@@ -2,8 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveSessionFilePath } from "../config/sessions/paths.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { resolveSessionFilePathCore } from "../config/sessions/paths.js";
 import { readFileWindowFullySync } from "../infra/file-read.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
@@ -146,7 +146,7 @@ function resolveRemovedSessionFile(params: {
   storePath: string;
 }): string | null {
   try {
-    return resolveSessionFilePath(
+    return resolveSessionFilePathCore(
       params.sessionId,
       params.sessionFile ? { sessionFile: params.sessionFile } : undefined,
       { sessionsDir: path.dirname(params.storePath) },

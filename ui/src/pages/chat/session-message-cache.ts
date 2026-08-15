@@ -1,17 +1,17 @@
 // Control UI chat module implements bounded visible-message caching.
+import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
 import {
   DEFAULT_MAIN_KEY,
   isUiGlobalSessionKey,
   normalizeAgentId,
+  normalizeSessionKeyForUiComparison,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
   resolveUiSelectedGlobalAgentId,
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
-import { readTranscriptSequence } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
 // JSON code-unit weight bounds retained payloads without allocating another
@@ -21,8 +21,9 @@ const MAX_CACHED_CHAT_WEIGHT = 24 * 1024 * 1024;
 // History reconciliation replaces changed messages and retains unchanged
 // objects, so serialization weight can follow the same immutable identity.
 const cachedMessageWeights = new WeakMap<object, number>();
+const appendedEventClaims = new WeakMap<ChatMessageCache, WeakSet<object>>();
 
-export type ChatSessionSnapshot = {
+type ChatSessionSnapshot = {
   displayedLeafEntryId?: string | null;
   messages: unknown[];
   pagination: ChatHistoryPagination;
@@ -30,9 +31,6 @@ export type ChatSessionSnapshot = {
 };
 
 type CachedChatSessionSnapshot = {
-  // The producing array identifies an unchanged snapshot so route exit can
-  // refresh LRU order without rescanning a long transcript.
-  sourceMessages: unknown[];
   snapshot: ChatSessionSnapshot;
   weight: number;
 };
@@ -64,8 +62,11 @@ function resolveCacheAgentId(host: ChatMessageCacheHost, target: ChatMessageCach
 }
 
 function resolveCanonicalSessionKey(host: ChatMessageCacheHost, sessionKey: string): string {
-  const parsed = parseAgentSessionKey(sessionKey);
-  const normalized = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  const normalizedSessionKey = normalizeSessionKeyForUiComparison(sessionKey);
+  const parsed = parseAgentSessionKey(normalizedSessionKey);
+  const normalized = parsed
+    ? normalizedSessionKey.split(":").slice(2).join(":")
+    : normalizedSessionKey;
   const configuredMainKey = resolveUiConfiguredMainKey(host);
   return isUiGlobalSessionKey(sessionKey) ||
     normalized === DEFAULT_MAIN_KEY ||
@@ -88,7 +89,19 @@ export function appendChatMessageToCache(
   host: ChatMessageCacheHost,
   target: ChatMessageCacheTarget,
   message: unknown,
+  eventClaim?: object,
 ): void {
+  if (eventClaim) {
+    let claims = appendedEventClaims.get(cache);
+    if (!claims) {
+      claims = new WeakSet();
+      appendedEventClaims.set(cache, claims);
+    }
+    if (claims.has(eventClaim)) {
+      return;
+    }
+    claims.add(eventClaim);
+  }
   const cacheKey = resolveChatMessageCacheKey(host, target);
   const existing = getSessionCacheValue(cache, cacheKey);
   if (!existing) {
@@ -119,7 +132,6 @@ export function appendChatMessageToCache(
   }
   setSessionCacheValue(cache, cacheKey, {
     snapshot,
-    sourceMessages: snapshot.messages,
     weight,
   });
   trimChatSessionSnapshotCache(cache);
@@ -150,7 +162,7 @@ export function cacheChatSessionSnapshot(
   const cacheKey = resolveChatMessageCacheKey(host, target);
   const existing = getSessionCacheValue(cache, cacheKey);
   if (
-    existing?.sourceMessages === snapshot.messages &&
+    existing?.snapshot.messages === snapshot.messages &&
     existing.snapshot.sessionId === snapshot.sessionId &&
     existing.snapshot.displayedLeafEntryId === snapshot.displayedLeafEntryId &&
     samePagination(existing.snapshot.pagination, snapshot.pagination)
@@ -167,9 +179,7 @@ export function cacheChatSessionSnapshot(
     cache.delete(cacheKey);
     return;
   }
-  const bounded = boundChatSessionSnapshot(
-    mergeRetainedSessionDepth(existing?.snapshot ?? null, snapshot),
-  );
+  const bounded = boundChatSessionSnapshot(snapshot);
   if (!bounded) {
     cache.delete(cacheKey);
     return;
@@ -178,98 +188,12 @@ export function cacheChatSessionSnapshot(
   trimChatSessionSnapshotCache(cache);
 }
 
-function mergeRetainedSessionDepth(
-  existing: ChatSessionSnapshot | null,
-  incoming: ChatSessionSnapshot,
-): ChatSessionSnapshot {
-  if (
-    !existing ||
-    !existing.sessionId ||
-    existing.sessionId !== incoming.sessionId ||
-    existing.messages.length === 0 ||
-    incoming.messages.length === 0
-  ) {
-    return incoming;
-  }
-  const existingBounds = transcriptSequenceBounds(existing.messages);
-  const incomingBounds = transcriptSequenceBounds(incoming.messages);
-  const existingTotal = existing.pagination.totalMessages;
-  const incomingTotal = incoming.pagination.totalMessages;
-  if (
-    existingBounds &&
-    incomingBounds &&
-    typeof existingTotal === "number" &&
-    incomingTotal === existingTotal &&
-    incomingBounds.newest < existingBounds.newest
-  ) {
-    return existing;
-  }
-  if (
-    !existingBounds ||
-    !incomingBounds ||
-    typeof existingTotal !== "number" ||
-    typeof incomingTotal !== "number" ||
-    incomingTotal < existingTotal ||
-    incomingBounds.oldest <= existingBounds.oldest ||
-    incomingBounds.oldest > existingBounds.newest + 1
-  ) {
-    return incoming;
-  }
-  const overlapStart = existing.messages.findIndex((message) => {
-    const sequence = readTranscriptSequence(message);
-    return sequence !== null && sequence >= incomingBounds.oldest;
-  });
-  const retainedPrefix =
-    overlapStart === -1 ? existing.messages : existing.messages.slice(0, overlapStart);
-  const messages = [...retainedPrefix, ...incoming.messages];
-  const pagination = capSnapshotPagination(incoming.pagination, messages);
-  return pagination
-    ? {
-        ...(Object.hasOwn(incoming, "displayedLeafEntryId")
-          ? { displayedLeafEntryId: incoming.displayedLeafEntryId }
-          : {}),
-        messages,
-        pagination,
-        sessionId: incoming.sessionId,
-      }
-    : incoming;
-}
-
-function transcriptSequenceBounds(
-  messages: readonly unknown[],
-): { oldest: number; newest: number } | null {
-  let oldest: number | null = null;
-  let newest: number | null = null;
-  for (const message of messages) {
-    const sequence = readTranscriptSequence(message);
-    if (sequence === null) {
-      continue;
-    }
-    oldest = oldest === null ? sequence : Math.min(oldest, sequence);
-    newest = newest === null ? sequence : Math.max(newest, sequence);
-  }
-  return oldest === null || newest === null ? null : { oldest, newest };
-}
-
 export function readChatSessionSnapshot(
   cache: ChatMessageCache,
   host: ChatMessageCacheHost,
   target: ChatMessageCacheTarget,
 ): ChatSessionSnapshot | null {
-  const cached = getSessionCacheValue(cache, resolveChatMessageCacheKey(host, target));
-  if (!cached) {
-    return null;
-  }
-  const messages = [...cached.snapshot.messages];
-  cached.sourceMessages = messages;
-  return {
-    ...(Object.hasOwn(cached.snapshot, "displayedLeafEntryId")
-      ? { displayedLeafEntryId: cached.snapshot.displayedLeafEntryId }
-      : {}),
-    messages,
-    pagination: { ...cached.snapshot.pagination },
-    sessionId: cached.snapshot.sessionId,
-  };
+  return getSessionCacheValue(cache, resolveChatMessageCacheKey(host, target))?.snapshot ?? null;
 }
 
 function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSessionSnapshot | null {
@@ -295,14 +219,14 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
       messageWeights.length - start,
     );
     if (weight !== null && weight <= MAX_CACHED_CHAT_SNAPSHOT_WEIGHT) {
+      const messages = start === 0 ? snapshot.messages : snapshot.messages.slice(start);
       return {
-        sourceMessages: snapshot.messages,
         snapshot: {
           ...(Object.hasOwn(snapshot, "displayedLeafEntryId")
             ? { displayedLeafEntryId: snapshot.displayedLeafEntryId }
             : {}),
-          messages: snapshot.messages.slice(start),
-          pagination: { ...pagination },
+          messages,
+          pagination: start === 0 ? pagination : { ...pagination },
           sessionId: snapshot.sessionId,
         },
         weight,
@@ -311,14 +235,14 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
     if (start >= snapshot.messages.length) {
       return null;
     }
-    const boundarySeq = readTranscriptSequence(snapshot.messages[start]);
+    const boundarySeq = readSessionMessageSequence(snapshot.messages[start]);
     retainedMessageWeight -= messageWeights[start] ?? 0;
     start += 1;
     if (boundarySeq === null) {
       continue;
     }
     while (start < snapshot.messages.length) {
-      if (readTranscriptSequence(snapshot.messages[start]) !== boundarySeq) {
+      if (readSessionMessageSequence(snapshot.messages[start]) !== boundarySeq) {
         break;
       }
       retainedMessageWeight -= messageWeights[start] ?? 0;
@@ -384,7 +308,7 @@ function capSnapshotPagination(
   const totalMessages = pagination.totalMessages;
   let oldestSeq: number | null = null;
   for (let index = start; index < messages.length; index += 1) {
-    oldestSeq = readTranscriptSequence(messages[index]);
+    oldestSeq = readSessionMessageSequence(messages[index]);
     if (oldestSeq !== null) {
       break;
     }

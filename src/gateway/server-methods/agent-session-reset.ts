@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentCommandOpts } from "../../agents/command/types.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentDeliveryPlanWithSessionRoute } from "../../infra/outbound/agent-delivery.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { performGatewaySessionReset } from "../session-reset-service.js";
 import { loadSessionEntry } from "../session-utils.js";
 import type { TrustedSessionCreation } from "./session-creation-provenance.js";
@@ -92,6 +93,7 @@ async function deliverBareSessionResetResult(params: {
   sessionKey: string;
   agentId?: string;
   sessionEntry?: SessionEntry;
+  preparedPlugin?: ChannelPlugin;
   request: {
     replyTo?: string;
     to?: string;
@@ -149,6 +151,7 @@ async function deliverBareSessionResetResult(params: {
     sessionEntry: params.sessionEntry,
     result: result as never,
     payloads: result.payloads as never,
+    preparedPlugin: params.preparedPlugin,
     assertDeliveryCurrent: params.assertCurrent,
   });
 }
@@ -179,7 +182,7 @@ export async function resolveBareSessionResetResult(params: {
     cfg: params.cfg,
     entry: params.sessionEntry,
     sessionKey: params.sessionKey,
-    channel: params.sessionEntry?.channel,
+    channel: sessionDeliveryChannel(params.sessionEntry),
     chatType: params.sessionEntry?.chatType,
   });
   if (sendPolicy === "deny") {
@@ -225,6 +228,7 @@ export async function resolveBareSessionResetResult(params: {
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     sessionEntry: params.sessionEntry,
+    preparedPlugin: deliveryPlan.plugin,
     request: {
       ...params.request,
       channel: deliveryPlan.resolvedChannel,
@@ -250,20 +254,15 @@ export function loadBareSessionResetDeliverySession(params: {
   entry?: SessionEntry;
   agentId: string;
 } {
-  const selectedGlobalAgentId =
-    params.sessionKey === "global" && params.agentId ? params.agentId : undefined;
   const loaded = loadSessionEntry(params.sessionKey, {
     clone: false,
-    ...(selectedGlobalAgentId ? { agentId: selectedGlobalAgentId } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   const loadedCfg = loaded?.cfg ?? params.cfg;
   return {
     cfg: loadedCfg,
     entry: loaded?.entry,
-    agentId:
-      selectedGlobalAgentId ??
-      resolveAgentIdFromSessionKey(params.sessionKey) ??
-      resolveDefaultAgentId(loadedCfg),
+    agentId: resolveAgentIdFromSessionKey(params.sessionKey, params.agentId),
   };
 }
 

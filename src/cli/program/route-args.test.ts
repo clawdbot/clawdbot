@@ -6,6 +6,7 @@ import {
   parseChannelsStatusRouteArgs,
   parseConfigGetRouteArgs,
   parseConfigUnsetRouteArgs,
+  parseGatewayHealthRouteArgs,
   parseGatewayStatusRouteArgs,
   parseHealthRouteArgs,
   parseModelsListRouteArgs,
@@ -32,6 +33,8 @@ describe("route-args", () => {
         "--deep",
         "--all",
         "--usage",
+        "--agent",
+        "beta",
         "--timeout",
         "5000",
       ]),
@@ -40,10 +43,12 @@ describe("route-args", () => {
       deep: true,
       all: true,
       usage: true,
+      agent: "beta",
       verbose: false,
       timeoutMs: 5000,
     });
     expect(parseStatusRouteArgs(["node", "openclaw", "status", "--timeout"])).toBeNull();
+    expect(parseStatusRouteArgs(["node", "openclaw", "status", "--agent"])).toBeNull();
   });
 
   it("defers status/health --timeout with a present-but-invalid value to Commander", () => {
@@ -219,6 +224,83 @@ describe("route-args", () => {
     ).toBeNull();
     expect(
       parseGatewayStatusRouteArgs(["node", "openclaw", "gateway", "status", "--ssh-auto"]),
+    ).toBeNull();
+  });
+
+  it("parses JSON gateway health route args and defers unsupported shapes", () => {
+    expect(
+      parseGatewayHealthRouteArgs([
+        "node",
+        "openclaw",
+        "gateway",
+        "health",
+        "--url",
+        "ws://127.0.0.1:18789",
+        "--token",
+        "abc",
+        "--password",
+        "def",
+        "--timeout",
+        "5000",
+        "--expect-final",
+        "--json",
+      ]),
+    ).toEqual({
+      rpc: {
+        url: "ws://127.0.0.1:18789",
+        token: "abc",
+        password: "def",
+        timeout: "5000",
+        expectFinal: true,
+        json: true,
+      },
+      localPortOverride: undefined,
+    });
+    expect(
+      parseGatewayHealthRouteArgs([
+        "node",
+        "openclaw",
+        "gateway",
+        "--port",
+        "19083",
+        "health",
+        "--json",
+      ]),
+    ).toEqual({
+      rpc: {
+        url: undefined,
+        token: undefined,
+        password: undefined,
+        timeout: "10000",
+        expectFinal: false,
+        json: true,
+      },
+      localPortOverride: 19083,
+    });
+    expect(parseGatewayHealthRouteArgs(["node", "openclaw", "gateway", "health"])).toBeNull();
+    expect(
+      parseGatewayHealthRouteArgs([
+        "node",
+        "openclaw",
+        "gateway",
+        "health",
+        "--url",
+        "ws://127.0.0.1:18789",
+        "--port",
+        "19083",
+        "--json",
+      ]),
+    ).toBeNull();
+    expect(
+      parseGatewayHealthRouteArgs([
+        "node",
+        "openclaw",
+        "gateway",
+        "health",
+        "--timeout",
+        "5s",
+        "--json",
+      ]),
     ).toBeNull();
   });
 

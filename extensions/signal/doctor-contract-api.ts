@@ -4,7 +4,8 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import { defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { migrateLegacySignalTransportConfigSync } from "./src/config-compat.js";
 
 const RETIRED_SIGNAL_ACCOUNT_TRANSPORT_FIELDS = [
@@ -18,10 +19,6 @@ const RETIRED_SIGNAL_ACCOUNT_TRANSPORT_FIELDS = [
   "receiveMode",
   "ignoreStories",
 ] as const;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function hasRetiredSignalAccountTransportFields(value: unknown): boolean {
   return (

@@ -1,15 +1,17 @@
+import { normalizeOptionalString as normalizeText } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import {
   buildConversationRef,
   normalizeConversationPeerId,
 } from "../../routing/conversation-ref.js";
-import { normalizeAccountId } from "../../utils/account-id.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
+  sessionDeliveryOrigin,
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { resolveGroupSessionKey } from "./group.js";
@@ -33,10 +35,6 @@ export type ConversationIdentity = {
   label?: string;
   metadata?: Record<string, unknown>;
 };
-
-function normalizeText(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function normalizeThreadId(value: unknown): string | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -65,7 +63,7 @@ function resolvePairedOriginPeerId(params: {
   if (params.kind !== "direct") {
     return undefined;
   }
-  const origin = params.entry.origin;
+  const origin = sessionDeliveryOrigin(params.entry);
   const originFrom = normalizeText(origin?.from);
   const originTo = normalizeText(origin?.to);
   const originChannel = normalizeText(origin?.provider)?.toLowerCase();
@@ -76,8 +74,8 @@ function resolvePairedOriginPeerId(params: {
     !originChannel ||
     originChannel !== deliveryChannel ||
     normalizeChatType(origin?.chatType) !== params.kind ||
-    (normalizeAccountId(origin?.accountId) ?? "default") !==
-      (normalizeAccountId(params.deliveryContext?.accountId) ?? "default") ||
+    (normalizeOptionalAccountId(origin?.accountId) ?? "default") !==
+      (normalizeOptionalAccountId(params.deliveryContext?.accountId) ?? "default") ||
     normalizeThreadId(origin?.threadId) !== normalizeThreadId(params.deliveryContext?.threadId)
   ) {
     return undefined;
@@ -114,7 +112,7 @@ export function buildConversationIdentity(params: {
   if (!deliveryTarget) {
     return null;
   }
-  const accountId = normalizeAccountId(params.accountId) ?? "default";
+  const accountId = normalizeOptionalAccountId(params.accountId) ?? "default";
   const rawParent = normalizeText(params.parentConversationRef);
   const parentConversationRef = rawParent
     ? rawParent.startsWith("conv_")
@@ -158,20 +156,14 @@ export function buildConversationIdentity(params: {
 export function conversationIdentityFromSessionEntry(
   entry: SessionEntry,
 ): ConversationIdentity | null {
-  // Explicit route snapshots own their populated fields, while persisted
-  // origin/last-route facts fill gaps such as an omitted account id.
-  const deliveryContext = mergeDeliveryContext(
-    normalizeDeliveryContext(entry.deliveryContext),
-    deliveryContextFromSession(entry),
-  );
+  const deliveryContext = deliveryContextFromSession(entry);
+  const origin = sessionDeliveryOrigin(entry);
   const kind = normalizeKind(entry.chatType);
   const routeTarget = normalizeText(deliveryContext?.to);
   const deliveryTarget =
-    routeTarget ?? (kind === "direct" ? normalizeText(entry.origin?.from) : undefined);
+    routeTarget ?? (kind === "direct" ? normalizeText(origin?.from) : undefined);
   const routeOwnsTarget = Boolean(routeTarget);
-  const channel = routeOwnsTarget
-    ? deliveryContext?.channel
-    : (normalizeText(entry.origin?.provider) ?? normalizeText(entry.channel));
+  const channel = routeOwnsTarget ? deliveryContext?.channel : normalizeText(origin?.provider);
   // Outbound routes can use an alias for delivery while `origin.from` carries
   // the canonical peer. Trust it only when both snapshots are fully paired.
   const pairedOriginPeerId = routeTarget
@@ -184,14 +176,14 @@ export function conversationIdentityFromSessionEntry(
     : undefined;
   return buildConversationIdentity({
     channel,
-    accountId: routeOwnsTarget ? deliveryContext?.accountId : entry.origin?.accountId,
+    accountId: routeOwnsTarget ? deliveryContext?.accountId : origin?.accountId,
     kind,
     // Native ids remain descriptive metadata and cannot redirect a stored conversation ref.
     peerId: pairedOriginPeerId ?? deliveryTarget,
     deliveryTarget,
-    threadId: routeOwnsTarget ? deliveryContext?.threadId : entry.origin?.threadId,
-    nativeChannelId: entry.origin?.nativeChannelId,
-    nativeDirectUserId: entry.origin?.nativeDirectUserId,
+    threadId: routeOwnsTarget ? deliveryContext?.threadId : origin?.threadId,
+    nativeChannelId: origin?.nativeChannelId,
+    nativeDirectUserId: origin?.nativeDirectUserId,
     label: entry.displayName ?? entry.label,
   });
 }

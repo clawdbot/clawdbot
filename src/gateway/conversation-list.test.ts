@@ -128,6 +128,65 @@ describe("runGatewayConversationList", () => {
     ]);
   });
 
+  it("keeps a discovered group origin distinct from its channel delivery address", async () => {
+    let discovered: ConversationIdentity[] = [];
+    const channelId = "private-room-123";
+    const resolveOutboundSessionRoute = vi.fn(async () => ({
+      sessionKey: `agent:main:reef:group:${channelId}`,
+      baseSessionKey: `agent:main:reef:group:${channelId}`,
+      peer: { kind: "group" as const, id: channelId },
+      chatType: "group" as const,
+      from: `reef:group:${channelId}`,
+      to: `channel:${channelId}`,
+    }));
+    const deps = {
+      resolveOutboundChannelPlugin: vi.fn(() => ({
+        id: "reef",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({ enabled: true, configured: true }),
+          isEnabled: () => true,
+          isConfigured: () => true,
+        },
+        directory: {
+          listPeers: async () => [],
+          listGroups: async () => [
+            { kind: "group" as const, id: `channel:${channelId}`, name: "Private room" },
+          ],
+        },
+      })),
+      resolveOutboundSessionRoute,
+      registerConversationAddresses: vi.fn((_scope, identities) => {
+        discovered = [...identities];
+      }),
+      listConversations: vi.fn(() => []),
+    };
+
+    await runGatewayConversationList(
+      { config: {}, agentId: "main", channel: "reef", limit: 50 },
+      deps as never,
+    );
+
+    expect(resolveOutboundSessionRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: `channel:${channelId}`,
+        resolvedTarget: expect.objectContaining({
+          kind: "group",
+          to: `channel:${channelId}`,
+        }),
+      }),
+    );
+    expect(discovered).toEqual([
+      expect.objectContaining({
+        channel: "reef",
+        kind: "group",
+        peerId: channelId,
+        deliveryTarget: `channel:${channelId}`,
+        nativeChannelId: channelId,
+      }),
+    ]);
+  });
+
   it("merges live directory adapters with config-backed entries", async () => {
     const listPeers = vi.fn(async () => [
       { kind: "user" as const, id: "stale-peer", name: "Stale Peer" },

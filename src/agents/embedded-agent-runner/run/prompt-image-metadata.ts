@@ -1,4 +1,3 @@
-import { normalizeMediaFacts, type MediaFact } from "../../../media/media-facts.js";
 import type { AgentMessage } from "../../runtime/index.js";
 
 export type ImageFactIndex = number | null;
@@ -8,52 +7,10 @@ export type MediaImageLayout = {
   suppressedFactIndexes: number[];
 };
 
-export function resolveLayoutInlineFactIndexes(
-  layout: MediaImageLayout | undefined,
-  existingImageCount: number,
-): ImageFactIndex[] | undefined {
-  const factIndexes = layout?.slots.flatMap((slot) =>
-    slot.kind === "inline" ? [slot.factIndex ?? null] : [],
-  );
-  return factIndexes?.length === existingImageCount ? factIndexes : undefined;
-}
-
-export function countMissingLayoutInlineSlots(
-  layout: MediaImageLayout | undefined,
-  existingFactIndexes: readonly ImageFactIndex[] | undefined,
-  existingImageCount: number,
-): number {
-  if (!layout) {
-    return 0;
-  }
-  const available = existingFactIndexes
-    ? [...existingFactIndexes]
-    : Array.from({ length: existingImageCount }, () => null);
-  let missing = 0;
-  for (const slot of layout.slots) {
-    if (slot.kind !== "inline") {
-      continue;
-    }
-    const exactIndex =
-      slot.factIndex === undefined
-        ? available.length > 0
-          ? 0
-          : -1
-        : available.findIndex((factIndex) => factIndex === slot.factIndex);
-    const matchIndex = exactIndex >= 0 ? exactIndex : available.indexOf(null);
-    if (matchIndex >= 0) {
-      available.splice(matchIndex, 1);
-    } else {
-      missing++;
-    }
-  }
-  return missing;
-}
-
 export function readPersistedImageBlockFactIndexes(
   message: AgentMessage,
 ): ImageFactIndex[] | undefined {
-  const meta = (message as unknown as Record<string, unknown>)["__openclaw"];
+  const meta = Reflect.get(message, "__openclaw");
   const value =
     meta && typeof meta === "object" && !Array.isArray(meta)
       ? (meta as Record<string, unknown>).mediaImageBlockFactIndexes
@@ -66,17 +23,8 @@ export function readPersistedImageBlockFactIndexes(
   );
 }
 
-export function readPersistedPromptMediaFacts(message: AgentMessage): MediaFact[] | undefined {
-  const meta = (message as unknown as Record<string, unknown>)["__openclaw"];
-  const media =
-    meta && typeof meta === "object" && !Array.isArray(meta)
-      ? (meta as Record<string, unknown>).media
-      : undefined;
-  return Array.isArray(media) ? normalizeMediaFacts(media as MediaFact[]) : undefined;
-}
-
 export function readPersistedMediaImageLayout(message: AgentMessage): MediaImageLayout | undefined {
-  const meta = (message as unknown as Record<string, unknown>)["__openclaw"];
+  const meta = Reflect.get(message, "__openclaw");
   if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
     return undefined;
   }

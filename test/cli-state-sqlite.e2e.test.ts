@@ -260,6 +260,70 @@ describe("SQLite CLI maintenance ownership", () => {
     );
   }, 90_000);
 
+  it.skipIf(process.platform === "win32")(
+    "rejects symbolic-linked SQLite sidecars before destructive maintenance",
+    async () => {
+      await withTempHome(
+        async (tempHome) => {
+          const stateDir = path.join(tempHome, ".openclaw");
+          const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+          const sqlitePath = path.join(
+            stateDir,
+            "agents",
+            "main",
+            "agent",
+            "openclaw-agent.sqlite",
+          );
+          const targetPath = path.join(stateDir, "agents", "main", "agent", "sidecar-target");
+          fs.mkdirSync(path.dirname(storePath), { recursive: true });
+          fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
+          fs.writeFileSync(storePath, "{}\n", "utf8");
+          fs.writeFileSync(targetPath, "owned target\n", "utf8");
+          fs.symlinkSync(targetPath, `${sqlitePath}-wal`);
+          const env: NodeJS.ProcessEnv = {
+            ...process.env,
+            HOME: tempHome,
+            USERPROFILE: tempHome,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_TEST_FAST: "1",
+          };
+          delete env.OPENCLAW_CONFIG_PATH;
+          delete env.OPENCLAW_HOME;
+          delete env.VITEST;
+
+          const entry = path.resolve(process.cwd(), "src/entry.ts");
+          const result = spawnSync(
+            process.execPath,
+            [
+              "--import",
+              "tsx",
+              entry,
+              "doctor",
+              "--session-sqlite",
+              "compact",
+              "--session-sqlite-store",
+              storePath,
+              "--json",
+            ],
+            {
+              cwd: process.cwd(),
+              env,
+              encoding: "utf8",
+              timeout: 60_000,
+            },
+          );
+
+          expect(result.status).not.toBe(0);
+          expect(`${result.stderr}\n${result.stdout}`).toContain("symbolic-link path");
+          expect(fs.readFileSync(targetPath, "utf8")).toBe("owned target\n");
+        },
+        { prefix: "openclaw-session-sqlite-symlink-sidecar-cli-" },
+      );
+    },
+    90_000,
+  );
+
   it("rejects hard-linked SQLite sidecars discovered through configured session stores", async () => {
     await withTempHome(
       async (tempHome) => {

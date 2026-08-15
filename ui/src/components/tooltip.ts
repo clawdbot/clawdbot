@@ -24,6 +24,10 @@ function normalizeTooltipText(text: string) {
   return text.replace(/\s+/gu, " ").trim();
 }
 
+function isHtmlElement(element: Element): element is HTMLElement {
+  return element.namespaceURI === "http://www.w3.org/1999/xhtml";
+}
+
 class TooltipProvider extends OpenClawLitElement {
   @property({ type: Number }) delay = HOVER_DELAY;
   @property({ type: Number }) skipDelay = SKIP_DELAY;
@@ -90,6 +94,9 @@ class TooltipProvider extends OpenClawLitElement {
 
 class Tooltip extends OpenClawLitElement {
   @property() content = "";
+
+  /** Let a reveal-only trigger open on click instead of dismissing. */
+  @property({ type: Boolean, attribute: "open-on-click" }) openOnClick = false;
 
   @query("wa-tooltip") private webAwesomeTooltip?: WaTooltip;
 
@@ -186,9 +193,7 @@ class Tooltip extends OpenClawLitElement {
 
   private attachTrigger() {
     const slot = this.renderRoot.querySelector<HTMLSlotElement>("slot:not([name])");
-    const trigger = slot
-      ?.assignedElements({ flatten: true })
-      .find((element): element is HTMLElement => element instanceof HTMLElement);
+    const trigger = slot?.assignedElements({ flatten: true }).find(isHtmlElement);
     if (trigger === this.triggerElement) {
       return;
     }
@@ -337,7 +342,17 @@ class Tooltip extends OpenClawLitElement {
     }
     this.close();
   };
-  private readonly handleClick = () => this.close();
+  // Pointer activation normally dismisses, so an action button never strands an
+  // open tooltip. A trigger whose only job is to reveal the tip opts out: on
+  // touch and in browsers that do not focus buttons on click there is no other
+  // way to read it.
+  private readonly handleClick = () => {
+    if (this.openOnClick) {
+      this.show();
+      return;
+    }
+    this.close();
+  };
   private readonly handleDocumentPointerUp = () => {
     document.removeEventListener("pointerup", this.handleDocumentPointerUp);
     this.suppressPointerFocus = false;
@@ -399,7 +414,7 @@ class Tooltip extends OpenClawLitElement {
     const content = normalizeTooltipText(this.content);
     const triggerText = normalizeTooltipText(trigger.textContent ?? "");
     const clipsContent = [trigger, ...trigger.querySelectorAll("*")].some(
-      (element) => element instanceof HTMLElement && element.scrollWidth > element.clientWidth,
+      (element) => isHtmlElement(element) && element.scrollWidth > element.clientWidth,
     );
     return Boolean(content && triggerText && triggerText.includes(content) && !clipsContent);
   }

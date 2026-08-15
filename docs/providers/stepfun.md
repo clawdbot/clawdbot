@@ -138,7 +138,7 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
   <Accordion title="Full config: Standard provider">
     ```json5
     {
-      env: { STEPFUN_API_KEY: "your-key" },
+      env: { vars: { STEPFUN_API_KEY: "your-key" } },
       agents: { defaults: { model: { primary: "stepfun/step-3.5-flash" } } },
       models: {
         mode: "merge",
@@ -163,7 +163,7 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
                 name: "Step 3.5 Flash",
                 reasoning: true,
                 input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                cost: { input: 0.1, output: 0.3, cacheRead: 0.02, cacheWrite: 0 },
                 contextWindow: 262144,
                 maxTokens: 65536,
               },
@@ -178,7 +178,7 @@ A single auth flow writes region-matched profiles for both `stepfun` and `stepfu
   <Accordion title="Full config: Step Plan provider">
     ```json5
     {
-      env: { STEPFUN_API_KEY: "your-key" },
+      env: { vars: { STEPFUN_API_KEY: "your-key" } },
       agents: { defaults: { model: { primary: "stepfun-plan/step-3.5-flash" } } },
       models: {
         mode: "merge",

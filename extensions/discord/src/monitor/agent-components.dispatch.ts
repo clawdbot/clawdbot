@@ -301,9 +301,9 @@ export async function dispatchDiscordComponentEvent(params: {
           },
         },
         delivery: {
-          deliver: async (payload, info) => {
+          deliverWithProviderMessageSending: async (payload, info) => {
             const replyToId = replyReference.use();
-            await deliverDiscordReply({
+            const result = await deliverDiscordReply({
               cfg: ctx.cfg,
               replies: [payload],
               target: deliverTarget,
@@ -323,8 +323,12 @@ export async function dispatchDiscordComponentEvent(params: {
               chunkMode: resolveChunkMode(ctx.cfg, "discord", accountId),
               mediaLocalRoots,
               kind: info.kind,
+              bindPendingFinalDelivery: info.bindPendingFinalDelivery,
             });
-            replyReference.markSent();
+            if (result.visibleReplySent) {
+              replyReference.markSent();
+            }
+            return result;
           },
           onError: (err) => {
             logError(`discord component dispatch failed: ${String(err)}`);

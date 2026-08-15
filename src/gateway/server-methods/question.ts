@@ -21,6 +21,8 @@ import {
   QuestionManagerError,
   QuestionManagerErrorCodes,
 } from "../question-manager.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const DEFAULT_QUESTION_TIMEOUT_MS = 15 * 60 * 1_000;
@@ -95,11 +97,35 @@ export function createQuestionHandlers(manager: QuestionManager): GatewayRequest
       }
       const request = params as QuestionRequestParams;
       try {
+        const requestedSession = request.sessionKey
+          ? resolveRequestedSessionAgentId(
+              context.getRuntimeConfig(),
+              request.sessionKey,
+              request.agentId,
+            )
+          : undefined;
+        if (requestedSession && !requestedSession.ok) {
+          respond(false, undefined, requestedSession.error);
+          return;
+        }
+        const sessionKey =
+          request.sessionKey && requestedSession?.ok
+            ? resolveStoredSessionKeyForAgentStore({
+                cfg: context.getRuntimeConfig(),
+                agentId: requestedSession.agentId,
+                sessionKey: request.sessionKey,
+              })
+            : undefined;
         const record = manager.request({
           ...(request.id ? { id: request.id } : {}),
           questions: normalizeQuestions(request),
-          ...(request.agentId ? { agentId: request.agentId } : {}),
-          ...(request.sessionKey ? { sessionKey: request.sessionKey } : {}),
+          ...(requestedSession?.ok
+            ? { agentId: requestedSession.agentId }
+            : request.agentId
+              ? { agentId: request.agentId }
+              : {}),
+          ...(sessionKey ? { sessionKey } : {}),
+          ...(request.runId ? { runId: request.runId } : {}),
           timeoutMs: request.timeoutMs ?? DEFAULT_QUESTION_TIMEOUT_MS,
           onResolved: (event) => {
             handleQuestionChannelResolved(event);

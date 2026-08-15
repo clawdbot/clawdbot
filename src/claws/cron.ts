@@ -1,5 +1,7 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
+import { createTrustedCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
 import { applyDefaultCronToolsAllow } from "../cron/tools-allow.js";
 import type { CronJob } from "../cron/types.js";
 import {
@@ -42,6 +44,7 @@ export type ClawCronGateway = {
   get?: (schedulerJobId: string) => Promise<unknown>;
   list?: (agentId: string) => Promise<unknown>;
   remove: (schedulerJobId: string) => Promise<unknown>;
+  waitUntilAgentAvailable?: (agentId: string) => Promise<void>;
 };
 
 export class ClawCronInstallError extends Error {
@@ -183,10 +186,10 @@ export function clawCronSchedulerJobFromResult(value: unknown): { id: string } |
   return undefined;
 }
 
-function schedulerJobByDeclarationKey(
+function schedulerJobRecordByDeclarationKey(
   value: unknown,
   declarationKey: string,
-): { id: string } | undefined {
+): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
   }
@@ -202,6 +205,14 @@ function schedulerJobByDeclarationKey(
       typeof (job as Record<string, unknown>).id === "string",
   );
   const match = matches.length === 1 ? matches[0] : undefined;
+  return match;
+}
+
+function schedulerJobByDeclarationKey(
+  value: unknown,
+  declarationKey: string,
+): { id: string } | undefined {
+  const match = schedulerJobRecordByDeclarationKey(value, declarationKey);
   return match ? { id: match.id as string } : undefined;
 }
 
@@ -256,10 +267,16 @@ export function clawCronGatewayJobMatchesRef(
   const comparableLive = { ...live, payload: { ...live.payload } } as CronJob;
   applyDefaultCronToolsAllow(expected);
   applyDefaultCronToolsAllow(comparableLive);
+  const expectedWithPolicy = {
+    ...expected,
+    ...(comparableLive.scheduledToolPolicy
+      ? { scheduledToolPolicy: createTrustedCronScheduledToolPolicy() }
+      : {}),
+  };
   try {
     return (
       resolveCronJobConfigRevision({
-        ...expected,
+        ...expectedWithPolicy,
         id: live.id,
         createdAtMs: live.createdAtMs,
         updatedAtMs: live.updatedAtMs,
@@ -274,7 +291,7 @@ export function clawCronGatewayJobMatchesRef(
 export async function installClawCronJobs(
   plan: ClawAddPlan,
   options: OpenClawStateDatabaseOptions & {
-    gateway?: Pick<ClawCronGateway, "add" | "list">;
+    gateway?: Pick<ClawCronGateway, "add" | "list" | "waitUntilAgentAvailable">;
     nowMs?: number;
   } = {},
 ): Promise<PersistedClawCronRef[]> {
@@ -285,11 +302,12 @@ export async function installClawCronJobs(
   if (!options.gateway) {
     throw new ClawCronInstallError(
       "cron_gateway_required",
-      "Claw cron jobs require the gateway-owned cron.add API.",
+      "Claw automations require the gateway-owned cron.add API.",
       [],
     );
   }
   const refs: PersistedClawCronRef[] = [];
+  let agentAvailable = false;
   for (const action of actions) {
     const details = action.details as (ClawCronJob & { agentId?: string }) | undefined;
     if (!details?.id) {
@@ -309,11 +327,48 @@ export async function installClawCronJobs(
     };
     const pending = persistPendingRef(plan, job, options);
     refs.push(pending);
-    if (pending.status === "complete" && pending.schedulerJobId) {
-      continue;
-    }
     let result: { id: string } | undefined;
+    if (pending.status === "complete" && pending.schedulerJobId) {
+      if (!options.gateway.list) {
+        continue;
+      }
+      if (!agentAvailable) {
+        await options.gateway.waitUntilAgentAvailable?.(plan.agent.finalId);
+        agentAvailable = true;
+      }
+      const listedJob = schedulerJobRecordByDeclarationKey(
+        await options.gateway.list(plan.agent.finalId),
+        pending.declarationKey,
+      );
+      if (listedJob) {
+        if (!clawCronGatewayJobMatchesRef(plan.agent.finalId, pending, listedJob)) {
+          throw new ClawCronInstallError(
+            "cron_reconcile_conflict",
+            `Cron declaration ${JSON.stringify(pending.manifestId)} changed after installation.`,
+            refs,
+          );
+        }
+        result = { id: listedJob.id as string };
+        if (result.id !== pending.schedulerJobId) {
+          refs[refs.length - 1] = updateRef(
+            pending,
+            { status: "complete", schedulerJobId: result.id },
+            options,
+          );
+        }
+        continue;
+      }
+      throw new ClawCronInstallError(
+        "cron_reconcile_conflict",
+        `Cron declaration ${JSON.stringify(pending.manifestId)} is missing; remove and add the Claw again to recreate it safely.`,
+        refs,
+      );
+    }
     try {
+      if (!agentAvailable) {
+        await options.gateway.waitUntilAgentAvailable?.(plan.agent.finalId);
+        agentAvailable = true;
+      }
       if (options.gateway.list) {
         result = schedulerJobByDeclarationKey(
           await options.gateway.list(plan.agent.finalId),
@@ -327,7 +382,7 @@ export async function installClawCronJobs(
         throw new Error("cron.add returned no scheduler job id");
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = coerceErrorMessage(error);
       refs[refs.length - 1] = updateRef(pending, { status: "pending", error: message }, options);
       throw new ClawCronInstallError("cron_install_failed", message, refs);
     }
@@ -338,7 +393,7 @@ export async function installClawCronJobs(
         options,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = coerceErrorMessage(error);
       throw new ClawCronInstallError(
         "cron_provenance_failed",
         `cron.add succeeded, but its scheduler id could not be persisted: ${message}`,

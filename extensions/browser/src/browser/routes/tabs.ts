@@ -17,6 +17,7 @@ import {
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
+import { clearSnapshotKeysForTab } from "../snapshot-delta-cache.js";
 import { resolveTargetIdFromTabs } from "../target-id.js";
 import { browserNavigationPolicyForProfile, resolveProfileContext } from "./agent.shared.js";
 import { readRouteNonNegativeInteger } from "./route-numeric.js";
@@ -321,6 +322,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       targetId,
       mutate: async (profileCtx, id) => {
         await profileCtx.closeTab(id, targetIdMode === "raw" ? { exactTargetId: true } : undefined);
+        clearSnapshotKeysForTab(ctx, profileCtx.profile.name, id);
       },
     });
   });
@@ -397,6 +399,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
             throw new BrowserTabNotFoundError();
           }
           await profileCtx.closeTab(target.targetId, { exactTargetId: true });
+          clearSnapshotKeysForTab(ctx, profileCtx.profile.name, target.targetId);
           return { ok: true, targetId: target.targetId };
         }
 

@@ -112,6 +112,36 @@ describe("nostr-profile-import", () => {
       expect(mockState.close).toHaveBeenCalledWith(relays);
     });
 
+    it("uses the lowest event id when profile timestamps match", async () => {
+      const pubkey = "a".repeat(64);
+      const relays = ["wss://first.example", "wss://second.example"];
+      const relayEvents = [
+        createProfileEvent({
+          id: "f".repeat(64),
+          created_at: 20,
+          content: JSON.stringify({ name: "arrived-first" }),
+        }),
+        createProfileEvent({
+          id: "0".repeat(64),
+          created_at: 20,
+          content: JSON.stringify({ name: "canonical" }),
+        }),
+      ];
+      mockState.subscribeMany.mockImplementation((_relays, _filter, params) => {
+        params.onevent?.(relayEvents.shift()!);
+        params.oneose?.();
+      });
+
+      const result = await importProfileFromRelays({ pubkey, relays });
+
+      expect(result).toMatchObject({
+        ok: true,
+        profile: { name: "canonical" },
+        event: { id: "0".repeat(64), created_at: 20 },
+        sourceRelay: relays[1],
+      });
+    });
+
     it("bounds the whole query while the native relay subscription is pending", async () => {
       vi.useFakeTimers();
       try {

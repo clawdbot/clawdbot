@@ -13,7 +13,7 @@ import { DiscordPresenceBaselineCache } from "./presence-transition-cache.js";
 
 const mocks = vi.hoisted(() => ({
   canViewDiscordGuildChannel: vi.fn(async () => true),
-  enqueueSystemEvent: vi.fn(() => true),
+  enqueueSystemEvent: vi.fn((_text: unknown, _options: Record<string, unknown>) => true),
   requestHeartbeat: vi.fn(),
   resolveAgentRoute: vi.fn(() => ({
     agentId: "molty",
@@ -24,11 +24,18 @@ const mocks = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/heartbeat-runtime", () => ({
   requestHeartbeat: mocks.requestHeartbeat,
 }));
-vi.mock("openclaw/plugin-sdk/routing", () => ({
-  resolveAgentRoute: mocks.resolveAgentRoute,
-}));
+vi.mock("openclaw/plugin-sdk/routing", () => ({ resolveAgentRoute: mocks.resolveAgentRoute }));
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
-  enqueueSystemEvent: mocks.enqueueSystemEvent,
+  enqueueRoutedSystemEvent: (
+    text: unknown,
+    route: { agentId: unknown; sessionKey: unknown },
+    options: Record<string, unknown>,
+  ) =>
+    mocks.enqueueSystemEvent(text, {
+      ...options,
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+    }),
 }));
 vi.mock("../send.permissions.js", () => ({
   canViewDiscordGuildChannel: mocks.canViewDiscordGuildChannel,
@@ -83,23 +90,44 @@ function cooldownStore(values = new Map<string, number>()): PluginStateSyncKeyed
   };
 }
 
+type PresenceListenerParams = ConstructorParameters<typeof DiscordPresenceListener>[0];
+type PresenceEventConfig = NonNullable<
+  NonNullable<PresenceListenerParams["guildEntries"]>[string]["presenceEvents"]
+>;
+type PresenceListenerOverrides = Partial<PresenceListenerParams> & {
+  presenceEvents?: Partial<PresenceEventConfig>;
+};
+let nowMs = 1_000;
+
+function createPresenceListener({
+  presenceEvents,
+  ...overrides
+}: PresenceListenerOverrides = {}): DiscordPresenceListener {
+  return new DiscordPresenceListener({
+    cfg: {} as OpenClawConfig,
+    accountId: "molty",
+    guildEntries: {
+      "guild-1": { presenceEvents: { channelId: "channel-1", ...presenceEvents } },
+    },
+    cooldownStore: cooldownStore(),
+    nowMs: () => nowMs,
+    ...overrides,
+  });
+}
+
 describe("DiscordPresenceListener", () => {
+  let humanClient: Client;
+
   beforeEach(() => {
+    nowMs = 1_000;
     clearPresences();
     vi.clearAllMocks();
+    humanClient = client();
   });
 
   it("routes, queues, and wakes an offline-to-online transition", async () => {
-    let nowMs = 0;
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
+    const listener = createPresenceListener({
       botUserId: "bot-1",
-      guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1" } },
-      },
-      cooldownStore: cooldownStore(),
-      nowMs: () => nowMs,
     });
 
     nowMs = 30_000;
@@ -117,6 +145,7 @@ describe("DiscordPresenceListener", () => {
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
       expect.stringContaining('user_id="user-1"'),
       expect.objectContaining({
+        agentId: "molty",
         sessionKey: "agent:molty:discord:channel:channel-1",
         deliveryContext: {
           channel: "discord",
@@ -147,17 +176,10 @@ describe("DiscordPresenceListener", () => {
 
   it("ignores guild members who cannot view the target channel", async () => {
     mocks.canViewDiscordGuildChannel.mockResolvedValueOnce(false);
-    let nowMs = 0;
     const store = cooldownStore();
     const registerIfAbsent = vi.spyOn(store, "registerIfAbsent");
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1" } },
-      },
+    const listener = createPresenceListener({
       cooldownStore: store,
-      nowMs: () => nowMs,
     });
 
     nowMs = 30_000;
@@ -179,17 +201,11 @@ describe("DiscordPresenceListener", () => {
 
   it("retries when the queue rejects an event", async () => {
     mocks.enqueueSystemEvent.mockReturnValueOnce(false);
-    let nowMs = 0;
     const store = cooldownStore();
     const registerIfAbsent = vi.spyOn(store, "registerIfAbsent");
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1", burstLimit: 1 } },
-      },
+    const listener = createPresenceListener({
+      presenceEvents: { burstLimit: 1 },
       cooldownStore: store,
-      nowMs: () => nowMs,
     });
 
     nowMs = 30_000;
@@ -207,21 +223,14 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("skips a wake when the durable cooldown cannot be reserved", async () => {
-    let nowMs = 0;
     const store = cooldownStore();
     vi.spyOn(store, "registerIfAbsent").mockImplementation(() => {
       throw new Error("capacity");
     });
     const warn = vi.fn();
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
+    const listener = createPresenceListener({
       logger: { warn } as never,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1" } },
-      },
       cooldownStore: store,
-      nowMs: () => nowMs,
     });
 
     nowMs = 30_000;
@@ -235,16 +244,7 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("uses the guild snapshot to classify the first live presence update", async () => {
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1" } },
-      },
-      cooldownStore: cooldownStore(),
-      nowMs: () => 1_000,
-    });
-    const humanClient = client();
+    const listener = createPresenceListener();
 
     listener.seedGuildSnapshot(guildSnapshot([presence("online", "already-online")]));
     await listener.handle(presence("online", "already-online"), humanClient);
@@ -263,16 +263,7 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("requires an explicit offline update after an incomplete large-guild snapshot", async () => {
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1" } },
-      },
-      cooldownStore: cooldownStore(),
-      nowMs: () => 1_000,
-    });
-    const humanClient = client();
+    const listener = createPresenceListener();
 
     listener.seedGuildSnapshot(guildSnapshot([], 75_001));
     await listener.handle(presence("online", "large-guild-member"), humanClient);
@@ -284,17 +275,9 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("disables snapshot-absence inference after bounded baseline eviction", async () => {
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1" } },
-      },
-      cooldownStore: cooldownStore(),
+    const listener = createPresenceListener({
       presenceBaseline: new DiscordPresenceBaselineCache(1),
-      nowMs: () => 1_000,
     });
-    const humanClient = client();
 
     listener.seedGuildSnapshot(
       guildSnapshot([presence("online", "first"), presence("online", "second")]),
@@ -308,18 +291,13 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("keeps complete snapshot inference isolated per guild", async () => {
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
+    const listener = createPresenceListener({
       guildEntries: {
         "guild-1": { presenceEvents: { channelId: "channel-1" } },
         "guild-2": { presenceEvents: { channelId: "channel-1" } },
       },
-      cooldownStore: cooldownStore(),
       presenceBaseline: new DiscordPresenceBaselineCache(1),
-      nowMs: () => 1_000,
     });
-    const humanClient = client();
 
     listener.seedGuildSnapshot(guildSnapshot([]));
     listener.seedGuildSnapshot({ ...guildSnapshot([], 75_001), id: "guild-2" });
@@ -336,15 +314,7 @@ describe("DiscordPresenceListener", () => {
 
   it("ignores unavailable snapshots and invalidates in-flight work on replacement", async () => {
     for (const bot of [false, true]) {
-      const listener = new DiscordPresenceListener({
-        cfg: {} as OpenClawConfig,
-        accountId: "molty",
-        guildEntries: {
-          "guild-1": { presenceEvents: { channelId: "channel-1" } },
-        },
-        cooldownStore: cooldownStore(),
-        nowMs: () => 1_000,
-      });
+      const listener = createPresenceListener();
       let resolveFetch: ((value: { bot: boolean }) => void) | undefined;
       const fetchUser = vi.fn(
         () =>
@@ -368,15 +338,7 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("detaches replacement-snapshot work from stale in-flight lookups", async () => {
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1" } },
-      },
-      cooldownStore: cooldownStore(),
-      nowMs: () => 1_000,
-    });
+    const listener = createPresenceListener();
     const resolvers: Array<(value: { bot: boolean }) => void> = [];
     const fetchUser = vi.fn(
       () =>
@@ -403,15 +365,9 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("detaches replacement-session work from stale in-flight lookups", async () => {
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
-      guildEntries: {
-        // Disable the reconnect window; this test targets stale-lookup detachment.
-        "guild-1": { presenceEvents: { channelId: "channel-1", reconnectSuppressSeconds: 0 } },
-      },
-      cooldownStore: cooldownStore(),
-      nowMs: () => 1_000,
+    const listener = createPresenceListener({
+      // Disable the reconnect window; this test targets stale-lookup detachment.
+      presenceEvents: { reconnectSuppressSeconds: 0 },
     });
     const resolvers: Array<(value: { bot: boolean }) => void> = [];
     const fetchUser = vi.fn(
@@ -440,15 +396,7 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("invalidates in-flight work when Discord deletes a guild", async () => {
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1" } },
-      },
-      cooldownStore: cooldownStore(),
-      nowMs: () => 1_000,
-    });
+    const listener = createPresenceListener();
     let resolveFetch: ((value: { bot: boolean }) => void) | undefined;
     const fetchUser = vi.fn(
       () =>
@@ -470,19 +418,10 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("does not let excluded users consume bounded baseline state", async () => {
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": {
-          presenceEvents: { channelId: "channel-1", users: ["allowed"] },
-        },
-      },
-      cooldownStore: cooldownStore(),
+    const listener = createPresenceListener({
+      presenceEvents: { users: ["allowed"] },
       presenceBaseline: new DiscordPresenceBaselineCache(1),
-      nowMs: () => 1_000,
     });
-    const humanClient = client();
 
     listener.seedGuildSnapshot(guildSnapshot([]));
     await listener.handle(presence("online", "excluded-1"), humanClient);
@@ -497,17 +436,9 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("protects explicit offline evidence from unrelated online churn", async () => {
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1" } },
-      },
-      cooldownStore: cooldownStore(),
+    const listener = createPresenceListener({
       presenceBaseline: new DiscordPresenceBaselineCache(1),
-      nowMs: () => 1_000,
     });
-    const humanClient = client();
 
     listener.seedGuildSnapshot(guildSnapshot([], 75_001));
     await listener.handle(presence("offline", "target"), humanClient);
@@ -523,17 +454,11 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("keeps transition state per guild and does not charge partial bots to the burst limit", async () => {
-    let nowMs = 0;
     const store = cooldownStore();
     const registerIfAbsent = vi.spyOn(store, "registerIfAbsent");
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1", burstLimit: 1 } },
-      },
+    const listener = createPresenceListener({
+      presenceEvents: { burstLimit: 1 },
       cooldownStore: store,
-      nowMs: () => nowMs,
     });
     const fetchUser = vi.fn(async () => ({ bot: true }));
     const botClient = { fetchUser } as unknown as Client;
@@ -560,17 +485,7 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("does not let another guild's status suppress the configured guild", async () => {
-    let nowMs = 0;
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1" } },
-      },
-      cooldownStore: cooldownStore(),
-      nowMs: () => nowMs,
-    });
-    const humanClient = client();
+    const listener = createPresenceListener();
 
     nowMs = 30_000;
     await listener.handle(presence("offline"), humanClient);
@@ -583,19 +498,10 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("suppresses the presence replay burst after a gateway reconnect", async () => {
-    let nowMs = 0;
     const info = vi.fn();
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
+    const listener = createPresenceListener({
       logger: { info } as never,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1" } },
-      },
-      cooldownStore: cooldownStore(),
-      nowMs: () => nowMs,
     });
-    const humanClient = client();
 
     nowMs = 30_000;
     listener.resetGatewaySession();
@@ -626,19 +532,9 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("honors a configured reconnect suppression window, including disabling it", async () => {
-    let nowMs = 0;
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": {
-          presenceEvents: { channelId: "channel-1", reconnectSuppressSeconds: 0 },
-        },
-      },
-      cooldownStore: cooldownStore(),
-      nowMs: () => nowMs,
+    const listener = createPresenceListener({
+      presenceEvents: { reconnectSuppressSeconds: 0 },
     });
-    const humanClient = client();
 
     nowMs = 30_000;
     listener.resetGatewaySession();
@@ -650,28 +546,19 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("rate-limits presence event bursts and logs the suppression once", async () => {
-    let nowMs = 0;
     const info = vi.fn();
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
+    const listener = createPresenceListener({
       logger: { info } as never,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": {
-          presenceEvents: { channelId: "channel-1", burstLimit: 2, burstWindowSeconds: 60 },
-        },
-      },
-      cooldownStore: cooldownStore(),
-      nowMs: () => nowMs,
+      presenceEvents: { burstLimit: 2, burstWindowSeconds: 60 },
     });
     const fetchUser = vi.fn(async () => ({ bot: false }));
-    const humanClient = { fetchUser } as unknown as Client;
+    const lookupClient = { fetchUser } as unknown as Client;
 
     nowMs = 30_000;
     listener.seedGuildSnapshot(guildSnapshot([]));
     for (const userId of ["burst-1", "burst-2", "burst-3", "burst-4"]) {
       nowMs += 100;
-      await listener.handle(presence("online", userId), humanClient);
+      await listener.handle(presence("online", userId), lookupClient);
     }
 
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(2);
@@ -686,7 +573,7 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("keeps an eligible member retryable while lookup admission is full", async () => {
-    let nowMs = 30_000;
+    nowMs = 30_000;
     let resolveFirstLookup!: (allowed: boolean) => void;
     mocks.canViewDiscordGuildChannel
       .mockImplementationOnce(
@@ -696,16 +583,9 @@ describe("DiscordPresenceListener", () => {
           }),
       )
       .mockResolvedValueOnce(true);
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1", burstLimit: 1 } },
-      },
-      cooldownStore: cooldownStore(),
-      nowMs: () => nowMs,
+    const listener = createPresenceListener({
+      presenceEvents: { burstLimit: 1 },
     });
-    const humanClient = client();
 
     listener.seedGuildSnapshot(guildSnapshot([]));
     const unrelated = listener.handle(presence("online", "unrelated"), humanClient);
@@ -729,18 +609,13 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("keeps burst limits independent per guild", async () => {
-    let nowMs = 30_000;
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
+    nowMs = 30_000;
+    const listener = createPresenceListener({
       guildEntries: {
         "guild-1": { presenceEvents: { channelId: "channel-1", burstLimit: 1 } },
         "guild-2": { presenceEvents: { channelId: "channel-2", burstLimit: 1 } },
       },
-      cooldownStore: cooldownStore(),
-      nowMs: () => nowMs,
     });
-    const humanClient = client();
 
     listener.seedGuildSnapshot(guildSnapshot([]));
     listener.seedGuildSnapshot({ ...guildSnapshot([]), id: "guild-2" });
@@ -766,7 +641,7 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("starts the burst window after a delayed user lookup", async () => {
-    let nowMs = 30_000;
+    nowMs = 30_000;
     let resolveUser!: (value: { bot: boolean }) => void;
     const fetchUser = vi.fn(
       () =>
@@ -774,16 +649,8 @@ describe("DiscordPresenceListener", () => {
           resolveUser = resolve;
         }),
     );
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": {
-          presenceEvents: { channelId: "channel-1", burstLimit: 1, burstWindowSeconds: 60 },
-        },
-      },
-      cooldownStore: cooldownStore(),
-      nowMs: () => nowMs,
+    const listener = createPresenceListener({
+      presenceEvents: { burstLimit: 1, burstWindowSeconds: 60 },
     });
 
     listener.seedGuildSnapshot(guildSnapshot([]));
@@ -805,17 +672,7 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("drops offline baselines when the gateway session resets", async () => {
-    let nowMs = 0;
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1" } },
-      },
-      cooldownStore: cooldownStore(),
-      nowMs: () => nowMs,
-    });
-    const humanClient = client();
+    const listener = createPresenceListener();
 
     nowMs = 30_000;
     await listener.handle(presence("offline"), humanClient);
@@ -829,16 +686,7 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("retries a partial-user transition after a transient lookup failure", async () => {
-    let nowMs = 0;
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1" } },
-      },
-      cooldownStore: cooldownStore(),
-      nowMs: () => nowMs,
-    });
+    const listener = createPresenceListener();
     const fetchUser = vi
       .fn()
       .mockRejectedValueOnce(new Error("temporary"))
@@ -859,17 +707,7 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("serializes rapid transitions while a partial-user lookup is pending", async () => {
-    let nowMs = 0;
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1" } },
-      },
-      cooldownStore: cooldownStore(),
-      nowMs: () => nowMs,
-    });
-    const humanClient = client();
+    const listener = createPresenceListener();
     const partialOnline = { ...presence("online"), user: { id: "user-1" } };
 
     nowMs = 30_000;
@@ -887,17 +725,10 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("atomically claims a cooldown across overlapping listener generations", async () => {
-    let nowMs = 0;
     const sharedCooldownStore = cooldownStore();
     const createListener = () =>
-      new DiscordPresenceListener({
-        cfg: {} as OpenClawConfig,
-        accountId: "molty",
-        guildEntries: {
-          "guild-1": { presenceEvents: { channelId: "channel-1" } },
-        },
+      createPresenceListener({
         cooldownStore: sharedCooldownStore,
-        nowMs: () => nowMs,
       });
     const firstListener = createListener();
     const replacementListener = createListener();
@@ -926,19 +757,11 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("keeps the cooldown when the listener is recreated", async () => {
-    let nowMs = 0;
     const sharedCooldownStore = cooldownStore();
     const createListener = () =>
-      new DiscordPresenceListener({
-        cfg: {} as OpenClawConfig,
-        accountId: "molty",
-        guildEntries: {
-          "guild-1": { presenceEvents: { channelId: "channel-1" } },
-        },
-        nowMs: () => nowMs,
+      createPresenceListener({
         cooldownStore: sharedCooldownStore,
       });
-    const humanClient = client();
     const firstListener = createListener();
 
     nowMs = 30_000;
@@ -957,17 +780,8 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("deduplicates repeated offline-to-online flaps during the cooldown", async () => {
-    let nowMs = 0;
-    const listener = new DiscordPresenceListener({
-      cfg: {} as OpenClawConfig,
-      accountId: "molty",
-      guildEntries: {
-        "guild-1": { presenceEvents: { channelId: "channel-1" } },
-      },
-      cooldownStore: cooldownStore(),
-      nowMs: () => nowMs,
-    });
-    const humanClient = client();
+    nowMs = 0;
+    const listener = createPresenceListener();
 
     for (let cycle = 0; cycle < 3; cycle += 1) {
       nowMs += 1000;
@@ -982,19 +796,12 @@ describe("DiscordPresenceListener", () => {
   });
 
   it("scopes persisted cooldowns by Discord account", async () => {
-    let nowMs = 0;
     const sharedCooldownStore = cooldownStore();
     const createListener = (accountId: string) =>
-      new DiscordPresenceListener({
-        cfg: {} as OpenClawConfig,
+      createPresenceListener({
         accountId,
-        guildEntries: {
-          "guild-1": { presenceEvents: { channelId: "channel-1" } },
-        },
-        nowMs: () => nowMs,
         cooldownStore: sharedCooldownStore,
       });
-    const humanClient = client();
     const firstAccount = createListener("first");
     const secondAccount = createListener("second");
 

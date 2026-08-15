@@ -12,6 +12,7 @@ import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-con
 import type { AssistantMessage, Model } from "../../../llm/types.js";
 import type { AgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
+import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
 import type { DelegationCapability } from "../../delegation-capability.js";
@@ -20,11 +21,13 @@ import type {
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "../../harness/runtime-artifact.types.js";
+import type { McpConnectAction } from "../../mcp-connect-action.js";
 import type { McpAppChannelView } from "../../mcp-ui-resource.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import type { AgentRunTimeoutPhase } from "../../run-timeout-attribution.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import type { SandboxContext } from "../../sandbox/types.js";
 import type { AuthStorage, ModelRegistry } from "../../sessions/index.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
@@ -44,6 +47,8 @@ type EmbeddedRunAttemptBase = Omit<
   | "lane"
   | "enqueue"
   | "sessionFile"
+  | "preparedRunAdmission"
+  | "admittedRunContext"
 >;
 
 type EmbeddedRunContextWindowInfo = {
@@ -94,8 +99,15 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 };
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
+  /** Host-resolved sandbox snapshot for plugin harness tool construction. */
+  sandbox?: SandboxContext | null;
+  /** Host-created authority available only after harness selection. */
+  hostCapabilities?: import("../../harness/host-capability-types.js").AgentHarnessHostCapabilities;
   /** Sticky operation identity used to suppress ordinary retry and hook policy. */
   operation?: EmbeddedRunAttemptOperation;
+  /** Core-prepared fact that explicit requester/config policy restricts plugin-native tools. */
+  pluginHarnessToolPolicyRestricted?: boolean;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   /** Active file-backed artifact target resolved by the run/session target seam. */
   sessionFile: string;
@@ -136,12 +148,12 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   observeToolTerminal?: EmbeddedRunAttemptToolTerminalObserver;
   /** Host-issued scope for harnesses that mirror native child runs into task state. */
   agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
-  /** Storage-neutral trajectory target for harness-owned runtime trace artifacts. */
-  trajectorySessionFile?: string;
   /** Storage-aware trajectory recorder owned by the OpenClaw host. */
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder | null;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
+  /** Reads the sticky untrusted-content flag for the current user turn. */
+  isTurnTainted?: () => boolean;
   /** Signals that the attempt's own run-timeout watchdog is active. */
   onAttemptTimeoutArmed?: () => void;
   /** Signals that this attempt's timeout has fired and must unwind promptly. */
@@ -169,33 +181,13 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 };
 
 export type EmbeddedRunAttemptResult = {
-  aborted: boolean;
+  terminal: AgentRunAttemptTerminal;
   /** True when the runtime made the authoritative final-assistant transcript decision. */
   assistantTranscriptOwned?: boolean;
   /** Exact idempotency key for the runtime-owned final-assistant transcript row. */
   assistantTranscriptIdempotencyKey?: string;
-  /** True when the abort originated from the caller-provided abortSignal. */
-  externalAbort: boolean;
-  timedOut: boolean;
-  /** True when the no-response LLM idle watchdog caused the timeout. */
-  idleTimedOut: boolean;
-  /** True if the timeout occurred while compaction was in progress or pending. */
-  timedOutDuringCompaction: boolean;
-  /** Optional because this type is re-exported as `AgentHarnessAttemptResult`. */
-  timedOutDuringToolExecution?: boolean;
-  timedOutByRunBudget?: boolean;
-  promptError: unknown;
-  /**
-   * Identifies which phase produced the promptError.
-   * - "prompt": the LLM call itself failed and may be eligible for retry/fallback.
-   * - "compaction": the prompt succeeded, but waiting for compaction/retry teardown was aborted;
-   *   this must not be retried as a fresh prompt or the same tool turn can replay.
-   * - "precheck": pre-prompt overflow recovery intentionally short-circuited the prompt so the
-   *   outer run loop can recover via compaction/truncation before any model call is made.
-   * - "hook:before_agent_run": a lifecycle hook blocked the run before the prompt was sent.
-   * - null: no promptError.
-   */
-  promptErrorSource: "prompt" | "compaction" | "precheck" | "hook:before_agent_run" | null;
+  /** Host-private terminal identity used to close the accepted transcript turn. */
+  contextEngineTerminalAnchor?: import("../../../config/sessions/transcript-entry-anchor.js").TranscriptEntryAnchor;
   preflightRecovery?:
     | {
         route: Exclude<PreemptiveCompactionRoute, "fits">;
@@ -243,6 +235,7 @@ export type EmbeddedRunAttemptResult = {
       | "potential_side_effect"
       | "active_item";
     diagnostics?: {
+      transportError?: string;
       idleMs?: number;
       timeoutMs?: number;
       lastActivityReason?: string;
@@ -263,6 +256,8 @@ export type EmbeddedRunAttemptResult = {
   bootstrapPromptWarningSignature?: string;
   systemPromptReport?: SessionSystemPromptReport;
   finalPromptText?: string;
+  /** Exact provider-response count when the harness can observe model iterations directly. */
+  modelIterations?: number;
   messagesSnapshot: AgentMessage[];
   /**
    * Complete application transcript frozen through a settled tool boundary.
@@ -275,6 +270,7 @@ export type EmbeddedRunAttemptResult = {
   beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
   latestMcpAppChannelView?: McpAppChannelView;
+  latestMcpConnectAction?: McpConnectAction;
   lastAssistantTextMessageIndex?: number;
   toolMetas: Array<{
     toolName: string;
@@ -286,7 +282,13 @@ export type EmbeddedRunAttemptResult = {
     asyncTaskId?: string;
   }>;
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
+  /** This attempt accepted work whose future output has a runtime-owned delivery path. */
+  runtimeContinuationStarted?: boolean;
   lastAssistant: AssistantMessage | undefined;
+  /**
+   * Omission preserves the legacy `lastAssistant` fallback; explicit `undefined`
+   * means this attempt produced no assistant response.
+   */
   currentAttemptAssistant?: AssistantMessage | undefined;
   /** Completed message_end snapshot owned by this model attempt. */
   currentAttemptCompletedAssistant?: AssistantMessage | undefined;
@@ -310,6 +312,8 @@ export type EmbeddedRunAttemptResult = {
   hasToolMediaBlockReply?: boolean;
   successfulCronAdds?: number;
   cloudCodeAssistFormatError: boolean;
+  /** Effective context window reported by the harness during this attempt. */
+  contextTokens?: number;
   attemptUsage?: NormalizedUsage;
   promptCache?: ContextEnginePromptCacheInfo;
   contextBudgetStatus?: SessionContextBudgetStatus;
@@ -325,6 +329,20 @@ export type EmbeddedRunAttemptResult = {
   clientToolCalls?: Array<{ name: string; params: Record<string, unknown> }>;
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
+  /**
+   * True when code mode owned this attempt's model tool surface. Absent means
+   * the harness did not report engagement (treated as not engaged), which is
+   * how config-enabled code mode stays visible as a no-op on harness routes.
+   */
+  codeModeEngaged?: boolean;
+  /** Completed assistant round trips observed during this attempt. */
+  assistantTurns?: number;
+  /** Inner bridge call counts from this attempt's tool-search/code-mode catalog. */
+  bridgeCalls?: {
+    search: number;
+    describe: number;
+    call: number;
+  };
   replayMetadata: EmbeddedRunReplayMetadata;
   /**
    * Replay metadata for this attempt before prior session state is accumulated.

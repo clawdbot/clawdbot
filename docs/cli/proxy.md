@@ -15,9 +15,9 @@ Validate operator-managed proxy routing, or run the local explicit debug proxy a
 openclaw proxy validate [--json] [--proxy-url <url>] [--proxy-ca-file <path>] [--allowed-url <url>] [--denied-url <url>] [--apns-reachable] [--apns-authority <url>] [--timeout-ms <ms>]
 openclaw proxy start [--host <host>] [--port <port>]
 openclaw proxy run [--host <host>] [--port <port>] -- <cmd...>
-openclaw proxy coverage
-openclaw proxy sessions [--limit <count>]
-openclaw proxy query --preset <name> [--session <id>]
+openclaw proxy coverage [--json]
+openclaw proxy sessions [--limit <count>] [--json]
+openclaw proxy query --preset <name> [--session <id>] [--json]
 openclaw proxy blob --id <blobId>
 openclaw proxy purge
 ```
@@ -76,6 +76,11 @@ The debug proxy's direct upstream forwarding opens upstream sockets for diagnost
 - `ws-duplicate-frames`
 - `missing-ack`
 - `error-bursts`
+
+`coverage`, `sessions`, and `query` already return JSON by default. They also
+accept `--json` as an explicit machine-output spelling for consistent scripts.
+In that mode, `coverage` keeps its report object, while `sessions` and `query`
+wrap their rows under `sessions` and `rows`, respectively.
 
 `blob --id <blobId>` prints a captured payload blob's raw content.
 

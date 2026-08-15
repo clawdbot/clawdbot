@@ -7,6 +7,7 @@ import {
   ssrfPolicyFromPrivateNetworkOptIn,
   type LookupFn,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeMattermostBaseUrl, readMattermostError, type MattermostUser } from "./client.js";
 import type { BaseProbeResult } from "./runtime-api.js";
 
@@ -34,49 +35,51 @@ export async function probeMattermost(
     return { ok: false, error: "baseUrl missing" };
   }
   const url = `${normalized}/api/v4/users/me`;
-  const start = Date.now();
-  // Guard-owned timeoutMs covers DNS/proxy preflight; init.signal alone does not.
-  const resolvedTimeoutMs = timeoutMs > 0 ? resolveTimerTimeoutMs(timeoutMs, 2500) : undefined;
-  try {
-    const { response: res, release } = await fetchWithSsrFGuard({
-      url,
-      init: {
-        headers: { Authorization: `Bearer ${botToken}` },
-      },
-      auditContext: "mattermost-probe",
-      policy: ssrfPolicyFromPrivateNetworkOptIn(allowPrivateNetwork),
-      ...(resolvedTimeoutMs !== undefined ? { timeoutMs: resolvedTimeoutMs } : {}),
-      ...(deps?.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
-      ...(deps?.lookupFn ? { lookupFn: deps.lookupFn } : {}),
-    });
-    try {
-      const elapsedMs = Date.now() - start;
-      if (!res.ok) {
-        const detail = await readMattermostError(res);
+  return await runChannelProbe(
+    undefined,
+    async ({ elapsedMs }) => {
+      // Guard-owned timeoutMs covers DNS/proxy preflight; init.signal alone does not.
+      const resolvedTimeoutMs = timeoutMs > 0 ? resolveTimerTimeoutMs(timeoutMs, 2500) : undefined;
+      const { response: res, release } = await fetchWithSsrFGuard({
+        url,
+        init: {
+          headers: { Authorization: `Bearer ${botToken}` },
+        },
+        auditContext: "mattermost-probe",
+        policy: ssrfPolicyFromPrivateNetworkOptIn(allowPrivateNetwork),
+        ...(resolvedTimeoutMs !== undefined ? { timeoutMs: resolvedTimeoutMs } : {}),
+        ...(deps?.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
+        ...(deps?.lookupFn ? { lookupFn: deps.lookupFn } : {}),
+      });
+      const requestElapsedMs = elapsedMs();
+      try {
+        if (!res.ok) {
+          const detail = await readMattermostError(res);
+          return {
+            ok: false,
+            status: res.status,
+            error: detail || res.statusText,
+            elapsedMs: requestElapsedMs,
+          };
+        }
+        const bot = await readProviderJsonResponse<MattermostUser>(
+          res,
+          "Mattermost probe /users/me",
+        );
         return {
-          ok: false,
+          ok: true,
           status: res.status,
-          error: detail || res.statusText,
-          elapsedMs,
+          elapsedMs: requestElapsedMs,
+          bot,
         };
+      } finally {
+        await release();
       }
-      const bot = await readProviderJsonResponse<MattermostUser>(res, "Mattermost probe /users/me");
-      return {
-        ok: true,
-        status: res.status,
-        elapsedMs,
-        bot,
-      };
-    } finally {
-      await release();
-    }
-  } catch (err) {
-    const message = formatErrorMessage(err);
-    return {
+    },
+    (error) => ({
       ok: false,
       status: null,
-      error: message,
-      elapsedMs: Date.now() - start,
-    };
-  }
+      error: formatErrorMessage(error),
+    }),
+  );
 }

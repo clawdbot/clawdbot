@@ -2,6 +2,7 @@ package ai.openclaw.app
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -10,7 +11,14 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 internal object AndroidScreenshotFixture {
+  @Volatile private var scene: AndroidScreenshotScene = AndroidScreenshotScene.Home
+
+  fun configure(scene: AndroidScreenshotScene) {
+    this.scene = scene
+  }
+
   const val gatewayId = "android-screenshot-gateway"
+  const val controlUiBaseUrl = "http://127.0.0.1:18789"
   const val mainSessionKey = "agent:main:node-screenshot"
   const val primarySessionTitle = "Android release planning"
   const val cronJobId = "android-release-digest"
@@ -99,7 +107,7 @@ internal object AndroidScreenshotFixture {
     when (method) {
       "health" -> buildJsonObject { put("ok", JsonPrimitive(true)) }.toString()
       "chat.history" -> chatHistory()
-      "sessions.list" -> sessionList()
+      "sessions.list" -> sessionList(paramsJson)
       "chat.metadata" -> chatMetadata()
       "cron.list" -> cronList()
       "cron.get" -> cronJob().toString()
@@ -261,6 +269,22 @@ internal object AndroidScreenshotFixture {
               1_783_555_080_000,
             ),
           )
+          add(
+            chatMessage(
+              role = "user",
+              content = "[System] Continue the interrupted turn.",
+              timestamp = 1_783_555_100_000,
+              provenanceSourceTool = "main_session_restart_recovery",
+            ),
+          )
+          add(
+            chatMessage(
+              role = "user",
+              content = "[System] Gateway restarted during the Android release update.",
+              timestamp = 1_783_555_120_000,
+              provenanceSourceTool = "restart-sentinel",
+            ),
+          )
           add(chatMessage("user", "Summarize the open review feedback for me.", 1_783_555_140_000))
           add(
             chatMessage(
@@ -268,6 +292,32 @@ internal object AndroidScreenshotFixture {
               "The main thread asks for a regression test around session restore, and the second one wants the new " +
                 "config key documented before merge. Both are small; I can draft patches for each if you want.",
               1_783_555_200_000,
+            ),
+          )
+          add(
+            chatMessage(
+              role = "system",
+              content = "Compaction",
+              timestamp = 1_783_555_220_000,
+              marker =
+                buildJsonObject {
+                  put("kind", JsonPrimitive("compaction"))
+                  put("id", JsonPrimitive("android-screenshot-compaction"))
+                  put("tokensBefore", JsonPrimitive(900_000))
+                  put("tokensAfter", JsonPrimitive(24_700))
+                },
+            ),
+          )
+          add(
+            chatMessage(
+              role = "system",
+              content = "Reset",
+              timestamp = 1_783_555_240_000,
+              marker =
+                buildJsonObject {
+                  put("kind", JsonPrimitive("reset"))
+                  put("id", JsonPrimitive("android-screenshot-reset"))
+                },
             ),
           )
           add(chatMessage("user", "Draft a short status update for the team.", 1_783_555_260_000))
@@ -299,14 +349,46 @@ internal object AndroidScreenshotFixture {
     role: String,
     content: String,
     timestamp: Long,
+    provenanceSourceTool: String? = null,
+    marker: JsonObject? = null,
   ) = buildJsonObject {
     put("role", JsonPrimitive(role))
     put("content", JsonPrimitive(content))
     put("timestamp", JsonPrimitive(timestamp))
+    provenanceSourceTool?.let { sourceTool ->
+      put(
+        "provenance",
+        buildJsonObject {
+          put("kind", JsonPrimitive("internal_system"))
+          put("sourceTool", JsonPrimitive(sourceTool))
+        },
+      )
+    }
+    marker?.let { put("__openclaw", it) }
   }
 
-  private fun sessionList(): String =
-    buildJsonObject {
+  private fun sessionList(paramsJson: String?): String {
+    val spawnedBy =
+      paramsJson
+        ?.let {
+          runCatching {
+            Json
+              .parseToJsonElement(it)
+              .jsonObject["spawnedBy"]
+              ?.jsonPrimitive
+              ?.contentOrNull
+          }.getOrNull()
+        }
+    if (scene == AndroidScreenshotScene.Swarm && spawnedBy != null) {
+      val children = swarmChildren(spawnedBy)
+      return buildJsonObject {
+        put("sessions", buildJsonArray { children.forEach(::add) })
+        put("count", JsonPrimitive(children.size))
+        put("totalCount", JsonPrimitive(children.size))
+        put("hasMore", JsonPrimitive(false))
+      }.toString()
+    }
+    return buildJsonObject {
       put(
         "sessions",
         buildJsonArray {
@@ -317,6 +399,37 @@ internal object AndroidScreenshotFixture {
       )
       put("totalCount", JsonPrimitive(3))
     }.toString()
+  }
+
+  private fun swarmChildren(parentKey: String) =
+    listOf(
+      swarmChild("research-polling", "National polling", "done", parentKey),
+      swarmChild("research-work", "Work and labor", "running", parentKey),
+      swarmChild("research-health", "Health", "running", parentKey),
+      swarmChild("research-trust", "Governance and trust", null, parentKey, queued = true),
+      swarmChild("research-media", "Media signals", "failed", parentKey),
+    )
+
+  private fun swarmChild(
+    key: String,
+    label: String,
+    status: String?,
+    parentKey: String,
+    queued: Boolean = false,
+  ) = session("agent:main:subagent:$key", label, 1_783_555_320_000).toMutableMap().let { values ->
+    buildJsonObject {
+      values.forEach { (field, value) -> put(field, value) }
+      put("parentSessionKey", JsonPrimitive(parentKey))
+      put("spawnedBy", JsonPrimitive(parentKey))
+      put("swarmGroupId", JsonPrimitive("swarm:$parentKey:research"))
+      put("swarmPhase", JsonPrimitive("Research"))
+      put("swarmPhaseRank", JsonPrimitive(0))
+      put("swarmLog", JsonPrimitive("Comparing labor, education, health, trust, and media signals."))
+      status?.let { put("status", JsonPrimitive(it)) }
+      if (queued) put("subagentRunState", JsonPrimitive("active"))
+      if (status == "running") put("hasActiveRun", JsonPrimitive(true))
+    }
+  }
 
   private fun session(
     key: String,
@@ -338,6 +451,7 @@ internal object AndroidScreenshotFixture {
 
   private fun chatMetadata(): String =
     buildJsonObject {
+      put("swarmEnabled", JsonPrimitive(scene == AndroidScreenshotScene.Swarm))
       put(
         "commands",
         buildJsonArray {

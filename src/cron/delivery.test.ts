@@ -234,8 +234,108 @@ describe("resolveFailureDestination", () => {
     expect(plan).toEqual({
       mode: "announce",
       channel: "signal",
-      to: "222",
-      accountId: "global-account",
+      to: undefined,
+      accountId: undefined,
+    });
+  });
+
+  it("preserves global targets and accounts for same-channel failure overrides", () => {
+    const plan = resolveFailureDestination(
+      makeCronJob({
+        delivery: {
+          mode: "none",
+          failureDestination: { channel: "slack", mode: "announce" },
+        },
+      }),
+      {
+        channel: "slack",
+        to: "slack:cron-alerts",
+        accountId: "slack-bot",
+        mode: "announce",
+      },
+    );
+
+    expect(plan).toEqual({
+      mode: "announce",
+      channel: "slack",
+      to: "slack:cron-alerts",
+      accountId: "slack-bot",
+    });
+  });
+
+  it("does not reuse a global recipient or account across failure channels", () => {
+    const plan = resolveFailureDestination(
+      makeCronJob({
+        delivery: {
+          mode: "none",
+          failureDestination: { channel: "telegram" },
+        },
+      }),
+      {
+        channel: "slack",
+        to: "slack:cron-alerts",
+        accountId: "slack-bot",
+        mode: "announce",
+      },
+    );
+
+    expect(plan).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: undefined,
+      accountId: undefined,
+    });
+  });
+
+  it("does not reuse a channel-specific recipient or account for the last failure channel", () => {
+    const plan = resolveFailureDestination(
+      makeCronJob({
+        delivery: {
+          mode: "none",
+          failureDestination: { channel: "last" },
+        },
+      }),
+      {
+        channel: "slack",
+        to: "slack:cron-alerts",
+        accountId: "slack-bot",
+        mode: "announce",
+      },
+    );
+
+    expect(plan).toEqual({
+      mode: "announce",
+      channel: "last",
+      to: undefined,
+      accountId: undefined,
+    });
+  });
+
+  it("preserves an explicitly overridden recipient and account on a different failure channel", () => {
+    const plan = resolveFailureDestination(
+      makeCronJob({
+        delivery: {
+          mode: "none",
+          failureDestination: {
+            channel: "telegram",
+            to: "telegram:123",
+            accountId: "telegram-bot",
+          },
+        },
+      }),
+      {
+        channel: "slack",
+        to: "slack:cron-alerts",
+        accountId: "slack-bot",
+        mode: "announce",
+      },
+    );
+
+    expect(plan).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "telegram:123",
+      accountId: "telegram-bot",
     });
   });
 
@@ -486,6 +586,35 @@ describe("resolveFailureDestination", () => {
       }),
       undefined,
     );
+    expect(plan).toEqual({
+      mode: "announce",
+      channel: "slack",
+      to: "slack:U123",
+      accountId: undefined,
+    });
+  });
+
+  it("does not inherit a foreign global account for a prefixed failure destination", () => {
+    const plan = resolveFailureDestination(
+      makeCronJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "111",
+          failureDestination: {
+            mode: "announce",
+            to: "slack:U123",
+          },
+        },
+      }),
+      {
+        mode: "announce",
+        channel: "telegram",
+        to: "telegram:alerts",
+        accountId: "telegram-bot",
+      },
+    );
+
     expect(plan).toEqual({
       mode: "announce",
       channel: "slack",

@@ -1,18 +1,11 @@
 // Gateway RPC handler for the tool catalog shown by clients and Control UI.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
   type ToolsCatalogResult,
   validateToolsCatalogParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../../agents/agent-scope.js";
-import { resolveSwarmConfig } from "../../agents/swarm-config.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import {
   listCoreToolSections,
   PROFILE_OPTIONS,
@@ -30,6 +23,7 @@ import {
 } from "../../plugins/tools.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 type ToolCatalogEntry = {
   id: string;
@@ -198,10 +192,10 @@ function buildPluginGroups(params: {
 /** Build the merged core/plugin tool catalog for one agent. */
 function buildToolsCatalogResult(params: {
   cfg: OpenClawConfig;
-  agentId?: string;
+  agentId: string;
   includePlugins?: boolean;
 }): ToolsCatalogResult {
-  const agentId = normalizeOptionalString(params.agentId) || resolveDefaultAgentId(params.cfg);
+  const agentId = params.agentId;
   const includePlugins = params.includePlugins !== false;
   const groups = buildCoreGroups({ cfg: params.cfg, agentId });
   if (includePlugins) {
@@ -226,15 +220,7 @@ function buildToolsCatalogResult(params: {
 /** Gateway request handlers for tool catalog queries. */
 export const toolsCatalogHandlers: GatewayRequestHandlers = {
   "tools.catalog": ({ params, respond, context }) => {
-    if (!validateToolsCatalogParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid tools.catalog params: ${formatValidationErrors(validateToolsCatalogParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateToolsCatalogParams, "tools.catalog", respond)) {
       return;
     }
     const resolved = resolveAgentIdOrRespondError({

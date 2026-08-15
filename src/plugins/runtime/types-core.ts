@@ -113,6 +113,17 @@ type RuntimeCreateSessionEntryBaseParams = {
         pluginExtensions?: RuntimeSessionPluginExtensions;
         /** Registry-injected owner; plugin callers cannot select another owner. */
         pluginOwnerId?: string;
+      }
+    | {
+        acpBackendId: string;
+        acpSessionBinding: {
+          acpAgentId: string;
+          agentSessionId: string;
+        };
+        modelSelectionLocked?: true;
+        pluginExtensions?: RuntimeSessionPluginExtensions;
+        /** Registry-injected owner; plugin callers cannot select another owner. */
+        pluginOwnerId?: string;
       };
 };
 type RuntimeCreateSessionEntryParams = RuntimeCreateSessionEntryBaseParams &
@@ -213,11 +224,12 @@ export type LlmCompleteUsage = {
   costUsd?: number;
 };
 
-export type LlmCompleteParams = {
-  messages: LlmCompleteMessage[];
+type LlmCompleteCommonParams = {
   /** Model ref (e.g. "anthropic/claude-sonnet-4-6"); defaults to the target agent's configured model. */
   model?: string;
+  /** Advisory output limit; runtime owners without an equivalent control may ignore it. */
   maxTokens?: number;
+  /** Advisory sampling hint; runtime owners without an equivalent control may ignore it. */
   temperature?: number;
   /** Requested reasoning effort; the host normalizes it for the selected model. */
   reasoning?: import("../../auto-reply/thinking.js").ThinkLevel;
@@ -229,12 +241,52 @@ export type LlmCompleteParams = {
   agentId?: string;
 };
 
+type LlmDirectCompleteParams = LlmCompleteCommonParams & {
+  messages: LlmCompleteMessage[];
+  execution?: undefined;
+};
+
+export type LlmIsolatedAgentRuntimeCompleteParams = LlmCompleteCommonParams & {
+  /** Isolated runtimes currently accept one fresh user prompt, not a replayed chat history. */
+  messages: [{ role: "user"; content: string }];
+  execution: {
+    /** Fresh, literal-zero-tool completion through the configured agent runtime. */
+    mode: "isolated-agent-runtime";
+    /** Exact credential owner. Requires host-granted plugin policy. */
+    authProfileId?: string;
+    timeoutMs?: number;
+  };
+};
+
+export type LlmCompleteParams = LlmDirectCompleteParams | LlmIsolatedAgentRuntimeCompleteParams;
+
+export type LlmCompleteErrorCode =
+  | "LLM_COMPLETION_NOT_AUTHORIZED"
+  | "LLM_ISOLATED_INPUT_REJECTED"
+  | "LLM_ISOLATED_UNSUPPORTED"
+  | "LLM_RUNTIME_UNAVAILABLE"
+  | "LLM_COMPLETION_ABORTED"
+  | "LLM_COMPLETION_TIMEOUT"
+  | "LLM_COMPLETION_OUTPUT_REJECTED"
+  | "LLM_COMPLETION_FAILED";
+
+type LlmCompleteExecution =
+  | {
+      mode: "direct-provider";
+      owner: { kind: "provider"; id: string };
+    }
+  | {
+      mode: "isolated-agent-runtime";
+      owner: { kind: "cli" | "harness"; id: string };
+    };
+
 export type LlmCompleteResult = {
   text: string;
   provider: string;
   model: string;
   agentId: string;
   usage: LlmCompleteUsage;
+  execution: LlmCompleteExecution;
   audit: {
     caller: LlmCompleteCaller;
     purpose?: string;
@@ -242,8 +294,13 @@ export type LlmCompleteResult = {
   };
 };
 
+type RuntimeRunEmbeddedAgentParams = Omit<
+  import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
+  "admittedRunContext" | "preparedRunAdmission" | "skillWorkshopCollectionReconcile"
+>;
+
 type RuntimeRunEmbeddedAgent = (
-  params: import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
+  params: RuntimeRunEmbeddedAgentParams,
 ) => Promise<import("../../agents/embedded-agent-runner/types.js").EmbeddedAgentRunResult>;
 
 /** Core runtime helpers exposed to trusted native plugins. */
@@ -275,6 +332,8 @@ export type PluginRuntimeCore = {
     resolveAgentDir: typeof import("../../agents/agent-scope.js").resolveAgentDir;
     resolveAgentWorkspaceDir: typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir;
     resolveAgentIdentity: typeof import("../../agents/identity.js").resolveAgentIdentity;
+    /** Resolve an allowed catalog create target through canonical agent model/runtime policy. */
+    resolveSessionCatalogCreateTarget: typeof import("./runtime-agent-session-catalog.js").resolveAgentCatalogCreateTarget;
     resolveThinkingDefault: (params: {
       cfg: import("../../config/types.openclaw.js").OpenClawConfig;
       provider: string;
@@ -299,7 +358,7 @@ export type PluginRuntimeCore = {
     resolveCliBackendDispatchEligibility: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibility;
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
-      resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
+      resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
       createSessionEntry: (
         params: RuntimeCreateSessionEntryParams,
       ) => Promise<RuntimeCreateSessionEntryResult>;
@@ -330,9 +389,8 @@ export type PluginRuntimeCore = {
     requestHeartbeatNow: (opts?: RuntimeRequestHeartbeatNowOptions) => void;
     /**
      * Run a single heartbeat cycle immediately (bypassing the coalesce timer).
-     * Accepts an optional `heartbeat` config override so callers can force
-     * delivery to the last active channel — the same pattern the cron service
-     * uses to avoid the default `target: "none"` suppression.
+     * Accepts an optional `heartbeat` config override so callers can choose
+     * an explicit destination or opt into internal-only `target: "none"` runs.
      */
     runHeartbeatOnce: (opts?: RunHeartbeatOnceOptions) => Promise<HeartbeatRunResult>;
     runCommandWithTimeout: typeof import("../../process/exec.js").runCommandWithTimeout;
@@ -415,7 +473,6 @@ export type PluginRuntimeCore = {
     openSyncKeyedStore: <T>(
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateSyncKeyedStore<T>;
-    withLease: import("../../plugin-state/plugin-state-lease.types.js").PluginStateLeaseRunner;
     openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
       options?: Omit<CreateChannelIngressQueueOptions, "channelId">,
     ) => import("../../channels/message/ingress-queue.js").ChannelIngressQueue<

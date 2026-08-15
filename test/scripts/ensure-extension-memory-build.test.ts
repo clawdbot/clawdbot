@@ -7,7 +7,7 @@ import {
   ensureExtensionMemoryBuild,
   hasBuiltExtensionMemoryEntries,
   resolveExtensionMemoryBuildTimeoutMs,
-} from "../../scripts/ensure-extension-memory-build.mjs";
+} from "../../scripts/ensure-extension-memory-build.mts";
 
 const tempRoots: string[] = [];
 
@@ -15,7 +15,7 @@ function makeTempRoot(): string {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-build-"));
   tempRoots.push(root);
   mkdirSync(path.join(root, "scripts"), { recursive: true });
-  writeFileSync(path.join(root, "scripts", "build-all.mjs"), "", "utf8");
+  writeFileSync(path.join(root, "scripts", "build-all.mts"), "", "utf8");
   return root;
 }
 
@@ -96,7 +96,7 @@ describe("ensure-extension-memory-build", () => {
     expect(calls).toEqual([
       {
         command: "/node",
-        args: [path.join(root, "scripts", "build-all.mjs"), "cliStartup"],
+        args: ["--import", "tsx", path.join(root, "scripts", "build-all.mts"), "cliStartup"],
         options: expect.objectContaining({
           cwd: root,
           killSignal: "SIGKILL",

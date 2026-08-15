@@ -1,4 +1,5 @@
 // Feishu tests cover bot.broadcast plugin behavior.
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { feishuGroupNameCache } from "./bot-group-name-state.js";
@@ -108,6 +109,7 @@ function createReplayClaim(key: string): FeishuMessageProcessingClaim {
 describe("broadcast dispatch", () => {
   const mockGetChatInfo = vi.fn();
   const mockShouldComputeCommandAuthorized = vi.fn(() => false);
+  const resolvedTurnCalls: Array<Record<string, unknown>> = [];
   const mockSaveMediaBuffer = vi.fn().mockResolvedValue({
     path: "/tmp/inbound-clip.mp4",
     contentType: "video/mp4",
@@ -133,6 +135,7 @@ describe("broadcast dispatch", () => {
         saveMediaBuffer: mockSaveMediaBuffer,
       },
       inbound: {
+        buildContext: buildChannelInboundEventContext,
         run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]) => {
           const input = await params.adapter.ingest(params.raw);
           if (!input) {
@@ -149,6 +152,7 @@ describe("broadcast dispatch", () => {
           if (!("route" in turn) || !("delivery" in turn)) {
             throw new Error("expected assembled Feishu channel turn plan");
           }
+          resolvedTurnCalls.push(turn as unknown as Record<string, unknown>);
           const routeSessionKey = turn.route.sessionKey;
           await mockRecordInboundSession({
             storePath: mockResolveStorePath(),
@@ -251,6 +255,7 @@ describe("broadcast dispatch", () => {
     mockResolveStorePath.mockReset().mockReturnValue("/tmp/feishu-session-store.json");
     feishuGroupNameCache.clear();
     builtInboundContextCalls.length = 0;
+    resolvedTurnCalls.length = 0;
     mockResolveAgentRoute.mockReturnValue({
       agentId: "main",
       channel: "feishu",
@@ -371,6 +376,37 @@ describe("broadcast dispatch", () => {
       | { agentId?: string }
       | undefined;
     expect(dispatcherParams?.agentId).toBe("main");
+  });
+
+  it("keeps the observer adapter isolated from active delivery", async () => {
+    const activeDeliver = vi.fn(async () => undefined);
+    mockCreateFeishuReplyDispatcher.mockReturnValueOnce({
+      dispatcherOptions: {},
+      delivery: { deliver: activeDeliver },
+      replyOptions: {},
+      ensureNoVisibleReplyFallback: vi.fn(),
+    });
+
+    await handleFeishuMessage({
+      cfg: createBroadcastConfig(),
+      event: createBroadcastEvent({
+        messageId: "msg-broadcast-observer-isolation",
+        text: "hello @bot",
+        botMentioned: true,
+      }),
+      botOpenId: "bot-open-id",
+      runtime: createRuntimeEnv(),
+    });
+
+    const observerTurn = resolvedTurnCalls.find(
+      (turn) => (turn["admission"] as { kind?: string } | undefined)?.kind === "observeOnly",
+    );
+    const observerDelivery = observerTurn?.["delivery"] as
+      | { deliver: (payload: unknown, context: unknown) => Promise<unknown> }
+      | undefined;
+    expect(observerDelivery?.deliver).not.toBe(activeDeliver);
+    await expect(observerDelivery?.deliver({}, {})).resolves.toEqual({ visibleReplySent: false });
+    expect(activeDeliver).not.toHaveBeenCalled();
   });
 
   it("sends no-visible-reply fallback for active broadcast zero-final dispatch", async () => {

@@ -276,7 +276,9 @@ describe("archive utils", () => {
           lstatSpy.mockRestore();
         }
 
-        await expect(fs.readFile(outsideAlias, "utf8")).resolves.toBe("");
+        // The raced alias points at attacker-supplied archive bytes. Cleanup unlinks the owned
+        // destination; truncating the inode would instead mutate a path outside that boundary.
+        await expect(fs.readFile(outsideAlias, "utf8")).resolves.toBe("owned");
         await expectPathMissing(extractedPath);
       });
     },

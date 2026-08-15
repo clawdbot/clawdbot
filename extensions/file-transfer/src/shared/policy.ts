@@ -50,6 +50,7 @@ import path from "node:path";
 import { minimatch } from "minimatch";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type FilePolicyKind = "read" | "write";
 type FilePolicyAskMode = "off" | "on-miss" | "always";
@@ -85,10 +86,7 @@ type NodeFilePolicyConfig = {
 type FilePolicyConfig = Record<string, NodeFilePolicyConfig>;
 
 function asFilePolicyConfig(value: unknown): FilePolicyConfig | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as FilePolicyConfig;
+  return asNullableRecord(value) as FilePolicyConfig | null;
 }
 
 function readFilePolicyConfigFromPluginConfig(pluginConfig: unknown): FilePolicyConfig | null {
@@ -358,8 +356,7 @@ export async function persistAllowAlways(input: {
     mutate: (draft) => {
       // Plugin config is intentionally plugin-owned; the root OpenClawConfig
       // type only guarantees `Record<string, unknown>` here.
-      const root = draft as unknown as Record<string, unknown>;
-      const plugins = (root.plugins ??= {}) as Record<string, unknown>;
+      const plugins = (draft.plugins ??= {}) as Record<string, unknown>;
       const entries = (plugins.entries ??= {}) as Record<string, unknown>;
       const pluginEntry = (entries["file-transfer"] ??= {}) as Record<string, unknown>;
       const pluginConfig = (pluginEntry.config ??= {}) as Record<string, unknown>;

@@ -139,7 +139,7 @@ function signWebhookBody(rawBody: string, encryptKey: string): Record<string, st
 }
 
 async function withWebhook(
-  eventDispatcher: Pick<Lark.EventDispatcher, "invoke">,
+  ingress: Pick<ReturnType<typeof createFeishuDurableIngress>, "invoke" | "invokeWebhook">,
   run: (url: string) => Promise<void>,
 ) {
   const port = await getFreePort();
@@ -154,7 +154,8 @@ async function withWebhook(
   const monitor = monitorWebhook({
     account,
     accountId: account.accountId,
-    eventDispatcher: eventDispatcher as Lark.EventDispatcher,
+    eventDispatcher: { invoke: ingress.invoke } as Lark.EventDispatcher,
+    invokeWebhookEvent: ingress.invokeWebhook,
     abortSignal: abortController.signal,
     runtime: createNonExitingRuntimeEnv(),
   });
@@ -197,7 +198,7 @@ describe("Feishu durable ingress", () => {
       const gatedQueue = { ...queue, enqueue } as FeishuIngressQueue;
       const ingress = startIngress({ queue: gatedQueue, dispatcher: createDispatcher() });
 
-      await withWebhook({ invoke: ingress.invoke }, async (url) => {
+      await withWebhook(ingress, async (url) => {
         let responseSettled = false;
         const responsePromise = postWebhook(
           url,
@@ -210,7 +211,9 @@ describe("Feishu durable ingress", () => {
         expect(responseSettled).toBe(false);
 
         releaseAppend();
-        await expect(responsePromise.then((response) => response.status)).resolves.toBe(200);
+        const response = await responsePromise;
+        expect(response.status).toBe(200);
+        expect(response.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
       });
       await ingress.stop();
     });
@@ -225,9 +228,10 @@ describe("Feishu durable ingress", () => {
       const dispatch = vi.fn(async () => undefined);
       const ingress = startIngress({ queue: failingQueue, dispatcher: createDispatcher(dispatch) });
 
-      await withWebhook({ invoke: ingress.invoke }, async (url) => {
+      await withWebhook(ingress, async (url) => {
         const response = await postWebhook(url, messageEnvelope({ eventId: "evt-append-fail" }));
         expect(response.status).toBe(500);
+        expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
       });
 
       expect(enqueue).toHaveBeenCalledTimes(3);

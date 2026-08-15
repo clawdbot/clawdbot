@@ -7,7 +7,6 @@ import {
   type ControlUiPluginFrameGrantAck,
 } from "../../../src/gateway/control-ui-contract.js";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
-import { setUiTimeFormatPreference } from "../lib/format.ts";
 import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
 
 type ApplicationConfigAuthSource = {
@@ -39,12 +38,13 @@ type ApplicationConfig = {
     avatarReason: string | null;
   };
   serverVersion: string | null;
+  serverBuildId?: string | null;
   devGitBranch: string | null;
   localMediaPreviewRoots: string[];
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
-  chatMessageMaxWidth: string | null;
   terminalEnabled: boolean;
+  cliAgentsEnabled?: boolean;
   pluginFrameGrants: ControlUiPluginFrameGrantAck[];
 };
 
@@ -76,12 +76,13 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
     avatarReason: null,
   },
   serverVersion: null,
+  serverBuildId: null,
   devGitBranch: null,
   localMediaPreviewRoots: [],
   embedSandboxMode: "strict",
   allowExternalEmbedUrls: false,
-  chatMessageMaxWidth: null,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
+  cliAgentsEnabled: false,
   pluginFrameGrants: [],
 };
 
@@ -143,6 +144,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
       avatarReason: identity.avatarReason ?? null,
     },
     serverVersion: parsed.serverVersion ?? null,
+    serverBuildId: parsed.serverBuildId ?? null,
     devGitBranch:
       typeof parsed.devGitBranch === "string" && parsed.devGitBranch.trim()
         ? parsed.devGitBranch.trim()
@@ -157,11 +159,8 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
           ? "strict"
           : "scripts",
     allowExternalEmbedUrls: parsed.allowExternalEmbedUrls === true,
-    chatMessageMaxWidth:
-      typeof parsed.chatMessageMaxWidth === "string" && parsed.chatMessageMaxWidth.trim()
-        ? parsed.chatMessageMaxWidth
-        : null,
     terminalEnabled: parsed.terminalEnabled === true,
+    cliAgentsEnabled: parsed.cliAgentsEnabled === true,
     pluginFrameGrants: Array.isArray(parsed.pluginFrameGrants)
       ? parsed.pluginFrameGrants.filter(
           (grant): grant is ControlUiPluginFrameGrantAck =>
@@ -219,7 +218,6 @@ async function loadApplicationConfig(params: {
       return null;
     }
     const parsed = (await res.json()) as ControlUiBootstrapConfig;
-    setUiTimeFormatPreference(parsed.timeFormat);
     applyControlUiSeamColor(parsed.seamColor);
     return normalizeApplicationConfig(parsed);
   } catch {

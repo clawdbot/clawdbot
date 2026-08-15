@@ -1,5 +1,5 @@
-import type { PluginHealthErrorSummary } from "../../commands/health.types.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
+import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
 import type { PortUsage } from "../../infra/ports.js";
 
 export type GatewayRestartWaitOutcome =

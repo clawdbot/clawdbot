@@ -1,4 +1,5 @@
 // Msteams plugin module implements graph behavior.
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   readProviderJsonArrayFieldResponse,
   readProviderJsonResponse,
@@ -99,6 +100,13 @@ export function buildMSTeamsGraphMessageUrl(params: {
   return `${GRAPH_ROOT}/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`;
 }
 
+async function releaseGraphResponse(response: Response, release: () => Promise<void>) {
+  if (!response.bodyUsed) {
+    void response.body?.cancel().catch(() => undefined); // Awaiting capture tees can deadlock.
+  }
+  await release();
+}
+
 async function fetchGraphCollection(params: {
   url: string;
   accessToken: string;
@@ -133,7 +141,7 @@ async function fetchGraphCollection(params: {
       return { status, items: [] };
     }
   } finally {
-    await release();
+    await releaseGraphResponse(response, release);
   }
 }
 
@@ -181,7 +189,7 @@ async function downloadGraphHostedContent(params: {
     })) as { status: number; items: GraphHostedContent[] };
   } catch (err) {
     params.logger?.warn?.("msteams graph hostedContents fetch failed", {
-      error: err instanceof Error ? err.message : String(err),
+      error: coerceErrorMessage(err),
     });
     return { media: [], count: 0 };
   }
@@ -228,12 +236,12 @@ async function downloadGraphHostedContent(params: {
           sourceId: item.id,
         });
       } finally {
-        await release();
+        await releaseGraphResponse(valRes, release);
       }
     } catch (err) {
       out.push(createGraphHostedContentFact(item));
       params.logger?.warn?.("msteams graph hostedContent value fetch failed", {
-        error: err instanceof Error ? err.message : String(err),
+        error: coerceErrorMessage(err),
       });
       continue;
     }
@@ -277,10 +285,10 @@ export async function downloadMSTeamsGraphMedia(params: {
   } catch (err) {
     params.logger?.debug?.("graph media token acquisition failed", {
       messageUrl,
-      error: err instanceof Error ? err.message : String(err),
+      error: coerceErrorMessage(err),
     });
     params.logger?.warn?.("msteams graph token acquisition failed", {
-      error: err instanceof Error ? err.message : String(err),
+      error: coerceErrorMessage(err),
     });
     return { media: [], messageUrl, tokenError: true };
   }
@@ -317,10 +325,10 @@ export async function downloadMSTeamsGraphMedia(params: {
         } catch (err) {
           params.logger?.debug?.("graph media message parse failed", {
             messageUrl,
-            error: err instanceof Error ? err.message : String(err),
+            error: coerceErrorMessage(err),
           });
           params.logger?.warn?.("msteams graph message parse failed", {
-            error: err instanceof Error ? err.message : String(err),
+            error: coerceErrorMessage(err),
             messageUrl,
           });
           msgData = {};
@@ -337,15 +345,15 @@ export async function downloadMSTeamsGraphMedia(params: {
         });
       }
     } finally {
-      await release();
+      await releaseGraphResponse(msgRes, release);
     }
   } catch (err) {
     params.logger?.debug?.("graph media message fetch failed", {
       messageUrl,
-      error: err instanceof Error ? err.message : String(err),
+      error: coerceErrorMessage(err),
     });
     params.logger?.warn?.("msteams graph message fetch failed", {
-      error: err instanceof Error ? err.message : String(err),
+      error: coerceErrorMessage(err),
     });
   }
 
@@ -416,7 +424,7 @@ export async function downloadMSTeamsGraphMedia(params: {
     } catch (err) {
       sharePointMedia.push(unavailableMedia);
       params.logger?.warn?.("msteams SharePoint reference download failed", {
-        error: err instanceof Error ? err.message : String(err),
+        error: coerceErrorMessage(err),
         name,
       });
     }
@@ -465,7 +473,7 @@ export async function downloadMSTeamsGraphMedia(params: {
     });
   } catch (err) {
     params.logger?.warn?.("msteams graph attachment download failed", {
-      error: err instanceof Error ? err.message : String(err),
+      error: coerceErrorMessage(err),
       messageUrl,
     });
   }

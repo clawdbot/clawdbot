@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
-import { listPluginCompatRecords } from "./registry.js";
+import { listPluginCompatRecords, type PluginCompatCode } from "./registry.js";
 
 const datePattern = /^\d{4}-\d{2}-\d{2}$/u;
 const sourceRootsForDeprecatedCallGuard = [
@@ -21,6 +21,44 @@ const deprecatedTargetParserCompatFiles = new Set([
   "src/infra/outbound/outbound-session.test-helpers.ts",
   "src/plugins/compat/registry.test.ts",
 ]);
+const removalDatePendingCompatCodes = new Set<PluginCompatCode>([
+  "plugin-sdk-tool-plugin-public-demotion",
+  "agent-harness-sdk-alias",
+]);
+const retiredPluginSdkSubpathCodes = [
+  "plugin-sdk-channel-streaming-subpath",
+  "plugin-sdk-text-runtime-subpath",
+  "plugin-sdk-channel-secret-runtime-subpath",
+  "plugin-sdk-agent-config-primitives-subpath",
+  "plugin-sdk-matrix-subpath",
+  "plugin-sdk-channel-logging-subpath",
+  "plugin-sdk-group-access-subpath",
+  "plugin-sdk-zod-subpath",
+] as const satisfies readonly PluginCompatCode[];
+const deprecationMarkingCodes = [
+  "plugin-sdk-channel-setup-input-fields",
+  "plugin-sdk-broad-runtime-barrels",
+  "plugin-sdk-provider-owned-helper-shims",
+  "message-presentation-legacy-bridges",
+  "plugin-sdk-focused-compat-aliases",
+  "agent-harness-terminal-result-aliases",
+  "official-plugin-export-aliases",
+  "memory-host-compatibility-aliases",
+  "plugin-runtime-api-compat-aliases",
+  "plugin-provider-manifest-compat-aliases",
+] as const;
+const deprecationMarkingSurfaceCounts: Record<(typeof deprecationMarkingCodes)[number], number> = {
+  "plugin-sdk-channel-setup-input-fields": 22,
+  "plugin-sdk-broad-runtime-barrels": 12,
+  "plugin-sdk-provider-owned-helper-shims": 31,
+  "message-presentation-legacy-bridges": 21,
+  "plugin-sdk-focused-compat-aliases": 23,
+  "agent-harness-terminal-result-aliases": 10,
+  "official-plugin-export-aliases": 7,
+  "memory-host-compatibility-aliases": 4,
+  "plugin-runtime-api-compat-aliases": 27,
+  "plugin-provider-manifest-compat-aliases": 9,
+};
 function expectNonEmptyStringList(values: readonly string[], label: string) {
   expect(values, label).toEqual([expect.stringMatching(/\S/u), ...values.slice(1)]);
   for (const value of values) {
@@ -29,9 +67,11 @@ function expectNonEmptyStringList(values: readonly string[], label: string) {
 }
 
 function listTrackedSourceFiles(): string[] {
-  return (listGitTrackedFiles({ pathspecs: sourceRootsForDeprecatedCallGuard }) ?? []).filter(
-    (file) => /\.(?:ts|tsx|mts|cts)$/u.test(file),
-  );
+  const files = listGitTrackedFiles({ pathspecs: sourceRootsForDeprecatedCallGuard });
+  if (!files) {
+    throw new Error("unable to list tracked source files for the deprecated-call guard");
+  }
+  return files.filter((file) => /\.(?:ts|tsx|mts|cts)$/u.test(file));
 }
 
 describe("plugin compatibility registry", () => {
@@ -50,7 +90,14 @@ describe("plugin compatibility registry", () => {
       if (record.status === "deprecated") {
         expect(record.deprecated, record.code).toMatch(datePattern);
         expect(record.warningStarts, record.code).toMatch(datePattern);
-        expect(record.removeAfter, record.code).toMatch(datePattern);
+        if (record.removalGate !== undefined) {
+          expect(record.removalGate, record.code).toBe("next-plugin-sdk-major");
+          expect(record.removeAfter, record.code).toBeUndefined();
+        } else if (removalDatePendingCompatCodes.has(record.code)) {
+          expect(record.removeAfter, record.code).toBeUndefined();
+        } else {
+          expect(record.removeAfter, record.code).toMatch(datePattern);
+        }
         expect(record.replacement, record.code).toMatch(/\S/u);
       }
       expectNonEmptyStringList(record.surfaces, `${record.code}: surfaces`);
@@ -62,26 +109,118 @@ describe("plugin compatibility registry", () => {
     }
   });
 
-  it("keeps shipped public contracts pending until their runtime blockers clear", () => {
-    const records = listPluginCompatRecords().filter(
+  it("keeps blocked public SDK removals aligned with their actual gates", () => {
+    const records = new Map(listPluginCompatRecords().map((record) => [record.code, record]));
+    const staleRemovalWindows = [...records.values()].filter(
       (record) =>
         record.status === "removal-pending" &&
         record.removeAfter !== undefined &&
         record.removeAfter <= "2026-07-30",
     );
 
-    expect(records.map((record) => record.code)).toEqual([
-      "plugin-sdk-agent-media-payload-public-demotion",
-      "plugin-sdk-media-understanding-public-demotion",
-      "plugin-sdk-memory-host-core-public-demotion",
-      "plugin-sdk-plugin-config-runtime-public-demotion",
-      "plugin-sdk-tool-plugin-public-demotion",
-      "agent-harness-sdk-alias",
-    ]);
-    for (const record of records) {
-      expect(record.replacement).toMatch(/retain the public/u);
-      expect(record.releaseNote).toBeUndefined();
+    expect(staleRemovalWindows).toEqual([]);
+    expect(records.get("plugin-sdk-media-understanding-public-demotion")).toMatchObject({
+      status: "removal-pending",
+      removeAfter: "2026-09-30",
+    });
+    expect(records.get("plugin-sdk-memory-host-core-public-demotion")).toMatchObject({
+      status: "removal-pending",
+      removeAfter: "2026-09-30",
+    });
+    expect(records.get("plugin-sdk-plugin-config-runtime-public-demotion")).toMatchObject({
+      status: "removal-pending",
+      removeAfter: "2026-12-01",
+    });
+    for (const code of removalDatePendingCompatCodes) {
+      expect(records.get(code)).toMatchObject({ status: "deprecated" });
+      expect(records.get(code)?.removeAfter).toBeUndefined();
+      expect(records.get(code)?.replacement).toMatch(/retain/u);
     }
+    expect(records.get("plugin-sdk-inbound-reply-dispatch-subpath")).toMatchObject({
+      status: "deprecated",
+      removalGate: "next-plugin-sdk-major",
+      removeAfter: undefined,
+    });
+    expect(records.get("agent-harness-sdk-alias")?.surfaces).toEqual([
+      "openclaw/plugin-sdk/agent-harness",
+      "openclaw/plugin-sdk/agent-harness-runtime",
+    ]);
+  });
+
+  it("keeps retired Plugin SDK subpaths as migration tombstones", () => {
+    const records = new Map(listPluginCompatRecords().map((record) => [record.code, record]));
+
+    for (const code of retiredPluginSdkSubpathCodes) {
+      expect(records.get(code)).toMatchObject({
+        status: "removed",
+        releaseNote: expect.stringMatching(/\S/u),
+      });
+      expect(records.get(code)?.removeAfter, code).toBeUndefined();
+    }
+  });
+
+  it("tracks the deprecation-marking families through the approved window", () => {
+    const records = new Map(listPluginCompatRecords().map((record) => [record.code, record]));
+
+    expect(deprecationMarkingCodes.map((code) => records.get(code)?.code)).toEqual(
+      deprecationMarkingCodes,
+    );
+    for (const code of deprecationMarkingCodes) {
+      expect(records.get(code)).toMatchObject({
+        status: "deprecated",
+        deprecated: "2026-07-25",
+        warningStarts: "2026-07-25",
+        removeAfter: "2026-10-01",
+      });
+      expect(records.get(code)?.surfaces, code).toHaveLength(deprecationMarkingSurfaceCounts[code]);
+    }
+    expect(records.get("plugin-sdk-broad-runtime-barrels")?.surfaces).toEqual(
+      expect.arrayContaining([
+        "openclaw/plugin-sdk/agent-runtime",
+        "openclaw/plugin-sdk/agent-runtime loadModelCatalog params.useCache",
+        "openclaw/plugin-sdk/agent-runtime loadModelCatalog params.cacheOnly",
+        "openclaw/plugin-sdk/agent-runtime loadModelCatalog params.metadataSnapshot",
+        "openclaw/plugin-sdk/agent-runtime loadModelCatalog",
+        "openclaw/plugin-sdk/cli-runtime",
+        "openclaw/plugin-sdk/conversation-runtime",
+        "openclaw/plugin-sdk/hook-runtime",
+        "openclaw/plugin-sdk/media-runtime",
+        "openclaw/plugin-sdk/media-runtime buildAgentMediaPayload",
+        "openclaw/plugin-sdk/plugin-runtime",
+        "openclaw/plugin-sdk/security-runtime",
+      ]),
+    );
+    expect(records.get("deprecated-session-store-beta5-api")?.surfaces).toEqual(
+      expect.arrayContaining([
+        "openclaw package root loadSessionStore",
+        "openclaw package root saveSessionStore",
+      ]),
+    );
+  });
+
+  it("keeps the removed context-engine host-param default as a migration tombstone", () => {
+    const record = listPluginCompatRecords().find(
+      (candidate) => candidate.code === "context-engine-legacy-host-param-default",
+    );
+
+    expect(record).toMatchObject({
+      status: "removed",
+      replacement:
+        "`ContextEngineInfo.acceptedHostParams` for restricted projection; omitted declarations receive full host params",
+    });
+    expect(record?.removeAfter).toBeUndefined();
+  });
+
+  it("keeps the removed deactivate hook alias as a migration tombstone", () => {
+    const record = listPluginCompatRecords().find(
+      (candidate) => candidate.code === "legacy-deactivate-hook-alias",
+    );
+
+    expect(record).toMatchObject({
+      status: "removed",
+      replacement: "`gateway_stop` hook",
+    });
+    expect(record?.removeAfter).toBeUndefined();
   });
 
   it("keeps deprecated explicit target parser calls inside compatibility shims", () => {

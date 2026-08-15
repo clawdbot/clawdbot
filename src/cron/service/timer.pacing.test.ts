@@ -1,9 +1,16 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import {
+  clearCronJobActive,
+  markCronJobActive,
+  noteActiveCronJobTriggerMutation,
+} from "../active-jobs.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { createNoopLogger } from "../service.test-harness.js";
 import type { CronJob, CronPacing } from "../types.js";
-import { recomputeNextRunsForMaintenance } from "./jobs.js";
+import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { createCronServiceState } from "./state.js";
+import { applyOutcomeToStoredJob, applyTriggerNoFireResult } from "./timer-outcomes.js";
 import { applyJobResult } from "./timer.js";
 
 const ENDED_AT = Date.parse("2026-07-18T12:00:00.000Z");
@@ -29,7 +36,180 @@ function makePacedJob(pacing: CronPacing, everyMs = 60 * 60_000): CronJob {
   });
 }
 
+describe("cron trigger evaluation ownership", () => {
+  it("keeps a replacement once trigger armed after an obsolete fired payload", () => {
+    const state = makeState();
+    const job = makePacedJob({ min: "15m" });
+    job.trigger = { script: "old trigger", once: true };
+    const admittedJob = structuredClone(job);
+    job.trigger = { script: "replacement trigger", once: true };
+    job.state.triggerState = { owner: "replacement" };
+    state.store = { version: 1, jobs: [job] };
+
+    applyOutcomeToStoredJob(state, {
+      jobId: job.id,
+      job: admittedJob,
+      status: "ok",
+      startedAt: STARTED_AT,
+      endedAt: ENDED_AT,
+      triggerEval: { fired: true, stateChanged: true, state: { owner: "obsolete trigger" } },
+      scriptStateChanged: true,
+      scriptState: { owner: "obsolete payload" },
+    });
+
+    expect(job.enabled).toBe(true);
+    expect(job.state.triggerState).toEqual({ owner: "replacement" });
+    expect(job.state.lastTriggerEvalAtMs).toBeUndefined();
+    expect(job.state.nextRunAtMs).toBeGreaterThan(ENDED_AT);
+  });
+
+  it("does not let an obsolete quiet evaluation replace current trigger state", () => {
+    const state = makeState();
+    const job = makePacedJob({ min: "15m" });
+    job.trigger = { script: "old trigger" };
+    const admittedJob = structuredClone(job);
+    job.trigger = { script: "replacement trigger" };
+    job.state.triggerState = { owner: "replacement" };
+    job.state.consecutiveErrors = 3;
+    job.state.scheduleErrorCount = 2;
+    state.store = { version: 1, jobs: [job] };
+
+    applyOutcomeToStoredJob(state, {
+      jobId: job.id,
+      job: admittedJob,
+      status: "ok",
+      startedAt: STARTED_AT,
+      endedAt: ENDED_AT,
+      triggerEval: { fired: false, stateChanged: true, state: { owner: "obsolete" } },
+    });
+
+    expect(job.state.triggerState).toEqual({ owner: "replacement" });
+    expect(job.state.triggerEvalCount).toBeUndefined();
+    expect(job.state.consecutiveErrors).toBe(3);
+    expect(job.state.scheduleErrorCount).toBe(2);
+    expect(job.state.nextRunAtMs).toBeGreaterThan(ENDED_AT);
+  });
+
+  it("retains trigger ownership when an edited script is restored during its active run", () => {
+    const state = makeState();
+    const job = makePacedJob({ min: "15m" });
+    job.trigger = { script: "original trigger", once: true };
+    const admittedJob = structuredClone(job);
+    job.state.triggerState = { owner: "latest edit" };
+    state.store = { version: 1, jobs: [job] };
+    const activeJobMarker = markCronJobActive(job.id);
+    noteActiveCronJobTriggerMutation(job.id);
+
+    try {
+      applyOutcomeToStoredJob(state, {
+        jobId: job.id,
+        job: admittedJob,
+        activeJobMarker,
+        status: "ok",
+        startedAt: STARTED_AT,
+        endedAt: ENDED_AT,
+        triggerEval: { fired: true, stateChanged: true, state: { owner: "obsolete" } },
+      });
+
+      expect(job.enabled).toBe(true);
+      expect(job.state.triggerState).toEqual({ owner: "latest edit" });
+      expect(job.state.lastTriggerFireAtMs).toBeUndefined();
+    } finally {
+      clearCronJobActive(job.id, activeJobMarker);
+    }
+  });
+});
+
 describe("applyJobResult dynamic cadence", () => {
+  it.each(["one-shot retry", "recurring retry", "pacing", "trigger floor", "quiet trigger"])(
+    "auto-disables a job when %s cannot produce a Date-valid next run",
+    (scenario) => {
+      const endedAt = MAX_DATE_TIMESTAMP_MS - 1_000;
+      const state = makeState();
+      const deferredNotifications: Array<() => void> = [];
+      const job = makeCronJob({
+        schedule:
+          scenario === "one-shot retry"
+            ? { kind: "at", at: new Date(endedAt).toISOString() }
+            : { kind: "every", everyMs: 1_000, anchorMs: 0 },
+        state: { nextRunAtMs: endedAt },
+        ...(scenario === "pacing" ? { pacing: { min: "1s" } } : {}),
+        ...(scenario === "trigger floor" || scenario === "quiet trigger"
+          ? { trigger: { script: "return true" } }
+          : {}),
+      });
+
+      if (scenario === "quiet trigger") {
+        applyTriggerNoFireResult(
+          state,
+          job,
+          {
+            startedAt: endedAt - 1,
+            endedAt,
+            triggerEval: { fired: false, stateChanged: false },
+          },
+          { deferredNotifications },
+        );
+      } else {
+        const isRetry = scenario === "one-shot retry" || scenario === "recurring retry";
+        applyJobResult(
+          state,
+          job,
+          {
+            status: isRetry ? "error" : "ok",
+            ...(isRetry
+              ? {
+                  error: "temporary timeout",
+                  errorClassification: { kind: "reason" as const, reason: "timeout" as const },
+                  executionStarted: true,
+                }
+              : {}),
+            startedAt: endedAt - 1,
+            endedAt,
+            ...(scenario === "pacing" ? { nextCheck: { delayMs: 2_000 } } : {}),
+          },
+          { deferredNotifications },
+        );
+      }
+
+      expect(job.enabled).toBe(false);
+      expect(job.state.nextRunAtMs).toBeUndefined();
+      expect(job.state.pacedNextRunAtMs).toBeUndefined();
+      expect(job.state.autoDisabled).toEqual({
+        reason: "schedule-errors",
+        atMs: ENDED_AT,
+        consecutiveErrors: 1,
+      });
+      expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
+      expect(deferredNotifications).toHaveLength(1);
+
+      deferredNotifications[0]?.();
+      expect(state.deps.enqueueSystemEvent).toHaveBeenCalledOnce();
+      expect(state.deps.requestHeartbeat).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("disables an exhausted every schedule instead of synthesizing a backoff-only run", () => {
+    const endedAt = MAX_DATE_TIMESTAMP_MS - 39_000;
+    const job = makeCronJob({
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: 0 },
+      state: { nextRunAtMs: endedAt },
+    });
+
+    applyJobResult(makeState(), job, {
+      status: "error",
+      error: "permanent failure",
+      errorClassification: { kind: "permanent" },
+      startedAt: endedAt - 1_000,
+      endedAt,
+    });
+
+    expect(endedAt + 30_000).toBeLessThanOrEqual(MAX_DATE_TIMESTAMP_MS);
+    expect(job.enabled).toBe(false);
+    expect(job.state.nextRunAtMs).toBeUndefined();
+  });
+
   it.each([
     ["honors an in-range proposal", { min: "15m", max: "4h" }, 60 * 60_000, 60 * 60_000],
     ["clamps below the minimum", { min: "15m", max: "4h" }, 5 * 60_000, 15 * 60_000],
@@ -64,6 +244,79 @@ describe("applyJobResult dynamic cadence", () => {
     expect(job.state.nextRunAtMs).toBe(STARTED_AT + 60 * 60_000);
     expect(job.state.pacedNextRunAtMs).toBeUndefined();
     expect(job.state.forcePreservedNextRunAtMs).toBeUndefined();
+  });
+
+  it("clears the consumed pacing override after a current quiet trigger", () => {
+    const state = makeState();
+    const job = makePacedJob({ min: "15m", max: "4h" });
+    job.state.pacedNextRunAtMs = ENDED_AT + 30 * 60_000;
+    state.store = { version: 1, jobs: [job] };
+    const admittedJob = structuredClone(job);
+
+    applyOutcomeToStoredJob(state, {
+      jobId: job.id,
+      job: admittedJob,
+      status: "ok",
+      startedAt: STARTED_AT,
+      endedAt: ENDED_AT,
+      triggerEval: { fired: false, stateChanged: false },
+    });
+
+    expect(job.state.pacedNextRunAtMs).toBeUndefined();
+  });
+
+  it.each([
+    ["without a force marker", undefined],
+    ["with an existing force marker", ENDED_AT + 15 * 60_000],
+  ] as const)("preserves an edited pacing override after a stale quiet trigger %s", (_, marker) => {
+    const state = makeState();
+    const job = makePacedJob({ min: "15m", max: "4h" });
+    const admittedJob = structuredClone(job);
+    const editedNextRunAtMs = ENDED_AT + 45 * 60_000;
+    job.schedule = { kind: "every", everyMs: 2 * 60 * 60_000, anchorMs: STARTED_AT };
+    job.state.nextRunAtMs = editedNextRunAtMs;
+    job.state.pacedNextRunAtMs = editedNextRunAtMs;
+    job.state.forcePreservedNextRunAtMs = marker;
+    state.store = { version: 1, jobs: [job] };
+
+    applyOutcomeToStoredJob(state, {
+      jobId: job.id,
+      job: admittedJob,
+      status: "ok",
+      startedAt: STARTED_AT,
+      endedAt: ENDED_AT,
+      triggerEval: { fired: false, stateChanged: false },
+    });
+
+    expect(job.state.nextRunAtMs).toBe(editedNextRunAtMs);
+    expect(job.state.pacedNextRunAtMs).toBe(editedNextRunAtMs);
+    expect(job.state.forcePreservedNextRunAtMs).toBe(marker);
+  });
+
+  it.each([
+    ["without a previous marker", undefined],
+    ["with a previous marker", ENDED_AT + 15 * 60_000],
+  ] as const)("marks the exact paced slot after a forced quiet trigger %s", (_, previousMarker) => {
+    const job = makePacedJob({ min: "15m", max: "4h" });
+    const pendingSlot = ENDED_AT + 45 * 60_000;
+    job.state.nextRunAtMs = pendingSlot;
+    job.state.pacedNextRunAtMs = pendingSlot;
+    job.state.forcePreservedNextRunAtMs = previousMarker;
+
+    applyTriggerNoFireResult(
+      makeState(),
+      job,
+      {
+        startedAt: STARTED_AT,
+        endedAt: ENDED_AT,
+        triggerEval: { fired: false, stateChanged: false },
+      },
+      { scheduleMode: "force-preserve" },
+    );
+
+    expect(job.state.nextRunAtMs).toBe(pendingSlot);
+    expect(job.state.pacedNextRunAtMs).toBe(pendingSlot);
+    expect(job.state.forcePreservedNextRunAtMs).toBe(pendingSlot);
   });
 
   it.each([

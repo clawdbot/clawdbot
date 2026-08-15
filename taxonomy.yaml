@@ -8,22 +8,42 @@ snapshot:
 profiles:
   - id: smoke-ci
     description: Deterministic PR and merge proof with mock model providers and the
-      Crabline-backed channel driver; categories are limited to exact owners exercised by the
-      fixed bounded CI plan.
+      Crabline-backed channel driver; coverage IDs resolve to every eligible primary owner.
     evidenceMode: slim
     channelDriver: crabline
-    categoryIds:
-      - agent-runtime.model-and-runtime-selection
-      - agent-runtime.tool-calls-and-response-handling
-      - session-memory.cross-client-history-and-session-parity
-      - session-memory.memory
-      - gateway.gateway-rpc-apis-and-events
-      - gateway.websocket-connection
-      - channels.channel-actions-commands-and-approvals
-      - channels.channel-setup
-      - channels.outbound-delivery-and-reply-pipeline
-      - plugins.installing-and-running-plugins
-      - control-ui.browser-ui
+    coverageIds:
+      - agent-runtime.runtime-override-switching
+      - agent-runtime.subagent-turns-delivery
+      - agent-runtime.tool-fs-read
+      - agent-runtime.tool-fs-write
+      - agent-runtime.tool-task-followthrough
+      - channels.outbound-group-reply
+      - channels.resumed-final-reply
+      - gateway.health-apis
+      - gateway.hello-ok-snapshot
+      - gateway.websocket-transport
+      - plugins.activation-lifecycle
+      - session-memory.memory-files-dreaming
+      - telegram.built-in-commands
+  - id: personal-agent
+    description: Local personal-assistant reliability proof selected by semantic coverage targets.
+    coverageIds:
+      - agent-runtime.failure-recovery
+      - agent-runtime.progress-visibility-no-fake-progress
+      - agent-runtime.tool-safety-controls
+      - agent-runtime.tool-task-followthrough
+      - automation.agent-cron-tool-reminders
+      - channels.native-threads-channel-replies
+      - observability.support-zip-diagnostics
+      - security.approval-policy-approval-denial
+      - security.redaction-personal-redaction
+      - session-memory.personal-memory-recall
+  - id: observability
+    description: Source-checkout telemetry proof selected by semantic coverage targets.
+    coverageIds:
+      - observability.otlp-http-traces-otel
+      - observability.prometheus
+      - observability.prometheus-api-auth
   - id: release
     description: Stable/LTS proof selector for live providers, live channels, package artifacts,
       upgrade paths, and platform proof where the claim depends on real upstreams or release
@@ -979,10 +999,6 @@ surfaces:
         id: plugin-sdk-exports-sync
         command: pnpm plugin-sdk:check-exports
         purpose: Verify generated public SDK exports still match the checked-in entrypoint inventory.
-      - name: Plugin SDK API baseline
-        id: plugin-sdk-api-baseline
-        command: pnpm plugin-sdk:api:check
-        purpose: Detect public API drift in the packaged Plugin SDK surface.
       - name: Plugin SDK surface budget
         id: plugin-sdk-surface-budget
         command: pnpm plugin-sdk:surface:check
@@ -1510,13 +1526,23 @@ surfaces:
           - name: "Abort and terminal outcomes — Long run stability"
             coverageIds: [agent-runtime.terminal-long-run-stability]
             description: "Exact coverage for long run stability within Abort and terminal outcomes."
+          - name: Managed worktrees
+            coverageIds: [agent-runtime.managed-worktrees-lifecycle]
+            description: Managed worktree create with ignored-file provisioning and repository setup hooks, dirty-removal snapshots, snapshot restore, and manual-owner gc retention.
+          - name: "Managed worktrees — Session owner"
+            coverageIds: [agent-runtime.managed-worktrees-session-lifecycle]
+            description: Session worktree creation through sessions.create, persisted session worktree metadata, gc owner protection while the session is live, session-delete snapshot removal, and worktreePreserved reporting for locked checkouts.
+          - name: "Managed worktrees — Workboard owner"
+            coverageIds: [agent-runtime.managed-worktrees-workboard-lifecycle]
+            description: Workboard card workspace materialization as wb-<card-id> worktrees, card workspace writeback, run-end lossless removal, and dirty-checkout retention with a recorded cleanup outcome.
         docs:
           - docs/concepts/agent-loop.md
           - docs/cli/agent.md
           - docs/concepts/agent-runtimes.md
+          - docs/concepts/managed-worktrees.md
         search_anchors:
           - agent RPC shape and event stream
-          - runAgentTurnWithFallback
+          - executeAgentTurn
           - agent.wait timeout and terminal outcomes
         category_note: agent-turn-orchestration-and-runtime-lifecycle.md
         human_lts_override: true
@@ -2152,7 +2178,7 @@ surfaces:
         features:
           - name: Memory Backend Storage
             coverageIds: [session-memory.memory-backend-storage]
-            description: Covers Memory Backend Storage across memory backend config, SQLite schema, vector acceleration, embedding provider selection, remote embedding fetch, QMD process/query parsing, session transcript indexing for search, extra paths, and backend security boundaries.
+            description: Covers Memory Backend Storage across built-in memory config, SQLite schema, vector acceleration, embedding provider selection, remote embedding fetch, session transcript indexing for search, extra paths, and memory security boundaries.
           - name: "Embedding Search — QA channel"
             coverageIds: [session-memory.embedding-search-qa-channel]
             description: "Exact coverage for qa channel within Embedding Search."
@@ -2218,7 +2244,6 @@ surfaces:
             description: "Exact coverage for memory recall within Active Memory."
         docs:
           - docs/reference/memory-config.md
-          - docs/concepts/memory-qmd.md
           - docs/concepts/memory.md
           - docs/channels/discord.md
         search_anchors:
@@ -3568,37 +3593,26 @@ surfaces:
         features:
           - name: Heartbeat scheduling
             coverageIds: [automation.heartbeat-scheduling]
-            description: Covers Heartbeat scheduling across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts and due-only task mode, and related heartbeat and commitments behavior.
+            description: Covers Heartbeat scheduling across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts, and due-only task mode.
           - name: Active hours
             coverageIds: [automation.active-hours]
-            description: Covers Active hours across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts and due-only task mode, and related heartbeat and commitments behavior.
+            description: Covers Active hours across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts, and due-only task mode.
           - name: Wake and cooldown handling
             coverageIds: [automation.wake-and-cooldown-handling]
-            description: Covers Wake and cooldown handling across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts and due-only task mode, and related heartbeat and commitments behavior.
+            description: Covers Wake and cooldown handling across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts, and due-only task mode.
           - name: Due-only heartbeat tasks
             coverageIds: [automation.due-only-heartbeat-tasks]
-            description: Covers Due-only heartbeat tasks across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts and due-only task mode, and related heartbeat and commitments behavior.
-          - name: "Commitment check-ins — Heartbeat target none"
-            coverageIds: [automation.commitment-check-ins-heartbeat-target-none]
-            description: "Exact coverage for heartbeat target none within Commitment check-ins."
-          - name: "Commitment check-ins — Scope"
-            coverageIds: [automation.commitment-check-ins-scope]
-            description: "Exact coverage for scope within Commitment check-ins."
-          - name: "Commitment check-ins — Delivery"
-            coverageIds: [automation.commitment-check-ins-delivery]
-            description: "Exact coverage for delivery within Commitment check-ins."
+            description: Covers Due-only heartbeat tasks across periodic heartbeat runs, active-hours and variable schedule behavior, wake/cooldown handling, heartbeat prompts, and due-only task mode.
         docs:
           - docs/automation/index.md
           - docs/gateway/heartbeat.md
-          - docs/concepts/commitments.md
         search_anchors:
           - Heartbeat scheduling
           - Active hours
           - Wake and cooldown handling
           - Due-only heartbeat tasks
-          - Commitment check-ins
           - openclaw cron
-        category_note: heartbeat-commitments.md
+        category_note: heartbeat.md
         human_lts_override: false
       - name: Polling Controls
         id: polling-controls
@@ -7935,15 +7949,15 @@ surfaces:
           - name: BotFather token creation
             coverageIds: [telegram.botfather-token-creation]
             description: BotFather token creation and first gateway start
-          - name: TELEGRAM_BOT_TOKEN
+          - name: Token-source precedence
             coverageIds: [telegram.telegram-bot-token]
-            description: TELEGRAM_BOT_TOKEN, botToken, tokenFile, and account-scoped token
+            description: Account tokenFile, account botToken, channel tokenFile, channel botToken, then TELEGRAM_BOT_TOKEN precedence.
           - name: Setup wizard credential capture
             coverageIds: [telegram.setup-wizard-credential-capture]
             description: Setup wizard credential capture, allowlist prompts, and DM policy defaults
           - name: Startup getMe
             coverageIds: [telegram.startup-getme]
-            description: Startup getMe, bot-info cache, account throttling, and multi-account default
+            description: Product-startup getMe success and authentication failure, bot-info cache fallback, and account probe throttling.
           - name: Doctor/status surfacing
             coverageIds: [telegram.doctor-status-surfacing]
             description: Doctor/status surfacing for invalid tokens, missing defaults, and read-only
@@ -8074,7 +8088,13 @@ surfaces:
             description: Built-in commands such as /help, /commands, /whoami, /status, and related command UI.
           - name: Command authorization in DMs
             coverageIds: [telegram.command-authorization-in-dms]
-            description: Command authorization in DMs, groups, and commands addressed to other bots
+            description: Command authorization for Telegram direct messages.
+          - name: Command authorization in groups
+            coverageIds: [telegram.command-authorization-in-groups]
+            description: Group allowlist authorization for Telegram commands.
+          - name: Other-bot command gating
+            coverageIds: [telegram.other-bot-command-gating]
+            description: Commands addressed to another Telegram bot remain ignored.
           - name: Model buttons
             coverageIds: [telegram.model-buttons]
             description: Model buttons and command UI helpers
@@ -8342,6 +8362,12 @@ surfaces:
           - name: Sender Authorization
             coverageIds: [slack.sender-authorization]
             description: Covers Sender Authorization across Slack DM routing, `dmPolicy`, `allowFrom`, pairing approvals, group DMs/MPIMs, account-level allowlist inheritance, command authorization in DMs, and sender identity normalization.
+          - name: MPIM routing
+            coverageIds: [slack.mpim]
+            description: Covers group direct-message routing and app-mention dispatch in Slack MPIM conversations.
+          - name: Delivery dedupe
+            coverageIds: [slack.delivery-dedupe]
+            description: Covers single-delivery enforcement when one Slack event arrives through overlapping message and app-mention paths.
         docs:
           - docs/channels/slack.md
           - docs/channels/bot-loop-protection.md

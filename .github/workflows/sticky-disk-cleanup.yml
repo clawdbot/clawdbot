@@ -38,7 +38,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout protected manifest
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           # A rerun keeps its original workflow_dispatch SHA. Read the latest
           # protected manifest so removing an entry revokes deletion authority.
@@ -111,7 +111,7 @@ jobs:
           EOF
 
       - name: Delete retired sticky disk
-        uses: useblacksmith/stickydisk-delete@3bd8d43f9da764c6b80c2cd6db129bdb568c79b6 # v1
+        uses: useblacksmith/stickydisk-delete@3bd8d43f9da764c6b80c2cd6db129bdb568c79b6 # untagged commit; action.yml matches v1
         with:
           delete-docker-cache: "false"
           delete-key: ${{ inputs.retired_key }}

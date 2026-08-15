@@ -15,6 +15,7 @@ import {
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
   type MemorySessionSyncTarget,
+  type MemoryEntryProvenance,
   type MemorySource,
   type MemorySyncParams,
   type MemorySyncProgressUpdate,
@@ -66,6 +67,7 @@ export type MemoryIndexEntry = {
   content?: string;
   contentText?: string;
   lineMap?: number[];
+  lineProvenance?: MemoryEntryProvenance[];
 };
 
 export type MemoryIndexWorkItem = {
@@ -79,19 +81,13 @@ export type MemorySourceSyncPlan = {
   finalize: () => Promise<void> | void;
 };
 
-type MemorySessionDeltaState = {
-  lastSize: number;
-  pendingBytes: number;
-  pendingMessages: number;
-};
-
 type MemoryReindexRetryState = {
   dirty: boolean;
   memoryFullRetryDirty: boolean;
   sessionsDirty: boolean;
   sessionsFullRetryDirty: boolean;
+  sessionsReconcileDirty: boolean;
   sessionsDirtyFiles: Set<string>;
-  sessionDeltas: Map<string, MemorySessionDeltaState>;
 };
 
 export const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
@@ -159,10 +155,12 @@ export abstract class MemoryManagerSyncBase {
   // Failed full reindexes can start with no per-file dirty set. Keep a
   // one-shot all-sessions retry marker so the next non-force sync cannot skip.
   protected sessionsFullRetryDirty = false;
+  // A corpus reconciliation deletes stale indexed paths while leaving unchanged
+  // live sessions untouched. Keep it distinct from a failed full reindex retry.
+  protected sessionsReconcileDirty = false;
   protected sessionsDirtyFiles = new Set<string>();
   protected sessionPendingFiles = new Set<string>();
   protected sessionPendingTargets = new Map<string, MemorySessionSyncTarget>();
-  protected sessionDeltas = new Map<string, MemorySessionDeltaState>();
   protected vectorDegradedWriteWarningShown = false;
   protected lastMetaSerialized: string | null = null;
 
@@ -212,10 +210,8 @@ export abstract class MemoryManagerSyncBase {
       memoryFullRetryDirty: this.memoryFullRetryDirty,
       sessionsDirty: this.sessionsDirty,
       sessionsFullRetryDirty: this.sessionsFullRetryDirty,
+      sessionsReconcileDirty: this.sessionsReconcileDirty,
       sessionsDirtyFiles: new Set(this.sessionsDirtyFiles),
-      sessionDeltas: new Map(
-        Array.from(this.sessionDeltas, ([file, state]) => [file, { ...state }]),
-      ),
     };
   }
 
@@ -223,18 +219,13 @@ export abstract class MemoryManagerSyncBase {
     this.dirty = snapshot.dirty || this.dirty;
     this.memoryFullRetryDirty = snapshot.memoryFullRetryDirty || this.memoryFullRetryDirty;
     this.sessionsFullRetryDirty = snapshot.sessionsFullRetryDirty || this.sessionsFullRetryDirty;
+    this.sessionsReconcileDirty = snapshot.sessionsReconcileDirty || this.sessionsReconcileDirty;
     this.sessionsDirtyFiles = new Set([...snapshot.sessionsDirtyFiles, ...this.sessionsDirtyFiles]);
-    const currentDeltas = this.sessionDeltas;
-    this.sessionDeltas = new Map(
-      Array.from(currentDeltas, ([file, state]) => [file, { ...state }]),
-    );
-    for (const [file, state] of snapshot.sessionDeltas) {
-      this.sessionDeltas.set(file, { ...state });
-    }
     this.sessionsDirty =
       snapshot.sessionsDirty ||
       this.sessionsDirty ||
       this.sessionsFullRetryDirty ||
+      this.sessionsReconcileDirty ||
       this.sessionsDirtyFiles.size > 0;
   }
 
@@ -252,6 +243,7 @@ export abstract class MemoryManagerSyncBase {
   protected clearSessionRetryState(): void {
     this.sessionsDirty = false;
     this.sessionsFullRetryDirty = false;
+    this.sessionsReconcileDirty = false;
     this.sessionsDirtyFiles.clear();
   }
 
@@ -261,7 +253,10 @@ export abstract class MemoryManagerSyncBase {
   }
 
   protected refreshSessionDirtyFlag(): void {
-    this.sessionsDirty = this.sessionsFullRetryDirty || this.sessionsDirtyFiles.size > 0;
+    this.sessionsDirty =
+      this.sessionsFullRetryDirty ||
+      this.sessionsReconcileDirty ||
+      this.sessionsDirtyFiles.size > 0;
   }
 
   protected shouldDeferSourceWideBatch(): boolean {
@@ -271,6 +266,14 @@ export abstract class MemoryManagerSyncBase {
       this.providerRuntime?.batchEmbed &&
       this.providerRuntime.sourceWideBatchEmbed === true,
     );
+  }
+
+  protected advanceSyncProgress(progress: MemorySyncProgressState | undefined, count = 1): void {
+    if (!progress) {
+      return;
+    }
+    progress.completed += count;
+    progress.report({ completed: progress.completed, total: progress.total });
   }
 
   protected async indexQueuedFiles(
@@ -292,13 +295,7 @@ export abstract class MemoryManagerSyncBase {
     for (const item of items) {
       item.afterIndex?.();
     }
-    if (progress) {
-      progress.completed += items.length;
-      progress.report({
-        completed: progress.completed,
-        total: progress.total,
-      });
-    }
+    this.advanceSyncProgress(progress, items.length);
   }
 
   protected async executeSourceSyncPlans(

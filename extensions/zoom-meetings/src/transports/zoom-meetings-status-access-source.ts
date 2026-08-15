@@ -7,11 +7,9 @@ export function zoomMeetingStatusAccessSource(): string {
   const captchaRequired = Boolean(firstRaw(selectors.captcha)) ||
     /complete (?:the )?captcha|security check|verify (?:that )?you(?:'re| are) (?:a )?human/i.test(pageTextLower);
   if (identityVerified && !inCall && passcodeRequired) {
-    controlManualActionReason = "zoom-passcode-required";
-    controlManualActionMessage = "Enter the Zoom meeting passcode in the OpenClaw browser profile, then retry joining.";
+    controlManualAction = manualActionFor("zoom-passcode-required", "Enter the Zoom meeting passcode in the OpenClaw browser profile, then retry joining.");
   } else if (identityVerified && !inCall && captchaRequired) {
-    controlManualActionReason = "zoom-captcha-required";
-    controlManualActionMessage = "Complete Zoom's security check in the OpenClaw browser profile, then retry joining.";
+    controlManualAction = manualActionFor("zoom-captcha-required", "Complete Zoom's security check in the OpenClaw browser profile, then retry joining.");
   }
 `;
 }

@@ -5,7 +5,12 @@ import path from "node:path";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveLineAccount, resolveDefaultLineAccountId, normalizeAccountId } from "./accounts.js";
+import {
+  listLineAccountIds,
+  normalizeAccountId,
+  resolveDefaultLineAccountId,
+  resolveLineAccount,
+} from "./accounts.js";
 
 describe("LINE accounts", () => {
   const tempDirs: string[] = [];
@@ -388,6 +393,24 @@ describe("LINE accounts", () => {
       const account = resolveLineAccount({ cfg });
 
       expect(account.name).toBe("Default Account Bot");
+    });
+  });
+
+  describe("listLineAccountIds", () => {
+    it("keeps unconfigured channels empty", () => {
+      expect(listLineAccountIds({})).toEqual([]);
+    });
+
+    it("preserves configured named-account insertion order", () => {
+      expect(
+        listLineAccountIds({
+          channels: {
+            line: {
+              accounts: { work: {}, alerts: {} },
+            },
+          },
+        }),
+      ).toEqual(["work", "alerts"]);
     });
   });
 

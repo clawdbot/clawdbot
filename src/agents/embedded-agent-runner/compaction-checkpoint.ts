@@ -1,3 +1,5 @@
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
+import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 /** Owns the shared checkpoint lifecycle around both compaction entry points. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -23,6 +25,7 @@ export async function persistCompactionCheckpoint(params: {
   tokensBefore?: number;
   tokensAfter?: number;
   sessionFile: string;
+  sessionTarget?: SessionTranscriptRuntimeTarget;
   leafId?: string;
   createdAt?: number;
 }): Promise<boolean> {
@@ -30,13 +33,16 @@ export async function persistCompactionCheckpoint(params: {
     return false;
   }
   try {
-    const transcriptState = await readSessionLeafStateFromTranscriptAsync(params.sessionFile);
+    const transcriptState = await readSessionLeafStateFromTranscriptAsync(
+      params.sessionTarget ?? params.sessionFile,
+    );
     const checkpointPosition = resolveCompactionCheckpointTranscriptPosition({
       preferredLeafId: params.leafId,
       transcriptState,
     });
     const stored = await compactionCheckpointStore.persistCheckpoint({
       cfg: params.config,
+      ...(params.sessionTarget?.agentId ? { agentId: params.sessionTarget.agentId } : {}),
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
       reason: resolveSessionCompactionCheckpointReason({ trigger: params.trigger }),
@@ -45,7 +51,10 @@ export async function persistCompactionCheckpoint(params: {
       firstKeptEntryId: params.firstKeptEntryId,
       tokensBefore: params.tokensBefore,
       tokensAfter: params.tokensAfter,
-      postSessionFile: params.sessionFile,
+      // Keep the full successor location for cross-key/store checkpoint recovery.
+      postSessionFile: params.sessionTarget
+        ? formatSqliteSessionFileMarker(params.sessionTarget)
+        : params.sessionFile,
       postLeafId: checkpointPosition.leafId,
       postEntryId: checkpointPosition.entryId,
       createdAt: params.createdAt,

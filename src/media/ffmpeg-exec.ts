@@ -13,14 +13,21 @@ type MediaExecOptions = {
   timeoutMs?: number;
   maxBufferBytes?: number;
   input?: Buffer | string;
+  stdinFileDescriptor?: number;
 };
 
 function resolveExecOptions(
   defaultTimeoutMs: number,
   options: MediaExecOptions | undefined,
 ): RunExecOptions {
+  if (options?.input !== undefined && options.stdinFileDescriptor !== undefined) {
+    throw new Error("media exec accepts either input or stdinFileDescriptor, not both");
+  }
   return {
     input: options?.input,
+    ...(options?.stdinFileDescriptor !== undefined
+      ? { stdinFileDescriptor: options.stdinFileDescriptor }
+      : {}),
     logOutput: false,
     maxBuffer: options?.maxBufferBytes ?? MEDIA_FFMPEG_MAX_BUFFER_BYTES,
     timeoutMs: options?.timeoutMs ?? defaultTimeoutMs,

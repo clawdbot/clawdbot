@@ -220,6 +220,30 @@ describe("startNostrBus inbound guards", () => {
     await bus.close();
   });
 
+  it("classifies a durable queue open failure as unavailable ingress", async () => {
+    const queueError = new Error("sqlite unavailable");
+    setNostrRuntime({
+      state: {
+        openChannelIngressQueue: () => {
+          throw queueError;
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    await expect(
+      startTestNostrBus({
+        ...buildResolvedNostrAccount(),
+        onMessage: vi.fn(async () => {}),
+        onMetric: () => {},
+      }),
+    ).rejects.toMatchObject({
+      name: "ChannelIngressUnavailableError",
+      code: "CHANNEL_INGRESS_UNAVAILABLE",
+      cause: queueError,
+    });
+    expect(mockState.subscribeMany).not.toHaveBeenCalled();
+  });
+
   it("waits for EOSE before persisting a durable relay cursor", async () => {
     const bus = await startTestNostrBus({
       ...buildResolvedNostrAccount(),

@@ -47,7 +47,7 @@ vi.mock("../../secrets/runtime-state.js", () => ({
 
 vi.mock("../../web-search/runtime.js", async () => {
   const { getActivePluginRegistry } = await import("../../plugins/runtime.js");
-  const { getActiveRuntimeWebToolsMetadata } =
+  const { getActiveRuntimeWebToolsMetadataFromState } =
     await import("../../secrets/runtime-web-tools-state.js");
   const resolveRuntimeDefinition = (options?: {
     config?: unknown;
@@ -58,8 +58,8 @@ vi.mock("../../web-search/runtime.js", async () => {
     const providerId =
       options?.runtimeWebSearch?.selectedProvider ??
       options?.runtimeWebSearch?.providerConfigured ??
-      getActiveRuntimeWebToolsMetadata()?.search?.selectedProvider ??
-      getActiveRuntimeWebToolsMetadata()?.search?.providerConfigured ??
+      getActiveRuntimeWebToolsMetadataFromState()?.search?.selectedProvider ??
+      getActiveRuntimeWebToolsMetadataFromState()?.search?.providerConfigured ??
       readConfiguredSearchProvider(options?.config);
     const registration = getActivePluginRegistry()?.webSearchProviders.find(
       (entry) => entry.provider.id === providerId,
@@ -119,8 +119,11 @@ afterEach(() => {
 
 describe("web tools defaults", () => {
   it("enables web_fetch by default (non-sandbox)", () => {
-    const tool = createWebFetchTool({ config: {}, sandboxed: false });
-    expect(tool?.name).toBe("web_fetch");
+    const fetchTool = createWebFetchTool({ config: {}, sandboxed: false });
+    const searchTool = createWebSearchTool({ config: {}, sandboxed: false });
+    expect(fetchTool?.name).toBe("web_fetch");
+    expect(fetchTool?.resultContentSource).toBe("network");
+    expect(searchTool?.resultContentSource).toBe("network");
   });
 
   it("disables web_fetch when explicitly disabled", () => {

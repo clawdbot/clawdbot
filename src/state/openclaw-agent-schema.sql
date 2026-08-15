@@ -12,35 +12,18 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS state_leases (
-  scope TEXT NOT NULL,
-  lease_key TEXT NOT NULL,
-  owner TEXT NOT NULL,
-  expires_at INTEGER,
-  heartbeat_at INTEGER,
-  payload_json TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  PRIMARY KEY (scope, lease_key)
-) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_agent_state_leases_expiry
-  ON state_leases(expires_at, scope, lease_key)
-  WHERE expires_at IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_agent_state_leases_owner
-  ON state_leases(owner, updated_at DESC);
-
 CREATE TABLE IF NOT EXISTS session_nodes (
   session_key TEXT NOT NULL PRIMARY KEY,
   current_session_id TEXT NOT NULL,
   entry_json TEXT NOT NULL,
+  entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1)),
   updated_at INTEGER NOT NULL,
   status TEXT CHECK (status IS NULL OR status IN ('running', 'done', 'failed', 'killed', 'timeout')),
   created_at INTEGER,
   created_via TEXT CHECK (created_via IS NULL OR created_via IN ('operator', 'spawn', 'channel', 'cron', 'talk', 'run', 'plugin', 'internal')),
   created_actor_type TEXT CHECK (created_actor_type IS NULL OR created_actor_type IN ('human', 'agent', 'system')),
   created_actor_id TEXT,
+  project_id TEXT,
   parent_session_key TEXT,
   spawned_by TEXT,
   fork_source_session_key TEXT,
@@ -79,6 +62,36 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_archived_at
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_current_session_id
   ON session_nodes(current_session_id);
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_entry_valid_pending
+  ON session_nodes(session_key)
+  WHERE entry_valid = 0;
+
+CREATE TABLE IF NOT EXISTS session_key_contract (
+  id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+  main_key TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+INSERT OR IGNORE INTO session_key_contract (id, main_key, updated_at) VALUES (1, 'main', 0);
+
+CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_insert
+AFTER INSERT ON session_nodes
+BEGIN
+  UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_entry_update
+AFTER UPDATE OF entry_json ON session_nodes
+BEGIN
+  UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_identity_update
+AFTER UPDATE OF current_session_id, updated_at ON session_nodes
+BEGIN
+  UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
+END;
 
 CREATE TABLE IF NOT EXISTS session_windows (
   session_id TEXT NOT NULL PRIMARY KEY,
@@ -215,6 +228,31 @@ CREATE TABLE IF NOT EXISTS session_members (
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_members_identity
   ON session_members(identity_id, session_key);
+
+CREATE TABLE IF NOT EXISTS session_suggestions (
+  id TEXT PRIMARY KEY,
+  session_key TEXT NOT NULL,
+  author_id TEXT NOT NULL,
+  author_label TEXT,
+  text TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'accepted', 'dismissed')),
+  dispatch_token TEXT,
+  dispatch_started_at INTEGER,
+  dispatch_resolution TEXT CHECK (dispatch_resolution IN ('send', 'queue', 'edit', 'dismiss')),
+  CHECK (
+    (dispatch_token IS NULL AND dispatch_started_at IS NULL AND dispatch_resolution IS NULL)
+    OR (dispatch_token IS NOT NULL AND dispatch_started_at IS NOT NULL AND dispatch_resolution IS NOT NULL)
+  ),
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_suggestions_session_state_created
+  ON session_suggestions(session_key, state, created_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_suggestions_author_created
+  ON session_suggestions(author_id, created_at, id);
+
 CREATE TABLE IF NOT EXISTS board_tabs (
   session_key TEXT NOT NULL,
   tab_id TEXT NOT NULL,
@@ -343,6 +381,21 @@ CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_parent
 CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_sequence
   ON transcript_event_identities(session_id, event_type, seq DESC);
 
+CREATE TABLE IF NOT EXISTS context_engine_turn_outbox (
+  advancement_key TEXT NOT NULL PRIMARY KEY,
+  engine_id TEXT NOT NULL,
+  owner_plugin_id TEXT,
+  session_id TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at INTEGER,
+  last_error TEXT,
+  created_at INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_context_engine_turn_outbox_engine
+  ON context_engine_turn_outbox(engine_id, created_at);
+
 CREATE TABLE IF NOT EXISTS cache_entries (
   scope TEXT NOT NULL,
   key TEXT NOT NULL,
@@ -400,6 +453,23 @@ CREATE TABLE IF NOT EXISTS memory_index_chunks (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS memory_index_chunk_recall_metadata (
+  chunk_id TEXT PRIMARY KEY,
+  importance INTEGER CHECK (importance IS NULL OR importance BETWEEN 1 AND 10),
+  triggers TEXT,
+  project_key TEXT,
+  FOREIGN KEY (chunk_id) REFERENCES memory_index_chunks(id) ON DELETE CASCADE
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS memory_index_chunk_provenance (
+  chunk_id TEXT PRIMARY KEY,
+  origin_class TEXT NOT NULL CHECK (origin_class IN ('owner', 'agent', 'untrusted', 'system')),
+  session_kind TEXT NOT NULL CHECK (session_kind IN ('interactive', 'cron', 'heartbeat', 'subagent', 'unknown')),
+  observed_at INTEGER NOT NULL,
+  supersedes_key TEXT,
+  FOREIGN KEY (chunk_id) REFERENCES memory_index_chunks(id) ON DELETE CASCADE
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS memory_embedding_cache (
   provider TEXT NOT NULL,
   model TEXT NOT NULL,
@@ -415,6 +485,61 @@ CREATE TABLE IF NOT EXISTS memory_index_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   revision INTEGER NOT NULL
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS standing_intents (
+  intent_key INTEGER PRIMARY KEY,
+  id TEXT NOT NULL UNIQUE,
+  description TEXT NOT NULL,
+  trigger_keywords TEXT NOT NULL,
+  trigger_embedding TEXT,
+  channel_scope TEXT,
+  sender_scope TEXT,
+  creator_sender TEXT CHECK (creator_sender IS NULL OR length(trim(creator_sender)) > 0),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'armed', 'fired', 'done', 'cancelled', 'expired')),
+  expires_at INTEGER NOT NULL,
+  max_fires INTEGER NOT NULL CHECK (max_fires > 0),
+  fire_count INTEGER NOT NULL DEFAULT 0 CHECK (fire_count >= 0),
+  cooldown_seconds INTEGER NOT NULL DEFAULT 86400 CHECK (cooldown_seconds >= 0),
+  last_fired_at INTEGER,
+  created_at INTEGER NOT NULL,
+  source_session_id TEXT
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_standing_intents_lifecycle
+  ON standing_intents(status, expires_at, last_fired_at);
+
+CREATE INDEX IF NOT EXISTS idx_standing_intents_scope
+  ON standing_intents(status, channel_scope, sender_scope);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS standing_intents_fts USING fts5(
+  trigger_keywords,
+  content = 'standing_intents',
+  content_rowid = 'intent_key',
+  tokenize = 'unicode61 remove_diacritics 2'
+);
+
+CREATE TRIGGER IF NOT EXISTS standing_intents_fts_after_insert
+AFTER INSERT ON standing_intents
+BEGIN
+  INSERT INTO standing_intents_fts(rowid, trigger_keywords)
+  VALUES (new.intent_key, new.trigger_keywords);
+END;
+
+CREATE TRIGGER IF NOT EXISTS standing_intents_fts_after_delete
+AFTER DELETE ON standing_intents
+BEGIN
+  INSERT INTO standing_intents_fts(standing_intents_fts, rowid, trigger_keywords)
+  VALUES ('delete', old.intent_key, old.trigger_keywords);
+END;
+
+CREATE TRIGGER IF NOT EXISTS standing_intents_fts_after_update
+AFTER UPDATE OF trigger_keywords ON standing_intents
+BEGIN
+  INSERT INTO standing_intents_fts(standing_intents_fts, rowid, trigger_keywords)
+  VALUES ('delete', old.intent_key, old.trigger_keywords);
+  INSERT INTO standing_intents_fts(rowid, trigger_keywords)
+  VALUES (new.intent_key, new.trigger_keywords);
+END;
 
 CREATE TABLE IF NOT EXISTS session_transcript_index_state (
   session_id TEXT NOT NULL PRIMARY KEY,

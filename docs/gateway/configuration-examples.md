@@ -65,8 +65,8 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 {
   // Environment + shell
   env: {
-    OPENROUTER_API_KEY: "sk-or-...",
     vars: {
+      OPENROUTER_API_KEY: "sk-or-...",
       GROQ_API_KEY: "gsk-...",
     },
     shellEnv: {
@@ -97,7 +97,6 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     file: "/tmp/openclaw/openclaw.log",
     consoleLevel: "info",
     consoleStyle: "pretty",
-    redactSensitive: "tools",
   },
 
   // Message formatting
@@ -252,11 +251,10 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       heartbeat: {
         every: "30m",
         model: "anthropic/claude-sonnet-4-6",
-        target: "last",
+        target: "whatsapp",
         directPolicy: "allow", // allow (default) | block
         to: "+15555550123",
         prompt: "HEARTBEAT",
-        ackMaxChars: 300,
       },
       sandbox: {
         mode: "non-main",
@@ -369,7 +367,6 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   // Cron jobs
   cron: {
     enabled: true,
-    store: "~/.openclaw/cron/jobs.json",
     sessionRetention: "24h",
   },
 

@@ -1,10 +1,17 @@
 // Persistent operator approval lifecycle and first-answer-wins transitions.
-import type { Selectable } from "kysely";
+import { createHash } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { sql, type Selectable } from "kysely";
 import {
+  type DecisionReceiptV1,
   type ApprovalPresentation,
   isWellFormedApprovalId,
   validateApprovalPresentation,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import {
   buildApprovalResolutionRef,
   isApprovalResolutionRef,
@@ -14,6 +21,8 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type {
   DB as OpenClawStateKyselyDatabase,
   OperatorApprovals,
@@ -25,6 +34,8 @@ import {
 } from "../state/openclaw-state-db.js";
 
 const OPERATOR_APPROVAL_TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60_000;
+const OPERATOR_APPROVAL_RECEIPT_SUMMARY_MAX_ROWS = 128;
+const OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES = 64 * 1024;
 export const OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS = 64;
 const OPERATOR_APPROVAL_PENDING_SCAN_PAGE_SIZE = 256;
 const OPERATOR_APPROVAL_MAX_LIST_LIMIT = 1_001;
@@ -96,6 +107,7 @@ type NewOperatorApproval = {
   runtimeEpoch: string;
   createdAtMs: number;
   expiresAtMs: number;
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
 };
 
 type InsertOperatorApprovalResult =
@@ -141,7 +153,10 @@ type TerminalizeOperatorApprovalsResult = {
   records: OperatorApprovalRecord[];
 };
 
-type OperatorApprovalDatabase = Pick<OpenClawStateKyselyDatabase, "operator_approvals">;
+type OperatorApprovalDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "operator_approvals" | "operator_approval_execution_identities"
+>;
 type OperatorApprovalRow = Selectable<OperatorApprovals>;
 
 type OperatorApprovalHistoryCursor = {
@@ -160,6 +175,31 @@ type ListTerminalOperatorApprovalsResult = {
   records: OperatorApprovalRecord[];
   nextCursor?: string;
 };
+
+type OperatorApprovalReceiptContext = {
+  contextId: string;
+  executionId: string;
+  runId: string;
+};
+type OperatorApprovalReceiptRow = OperatorApprovalRow & {
+  binding_context_id: string | null;
+  binding_execution_id: string | null;
+};
+type OperatorApprovalReceiptCursor = { occurredAt: number; rowId: number };
+type OperatorApprovalReceiptMetadataRow = Pick<
+  OperatorApprovalRow,
+  "approval_id" | "kind" | "resolution_ref" | "resolved_at_ms" | "updated_at_ms"
+> & {
+  binding_context_id: string | null;
+  binding_execution_id: string | null;
+  receipt_rowid: number;
+  payload_bytes: number;
+};
+type OperatorApprovalReceiptPage = {
+  receipts: DecisionReceiptV1[];
+  nextCursor?: OperatorApprovalReceiptCursor;
+};
+type OperatorApprovalExecutionLinkState = "exact" | "missing" | "malformed" | "mismatch";
 
 const OPERATOR_APPROVAL_DECISIONS = new Set<OperatorApprovalDecision>([
   "allow-once",
@@ -190,37 +230,53 @@ const OPERATOR_APPROVAL_RESOLVER_KINDS = new Set<OperatorApprovalResolverKind>([
   "system",
 ]);
 
-function parseApprovalPresentation(raw: string): ApprovalPresentation | null {
-  try {
-    const value: unknown = JSON.parse(raw);
-    return validateApprovalPresentation(value) ? value : null;
-  } catch {
-    return null;
+const OPERATOR_APPROVAL_EXECUTION_IDENTITY_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS operator_approval_execution_identities (
+  approval_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES operator_approvals(approval_id) ON DELETE CASCADE,
+  source_context_id TEXT NOT NULL CHECK (
+    length(source_context_id) BETWEEN 1 AND 256 AND source_context_id = trim(source_context_id)
+  ),
+  source_execution_id TEXT NOT NULL CHECK (
+    length(source_execution_id) BETWEEN 1 AND 256 AND source_execution_id = trim(source_execution_id)
+  )
+) STRICT;
+`;
+
+function normalizeExecutionIdentityBinding(input: NewOperatorApproval) {
+  const binding = input.executionIdentityToken;
+  const sourceRunId = normalizeNullableString(input.source?.runId);
+  if (!binding || normalizeNullableString(binding.runId) !== sourceRunId) {
+    return undefined;
   }
+  const sourceContextId = normalizeNullableString(binding.contextId);
+  const sourceExecutionId = normalizeNullableString(binding.executionId);
+  if (
+    !sourceContextId ||
+    !sourceExecutionId ||
+    sourceContextId.length > 256 ||
+    sourceExecutionId.length > 256
+  ) {
+    return undefined;
+  }
+  return { sourceContextId, sourceExecutionId };
+}
+
+function parseApprovalPresentation(raw: string): ApprovalPresentation | null {
+  const value = safeParseJson(raw);
+  return validateApprovalPresentation(value) ? value : null;
 }
 
 function parseStringArray(raw: string): string[] | null {
-  try {
-    const value: unknown = JSON.parse(raw);
-    if (
-      !Array.isArray(value) ||
-      value.some((entry) => typeof entry !== "string" || !entry.trim())
-    ) {
-      return null;
-    }
-    return value as string[];
-  } catch {
+  const value = safeParseJson(raw);
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || !entry.trim())) {
     return null;
   }
-}
-
-function normalizeString(value: string | null | undefined): string | null {
-  const normalized = value?.trim();
-  return normalized ? normalized : null;
+  return value as string[];
 }
 
 function requireString(value: string, label: string): string {
-  const normalized = normalizeString(value);
+  const normalized = normalizeNullableString(value);
   if (!normalized) {
     throw new Error(`${label} must not be empty`);
   }
@@ -264,17 +320,6 @@ function decodeOperatorApprovalHistoryCursor(raw: string): OperatorApprovalHisto
     }
     throw new OperatorApprovalHistoryCursorError();
   }
-}
-
-function normalizeStringArray(values: readonly string[] | undefined): string[] {
-  const result: string[] = [];
-  for (const value of values ?? []) {
-    const normalized = normalizeString(value);
-    if (normalized && !result.includes(normalized)) {
-      result.push(normalized);
-    }
-  }
-  return result;
 }
 
 function stringifyPresentation(presentation: ApprovalPresentation): string {
@@ -446,6 +491,626 @@ function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApprovalRe
   };
 }
 
+function operatorApprovalReasonCode(record: OperatorApprovalRecord): string {
+  if (record.status === "allowed") {
+    return record.decision === "allow-always"
+      ? "operator_approval_allowed_always"
+      : "operator_approval_allowed_once";
+  }
+  if (record.status === "expired") {
+    return "operator_approval_expired";
+  }
+  if (record.status === "cancelled") {
+    return record.terminalReason === "gateway-restart"
+      ? "operator_approval_cancelled_gateway_restart"
+      : "operator_approval_cancelled_run_aborted";
+  }
+  switch (record.terminalReason) {
+    case "malformed-verdict":
+      return "operator_approval_denied_malformed_verdict";
+    case "no-route":
+      return "operator_approval_denied_no_route";
+    case "storage-corrupt":
+      return "operator_approval_denied_storage_corrupt";
+    default:
+      return "operator_approval_denied_by_reviewer";
+  }
+}
+
+function operatorApprovalPolicyRefs(record: OperatorApprovalRecord): string[] {
+  const refs = ["operator-approval:first-answer-wins"];
+  switch (record.terminalReason) {
+    case "user":
+      refs.push("operator-approval:human-decision");
+      break;
+    case "timeout":
+      refs.push("operator-approval:deadline");
+      break;
+    case "no-route":
+      refs.push("operator-approval:delivery-route-required");
+      break;
+    case "run-aborted":
+      refs.push("operator-approval:run-lifecycle");
+      break;
+    case "gateway-restart":
+      refs.push("operator-approval:runtime-lifecycle");
+      break;
+    case "malformed-verdict":
+      refs.push("operator-approval:valid-verdict-required");
+      break;
+    case "storage-corrupt":
+      refs.push("operator-approval:fail-closed-storage");
+      break;
+    case null:
+      break;
+  }
+  return refs.toSorted();
+}
+
+function operatorApprovalRemediation(
+  record: OperatorApprovalRecord,
+): DecisionReceiptV1["remediation"] {
+  if (record.status === "allowed") {
+    return [];
+  }
+  switch (record.terminalReason) {
+    case "timeout":
+      return [
+        {
+          code: "request_approval_again",
+          text: "Request the action again and resolve the new approval before its deadline.",
+        },
+      ];
+    case "no-route":
+      return [
+        {
+          code: "restore_approval_route",
+          text: "Connect an eligible approval client or configure an approval delivery route, then request the action again.",
+        },
+      ];
+    case "run-aborted":
+      return [
+        {
+          code: "start_new_run",
+          text: "Start a new run and request the action again if it is still needed.",
+        },
+      ];
+    case "gateway-restart":
+      return [
+        {
+          code: "request_after_restart",
+          text: "After the Gateway is available, request the action again to create a current approval.",
+        },
+      ];
+    case "malformed-verdict":
+      return [
+        {
+          code: "submit_supported_decision",
+          text: "Request the action again and resolve it with one of the decisions shown by the approval prompt.",
+        },
+      ];
+    case "storage-corrupt":
+      return [
+        {
+          code: "inspect_state_integrity",
+          text: "Run openclaw doctor and inspect the shared state database before requesting the action again.",
+        },
+      ];
+    default:
+      return [
+        {
+          code: "review_and_request_again",
+          text: "Review the denial, then request the action again only if an eligible reviewer should reconsider it.",
+        },
+      ];
+  }
+}
+
+function projectOperatorApprovalReceipt(
+  record: OperatorApprovalRecord,
+  context: OperatorApprovalReceiptContext,
+): DecisionReceiptV1 {
+  const allowed = record.status === "allowed";
+  const sourceRef = record.resolutionRef;
+  return {
+    schemaVersion: 1,
+    receiptId: `approval:${sourceRef}`,
+    contextId: context.contextId,
+    executionId: context.executionId,
+    runId: context.runId,
+    actionId: sourceRef,
+    occurredAt: record.resolvedAtMs ?? record.updatedAtMs,
+    action: {
+      family: record.kind,
+      operation: "approval",
+      summary: allowed
+        ? `A ${record.kind} approval allowed the requested action.`
+        : `A ${record.kind} approval stopped the requested action.`,
+    },
+    decision: {
+      outcome: allowed ? "allowed" : "denied",
+      reasonCode: operatorApprovalReasonCode(record),
+    },
+    enforcement: {
+      coverageState: "enforced",
+      evaluatorRef: `operator-approval:${record.resolver?.kind ?? "system"}`,
+      policyRefs: operatorApprovalPolicyRefs(record),
+      grantRefs: allowed ? [`operator-approval-grant:${sourceRef}`] : [],
+      contextFieldsUsed: ["contextId", "executionId", "runId"],
+    },
+    source: {
+      owner: "operator_approvals",
+      recordRef: sourceRef,
+      decisionBoundary: "gateway.operator-approval.first-answer",
+    },
+    missingEvidence: [],
+    remediation: operatorApprovalRemediation(record),
+  };
+}
+
+function projectUnlinkedOperatorApprovalReceipt(
+  record: OperatorApprovalRecord,
+  context: OperatorApprovalReceiptContext,
+  linkState: Exclude<OperatorApprovalExecutionLinkState, "exact">,
+): DecisionReceiptV1 {
+  const sourceRef = record.resolutionRef;
+  const receiptId = `approval-unlinked:${createHash("sha256")
+    .update(sourceRef, "utf8")
+    .update("\0", "utf8")
+    .update(context.contextId, "utf8")
+    .digest("base64url")}`;
+  return {
+    schemaVersion: 1,
+    receiptId,
+    contextId: context.contextId,
+    executionId: context.executionId,
+    runId: context.runId,
+    actionId: sourceRef,
+    occurredAt: record.resolvedAtMs ?? record.updatedAtMs,
+    action: {
+      family: record.kind,
+      operation: "approval",
+      summary: `A terminal ${record.kind} approval shares this run correlation, but its retained binding does not match this exact execution.`,
+    },
+    decision: {
+      outcome: "unknown",
+      reasonCode: `operator_approval_execution_link_${linkState}`,
+    },
+    enforcement: {
+      coverageState: "unknown",
+      policyRefs: operatorApprovalPolicyRefs(record),
+      grantRefs: [],
+      contextFieldsUsed: ["contextId", "executionId", "runId"],
+    },
+    source: {
+      owner: "operator_approvals",
+      recordRef: sourceRef,
+      decisionBoundary: "gateway.operator-approval.first-answer",
+    },
+    missingEvidence: ["decision.execution_link"],
+    remediation: [
+      {
+        code: "inspect_exact_approval_binding",
+        text: "Treat this approval only as run-correlated; inspect its retained execution binding before trusting attribution.",
+      },
+    ],
+  };
+}
+
+function projectCorruptOperatorApprovalReceipt(
+  row: Pick<
+    OperatorApprovalRow,
+    "approval_id" | "kind" | "resolution_ref" | "resolved_at_ms" | "updated_at_ms"
+  >,
+  context: OperatorApprovalReceiptContext,
+): DecisionReceiptV1 {
+  const kind = OPERATOR_APPROVAL_KINDS.has(row.kind as OperatorApprovalKind)
+    ? (row.kind as OperatorApprovalKind)
+    : "exec";
+  const sourceRef = isApprovalResolutionRef(row.resolution_ref)
+    ? row.resolution_ref
+    : buildApprovalResolutionRef({ approvalId: row.approval_id, approvalKind: kind });
+  const occurredAt = isValidTimestamp(row.resolved_at_ms ?? -1)
+    ? row.resolved_at_ms!
+    : isValidTimestamp(row.updated_at_ms)
+      ? row.updated_at_ms
+      : 0;
+  return {
+    schemaVersion: 1,
+    receiptId: `approval:${sourceRef}`,
+    contextId: context.contextId,
+    executionId: context.executionId,
+    runId: context.runId,
+    actionId: sourceRef,
+    occurredAt,
+    action: { family: kind, operation: "approval" },
+    decision: { outcome: "unknown", reasonCode: "operator_approval_record_corrupt" },
+    enforcement: {
+      coverageState: "unknown",
+      policyRefs: [],
+      grantRefs: [],
+      contextFieldsUsed: ["runId"],
+    },
+    source: {
+      owner: "operator_approvals",
+      recordRef: sourceRef,
+      decisionBoundary: "gateway.operator-approval.first-answer",
+    },
+    missingEvidence: ["operator_approval.valid"],
+    remediation: [
+      {
+        code: "inspect_state_integrity",
+        text: "Run openclaw doctor and inspect the shared state database before trusting this approval.",
+      },
+    ],
+  };
+}
+
+function projectOversizedOperatorApprovalReceipt(
+  row: OperatorApprovalReceiptMetadataRow,
+  context: OperatorApprovalReceiptContext,
+): DecisionReceiptV1 {
+  const receipt = projectCorruptOperatorApprovalReceipt(row, context);
+  return {
+    ...receipt,
+    decision: { outcome: "unknown", reasonCode: "operator_approval_payload_bounded" },
+    missingEvidence: ["operator_approval.payload_bounded"],
+    remediation: [
+      {
+        code: "inspect_approval_record",
+        text: "Inspect the retained approval directly; its presentation exceeds the bounded audit projection.",
+      },
+    ],
+  };
+}
+
+function terminalApprovalsForRunQuery(
+  database: ReturnType<typeof getNodeSqliteKysely<OperatorApprovalDatabase>>,
+  runId: string,
+  nowMs: number,
+) {
+  return database
+    .selectFrom("operator_approvals")
+    .where("source_run_id", "=", runId)
+    .where("status", "!=", "pending")
+    .where("resolved_at_ms", "is not", null)
+    .where("resolved_at_ms", ">=", nowMs - OPERATOR_APPROVAL_TERMINAL_RETENTION_MS);
+}
+
+function operatorApprovalRowId() {
+  return /* kysely-allow-raw: SQLite rowid keeps the external cursor compact while the indexed approval id remains the query key. */ sql<number>`operator_approvals.rowid`;
+}
+
+function operatorApprovalPayloadBytes() {
+  return /* kysely-allow-raw: SQLite byte length excludes oversized retained presentation JSON before materialization. */ sql<number>`
+    length(CAST(operator_approvals.presentation_json AS BLOB)) +
+    length(CAST(operator_approvals.reviewer_device_ids_json AS BLOB)) +
+    length(CAST(operator_approvals.audience_session_keys_json AS BLOB))
+  `;
+}
+
+function terminalApprovalReceiptMetadataRows(params: {
+  db: DatabaseSync;
+  stateDb: ReturnType<typeof getNodeSqliteKysely<OperatorApprovalDatabase>>;
+  runId: string;
+  nowMs: number;
+  after?: OperatorApprovalReceiptCursor;
+  offset?: number;
+  limit: number;
+}): OperatorApprovalReceiptMetadataRow[] {
+  const boundary = params.after
+    ? executeSqliteQueryTakeFirstSync(
+        params.db,
+        params.stateDb
+          .selectFrom("operator_approvals")
+          .select(["approval_id", "resolved_at_ms"])
+          .where(operatorApprovalRowId(), "=", params.after.rowId)
+          .where("source_run_id", "=", params.runId)
+          .where("resolved_at_ms", "=", params.after.occurredAt),
+      )
+    : undefined;
+  if (params.after && !boundary) {
+    throw new Error("operator approval decision cursor is no longer retained");
+  }
+  const ordered = terminalApprovalsForRunQuery(params.stateDb, params.runId, params.nowMs)
+    .$if(boundary !== undefined && boundary.resolved_at_ms !== null, (query) =>
+      query.where((eb) =>
+        eb.or([
+          eb("operator_approvals.resolved_at_ms", ">", boundary!.resolved_at_ms!),
+          eb.and([
+            eb("operator_approvals.resolved_at_ms", "=", boundary!.resolved_at_ms!),
+            eb("operator_approvals.approval_id", ">", boundary!.approval_id),
+          ]),
+        ]),
+      ),
+    )
+    .orderBy("operator_approvals.resolved_at_ms", "asc")
+    .orderBy("operator_approvals.approval_id", "asc")
+    .$if(params.offset !== undefined, (query) => query.offset(params.offset!))
+    .limit(params.limit);
+  const metadata = (query: typeof ordered) =>
+    query
+      .select([
+        "operator_approvals.approval_id",
+        "operator_approvals.kind",
+        "operator_approvals.resolution_ref",
+        "operator_approvals.resolved_at_ms",
+        "operator_approvals.updated_at_ms",
+      ])
+      .select([
+        operatorApprovalRowId().as("receipt_rowid"),
+        operatorApprovalPayloadBytes().as("payload_bytes"),
+      ]);
+  if (!tableExists(params.db, "operator_approval_execution_identities")) {
+    return executeSqliteQuerySync(
+      params.db,
+      metadata(ordered).select((eb) => [
+        eb.val(null).as("binding_context_id"),
+        eb.val(null).as("binding_execution_id"),
+      ]),
+    ).rows;
+  }
+  return executeSqliteQuerySync(
+    params.db,
+    metadata(ordered)
+      .leftJoin(
+        "operator_approval_execution_identities",
+        "operator_approval_execution_identities.approval_id",
+        "operator_approvals.approval_id",
+      )
+      .select([
+        "operator_approval_execution_identities.source_context_id as binding_context_id",
+        "operator_approval_execution_identities.source_execution_id as binding_execution_id",
+      ]),
+  ).rows;
+}
+
+function terminalApprovalReceiptRowsById(params: {
+  db: DatabaseSync;
+  stateDb: ReturnType<typeof getNodeSqliteKysely<OperatorApprovalDatabase>>;
+  ids: readonly string[];
+}): Map<string, OperatorApprovalReceiptRow> {
+  if (params.ids.length === 0) {
+    return new Map();
+  }
+  const query = params.stateDb
+    .selectFrom("operator_approvals")
+    .where("operator_approvals.approval_id", "in", [...params.ids])
+    .where(operatorApprovalPayloadBytes(), "<=", OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES);
+  if (!tableExists(params.db, "operator_approval_execution_identities")) {
+    const rows = executeSqliteQuerySync(
+      params.db,
+      query
+        .selectAll("operator_approvals")
+        .select((eb) => [
+          eb.val(null).as("binding_context_id"),
+          eb.val(null).as("binding_execution_id"),
+        ]),
+    ).rows;
+    return new Map(rows.map((row) => [row.approval_id, row]));
+  }
+  const rows = executeSqliteQuerySync(
+    params.db,
+    query
+      .leftJoin(
+        "operator_approval_execution_identities",
+        "operator_approval_execution_identities.approval_id",
+        "operator_approvals.approval_id",
+      )
+      .selectAll("operator_approvals")
+      .select([
+        "operator_approval_execution_identities.source_context_id as binding_context_id",
+        "operator_approval_execution_identities.source_execution_id as binding_execution_id",
+      ]),
+  ).rows;
+  return new Map(rows.map((row) => [row.approval_id, row]));
+}
+
+function operatorApprovalExecutionLinkState(
+  row: Pick<
+    OperatorApprovalReceiptRow,
+    "binding_context_id" | "binding_execution_id" | "source_run_id"
+  >,
+  context: OperatorApprovalReceiptContext,
+): OperatorApprovalExecutionLinkState {
+  if (row.binding_context_id === null && row.binding_execution_id === null) {
+    return "missing";
+  }
+  if (
+    typeof row.binding_context_id !== "string" ||
+    typeof row.binding_execution_id !== "string" ||
+    row.binding_context_id.length === 0 ||
+    row.binding_execution_id.length === 0 ||
+    row.binding_context_id.length > 256 ||
+    row.binding_execution_id.length > 256 ||
+    row.binding_context_id.trim() !== row.binding_context_id ||
+    row.binding_execution_id.trim() !== row.binding_execution_id
+  ) {
+    return "malformed";
+  }
+  return row.binding_context_id === context.contextId &&
+    row.binding_execution_id === context.executionId &&
+    row.source_run_id === context.runId
+    ? "exact"
+    : "mismatch";
+}
+
+/** Probe for an authoritative retained approval without scanning the full run history. */
+export function hasOperatorApprovalReceiptsForRun(params: {
+  runId: string;
+  nowMs?: number;
+  databaseOptions?: OpenClawStateDatabaseOptions;
+}): boolean {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+      if (!tableExists(db, "operator_approvals")) {
+        return false;
+      }
+      const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
+      return Boolean(
+        executeSqliteQueryTakeFirstSync(
+          db,
+          terminalApprovalsForRunQuery(stateDb, params.runId, params.nowMs ?? Date.now())
+            .clearSelect()
+            .select("approval_id")
+            .limit(1),
+        ),
+      );
+    }, params.databaseOptions) ?? false
+  );
+}
+
+/** Summarize at most 128 owner rows; the 129th makes coverage explicitly unknown. */
+export function summarizeOperatorApprovalReceiptsForRun(params: {
+  context: OperatorApprovalReceiptContext;
+  nowMs?: number;
+  databaseOptions?: OpenClawStateDatabaseOptions;
+  exactCount?: boolean;
+}): {
+  count: number;
+  coverageState?: "enforced" | "unknown";
+  missingEvidence: string[];
+} {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+      if (!tableExists(db, "operator_approvals")) {
+        return { count: 0, missingEvidence: [] };
+      }
+      const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
+      const metadataRows = terminalApprovalReceiptMetadataRows({
+        db,
+        stateDb,
+        runId: params.context.runId,
+        nowMs: params.nowMs ?? Date.now(),
+        limit: OPERATOR_APPROVAL_RECEIPT_SUMMARY_MAX_ROWS + 1,
+      });
+      const boundedCount = metadataRows.length;
+      const count = params.exactCount
+        ? (executeSqliteQueryTakeFirstSync(
+            db,
+            terminalApprovalsForRunQuery(stateDb, params.context.runId, params.nowMs ?? Date.now())
+              .clearSelect()
+              .select((eb) => eb.fn.countAll<number>().as("count")),
+          )?.count ?? 0)
+        : boundedCount;
+      if (boundedCount === 0) {
+        return { count: 0, missingEvidence: [] };
+      }
+      // Whole-set coverage stays conservative without decoding an unbounded
+      // collection on the Gateway event loop.
+      if (boundedCount > OPERATOR_APPROVAL_RECEIPT_SUMMARY_MAX_ROWS) {
+        return {
+          count,
+          coverageState: "unknown" as const,
+          missingEvidence: ["operator_approval.summary_bounded"],
+        };
+      }
+      const hasOversizedRecord = metadataRows.some(
+        (row) => row.payload_bytes > OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES,
+      );
+      const boundedMetadataRows = metadataRows.filter(
+        (row) => row.payload_bytes <= OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES,
+      );
+      const rowsById = terminalApprovalReceiptRowsById({
+        db,
+        stateDb,
+        ids: boundedMetadataRows.map((row) => row.approval_id),
+      });
+      const rows = metadataRows.flatMap((metadata) => {
+        const row = rowsById.get(metadata.approval_id);
+        return row ? [row] : [];
+      });
+      const hasMissingBoundedRow = rows.length !== boundedMetadataRows.length;
+      const records = rows.map((row) => decodeOperatorApprovalRow(row));
+      const hasCorruptRecord = records.some((record) => record === null);
+      const hasUnlinkedRecord = rows.some(
+        (row, index) =>
+          records[index] !== null &&
+          operatorApprovalExecutionLinkState(row, params.context) !== "exact",
+      );
+      return {
+        count,
+        coverageState:
+          hasOversizedRecord || hasMissingBoundedRow || hasCorruptRecord || hasUnlinkedRecord
+            ? "unknown"
+            : "enforced",
+        missingEvidence: [
+          ...(hasUnlinkedRecord ? ["decision.execution_link"] : []),
+          ...(hasCorruptRecord ? ["operator_approval.valid"] : []),
+          ...(hasOversizedRecord || hasMissingBoundedRow
+            ? ["operator_approval.payload_bounded"]
+            : []),
+        ],
+      };
+    }, params.databaseOptions) ?? { count: 0, missingEvidence: [] }
+  );
+}
+
+/** Project authoritative approval rows directly; no generic decision fact is written. */
+export function pageOperatorApprovalReceiptsForRun(params: {
+  context: OperatorApprovalReceiptContext;
+  after?: OperatorApprovalReceiptCursor;
+  offset?: number;
+  limit: number;
+  nowMs?: number;
+  databaseOptions?: OpenClawStateDatabaseOptions;
+}): OperatorApprovalReceiptPage {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+      if (!tableExists(db, "operator_approvals")) {
+        return { receipts: [] };
+      }
+      const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
+      const metadataRows = terminalApprovalReceiptMetadataRows({
+        db,
+        stateDb,
+        runId: params.context.runId,
+        nowMs: params.nowMs ?? Date.now(),
+        after: params.after,
+        offset: params.offset,
+        limit: params.limit + 1,
+      });
+      const pageMetadata = metadataRows.slice(0, params.limit);
+      const rowsById = terminalApprovalReceiptRowsById({
+        db,
+        stateDb,
+        ids: pageMetadata
+          .filter((row) => row.payload_bytes <= OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES)
+          .map((row) => row.approval_id),
+      });
+      const receipts = pageMetadata.map((metadata) => {
+        if (metadata.payload_bytes > OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES) {
+          return projectOversizedOperatorApprovalReceipt(metadata, params.context);
+        }
+        const row = rowsById.get(metadata.approval_id);
+        if (!row) {
+          return projectCorruptOperatorApprovalReceipt(metadata, params.context);
+        }
+        const record = decodeOperatorApprovalRow(row);
+        if (!record) {
+          return projectCorruptOperatorApprovalReceipt(row, params.context);
+        }
+        const linkState = operatorApprovalExecutionLinkState(row, params.context);
+        return linkState === "exact"
+          ? projectOperatorApprovalReceipt(record, params.context)
+          : projectUnlinkedOperatorApprovalReceipt(record, params.context, linkState);
+      });
+      const last = pageMetadata.at(-1);
+      return {
+        receipts,
+        ...(metadataRows.length > params.limit && last && last.resolved_at_ms !== null
+          ? {
+              nextCursor: {
+                occurredAt: last.resolved_at_ms,
+                rowId: last.receipt_rowid,
+              },
+            }
+          : {}),
+      };
+    }, params.databaseOptions) ?? { receipts: [] }
+  );
+}
+
 function selectOperatorApprovalRow(
   database: ReturnType<typeof openOpenClawStateDatabase>,
   id: string,
@@ -579,16 +1244,16 @@ function inputMatchesExistingRow(
     row.status === "pending" &&
     row.kind === input.kind &&
     row.presentation_json === serialized.presentationJson &&
-    row.requested_by_device_id === normalizeString(input.requester?.deviceId) &&
-    row.requested_by_client_id === normalizeString(input.requester?.clientId) &&
+    row.requested_by_device_id === normalizeNullableString(input.requester?.deviceId) &&
+    row.requested_by_client_id === normalizeNullableString(input.requester?.clientId) &&
     row.requested_by_device_token_auth === (input.requester?.deviceTokenAuth === true ? 1 : 0) &&
     row.reviewer_device_ids_json === serialized.reviewerDeviceIdsJson &&
-    row.source_agent_id === normalizeString(source.agentId) &&
-    row.source_session_key === normalizeString(source.sessionKey) &&
-    row.source_session_id === normalizeString(source.sessionId) &&
-    row.source_run_id === normalizeString(source.runId) &&
-    row.source_tool_call_id === normalizeString(source.toolCallId) &&
-    row.source_tool_name === normalizeString(source.toolName) &&
+    row.source_agent_id === normalizeNullableString(source.agentId) &&
+    row.source_session_key === normalizeNullableString(source.sessionKey) &&
+    row.source_session_id === normalizeNullableString(source.sessionId) &&
+    row.source_run_id === normalizeNullableString(source.runId) &&
+    row.source_tool_call_id === normalizeNullableString(source.toolCallId) &&
+    row.source_tool_name === normalizeNullableString(source.toolName) &&
     row.audience_session_keys_json === serialized.audienceSessionKeysJson &&
     row.runtime_epoch === input.runtimeEpoch.trim() &&
     row.created_at_ms === input.createdAtMs &&
@@ -617,8 +1282,10 @@ export function insertOperatorApproval(params: {
   if (input.presentation.kind !== input.kind) {
     throw new Error("operator approval kind must match its safe presentation");
   }
-  const reviewerDeviceIdsJson = JSON.stringify(normalizeStringArray(input.reviewerDeviceIds));
-  const audienceSessionKeys = normalizeStringArray(input.audienceSessionKeys);
+  const reviewerDeviceIdsJson = JSON.stringify(
+    normalizeUniqueTrimmedStringList(input.reviewerDeviceIds),
+  );
+  const audienceSessionKeys = normalizeUniqueTrimmedStringList(input.audienceSessionKeys);
   if (audienceSessionKeys.length > OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS) {
     throw new Error(
       `operator approval audience exceeds ${OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS} sessions`,
@@ -630,6 +1297,7 @@ export function insertOperatorApproval(params: {
     reviewerDeviceIdsJson,
     audienceSessionKeysJson,
   };
+  const executionIdentityBinding = normalizeExecutionIdentityBinding(input);
 
   return runOpenClawStateWriteTransaction((database) => {
     const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
@@ -655,16 +1323,16 @@ export function insertOperatorApproval(params: {
           kind: input.kind,
           status: "pending",
           presentation_json: presentationJson,
-          requested_by_device_id: normalizeString(input.requester?.deviceId),
-          requested_by_client_id: normalizeString(input.requester?.clientId),
+          requested_by_device_id: normalizeNullableString(input.requester?.deviceId),
+          requested_by_client_id: normalizeNullableString(input.requester?.clientId),
           requested_by_device_token_auth: input.requester?.deviceTokenAuth === true ? 1 : 0,
           reviewer_device_ids_json: reviewerDeviceIdsJson,
-          source_agent_id: normalizeString(source.agentId),
-          source_session_key: normalizeString(source.sessionKey),
-          source_session_id: normalizeString(source.sessionId),
-          source_run_id: normalizeString(source.runId),
-          source_tool_call_id: normalizeString(source.toolCallId),
-          source_tool_name: normalizeString(source.toolName),
+          source_agent_id: normalizeNullableString(source.agentId),
+          source_session_key: normalizeNullableString(source.sessionKey),
+          source_session_id: normalizeNullableString(source.sessionId),
+          source_run_id: normalizeNullableString(source.runId),
+          source_tool_call_id: normalizeNullableString(source.toolCallId),
+          source_tool_name: normalizeNullableString(source.toolName),
           audience_session_keys_json: audienceSessionKeysJson,
           runtime_epoch: runtimeEpoch,
           created_at_ms: input.createdAtMs,
@@ -695,51 +1363,57 @@ export function insertOperatorApproval(params: {
       return { outcome: "conflict" };
     }
     if (result.numAffectedRows === 1n) {
+      if (executionIdentityBinding) {
+        // sqlite-allow-raw -- feature-local additive schema DDL; binding rows use Kysely.
+        database.db.exec(OPERATOR_APPROVAL_EXECUTION_IDENTITY_SCHEMA_SQL);
+        executeSqliteQuerySync(
+          database.db,
+          stateDb.insertInto("operator_approval_execution_identities").values({
+            approval_id: id,
+            source_context_id: executionIdentityBinding.sourceContextId,
+            source_execution_id: executionIdentityBinding.sourceExecutionId,
+          }),
+        );
+      }
       return { outcome: "inserted", record };
     }
-    return inputMatchesExistingRow(input, row, serialized)
-      ? { outcome: "existing", record }
-      : { outcome: "conflict" };
+    if (!inputMatchesExistingRow(input, row, serialized)) {
+      return { outcome: "conflict" };
+    }
+    if (executionIdentityBinding) {
+      if (!tableExists(database.db, "operator_approval_execution_identities")) {
+        return { outcome: "conflict" };
+      }
+      const existingBinding = executeSqliteQueryTakeFirstSync(
+        database.db,
+        stateDb
+          .selectFrom("operator_approval_execution_identities")
+          .select(["source_context_id", "source_execution_id"])
+          .where("approval_id", "=", id),
+      );
+      if (
+        existingBinding?.source_context_id !== executionIdentityBinding.sourceContextId ||
+        existingBinding.source_execution_id !== executionIdentityBinding.sourceExecutionId
+      ) {
+        return { outcome: "conflict" };
+      }
+    }
+    return { outcome: "existing", record };
   }, params.databaseOptions);
 }
 
 export function getOperatorApprovalDetailed(params: {
   id: string;
+  allowTransportRef?: boolean;
   nowMs?: number;
   databaseOptions?: OpenClawStateDatabaseOptions;
 }): GetOperatorApprovalResult {
-  const id = requireApprovalId(params.id);
+  const locator = requireApprovalId(params.id);
   return runOpenClawStateWriteTransaction((database) => {
     const nowMs = params.nowMs ?? Date.now();
-    let row = selectOperatorApprovalRow(database, id);
-    if (!row) {
-      return { outcome: "not-found" };
-    }
-    if (row.status === "pending" && row.expires_at_ms <= nowMs) {
-      row = expirePendingRow({ database, id, nowMs, createdAtMs: row.created_at_ms });
-      if (!row) {
-        return { outcome: "not-found" };
-      }
-    }
-    const record = decodeOperatorApprovalRow(row);
-    if (record) {
-      return { outcome: "found", record };
-    }
-    denyCorruptPendingRow({ database, id, nowMs, createdAtMs: row.created_at_ms });
-    return { outcome: "corrupt" };
-  }, params.databaseOptions);
-}
-
-/** Resolve either the canonical id or its fixed-size transport reference. */
-export function getOperatorApprovalDetailedByLocator(params: {
-  locator: string;
-  nowMs?: number;
-  databaseOptions?: OpenClawStateDatabaseOptions;
-}): GetOperatorApprovalResult {
-  const locator = requireApprovalId(params.locator);
-  return runOpenClawStateWriteTransaction((database) => {
-    const nowMs = params.nowMs ?? Date.now();
-    let row = selectOperatorApprovalRowByLocator(database, locator);
+    let row = params.allowTransportRef
+      ? selectOperatorApprovalRowByLocator(database, locator)
+      : selectOperatorApprovalRow(database, locator);
     if (!row) {
       return { outcome: "not-found" };
     }
@@ -755,7 +1429,7 @@ export function getOperatorApprovalDetailedByLocator(params: {
       return { outcome: "found", record };
     }
     denyCorruptPendingRow({ database, id, nowMs, createdAtMs: row.created_at_ms });
-    return { outcome: "corrupt", id };
+    return params.allowTransportRef ? { outcome: "corrupt", id } : { outcome: "corrupt" };
   }, params.databaseOptions);
 }
 
@@ -937,7 +1611,7 @@ export function resolveOperatorApproval(params: {
   databaseOptions?: OpenClawStateDatabaseOptions;
 }): ResolveOperatorApprovalResult {
   const id = requireApprovalId(params.id);
-  const resolverId = normalizeString(params.resolver.id);
+  const resolverId = normalizeNullableString(params.resolver.id);
   const runtimeEpoch =
     params.runtimeEpoch === undefined
       ? undefined
@@ -1085,7 +1759,7 @@ export function forceDenyOperatorApproval(params: {
         terminal_reason: params.reason,
         resolved_at_ms: auditTimestampMs,
         resolver_kind: params.resolver.kind,
-        resolver_id: normalizeString(params.resolver.id),
+        resolver_id: normalizeNullableString(params.resolver.id),
         updated_at_ms: auditTimestampMs,
       })
       .where("approval_id", "=", id)

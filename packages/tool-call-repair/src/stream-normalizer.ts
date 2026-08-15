@@ -1,3 +1,10 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isOffsetInProtectedRanges,
+  type PlainTextToolCallNameMatcher,
+  type PlainTextToolCallProtectedRange,
+  type PlainTextToolCallProtectedRangeResolver,
+} from "./contracts.js";
 import {
   consumeLineBreak,
   END_TOOL_REQUEST,
@@ -11,14 +18,10 @@ import {
   type StructuralLineBreakOptions,
   utf8ByteLengthWithinLimit,
 } from "./grammar.js";
-import {
-  scanPlainTextToolCall,
-  type PlainTextToolCallNameMatcher,
-  type PlainTextToolCallScan,
-} from "./payload.js";
+import { scanPlainTextToolCall, type PlainTextToolCallScan } from "./payload.js";
 import type { PlainTextToolCallMessageProjection } from "./promote.js";
 
-export type { PlainTextToolCallNameMatcher } from "./payload.js";
+export type { PlainTextToolCallNameMatcher } from "./contracts.js";
 
 /** Result of repairing the final message carried by a provider stream `done` event. */
 export type PlainTextToolCallMessageNormalization =
@@ -31,6 +34,8 @@ export type PlainTextToolCallStreamNormalizerOptions = {
   createPromotedToolCallEvents(message: Record<string, unknown>): Iterable<unknown>;
   /** Tool-name matcher scoped to the exact request being normalized. */
   matcher: PlainTextToolCallNameMatcher;
+  /** Resolves source ranges that must remain literal user-visible text. */
+  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver;
   /** Promotes an eligible terminal snapshot or scrubs every recognized candidate. */
   normalizeTerminalMessage(params: {
     allowPromotion: boolean;
@@ -44,6 +49,8 @@ export type PlainTextToolCallStreamNormalizerOptions = {
 
 const MAX_PAYLOAD_BYTES = 256_000;
 const MAX_PENDING_EVENTS = 256;
+// Retain bounded visible history only for split Markdown ownership; terminal snapshots stay canonical.
+const MAX_PROTECTION_CONTEXT_CHARS = 1_000_000;
 const MAX_TOOL_NAME_CHARS = 120;
 
 type TextRange = { end: number; start: number };
@@ -97,10 +104,6 @@ type SuppressingPendingState = {
 
 type PendingState = CandidatePendingState | SuppressingPendingState;
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
 function eventContentIndex(event: Record<string, unknown>): number {
   const index = event.contentIndex;
   return typeof index === "number" && Number.isInteger(index) && index >= 0 ? index : 0;
@@ -114,7 +117,7 @@ function extractStandaloneCandidate(
   message: unknown,
   requireAssistantRole = false,
 ): StandalonePlainTextToolCallCandidate | undefined {
-  const record = asRecord(message);
+  const record = asOptionalObjectRecord(message);
   if (!record || (requireAssistantRole && record.role !== "assistant")) {
     return undefined;
   }
@@ -126,7 +129,7 @@ function extractStandaloneCandidate(
   }
   const candidate: StandalonePlainTextToolCallCandidate = { text: "", parts: [] };
   for (const [contentIndex, block] of record.content.entries()) {
-    const value = asRecord(block);
+    const value = asOptionalObjectRecord(block);
     if (!value) {
       return undefined;
     }
@@ -200,6 +203,7 @@ function findCallSequences(
   matcher: PlainTextToolCallNameMatcher,
   structuralBoundaries: readonly number[] = [],
   structuralLineBreaks?: StructuralLineBreakOptions,
+  protectedRanges: readonly PlainTextToolCallProtectedRange[] = [],
 ): ScannedCallSequence[] {
   const sequences: ScannedCallSequence[] = [];
   const structuralBoundarySet = new Set(structuralBoundaries);
@@ -217,6 +221,10 @@ function findCallSequences(
     }
     const sequenceStart = index;
     let callStart = skipLineIndentation(text, index);
+    if (isOffsetInProtectedRanges(callStart, protectedRanges)) {
+      index += 1;
+      continue;
+    }
     let sequenceEnd = callStart;
     let hasOverCap = false;
     let activeStart: number | undefined;
@@ -274,6 +282,9 @@ function findCallSequences(
       if (nextStart >= text.length) {
         break;
       }
+      if (isOffsetInProtectedRanges(nextStart, protectedRanges)) {
+        break;
+      }
       const nextScan = scanPlainTextToolCall(text, nextStart, {
         matcher,
         maxPayloadBytes: MAX_PAYLOAD_BYTES,
@@ -321,9 +332,16 @@ function createCandidateScanView(candidate: StandalonePlainTextToolCallCandidate
 function findCandidateCallSequences(
   candidate: StandalonePlainTextToolCallCandidate,
   matcher: PlainTextToolCallNameMatcher,
+  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver,
 ): ScannedCallSequence[] {
   const view = createCandidateScanView(candidate);
-  return findCallSequences(view.text, matcher, view.boundaries, view.structuralLineBreaks);
+  return findCallSequences(
+    view.text,
+    matcher,
+    view.boundaries,
+    view.structuralLineBreaks,
+    resolveProtectedRanges?.(view.text),
+  );
 }
 
 function createRangeRemover(ranges: readonly TextRange[]) {
@@ -376,7 +394,7 @@ function projectRangesOntoMessage(
   const sourceToProjectedContentIndex = new Map<number, number>();
   for (const [index, block] of record.content.entries()) {
     const part = parts.get(index);
-    const blockRecord = asRecord(block);
+    const blockRecord = asOptionalObjectRecord(block);
     if (!part || blockRecord?.type !== "text" || typeof blockRecord.text !== "string") {
       sourceToProjectedContentIndex.set(index, content.length);
       content.push(block);
@@ -398,9 +416,10 @@ export function projectScrubbedPlainTextToolCallMessage(params: {
   matcher: PlainTextToolCallNameMatcher;
   message: unknown;
   preserveEmptyTextBlocks?: boolean;
+  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver;
   requireAssistantRole?: boolean;
 }): PlainTextToolCallMessageProjection | undefined {
-  const record = asRecord(params.message);
+  const record = asOptionalObjectRecord(params.message);
   const candidate = extractStandaloneCandidate(
     params.message,
     params.requireAssistantRole === true,
@@ -408,7 +427,11 @@ export function projectScrubbedPlainTextToolCallMessage(params: {
   if (!record || !candidate) {
     return undefined;
   }
-  const sequences = findCandidateCallSequences(candidate, params.matcher);
+  const sequences = findCandidateCallSequences(
+    candidate,
+    params.matcher,
+    params.resolveProtectedRanges,
+  );
   const visibleOutsideCalls = Boolean(createRangeRemover(sequences)(candidate.text).trim());
   const ranges = sequences.filter(
     (sequence) =>
@@ -426,6 +449,7 @@ function findPotentialCallStart(
   text: string,
   atLineStart: boolean,
   matcher: PlainTextToolCallNameMatcher,
+  isProtected?: (offset: number) => boolean,
 ): number | null {
   for (let index = 0; index < text.length;) {
     const lineStart =
@@ -435,6 +459,10 @@ function findPotentialCallStart(
       continue;
     }
     const start = skipLineIndentation(text, index);
+    if (isProtected?.(start)) {
+      index += 1;
+      continue;
+    }
     const scan = scanPlainTextToolCall(text, start, {
       matcher,
       maxPayloadBytes: MAX_PAYLOAD_BYTES,
@@ -445,6 +473,48 @@ function findPotentialCallStart(
     index = Math.max(index + 1, scan.next);
   }
   return null;
+}
+
+function resolvePartialProtectionCheck(params: {
+  authoritative: boolean;
+  contentIndex: number;
+  incoming: string;
+  partial: unknown;
+  resolveProtectedRanges: PlainTextToolCallProtectedRangeResolver;
+}): ((offset: number) => boolean) | undefined {
+  const candidate = extractStandaloneCandidate(params.partial);
+  const record = asOptionalObjectRecord(params.partial);
+  if (!candidate || !record) {
+    return undefined;
+  }
+  let blockStart = 0;
+  let blockText: string | undefined;
+  if (typeof record.content === "string") {
+    if (params.contentIndex !== 0) {
+      return undefined;
+    }
+    blockText = record.content;
+  } else {
+    const part = candidate.parts.find((entry) => entry.contentIndex === params.contentIndex);
+    const block = Array.isArray(record.content)
+      ? asOptionalObjectRecord(record.content[params.contentIndex])
+      : undefined;
+    if (!part || block?.type !== "text" || typeof block.text !== "string") {
+      return undefined;
+    }
+    blockStart = part.start;
+    blockText = block.text;
+  }
+  const incomingStart = params.authoritative ? 0 : blockText.length - params.incoming.length;
+  if (
+    incomingStart < 0 ||
+    (params.authoritative ? blockText !== params.incoming : !blockText.endsWith(params.incoming))
+  ) {
+    return undefined;
+  }
+  const protectedRanges = params.resolveProtectedRanges(candidate.text);
+  return (offset) =>
+    isOffsetInProtectedRanges(blockStart + incomingStart + offset, protectedRanges);
 }
 
 function nextAtLineStart(previous: boolean, text: string): boolean {
@@ -638,14 +708,14 @@ function projectedTextForEvent(
   event: Record<string, unknown>,
   projection: PlainTextToolCallMessageProjection,
 ): string | undefined {
-  const content = asRecord(projection.message)?.content;
+  const content = asOptionalObjectRecord(projection.message)?.content;
   if (typeof content === "string") {
     return content;
   }
   const projectedIndex = projection.sourceToProjectedContentIndex.get(eventContentIndex(event));
   const block =
     Array.isArray(content) && projectedIndex !== undefined
-      ? asRecord(content[projectedIndex])
+      ? asOptionalObjectRecord(content[projectedIndex])
       : undefined;
   return block?.type === "text" && typeof block.text === "string" ? block.text : undefined;
 }
@@ -756,6 +826,7 @@ function createOverCapSuppressor(
 function classifyPending(
   pending: CandidatePendingState,
   matcher: PlainTextToolCallNameMatcher,
+  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver,
   finalize = false,
 ): PendingClassification {
   const candidate = { text: pending.buffer, parts: pending.parts };
@@ -766,7 +837,7 @@ function classifyPending(
     structuralLineBreaks: view.structuralLineBreaks,
   });
   const hasNamedCandidate = scanHasNamedCandidate(terminalScan);
-  const sequences = findCandidateCallSequences(candidate, matcher);
+  const sequences = findCandidateCallSequences(candidate, matcher, resolveProtectedRanges);
   const overCapRanges = sequences.filter(({ overCap }) => overCap);
   const leading = sequences[0]?.start === 0 ? sequences[0] : undefined;
   if (leading?.activeStart !== undefined && (pending.sequenceOverCap || overCapRanges.length > 0)) {
@@ -1014,7 +1085,7 @@ function orderByContentIndex(
 ): unknown[] {
   const contentLength = Array.isArray(message.content) ? message.content.length : 0;
   const order = (event: unknown) => {
-    const index = asRecord(event)?.contentIndex;
+    const index = asOptionalObjectRecord(event)?.contentIndex;
     return typeof index === "number" &&
       Number.isInteger(index) &&
       index >= 0 &&
@@ -1039,6 +1110,61 @@ export async function* normalizePlainTextToolCallStreamEvents(
   const heldTextStarts = new Map<string, Record<string, unknown>>();
   const lineStarts = new Map<string, boolean>();
   const emittedTextUnits = new Map<string, number>();
+  const protectionChunks: string[] = [];
+  let protectionContextLength = 0;
+  let protectionContextOverflow = false;
+  let protectionBlockContentIndex: number | undefined;
+  let protectionBlockStart = 0;
+
+  const beginProtectionBlock = (contentIndex: number) => {
+    if (protectionBlockContentIndex === contentIndex) {
+      return;
+    }
+    protectionBlockContentIndex = contentIndex;
+    protectionBlockStart = protectionContextLength;
+  };
+  const truncateProtectionContext = (length: number) => {
+    while (protectionContextLength > length) {
+      const tail = protectionChunks.at(-1);
+      if (tail === undefined) {
+        protectionContextLength = 0;
+        return;
+      }
+      const retainedLength = tail.length - (protectionContextLength - length);
+      if (retainedLength > 0) {
+        protectionChunks[protectionChunks.length - 1] = tail.slice(0, retainedLength);
+        protectionContextLength = length;
+        return;
+      }
+      protectionChunks.pop();
+      protectionContextLength -= tail.length;
+    }
+  };
+  const advanceProtectionContext = (text: string, resetActiveBlock = false) => {
+    if (!options.resolveProtectedRanges || protectionContextOverflow) {
+      return;
+    }
+    if (resetActiveBlock) {
+      truncateProtectionContext(protectionBlockStart);
+    }
+    if (protectionContextLength + text.length > MAX_PROTECTION_CONTEXT_CHARS) {
+      protectionChunks.length = 0;
+      protectionContextLength = 0;
+      protectionContextOverflow = true;
+      return;
+    }
+    if (text) {
+      protectionChunks.push(text);
+    }
+    protectionContextLength += text.length;
+  };
+  const materializeProtectionPrefix = (authoritative: boolean): string => {
+    if (protectionContextOverflow) {
+      return "";
+    }
+    const context = protectionChunks.join("");
+    return authoritative ? context.slice(0, protectionBlockStart) : context;
+  };
 
   const scrubSnapshot = (
     value: unknown,
@@ -1051,6 +1177,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
           matcher: options.matcher,
           message: value,
           preserveEmptyTextBlocks,
+          resolveProtectedRanges: options.resolveProtectedRanges,
         })
       : undefined;
     if (forced) {
@@ -1093,7 +1220,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
 
   async function* normalizeEvents() {
     for await (const sourceEvent of source) {
-      let record = asRecord(sourceEvent);
+      let record = asOptionalObjectRecord(sourceEvent);
       if (!record) {
         yield sourceEvent;
         continue;
@@ -1153,6 +1280,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
         const closesText = type === "text_end";
         let authoritative = closesText;
         let sequenceOverCap = false;
+        beginProtectionBlock(eventContentIndex(record));
         while (true) {
           if (pending?.kind === "suppressing") {
             if (closesText) {
@@ -1208,7 +1336,41 @@ export async function* normalizePlainTextToolCallStreamEvents(
               sequenceOverCap ||
               overCapSequenceOpen ||
               (lineStarts.get(key) ?? true);
-            const callStart = findPotentialCallStart(incoming, atLineStart, options.matcher);
+            let callStart = findPotentialCallStart(incoming, atLineStart, options.matcher);
+            if (callStart !== null && options.resolveProtectedRanges) {
+              if (protectionContextOverflow) {
+                // Bounded live history no longer proves ownership. Preserve bytes and let the
+                // authoritative terminal snapshot decide instead of deleting literal content.
+                callStart = null;
+              } else {
+                const partialProtection = resolvePartialProtectionCheck({
+                  authoritative,
+                  contentIndex: eventContentIndex(incomingRecord),
+                  incoming,
+                  partial: incomingRecord.partial,
+                  resolveProtectedRanges: options.resolveProtectedRanges,
+                });
+                // Candidate-shaped text is rare. Materialize prior visible text only when the
+                // provider did not supply an authoritative cumulative partial.
+                const protectionPrefix = partialProtection
+                  ? ""
+                  : materializeProtectionPrefix(authoritative);
+                const protectedRanges = partialProtection
+                  ? undefined
+                  : options.resolveProtectedRanges(`${protectionPrefix}${incoming}`);
+                callStart = findPotentialCallStart(
+                  incoming,
+                  atLineStart,
+                  options.matcher,
+                  partialProtection ??
+                    ((offset) =>
+                      isOffsetInProtectedRanges(
+                        protectionPrefix.length + offset,
+                        protectedRanges ?? [],
+                      )),
+                );
+              }
+            }
             if (callStart === null) {
               const held = heldTextStarts.get(key);
               if (held) {
@@ -1224,9 +1386,11 @@ export async function* normalizePlainTextToolCallStreamEvents(
                   (sequenceOverCap || continuesScrubbedSequence) && contentIndex > 0;
               }
               lineStarts.set(key, nextAtLineStart(atLineStart, incoming));
+              advanceProtectionContext(incoming, authoritative);
               break;
             }
             const visiblePrefix = incoming.slice(0, callStart);
+            advanceProtectionContext(visiblePrefix, authoritative);
             const emittedUnits = emittedTextUnits.get(key) ?? 0;
             const emittedPrefixUnits = authoritative ? emittedUnits : 0;
             const novelVisiblePrefix = visiblePrefix.slice(emittedPrefixUnits);
@@ -1244,7 +1408,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
                 yield createSyntheticTextDelta(
                   visibleTemplate,
                   novelVisiblePrefix,
-                  asRecord(visibleProjection?.message),
+                  asOptionalObjectRecord(visibleProjection?.message),
                 );
               }
             }
@@ -1289,7 +1453,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
                   createSyntheticTextDelta(
                     pending.template,
                     candidateText,
-                    asRecord(record.partial),
+                    asOptionalObjectRecord(record.partial),
                   ),
                   { ...incomingRecord, content: incoming },
                 ];
@@ -1332,7 +1496,11 @@ export async function* normalizePlainTextToolCallStreamEvents(
           if (!shouldClassify) {
             break;
           }
-          const classification = classifyPending(pending, options.matcher);
+          const classification = classifyPending(
+            pending,
+            options.matcher,
+            options.resolveProtectedRanges,
+          );
           pending.nextScanChars = Math.max(pending.buffer.length + 1, pending.nextScanChars * 2);
           if (classification.kind === "complete" || classification.kind === "incomplete") {
             break;
@@ -1373,10 +1541,12 @@ export async function* normalizePlainTextToolCallStreamEvents(
           if (classification.kind === "false-positive") {
             yield* replayFalsePositiveCandidate(pending);
             const replayText = pending.buffer;
+            const replayedCandidate = pending;
             pending = undefined;
             if (replayText) {
               overCapSequenceOpen = false;
               lineStarts.set(key, nextAtLineStart(lineStarts.get(key) ?? true, replayText));
+              advanceProtectionContext(replayedCandidate.buffer);
             }
             break;
           }
@@ -1419,11 +1589,14 @@ export async function* normalizePlainTextToolCallStreamEvents(
             yield createSyntheticTextDelta(pending.template, novelText, partial);
           }
           lineStarts.set(key, nextAtLineStart(lineStarts.get(key) ?? true, sanitizedText));
+          advanceProtectionContext(sanitizedText);
           pending = undefined;
           break;
         }
         if (closesText) {
           emittedTextUnits.delete(key);
+          protectionBlockContentIndex = undefined;
+          protectionBlockStart = protectionContextLength;
         }
         continue;
       }
@@ -1444,9 +1617,11 @@ export async function* normalizePlainTextToolCallStreamEvents(
           : extractStandaloneCandidate(record.message, false);
         const terminalHasIncompleteCandidate =
           terminalCandidate &&
-          findCandidateCallSequences(terminalCandidate, options.matcher).some(
-            (sequence) => sequence.activeStart !== undefined,
-          );
+          findCandidateCallSequences(
+            terminalCandidate,
+            options.matcher,
+            options.resolveProtectedRanges,
+          ).some((sequence) => sequence.activeStart !== undefined);
         const terminalCandidateProjection = terminalHasIncompleteCandidate
           ? scrubSnapshot(record.message, preserveTerminalContentIndexes, true)
           : undefined;
@@ -1470,7 +1645,12 @@ export async function* normalizePlainTextToolCallStreamEvents(
           yield { ...record, reason: "toolUse", message: normalized.message };
         } else if (normalized?.kind === "scrubbed") {
           if (pending?.kind === "candidate") {
-            const classification = classifyPending(pending, options.matcher, true);
+            const classification = classifyPending(
+              pending,
+              options.matcher,
+              options.resolveProtectedRanges,
+              true,
+            );
             if (classification.kind === "stripped" && classification.text) {
               const template = projectEventIndex(pending.template, normalized);
               if (template) {
@@ -1491,7 +1671,12 @@ export async function* normalizePlainTextToolCallStreamEvents(
         } else {
           let message = record.message;
           if (pending?.kind === "candidate") {
-            const classification = classifyPending(pending, options.matcher, true);
+            const classification = classifyPending(
+              pending,
+              options.matcher,
+              options.resolveProtectedRanges,
+              true,
+            );
             if (classification.kind === "false-positive") {
               yield* replayFalsePositiveCandidate(pending);
             } else {
@@ -1510,6 +1695,11 @@ export async function* normalizePlainTextToolCallStreamEvents(
         forceScrubTerminal = false;
         heldTextStarts.clear();
         emittedTextUnits.clear();
+        protectionChunks.length = 0;
+        protectionContextLength = 0;
+        protectionContextOverflow = false;
+        protectionBlockContentIndex = undefined;
+        protectionBlockStart = 0;
         if (options.stopAfterDone) {
           return;
         }
@@ -1520,7 +1710,8 @@ export async function* normalizePlainTextToolCallStreamEvents(
         const knownCandidate =
           pending?.kind === "suppressing" ||
           (pending?.kind === "candidate" &&
-            classifyPending(pending, options.matcher, true).kind !== "false-positive");
+            classifyPending(pending, options.matcher, options.resolveProtectedRanges, true).kind !==
+              "false-positive");
         if (pending?.kind === "candidate" && !knownCandidate) {
           yield* replayFalsePositiveCandidate(pending);
         }
@@ -1573,7 +1764,11 @@ export async function* normalizePlainTextToolCallStreamEvents(
         }
         queuePendingEvent(pending, record);
         if (pendingQueueOverCap(pending)) {
-          const classification = classifyPending(pending, options.matcher);
+          const classification = classifyPending(
+            pending,
+            options.matcher,
+            options.resolveProtectedRanges,
+          );
           if (classification.kind === "false-positive") {
             yield* replayFalsePositiveCandidate(pending);
             pending = undefined;
@@ -1606,7 +1801,12 @@ export async function* normalizePlainTextToolCallStreamEvents(
     }
 
     if (pending?.kind === "candidate") {
-      const classification = classifyPending(pending, options.matcher, true);
+      const classification = classifyPending(
+        pending,
+        options.matcher,
+        options.resolveProtectedRanges,
+        true,
+      );
       if (classification.kind === "false-positive") {
         yield* replayFalsePositiveCandidate(pending);
       } else {
@@ -1620,7 +1820,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
     }
   }
   for await (const event of normalizeEvents()) {
-    const record = asRecord(event);
+    const record = asOptionalObjectRecord(event);
     if (record?.type === "text_delta" && typeof record.delta === "string") {
       const key = eventKey(record);
       const previous = emittedTextUnits.get(key) ?? 0;

@@ -2,11 +2,12 @@
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeAccountId, normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
+  hasNonEmptyString as nonEmptyString,
   isRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ROUTING_MATCH_KINDS } from "../policy-routing.js";
-import { POLICY_TOOL_GROUPS } from "../tool-policy-conformance.js";
+import { expandPolicyToolRequirement, toolListCoversTool } from "../tool-policy-conformance.js";
 import type { PolicyRuleMetadata } from "./metadata.js";
 
 type ExecApprovalAllowlistRequirement = {
@@ -169,10 +170,6 @@ function canonicalRoutingPeer(value: unknown): object | undefined | null {
 
 function normalizeRoutingId(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim() : undefined;
-}
-
-function nonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim() !== "";
 }
 
 function isPolicyOrderedStringAtLeastAsStrict(
@@ -373,41 +370,4 @@ function isChannelDenyRule(value: unknown): value is {
     isRecord(value.when) &&
     typeof value.when.provider === "string"
   );
-}
-
-function toolListCoversTool(list: readonly string[], tool: string): boolean {
-  for (const entry of list) {
-    const normalized = normalizePolicyToolName(entry);
-    if (normalized === "*" || normalized === tool) {
-      return true;
-    }
-    if (POLICY_TOOL_GROUPS[normalized]?.includes(tool)) {
-      return true;
-    }
-    if (normalized.includes("*") && policyToolGlobMatches(tool, normalized)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function expandPolicyToolRequirement(value: string): readonly string[] {
-  const normalized = normalizePolicyToolName(value);
-  return POLICY_TOOL_GROUPS[normalized] ?? [normalized];
-}
-
-function normalizePolicyToolName(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "bash") {
-    return "exec";
-  }
-  if (normalized === "apply-patch") {
-    return "apply_patch";
-  }
-  return normalized;
-}
-
-function policyToolGlobMatches(tool: string, pattern: string): boolean {
-  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`).test(tool);
 }

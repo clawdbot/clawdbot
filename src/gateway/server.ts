@@ -1,42 +1,42 @@
 /**
  * Lazy public entrypoint for the gateway server implementation.
  *
- * Keeping `server.impl` behind dynamic import lets light-weight callers import
+ * Keeping `server-start` behind dynamic import lets light-weight callers import
  * server types and helpers without paying the full startup dependency graph.
  */
 export { truncateCloseReason } from "./server/close-reason.js";
-export type { GatewayServer, GatewayServerOptions } from "./server.impl.js";
+export type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 
-function emitStartupTrace(name: string, durationMs: number, totalMs: number): void {
+async function emitStartupTrace(name: string, durationMs: number, totalMs: number): Promise<void> {
   if (!process.env.OPENCLAW_GATEWAY_STARTUP_TRACE) {
     return;
   }
-  process.stderr.write(
-    `[gateway] startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms\n`,
-  );
+  const { formatConsoleDiagnosticLine } = await import("../logging/json-console-line.js");
+  const message = `[gateway] startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms`;
+  process.stderr.write(`${formatConsoleDiagnosticLine({ level: "info", message })}\n`);
 }
 
-async function loadServerImpl() {
+async function loadServerStart() {
   const startupStartedAt = performance.now();
   const before = performance.now();
   try {
-    return await import("./server.impl.js");
+    return await import("./server-start.js");
   } finally {
     const now = performance.now();
-    emitStartupTrace("gateway.server-impl-import", now - before, now - startupStartedAt);
+    await emitStartupTrace("gateway.server-start-import", now - before, now - startupStartedAt);
   }
 }
 
 /** Starts the gateway server after lazily loading the full server implementation. */
 export async function startGatewayServer(
-  ...args: Parameters<typeof import("./server.impl.js").startGatewayServer>
-): ReturnType<typeof import("./server.impl.js").startGatewayServer> {
-  const mod = await loadServerImpl();
-  return await mod.startGatewayServer(...args);
+  ...args: Parameters<typeof import("./server-start.js").startGatewayServerCore>
+): ReturnType<typeof import("./server-start.js").startGatewayServerCore> {
+  const mod = await loadServerStart();
+  return await mod.startGatewayServerCore(...args);
 }
 
 /** Clears prepared model-catalog generations between tests. */
 export async function resetPreparedModelCatalogForTest(): Promise<void> {
-  const mod = await loadServerImpl();
-  await mod.resetPreparedModelCatalogForTest();
+  const mod = await loadServerStart();
+  await mod.resetPreparedModelCatalogForTestCore();
 }

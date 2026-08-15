@@ -1,16 +1,18 @@
 // Session snapshot helpers capture and restore runtime skill state for sessions.
-import crypto from "node:crypto";
-import { stableStringify } from "../../agents/stable-stringify.js";
-import { redactConfigObject } from "../../config/redact-snapshot.js";
+import { stableStringify } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { matchesSkillFilter } from "../discovery/filter.js";
-import { buildWorkspaceSkillSnapshot } from "../loading/workspace.js";
+import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import type { SkillEligibilityContext, SkillSnapshot } from "../types.js";
 import { getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion } from "./refresh-state.js";
 import { ensureSkillsWatcher } from "./refresh.js";
+import { fingerprintSkillSnapshotConfig } from "./snapshot-config-fingerprint.js";
 import { hydrateResolvedSkills } from "./snapshot-hydration.js";
 
+// The resolved index is gateway-process state. Mutation RPCs and watcher events
+// must bump that same process's version so a new-session key cannot reuse it.
 const resolvedSkillsCache = new Map<string, SkillSnapshot["resolvedSkills"]>();
 const RESOLVED_SKILLS_CACHE_MAX = 10;
 
@@ -20,6 +22,7 @@ type ReusableSkillSnapshotParams = {
   config: OpenClawConfig;
   agentId?: string;
   skillFilter?: string[];
+  skillOverrides?: Record<string, boolean>;
   eligibility?: SkillEligibilityContext;
   existingSnapshot?: SkillSnapshot;
   snapshotVersion?: number;
@@ -33,21 +36,9 @@ type ReusableSkillSnapshotResult = {
   snapshotVersion: number;
 };
 
-function fingerprintSkillSnapshotConfig(config: OpenClawConfig): string {
-  return crypto
-    .createHash("sha256")
-    .update(stableStringify(redactConfigObject(config)))
-    .digest("hex");
-}
-
 function cacheResolvedSkills(cacheKey: string, snapshot: SkillSnapshot): SkillSnapshot {
   resolvedSkillsCache.set(cacheKey, snapshot.resolvedSkills);
-  if (resolvedSkillsCache.size > RESOLVED_SKILLS_CACHE_MAX) {
-    const oldest = resolvedSkillsCache.keys().next().value;
-    if (oldest !== undefined) {
-      resolvedSkillsCache.delete(oldest);
-    }
-  }
+  pruneMapToMaxSize(resolvedSkillsCache, RESOLVED_SKILLS_CACHE_MAX);
   return snapshot;
 }
 
@@ -67,32 +58,38 @@ export function resolveReusableWorkspaceSkillSnapshot(
   const nodeSkillsEligibilityChanged =
     stableStringify(params.existingSnapshot?.nodeSkillsEligibility) !==
     stableStringify(params.eligibility?.nodeSkills);
+  const skillOverridesChanged =
+    stableStringify(params.existingSnapshot?.skillOverrides) !==
+    stableStringify(params.skillOverrides);
   const shouldRefresh =
     promptFormatChanged ||
     skillVersionChanged ||
     nodeSkillsEligibilityChanged ||
-    !matchesSkillFilter(params.existingSnapshot?.skillFilter, params.skillFilter);
+    !matchesSkillFilter(params.existingSnapshot?.skillFilter, params.skillFilter) ||
+    skillOverridesChanged;
   const buildSnapshot = () => {
-    return buildWorkspaceSkillSnapshot(params.workspaceDir, {
+    return buildSkillSnapshot(params.workspaceDir, {
       config: params.config,
       agentId: params.agentId,
       skillFilter: params.skillFilter,
+      skillOverrides: params.skillOverrides,
       eligibility: params.eligibility,
       snapshotVersion,
     });
   };
 
-  const configFingerprint = fingerprintSkillSnapshotConfig(params.config);
-  const snapshotCacheKey = JSON.stringify([
-    params.workspaceDir,
-    snapshotVersion,
-    params.skillFilter,
-    params.agentId,
-    params.eligibility,
-    configFingerprint,
-  ]);
+  const buildSnapshotCacheKey = () =>
+    JSON.stringify([
+      params.workspaceDir,
+      snapshotVersion,
+      params.skillFilter,
+      params.skillOverrides,
+      params.agentId,
+      params.eligibility,
+      fingerprintSkillSnapshotConfig(params.config),
+    ]);
 
-  const cachedRebuild = (): SkillSnapshot => {
+  const cachedRebuild = (snapshotCacheKey = buildSnapshotCacheKey()): SkillSnapshot => {
     if (resolvedSkillsCache.has(snapshotCacheKey)) {
       return { resolvedSkills: resolvedSkillsCache.get(snapshotCacheKey) } as SkillSnapshot;
     }
@@ -101,7 +98,7 @@ export function resolveReusableWorkspaceSkillSnapshot(
 
   const snapshot =
     !params.existingSnapshot || shouldRefresh
-      ? cacheResolvedSkills(snapshotCacheKey, buildSnapshot())
+      ? cacheResolvedSkills(buildSnapshotCacheKey(), buildSnapshot())
       : params.hydrateExisting === false
         ? params.existingSnapshot
         : hydrateResolvedSkills(params.existingSnapshot, cachedRebuild);

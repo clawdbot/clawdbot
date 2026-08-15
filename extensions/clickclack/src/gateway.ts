@@ -3,13 +3,22 @@
  * websocket, and dispatching user messages into OpenClaw.
  */
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import type { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import type { RawData } from "ws";
 import { resolveClickClackInboundAccess } from "./access.js";
 import { resolveClickClackAccount } from "./accounts.js";
 import { syncClickClackCommandMenu } from "./command-menu.js";
-import { createClickClackClient, normalizeClickClackCorrelationId } from "./http-client.js";
+import {
+  ClickClackHttpError,
+  createClickClackClient,
+  normalizeClickClackCorrelationId,
+} from "./http-client.js";
 import { handleClickClackInbound } from "./inbound.js";
 import { resolveWorkspaceId } from "./resolve.js";
 import type {
@@ -22,8 +31,7 @@ import type {
 const CLICKCLACK_EVENT_PAGE_LIMIT = 500;
 
 function payloadString(event: ClickClackEvent, key: string): string {
-  const value = event.payload?.[key];
-  return typeof value === "string" ? value : "";
+  return readStringField(event.payload, key) ?? "";
 }
 
 function eventCorrelationId(event: ClickClackEvent): string | undefined {
@@ -38,52 +46,19 @@ async function resolveEventMessage(params: {
   if (!messageId) {
     return null;
   }
-  const directConversationId = payloadString(params.event, "direct_conversation_id");
-  if (directConversationId && typeof params.event.seq === "number") {
-    // ClickClack event payloads carry ids and cursors; fetch a narrow window
-    // around the sequence so the message body/author fields stay authoritative.
-    const messages = await params.client.directMessages(
-      directConversationId,
-      params.event.seq - 1,
-      10,
-    );
-    return messages.find((message) => message.id === messageId) ?? null;
-  }
-  if (params.event.type === "thread.reply_created") {
-    const rootId = payloadString(params.event, "root_message_id");
-    if (!rootId) {
+  try {
+    return await params.client.message(messageId);
+  } catch (error) {
+    if (error instanceof ClickClackHttpError && error.status === 404) {
       return null;
     }
-    const thread = await params.client.thread(rootId);
-    return thread.replies.find((message) => message.id === messageId) ?? null;
+    throw error;
   }
-  if (params.event.channel_id && typeof params.event.seq === "number") {
-    const messages = await params.client.channelMessages(
-      params.event.channel_id,
-      params.event.seq - 1,
-      10,
-    );
-    return messages.find((message) => message.id === messageId) ?? null;
-  }
-  return null;
-}
-
-function decodeSocketMessage(data: RawData): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  return Buffer.concat(data).toString("utf8");
 }
 
 function parseSocketEvent(data: RawData): ClickClackEvent | null {
   try {
-    return JSON.parse(decodeSocketMessage(data)) as ClickClackEvent;
+    return JSON.parse(rawDataToString(data)) as ClickClackEvent;
   } catch {
     return null;
   }
@@ -95,6 +70,8 @@ async function processEvent(params: {
   client: ReturnType<typeof createClickClackClient>;
   event: ClickClackEvent;
   botUserId: string;
+  buildContext?: typeof buildChannelInboundEventContext;
+  log?: { info: (message: string) => void; warn?: (message: string) => void };
 }) {
   if (params.event.type !== "message.created" && params.event.type !== "thread.reply_created") {
     return;
@@ -113,10 +90,14 @@ async function processEvent(params: {
       })
     : params.client;
   const message = await resolveEventMessage({ client: messageClient, event: params.event });
-  if (!message || message.author_id === params.botUserId) {
+  if (!message) {
+    params.log?.warn?.(
+      `[${params.account.accountId}] skipped unreadable ClickClack message before agent dispatch: ` +
+        `type=${params.event.type} messageId=${payloadString(params.event, "message_id") || "unknown"}`,
+    );
     return;
   }
-  if (message.author?.kind === "bot") {
+  if (message.author_id === params.botUserId) {
     return;
   }
   const access = await resolveClickClackInboundAccess({
@@ -125,6 +106,14 @@ async function processEvent(params: {
     message,
   });
   if (!access.shouldDispatch) {
+    params.log?.info(
+      `[${params.account.accountId}] skipped ClickClack message before agent dispatch: ` +
+        `kind=${message.direct_conversation_id ? "dm" : "group"} ` +
+        `requireMention=${access.requireMention ?? "unknown"} ` +
+        `wasMentioned=${access.mentionFacts.wasMentioned} ` +
+        `hasAnyMention=${access.mentionFacts.hasAnyMention ?? "unknown"} ` +
+        `commandAuthorized=${access.commandAuthorized}`,
+    );
     return;
   }
   await handleClickClackInbound({
@@ -132,6 +121,7 @@ async function processEvent(params: {
     config: params.config,
     message,
     access,
+    buildContext: params.buildContext,
     ...(correlationId ? { correlationId } : {}),
   });
 }
@@ -187,6 +177,7 @@ export async function startClickClackGatewayAccount(
     ...configuredAccount,
     workspace: workspaceId,
     botUserId: configuredAccount.botUserId ?? me.id,
+    botHandle: me.handle,
   };
   const processIncomingEvent = (event: ClickClackEvent) =>
     processEvent({
@@ -195,6 +186,9 @@ export async function startClickClackGatewayAccount(
       client,
       event,
       botUserId: account.botUserId,
+      buildContext: (ctx.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
+        .buildContext,
+      log: ctx.log,
     });
   if (account.commandMenu) {
     await syncClickClackCommandMenu({ cfg: ctx.cfg, client, log: ctx.log });
@@ -202,6 +196,7 @@ export async function startClickClackGatewayAccount(
   ctx.setStatus({
     accountId: account.accountId,
     running: true,
+    lifecycle: "starting",
     configured: true,
     enabled: account.enabled,
     baseUrl: account.baseUrl,
@@ -285,6 +280,9 @@ export async function startClickClackGatewayAccount(
         };
         ctx.abortSignal.addEventListener("abort", abort, { once: true });
         removeAbortListener = () => ctx.abortSignal.removeEventListener("abort", abort);
+        socket.on("open", () => {
+          ctx.setStatus(channelReadyPatch({ accountId: account.accountId }));
+        });
         socket.on("message", (data) => {
           if (closing || settled) {
             return;
@@ -306,6 +304,13 @@ export async function startClickClackGatewayAccount(
         });
         socket.on("close", () => {
           closing = true;
+          if (!ctx.abortSignal.aborted) {
+            ctx.setStatus({
+              accountId: account.accountId,
+              connected: false,
+              lifecycle: "recovering",
+            });
+          }
           finishAfterQueuedMessages();
         });
         socket.on("error", (error) => {
@@ -321,6 +326,12 @@ export async function startClickClackGatewayAccount(
               error instanceof Error ? error.message : String(error)
             }`,
           );
+          ctx.setStatus({
+            accountId: account.accountId,
+            connected: false,
+            lifecycle: "recovering",
+            lastError: error instanceof Error ? error.message : String(error),
+          });
           closing = true;
           socket.close();
         });
@@ -338,6 +349,6 @@ export async function startClickClackGatewayAccount(
       }
     }
   } finally {
-    ctx.setStatus({ accountId: account.accountId, running: false });
+    ctx.setStatus(channelStoppedPatch({ accountId: account.accountId }));
   }
 }

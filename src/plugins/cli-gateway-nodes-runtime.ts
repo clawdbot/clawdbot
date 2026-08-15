@@ -77,6 +77,7 @@ export function createPluginCliGatewayNodesRuntime(): PluginRuntime["nodes"] {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
         ...(scopes ? { scopes } : {}),
+        ...(params.signal ? { signal: params.signal } : {}),
       });
     },
   };

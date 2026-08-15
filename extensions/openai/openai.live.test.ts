@@ -6,13 +6,13 @@ import OpenAI from "openai";
 import type { ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { coerceErrorMessage as formatLiveOpenAIError } from "openclaw/plugin-sdk/error-runtime";
 import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { runRealtimeSttLiveTest } from "openclaw/plugin-sdk/provider-test-contracts";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   isOverloadedErrorMessage,
   isServerErrorMessage,
@@ -82,10 +82,6 @@ function createReferencePng(): Buffer {
   return encodePngRgba(buf, width, height);
 }
 
-function formatLiveOpenAIError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function resolveLiveOpenAISkipReason(error: unknown): string | null {
   const message = formatLiveOpenAIError(error);
   if (isTimeoutErrorMessage(message) || /timed out|operation was aborted/i.test(message)) {
@@ -97,22 +93,23 @@ function resolveLiveOpenAISkipReason(error: unknown): string | null {
   return null;
 }
 
+/**
+ * Builds a synthetic config carrying only the live OpenAI credential this suite needs.
+ * Deliberately does not read the operator's real ~/.openclaw config: strict schema
+ * validation on that real, possibly-unmigrated file must never gate live provider tests.
+ */
 function createLiveConfig(): OpenClawConfig {
-  const cfg = getRuntimeConfig();
   return {
-    ...cfg,
     models: {
-      ...cfg.models,
       providers: {
-        ...cfg.models?.providers,
         openai: {
-          ...cfg.models?.providers?.openai,
           apiKey: OPENAI_API_KEY,
           baseUrl: "https://api.openai.com/v1",
+          models: [],
         },
       },
     },
-  } as OpenClawConfig;
+  };
 }
 
 function createLiveTtsConfig(): ResolvedTtsConfig {

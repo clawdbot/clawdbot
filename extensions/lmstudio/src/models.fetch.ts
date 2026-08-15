@@ -93,13 +93,6 @@ async function fetchLmstudioEndpoint(params: {
   };
 }
 
-function asLmstudioModelWire(value: unknown): LmstudioModelWire {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("LM Studio model list: malformed JSON response");
-  }
-  return value as LmstudioModelWire;
-}
-
 function withResolvedLmstudioModelKey(
   error: unknown,
   resolvedModelKey: string,
@@ -152,10 +145,17 @@ export async function fetchLmstudioModels(params: {
         "LM Studio model list",
         "models",
       );
+      const validModels = models.filter(
+        (model): model is LmstudioModelWire =>
+          typeof model === "object" && model !== null && !Array.isArray(model),
+      );
+      if (models.length > 0 && validModels.length === 0) {
+        throw new Error("LM Studio model list: malformed JSON response");
+      }
       return {
         reachable: true,
         status: response.status,
-        models: models.map(asLmstudioModelWire),
+        models: validModels,
       };
     } finally {
       await release();

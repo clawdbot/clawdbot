@@ -105,6 +105,42 @@ describe("mcp.tools.call.v1", () => {
     expect(unexpected.error?.message).toHaveLength(1_024);
   });
 
+  it("does not publish an MCP result after its invocation is canceled", async () => {
+    const controller = new AbortController();
+    let resolveTool:
+      | ((result: { content: Array<{ type: "text"; text: string }> }) => void)
+      | undefined;
+    const callMcpTool = vi.fn<NodeHostMcpManager["callMcpTool"]>(
+      () =>
+        new Promise((resolve) => {
+          resolveTool = resolve;
+        }),
+    );
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+
+    const invoking = handleInvoke(
+      {
+        id: "invoke-mcp-canceled",
+        nodeId: "node-1",
+        command: "mcp.tools.call.v1",
+        paramsJSON: JSON.stringify({ server: "docs", tool: "search" }),
+        timeoutMs: 321,
+      },
+      { request } as unknown as GatewayClient,
+      { current: async () => [] },
+      managerWith(callMcpTool),
+      { signal: controller.signal },
+    );
+    await vi.waitFor(() => expect(callMcpTool).toHaveBeenCalledOnce());
+    expect(callMcpTool.mock.calls[0]?.[0].signal).toBe(controller.signal);
+
+    controller.abort();
+    resolveTool?.({ content: [{ type: "text", text: "stale MCP result" }] });
+    await invoking;
+
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("caps aggregate MCP text content at one megabyte with a truncation note", async () => {
     const result = await invokeMcp(
       managerWith(async () => ({

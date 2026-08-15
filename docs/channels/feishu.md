@@ -38,7 +38,7 @@ The wizard also asks for the API domain (Feishu vs Lark) and the group policy. I
 
 ## Inbound durability
 
-OpenClaw durably queues authenticated `im.message.receive_v1` and `drive.notice.comment_add_v1` envelopes before agent dispatch. Pending or retryable events survive a Gateway restart, remain serialized per chat or document, and use Feishu's event ID to suppress duplicate queue entries while the active or retained completion record exists.
+OpenClaw durably queues authenticated `im.message.receive_v1` and `drive.notice.comment_add_v1` envelopes before agent dispatch. In webhook mode, the durable `200` carries `x-openclaw-delivery-accepted: durable`; verification challenges, non-durable event types, and error responses omit the marker, so reverse proxies can require it to distinguish durable acceptance from a generic `200`. Pending or retryable events survive a Gateway restart, remain serialized per chat or document, and use Feishu's event ID to suppress duplicate queue entries while the active or retained completion record exists.
 
 If a WebSocket event cannot be persisted after bounded retries, OpenClaw closes that socket and forces a fresh authenticated connection instead of continuing past an uncommitted turn. Other Feishu event types, including reactions and VC meeting invitations, use their normal event paths and do not receive this durable-queue guarantee.
 
@@ -385,7 +385,11 @@ The plugin ships agent tools for Feishu documents, chats, knowledge base, cloud 
 | `tools.scopes`  | `feishu_app_scopes` app scope diagnostics     | `true`              |
 | `tools.bitable` | `feishu_bitable_*` Bitable/Base operations    | `true`              |
 
-`tools.base` is an alias for `tools.bitable`; the explicit `bitable` value wins when both are set. Per-account gates live under `accounts.<id>.tools`.
+Per-account gates live under `accounts.<id>.tools`.
+
+`feishu_doc` creates title-only documents. To add Markdown, pass the returned
+`document_id` as `doc_token` in a separate `write` action. A `create` request
+that includes `content` fails without creating an empty document.
 
 Grant `drive:drive.metadata:readonly` for direct `feishu_drive info` lookups outside the root
 directory, unless the app already has the full `drive:drive` scope. Without either scope, `info`
@@ -400,9 +404,9 @@ Feishu/Lark supports ACP for DMs and group thread messages. Feishu/Lark ACP is t
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "codex",
+    entries: {
+      codex: {
+        default: true,
         runtime: {
           type: "acp",
           acp: {
@@ -413,7 +417,7 @@ Feishu/Lark supports ACP for DMs and group thread messages. Feishu/Lark ACP is t
           },
         },
       },
-    ],
+    },
   },
   bindings: [
     {
@@ -456,11 +460,11 @@ Use `bindings` to route Feishu/Lark DMs or groups to different agents.
 ```json5
 {
   agents: {
-    list: [
-      { id: "main" },
-      { id: "agent-a", workspace: "/home/user/agent-a" },
-      { id: "agent-b", workspace: "/home/user/agent-b" },
-    ],
+    entries: {
+      main: { default: true },
+      "agent-a": { workspace: "/home/user/agent-a" },
+      "agent-b": { workspace: "/home/user/agent-b" },
+    },
   },
   bindings: [
     {
@@ -636,7 +640,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.defaultAccount`                         | Default account for outbound routing                                                 | `default`                            |
 | `channels.feishu.verificationToken`                      | Required for webhook mode                                                            | -                                    |
 | `channels.feishu.encryptKey`                             | Required for webhook mode                                                            | -                                    |
-| `channels.feishu.webhookPath`                            | Webhook route path                                                                   | `/feishu/events`                     |
+| `channels.feishu.webhookPath`                            | Canonical HTTP request path (must start with `/`)                                    | `/feishu/events`                     |
 | `channels.feishu.webhookHost`                            | Webhook bind host                                                                    | `127.0.0.1`                          |
 | `channels.feishu.webhookPort`                            | Webhook bind port                                                                    | `3000`                               |
 | `channels.feishu.accounts.<id>.appId`                    | App ID                                                                               | -                                    |
@@ -677,9 +681,15 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.tools.perm`                             | Enable permission management tools                                                   | `false`                              |
 | `channels.feishu.tools.scopes`                           | Enable app scopes diagnostic tool                                                    | `true`                               |
 | `channels.feishu.tools.bitable`                          | Enable Bitable/Base tools                                                            | `true`                               |
-| `channels.feishu.tools.base`                             | Alias for `channels.feishu.tools.bitable`; explicit `bitable` wins when both set     | `true`                               |
 | `channels.feishu.accounts.<id>.tools.bitable`            | Per-account Bitable/Base tool gate                                                   | inherited                            |
-| `channels.feishu.accounts.<id>.tools.base`               | Per-account alias for `tools.bitable`                                                | inherited                            |
+
+In webhook mode, both `channels.feishu.webhookPath` and
+`channels.feishu.accounts.<id>.webhookPath` must be canonical HTTP request paths
+beginning with `/`, such as `/feishu/events`. An optional query string is
+supported and must match exactly. Full URLs, relative paths, URL fragments, dot
+segments, and unencoded spaces or Unicode are rejected. If an existing
+configuration contains a noncanonical path, run `openclaw doctor --fix` to
+repair it before starting the gateway.
 
 ## Supported message types
 

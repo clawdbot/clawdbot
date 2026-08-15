@@ -13,7 +13,7 @@ import { releaseChildProcessOutputAfterExit } from "../../../process/child-proce
 import { spawnCommand } from "../../../process/exec.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.js";
-import { theme } from "../../modes/interactive/theme/theme.js";
+import { interactiveAgentTheme as theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
 import {
   buildShellCommandInvocation,
@@ -81,7 +81,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
           reject: false,
           stdio: [invocation.stdin, "pipe", "pipe"],
         });
-        const releaseOutput = releaseChildProcessOutputAfterExit(child);
+        const releaseOutput = releaseChildProcessOutputAfterExit(child.nodeChildProcess);
         let timedOut = false;
         let timeoutHandle: NodeJS.Timeout | undefined;
         const timeoutMs = resolveBashTimeoutMs(timeout);

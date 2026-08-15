@@ -30,7 +30,7 @@ scenario:
     - src/agents/conversation-capability-profile.ts
     - src/agents/requester-tool-policy.ts
     - src/agents/sender-tool-policy.ts
-    - src/agents/subagent-capabilities.ts
+    - src/agents/subagents/spawn/subagent-capabilities.ts
   execution:
     kind: flow
     suiteIsolation: isolated
@@ -114,7 +114,7 @@ flow:
             - lambda:
                 async: true
                 expr: "readRawQaSessionStore(env).then((store) => { const match = Object.entries(store).find(([, entry]) => entry?.label === config.childLabel && typeof entry?.spawnedBy === 'string'); return match ? { key: match[0], entry: match[1] } : undefined; })"
-            - 60000
+            - expr: liveTurnTimeoutMs(env, 60000)
             - 250
         - call: readSessionTranscriptSummary
           saveAs: childTranscript

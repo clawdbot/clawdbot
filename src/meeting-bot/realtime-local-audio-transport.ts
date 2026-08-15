@@ -46,6 +46,11 @@ type MeetingRealtimeAudioSpawn = (
   options: { stdio: ["pipe" | "ignore", "pipe" | "ignore", "pipe" | "ignore"] },
 ) => BridgeProcess;
 
+type OutputWriteWaiter = {
+  proc: BridgeProcess;
+  release: () => void;
+};
+
 function splitCommand(argv: string[]): { command: string; args: string[] } {
   const [command, ...args] = argv;
   if (!command) {
@@ -69,8 +74,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   const input = splitCommand(params.inputCommand);
   const output = splitCommand(params.outputCommand);
   const spawnFn: MeetingRealtimeAudioSpawn =
-    params.spawn ??
-    ((command, args, options) => spawn(command, args, options) as unknown as BridgeProcess);
+    params.spawn ?? ((command, args, options) => spawn(command, args, options));
   const spawnOutputProcess = () =>
     spawnFn(output.command, output.args, { stdio: ["pipe", "ignore", "pipe"] });
   let outputProcess = spawnOutputProcess();
@@ -84,6 +88,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   let fatalHandler: (() => void) | undefined;
   let stopPromise: Promise<void> | undefined;
   const retiredOutputStops = new Set<Promise<void>>();
+  const outputWriteWaiters = new Set<OutputWriteWaiter>();
   const outputLoopbackVerifier = createMeetingOutputLoopbackVerifier({
     audioFormat: params.audioFormat ?? "pcm16-24khz",
   });
@@ -126,6 +131,40 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       }
     });
   };
+  const writeOutputChunk = (proc: BridgeProcess, stdin: Writable, audio: Buffer): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = (error?: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        outputWriteWaiters.delete(waiter);
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
+      const waiter: OutputWriteWaiter = { proc, release: () => finish() };
+      outputWriteWaiters.add(waiter);
+      try {
+        stdin.write(audio, (error) => finish(error ?? undefined));
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(formatErrorMessage(error)));
+        return;
+      }
+      if (stdin.destroyed || stdin.writableEnded) {
+        finish(new Error("audio output stream is closed"));
+      }
+    });
+  const releaseOutputWriteWaiters = (proc?: BridgeProcess) => {
+    for (const waiter of outputWriteWaiters) {
+      if (!proc || waiter.proc === proc) {
+        waiter.release();
+      }
+    }
+  };
   attachOutputProcessHandlers(outputProcess);
   inputProcess.on("error", fail("audio input command"));
   inputProcess.on("exit", (code, signal) => {
@@ -166,6 +205,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
     stop: () => {
       stopPromise ??= (async () => {
         stopped = true;
+        releaseOutputWriteWaiters();
         await Promise.all([
           terminateMeetingBridgeProcess(inputProcess, {
             graceMs: LOCAL_BRIDGE_TERMINATION_GRACE_MS,
@@ -185,11 +225,21 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       if (stopped) {
         return;
       }
+      const proc = outputProcess;
+      const stdin = proc.stdin;
+      if (!stdin) {
+        return;
+      }
       outputLoopbackVerifier.recordOutput(audio);
       try {
-        outputProcess.stdin?.write(audio);
+        await writeOutputChunk(proc, stdin, audio);
       } catch (error) {
-        fail("audio output command")(error as Error);
+        if (stopped || proc !== outputProcess || fatalSignaled) {
+          return;
+        }
+        fail("audio output command")(
+          error instanceof Error ? error : new Error(formatErrorMessage(error)),
+        );
       }
     },
     clearOutput: async () => {
@@ -200,6 +250,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       const previousOutput = outputProcess;
       outputProcess = spawnOutputProcess();
       attachOutputProcessHandlers(outputProcess);
+      releaseOutputWriteWaiters(previousOutput);
       params.logger.debug?.(
         `${params.logScope} cleared realtime audio output buffer by restarting playback command`,
       );

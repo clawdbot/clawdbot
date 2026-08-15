@@ -17,7 +17,7 @@ SenseAudio transcribes inbound audio and voice-note attachments through OpenClaw
 | Default model | `senseaudio-asr-pro-1.5-260319`                  |
 | Default URL   | `https://api.senseaudio.cn/v1`                   |
 | Website       | [senseaudio.cn](https://senseaudio.cn)           |
-| Docs          | [senseaudio.cn/docs](https://senseaudio.cn/docs) |
+| Docs          | [docs.senseaudio.cn](https://docs.senseaudio.cn) |
 
 ## Getting started
 
@@ -32,9 +32,15 @@ SenseAudio transcribes inbound audio and voice-note attachments through OpenClaw
     {
       tools: {
         media: {
+          models: [
+            {
+              provider: "senseaudio",
+              model: "senseaudio-asr-pro-1.5-260319",
+              capabilities: ["audio"],
+            },
+          ],
           audio: {
             enabled: true,
-            models: [{ provider: "senseaudio", model: "senseaudio-asr-pro-1.5-260319" }],
           },
         },
       },

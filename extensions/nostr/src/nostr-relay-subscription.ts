@@ -76,7 +76,10 @@ export function createNostrRelaySubscriptionGroup(options: {
               deadlineTimers.delete(deadlineTimer);
               settleBackfill(relay, "incomplete");
               if (!locallyClosing && !options.abort.aborted) {
-                options.onClose(relay, reasons);
+                options.onClose(
+                  relay,
+                  reasons.map(({ reason }) => reason),
+                );
               }
             },
             // Own earlier deadline marks synthetic library EOSE as incomplete.

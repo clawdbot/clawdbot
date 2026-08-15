@@ -4,7 +4,7 @@ export function resolveReefInboundDispatchContent(message: ReefIngressMessage) {
   return {
     rawBody: message.text,
     extraContext: {
-      UntrustedContext: [message.provenance],
+      ChannelPromptContext: [message.provenance],
       ReefProvenance: message.provenance,
       ReefEnvelopeId: message.id,
       SenderIsBot: true,

@@ -1070,24 +1070,30 @@ fun OnboardingFlow(
 }
 
 @Composable
-private fun WelcomeScreen(
+internal fun WelcomeScreen(
   mascotMood: MascotMood,
   onConnect: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
-    Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-      OnboardingHeroTopSpacer(afterHeader = false)
-      OnboardingIntroHero(
-        title = nativeString("Welcome to OpenClaw"),
-        subtitle = nativeString("Turn this device into a secure OpenClaw node for chat, voice, camera, and device tools."),
-        mark = { WelcomeLogo(mood = mascotMood, announceLogo = true) },
-      )
-      Spacer(modifier = Modifier.height(24.dp))
-      WelcomeChecklist()
-      Spacer(modifier = Modifier.height(16.dp))
-      SecurityNotice()
-      Spacer(modifier = Modifier.weight(1f))
+    Column(modifier = Modifier.fillMaxSize()) {
+      // Keep actions outside the scroller so font scaling cannot push them out of reach.
+      Column(
+        modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally,
+      ) {
+        OnboardingHeroTopSpacer(afterHeader = false)
+        OnboardingIntroHero(
+          title = nativeString("Welcome to OpenClaw"),
+          subtitle = nativeString("Turn this device into a secure OpenClaw node for chat, voice, camera, and device tools."),
+          mark = { WelcomeLogo(mood = mascotMood, announceLogo = true) },
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        WelcomeChecklist()
+        Spacer(modifier = Modifier.height(16.dp))
+        SecurityNotice()
+        Spacer(modifier = Modifier.height(24.dp))
+      }
       OnboardingActions {
         ClawPrimaryButton(text = nativeString("Continue"), onClick = onConnect, modifier = Modifier.onboardingActionButton())
       }
@@ -1222,7 +1228,7 @@ private fun SoftPanel(
 }
 
 @Composable
-private fun GatewaySetupScreen(
+internal fun GatewaySetupScreen(
   nearbyGateway: GatewayEndpoint?,
   onBack: () -> Unit,
   onSetupCode: () -> Unit,
@@ -1234,8 +1240,12 @@ private fun GatewaySetupScreen(
   ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
     Column(modifier = Modifier.fillMaxSize()) {
       OnboardingHeader(title = nativeText(""), onBack = onBack)
-      OnboardingHeroTopSpacer(afterHeader = true)
-      Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+      // Keep actions outside the scroller so font scaling cannot push them out of reach.
+      Column(
+        modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally,
+      ) {
+        OnboardingHeroTopSpacer(afterHeader = true)
         OnboardingIntroHero(
           title = nativeString("Connect Gateway"),
           subtitle = nativeString("Scan a QR code or use the setup code from your OpenClaw Gateway."),
@@ -1251,8 +1261,8 @@ private fun GatewaySetupScreen(
             }
           },
         )
+        Spacer(modifier = Modifier.height(24.dp))
       }
-      Spacer(modifier = Modifier.weight(1f))
       OnboardingActions {
         ClawPrimaryButton(
           text = nativeString("Scan QR or setup code"),

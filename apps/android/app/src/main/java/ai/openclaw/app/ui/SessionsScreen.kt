@@ -18,11 +18,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -35,6 +33,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.StarBorder
@@ -71,6 +70,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -81,6 +81,8 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun SessionsScreen(
   viewModel: MainViewModel,
+  showSidebarButton: Boolean,
+  onOpenSidebar: () -> Unit,
   onOpenChat: () -> Unit,
 ) {
   val sessions by viewModel.chatSessions.collectAsState()
@@ -170,7 +172,7 @@ internal fun SessionsScreen(
 
   ClawScaffold(
     contentPadding = PaddingValues(start = 16.dp, top = 10.dp, end = 16.dp, bottom = 4.dp),
-    contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+    contentWindowInsets = WindowInsets.safeDrawing,
   ) {
     LazyColumn(
       modifier = Modifier.fillMaxSize(),
@@ -183,6 +185,14 @@ internal fun SessionsScreen(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+          if (showSidebarButton) {
+            ClawPlainIconButton(
+              icon = Icons.Default.Menu,
+              contentDescription = nativeString("Show Sidebar"),
+              onClick = onOpenSidebar,
+              modifier = Modifier.testTag("sidebar-open-sessions"),
+            )
+          }
           Text(text = nativeString("Threads"), style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
           ClawPlainIconButton(
             icon = Icons.Default.Search,
@@ -366,7 +376,13 @@ internal fun SessionsScreen(
               onRename = { renameSessionTarget = session.toActionTarget(activeGatewayStableId) },
               onFork = {
                 coroutineScope.launch {
-                  viewModel.forkChatSession(session.key, session.ownerAgentId)?.let { newKey ->
+                  val newKey =
+                    viewModel.forkChatSession(
+                      session.key,
+                      session.ownerAgentId,
+                      fromLastCompleted = session.hasActiveRun == true,
+                    )
+                  if (newKey != null) {
                     viewModel.switchChatSession(newKey, session.ownerAgentId)
                     onOpenChat()
                   }
@@ -385,7 +401,12 @@ internal fun SessionsScreen(
               },
               onSetArchived = { archived ->
                 coroutineScope.launch {
-                  viewModel.patchChatSession(key = session.key, ownerAgentId = session.ownerAgentId, archived = archived)
+                  viewModel.patchChatSession(
+                    key = session.key,
+                    ownerAgentId = session.ownerAgentId,
+                    expectedSessionId = session.sessionId,
+                    archived = archived,
+                  )
                 }
               },
               onDelete = { deleteSessionTarget = session.toActionTarget(activeGatewayStableId) },
@@ -580,6 +601,7 @@ private fun SessionRow(
 ) {
   var menuExpanded by remember { mutableStateOf(false) }
   var groupMenuVisible by remember { mutableStateOf(false) }
+  val canChangeArchived = !session.sessionId.isNullOrBlank()
 
   Surface(color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Box {
@@ -667,9 +689,11 @@ private fun SessionRow(
         },
       ) {
         if (archived) {
-          SessionMenuItem(nativeString("Unarchive")) {
-            menuExpanded = false
-            onSetArchived(false)
+          if (canChangeArchived) {
+            SessionMenuItem(nativeString("Unarchive")) {
+              menuExpanded = false
+              onSetArchived(false)
+            }
           }
           SessionMenuItem(nativeString("Delete…")) {
             menuExpanded = false
@@ -709,14 +733,20 @@ private fun SessionRow(
             menuExpanded = false
             onRename()
           }
-          SessionMenuItem(nativeString("Fork")) {
+          SessionMenuItem(
+            nativeString(
+              if (session.hasActiveRun == true) "Fork from last completed message" else "Fork",
+            ),
+          ) {
             menuExpanded = false
             onFork()
           }
           SessionMenuItem(nativeString("Move to group")) { groupMenuVisible = true }
-          SessionMenuItem(nativeString("Archive")) {
-            menuExpanded = false
-            onSetArchived(true)
+          if (canChangeArchived) {
+            SessionMenuItem(nativeString("Archive")) {
+              menuExpanded = false
+              onSetArchived(true)
+            }
           }
           // Delete is archive-gated: the bounded operator session lacks
           // operator.admin, and the gateway only grants write-scope deletes

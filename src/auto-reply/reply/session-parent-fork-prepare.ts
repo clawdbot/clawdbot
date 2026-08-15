@@ -1,6 +1,6 @@
 // Prepares parent-context fork metadata for guarded reply session initialization.
-import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery-clear.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery/main-session-recovery-clear.js";
+import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import { forkSessionFromParent, resolveParentForkDecision } from "./session-fork.js";
 
 export async function prepareReplySessionParentFork(params: {
@@ -52,14 +52,13 @@ export async function prepareReplySessionParentFork(params: {
     `forking from parent session: parentKey=${params.parentSessionKey} → sessionKey=${params.sessionKey} ` +
       `parentTokens=${decision.parentTokens ?? "unknown"}`,
   );
-  params.warn(`forked session created: file=${fork.sessionFile}`);
   // The fork replaces this thread's transcript identity; recovery state from
   // the preseed row must not govern a later interruption of the fork.
-  return {
+  const forkedEntry: InternalSessionEntry = {
     ...params.sessionEntry,
     ...buildMainSessionRecoveryClearPatch(params.sessionEntry),
     sessionId: fork.sessionId,
-    sessionFile: fork.sessionFile,
+    lifecycleRunId: undefined,
     forkSource: {
       sessionKey: params.parentSessionKey,
       sessionId: parentEntry.sessionId,
@@ -67,5 +66,7 @@ export async function prepareReplySessionParentFork(params: {
     forkedFromParent: true,
     totalTokens: undefined,
     totalTokensFresh: false,
+    totalTokensVersion: undefined,
   };
+  return forkedEntry;
 }

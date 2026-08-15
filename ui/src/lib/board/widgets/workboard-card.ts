@@ -1,7 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../../i18n/index.ts";
 import type { WorkboardStatus } from "../../workboard/types.ts";
-import type { BoardViewWidget } from "../view-types.ts";
+import type { BoardWidget } from "../types.ts";
 import type { PluginBoardWidgetRenderer } from "./index.ts";
 import { WorkboardWidgetElement } from "./workboard-widget.ts";
 
@@ -67,6 +67,7 @@ class OpenClawWorkboardCardWidget extends WorkboardWidgetElement {
                 <select
                   aria-label=${`${t("workboard.fieldStatus")}: ${card.title}`}
                   .value=${card.status}
+                  ?disabled=${!this.canMutate}
                   @change=${(event: Event) => void this.handleStatusChange(event)}
                 >
                   ${statuses.map(
@@ -92,15 +93,21 @@ if (!customElements.get("openclaw-workboard-card-widget")) {
 export const renderWorkboardCardWidget: PluginBoardWidgetRenderer = ({
   widget,
   sessionKey,
+  active,
+  canMutate,
   requestUpdate,
 }: {
-  widget: BoardViewWidget;
+  widget: BoardWidget;
   sessionKey: string;
+  active: boolean;
+  canMutate: boolean;
   requestUpdate: () => void;
 }) => html`
   <openclaw-workboard-card-widget
     .widget=${widget}
     .sessionKey=${sessionKey}
+    .active=${active}
+    .canMutate=${canMutate}
     .hostRequestUpdate=${requestUpdate}
   ></openclaw-workboard-card-widget>
 `;

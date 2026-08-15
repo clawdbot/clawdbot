@@ -105,10 +105,7 @@ describe("structured prompt media replay", () => {
     const message = {
       role: "user" as const,
       content: "missing attachment",
-      MediaPath: missingPath,
-      MediaPaths: [missingPath],
-      MediaType: "image/png",
-      MediaTypes: ["image/png"],
+      __openclaw: { media: [{ path: missingPath, contentType: "image/png" }] },
     } as unknown as AgentMessage;
 
     try {
@@ -118,7 +115,9 @@ describe("structured prompt media replay", () => {
         workspaceOnly: true,
       });
       const replayed = result[0] as unknown as Record<string, unknown>;
-      expect(replayed.MediaPaths).toEqual([missingPath]);
+      expect(replayed["__openclaw"]).toMatchObject({
+        media: [expect.objectContaining({ path: missingPath })],
+      });
       expect(replayed.content).toEqual([{ type: "text", text: "missing attachment" }]);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
@@ -478,12 +477,12 @@ describe("structured prompt media replay", () => {
     expect(result.images).toEqual([]);
   });
 
-  it("pairs an identity-less legacy fact with its existing inline block", async () => {
+  it("pairs an identity-less persisted fact with its existing inline block", async () => {
     const inlineImage = { type: "image" as const, data: TINY_PNG_BASE64, mimeType: "image/png" };
     const message = {
       role: "user" as const,
       content: [{ type: "text" as const, text: "legacy identity-less" }, inlineImage],
-      media: [{ kind: "image" }],
+      __openclaw: { media: [{ kind: "image" }] },
     } as unknown as AgentMessage;
 
     const result = await hydratePromptMediaMessages([message], {
@@ -497,12 +496,14 @@ describe("structured prompt media replay", () => {
     ]);
   });
 
-  it("does not pair an unresolved remote legacy fact with an existing inline block", async () => {
+  it("does not pair an unresolved remote persisted fact with an existing inline block", async () => {
     const inlineImage = { type: "image" as const, data: TINY_PNG_BASE64, mimeType: "image/png" };
     const message = {
       role: "user" as const,
       content: [{ type: "text" as const, text: "remote identity" }, inlineImage],
-      media: [{ kind: "image", url: "https://example.test/remote.png" }],
+      __openclaw: {
+        media: [{ kind: "image", url: "https://example.test/remote.png" }],
+      },
     } as unknown as AgentMessage;
 
     const result = await hydratePromptMediaMessages([message], {
@@ -520,7 +521,7 @@ describe("structured prompt media replay", () => {
     ]);
   });
 
-  it("hydrates an identity-bearing legacy fact beside an unowned inline block", async () => {
+  it("hydrates an identity-bearing persisted fact beside an unowned inline block", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-inline-"));
     const imagePath = path.join(workspaceDir, "inline.png");
     await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
@@ -528,10 +529,7 @@ describe("structured prompt media replay", () => {
     const message = {
       role: "user" as const,
       content: [{ type: "text" as const, text: "legacy" }, inlineImage],
-      MediaPath: imagePath,
-      MediaPaths: [imagePath],
-      MediaType: "image/png",
-      MediaTypes: ["image/png"],
+      __openclaw: { media: [{ path: imagePath, contentType: "image/png" }] },
     } as unknown as AgentMessage;
 
     try {
@@ -550,7 +548,7 @@ describe("structured prompt media replay", () => {
     }
   });
 
-  it("keeps identity-bearing legacy facts ahead of an unowned inline block", async () => {
+  it("keeps identity-bearing persisted facts ahead of an unowned inline block", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-order-"));
     const existingPath = path.join(workspaceDir, "existing.png");
     const hydratedPath = path.join(workspaceDir, "hydrated.png");
@@ -565,10 +563,12 @@ describe("structured prompt media replay", () => {
     const message = {
       role: "user" as const,
       content: [{ type: "text" as const, text: "legacy order" }, existingImage],
-      MediaPath: existingPath,
-      MediaPaths: [existingPath, hydratedPath],
-      MediaType: "image/png",
-      MediaTypes: ["image/png", "image/png"],
+      __openclaw: {
+        media: [
+          { path: existingPath, contentType: "image/png" },
+          { path: hydratedPath, contentType: "image/png" },
+        ],
+      },
     } as unknown as AgentMessage;
 
     try {

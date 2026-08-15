@@ -292,10 +292,6 @@ avdmanager_bin() {
     printf '%s\n' "$AVDMANAGER"
     return
   fi
-  if command -v avdmanager >/dev/null 2>&1; then
-    command -v avdmanager
-    return
-  fi
   for sdk_root in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "$HOME/Library/Android/sdk"; do
     for relative_path in cmdline-tools/latest/bin/avdmanager cmdline-tools/bin/avdmanager tools/bin/avdmanager; do
       if [[ -n "$sdk_root" && -x "$sdk_root/$relative_path" ]]; then
@@ -304,6 +300,10 @@ avdmanager_bin() {
       fi
     done
   done
+  if command -v avdmanager >/dev/null 2>&1; then
+    command -v avdmanager
+    return
+  fi
   echo "avdmanager not found. Install Android SDK command-line tools or set AVDMANAGER." >&2
   return 127
 }

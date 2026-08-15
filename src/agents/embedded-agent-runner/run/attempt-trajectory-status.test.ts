@@ -17,9 +17,8 @@ function baseParams(
   // Default to a completed but non-deliverable attempt; tests opt in to each
   // kind of terminal progress.
   return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
+    failed: false,
+    interrupted: false,
     assistantTexts: [],
     toolMetas: [],
     didSendViaMessagingTool: false,
@@ -241,7 +240,7 @@ describe("attempt trajectory status", () => {
     expect(
       resolveAttemptTrajectoryTerminal(
         baseParams({
-          aborted: true,
+          interrupted: false,
           toolMetas: [{ toolName: "web_search" }],
           lastAssistantStopReason: "toolUse",
         }),
@@ -264,14 +263,14 @@ describe("attempt trajectory status", () => {
   });
 
   it("preserves prompt errors and interrupts", () => {
-    expect(
-      resolveAttemptTrajectoryTerminal(baseParams({ promptError: new Error("boom") })),
-    ).toEqual({ status: "error" });
-    expect(resolveAttemptTrajectoryTerminal(baseParams({ timedOut: true }))).toEqual({
+    expect(resolveAttemptTrajectoryTerminal(baseParams({ failed: true }))).toEqual({
+      status: "error",
+    });
+    expect(resolveAttemptTrajectoryTerminal(baseParams({ interrupted: true }))).toEqual({
       status: "interrupted",
     });
     expect(
-      resolveAttemptTrajectoryTerminal(baseParams({ aborted: true, externalAbort: true })),
+      resolveAttemptTrajectoryTerminal(baseParams({ failed: true, interrupted: true })),
     ).toEqual({
       status: "interrupted",
     });

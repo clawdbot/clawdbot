@@ -9,9 +9,14 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { LitElement, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { isLobsterDay } from "../../../src/shared/lobster-day.js";
+import { patchSettings } from "../app/settings.ts";
 import * as dex from "./lobster-dex.ts";
 import { playLobsterPetChirp, type LobsterPetChirpKind } from "./lobster-pet-audio.ts";
 import * as contract from "./lobster-pet-contract.ts";
+import {
+  renderLobsterPetDismissMenu,
+  type LobsterPetDismissMenuPosition,
+} from "./lobster-pet-dismiss-menu.ts";
 import * as lobsterLook from "./lobster-pet-look.ts";
 import * as plans from "./lobster-pet-plans.ts";
 import { LobsterLedgeTraffic } from "./lobster-pet-traffic.ts";
@@ -28,8 +33,11 @@ export {
   LOBSTER_PET_PALETTES,
   canonicalLobsterLook,
   createLobsterPetLook,
+  lobsterLookStyle,
   renderLobsterSvg,
 } from "./lobster-pet-look.ts";
+export { lobsterPaletteName } from "./lobster-pet-lore.ts";
+export { moonPhaseFraction } from "./lobster-pet-moon.ts";
 
 class LobsterPet extends LitElement {
   override createRenderRoot() {
@@ -43,6 +51,7 @@ class LobsterPet extends LitElement {
   @property({ attribute: false }) runOutcome: contract.LobsterRunOutcome = "ok";
   @property({ attribute: false }) soundsEnabled = false;
   @property({ attribute: false }) gatewayVersion: string | null = null;
+  @property({ attribute: false }) onVisitsDisabled: () => void = () => undefined;
 
   @state() private act: plans.LobsterPetAct | null = null;
   @state() private spotPct = 80;
@@ -53,6 +62,7 @@ class LobsterPet extends LitElement {
   @state() private anchor: plans.LobsterPetAnchor = "ledge";
   @state() private scheduledVisiting = false;
   @state() private dismissed = false;
+  @state() private dismissMenuPosition: LobsterPetDismissMenuPosition | null = null;
   @state() private grumpy = false;
   @state() private vigil = false;
   @state() private outcomePresenceOwner: "vigil" | null = null;
@@ -164,6 +174,7 @@ class LobsterPet extends LitElement {
       this.clearActTimers();
       this.act = null;
       this.dismissed = false;
+      this.dismissMenuPosition = null;
       this.presence = "out";
       this.molted = false;
       this.shellVisible = false;
@@ -198,6 +209,13 @@ class LobsterPet extends LitElement {
         // celebrate or mourn - just acknowledge the change.
         const finishAct = plans.resolveLobsterFinishAct(this.runOutcome);
         this.performAct(finished ? finishAct : "startle", presenceOwner);
+      }
+    }
+    if (changed.has("visitsEnabled")) {
+      if (!this.visitsEnabled) {
+        this.dismissMenuPosition = null;
+      } else if (changed.get("visitsEnabled") === false) {
+        this.dismissed = false;
       }
     }
     // Moving day latches once per load, as soon as the gateway version is
@@ -255,6 +273,7 @@ class LobsterPet extends LitElement {
       return;
     }
     if (!visible && this.presence === "in") {
+      this.dismissMenuPosition = null;
       this.outcomePresenceOwner = null;
       this.clearActTimers();
       this.act = null;
@@ -304,8 +323,8 @@ class LobsterPet extends LitElement {
   // quick tap is a poke. Pokes are fun until they are not: 3 fast pokes turn
   // it grumpy for a minute, 10 send it off in a huff until a later visit.
   // Offline pets are on duty and never huff.
-  private readonly handleHoldStart = () => {
-    if (plans.prefersReducedMotion()) {
+  private readonly handleHoldStart = (event: PointerEvent) => {
+    if (event.button !== 0 || plans.prefersReducedMotion()) {
       return;
     }
     this.holdPetted = false;
@@ -321,7 +340,10 @@ class LobsterPet extends LitElement {
     }, 600);
   };
 
-  private readonly handleHoldEnd = () => {
+  private readonly handleHoldEnd = (event: PointerEvent) => {
+    if (event.button !== 0) {
+      return;
+    }
     if (this.holdTimer !== null) {
       window.clearTimeout(this.holdTimer);
       this.holdTimer = null;
@@ -372,7 +394,7 @@ class LobsterPet extends LitElement {
   private huffOff() {
     this.pokeTimes = [];
     this.grumpy = false;
-    // Ends the current visit only; unlike a right-click dismissal the pet
+    // Ends the current visit only; unlike a menu dismissal the pet
     // still returns on a later scheduled visit.
     this.clearVisitTimers();
     this.scheduledVisiting = false;
@@ -423,12 +445,23 @@ class LobsterPet extends LitElement {
     }
   };
 
-  // Right-click shoos the pet away for the rest of this page load.
-  private readonly handleShoo = (event: Event) => {
+  private readonly openDismissMenu = (event: MouseEvent) => {
     event.preventDefault();
+    event.stopPropagation();
+    this.handleHoldCancel();
+    this.dismissMenuPosition = { x: event.clientX, y: event.clientY };
+  };
+
+  private dismiss(permanently: boolean) {
+    this.dismissMenuPosition = null;
     this.dismissed = true;
     dex.recordLobsterShoo();
-  };
+    if (permanently) {
+      this.visitsEnabled = false;
+      patchSettings({ lobsterPetVisits: false });
+      this.onVisitsDisabled();
+    }
+  }
 
   private clearActTimers() {
     for (const timer of [this.idleTimer, this.actEndTimer, this.enterTimer]) {
@@ -669,7 +702,7 @@ class LobsterPet extends LitElement {
       : identity?.oldFriend
         ? "an old friend"
         : null;
-    return lobsterLook.renderLobsterPetScene({
+    const scene = lobsterLook.renderLobsterPetScene({
       look,
       mode: this.mode,
       presence: this.presence,
@@ -708,9 +741,19 @@ class LobsterPet extends LitElement {
       onPointerDown: this.handleHoldStart,
       onPointerUp: this.handleHoldEnd,
       onPointerCancel: this.handleHoldCancel,
-      onContextMenu: this.handleShoo,
+      onContextMenu: this.openDismissMenu,
       onBottleOpen: this.traffic.openBottle,
     });
+    return [
+      scene,
+      renderLobsterPetDismissMenu({
+        position: this.dismissMenuPosition,
+        onDismiss: (permanently) => this.dismiss(permanently),
+        onClose: () => {
+          this.dismissMenuPosition = null;
+        },
+      }),
+    ];
   }
 }
 if (!customElements.get("openclaw-lobster-pet")) {

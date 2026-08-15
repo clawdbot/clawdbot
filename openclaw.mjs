@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 const MIN_NODE_22 = { major: 22, minor: 22, patch: 3 };
 const MIN_NODE_24 = { major: 24, minor: 15, patch: 0 };
 const MIN_NODE_25 = { major: 25, minor: 9, patch: 0 };
-const RECOMMENDED_NODE_MAJOR = 24;
+const RECOMMENDED_NODE_MAJOR = 26;
 const SUPPORTED_NODE_RANGE = ">=22.22.3 <23, >=24.15.0 <25, or >=25.9.0";
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 
@@ -49,8 +49,19 @@ const isSupportedNodeVersion = (version) => {
 
 const ensureSupportedRuntimeVersion = () => {
   if (process.versions.bun) {
+    // Bun >=1.4 (Rust rewrite) ships node:sqlite; feature-probe instead of
+    // rejecting Bun outright so capable Bun builds can run OpenClaw.
+    let hasNodeSqlite;
+    try {
+      hasNodeSqlite = Boolean(process.getBuiltinModule?.("node:sqlite"));
+    } catch {
+      hasNodeSqlite = false;
+    }
+    if (hasNodeSqlite) {
+      return;
+    }
     process.stderr.write(
-      "openclaw: the Bun runtime is unsupported because OpenClaw requires node:sqlite.\n" +
+      "openclaw: this Bun runtime is unsupported because it does not provide node:sqlite.\n" +
         `Use Node.js ${SUPPORTED_NODE_RANGE}; Bun remains supported for installs and package scripts.\n`,
     );
     process.exit(1);
@@ -452,8 +463,7 @@ const hasLauncherContainerTarget = (argv) => {
     return true;
   }
   const args = argv.slice(2);
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+  for (const arg of args) {
     if (!arg || arg === "--") {
       return false;
     }
@@ -647,8 +657,8 @@ function resolveLauncherCommit() {
     return envCommit;
   }
   return (
-    readLauncherGitCommit() ??
     formatLauncherCommit(readLauncherJson("./dist/build-info.json")?.commit) ??
+    readLauncherGitCommit() ??
     formatLauncherCommit(readLauncherJson("./package.json")?.gitHead) ??
     formatLauncherCommit(readLauncherJson("./package.json")?.githead)
   );

@@ -8,7 +8,11 @@ import {
   createPlainTextToolCallCompatWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asPositiveSafeInteger,
+  asRecord,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import { ensureLmstudioModelLoaded } from "./models.fetch.js";
 import { resolveLmstudioInferenceBase } from "./models.js";
@@ -78,7 +82,6 @@ function isPreloadCoolingDown(preloadKey: string, now: number): PreloadCooldownE
     return undefined;
   }
   if (entry.untilMs <= now) {
-    preloadCooldown.delete(preloadKey);
     return undefined;
   }
   return entry;
@@ -112,23 +115,30 @@ function resolveModelHeaders(model: StreamModel): Record<string, string> | undef
   return model.headers;
 }
 
-function toRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
 function shouldPreloadLmstudioModels(value: unknown): boolean {
-  const providerConfig = toRecord(value);
-  const params = toRecord(providerConfig?.params);
-  return params?.preload !== false;
+  const providerConfig = asRecord(value);
+  const params = asRecord(providerConfig.params);
+  return params.preload !== false;
 }
 
 function withLmstudioUsageCompat(model: StreamModel): StreamModel {
+  const compat = model.compat && typeof model.compat === "object" ? model.compat : {};
+  const unsupportedToolSchemaKeywords =
+    "unsupportedToolSchemaKeywords" in compat && Array.isArray(compat.unsupportedToolSchemaKeywords)
+      ? compat.unsupportedToolSchemaKeywords.filter(
+          (keyword): keyword is string => typeof keyword === "string",
+        )
+      : [];
+  const normalizedCompat = {
+    ...compat,
+    supportsUsageInStreaming: true,
+    // LM Studio's GGUF grammar rejects regex constraints; the shared transport
+    // removes this keyword recursively while preserving native tool calling.
+    unsupportedToolSchemaKeywords: uniqueStrings([...unsupportedToolSchemaKeywords, "pattern"]),
+  };
   return {
     ...model,
-    compat: {
-      ...(model.compat && typeof model.compat === "object" ? model.compat : {}),
-      supportsUsageInStreaming: true,
-    },
+    compat: normalizedCompat,
   };
 }
 
@@ -167,6 +177,37 @@ function createPreloadKey(params: {
   requestedContextLength?: number;
 }) {
   return `${params.baseUrl}::${params.modelKey}::${params.requestedContextLength ?? "default"}`;
+}
+
+function toLmstudioPreloadError(reason: unknown, message: string): Error {
+  return reason instanceof Error ? reason : new Error(message, { cause: reason });
+}
+
+function waitForLmstudioPreload(
+  preload: Promise<string | undefined>,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  if (!signal) {
+    return preload;
+  }
+  if (signal.aborted) {
+    return Promise.reject(toLmstudioPreloadError(signal.reason, "LM Studio preload aborted"));
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () =>
+      reject(toLmstudioPreloadError(signal.reason, "LM Studio preload aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    void preload.then(
+      (modelKey) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(modelKey);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(toLmstudioPreloadError(error, "LM Studio model preload failed"));
+      },
+    );
+  });
 }
 
 async function ensureLmstudioModelLoadedBestEffort(params: {
@@ -224,6 +265,8 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
     if (!modelKey) {
       return underlying(model, context, options);
     }
+    // Cancellation belongs to this caller; never start or join a shared load after abort.
+    options?.signal?.throwIfAborted();
     const providerConfig = ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
     if (!shouldPreloadLmstudioModels(providerConfig)) {
       return streamWithThinkingLevel(withLmstudioUsageCompat(model), context, options);
@@ -281,8 +324,11 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
       let resolvedModelKey: string | undefined;
       if (preloadPromise) {
         try {
-          resolvedModelKey = await preloadPromise;
+          resolvedModelKey = await waitForLmstudioPreload(preloadPromise, options?.signal);
         } catch (error) {
+          // A caller owns its wait, not the shared model load needed by other
+          // in-flight requests; cancellation must never become preload backoff.
+          options?.signal?.throwIfAborted();
           const annotated = error as {
             cause?: unknown;
             consecutiveFailures?: number;

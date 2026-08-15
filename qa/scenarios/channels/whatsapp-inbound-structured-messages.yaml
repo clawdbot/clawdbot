@@ -6,14 +6,14 @@ scenario:
     primary:
       - channels.provider-specific-channeldata
   execution:
-    profiles: { "whatsapp:mock-default": 25 }
     kind: flow
     channel: whatsapp
     timeoutMs: 240000
     retryCount: 1
     suiteIsolation: isolated
-    config: { whatsappScenarioId: whatsapp-inbound-structured-messages }
 flow:
   module: ./live-transports/whatsapp/scenario-runtime.js
-  call: runWhatsAppInboundStructuredMessagesScenario
-  args: [{ expr: whatsappScenarioContext }]
+  call: runWhatsAppScenario
+  args:
+    - { expr: whatsappScenarioContext }
+    - { moduleExport: whatsappQaInboundStructuredMessagesScenario }

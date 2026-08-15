@@ -2,56 +2,58 @@
 import { installChannelOutboundPayloadContractSuite } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { createSlackOutboundPayloadHarness, slackOutbound } from "../test-api.js";
+import { createSlackOutboundPayloadHarness as createHarness, slackOutbound } from "../test-api.js";
 import { createSlackSendTestClient } from "./blocks.test-helpers.js";
 import type { SlackReplyBlockSegment } from "./reply-blocks.js";
 import { sendMessageSlack } from "./send.js";
 
-function createHarness(params: {
-  payload: ReplyPayload;
-  sendResults?: Array<{ messageId: string }>;
-}) {
-  return createSlackOutboundPayloadHarness(params);
-}
+type MockWithCalls = { mock: { calls: unknown[][] } };
 
-type MockWithCalls = {
-  mock: { calls: unknown[][] };
+type SlackTestBlock = {
+  block_id?: string;
+  elements?: Array<{ action_id?: string }>;
+  text?: { text?: string };
+  type?: string;
 };
 
-function sendCall(sendMock: MockWithCalls, index: number): unknown[] {
+type SlackSendOptions = {
+  authoredTextPlacement?: "none" | "blocks" | "outside-blocks";
+  blocks?: SlackTestBlock[];
+  mediaUrl?: string;
+  nativeDataFallbackBaseText?: string;
+  textIsSlackPlainText?: boolean;
+};
+
+type PostedSlackMessage = Pick<SlackSendOptions, "blocks"> & {
+  mrkdwn?: boolean;
+  text?: string;
+};
+
+function sentSlackMessage(sendMock: MockWithCalls, index: number) {
   const call = sendMock.mock.calls[index];
   if (!call) {
     throw new Error(`expected Slack send call ${index}`);
   }
-  return call;
-}
-
-function sendOptions(call: unknown[]): {
-  authoredTextPlacement?: "none" | "blocks" | "outside-blocks";
-  blocks?: Array<{
-    block_id?: string;
-    elements?: Array<{ action_id?: string }>;
-    type?: string;
-  }>;
-  mediaUrl?: string;
-  nativeDataFallbackBaseText?: string;
-  textIsSlackPlainText?: boolean;
-} {
-  const options = call?.[2];
+  const options = call[2];
   if (!options) {
     throw new Error("Expected Slack send options");
   }
-  return options as {
-    authoredTextPlacement?: "none" | "blocks" | "outside-blocks";
-    blocks?: Array<{
-      block_id?: string;
-      elements?: Array<{ action_id?: string }>;
-      type?: string;
-    }>;
-    mediaUrl?: string;
-    nativeDataFallbackBaseText?: string;
-    textIsSlackPlainText?: boolean;
+  return {
+    options: options as SlackSendOptions,
+    text: call[1],
+    to: call[0],
   };
+}
+
+function postedSlackMessage(
+  client: ReturnType<typeof createSlackSendTestClient>,
+  index: number,
+): PostedSlackMessage {
+  const message = client.chat.postMessage.mock.calls[index]?.[0];
+  if (!message) {
+    throw new Error(`expected Slack postMessage call ${index}`);
+  }
+  return message as PostedSlackMessage;
 }
 
 function renderedPresentationSegments(payload: ReplyPayload | null | undefined) {
@@ -64,27 +66,123 @@ function renderedPresentationSegments(payload: ReplyPayload | null | undefined) 
   return value as SlackReplyBlockSegment[];
 }
 
-function createMixedPresentationPayload(): ReplyPayload {
-  const headers = Array.from({ length: 21 }, (_entry, index) => `Column ${String(index)}`);
+async function renderPresentation(payload: ReplyPayload, text = ""): Promise<ReplyPayload> {
+  const rendered = await slackOutbound.renderPresentation?.({
+    payload,
+    presentation: payload.presentation!,
+    ctx: { cfg: {}, to: "C12345", text, payload },
+  });
+  if (!rendered) {
+    throw new Error("Expected rendered Slack presentation");
+  }
+  return rendered;
+}
+
+async function renderPayloadForSend(payload: ReplyPayload, text = ""): Promise<ReplyPayload> {
+  const { presentation: _presentation, ...payloadForSend } = await renderPresentation(
+    payload,
+    text,
+  );
+  return payloadForSend;
+}
+
+async function sendThroughRealSlack(params: {
+  payload: ReplyPayload;
+  rejectFirstNativeBlocks?: boolean;
+  renderText?: string;
+  deliveryQueueId?: string;
+  onPlatformSendDispatch?: () => Promise<void>;
+}) {
+  const payload = await renderPayloadForSend(params.payload, params.renderText);
+  const client = createSlackSendTestClient();
+  if (params.rejectFirstNativeBlocks) {
+    client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
+  }
+  const cfg = { channels: { slack: { botToken: "xoxb-test" } } };
+  const capturedSendOptions: Array<NonNullable<Parameters<typeof sendMessageSlack>[2]>> = [];
+  const sendSlack: typeof sendMessageSlack = async (to, text, opts) => {
+    capturedSendOptions.push(opts);
+    return await sendMessageSlack(to, text, { ...opts, cfg, token: "xoxb-test", client });
+  };
+
+  await slackOutbound.sendPayload?.({
+    cfg,
+    to: "channel:C123",
+    text: "",
+    payload,
+    deps: { sendSlack },
+    deliveryQueueId: params.deliveryQueueId,
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
+  });
+  return { capturedSendOptions, client };
+}
+
+function valueButtons(label: string, value: string) {
+  return { type: "buttons" as const, buttons: [{ label, value }] };
+}
+
+function interactiveButtons(label: string, value: string) {
+  return { blocks: [valueButtons(label, value)] };
+}
+
+function createPipelineTablePayload(rowHeaderColumnIndex?: number): ReplyPayload {
   return {
-    text: "Summary",
+    text: "Pipeline summary",
     presentation: {
       blocks: [
         {
-          type: "chart",
-          chartType: "bar",
-          title: "Pipeline",
-          categories: ["Open"],
-          series: [{ name: "Issues", values: [5] }],
-        },
-        {
           type: "table",
-          caption: "Wide pipeline",
-          headers,
-          rows: [headers.map((_header, index) => `Value ${String(index)}`)],
+          caption: "Open pipeline",
+          headers: ["Account", "ARR"],
+          rows: [
+            ["Acme", 125000],
+            ["Globex", 82000],
+          ],
+          ...(rowHeaderColumnIndex === undefined ? {} : { rowHeaderColumnIndex }),
         },
-        { type: "buttons", buttons: [{ label: "Stage", value: "stage" }] },
       ],
+    },
+  };
+}
+
+function createWidePipelineTable() {
+  const headers = Array.from({ length: 21 }, (_entry, index) => `Column ${String(index)}`);
+  return {
+    type: "table" as const,
+    caption: "Wide pipeline",
+    headers,
+    rows: [headers.map((_header, index) => `Value ${String(index)}`)],
+  };
+}
+
+function createPipelineChart() {
+  return {
+    type: "chart" as const,
+    chartType: "bar" as const,
+    title: "Pipeline",
+    categories: ["Open"],
+    series: [{ name: "Issues", values: [5] }],
+  };
+}
+
+const COMMAND_FALLBACK_PRESENTATION = {
+  title: "Actions",
+  blocks: [
+    { type: "text" as const, text: "Choose an action" },
+    {
+      type: "buttons" as const,
+      buttons: [{ label: "Status", action: { type: "command" as const, command: "/status" } }],
+    },
+  ],
+};
+const PIPELINE_TABLE_TEXT =
+  "Pipeline summary\n\nOpen pipeline (table)\nAccount\tARR\nAcme\t125000\nGlobex\t82000";
+
+function createMixedPresentationPayload(): ReplyPayload {
+  return {
+    text: "Summary",
+    presentation: {
+      blocks: [createPipelineChart(), createWidePipelineTable(), valueButtons("Stage", "stage")],
     },
   };
 }
@@ -101,10 +199,10 @@ describe("slackOutbound sendPayload", () => {
     const result = await run();
 
     expect(sendMock).toHaveBeenCalledTimes(1);
-    const call = sendCall(sendMock, 0);
-    expect(call[0]).toBe(to);
-    expect(call[1]).toBe("Fallback summary");
-    expect(sendOptions(call).blocks).toEqual([
+    const sent = sentSlackMessage(sendMock, 0);
+    expect(sent.to).toBe(to);
+    expect(sent.text).toBe("Fallback summary");
+    expect(sent.options.blocks).toEqual([
       { type: "section", text: { type: "mrkdwn", text: "Fallback summary", verbatim: true } },
       { type: "divider" },
     ]);
@@ -117,23 +215,15 @@ describe("slackOutbound sendPayload", () => {
       text: "**Overview**",
       presentation: { blocks: [{ type: "divider" }] },
     };
-    const rendered = await slackOutbound.renderPresentation?.({
-      payload,
-      presentation: payload.presentation!,
-      ctx: { cfg: {}, to: "C12345", text: payload.text ?? "", payload },
-    });
-    if (!rendered) {
-      throw new Error("Expected rendered Slack segments");
-    }
-    const { presentation: _presentation, ...payloadForSend } = rendered;
+    const payloadForSend = await renderPayloadForSend(payload, payload.text);
     const { run, sendMock } = createHarness({ payload: payloadForSend });
 
     await run();
 
-    const call = sendCall(sendMock, 0);
-    expect(call[1]).toBe("*Overview*");
-    expect(sendOptions(call).authoredTextPlacement).toBe("blocks");
-    expect(sendOptions(call).blocks).toEqual([
+    const sent = sentSlackMessage(sendMock, 0);
+    expect(sent.text).toBe("*Overview*");
+    expect(sent.options.authoredTextPlacement).toBe("blocks");
+    expect(sent.options.blocks).toEqual([
       { type: "section", text: { type: "mrkdwn", text: "*Overview*", verbatim: true } },
       { type: "divider" },
     ]);
@@ -160,8 +250,8 @@ describe("slackOutbound sendPayload", () => {
 
     await run();
 
-    const call = sendCall(sendMock, 0);
-    expect(call[1]).toBe(
+    const sent = sentSlackMessage(sendMock, 0);
+    expect(sent.text).toBe(
       [
         "Revenue summary",
         "",
@@ -170,7 +260,7 @@ describe("slackOutbound sendPayload", () => {
         "- Revenue: Q1: 120; Q2: 145",
       ].join("\n"),
     );
-    expect(sendOptions(call).blocks).toEqual([
+    expect(sent.options.blocks).toEqual([
       { type: "section", text: { type: "mrkdwn", text: "Revenue summary", verbatim: true } },
       {
         type: "data_visualization",
@@ -190,45 +280,20 @@ describe("slackOutbound sendPayload", () => {
         },
       },
     ]);
-    expect(sendOptions(call).authoredTextPlacement).toBe("blocks");
-    expect(sendOptions(call).nativeDataFallbackBaseText).toBeUndefined();
+    expect(sent.options.authoredTextPlacement).toBe("blocks");
+    expect(sent.options.nativeDataFallbackBaseText).toBeUndefined();
   });
 
   it("renders native tables with complete top-level accessibility text", async () => {
     const { run, sendMock } = createHarness({
-      payload: {
-        text: "Pipeline summary",
-        presentation: {
-          blocks: [
-            {
-              type: "table",
-              caption: "Open pipeline",
-              headers: ["Account", "ARR"],
-              rows: [
-                ["Acme", 125000],
-                ["Globex", 82000],
-              ],
-              rowHeaderColumnIndex: 0,
-            },
-          ],
-        },
-      },
+      payload: createPipelineTablePayload(0),
     });
 
     await run();
 
-    const call = sendCall(sendMock, 0);
-    expect(call[1]).toBe(
-      [
-        "Pipeline summary",
-        "",
-        "Open pipeline (table)",
-        "Account\tARR",
-        "Acme\t125000",
-        "Globex\t82000",
-      ].join("\n"),
-    );
-    expect(sendOptions(call).blocks).toEqual([
+    const sent = sentSlackMessage(sendMock, 0);
+    expect(sent.text).toBe(PIPELINE_TABLE_TEXT);
+    expect(sent.options.blocks).toEqual([
       { type: "section", text: { type: "mrkdwn", text: "Pipeline summary", verbatim: true } },
       {
         type: "data_table",
@@ -250,8 +315,8 @@ describe("slackOutbound sendPayload", () => {
         ],
       },
     ]);
-    expect(sendOptions(call).authoredTextPlacement).toBe("blocks");
-    expect(sendOptions(call).nativeDataFallbackBaseText).toBeUndefined();
+    expect(sent.options.authoredTextPlacement).toBe("blocks");
+    expect(sent.options.nativeDataFallbackBaseText).toBeUndefined();
   });
 
   it.each([
@@ -285,7 +350,7 @@ describe("slackOutbound sendPayload", () => {
 
     await run();
 
-    const options = sendOptions(sendCall(sendMock, 0));
+    const { options } = sentSlackMessage(sendMock, 0);
     expect(options.authoredTextPlacement).toBe(expectedPlacement);
     expect(options.nativeDataFallbackBaseText).toBeUndefined();
     expect(options.blocks?.map((block) => block.type)).toEqual(
@@ -307,8 +372,8 @@ describe("slackOutbound sendPayload", () => {
     const result = await run();
 
     expect(sendMock).toHaveBeenCalledTimes(2);
-    expect(sendOptions(sendCall(sendMock, 0)).blocks).toHaveLength(50);
-    expect(sendOptions(sendCall(sendMock, 1)).blocks).toEqual([
+    expect(sentSlackMessage(sendMock, 0).options.blocks).toHaveLength(50);
+    expect(sentSlackMessage(sendMock, 1).options.blocks).toEqual([
       { type: "section", text: { type: "mrkdwn", text: "Summary", verbatim: true } },
     ]);
     expect(result.messageId).toBe("sl-summary");
@@ -333,69 +398,22 @@ describe("slackOutbound sendPayload", () => {
     await run();
 
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sendCall(sendMock, 0)[1]).toBe("Real text");
-    expect(sendOptions(sendCall(sendMock, 0)).blocks).toBeUndefined();
+    const sent = sentSlackMessage(sendMock, 0);
+    expect(sent.text).toBe("Real text");
+    expect(sent.options.blocks).toBeUndefined();
   });
 
   it("does not duplicate native table rows after real outbound rejection fallback", async () => {
-    const payload: ReplyPayload = {
-      text: "Pipeline summary",
-      presentation: {
-        blocks: [
-          {
-            type: "table",
-            caption: "Open pipeline",
-            headers: ["Account", "ARR"],
-            rows: [
-              ["Acme", 125000],
-              ["Globex", 82000],
-            ],
-          },
-        ],
-      },
-    };
-    const rendered = await slackOutbound.renderPresentation?.({
-      payload,
-      presentation: payload.presentation!,
-      ctx: { cfg: {}, to: "C12345", text: "", payload },
-    });
-    if (!rendered) {
-      throw new Error("Expected Slack native table rendering");
-    }
-    const { presentation: _presentation, ...payloadForSend } = rendered;
-    const client = createSlackSendTestClient();
-    client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
-    const cfg = { channels: { slack: { botToken: "xoxb-test" } } };
-    const sendSlack: typeof sendMessageSlack = async (to, text, opts) =>
-      await sendMessageSlack(to, text, {
-        ...opts,
-        cfg,
-        token: "xoxb-test",
-        client,
-      });
-
-    await slackOutbound.sendPayload?.({
-      cfg,
-      to: "channel:C123",
-      text: "",
-      payload: payloadForSend,
-      deps: { sendSlack },
+    const { client } = await sendThroughRealSlack({
+      payload: createPipelineTablePayload(),
+      rejectFirstNativeBlocks: true,
     });
 
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
-    const fallback = client.chat.postMessage.mock.calls[1]?.[0] as
-      | { blocks?: unknown; mrkdwn?: boolean; text?: string }
-      | undefined;
+    const fallback = postedSlackMessage(client, 1);
     expect(fallback).toMatchObject({
       mrkdwn: false,
-      text: [
-        "Pipeline summary",
-        "",
-        "Open pipeline (table)",
-        "Account\tARR",
-        "Acme\t125000",
-        "Globex\t82000",
-      ].join("\n"),
+      text: PIPELINE_TABLE_TEXT,
     });
     expect(fallback?.blocks).toEqual([
       { type: "section", text: { type: "mrkdwn", text: "Pipeline summary", verbatim: true } },
@@ -425,10 +443,7 @@ describe("slackOutbound sendPayload", () => {
       },
       interactive: {
         blocks: [
-          {
-            type: "buttons",
-            buttons: [{ label: "Refresh", value: "refresh" }],
-          },
+          valueButtons("Refresh", "refresh"),
           {
             type: "select",
             placeholder: "Window",
@@ -447,10 +462,7 @@ describe("slackOutbound sendPayload", () => {
               index === 0 ? "<@U123>" : `owner-${String(index)} ${"x".repeat(110)}`,
             ]),
           },
-          {
-            type: "buttons",
-            buttons: [{ label: "Stage", value: "stage" }],
-          },
+          valueButtons("Stage", "stage"),
           {
             type: "select",
             placeholder: "Lane",
@@ -460,35 +472,9 @@ describe("slackOutbound sendPayload", () => {
       },
     };
 
-    const rendered = await slackOutbound.renderPresentation?.({
-      payload,
-      presentation: payload.presentation!,
-      ctx: { cfg: {}, to: "C12345", text: "", payload },
-    });
-    if (!rendered) {
-      throw new Error("Expected Slack to render a table fallback");
-    }
-    const { presentation: _presentation, ...payloadForSend } = rendered;
-    const client = createSlackSendTestClient();
-    const cfg = { channels: { slack: { botToken: "xoxb-test" } } };
-    const capturedSendOptions: Array<NonNullable<Parameters<typeof sendMessageSlack>[2]>> = [];
     const onPlatformSendDispatch = vi.fn(async () => {});
-    const sendSlack: typeof sendMessageSlack = async (to, text, opts) => {
-      capturedSendOptions.push(opts ?? {});
-      return await sendMessageSlack(to, text, {
-        ...opts,
-        cfg,
-        token: "xoxb-test",
-        client,
-      });
-    };
-
-    await slackOutbound.sendPayload?.({
-      cfg,
-      to: "channel:C123",
-      text: "",
-      payload: payloadForSend,
-      deps: { sendSlack },
+    const { capturedSendOptions, client } = await sendThroughRealSlack({
+      payload,
       deliveryQueueId: "queue-1",
       onPlatformSendDispatch,
     });
@@ -496,10 +482,10 @@ describe("slackOutbound sendPayload", () => {
     expect(client.chat.postMessage.mock.calls.length).toBeGreaterThanOrEqual(3);
     expect(capturedSendOptions).not.toHaveLength(0);
     expect(capturedSendOptions.every((opts) => opts.deliveryQueueId === undefined)).toBe(true);
-    expect(capturedSendOptions.every((opts) => opts.onPlatformSendDispatch === undefined)).toBe(
-      true,
-    );
-    expect(client.chat.postMessage.mock.calls[0]?.[0]).toMatchObject({
+    expect(
+      capturedSendOptions.every((opts) => opts.onPlatformSendDispatch === onPlatformSendDispatch),
+    ).toBe(true);
+    expect(postedSlackMessage(client, 0)).toMatchObject({
       text: expect.stringContaining("Pipeline <!channel>"),
       mrkdwn: false,
       blocks: [
@@ -556,30 +542,10 @@ describe("slackOutbound sendPayload", () => {
   it("keeps the full portable fallback when any control cannot render natively", async () => {
     const payload: ReplyPayload = {
       text: "Fallback",
-      presentation: {
-        title: "Actions",
-        blocks: [
-          { type: "text", text: "Choose an action" },
-          {
-            type: "buttons",
-            buttons: [{ label: "Status", action: { type: "command", command: "/status" } }],
-          },
-        ],
-      },
+      presentation: COMMAND_FALLBACK_PRESENTATION,
     };
 
-    const rendered = await slackOutbound.renderPresentation?.({
-      payload,
-      presentation: payload.presentation!,
-      ctx: {
-        cfg: {},
-        to: "C12345",
-        text: "",
-        payload,
-      },
-    });
-
-    const segments = renderedPresentationSegments(rendered);
+    const segments = renderedPresentationSegments(await renderPresentation(payload));
     expect(segments.map((segment) => segment.kind)).toEqual(["blocks", "text"]);
     expect(segments[1]).toEqual({ kind: "text", text: "- Status: `/status`", mrkdwn: false });
   });
@@ -587,25 +553,10 @@ describe("slackOutbound sendPayload", () => {
   it("renders the portable fallback visibly when native Slack blocks survive", async () => {
     const payload: ReplyPayload = {
       channelData: { slack: { blocks: [{ type: "divider" }] } },
-      presentation: {
-        title: "Actions",
-        blocks: [
-          { type: "text", text: "Choose an action" },
-          {
-            type: "buttons",
-            buttons: [{ label: "Status", action: { type: "command", command: "/status" } }],
-          },
-        ],
-      },
+      presentation: COMMAND_FALLBACK_PRESENTATION,
     };
 
-    const rendered = await slackOutbound.renderPresentation?.({
-      payload,
-      presentation: payload.presentation!,
-      ctx: { cfg: {}, to: "C12345", text: "", payload },
-    });
-
-    const segments = renderedPresentationSegments(rendered);
+    const segments = renderedPresentationSegments(await renderPresentation(payload));
     expect(segments.map((segment) => segment.kind)).toEqual(["blocks", "text"]);
     expect(segments[0]).toMatchObject({
       kind: "blocks",
@@ -639,13 +590,7 @@ describe("slackOutbound sendPayload", () => {
       },
     };
 
-    const rendered = await slackOutbound.renderPresentation?.({
-      payload,
-      presentation: payload.presentation!,
-      ctx: { cfg: {}, to: "C12345", text: "", payload },
-    });
-
-    const [segment] = renderedPresentationSegments(rendered);
+    const [segment] = renderedPresentationSegments(await renderPresentation(payload));
     expect(segment).toMatchObject({
       kind: "blocks",
       blocks: [
@@ -692,13 +637,7 @@ describe("slackOutbound sendPayload", () => {
   }>)("keeps the portable fallback for an oversized $name", async ({ presentation }) => {
     const payload: ReplyPayload = { presentation };
 
-    const rendered = await slackOutbound.renderPresentation?.({
-      payload,
-      presentation,
-      ctx: { cfg: {}, to: "C12345", text: "", payload },
-    });
-
-    const segments = renderedPresentationSegments(rendered);
+    const segments = renderedPresentationSegments(await renderPresentation(payload));
     expect(segments).toHaveLength(1);
     expect(segments[0]).toMatchObject({ kind: "text", mrkdwn: false });
   });
@@ -711,23 +650,10 @@ describe("slackOutbound sendPayload", () => {
         },
       },
       presentation: { title: "Deploy status", blocks: [{ type: "divider" }] },
-      interactive: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [{ label: "Allow", value: "pluginbind:approval-123:o" }],
-          },
-        ],
-      },
+      interactive: interactiveButtons("Allow", "pluginbind:approval-123:o"),
     };
 
-    const rendered = await slackOutbound.renderPresentation?.({
-      payload,
-      presentation: payload.presentation!,
-      ctx: { cfg: {}, to: "C12345", text: "", payload },
-    });
-
-    const segments = renderedPresentationSegments(rendered);
+    const segments = renderedPresentationSegments(await renderPresentation(payload));
     expect(segments.map((segment) => segment.kind)).toEqual(["blocks", "blocks"]);
     expect(segments[0]?.kind === "blocks" ? segments[0].blocks : []).toHaveLength(50);
     expect(segments[1]).toMatchObject({
@@ -736,44 +662,49 @@ describe("slackOutbound sendPayload", () => {
     });
   });
 
+  it("refreshes dispatch custody before each structured fanout request", async () => {
+    const payload: ReplyPayload = {
+      channelData: {
+        slack: { blocks: Array.from({ length: 49 }, () => ({ type: "divider" })) },
+      },
+      presentation: { title: "Deploy status", blocks: [{ type: "divider" }] },
+      interactive: interactiveButtons("Allow", "pluginbind:approval-123:o"),
+    };
+    const onPlatformSendDispatch = vi.fn(async () => undefined);
+
+    const { capturedSendOptions, client } = await sendThroughRealSlack({
+      payload,
+      deliveryQueueId: "queue-1",
+      onPlatformSendDispatch,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(capturedSendOptions).toHaveLength(2);
+    expect(capturedSendOptions.every((opts) => opts.deliveryQueueId === undefined)).toBe(true);
+    expect(
+      capturedSendOptions.every((opts) => opts.onPlatformSendDispatch === onPlatformSendDispatch),
+    ).toBe(true);
+    expect(onPlatformSendDispatch).toHaveBeenCalledTimes(2);
+    for (const [
+      index,
+      dispatchOrder,
+    ] of onPlatformSendDispatch.mock.invocationCallOrder.entries()) {
+      expect(dispatchOrder).toBeLessThan(client.chat.postMessage.mock.invocationCallOrder[index]!);
+    }
+  });
+
   it("uses the full ordered table fallback when preserved siblings exceed the block limit", async () => {
-    const headers = Array.from({ length: 21 }, (_entry, index) => `Column ${String(index)}`);
     const payload: ReplyPayload = {
       channelData: {
         slack: { blocks: Array.from({ length: 49 }, () => ({ type: "divider" })) },
       },
       presentation: {
-        blocks: [
-          {
-            type: "table",
-            caption: "Wide pipeline",
-            headers,
-            rows: [headers.map((_header, index) => `Value ${String(index)}`)],
-          },
-          {
-            type: "buttons",
-            buttons: [{ label: "Stage", value: "stage" }],
-          },
-        ],
+        blocks: [createWidePipelineTable(), valueButtons("Stage", "stage")],
       },
-      interactive: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [{ label: "Refresh", value: "refresh" }],
-          },
-        ],
-      },
+      interactive: interactiveButtons("Refresh", "refresh"),
     };
 
-    const rendered = await slackOutbound.renderPresentation?.({
-      payload,
-      presentation: payload.presentation!,
-      ctx: { cfg: {}, to: "C12345", text: "", payload },
-    });
-    if (!rendered) {
-      throw new Error("Expected Slack to render a full table fallback");
-    }
+    const rendered = await renderPresentation(payload);
     const segments = renderedPresentationSegments(rendered);
     expect(segments.map((segment) => segment.kind)).toEqual(["blocks", "text", "blocks"]);
     expect(segments[0]?.kind === "blocks" ? segments[0].blocks : []).toHaveLength(49);
@@ -795,95 +726,11 @@ describe("slackOutbound sendPayload", () => {
     });
     await expect(run()).resolves.toMatchObject({ messageId: "sl-after" });
     expect(sendMock).toHaveBeenCalledTimes(3);
-    expect(sendOptions(sendCall(sendMock, 0)).blocks).toHaveLength(49);
-    expect(sendCall(sendMock, 1)[1]).toBe(fallback);
-    expect(sendOptions(sendCall(sendMock, 1)).blocks).toBeUndefined();
-    expect(sendOptions(sendCall(sendMock, 2)).blocks).toHaveLength(2);
-  });
-
-  it("counts legacy interactive blocks compiled after presentation rendering", async () => {
-    const payload: ReplyPayload = {
-      text: "Question [[slack_buttons: OK:ok]]",
-      channelData: {
-        slack: {
-          blocks: Array.from({ length: 48 }, () => ({ type: "divider" })),
-        },
-      },
-      presentation: { title: "Deploy status", blocks: [{ type: "divider" }] },
-    };
-
-    const rendered = await slackOutbound.renderPresentation?.({
-      payload,
-      presentation: payload.presentation!,
-      ctx: {
-        cfg: {
-          channels: {
-            slack: {
-              botToken: "xoxb-test",
-              appToken: "xapp-test",
-              capabilities: { interactiveReplies: true },
-            },
-          },
-        },
-        accountId: "default",
-        to: "C12345",
-        text: payload.text ?? "",
-        payload,
-      },
-    });
-
-    const segments = renderedPresentationSegments(rendered);
-    expect(segments.map((segment) => segment.kind)).toEqual(["blocks", "blocks"]);
-    expect(segments[0]?.kind === "blocks" ? segments[0].blocks : []).toHaveLength(50);
-    expect(segments[1]).toMatchObject({
-      kind: "blocks",
-      blocks: [{ type: "section" }, { type: "actions" }],
-    });
-  });
-
-  it("does not duplicate text compiled around inline legacy controls", async () => {
-    const payload: ReplyPayload = {
-      text: "Before [[slack_buttons: OK:ok]] after",
-      presentation: { blocks: [{ type: "divider" }] },
-    };
-
-    const rendered = await slackOutbound.renderPresentation?.({
-      payload,
-      presentation: payload.presentation!,
-      ctx: {
-        cfg: {
-          channels: {
-            slack: {
-              botToken: "xoxb-test",
-              appToken: "xapp-test",
-              capabilities: { interactiveReplies: true },
-            },
-          },
-        },
-        accountId: "default",
-        to: "C12345",
-        text: payload.text ?? "",
-        payload,
-      },
-    });
-
-    expect(rendered?.channelData?.slack).toMatchObject({ authoredTextPlacement: "blocks" });
-    const segments = renderedPresentationSegments(rendered);
-    expect(segments).toHaveLength(1);
-    expect(segments[0]).toMatchObject({
-      kind: "blocks",
-      blocks: [
-        { type: "divider" },
-        { type: "section", text: { text: "Before" } },
-        { type: "actions" },
-        { type: "section", text: { text: "after" } },
-      ],
-    });
-    expect(rendered?.interactive?.blocks).toEqual([
-      { type: "text", text: "Before" },
-      { type: "buttons", buttons: [{ label: "OK", value: "ok" }] },
-      { type: "text", text: "after" },
-    ]);
+    expect(sentSlackMessage(sendMock, 0).options.blocks).toHaveLength(49);
+    const fallbackSent = sentSlackMessage(sendMock, 1);
+    expect(fallbackSent.text).toBe(fallback);
+    expect(fallbackSent.options.blocks).toBeUndefined();
+    expect(sentSlackMessage(sendMock, 2).options.blocks).toHaveLength(2);
   });
 
   it("sends an exact mirrored portable control row once", async () => {
@@ -898,80 +745,15 @@ describe("slackOutbound sendPayload", () => {
 
     await run();
 
-    const actions = sendOptions(sendCall(sendMock, 0)).blocks?.filter(
+    const actions = sentSlackMessage(sendMock, 0).options.blocks?.filter(
       (block) => block.type === "actions",
     );
     expect(actions).toHaveLength(1);
   });
 
-  it("marks inline legacy text as represented when native data is compiled with it", async () => {
-    const payload: ReplyPayload = {
-      text: "Before [[slack_buttons: OK:ok]] after",
-      presentation: {
-        blocks: [
-          {
-            type: "table",
-            caption: "Accounts",
-            headers: ["Account"],
-            rows: [["Acme"]],
-          },
-        ],
-      },
-    };
-    const cfg = {
-      channels: {
-        slack: {
-          botToken: "xoxb-test",
-          appToken: "xapp-test",
-          capabilities: { interactiveReplies: true },
-        },
-      },
-    };
-    const rendered = await slackOutbound.renderPresentation?.({
-      payload,
-      presentation: payload.presentation!,
-      ctx: {
-        cfg,
-        accountId: "default",
-        to: "C12345",
-        text: payload.text ?? "",
-        payload,
-      },
-    });
-    if (!rendered) {
-      throw new Error("Expected Slack native table rendering");
-    }
-
-    expect(rendered.channelData?.slack).toMatchObject({
-      authoredTextPlacement: "blocks",
-    });
-    const { presentation: _presentation, ...payloadForSend } = rendered;
-    const { run, sendMock } = createHarness({ payload: payloadForSend });
-
-    await run();
-
-    const options = sendOptions(sendCall(sendMock, 0));
-    expect(options.authoredTextPlacement).toBe("blocks");
-    expect(options.nativeDataFallbackBaseText).toBeUndefined();
-    expect(options.blocks?.map((block) => block.type)).toEqual([
-      "data_table",
-      "section",
-      "actions",
-      "section",
-    ]);
-  });
-
   it("preserves mixed chart, table fallback, and control order after presentation stripping", async () => {
     const payload = createMixedPresentationPayload();
-    const rendered = await slackOutbound.renderPresentation?.({
-      payload,
-      presentation: payload.presentation!,
-      ctx: { cfg: {}, to: "C12345", text: payload.text ?? "", payload },
-    });
-    if (!rendered) {
-      throw new Error("Expected rendered Slack segments");
-    }
-    const { presentation: _presentation, ...payloadForSend } = rendered;
+    const payloadForSend = await renderPayloadForSend(payload, payload.text);
     const { run, sendMock } = createHarness({
       payload: payloadForSend,
       sendResults: [
@@ -984,14 +766,15 @@ describe("slackOutbound sendPayload", () => {
     const result = await run();
 
     expect(sendMock).toHaveBeenCalledTimes(3);
-    expect(sendOptions(sendCall(sendMock, 0)).blocks?.map((block) => block.type)).toEqual([
+    expect(sentSlackMessage(sendMock, 0).options.blocks?.map((block) => block.type)).toEqual([
       "section",
       "data_visualization",
     ]);
-    expect(sendCall(sendMock, 1)[1]).toContain("Column 20: Value 20");
-    expect(sendOptions(sendCall(sendMock, 1)).blocks).toBeUndefined();
-    expect(sendOptions(sendCall(sendMock, 1)).textIsSlackPlainText).toBe(true);
-    expect(sendOptions(sendCall(sendMock, 2)).blocks?.map((block) => block.type)).toEqual([
+    const fallbackSent = sentSlackMessage(sendMock, 1);
+    expect(fallbackSent.text).toContain("Column 20: Value 20");
+    expect(fallbackSent.options.blocks).toBeUndefined();
+    expect(fallbackSent.options.textIsSlackPlainText).toBe(true);
+    expect(sentSlackMessage(sendMock, 2).options.blocks?.map((block) => block.type)).toEqual([
       "actions",
     ]);
     expect(result.messageId).toBe("sl-controls");
@@ -999,48 +782,25 @@ describe("slackOutbound sendPayload", () => {
 
   it("keeps mixed segment order when Slack rejects the native chart", async () => {
     const payload = createMixedPresentationPayload();
-    const rendered = await slackOutbound.renderPresentation?.({
+    const { client } = await sendThroughRealSlack({
       payload,
-      presentation: payload.presentation!,
-      ctx: { cfg: {}, to: "C12345", text: payload.text ?? "", payload },
-    });
-    if (!rendered) {
-      throw new Error("Expected rendered Slack segments");
-    }
-    const { presentation: _presentation, ...payloadForSend } = rendered;
-    const client = createSlackSendTestClient();
-    client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
-    const cfg = { channels: { slack: { botToken: "xoxb-test" } } };
-    const sendSlack: typeof sendMessageSlack = async (to, text, opts) =>
-      await sendMessageSlack(to, text, { ...opts, cfg, token: "xoxb-test", client });
-
-    await slackOutbound.sendPayload?.({
-      cfg,
-      to: "channel:C123",
-      text: "",
-      payload: payloadForSend,
-      deps: { sendSlack },
+      rejectFirstNativeBlocks: true,
+      renderText: payload.text,
     });
 
     expect(client.chat.postMessage).toHaveBeenCalledTimes(4);
-    const firstFallbackRequest = client.chat.postMessage.mock.calls[1]?.[0] as
-      | { blocks?: Array<{ type?: string }> }
-      | undefined;
+    const firstFallbackRequest = postedSlackMessage(client, 1);
     expect(firstFallbackRequest?.blocks?.map((block) => block.type)).toEqual([
       "section",
       "section",
     ]);
-    expect(client.chat.postMessage.mock.calls[2]?.[0]).toMatchObject({
+    expect(postedSlackMessage(client, 2)).toMatchObject({
       mrkdwn: false,
       text: expect.stringContaining("Column 20: Value 20"),
     });
-    const secondFallbackRequest = client.chat.postMessage.mock.calls[2]?.[0] as
-      | { blocks?: unknown }
-      | undefined;
+    const secondFallbackRequest = postedSlackMessage(client, 2);
     expect(secondFallbackRequest?.blocks).toBeUndefined();
-    const finalFallbackRequest = client.chat.postMessage.mock.calls[3]?.[0] as
-      | { blocks?: Array<{ type?: string }> }
-      | undefined;
+    const finalFallbackRequest = postedSlackMessage(client, 3);
     expect(finalFallbackRequest?.blocks?.map((block) => block.type)).toEqual(["actions"]);
   });
 
@@ -1052,46 +812,16 @@ describe("slackOutbound sendPayload", () => {
           blocks: [{ type: "section", text: { type: "mrkdwn", text: "Overview" } }],
         },
       },
-      presentation: {
-        blocks: [
-          {
-            type: "chart",
-            chartType: "bar",
-            title: "Pipeline",
-            categories: ["Open"],
-            series: [{ name: "Issues", values: [5] }],
-          },
-        ],
-      },
+      presentation: { blocks: [createPipelineChart()] },
     };
-    const rendered = await slackOutbound.renderPresentation?.({
+    const { client } = await sendThroughRealSlack({
       payload,
-      presentation: payload.presentation!,
-      ctx: { cfg: {}, to: "C12345", text: payload.text ?? "", payload },
-    });
-    if (!rendered) {
-      throw new Error("Expected rendered Slack segments");
-    }
-    const { presentation: _presentation, ...payloadForSend } = rendered;
-    const client = createSlackSendTestClient();
-    client.chat.postMessage.mockRejectedValueOnce({ data: { error: "invalid_blocks" } });
-    const cfg = { channels: { slack: { botToken: "xoxb-test" } } };
-    const sendSlack: typeof sendMessageSlack = async (to, text, opts) =>
-      await sendMessageSlack(to, text, { ...opts, cfg, token: "xoxb-test", client });
-
-    await slackOutbound.sendPayload?.({
-      cfg,
-      to: "channel:C123",
-      text: "",
-      payload: payloadForSend,
-      deps: { sendSlack },
+      rejectFirstNativeBlocks: true,
+      renderText: payload.text,
     });
 
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
-    const fallback = client.chat.postMessage.mock.calls[1]?.[0] as {
-      blocks?: Array<{ text?: { text?: string }; type?: string }>;
-      text?: string;
-    };
+    const fallback = postedSlackMessage(client, 1);
     expect(fallback.text?.match(/Overview/gu)).toHaveLength(1);
     expect(fallback.blocks?.filter((block) => block.text?.text === "Overview")).toHaveLength(1);
   });
@@ -1101,14 +831,7 @@ describe("slackOutbound sendPayload", () => {
       payload: {
         text: "Approval required",
         mediaUrl: "https://example.com/image.png",
-        interactive: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [{ label: "Allow", value: "pluginbind:approval-123:o" }],
-            },
-          ],
-        },
+        interactive: interactiveButtons("Allow", "pluginbind:approval-123:o"),
       },
       sendResults: [{ messageId: "sl-media" }, { messageId: "sl-controls" }],
     });
@@ -1116,18 +839,15 @@ describe("slackOutbound sendPayload", () => {
     const result = await run();
 
     expect(sendMock).toHaveBeenCalledTimes(2);
-    const mediaCall = sendCall(sendMock, 0);
-    expect(mediaCall[0]).toBe(to);
-    expect(mediaCall[1]).toBe("");
-    expect(sendOptions(mediaCall).mediaUrl).toBe("https://example.com/image.png");
-    expect(mediaCall[2]).not.toHaveProperty("blocks");
-    const controlsCall = sendCall(sendMock, 1);
-    expect(controlsCall[0]).toBe(to);
-    expect(controlsCall[1]).toBe("Approval required\n\nAllow");
-    expect(sendOptions(controlsCall).blocks?.map((block) => block.type)).toEqual([
-      "section",
-      "actions",
-    ]);
+    const mediaSent = sentSlackMessage(sendMock, 0);
+    expect(mediaSent.to).toBe(to);
+    expect(mediaSent.text).toBe("");
+    expect(mediaSent.options.mediaUrl).toBe("https://example.com/image.png");
+    expect(mediaSent.options).not.toHaveProperty("blocks");
+    const controlsSent = sentSlackMessage(sendMock, 1);
+    expect(controlsSent.to).toBe(to);
+    expect(controlsSent.text).toBe("Approval required\n\nAllow");
+    expect(controlsSent.options.blocks?.map((block) => block.type)).toEqual(["section", "actions"]);
     expect(result.channel).toBe("slack");
     expect(result.messageId).toBe("sl-controls");
   });
@@ -1141,21 +861,14 @@ describe("slackOutbound sendPayload", () => {
         presentation: {
           blocks: [{ type: "table", caption: "Accounts", headers: ["Account"], rows: [["Acme"]] }],
         },
-        interactive: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [{ label: "Allow", value: "pluginbind:approval-123:o" }],
-            },
-          ],
-        },
+        interactive: interactiveButtons("Allow", "pluginbind:approval-123:o"),
       },
     });
 
     await expect(run()).resolves.toMatchObject({ messageId: "sl-1" });
     expect(sendMock).toHaveBeenCalledTimes(2);
-    expect(sendOptions(sendCall(sendMock, 0)).blocks).toHaveLength(50);
-    expect(sendOptions(sendCall(sendMock, 1)).blocks?.map((block) => block.type)).toEqual([
+    expect(sentSlackMessage(sendMock, 0).options.blocks).toHaveLength(50);
+    expect(sentSlackMessage(sendMock, 1).options.blocks?.map((block) => block.type)).toEqual([
       "data_table",
       "actions",
     ]);
@@ -1176,32 +889,18 @@ describe("slackOutbound sendPayload", () => {
             ],
           },
         },
-        presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [{ label: "Stage", value: "stage" }],
-            },
-          ],
-        },
-        interactive: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [{ label: "Approve", value: "approve" }],
-            },
-          ],
-        },
+        presentation: { blocks: [valueButtons("Stage", "stage")] },
+        interactive: interactiveButtons("Approve", "approve"),
       },
     });
 
     await run();
 
     expect(sendMock).toHaveBeenCalledTimes(1);
-    const call = sendCall(sendMock, 0);
-    expect(call[0]).toBe(to);
-    expect(call[1]).toBe("Deploy?\n\nStage\n\nApprove");
-    const blocks = sendOptions(call).blocks;
+    const sent = sentSlackMessage(sendMock, 0);
+    expect(sent.to).toBe(to);
+    expect(sent.text).toBe("Deploy?\n\nStage\n\nApprove");
+    const blocks = sent.options.blocks;
     expect(blocks?.[0]?.block_id).toBe("openclaw_reply_buttons_1");
     expect(blocks?.[1]?.type).toBe("section");
     expect(blocks?.[2]?.block_id).toBe("openclaw_reply_buttons_2");
@@ -1215,7 +914,6 @@ describe("Slack outbound payload contract", () => {
   installChannelOutboundPayloadContractSuite({
     channel: "slack",
     chunking: { mode: "passthrough", longTextLength: 5000 },
-    createHarness: createSlackOutboundPayloadHarness,
+    createHarness,
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

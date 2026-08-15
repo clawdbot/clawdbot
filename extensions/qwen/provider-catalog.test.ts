@@ -99,57 +99,56 @@ describe("qwen provider catalog", () => {
 });
 
 describe("qwen token plan provider catalog", () => {
-  it("ships the exact 14-model Global catalog through manifest and runtime", () => {
+  it("ships the curated six-row Global catalog through manifest and runtime", () => {
     const provider = buildQwenTokenPlanProvider();
-    const modelIds = provider.models.map((model) => model.id);
+    const models = provider.models;
+    const modelIds = models.map((model) => model.id);
 
     expect(provider.baseUrl).toBe(QWEN_TOKEN_PLAN_GLOBAL_BASE_URL);
     expect(provider.api).toBe("openai-completions");
     expect(modelIds).toEqual([
-      "qwen3.7-max",
       QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID,
       "qwen3.6-plus",
-      "qwen3.6-flash",
-      "deepseek-v4-pro",
-      "deepseek-v4-flash",
-      "deepseek-v3.2",
-      "kimi-k2.7-code",
-      "kimi-k2.6",
+      "qwen3-coder-next",
       "kimi-k2.5",
-      "glm-5.2",
-      "glm-5.1",
       "glm-5",
       "MiniMax-M2.5",
     ]);
-    expect(provider.models.every((model) => model.reasoning)).toBe(true);
-    expect(manifest.modelCatalog.providers["qwen-token-plan"].models).toEqual(provider.models);
+    const manifestModels = manifest.modelCatalog.providers["qwen-token-plan"].models as Array<
+      Record<string, unknown>
+    >;
+    expect(manifestModels.find((model) => model.id === "qwen3-coder-next")).toMatchObject({
+      status: "deprecated",
+      replacedBy: QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID,
+    });
+    expect(models.every((model) => model.reasoning)).toBe(true);
+    expect(manifestModels.map((model) => model.id)).toEqual(modelIds);
     expect(manifest.modelCatalog.discovery["qwen-token-plan"]).toBe("refreshable");
   });
 
-  it("uses region-scoped endpoints with the documented GLM 5.2 window", () => {
+  it("uses region-scoped endpoints with the documented Qwen3.7-Plus window", () => {
     expect(resolveQwenTokenPlanBaseUrl("global")).toBe(QWEN_TOKEN_PLAN_GLOBAL_BASE_URL);
     expect(resolveQwenTokenPlanBaseUrl("cn")).toBe(QWEN_TOKEN_PLAN_CN_BASE_URL);
 
     const globalProvider = buildQwenTokenPlanProvider();
     const cnProvider = buildQwenTokenPlanProvider({ baseUrl: QWEN_TOKEN_PLAN_CN_BASE_URL });
-    expect(globalProvider.models.find((model) => model.id === "glm-5.2")?.contextWindow).toBe(
+    expect(globalProvider.models.find((model) => model.id === "qwen3.7-plus")?.contextWindow).toBe(
       1_000_000,
     );
-    expect(cnProvider.models.find((model) => model.id === "glm-5.2")?.contextWindow).toBe(
+    expect(cnProvider.models.find((model) => model.id === "qwen3.7-plus")?.contextWindow).toBe(
       1_000_000,
     );
   });
 
   it("uses current model limits instead of the stale contributor catalog", () => {
-    const provider = buildQwenTokenPlanProvider();
+    const models = buildQwenTokenPlanProvider().models;
 
-    expect(provider.models.find((model) => model.id === "qwen3.6-flash")?.maxTokens).toBe(65_536);
-    expect(provider.models.find((model) => model.id === "deepseek-v4-pro")).toMatchObject({
-      contextWindow: 1_000_000,
-      maxTokens: 393_216,
+    expect(models.find((model) => model.id === "qwen3-coder-next")).toMatchObject({
+      contextWindow: 262_144,
+      maxTokens: 65_536,
     });
-    expect(provider.models.find((model) => model.id === "kimi-k2.7-code")?.maxTokens).toBe(98_304);
-    expect(provider.models.find((model) => model.id === "MiniMax-M2.5")).toMatchObject({
+    expect(models.find((model) => model.id === "kimi-k2.5")?.maxTokens).toBe(98_304);
+    expect(models.find((model) => model.id === "MiniMax-M2.5")).toMatchObject({
       contextWindow: 196_608,
       maxTokens: 32_768,
     });
@@ -159,7 +158,7 @@ describe("qwen token plan provider catalog", () => {
     "opts Token Plan endpoint %s into native streaming usage",
     (baseUrl) => {
       const provider = applyQwenNativeStreamingUsageCompat(buildQwenTokenPlanProvider({ baseUrl }));
-      expect(provider.models).toHaveLength(14);
+      expect(provider.models).toHaveLength(6);
       expect(
         provider.models.every((model) => model.compat?.supportsUsageInStreaming === true),
       ).toBe(true);

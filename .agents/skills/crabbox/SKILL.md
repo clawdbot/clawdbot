@@ -27,7 +27,12 @@ Source trust before test size.
 - Untrusted contributor/fork: secretless fork CI or sanitized direct AWS.
 - Never untrusted code on credential-hydrated Testbox.
 - Never run untrusted repo wrapper/config locally.
-- No speculative warmup. Acquire when first heavy command ready. Reuse id. Stop.
+- No speculative warmup. Acquire when first heavy command ready. Reuse id. Stop
+  before handoff. Local proof fanning out/expensive: stop local, go remote.
+- Remote backend unavailable (broker/DNS/network/lease): trusted-source proof
+  falls back to local — including heavy suites/gates — instead of blocking.
+  Note fallback + reason in the proof summary. Untrusted source never falls
+  back to local.
 
 Need direct AWS semantics? Pass `--provider aws`. Need normal trusted OpenClaw
 heavy proof? Pass `--provider blacksmith-testbox`.
@@ -101,16 +106,30 @@ blacksmith testbox stop --id <tbx_id>
 
 Rules:
 
+- Warm from the task checkout; ownership is checkout-path scoped.
 - One lease, one active command. No sync/reclaim during run.
 - Sync current checkout every run. `--no-sync` only unchanged intentional rerun.
-- `--reclaim` only deliberate checkout-path ownership transfer.
+- `--reclaim` only deliberate checkout-path ownership transfer. It does not
+  retarget the remote checkout — never cross repos.
+- Sparse-sync temp checkout may claim a kept Testbox; repo-path reuse needs
+  `--reclaim`.
 - Base/head change: stop. Rewarm. No stale-lease override.
+- Warmup must print a lease id. Silent success is unusable — verify before
+  reuse, else fall back to one-shot `run`.
+- Wrapper lease reuse requires its local SSH key; missing after
+  restart/handoff: warm fresh.
+- Direct lease: `blacksmith testbox run`. Crabbox wrapper reuse needs a
+  wrapper-created lease.
 - Raw SHA unreliable for `warmup --ref`; use branch/tag.
 - `blacksmith testbox list` hides states. Use `list --all` or
   `status --id <tbx_id>`.
 - Testbox status/stop: `--id`. No status `--json`.
-- Delegated provider rejects `--fresh-pr`, `--full-resync`, `--script*`,
-  `--env-helper`, capture/download flags.
+- Delegated provider rejects `--fresh-pr`, `--stop-after`, `--full-resync`,
+  `--script*`, `--env-helper`, capture/download flags. Sync current checkout;
+  workflow owns lifecycle.
+- Compound commands: `bash -lc`, never `sh -lc`. Job env uses Bash `declare`.
+- Testbox owns Chromium; never pass Crabbox `--browser` to
+  `provider=blacksmith-testbox`.
 
 Autoreview parallel tests:
 
@@ -248,7 +267,8 @@ history. No safe injection path? Report live auth blocked. No fake-key upgrade t
 
 ## Real E2E
 
-“Test in Crabbox” means user path, not merely remote unit tests.
+“Test in Crabbox” means user path, not merely remote unit tests. No
+harness/bypass/shortcut unless explicitly asked.
 
 1. Reproduce entrypoint when feasible.
 2. Patch. Narrow local test.
@@ -318,6 +338,8 @@ Before handoff, prove CLI/app from neutral `~`:
 ```
 
 Visible desktop alone proves nothing. Keep browser windowed unless capture task.
+Before sharing a WebVNC link, screenshot first; verify the real app/path works
+and the target UI is not broken.
 Never commit proof assets to product repo.
 
 ## Failure Triage
@@ -344,7 +366,14 @@ blacksmith testbox status --id <tbx_id>
 - Cleanup unclear: list exact provider. Stop only owned ids.
 - Wrapper broken, Blacksmith healthy: direct Blacksmith only to isolate wrapper.
 
-Crabbox stop wrapper: no `--timing-json`.
+Run semantics:
+
+- Final timing JSON = proof complete. Portal sync hanging after it: interrupt
+  the wrapper only.
+- Wrapper stop has no `--timing-json`:
+  `node scripts/crabbox-wrapper.mjs stop --provider <provider> --id <id>`.
+- Dirty-sync generator proof: compare hashes before/after; `git diff` includes
+  the synced patch.
 
 ## Boundary
 

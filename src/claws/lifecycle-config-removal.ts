@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
+import { stableStringify } from "@openclaw/normalization-core";
 import { listAgentEntries } from "../agents/agent-scope.js";
-import { stableStringify } from "../agents/stable-stringify.js";
 import { getRuntimeConfig } from "../config/config.js";
-import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   AgentConfigPreconditionError,
   deleteAgentConfigEntry,
 } from "../gateway/server-methods/agents-config-mutations.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { digestClawAgentConfig } from "./agent-config-digest.js";
 import {
   deletionEffects,
   type ClawCleanupTargets,
@@ -17,9 +17,7 @@ import {
 
 export type ConfigCommit = (transform: (config: OpenClawConfig) => OpenClawConfig) => Promise<void>;
 
-export function digestClawAgentConfig(agent: AgentConfig): string {
-  return `sha256:${createHash("sha256").update(stableStringify(agent)).digest("hex")}`;
-}
+export { digestClawAgentConfig } from "./agent-config-digest.js";
 
 export function digestClawAgentRemovalSurface(config: OpenClawConfig, agentId: string): string {
   const normalizedId = normalizeAgentId(agentId);
@@ -95,6 +93,7 @@ export async function claimClawAgentConfigRemoval(params: {
   try {
     const committed = await deleteAgentConfigEntry({
       agentId: params.agentId,
+      allowConfigSizeDrop: true,
       allowMissing: params.expectedState === "missing",
       fallbackWorkspace: params.fallbackWorkspace,
       validateConfig: (config) => {

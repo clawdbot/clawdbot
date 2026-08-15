@@ -232,7 +232,7 @@ export function buildAnthropicCliMigrationResult(
     ...rewrittenModels.runtimeRefs,
     ...rewrittenModels.migrated,
   ]);
-  const defaultModel = rewrittenModel.primary ?? "anthropic/claude-opus-4-8";
+  const defaultModel = rewrittenModel.primary ?? "anthropic/claude-opus-5";
 
   return {
     profiles: buildClaudeCliAuthProfiles(credential),

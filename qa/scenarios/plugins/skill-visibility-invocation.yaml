@@ -17,7 +17,7 @@ scenario:
     - docs/tools/skills.md
     - docs/gateway/protocol.md
   codeRefs:
-    - src/agents/skills-status.ts
+    - src/skills/discovery/status.ts
     - extensions/qa-lab/src/suite.ts
   execution:
     kind: flow

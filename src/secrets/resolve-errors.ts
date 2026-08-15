@@ -8,7 +8,11 @@ type SecretRefResolutionCode =
   | "SECRET_REF_PROVIDER_ERROR"
   | "SECRET_REF_PROVIDER_CONTRACT";
 
-type SecretProviderResolutionCode = "SECRET_PROVIDER_INVALID" | "SECRET_PROVIDER_UNAVAILABLE";
+type SecretProviderResolutionCode =
+  | "SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE"
+  | "SECRET_PROVIDER_INVALID"
+  | "SECRET_PROVIDER_NOT_CONFIGURED"
+  | "SECRET_PROVIDER_UNAVAILABLE";
 
 export type SecretResolutionFailureReason =
   | "secret provider failed"
@@ -83,7 +87,10 @@ export function describeSecretResolutionError(
   value: unknown,
 ): SecretResolutionFailureReason | undefined {
   if (value instanceof SecretProviderResolutionError) {
-    return value.code === "SECRET_PROVIDER_UNAVAILABLE" ? "secret provider failed" : undefined;
+    return value.code === "SECRET_PROVIDER_UNAVAILABLE" ||
+      value.code === "SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE"
+      ? "secret provider failed"
+      : undefined;
   }
   if (!(value instanceof SecretRefResolutionError)) {
     return undefined;
@@ -101,6 +108,30 @@ export function describeSecretResolutionError(
       return undefined;
   }
   return undefined;
+}
+
+/** Sanitized provider detail suitable for operator-facing diagnostics. */
+export function describeSecretResolutionOperatorDiagnostic(value: unknown): string | undefined {
+  if (
+    value instanceof SecretProviderResolutionError &&
+    value.code === "SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE"
+  ) {
+    return "Windows path security could not be verified";
+  }
+  return undefined;
+}
+
+/** Sanitized recovery action suitable for operator-facing diagnostics. */
+export function describeSecretResolutionOperatorRecovery(value: unknown): string | undefined {
+  if (
+    !(value instanceof SecretProviderResolutionError) ||
+    value.code !== "SECRET_PROVIDER_PATH_SECURITY_UNVERIFIABLE"
+  ) {
+    return undefined;
+  }
+  return value.source === "exec"
+    ? "Restore Windows path security verification, or use an existing provider command whose owner and ACLs OpenClaw can verify"
+    : "Restore Windows path security verification, or use an existing secret file whose owner and ACLs OpenClaw can verify";
 }
 
 export function providerResolutionError(params: {

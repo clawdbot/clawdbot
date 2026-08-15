@@ -47,7 +47,9 @@ function listCandidateSkillFiles(skillsDir: string, warn: (message: string) => v
   try {
     entries = fs.readdirSync(skillsDir, { withFileTypes: true });
   } catch (error) {
-    warn(`node host skill scan skipped (${skillsDir}): ${String(error)}`);
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      warn(`node host skill scan skipped (${skillsDir}): ${String(error)}`);
+    }
     return [];
   }
   const candidates: string[] = [];
@@ -71,7 +73,7 @@ export function scanNodeHostedSkills(
   options: ScanNodeHostedSkillsOptions = {},
 ): NodeSkillDescriptor[] {
   const skillsDir = path.resolve(options.skillsDir ?? path.join(resolveConfigDir(), "skills"));
-  const warn = options.warn ?? ((message: string) => process.stderr.write(`${message}\n`));
+  const warn = options.warn ?? ((message: string) => console.warn(message));
   const rootSkillFile = path.join(skillsDir, "SKILL.md");
   try {
     if (fs.statSync(rootSkillFile, { throwIfNoEntry: false })?.isFile()) {

@@ -2,6 +2,13 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
+import {
+  type AgentRunResultView,
+  extractAgentRunTerminalError,
+  extractAgentRunText,
+} from "../agents/agent-run-result.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { normalizeAuthProfileCredential } from "../agents/auth-profiles/credential-normalize.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
@@ -9,6 +16,7 @@ import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import { SessionManager } from "../agents/sessions/index.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -22,13 +30,10 @@ import {
   SETUP_INFERENCE_TEST_TIMEOUT_MS,
   SetupInferenceCancelledError,
   type SetupInferenceFailureStatus,
-  log,
+  setupInferenceLog,
 } from "./setup-inference-core.js";
 import {
-  type RunResult,
   type SetupInferenceTestPlan,
-  extractRunTerminalError,
-  extractRunText,
   extractRunWinnerError,
   mapFailoverReasonToSetupStatus,
   resolveStrictSetupAuthProfileError,
@@ -49,7 +54,7 @@ export async function cleanupSetupInferenceTempDir(params: {
   } catch {
     // Windows cannot remove an open SQLite file. Keep cleanup nonfatal, but
     // always try the directory removal so callers do not retain probe secrets.
-    log.warn("Could not dispose the temporary inference auth database.");
+    setupInferenceLog.warn("Could not dispose the temporary inference auth database.");
   }
   try {
     await (
@@ -61,7 +66,7 @@ export async function cleanupSetupInferenceTempDir(params: {
     params.runtime?.error?.(
       `Could not remove temporary AI setup files: ${formatErrorMessage(error)}`,
     );
-    log.warn("Could not remove the temporary inference test directory.");
+    setupInferenceLog.warn("Could not remove the temporary inference test directory.");
   }
 }
 
@@ -105,13 +110,13 @@ export async function retainUnownedCodexInstall(params: {
       reason: "openclaw-inference-activation-not-committed",
     });
     if (!marked) {
-      log.warn("Could not retain the uncommitted Codex runtime package generation.");
+      setupInferenceLog.warn("Could not retain the uncommitted Codex runtime package generation.");
     }
     return marked;
   } catch {
     // Retention is best effort and marker-after-adoption is non-destructive.
     // A later install or GC may still reuse or remove the unowned generation.
-    log.warn("Could not retain the uncommitted Codex runtime package generation.");
+    setupInferenceLog.warn("Could not retain the uncommitted Codex runtime package generation.");
     return false;
   } finally {
     await clearUnownedCodexInstallCaches(params.deps);
@@ -126,7 +131,9 @@ async function clearUnownedCodexInstallCaches(deps: ActivateSetupInferenceDeps):
         .clearLoadInstalledPluginIndexInstallRecordsCache;
     clearInstallRecords();
   } catch {
-    log.warn("Could not clear the plugin install-record cache after failed Codex activation.");
+    setupInferenceLog.warn(
+      "Could not clear the plugin install-record cache after failed Codex activation.",
+    );
   }
   try {
     const clearPluginMetadata =
@@ -134,16 +141,18 @@ async function clearUnownedCodexInstallCaches(deps: ActivateSetupInferenceDeps):
       (await import("../plugins/plugin-metadata-lifecycle.js")).clearPluginMetadataLifecycleCaches;
     clearPluginMetadata();
   } catch {
-    log.warn("Could not clear plugin metadata caches after failed Codex activation.");
+    setupInferenceLog.warn("Could not clear plugin metadata caches after failed Codex activation.");
   }
   try {
     const invalidateRuntimeDiscovery =
       deps.invalidatePluginRuntimeDiscoveryAfterConfigMutation ??
       (await import("../plugins/registry-refresh.js"))
         .invalidatePluginRuntimeDiscoveryAfterConfigMutation;
-    await invalidateRuntimeDiscovery({ logger: log });
+    await invalidateRuntimeDiscovery({ logger: setupInferenceLog });
   } catch {
-    log.warn("Could not clear plugin runtime discovery after failed Codex activation.");
+    setupInferenceLog.warn(
+      "Could not clear plugin runtime discovery after failed Codex activation.",
+    );
   }
 }
 
@@ -158,7 +167,9 @@ export async function reloadCodexRegistryAfterActivation(params: {
   try {
     snapshot = await params.readSnapshot();
   } catch {
-    log.warn("Could not read config while reloading the plugin registry after Codex activation.");
+    setupInferenceLog.warn(
+      "Could not read config while reloading the plugin registry after Codex activation.",
+    );
     return false;
   }
   const runtimeConfig =
@@ -177,10 +188,12 @@ export async function reloadCodexRegistryAfterActivation(params: {
       config: sourceConfig,
       reason: "source-changed",
       workspaceDir: params.workspaceDir,
-      logger: log,
+      logger: setupInferenceLog,
     });
   } catch {
-    log.warn("Could not refresh persisted plugin registry metadata after Codex activation.");
+    setupInferenceLog.warn(
+      "Could not refresh persisted plugin registry metadata after Codex activation.",
+    );
   }
   try {
     const ensurePluginRegistryLoaded =
@@ -194,13 +207,15 @@ export async function reloadCodexRegistryAfterActivation(params: {
     });
     return true;
   } catch {
-    log.warn("Could not reload the active plugin registry after Codex inference activation.");
+    setupInferenceLog.warn(
+      "Could not reload the active plugin registry after Codex inference activation.",
+    );
     return false;
   }
 }
 
 function isMergePatchObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+  return isRecord(value);
 }
 
 function mergePatchConflicts(base: unknown, current: unknown, patch: unknown): boolean {
@@ -469,15 +484,36 @@ export async function runSetupInferenceTest(params: {
   // session id as cache affinity, so this ephemeral id must stay under OpenAI's 64-character cap.
   const runId = `probe-setup-inference-${randomUUID()}`;
   const sessionId = runId;
-  const sessionFile = path.join(tempDir, "session.jsonl");
+  const sessionFile = `in-memory:${sessionId}`;
+  const sessionManager = SessionManager.inMemory(tempDir);
+  const effectiveAgentId = plan.routeAgentId ?? plan.agentId ?? "openclaw";
+  const sessionKey = `agent:${effectiveAgentId}:setup-inference:incognito-${runId}`;
   const timeoutMs = deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
   const started = Date.now();
+  const failed = (status: SetupInferenceFailureStatus, error: string) => {
+    setupInferenceLog.warn("Inference setup probe failed.", {
+      event: "setup_inference_probe_failed",
+      provider: plan.provider,
+      model: plan.model,
+      runner: plan.runner,
+      status,
+      timeoutMs,
+      durationMs: Date.now() - started,
+    });
+    return { ok: false as const, status, error };
+  };
+  const preparedRunAdmission = prepareSystemAgentRunAdmission(
+    plan.config,
+    runId,
+    effectiveAgentId,
+    "system-agent.setup-inference",
+  );
   let successfulAuth: AgentExecutionAuthBinding | undefined;
   try {
     if (plan.runner === "cli") {
       const unsupportedError = resolveToolFreeCliSetupError(plan);
       if (unsupportedError) {
-        return { ok: false, status: "unavailable", error: unsupportedError };
+        return failed("unavailable", unsupportedError);
       }
     }
     const strictProfileError = resolveStrictSetupAuthProfileError({
@@ -486,21 +522,23 @@ export async function runSetupInferenceTest(params: {
       deps,
     });
     if (strictProfileError) {
-      return { ok: false, status: "auth", error: strictProfileError };
+      return failed("auth", strictProfileError);
     }
 
-    let result: RunResult;
+    let result: AgentRunResultView;
     if (plan.runner === "cli") {
       const runCli = deps.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent;
       result = (await runCli({
+        preparedRunAdmission,
         sessionId,
-        sessionKey: `temp:setup-inference:${runId}`,
-        agentId: plan.agentId ?? "openclaw",
+        sessionKey,
+        sessionManager,
+        agentId: effectiveAgentId,
         trigger: "manual",
         sessionFile,
         workspaceDir: tempDir,
         ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
-        config: plan.config,
+        config: plan.executionConfig ?? plan.config,
         prompt: params.prompt ?? SETUP_INFERENCE_TEST_PROMPT,
         provider: plan.provider,
         model: plan.model,
@@ -516,19 +554,21 @@ export async function runSetupInferenceTest(params: {
           successfulAuth = binding;
         },
         ...(params.signal ? { abortSignal: params.signal } : {}),
-      })) as RunResult;
+      })) as AgentRunResultView;
     } else {
       const runEmbedded =
         deps.runEmbeddedAgent ?? (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
       result = (await runEmbedded({
+        preparedRunAdmission,
         sessionId,
-        sessionKey: `temp:setup-inference:${runId}`,
-        agentId: plan.agentId ?? "openclaw",
+        sessionKey,
+        sessionManager,
+        agentId: effectiveAgentId,
         trigger: "manual",
         sessionFile,
         workspaceDir: tempDir,
         ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
-        config: plan.config,
+        config: plan.executionConfig ?? plan.config,
         prompt: params.prompt ?? SETUP_INFERENCE_TEST_PROMPT,
         provider: plan.provider,
         model: plan.model,
@@ -547,6 +587,7 @@ export async function runSetupInferenceTest(params: {
         thinkLevel: "off",
         reasoningLevel: "off",
         verboseLevel: "off",
+        disableTrajectory: true,
         // The 32-token probe cap is sized for the "reply OK" verification
         // prompt only. Custom completions pass no explicit cap: the stream
         // layer then applies the resolved model's own required maxTokens
@@ -562,39 +603,32 @@ export async function runSetupInferenceTest(params: {
           successfulAuth = binding;
         },
         ...(params.signal ? { abortSignal: params.signal } : {}),
-      })) as RunResult;
+      })) as AgentRunResultView;
     }
     if (params.signal?.aborted) {
       throw new SetupInferenceCancelledError();
     }
-    const terminalError = extractRunTerminalError(result);
+    const terminalError = extractAgentRunTerminalError(result);
     if (terminalError) {
       const described = describeFailoverError(new Error(terminalError));
-      return {
-        ok: false,
-        status: mapFailoverReasonToSetupStatus(described.reason),
-        error: described.message,
-      };
+      return failed(mapFailoverReasonToSetupStatus(described.reason), described.message);
     }
-    const text = extractRunText(result)?.trim();
+    const text = extractAgentRunText(result)?.trim();
     if (!text) {
-      return {
-        ok: false,
-        status: "format",
-        error: "The model started but did not send a reply. Try again or pick another option.",
-      };
+      return failed(
+        "format",
+        "The model started but did not send a reply. Try again or pick another option.",
+      );
     }
-    const winnerError = extractRunWinnerError(plan, result);
+    const winnerError = await extractRunWinnerError(plan, result);
     if (winnerError) {
-      return { ok: false, status: "format", error: winnerError };
+      return failed("unknown", winnerError);
     }
     if (requireExecutionOwner && !successfulAuth) {
-      return {
-        ok: false,
-        status: "unknown",
-        error:
-          "Inference succeeded, but its runtime did not report an owner that OpenClaw can safely reuse.",
-      };
+      return failed(
+        "unknown",
+        "Inference succeeded, but its runtime did not report an owner that OpenClaw can safely reuse.",
+      );
     }
     return {
       ok: true,
@@ -606,10 +640,8 @@ export async function runSetupInferenceTest(params: {
     };
   } catch (error) {
     const described = describeFailoverError(error);
-    return {
-      ok: false,
-      status: mapFailoverReasonToSetupStatus(described.reason),
-      error: described.message,
-    };
+    return failed(mapFailoverReasonToSetupStatus(described.reason), described.message);
+  } finally {
+    preparedRunAdmission.close();
   }
 }

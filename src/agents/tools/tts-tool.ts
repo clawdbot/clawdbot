@@ -7,9 +7,8 @@ import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { textToSpeech } from "../../tts/tts.js";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import type { AnyAgentTool } from "./common.js";
-import { readPositiveIntegerParam, readStringParam } from "./common.js";
+import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
 
 const TtsToolSchema = Type.Object({
   text: Type.String({ description: "Text to speak." }),
@@ -45,7 +44,7 @@ function sanitizeTranscriptForToolContent(text: string): string {
 
 export function createTtsTool(opts?: {
   config?: OpenClawConfig;
-  agentChannel?: GatewayMessageChannel;
+  agentChannel?: string;
   agentId?: string;
   agentAccountId?: string;
 }): AnyAgentTool {
@@ -54,12 +53,12 @@ export function createTtsTool(opts?: {
     name: "tts",
     displaySummary: "Text to speech audio.",
     description:
-      "Only explicit voice/speech/TTS intent or active TTS config; never ordinary text reply. Audio auto-delivered. After success follow reply instructions; no duplicate text/audio.",
+      "Convert text to spoken audio (TTS) with the configured voice provider. Only explicit voice/speech/TTS intent or active TTS config; never ordinary text reply. Audio auto-delivered. After success follow reply instructions; no duplicate text/audio.",
     parameters: TtsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const text = readStringParam(params, "text", { required: true });
-      const channel = readStringParam(params, "channel");
+      const text = readToolStringParam(params, "text", { required: true });
+      const channel = readToolStringParam(params, "channel");
       const timeoutMs = readTtsTimeoutMs(params);
       const cfg = opts?.config ?? getRuntimeConfig();
       const result = await textToSpeech({

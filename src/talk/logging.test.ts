@@ -9,7 +9,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createTalkLogRecord, recordTalkLogEvent } from "./logging.js";
 import { recordTalkObservabilityEvent } from "./observability.js";
 import { createTalkEventSequencer } from "./talk-events.js";
@@ -143,6 +143,8 @@ describe("talk logging", () => {
     expect(serialized).not.toContain("call-1");
     expect(serialized).not.toContain("item-1");
 
+    // The file transport appends asynchronously; drain it before reading.
+    await flushLogger();
     const fileLog = fs.readFileSync(logFile, "utf8");
     const fileLogRecord = JSON.parse(fileLog.trim()) as Record<string, unknown>;
     expect(fileLogRecord.message).toBe("talk event output.text.done");

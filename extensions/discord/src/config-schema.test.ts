@@ -422,6 +422,14 @@ describe("discord config schema", () => {
     );
   });
 
+  it("accepts mention-only gateway intent mode", () => {
+    const cfg = expectValidDiscordConfig({
+      intents: { messageContent: false },
+    });
+
+    expect(cfg.intents?.messageContent).toBe(false);
+  });
+
   it("accepts online-presence throttling knobs", () => {
     const cfg = expectValidDiscordConfig({
       intents: { presence: true },

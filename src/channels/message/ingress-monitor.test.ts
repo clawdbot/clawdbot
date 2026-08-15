@@ -1,12 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { sleep } from "../../utils/sleep.js";
 import {
+  CHANNEL_INGRESS_RETENTION_DEFAULTS,
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "./ingress-monitor.js";
 import { createChannelIngressQueue, type ChannelIngressQueue } from "./ingress-queue.js";
+import {
+  ChannelIngressUnavailableError,
+  isChannelIngressUnavailableError,
+} from "./ingress-unavailable.js";
 
 type RawEvent = { id: string; lane: string; text: string };
 type StoredEvent = { version: 1; rawEvent: string };
@@ -27,7 +34,7 @@ async function withQueue<T>(
 }
 
 function createMonitor(
-  queue: ChannelIngressQueue<StoredEvent>,
+  queue: ChannelIngressQueue<StoredEvent> | (() => ChannelIngressQueue<StoredEvent>),
   deliver: (
     raw: RawEvent,
     lifecycle: ChannelIngressMonitorLifecycle,
@@ -39,6 +46,16 @@ function createMonitor(
     | ((active: boolean) => void)
     | {
         admissionMode?: "durable-after-stop";
+        deferredClaims?: "wait-on-stop" | "settle-on-abort" | "manual";
+        retention?:
+          | "standard"
+          | Partial<{
+              pruneIntervalMs: number;
+              completedTtlMs: number;
+              completedMaxEntries: number;
+              failedTtlMs: number;
+              failedMaxEntries: number;
+            }>;
         waitForDeliveryIdleBeforeRepump?: boolean;
         waitForDeliveryIdleOnStop?: boolean;
       },
@@ -87,6 +104,50 @@ afterEach(() => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("channel ingress monitor", () => {
+  it("creates named plain and reasoned ingress errors", () => {
+    const PayloadError = createChannelIngressError("TestIngressPayloadError");
+    const PermanentError = createChannelIngressError<"invalid-event">("TestIngressPermanentError", {
+      withReason: true,
+    });
+
+    expect(PayloadError.name).toBe("TestIngressPayloadError");
+    const payloadError = new PayloadError("invalid");
+    expect(payloadError).toMatchObject({
+      name: "TestIngressPayloadError",
+      message: "invalid",
+    });
+    expect(payloadError).toBeInstanceOf(PayloadError);
+    expect("reason" in payloadError).toBe(false);
+    expect(new PermanentError("invalid-event", "invalid")).toMatchObject({
+      name: "TestIngressPermanentError",
+      reason: "invalid-event",
+      message: "invalid",
+    });
+  });
+
+  it("applies standard retention with explicit per-channel overrides", async () => {
+    for (const [retention, completedMaxEntries] of [
+      ["standard", 20_000],
+      [{ completedMaxEntries: 1_000 }, 1_000],
+    ] as const) {
+      await withQueue(async (queue) => {
+        const prune = vi.spyOn(queue, "prune");
+        const monitor = createMonitor(queue, vi.fn(), { retention });
+        monitor.start();
+        await monitor.waitForIdle();
+
+        expect(prune).toHaveBeenCalledWith({
+          completedTtlMs: CHANNEL_INGRESS_RETENTION_DEFAULTS.completedTtlMs,
+          completedMaxEntries,
+          failedTtlMs: CHANNEL_INGRESS_RETENTION_DEFAULTS.failedTtlMs,
+          failedMaxEntries: CHANNEL_INGRESS_RETENTION_DEFAULTS.failedMaxEntries,
+          now: expect.any(Number),
+        });
+        await monitor.stop();
+      });
+    }
+  });
+
   it("adopts terminal no-dispatch events", async () => {
     await withQueue(async (queue) => {
       const monitor = createMonitor(queue, vi.fn());
@@ -473,6 +534,51 @@ describe("channel ingress monitor", () => {
       await expect(queue.listClaims()).resolves.toHaveLength(1);
     });
   });
+
+  it("waits for tracked deferred claims to settle after drain disposal", async () => {
+    await withQueue(async (queue) => {
+      let deferredLifecycle: ChannelIngressMonitorLifecycle | undefined;
+      const monitor = createMonitor(
+        queue,
+        async (_raw, lifecycle) => {
+          deferredLifecycle = lifecycle;
+          lifecycle.onDeferred();
+        },
+        { deferredClaims: "wait-on-stop" },
+      );
+      monitor.start();
+      await monitor.admit({ id: "event-tracked-deferred", lane: "a", text: "hello" });
+      await vi.waitFor(() => expect(deferredLifecycle).toBeDefined());
+
+      let stopped = false;
+      const stopping = monitor.stop().then(() => {
+        stopped = true;
+      });
+      await vi.waitFor(() => expect(deferredLifecycle?.abortSignal.aborted).toBe(true));
+      expect(stopped).toBe(false);
+
+      await deferredLifecycle?.onAbandoned();
+      await stopping;
+      expect(stopped).toBe(true);
+    });
+  });
+
+  it("can settle tracked deferred bookkeeping on abort", async () => {
+    await withQueue(async (queue) => {
+      const monitor = createMonitor(
+        queue,
+        async (_raw, lifecycle) => {
+          lifecycle.onDeferred();
+        },
+        { deferredClaims: "settle-on-abort" },
+      );
+      monitor.start();
+      await monitor.admit({ id: "event-abort-deferred", lane: "a", text: "hello" });
+
+      await expect(monitor.stop()).resolves.toBeUndefined();
+      await expect(monitor.waitForDeferredClaims()).resolves.toBeUndefined();
+    });
+  });
   it("keeps append-only admission available after stop when explicitly requested", async () => {
     await withQueue(async (queue) => {
       const deliver = vi.fn();
@@ -491,6 +597,63 @@ describe("channel ingress monitor", () => {
       expect(deliver).toHaveBeenCalledOnce();
       await recovered.stop();
     });
+  });
+
+  it("can prepare the durable queue before starting the drain", async () => {
+    await withQueue(async (queue) => {
+      const queueFactory = vi.fn(() => queue);
+      const monitor = createMonitor(queueFactory, vi.fn());
+
+      monitor.ensureQueueAvailable();
+      expect(queueFactory).toHaveBeenCalledOnce();
+      expect(monitor.isRunning()).toBe(false);
+
+      monitor.start();
+      expect(queueFactory).toHaveBeenCalledOnce();
+      expect(monitor.isRunning()).toBe(true);
+      await monitor.stop();
+    });
+  });
+
+  it("fails start once when the durable queue cannot be opened", async () => {
+    const denial = new Error(
+      'openChannelIngressQueue is only available for trusted plugins in this release. Plugin "slack" loaded with origin "config"',
+    );
+    const queueFactory = vi.fn((): ChannelIngressQueue<StoredEvent> => {
+      throw denial;
+    });
+    const onError = vi.fn();
+    const monitor = createMonitor(queueFactory, vi.fn(), undefined, onError, undefined, 1);
+
+    // The typed rethrow is the gateway's only way to tell dead inbound apart from
+    // an ordinary channel crash; the denial stays reachable as the cause.
+    const startError = (() => {
+      try {
+        monitor.start();
+        return expect.unreachable("start must fail while the durable queue is denied");
+      } catch (error) {
+        return error;
+      }
+    })();
+    expect(startError).toBeInstanceOf(ChannelIngressUnavailableError);
+    expect((startError as Error).cause).toBe(denial);
+    expect(isChannelIngressUnavailableError(startError)).toBe(true);
+    // A channel plugin is free to wrap the start failure in its own error.
+    expect(
+      isChannelIngressUnavailableError(new Error("slack start failed", { cause: startError })),
+    ).toBe(true);
+    expect(isChannelIngressUnavailableError(denial)).toBe(false);
+    expect(monitor.isRunning()).toBe(false);
+    // An armed poll timer would have retried the denied factory many times over this window.
+    await sleep(25);
+    expect(queueFactory).toHaveBeenCalledOnce();
+    expect(onError).not.toHaveBeenCalled();
+
+    // Accepted transport input still fails closed rather than being silently dropped.
+    await expect(monitor.admit({ id: "event-denied", lane: "a", text: "hello" })).rejects.toBe(
+      denial,
+    );
+    await monitor.stop();
   });
 
   it("can defer delivery-idle waiting to a channel-owned shutdown grace", async () => {

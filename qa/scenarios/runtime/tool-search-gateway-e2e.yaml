@@ -6,14 +6,17 @@ scenario:
   coverage:
     primary:
       - agent-runtime.hosted-tool-use
-    secondary:
       - plugins.plugin-tools
+    secondary:
       - plugins.tool-plugin-invocation
-  objective: Verify the Tool Search gateway QA Lab flow keeps a large plugin-owned tool catalog behind the compact bridge while still invoking the selected plugin tool.
+  objective: Verify Tool Search keeps a large plugin-owned catalog compact, supports structured batch discovery, and still invokes the selected plugin tool.
   successCriteria:
     - Direct mode exposes the fake plugin tool schemas and calls the selected plugin tool.
+    - All three lanes report the selected tool through tools.effective with source=plugin and pluginId=tool-search-e2e-fixture.
     - Tool Search code mode exposes only the compact bridge to the provider.
+    - Tool Search code mode automatically advertises the selected tool in its bounded system-prompt directory.
     - The compact bridge calls the same selected plugin tool and records bridge plus target tool mentions in session logs.
+    - Structured Tool Search resolves two independent queries in one outer call, then records a typed result for the selected plugin tool.
     - The Tool Search request payload is smaller than direct tool exposure for the large fake catalog.
   docsRefs:
     - docs/tools/tool-search.md
@@ -24,9 +27,10 @@ scenario:
     - extensions/qa-lab/src/tool-search-gateway.fixture.test.ts
   execution:
     kind: flow
+    retryCount: 0
     suiteIsolation: isolated
-    isolationReason: Mutates gateway plugin/tool-search config and restarts the QA gateway between direct and compact lanes.
-    summary: Flow-backed gateway E2E for compact Tool Search bridge and plugin-owned tool invocation.
+    isolationReason: Mutates gateway plugin/tool-search config and restarts the QA gateway between direct, compact, and structured lanes.
+    summary: Flow-backed gateway E2E for direct, compact, and structured Tool Search with plugin-owned tool invocation.
     config:
       requiredProviderMode: mock-openai
       targetTool: fake_plugin_tool_17
@@ -54,7 +58,7 @@ flow:
                 expr: config.toolCount
       detailsExpr: toolSearchFixture
 
-    - name: compares direct and compact Tool Search gateway lanes
+    - name: compares direct, compact, and structured Tool Search gateway lanes
       actions:
         - call: toolSearch.runToolSearchGatewayLane
           saveAs: normalLane
@@ -72,6 +76,14 @@ flow:
               fixture:
                 ref: toolSearchFixture
               lane: code
+        - call: toolSearch.runToolSearchGatewayLane
+          saveAs: toolsLane
+          args:
+            - env:
+                ref: env
+              fixture:
+                ref: toolSearchFixture
+              lane: tools
         - call: toolSearch.assertToolSearchLaneResults
           args:
             - normal:
@@ -80,15 +92,30 @@ flow:
                 ref: codeLane
               targetTool:
                 ref: toolSearchFixture.targetTool
+        - call: toolSearch.assertToolSearchBatchLaneResult
+          args:
+            - tools:
+                ref: toolsLane
+              targetTool:
+                ref: toolSearchFixture.targetTool
       detailsExpr: |-
         ({
           targetTool: toolSearchFixture.targetTool,
           directDeclaredTools: normalLane.providerDeclaredToolCount,
           compactDeclaredTools: codeLane.providerDeclaredToolCount,
+          directDirectoryContainsTarget: normalLane.providerDirectoryContainsTarget,
+          compactDirectoryContainsTarget: codeLane.providerDirectoryContainsTarget,
           directRawBytes: normalLane.providerRawBytes,
           compactRawBytes: codeLane.providerRawBytes,
           directPlannedTools: normalLane.providerPlannedTools,
           compactPlannedTools: codeLane.providerPlannedTools,
+          structuredPlannedTools: toolsLane.providerPlannedTools,
+          structuredToolOutput: toolsLane.providerToolOutputSnippet,
           directMentions: normalLane.sessionLogToolMentions,
           compactMentions: codeLane.sessionLogToolMentions,
+          directEffectiveTool: normalLane.targetToolIdentity,
+          compactEffectiveTool: codeLane.targetToolIdentity,
+          structuredEffectiveTool: toolsLane.targetToolIdentity,
+          structuredMentions: toolsLane.sessionLogToolMentions,
+          structuredTargetToolResults: toolsLane.sessionLogTargetToolResults,
         })

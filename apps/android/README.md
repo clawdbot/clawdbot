@@ -28,6 +28,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 
 ## Open in Android Studio
 
+- Run `pnpm install` from the repository root so native Canvas resources can be generated.
 - Open the folder `apps/android`.
 
 ## Wear OS companion
@@ -158,9 +159,9 @@ Direct Gradle tasks:
 
 ```bash
 cd apps/android
-./gradlew :app:ktlintCheck :benchmark:ktlintCheck
-./gradlew :app:ktlintFormat :benchmark:ktlintFormat
-./gradlew :app:lintPlayDebug :app:lintThirdPartyDebug
+./gradlew :app:ktlintCheck :benchmark:ktlintCheck :wear:ktlintCheck :wear-shared:ktlintCheck
+./gradlew :app:ktlintFormat :benchmark:ktlintFormat :wear:ktlintFormat :wear-shared:ktlintFormat
+./gradlew :app:lintPlayDebug :app:lintThirdPartyDebug :wear:lintDebug :wear-shared:lintDebug
 ```
 
 `gradlew` auto-detects the Android SDK at `~/Library/Android/sdk` (macOS default) if `ANDROID_SDK_ROOT` / `ANDROID_HOME` are unset.
@@ -367,7 +368,9 @@ What it does:
 
 - Reads `node.describe` command list from the selected Android node.
 - Invokes advertised non-interactive commands.
-- Skips `screen.record` in this suite (Android requires interactive per-invocation screen-capture consent).
+- Skips `screen.record` and `talk.ptt.*` in this suite because they require
+  interactive capture. Use `apps/android/scripts/voice-e2e.sh` for microphone
+  and voice-path proof.
 - Asserts command contracts (success or expected deterministic error for safe-invalid calls like `sms.send` and `notifications.actions`).
 
 Common failure quick-fixes:

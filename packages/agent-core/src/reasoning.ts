@@ -1,5 +1,6 @@
 import {
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   type Model,
   type SimpleStreamOptions,
@@ -37,7 +38,8 @@ export function resolveAgentReasoningOption(
   if (isEnabledThinkingLevel(offFallback)) {
     return offFallback;
   }
-  return model.api === "anthropic-messages" && resolveClaudeSonnet5ModelIdentity(model)
+  return model.api === "anthropic-messages" &&
+    (resolveClaudeSonnet5ModelIdentity(model) || resolveClaudeOpus5ModelIdentity(model))
     ? "off"
     : undefined;
 }

@@ -10,7 +10,8 @@ private func questionRecord(
     createdAtMs: Int = 1_000_000,
     expiresAtMs: Int = 4_000_000_000_000,
     status: QuestionStatus = .pending,
-    answers: QuestionAnswers? = nil) -> QuestionRecord
+    answers: QuestionAnswers? = nil,
+    runId: String? = "run-question") -> QuestionRecord
 {
     QuestionRecord(
         id: "ask_123",
@@ -28,6 +29,7 @@ private func questionRecord(
         ],
         agentid: "main",
         sessionkey: "agent:main:main",
+        runid: runId,
         createdatms: createdAtMs,
         expiresatms: expiresAtMs,
         status: status,
@@ -124,6 +126,29 @@ private func questionRecord(
     model.apply(resolved: .init(id: model.id, status: .answered))
 
     #expect(model.terminalSummaryText(for: model.record.questions[0]) == "Pizza")
+}
+
+@MainActor
+@Test func `question card preserves run identity across local terminal records`() {
+    let answered = OpenClawQuestionCardModel(record: questionRecord())
+    answered.markAnsweredLocally(answers: ["meal": ["Pizza"]])
+    #expect(answered.record.runid == "run-question")
+
+    let skipped = OpenClawQuestionCardModel(record: questionRecord())
+    skipped.markSkippedLocally()
+    #expect(skipped.record.runid == "run-question")
+
+    let elsewhere = OpenClawQuestionCardModel(record: questionRecord())
+    elsewhere.markAnsweredElsewhere()
+    #expect(elsewhere.record.runid == "run-question")
+
+    let resolved = OpenClawQuestionCardModel(record: questionRecord())
+    resolved.apply(resolved: .init(id: resolved.id, status: .answered))
+    #expect(resolved.record.runid == "run-question")
+
+    let refreshed = OpenClawQuestionCardModel(record: questionRecord(answers: .init(answers: [:])))
+    #expect(refreshed.apply(record: questionRecord(status: .answered, runId: "run-refresh")))
+    #expect(refreshed.record.runid == "run-refresh")
 }
 
 @MainActor

@@ -1,5 +1,7 @@
 // Core root-command descriptor catalog used for help placeholders and lazy registration.
 import { isExperimentalClawsEnabled } from "../../claws/experimental.js";
+import { isConfigMachineOutput } from "../config-output-mode.js";
+import { isDoctorMachineOutput } from "../doctor-output-mode.js";
 import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
@@ -33,6 +35,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     description:
       "Non-interactive config helpers (get/set/patch/unset/file/schema/validate). Run without subcommand for guided setup.",
     hasSubcommands: true,
+    machineOutput: ({ argv }) => isConfigMachineOutput(argv),
   },
   {
     name: "claws",
@@ -42,8 +45,14 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "backup",
-    description: "Create and verify backup archives and SQLite snapshots",
+    description: "Create, verify, and restore backup archives and SQLite snapshots",
     hasSubcommands: true,
+  },
+  {
+    name: "database",
+    description: "Inspect shared-state schema compatibility and write ownership",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
   },
   {
     name: "migrate",
@@ -54,6 +63,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "doctor",
     description: "Health checks + quick fixes for the gateway and channels",
     hasSubcommands: false,
+    machineOutput: isDoctorMachineOutput,
   },
   {
     name: "dashboard",
@@ -89,7 +99,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   {
     name: "agent",
     description: "Run an agent turn via the Gateway (use --local for embedded)",
-    hasSubcommands: false,
+    hasSubcommands: true,
   },
   {
     name: "agents",
@@ -108,17 +118,12 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "audit",
-    description: "Inspect metadata-only run, tool, and message lifecycle records",
+    description: "Inspect activity records and exact-run identity context",
     hasSubcommands: false,
   },
   {
     name: "sessions",
     description: "List stored conversation sessions",
-    hasSubcommands: true,
-  },
-  {
-    name: "commitments",
-    description: "List and manage inferred follow-up commitments",
     hasSubcommands: true,
   },
   {
@@ -143,7 +148,7 @@ export function getCoreCliCommandDescriptors(): ReadonlyArray<CoreCliCommandDesc
 }
 
 /** Return names for all core root commands. */
-export function getCoreCliCommandNames(): string[] {
+export function getCoreCliCommandNamesCore(): string[] {
   return visibleCoreCliCommandDescriptors().map((descriptor) => descriptor.name);
 }
 

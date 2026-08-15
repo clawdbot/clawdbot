@@ -164,6 +164,12 @@ final class GatewayConnectionController {
         }
     }
 
+    /// Registration consumes the app-owned permission snapshot; constructing a location
+    /// manager on this hot path can synchronously block the main thread on Core Location.
+    var locationAuthorizationSnapshot: LocationAuthorizationSnapshot {
+        self.appModel?.locationAuthorizationSnapshot ?? .undetermined
+    }
+
     func setDiscoveryDebugLoggingEnabled(_ enabled: Bool) {
         self.discovery.setDebugLoggingEnabled(enabled)
     }
@@ -384,6 +390,7 @@ final class GatewayConnectionController {
         host: String,
         port: Int,
         useTLS: Bool,
+        contextPath: String? = nil,
         authOverride: ManualAuthOverride? = nil,
         forceReconnect: Bool = false) async
     {
@@ -393,7 +400,10 @@ final class GatewayConnectionController {
         let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
         guard let resolvedPort = Self.resolvedManualPort(host: host, port: port)
         else { return }
-        let stableID = self.manualStableID(host: host, port: resolvedPort)
+        let stableID = self.manualStableID(
+            host: host,
+            port: resolvedPort,
+            contextPath: contextPath)
         self.pendingConnectionStableID = stableID
         await self.waitForPendingForgetCleanup(stableID: stableID)
         guard self.connectAttemptGeneration == connectAttempt.suppressionLease.generation else { return }
@@ -416,7 +426,12 @@ final class GatewayConnectionController {
             : nil)
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
         if resolvedUseTLS, stored == nil {
-            guard let url = self.buildGatewayURL(host: host, port: resolvedPort, useTLS: true) else { return }
+            guard let url = self.buildGatewayURL(
+                host: host,
+                port: resolvedPort,
+                useTLS: true,
+                contextPath: contextPath)
+            else { return }
             self.appModel?.beginGatewayPreconnectVerification(statusText: "Verifying gateway TLS fingerprint…")
             guard let probeResult = await self.probeTLSFingerprint(
                 host: host,
@@ -459,7 +474,8 @@ final class GatewayConnectionController {
         guard let url = self.buildGatewayURL(
             host: host,
             port: resolvedPort,
-            useTLS: tlsParams?.required == true)
+            useTLS: tlsParams?.required == true,
+            contextPath: contextPath)
         else { return }
         let registryEntry = GatewaySettingsStore.GatewayRegistryEntry(
             stableID: stableID,
@@ -468,6 +484,7 @@ final class GatewayConnectionController {
             host: host,
             port: resolvedPort,
             useTLS: resolvedUseTLS && tlsParams != nil,
+            contextPath: contextPath,
             lastConnectedAtMs: nil)
         guard self.persistActiveGateway(registryEntry) else { return }
         self.didAutoConnect = true
@@ -490,7 +507,12 @@ final class GatewayConnectionController {
         switch active.kind {
         case .manual:
             guard let host = active.host, let port = active.port else { return }
-            await self.connectManual(host: host, port: port, useTLS: active.useTLS, forceReconnect: true)
+            await self.connectManual(
+                host: host,
+                port: port,
+                useTLS: active.useTLS,
+                contextPath: active.contextPath,
+                forceReconnect: true)
         case .discovered:
             if let gateway = self.gateways.first(where: {
                 GatewayStableIdentifier.matches($0.stableID, active.stableID)
@@ -500,7 +522,12 @@ final class GatewayConnectionController {
             }
             guard let fallback = self.mostRecentlyConnectedManualGateway() else { return }
             guard let host = fallback.host, let port = fallback.port else { return }
-            await self.connectManual(host: host, port: port, useTLS: fallback.useTLS, forceReconnect: true)
+            await self.connectManual(
+                host: host,
+                port: port,
+                useTLS: fallback.useTLS,
+                contextPath: fallback.contextPath,
+                forceReconnect: true)
         }
     }
 
@@ -527,6 +554,7 @@ final class GatewayConnectionController {
                 host: host,
                 port: port,
                 useTLS: entry.useTLS,
+                contextPath: entry.contextPath,
                 forceReconnect: true)
             return nil
         case .discovered:
@@ -809,6 +837,9 @@ final class GatewayConnectionController {
             host: pending.isManual ? prompt.host : nil,
             port: pending.isManual ? prompt.port : nil,
             useTLS: true,
+            contextPath: pending.isManual
+                ? URLComponents(url: pending.url, resolvingAgainstBaseURL: false)?.percentEncodedPath
+                : nil,
             lastConnectedAtMs: nil)
         guard self.persistActiveGateway(registryEntry) else {
             _ = GatewayTLSStore.clearFingerprint(stableID: pending.stableID)
@@ -1050,7 +1081,8 @@ extension GatewayConnectionController {
             guard let url = self.buildGatewayURL(
                 host: host,
                 port: port,
-                useTLS: tlsParams?.required == true)
+                useTLS: tlsParams?.required == true,
+                contextPath: active.contextPath)
             else { return false }
 
             let credentials = GatewaySettingsStore.loadGatewayCredentials(
@@ -1255,7 +1287,8 @@ extension GatewayConnectionController {
                   let url = self.buildGatewayURL(
                       host: host,
                       port: port,
-                      useTLS: tls?.required == true)
+                      useTLS: tls?.required == true,
+                      contextPath: entry.contextPath)
             else { return nil }
             route = (url, tls)
         case .discovered:

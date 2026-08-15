@@ -7,6 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import type { WhatsAppIdentity, WhatsAppReplyContext, WhatsAppSelfIdentity } from "../identity.js";
+import type { WhatsAppQuotedMessageKey } from "../quoted-message.js";
 import type { DeprecatedWebInboundAdmissionTopLevelFields } from "./admission-types.js";
 import type { WhatsAppInboundAdmission } from "./admission.js";
 import type { WhatsAppSendResult } from "./send-result.js";
@@ -20,14 +21,7 @@ export type WebListenerCloseReason = {
 };
 
 export type ActiveWebSendOptions = {
-  quotedMessageKey?: {
-    id: string;
-    remoteJid: string;
-    fromMe: boolean;
-    participant?: string;
-    messageText?: string;
-    media?: MediaPlaceholderTextFact;
-  };
+  quotedMessageKey?: WhatsAppQuotedMessageKey;
   gifPlayback?: boolean;
   accountId?: string;
   fileName?: string;
@@ -91,6 +85,13 @@ export type WhatsAppInboundGroupContext = {
   };
 };
 
+type WhatsAppInboundStructuredContextEntry = {
+  label: string;
+  source?: string;
+  type?: string;
+  payload: unknown;
+};
+
 type WhatsAppInboundPayload = {
   body: string;
   commandBody?: string;
@@ -102,12 +103,9 @@ type WhatsAppInboundPayload = {
     kind?: ChannelInboundMediaInput["kind"];
   };
   location?: NormalizedLocation;
-  untrustedStructuredContext?: Array<{
-    label: string;
-    source?: string;
-    type?: string;
-    payload: unknown;
-  }>;
+  channelStructuredContext?: WhatsAppInboundStructuredContextEntry[];
+  /** @deprecated Use `channelStructuredContext`. Removal: 2026-08-30. */
+  untrustedStructuredContext?: WhatsAppInboundStructuredContextEntry[];
 };
 
 type WhatsAppInboundPlatform = {
@@ -201,13 +199,10 @@ export type DeprecatedWebInboundMessageFlatAliases = {
   mediaFileName?: string;
   /** @deprecated Use `payload.media.url`. */
   mediaUrl?: string;
-  /** @deprecated Use `payload.untrustedStructuredContext`. */
-  untrustedStructuredContext?: Array<{
-    label: string;
-    source?: string;
-    type?: string;
-    payload: unknown;
-  }>;
+  /** @deprecated Use `payload.channelStructuredContext`. */
+  channelStructuredContext?: WhatsAppInboundStructuredContextEntry[];
+  /** @deprecated Use `payload.channelStructuredContext`. Removal: 2026-08-30. */
+  untrustedStructuredContext?: WhatsAppInboundStructuredContextEntry[];
   /** @deprecated Use `event.isBatched`. */
   isBatched?: boolean;
 };
@@ -241,6 +236,10 @@ export type AdmittedWebInboundMessage = Omit<
   WebInboundMessage,
   keyof DeprecatedWebInboundAdmissionTopLevelFields | "admission"
 > & {
+  admission: WhatsAppInboundAdmission;
+};
+
+export type AdmittedWebInboundCallbackMessage = WebInboundMessage & {
   admission: WhatsAppInboundAdmission;
 };
 

@@ -1,8 +1,9 @@
 // QA Lab Codex auth product proof exercises doctor, SQLite, Gateway, and app-server together.
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createJsonlRequestTailer } from "../../../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mjs";
+import { createJsonlRequestTailer } from "../../../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mts";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+import { loadBundledPluginFacade } from "../../../../src/test-utils/bundled-plugin-public-surface.js";
 import { connectGatewayStatusClient, postJson } from "../../../helpers/gateway-e2e-harness.js";
 import {
   createOpenClawTestInstance,
@@ -38,9 +39,15 @@ afterEach(async () => {
 function waitForRequest(requestLog: AppServerRequestLog, method: string) {
   return vi.waitFor(
     () => {
-      const request = requestLog.read().find((entry) => entry.method === method);
+      const entries = requestLog.read();
+      const request = entries.find((entry) => entry.method === method);
       if (!request) {
-        throw new Error(`waiting for Codex app-server method ${method}`);
+        const observedMethods = entries.flatMap((entry) =>
+          typeof entry.method === "string" ? [entry.method] : [],
+        );
+        throw new Error(
+          `waiting for Codex app-server method ${method}; observed ${observedMethods.join(", ") || "no methods"}`,
+        );
       }
       return request;
     },
@@ -103,6 +110,9 @@ describe("Codex auth product proof", () => {
     "repairs mixed legacy auth into SQLite and sends the selected OAuth profile to app-server",
     { timeout: 180_000 },
     async () => {
+      const { CODEX_APP_SERVER_VERSION } = await loadBundledPluginFacade<{
+        CODEX_APP_SERVER_VERSION: string;
+      }>({ pluginId: "codex", artifactBasename: "test-api.js" });
       const appServerFixture = fileURLToPath(
         new URL("./codex-auth-app-server.fixture.mjs", import.meta.url),
       );
@@ -110,6 +120,7 @@ describe("Codex auth product proof", () => {
         name: "qa-codex-auth-product-proof",
         env: {
           OPENCLAW_AGENT_HARNESS_FALLBACK: "none",
+          OPENCLAW_QA_CODEX_APP_SERVER_VERSION: CODEX_APP_SERVER_VERSION,
           OPENCLAW_SKIP_PROVIDERS: undefined,
         },
         config: {

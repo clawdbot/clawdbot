@@ -50,6 +50,10 @@ internal const val OUTBOX_ATTACHMENT_CHUNK_BYTES = 512 * 1024
 /** Upper bound of attachment bytes on one queued command (8 images plus a voice note fit). */
 internal const val OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES = 8L * 1024L * 1024L
 
+// Mirrors DEFAULT_CHAT_ATTACHMENT_MAX_MB in src/gateway/chat-attachments.ts. Only video raises
+// the durable command ceiling; existing image, audio, and document admission stays at 8 MiB.
+internal const val OUTBOX_MAX_VIDEO_COMMAND_ATTACHMENT_BYTES = 20L * 1024L * 1024L
+
 /** Upper bound of queued attachment bytes per gateway so the outbox database stays bounded. */
 internal const val OUTBOX_MAX_GATEWAY_ATTACHMENT_BYTES = 48L * 1024L * 1024L
 
@@ -155,6 +159,20 @@ class LoadedOutboxAttachment(
   val bytes: ByteArray,
 )
 
+private fun OutboxAttachmentPayload.isVideo(): Boolean = type == "video" || mimeType.startsWith("video/", ignoreCase = true)
+
+internal fun outboxCommandAttachmentsWithinByteLimits(attachments: List<OutboxAttachmentPayload>): Boolean {
+  val totalBytes = attachments.sumOf { it.bytes.size.toLong() }
+  val nonVideoBytes = attachments.filterNot(OutboxAttachmentPayload::isVideo).sumOf { it.bytes.size.toLong() }
+  val totalLimit =
+    if (attachments.any(OutboxAttachmentPayload::isVideo)) {
+      OUTBOX_MAX_VIDEO_COMMAND_ATTACHMENT_BYTES
+    } else {
+      OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
+    }
+  return totalBytes <= totalLimit && nonVideoBytes <= OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
+}
+
 sealed interface ChatOutboxEnqueueResult {
   data class Queued(
     val item: ChatOutboxItem,
@@ -162,7 +180,7 @@ sealed interface ChatOutboxEnqueueResult {
 
   data object QueueFull : ChatOutboxEnqueueResult
 
-  /** One command's attachments exceed [OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES]; deleting rows cannot help. */
+  /** One command's attachments exceed its media-kind byte ceiling; deleting rows cannot help. */
   data object AttachmentsTooLarge : ChatOutboxEnqueueResult
 
   /** The per-gateway attachment byte budget is exhausted; deleting queued rows frees space. */
@@ -696,7 +714,7 @@ class RoomChatCommandOutbox internal constructor(
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return ChatOutboxEnqueueResult.Unavailable
     val owner = normalizedOutboxOwnerAgentId(ownerAgentId) ?: return ChatOutboxEnqueueResult.Unavailable
     val attachmentBytes = attachments.sumOf { it.bytes.size.toLong() }
-    if (attachmentBytes > OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES) {
+    if (!outboxCommandAttachmentsWithinByteLimits(attachments)) {
       return ChatOutboxEnqueueResult.AttachmentsTooLarge
     }
     val dao = database.outboxDao()

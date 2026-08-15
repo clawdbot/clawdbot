@@ -4,6 +4,16 @@ import SwiftUI
 import UIKit
 
 struct RootTabs: View {
+    struct SessionObserverTaskIdentity: Equatable {
+        let sidebarRefreshID: String
+        let isSceneActive: Bool
+        let isSidebarVisible: Bool
+
+        var isObserverVisible: Bool {
+            self.isSceneActive && self.isSidebarVisible
+        }
+    }
+
     @Environment(NodeAppModel.self) private var appModel
     @Environment(VoiceWakeManager.self) private var voiceWake
     @Environment(GatewayConnectionController.self) private var gatewayController
@@ -35,7 +45,7 @@ struct RootTabs: View {
     @State private var isSidebarDrawerLayout: Bool = false
     @State private var didResolveSidebarLayout: Bool = false
     @State private var voiceWakeToastText: String?
-    @State private var toastDismissTask: Task<Void, Never>?
+    @State private var toastDismissGate = DelayedActionGate()
     @State private var presentedSheet: PresentedSheet?
     @State private var showGatewayProblemDetails: Bool = false
     @State private var gatewayToastDragOffset: CGFloat = 0
@@ -158,8 +168,15 @@ struct RootTabs: View {
 
     private var sidebarSplitContent: some View {
         GeometryReader { proxy in
-            let isDrawerLayout = self.shouldUseSidebarDrawer(containerSize: proxy.size)
-            let sidebarWidth = self.sidebarWidth(containerWidth: proxy.size.width, isDrawerLayout: isDrawerLayout)
+            // Keyboard safe-area changes must not masquerade as window/orientation changes;
+            // switching layouts destroys the focused detail subtree.
+            let layoutContainerSize = Self.sidebarLayoutContainerSize(
+                contentSize: proxy.size,
+                windowSize: self.foregroundKeyWindowSize())
+            let isDrawerLayout = self.shouldUseSidebarDrawer(containerSize: layoutContainerSize)
+            let sidebarWidth = self.sidebarWidth(
+                containerWidth: layoutContainerSize.width,
+                isDrawerLayout: isDrawerLayout)
             Group {
                 if isDrawerLayout {
                     self.sidebarDrawerContent(
@@ -170,10 +187,13 @@ struct RootTabs: View {
                 }
             }
             .onAppear {
-                self.updateSidebarLayout(containerSize: proxy.size, force: false)
+                self.updateSidebarLayout(containerSize: layoutContainerSize, force: false)
             }
             .onChange(of: proxy.size) { _, size in
-                self.updateSidebarLayout(containerSize: size, force: false)
+                let layoutContainerSize = Self.sidebarLayoutContainerSize(
+                    contentSize: size,
+                    windowSize: self.foregroundKeyWindowSize())
+                self.updateSidebarLayout(containerSize: layoutContainerSize, force: false)
             }
             // Single refresh owner: identity/session changes, scene activation,
             // and the periodic attention refresh all land here.
@@ -190,7 +210,19 @@ struct RootTabs: View {
                 guard self.scenePhase == .active else { return }
                 await self.sidebarModel.observeSessionEvents(appModel: self.appModel)
             }
+            .task(id: self.sessionObserverTaskIdentity) {
+                await self.sidebarModel.setSessionObserverVisibility(
+                    appModel: self.appModel,
+                    visible: self.sessionObserverTaskIdentity.isObserverVisible)
+            }
         }
+    }
+
+    private var sessionObserverTaskIdentity: SessionObserverTaskIdentity {
+        SessionObserverTaskIdentity(
+            sidebarRefreshID: self.sidebarRefreshID,
+            isSceneActive: self.scenePhase == .active,
+            isSidebarVisible: self.isSidebarVisible)
     }
 
     private var sidebarRefreshID: String {
@@ -362,6 +394,10 @@ struct RootTabs: View {
                 headerTitle: "Automations",
                 openSettings: { self.selectSidebarDestination(.gateway) })
                 .id(self.selectedSidebarDestination.id)
+        case .desktop:
+            DesktopHubScreen(
+                headerSidebarAction: self.sidebarHeaderAction,
+                gatewayAction: { self.selectSidebarDestination(.gateway) })
         case .terminal:
             TerminalHubScreen(
                 headerSidebarAction: self.sidebarHeaderAction,
@@ -476,6 +512,15 @@ struct RootTabs: View {
         Self.sidebarWidth(containerWidth: containerWidth, isDrawerLayout: isDrawerLayout)
     }
 
+    private func foregroundKeyWindowSize() -> CGSize? {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first(where: { $0.activationState == .foregroundActive })?
+            .windows
+            .first(where: \.isKeyWindow)?
+            .bounds.size
+    }
+
     private func rootOverlays(_ content: some View) -> some View {
         content
             .overlay(alignment: .top) {
@@ -498,9 +543,9 @@ struct RootTabs: View {
             }
 
             .overlay {
-                if self.appModel.cameraFlashNonce != 0 {
-                    RootCameraFlashOverlay(nonce: self.appModel.cameraFlashNonce)
-                }
+                // Keep the observer mounted so the first 0 -> 1 capture transition
+                // flashes without treating a later remount as a new capture.
+                RootCameraFlashOverlay(nonce: self.appModel.cameraFlashNonce)
             }
             .overlay {
                 if self.appModel.screen.isCanvasPresented {
@@ -602,17 +647,13 @@ struct RootTabs: View {
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { return }
 
-                self.toastDismissTask?.cancel()
                 withAnimation(self.reduceMotion ? .none : .spring(response: 0.25, dampingFraction: 0.85)) {
                     self.voiceWakeToastText = trimmed
                 }
 
-                self.toastDismissTask = Task {
-                    try? await Task.sleep(nanoseconds: 2_300_000_000)
-                    await MainActor.run {
-                        withAnimation(self.reduceMotion ? .none : .easeOut(duration: 0.25)) {
-                            self.voiceWakeToastText = nil
-                        }
+                self.toastDismissGate.schedule(after: .milliseconds(2300)) {
+                    withAnimation(self.reduceMotion ? .none : .easeOut(duration: 0.25)) {
+                        self.voiceWakeToastText = nil
                     }
                 }
             }
@@ -632,7 +673,10 @@ struct RootTabs: View {
             .onChange(of: self.scenePhase) { _, newValue in
                 self.updateIdleTimer()
                 self.updateHomeCanvasState()
-                guard newValue == .active else { return }
+                guard newValue == .active else {
+                    self.clearVoiceWakeToast()
+                    return
+                }
                 self.maybeRequestLocalNetworkAccess(reason: "scene_active")
                 Task {
                     await self.appModel.refreshGatewayOverviewIfConnected()
@@ -643,9 +687,13 @@ struct RootTabs: View {
             }
             .onDisappear {
                 UIApplication.shared.isIdleTimerDisabled = false
-                self.toastDismissTask?.cancel()
-                self.toastDismissTask = nil
+                self.clearVoiceWakeToast()
             }
+    }
+
+    private func clearVoiceWakeToast() {
+        self.voiceWakeToastText = nil
+        self.toastDismissGate.cancel()
     }
 
     private func rootGatewayProblemLifecycle(_ content: some View) -> some View {
@@ -1160,10 +1208,12 @@ extension RootTabs {
 }
 
 private struct RootCameraFlashOverlay: View {
+    @Environment(\.scenePhase) private var scenePhase
+
     var nonce: Int
 
     @State private var opacity: CGFloat = 0
-    @State private var task: Task<Void, Never>?
+    @State private var dismissGate = DelayedActionGate()
 
     var body: some View {
         Color.white
@@ -1171,21 +1221,33 @@ private struct RootCameraFlashOverlay: View {
             .ignoresSafeArea()
             .allowsHitTesting(false)
             .onChange(of: self.nonce) { _, _ in
-                self.task?.cancel()
-                self.task = Task { @MainActor in
-                    withAnimation(.easeOut(duration: 0.08)) {
-                        self.opacity = 0.85
-                    }
-                    try? await Task.sleep(nanoseconds: 110_000_000)
-                    withAnimation(.easeOut(duration: 0.32)) {
-                        self.opacity = 0
-                    }
+                guard self.scenePhase == .active else {
+                    self.clearFlash()
+                    return
                 }
+                self.showFlash()
             }
-            .onDisappear {
-                self.task?.cancel()
-                self.task = nil
+            .onChange(of: self.scenePhase) { _, newValue in
+                guard newValue != .active else { return }
+                self.clearFlash()
             }
+            .onDisappear { self.clearFlash() }
+    }
+
+    private func showFlash() {
+        withAnimation(.easeOut(duration: 0.08)) {
+            self.opacity = 0.85
+        }
+        self.dismissGate.schedule(after: .milliseconds(110)) {
+            withAnimation(.easeOut(duration: 0.32)) {
+                self.opacity = 0
+            }
+        }
+    }
+
+    private func clearFlash() {
+        self.opacity = 0
+        self.dismissGate.cancel()
     }
 }
 
@@ -1195,7 +1257,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 393, height: 852),
     .portrait)
 {
-    RootTabsPreviewHost(idiom: .phone)
+    RootTabsPreviewHost()
 }
 
 #Preview(
@@ -1203,7 +1265,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 393, height: 852),
     .portrait)
 {
-    RootTabsPreviewHost(idiom: .phone, sidebarVisible: true)
+    RootTabsPreviewHost(sidebarVisible: true)
 }
 
 #Preview(
@@ -1211,7 +1273,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 393, height: 852),
     .portrait)
 {
-    RootTabsPreviewHost(idiom: .phone, gatewayState: .connected)
+    RootTabsPreviewHost(gatewayState: .connected)
 }
 
 #Preview(
@@ -1219,7 +1281,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 393, height: 852),
     .portrait)
 {
-    RootTabsPreviewHost(idiom: .phone, gatewayState: .error)
+    RootTabsPreviewHost(gatewayState: .error)
 }
 
 #Preview(
@@ -1227,7 +1289,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 852, height: 393),
     .landscapeLeft)
 {
-    RootTabsPreviewHost(idiom: .phone)
+    RootTabsPreviewHost()
         .environment(\.horizontalSizeClass, .regular)
         .environment(\.verticalSizeClass, .compact)
 }
@@ -1237,7 +1299,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 1024, height: 1366),
     .portrait)
 {
-    RootTabsPreviewHost(idiom: .pad)
+    RootTabsPreviewHost()
 }
 
 #Preview(
@@ -1245,7 +1307,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 1366, height: 1024),
     .landscapeLeft)
 {
-    RootTabsPreviewHost(idiom: .pad, gatewayState: .connected)
+    RootTabsPreviewHost(gatewayState: .connected)
 }
 
 #Preview(
@@ -1253,7 +1315,7 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 1366, height: 1024),
     .landscapeLeft)
 {
-    RootTabsPreviewHost(idiom: .pad, gatewayState: .connecting)
+    RootTabsPreviewHost(gatewayState: .connecting)
 }
 
 #Preview(
@@ -1261,24 +1323,21 @@ private struct RootCameraFlashOverlay: View {
     traits: .fixedLayout(width: 1366, height: 1024),
     .landscapeLeft)
 {
-    RootTabsPreviewHost(idiom: .pad, gatewayState: .error)
+    RootTabsPreviewHost(gatewayState: .error)
 }
 
 private struct RootTabsPreviewHost: View {
     @State private var appearanceModel = AppAppearanceModel()
     @State private var appModel: NodeAppModel
     @State private var gatewayController: GatewayConnectionController
-    private let idiom: UIUserInterfaceIdiom
     private let sidebarVisible: Bool?
 
     init(
-        idiom: UIUserInterfaceIdiom,
         gatewayState: RootTabsPreviewGatewayState = .offline,
         sidebarVisible: Bool? = nil)
     {
         let appModel = NodeAppModel()
         gatewayState.apply(to: appModel)
-        self.idiom = idiom
         self.sidebarVisible = sidebarVisible
         _appModel = State(initialValue: appModel)
         _gatewayController = State(

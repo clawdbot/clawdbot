@@ -117,7 +117,9 @@ By default OpenClaw keeps context as received: allowlists decide who can trigger
 | `"allowlist"`       | Only inject history/thread/quote/forwarded context from allowlisted senders.     |
 | `"allowlist_quote"` | `allowlist`, plus keep the explicitly quoted/replied-to message from any sender. |
 
-Set it per channel (`channels.<channel>.contextVisibility`), per account (`channels.<channel>.accounts.<accountId>.contextVisibility`), or globally (`channels.defaults.contextVisibility`). Channels that fetch supplemental context (Discord, Feishu, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp) apply the policy when building inbound context; unknown policy combinations fail closed and omit the context.
+Set it per channel (`channels.<channel>.contextVisibility`), per account (`channels.<channel>.accounts.<accountId>.contextVisibility`), or globally (`channels.defaults.contextVisibility`). Channels that fetch supplemental context (Discord, Feishu, iMessage, Matrix, Microsoft Teams, QQBot, Signal, Slack, Telegram, WhatsApp) apply the policy when building inbound context; unknown policy combinations fail closed and omit the context.
+
+These modes filter channel-supplied supplemental context only. Tool policy and the owner-only tool inventory are still selected from the current turn's originating requester, not every sender represented in the prompt. See [Requester-scoped controls and prompt context](/gateway/security#requester-scoped-controls-and-prompt-context).
 
 ![Group message flow](/images/groups-flow.svg)
 
@@ -212,7 +214,7 @@ Related:
 
 - Configuration keys and defaults: [Gateway configuration](/gateway/config-agents#agentsdefaultssandbox)
 - Debugging why a tool is blocked: [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)
-- Bind mounts details: [Sandboxing](/gateway/sandboxing#custom-bind-mounts)
+- Bind mounts details: [Sandboxing](/gateway/sandboxing#multiple-folders-for-one-agent)
 
 ## Display labels
 
@@ -344,6 +346,7 @@ Each fact defaults to enabled when the channel produces it. Set the correspondin
   agents: {
     entries: {
       main: {
+        default: true,
         groupChat: {
           mentionPatterns: ["@openclaw", "openclaw", "\\+15555550123"],
           historyLimit: 50,

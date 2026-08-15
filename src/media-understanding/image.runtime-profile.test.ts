@@ -28,7 +28,7 @@ const hoisted = vi.hoisted(() => ({
       mode: "oauth",
     }),
   ),
-  resolveApiKeyForProviderMock: vi.fn(async () => ({
+  resolveApiKeyForProviderCoreMock: vi.fn(async () => ({
     [API_KEY_FIELD]: "test-token",
     source: "test",
     mode: "oauth",
@@ -51,7 +51,7 @@ const {
   completeMock,
   ensureOpenClawModelsJsonMock,
   getApiKeyForModelMock,
-  resolveApiKeyForProviderMock,
+  resolveApiKeyForProviderCoreMock,
   requireApiKeyMock,
   setRuntimeApiKeyMock,
   discoverModelsMock,
@@ -118,8 +118,8 @@ vi.mock("../agents/models-config.js", async () => ({
 
 vi.mock("../agents/model-auth.js", () => ({
   applySecretRefHeaderSentinels: (model: unknown) => model,
-  getApiKeyForModel: getApiKeyForModelMock,
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+  getApiKeyForModelCore: getApiKeyForModelMock,
+  resolveApiKeyForProviderCore: resolveApiKeyForProviderCoreMock,
   [REQUIRE_API_KEY_FIELD]: requireApiKeyMock,
 }));
 
@@ -165,14 +165,6 @@ vi.mock("../agents/embedded-agent-runner/model.js", () => ({
   resolveModelAsync: resolveModelAsyncMock,
 }));
 
-vi.mock("../plugin-sdk/provider-auth.js", () => ({
-  buildCopilotIdeHeaders: () => ({
-    "Editor-Version": "vscode/1.107.0",
-    "User-Agent": "GitHubCopilotChat/0.35.0",
-  }),
-  COPILOT_INTEGRATION_ID: "vscode-chat",
-}));
-
 const imageTestFetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 vi.mock("../infra/net/fetch-guard.js", async () => {
   const mod = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
@@ -184,9 +176,9 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
   };
 });
 
-const { describeImageWithModel } = await import("./image.js");
+const { describeImageWithModelCore } = await import("./image.js");
 
-describe("describeImageWithModel", () => {
+describe("describeImageWithModelCore", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
@@ -265,6 +257,14 @@ describe("describeImageWithModel", () => {
         ? {
             [API_KEY_FIELD]: "test-token",
             baseUrl: "https://api.githubcopilot.com",
+            request: {
+              headers: {
+                "Copilot-Integration-Id": "copilot-developer-cli",
+                "Editor-Version": "vscode/1.107.0",
+                "Openai-Organization": "github-copilot",
+                "User-Agent": "GitHubCopilotChat/0.35.0",
+              },
+            },
           }
         : undefined;
     });
@@ -273,7 +273,7 @@ describe("describeImageWithModel", () => {
   function getApiKeyForModelCall(index = 0): AuthRequestCall {
     const call = (getApiKeyForModelMock.mock.calls as unknown[][]).at(index);
     if (!call) {
-      throw new Error(`Expected getApiKeyForModel call ${index}`);
+      throw new Error(`Expected getApiKeyForModelCore call ${index}`);
     }
     return call[0] as AuthRequestCall;
   }
@@ -300,7 +300,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "flash ok" }],
     });
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "google",
@@ -355,7 +355,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "flash lite ok" }],
     });
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "google",
@@ -415,7 +415,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "profile-scoped image ok" }],
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "github-copilot",
@@ -469,7 +469,7 @@ describe("describeImageWithModel", () => {
       })),
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "github-copilot",
@@ -495,17 +495,24 @@ describe("describeImageWithModel", () => {
     expect(storedValue).not.toBe("test-token");
     expect(resolveSecretSentinel(storedValue)).toBe("test-token");
     const [completionModel, context, options] = providerStreamFn.mock.calls[0] as unknown as [
-      { baseUrl?: string },
+      { baseUrl?: string; headers?: Record<string, string> },
       { systemPrompt?: string; messages?: Array<{ role: string; content: unknown[] }> },
       { apiKey?: string; headers?: Record<string, string> },
     ];
     expect(completionModel.baseUrl).toBe("https://api.githubcopilot.com");
+    expect(completionModel.headers).toMatchObject({
+      "Copilot-Integration-Id": "copilot-developer-cli",
+      "Editor-Version": "vscode/1.107.0",
+      "Openai-Organization": "github-copilot",
+      "User-Agent": "GitHubCopilotChat/0.35.0",
+    });
+    expect(
+      Object.values(completionModel.headers ?? {}).some((value) => looksLikeSecretSentinel(value)),
+    ).toBe(false);
     expect(options.apiKey).toBe(storedValue);
     expect(options.headers).toMatchObject({
-      "Copilot-Integration-Id": "vscode-chat",
       "Copilot-Vision-Request": "true",
-      "Editor-Version": "vscode/1.107.0",
-      "User-Agent": "GitHubCopilotChat/0.35.0",
+      "x-initiator": "user",
     });
     expect(context.systemPrompt).toBeUndefined();
     const userMessage = context.messages?.find((m) => m.role === "user");
@@ -547,7 +554,7 @@ describe("describeImageWithModel", () => {
       })),
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "github-copilot",
@@ -586,7 +593,7 @@ describe("describeImageWithModel", () => {
     );
 
     await expect(
-      describeImageWithModel({
+      describeImageWithModelCore({
         cfg: {},
         agentDir: "/tmp/openclaw-agent",
         provider: "github-copilot",
@@ -623,7 +630,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "A solid red square." }],
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "openai",
@@ -669,7 +676,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "ok" }],
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "agent-plan",
@@ -706,7 +713,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "ok" }],
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "fake",
@@ -752,7 +759,7 @@ describe("describeImageWithModel", () => {
       },
     };
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg,
       agentId: "vision-agent",
       agentDir: "/tmp/openclaw-agent",
@@ -810,7 +817,7 @@ describe("describeImageWithModel", () => {
       content: [{ type: "text", text: "committed runtime" }],
     });
 
-    await describeImageWithModel({
+    await describeImageWithModelCore({
       cfg: requestedCfg,
       agentDir: "/tmp/requested-agent",
       workspaceDir: "/tmp/requested-workspace",
@@ -861,10 +868,12 @@ describe("describeImageWithModel", () => {
       agentDir: "/tmp/parent-agent",
       config: cfg,
       workspaceDir: "/tmp/parent-workspace",
+      configuredRuntimeModels: [],
+      inlineProviderModels: [],
       createStores: () => ({ authStorage: preparedAuthStorage, modelRegistry: {} }),
     } as never;
 
-    const result = await describeImageWithModel({
+    const result = await describeImageWithModelCore({
       cfg,
       agentDir: "/tmp/parent-agent",
       workspaceDir: "/tmp/parent-workspace",
@@ -881,5 +890,8 @@ describe("describeImageWithModel", () => {
     expect(result.text).toBe("parent runtime");
     expect(acquireAgentRunPreparedModelRuntimeMock).not.toHaveBeenCalled();
     expect(releasePreparedModelRuntimeMock).not.toHaveBeenCalled();
+    for (const call of resolveModelAsyncMock.mock.calls) {
+      expect(call[4]).toEqual(expect.objectContaining({ preparedModelRuntime }));
+    }
   });
 });

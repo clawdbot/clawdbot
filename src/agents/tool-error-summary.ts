@@ -6,6 +6,18 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { FileTarget } from "./tool-mutation.js";
 
+export type ProcessTerminalDiagnostic = {
+  kind: "process";
+  sessionId: string;
+  reason:
+    | { kind: "exit"; exitCode: number }
+    | { kind: "signal"; signal: string | number }
+    | {
+        kind: "timeout";
+        timeoutKind?: "overall-timeout" | "no-output-timeout";
+      };
+};
+
 export type ToolErrorSummary = {
   toolName: string;
   meta?: string;
@@ -17,6 +29,7 @@ export type ToolErrorSummary = {
   mutatingAction?: boolean;
   actionFingerprint?: string;
   fileTarget?: FileTarget;
+  terminalDiagnostic?: ProcessTerminalDiagnostic;
 };
 
 const EXEC_LIKE_TOOL_NAMES = new Set(["exec", "bash"]);

@@ -53,7 +53,7 @@ function collectWidgetThemeTokens(read: (hostVar: string) => string): Record<str
   return tokens;
 }
 
-function buildWidgetThemeMessage(): {
+export function buildWidgetThemeMessage(): {
   type: "openclaw:widget-theme";
   mode: "light" | "dark";
   tokens: Record<string, string>;
@@ -67,10 +67,10 @@ function buildWidgetThemeMessage(): {
   };
 }
 
-export function postWidgetTheme(frame: HTMLIFrameElement): void {
-  // Widget documents have opaque origins, so "*" is required; the payload
-  // contains theme colors only.
-  frame.contentWindow?.postMessage(buildWidgetThemeMessage(), "*");
+export function postWidgetTheme(frame: HTMLIFrameElement, targetOrigin = "*"): void {
+  // Canvas widgets have opaque origins and require "*". Authenticated
+  // cross-origin embeds instead supply their exact, validated origin.
+  frame.contentWindow?.postMessage(buildWidgetThemeMessage(), targetOrigin);
 }
 
 let widgetThemeObserverInstalled = false;

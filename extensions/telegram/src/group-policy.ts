@@ -118,6 +118,7 @@ export function resolveTelegramGroupToolPolicy(
   return resolveScopeToolsPolicy({
     tree: buildChannelGroupsScopeTree(params.cfg, "telegram", params.accountId),
     path: groupId ? [groupId] : [],
+    senderPolicyMode: params.senderPolicyMode,
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,

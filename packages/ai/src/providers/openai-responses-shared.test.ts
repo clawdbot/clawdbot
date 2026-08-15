@@ -6,6 +6,11 @@ import type {
 } from "openai/resources/responses/responses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
+import {
+  buildOpenAIResponsesReasoningReplayMetadata,
+  captureOpenAIResponsesCompaction,
+} from "../transports/openai-responses-compaction-replay.js";
+import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
@@ -13,7 +18,6 @@ import {
   applyCommonResponsesParams,
   createResponsesAssistantOutput,
   convertResponsesMessages,
-  processResponsesStream,
   resolveResponsesReasoningEffort,
   runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
@@ -92,6 +96,7 @@ const gpt56SolModel = {
 } satisfies Model<"openai-responses">;
 
 const testAllowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
+const reasoningReplayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
 
 function createAssistantOutput(): AssistantMessage {
   return {
@@ -827,6 +832,87 @@ describe("convertResponsesMessages", () => {
     });
   });
 
+  const sameRouteReplayMetadata = buildOpenAIResponsesReasoningReplayMetadata(
+    nativeOpenAIModel,
+    reasoningReplayIdentity,
+  );
+  const sessionMismatchReplayMetadata = buildOpenAIResponsesReasoningReplayMetadata(
+    nativeOpenAIModel,
+    { ...reasoningReplayIdentity, sessionId: "session-b" },
+  );
+  const authMismatchReplayMetadata = buildOpenAIResponsesReasoningReplayMetadata(
+    nativeOpenAIModel,
+    { ...reasoningReplayIdentity, authProfileId: "profile-b" },
+  );
+  const endpointMismatchReplayMetadata = buildOpenAIResponsesReasoningReplayMetadata(
+    { ...nativeOpenAIModel, baseUrl: "https://proxy.example.com/v1" },
+    reasoningReplayIdentity,
+  );
+
+  it.each([
+    ["matching block metadata", sameRouteReplayMetadata, sessionMismatchReplayMetadata, true],
+    ["mismatched block metadata", sessionMismatchReplayMetadata, sameRouteReplayMetadata, false],
+    ["auth-mismatched block metadata", authMismatchReplayMetadata, undefined, false],
+    ["endpoint-mismatched block metadata", endpointMismatchReplayMetadata, undefined, false],
+    ["malformed block metadata", null, sameRouteReplayMetadata, false],
+    ["matching embedded metadata", undefined, sameRouteReplayMetadata, true],
+    ["mismatched embedded metadata", undefined, sessionMismatchReplayMetadata, false],
+    ["malformed embedded metadata", undefined, null, false],
+  ])(
+    "fences encrypted reasoning with %s",
+    (_name, blockMetadata, embeddedMetadata, preservesCiphertext) => {
+      const input = convertResponsesMessages(
+        nativeOpenAIModel,
+        {
+          messages: [
+            {
+              ...createAssistantOutput(),
+              content: [
+                {
+                  type: "thinking",
+                  thinking: "Safe visible reasoning.",
+                  thinkingSignature: JSON.stringify({
+                    type: "reasoning",
+                    id: "rs_route_fenced",
+                    summary: [{ type: "summary_text", text: "safe summary" }],
+                    content: [{ type: "reasoning_text", text: "safe content" }],
+                    encrypted_content: "route-bound-ciphertext",
+                    ...(embeddedMetadata !== undefined
+                      ? { __openclaw_replay: embeddedMetadata }
+                      : {}),
+                  }),
+                  ...(blockMetadata !== undefined
+                    ? { openclawReasoningReplay: blockMetadata }
+                    : {}),
+                },
+              ] as unknown as AssistantMessage["content"],
+            },
+          ],
+        },
+        allowedToolCallProviders,
+        {
+          includeSystemPrompt: false,
+          replayResponsesItemIds: true,
+          ...reasoningReplayIdentity,
+        },
+      ) as unknown as Array<Record<string, unknown>>;
+
+      const reasoningItem = input.find((item) => item.type === "reasoning");
+      expect(reasoningItem).toMatchObject({
+        type: "reasoning",
+        id: "rs_route_fenced",
+        summary: [{ type: "summary_text", text: "safe summary" }],
+        content: [{ type: "reasoning_text", text: "safe content" }],
+      });
+      expect(reasoningItem).not.toHaveProperty("__openclaw_replay");
+      if (preservesCiphertext) {
+        expect(reasoningItem).toHaveProperty("encrypted_content", "route-bound-ciphertext");
+      } else {
+        expect(reasoningItem).not.toHaveProperty("encrypted_content");
+      }
+    },
+  );
+
   it("serializes structured tool results as text instead of image placeholders", () => {
     const input = convertResponsesMessages(
       nativeOpenAIModel,
@@ -886,7 +972,6 @@ describe("processResponsesStream", () => {
           },
         }),
         buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
-        formatError: (error) => (error instanceof Error ? error.message : String(error)),
       });
 
       await vi.advanceTimersByTimeAsync(5);
@@ -962,11 +1047,137 @@ describe("processResponsesStream", () => {
         },
       }),
       buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
-      formatError: (error) => (error instanceof Error ? error.message : String(error)),
     });
 
     expect(requestMaxRetries).toBe(expected);
     expect(output.stopReason).toBe("stop");
+  });
+
+  it("suppresses rejected persisted compaction state on the following turn", async () => {
+    const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+    const prior = createAssistantOutput();
+    captureOpenAIResponsesCompaction(
+      prior,
+      {
+        type: "compaction",
+        id: "cmp_rejected",
+        encrypted_content: "opaque-rejected-compaction",
+      },
+      0,
+      nativeOpenAIModel,
+      buildOpenAIResponsesReasoningReplayMetadata(nativeOpenAIModel, replayIdentity),
+    );
+    const context: Context = {
+      messages: [
+        { role: "user", content: "full history prefix", timestamp: 0 },
+        prior,
+        { role: "user", content: "recover", timestamp: 1 },
+      ],
+    };
+    const requests: ResponseCreateParamsStreaming[] = [];
+    const output = createAssistantOutput();
+    const onPayload = vi.fn((request: unknown) => request);
+    const onCompactionRejected = vi.fn();
+
+    await runResponsesStreamLifecycle({
+      stream: new AssistantMessageEventStream(),
+      model: nativeOpenAIModel,
+      output,
+      options: { ...replayIdentity, onCompactionRejected, onPayload },
+      createClient: () => ({
+        responses: {
+          create: (request) => {
+            requests.push(structuredClone(request));
+            const attempt = requests.length;
+            return {
+              withResponse: async () => {
+                if (attempt === 1) {
+                  throw Object.assign(new Error("invalid_encrypted_content"), {
+                    code: "invalid_encrypted_content",
+                    status: 400,
+                  });
+                }
+                return {
+                  data: streamResponsesEvents([
+                    {
+                      type: "response.completed",
+                      sequence_number: 1,
+                      response: { id: "resp_recovered", status: "completed", output: [] },
+                    } as unknown as ResponseStreamEvent,
+                  ]),
+                  response: new Response(null, { status: 200 }),
+                };
+              },
+            };
+          },
+        },
+      }),
+      buildParams: (_model, replayMode) => ({
+        model: nativeOpenAIModel.id,
+        input: convertResponsesMessages(nativeOpenAIModel, context, testAllowedToolCallProviders, {
+          ...replayIdentity,
+          replayMode,
+        }),
+        stream: true,
+      }),
+    });
+
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.input).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "compaction", id: "cmp_rejected" })]),
+    );
+    expect(JSON.stringify(requests[0]?.input)).not.toContain("full history prefix");
+    const retryInput = requests[1]?.input;
+    expect(Array.isArray(retryInput)).toBe(true);
+    const retryItems = Array.isArray(retryInput) ? retryInput : [];
+    expect(retryItems.some((item) => item.type === "compaction")).toBe(false);
+    expect(JSON.stringify(retryInput)).toContain("full history prefix");
+    expect(onPayload).toHaveBeenCalledTimes(2);
+    expect(onCompactionRejected).toHaveBeenCalledOnce();
+    expect(output.stopReason).toBe("stop");
+    expect(output.providerReplay).toMatchObject({
+      type: "openai-responses-compaction-suppression",
+      data: "rejected",
+      provider: nativeOpenAIModel.provider,
+      api: nativeOpenAIModel.api,
+      model: nativeOpenAIModel.id,
+    });
+
+    const nextInput = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        messages: [
+          ...context.messages,
+          output,
+          { role: "user", content: "next turn", timestamp: 2 },
+        ],
+      },
+      testAllowedToolCallProviders,
+      replayIdentity,
+    );
+    expect(nextInput.some((item) => item.type === "compaction")).toBe(false);
+  });
+
+  it("records the effective model from the terminal response", async () => {
+    const output = createAssistantOutput();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_rerouted",
+            status: "completed",
+            model: "gpt-5.5-rerouted",
+          },
+        },
+      ]),
+      output,
+      new AssistantMessageEventStream(),
+      nativeOpenAIModel,
+    );
+
+    expect(output.responseModel).toBe("gpt-5.5-rerouted");
   });
 
   it("keeps interleaved reasoning items bound to their output indices", async () => {
@@ -1392,37 +1603,80 @@ describe("processResponsesStream", () => {
         },
       }),
       buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
-      formatError: (error) => (error instanceof Error ? error.message : String(error)),
     });
 
     expect(lifecycleOutput.stopReason).toBe("error");
     expect(lifecycleOutput.errorMessage).toBe("Provider incomplete_reason: content_filter");
   });
 
-  it("preserves failed terminal response details", async () => {
+  it("preserves failed terminal response details and accounting", async () => {
+    const model = {
+      ...nativeOpenAIModel,
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+    } satisfies Model<"openai-responses">;
     const output = createAssistantOutput();
-
-    await processResponsesStream(
-      responseEvents([
-        {
-          type: "response.failed",
-          response: {
-            id: "resp_failed",
-            status: "failed",
-            error: { code: "server_error", message: "provider failed" },
-          },
-        },
-      ]),
-      output,
-      new AssistantMessageEventStream(),
-      nativeOpenAIModel,
+    const resolveServiceTier = vi.fn(
+      (
+        responseTier: ResponseCreateParamsStreaming["service_tier"],
+        requestTier: ResponseCreateParamsStreaming["service_tier"],
+      ) => responseTier ?? requestTier,
     );
+    const applyServiceTierPricing = vi.fn(
+      (usage: AssistantMessage["usage"], tier: ResponseCreateParamsStreaming["service_tier"]) => {
+        if (tier === "priority") {
+          usage.cost.total *= 2;
+        }
+      },
+    );
+
+    await expect(
+      processResponsesStream(
+        responseEvents([
+          {
+            type: "response.failed",
+            response: {
+              id: "resp_failed",
+              status: "failed",
+              model: "gpt-5.6-luna",
+              service_tier: "priority",
+              error: { code: "server_error", message: "provider failed" },
+              usage: {
+                input_tokens: 21,
+                output_tokens: 4,
+                total_tokens: 25,
+                input_tokens_details: { cached_tokens: 6, cache_write_tokens: 2 },
+                output_tokens_details: { reasoning_tokens: 3 },
+              },
+            },
+          },
+        ]),
+        output,
+        new AssistantMessageEventStream(),
+        model,
+        { serviceTier: "default", resolveServiceTier, applyServiceTierPricing },
+      ),
+    ).rejects.toThrow("server_error: provider failed");
 
     expect(output).toMatchObject({
       responseId: "resp_failed",
-      stopReason: "error",
-      errorMessage: "server_error: provider failed",
+      responseModel: "gpt-5.6-luna",
+      stopReason: "stop",
+      usage: {
+        input: 13,
+        output: 4,
+        cacheRead: 6,
+        cacheWrite: 2,
+        reasoningTokens: 3,
+        totalTokens: 25,
+      },
     });
+    expect(output.usage.cost.input).toBeCloseTo(0.000065, 10);
+    expect(output.usage.cost.output).toBeCloseTo(0.00012, 10);
+    expect(output.usage.cost.cacheRead).toBeCloseTo(0.000003, 10);
+    expect(output.usage.cost.cacheWrite).toBeCloseTo(0.0000125, 10);
+    expect(output.usage.cost.total).toBeCloseTo(0.000401, 10);
+    expect(resolveServiceTier).toHaveBeenCalledWith("priority", "default");
+    expect(applyServiceTierPricing).toHaveBeenCalledWith(output.usage, "priority");
   });
 
   it("rejects streams that end without a terminal response event", async () => {
@@ -1438,6 +1692,26 @@ describe("processResponsesStream", () => {
       ),
     ).rejects.toThrow("OpenAI Responses stream ended before a terminal response event");
     expect(output.usage.input).toBe(7);
+  });
+
+  it("preserves cancellation when the SDK swallows the abort and ends iteration", async () => {
+    const abort = new AbortController();
+    const output = createAssistantOutput();
+    async function* silentlyAbortedStream() {
+      yield { type: "response.created", response: { id: "resp_aborted" } };
+      abort.abort();
+    }
+
+    await expect(
+      processResponsesStream(
+        silentlyAbortedStream(),
+        output,
+        new AssistantMessageEventStream(),
+        nativeOpenAIModel,
+        { signal: abort.signal },
+      ),
+    ).rejects.toThrow("Request was aborted");
+    expect(output.responseId).toBe("resp_aborted");
   });
 
   it.each([
@@ -2879,8 +3153,8 @@ describe("processResponsesStream", () => {
     expect(liveTextBlockSignatures).toEqual([
       ["text_start", 0, JSON.stringify({ v: 1, id: "msg_1", phase: "final_answer" })],
       ["text_start", 1, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
-      ["text_delta", 1, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
-      ["text_delta", 1, JSON.stringify({ v: 1, id: "msg_2", phase: "final_answer" })],
+      ["text_delta", 1, undefined],
+      ["text_delta", 1, undefined],
     ]);
   });
 

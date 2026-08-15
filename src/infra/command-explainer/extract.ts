@@ -15,7 +15,7 @@ import {
   extractShellWrapperCommand,
   extractShellWrapperInlineCommand,
   isShellWrapperExecutable,
-  POSIX_SHELL_WRAPPERS,
+  POSIX_PARSEABLE_SHELL_WRAPPERS,
   resolveShellWrapperTransportArgv,
 } from "../shell-wrapper-resolution.js";
 import { parseBashForCommandExplanation } from "./tree-sitter-runtime.js";
@@ -68,7 +68,7 @@ type WalkState = {
 
 const MAX_WRAPPER_PAYLOAD_DEPTH = 2;
 
-const PARSEABLE_SHELL_WRAPPERS = new Set<string>(POSIX_SHELL_WRAPPERS);
+const PARSEABLE_SHELL_WRAPPERS = new Set<string>(POSIX_PARSEABLE_SHELL_WRAPPERS);
 
 // Span bases map nested wrapper payload offsets back to source command offsets.
 type SpanBase = {
@@ -249,6 +249,10 @@ const COMMAND_ARGUMENT_NODE_TYPES = new Set([
 
 function hasEscapedLineContinuation(text: string): boolean {
   return /\\(?:\r\n|[\r\n])/.test(text);
+}
+
+function hasLineBreakEscapedWordBoundary(text: string): boolean {
+  return /(?:\r\n|[\r\n])\\/.test(text);
 }
 
 function hasExecutableLineContinuation(text: string): boolean {
@@ -911,6 +915,8 @@ async function walk(
   const span = spanFromNode(node, state.spanBase);
   let childContext = context;
   if (node.type === "program" && hasEscapedLineContinuation(node.text)) {
+    output.risks.push({ kind: "line-continuation", text: node.text, span });
+  } else if (node.type === "word" && hasLineBreakEscapedWordBoundary(node.text)) {
     output.risks.push({ kind: "line-continuation", text: node.text, span });
   }
 

@@ -2,7 +2,6 @@
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateChatMessageGetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
@@ -12,16 +11,18 @@ import {
   dropPreSessionStartAnnouncePairs,
   projectChatDisplayMessage,
 } from "../chat-display-projection.js";
+import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import {
   readSessionMessageByIdAsync,
   readSessionMessagesAsync,
 } from "../session-transcript-readers.js";
-import { loadSessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { readChatHistoryMessageId } from "./chat-history-pages.js";
 import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 async function isChatMessageIdVisibleAfterHistoryFilters(params: {
   sessionId: string;
@@ -57,15 +58,7 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
 
 export const chatMessageGetHandlers: GatewayRequestHandlers = {
   "chat.message.get": async ({ params, respond, context }) => {
-    if (!validateChatMessageGetParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid chat.message.get params: ${formatValidationErrors(validateChatMessageGetParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateChatMessageGetParams, "chat.message.get", respond)) {
       return;
     }
     const { sessionKey, messageId, maxChars } = params as {
@@ -75,13 +68,21 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       maxChars?: number;
     };
     const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
-    const requestedAgentId = resolveRequestedChatAgentId({
+    const requestedAgent = resolveRequestedChatAgentId({
       cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
       requestedSessionKey: sessionKey,
       agentId: agentIdOverride,
     });
+    if (!requestedAgent.ok) {
+      respond(false, undefined, requestedAgent.error);
+      return;
+    }
+    const requestedAgentId = requestedAgent.agentId;
     const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
-    const { cfg, storePath, entry } = loadSessionEntryReadOnly(sessionKey, sessionLoadOptions);
+    const { cfg, storePath, entry } = loadGatewaySessionEntryReadOnly(
+      sessionKey,
+      sessionLoadOptions,
+    );
     const selectedAgent = validateChatSelectedAgent({
       cfg,
       requestedSessionKey: sessionKey,
@@ -142,6 +143,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
     const projectedMessage = resolved.message
       ? projectChatDisplayMessage(resolved.message, {
           maxChars: effectiveMaxChars,
+          resolveCurrentUserProfileDisplay,
         })
       : undefined;
     const projected = projectedMessage

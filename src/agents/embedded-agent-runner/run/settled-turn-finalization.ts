@@ -1,3 +1,4 @@
+import { markReplyPayloadForSourceSuppressionDelivery } from "../../../auto-reply/reply-payload.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveSettledTurnFinalizationText } from "../../harness/settled-turn-finalization-result.js";
 import type {
@@ -5,12 +6,23 @@ import type {
   AgentHarnessSettledTurnFinalizationResult,
 } from "../../harness/types.js";
 import { log } from "../logger.js";
-import { mergeUsageIntoAccumulator } from "../usage-accumulator.js";
+import {
+  mergeAttemptRunStatsIntoAccumulator,
+  mergeUsageIntoAccumulator,
+} from "../usage-accumulator.js";
+import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { runEmbeddedSettledTurnFinalizationWithBackend } from "./backend.js";
-import { EMBEDDED_RUN_LANE_HEARTBEAT_MS } from "./lane-runtime.js";
+import { withEmbeddedRunLaneProgressHeartbeat } from "./lane-runtime.js";
+import {
+  resolveEmbeddedRunAttemptTerminalOutcome,
+  type EmbeddedRunTerminalState,
+} from "./terminal-outcome.js";
 import { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
-import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js";
-import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+import {
+  copyAttemptDeliveryState,
+  resolveSettledTurnFinalizationRequest,
+} from "./terminal-resolution.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type TerminalPreparationInput = Parameters<typeof prepareEmbeddedRunTerminal>[0];
 type TerminalPreparationBase = Omit<
@@ -20,33 +32,21 @@ type TerminalPreparationBase = Omit<
   | "sessionIdUsed"
   | "sessionFileUsed"
   | "lastRunPromptUsage"
-  | "lastTurnTotal"
-  | "terminalInterrupted"
-  | "terminalTimedOut"
-  | "timedOutDuringCompaction"
-  | "timedOutDuringToolExecution"
+  | "terminalState"
 >;
 
 export async function prepareTerminalWithSettledTurnFinalization(input: {
   initial: {
-    attempt: EmbeddedRunAttemptResult;
-    attemptAssistant: EmbeddedRunAttemptResult["lastAssistant"];
-    currentAttemptCompletedAssistant: EmbeddedRunAttemptResult["currentAttemptCompletedAssistant"];
+    attempt: EmbeddedRunAttemptWithReceiptEvidence;
+    attemptAssistant: EmbeddedRunAttemptWithReceiptEvidence["lastAssistant"];
+    currentAttemptCompletedAssistant: EmbeddedRunAttemptWithReceiptEvidence["currentAttemptCompletedAssistant"];
     sessionIdUsed: string;
     sessionFileUsed?: string;
-    terminalAborted: boolean;
-    terminalTimedOut: boolean;
-    terminalInterrupted: boolean;
-    externalAbort: boolean;
-    signalOwnedInterruption: boolean;
-    promptError: unknown;
+    terminalState: EmbeddedRunTerminalState;
     attemptCompactionCount: number;
-    timedOutDuringCompaction: boolean;
-    timedOutDuringToolExecution: boolean;
   };
   terminalBase: TerminalPreparationBase;
   lastRunPromptUsage: TerminalPreparationInput["lastRunPromptUsage"];
-  lastTurnTotal: TerminalPreparationInput["lastTurnTotal"];
   finalization: {
     preparedAttempt: EmbeddedRunAttemptParams;
     harness: AgentHarness;
@@ -61,7 +61,6 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   const initial = input.initial;
   let attempt = initial.attempt;
   let lastRunPromptUsage = input.lastRunPromptUsage;
-  let lastTurnTotal = input.lastTurnTotal;
   let prepared = prepareEmbeddedRunTerminal({
     ...input.terminalBase,
     attempt,
@@ -69,11 +68,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     sessionIdUsed: initial.sessionIdUsed,
     sessionFileUsed: initial.sessionFileUsed,
     lastRunPromptUsage,
-    lastTurnTotal,
-    terminalInterrupted: initial.terminalInterrupted,
-    terminalTimedOut: initial.terminalTimedOut,
-    timedOutDuringCompaction: initial.timedOutDuringCompaction,
-    timedOutDuringToolExecution: initial.timedOutDuringToolExecution,
+    terminalState: initial.terminalState,
   });
   const prompt = resolveSettledTurnFinalizationRequest({
     runParams: input.terminalBase.runParams,
@@ -85,9 +80,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     recoveredFinalAssistantPayloadsAfterPromptTimeout:
       prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout,
     hasTerminalToolPresentation: input.finalization.hasTerminalToolPresentation,
-    terminalAborted: initial.terminalAborted,
-    terminalTimedOut: initial.terminalTimedOut,
-    promptError: initial.promptError,
+    terminalState: initial.terminalState,
     settledTurnFinalizationAvailable:
       typeof input.finalization.harness.finalizeSettledTurn === "function",
   });
@@ -96,11 +89,10 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       ...initial,
       prepared,
       lastRunPromptUsage,
-      lastTurnTotal,
-      finalizationAttempted: false,
-      finalizationSucceeded: false,
+      finalizationOutcome: "not-attempted" as const,
     };
   }
+  const settledFailureSignal = prepared.failureSignal;
 
   const runParams = input.terminalBase.runParams;
   const errorContext = input.terminalBase.activeErrorContext;
@@ -109,49 +101,57 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       `provider=${errorContext.provider}/${errorContext.model} — running isolated finalization`,
   );
   try {
-    attempt = await runPreparedSettledTurnFinalization({
+    const finalization = await runPreparedSettledTurnFinalization({
       attempt: input.finalization.preparedAttempt,
       settledAttempt: initial.attempt,
       harness: input.finalization.harness,
       prompt,
       noteLaneTaskProgress: input.finalization.noteLaneTaskProgress,
     });
+    attempt = finalization.attempt;
     mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, attempt.attemptUsage);
+    mergeAttemptRunStatsIntoAccumulator(input.terminalBase.usageAccumulator, attempt);
     lastRunPromptUsage = attempt.attemptUsage ?? lastRunPromptUsage;
-    lastTurnTotal = attempt.attemptUsage?.total ?? lastTurnTotal;
-    prepared = prepareEmbeddedRunTerminal({
+    if (finalization.outcome === "empty") {
+      log.warn(
+        `settled-turn finalization completed without a visible answer: runId=${runParams.runId} sessionId=${runParams.sessionId} ` +
+          `provider=${errorContext.provider}/${errorContext.model} — recording completed-empty outcome`,
+      );
+    }
+    // Successful isolated finalization owns a fresh terminal, never the original abort signal.
+    const terminalState: EmbeddedRunTerminalState = {
+      outcome: resolveEmbeddedRunAttemptTerminalOutcome({
+        attempt,
+        assistant: attempt.currentAttemptAssistant,
+      }),
+      signalOwnedInterruption: false,
+    };
+    const finalizedPrepared = prepareEmbeddedRunTerminal({
       ...input.terminalBase,
       attempt,
       currentAttemptCompletedAssistant: attempt.currentAttemptCompletedAssistant,
       sessionIdUsed: attempt.sessionIdUsed,
       sessionFileUsed: attempt.sessionFileUsed,
       lastRunPromptUsage,
-      lastTurnTotal,
-      terminalInterrupted: false,
-      terminalTimedOut: false,
-      timedOutDuringCompaction: false,
-      timedOutDuringToolExecution: false,
+      terminalState,
     });
+    // The isolated finalizer cannot call a message tool. Its answer is
+    // host-owned recovery output and must cross that source-reply suppression.
+    finalizedPrepared.payloadsWithToolMedia?.forEach(markReplyPayloadForSourceSuppressionDelivery);
+    // A failure-honest final answer cannot turn a settled cron denial into success.
+    prepared = { ...finalizedPrepared, failureSignal: settledFailureSignal };
     return {
       attempt,
       attemptAssistant: attempt.currentAttemptAssistant,
       currentAttemptCompletedAssistant: attempt.currentAttemptCompletedAssistant,
-      terminalAborted: false,
-      terminalTimedOut: false,
-      terminalInterrupted: false,
-      externalAbort: false,
-      signalOwnedInterruption: false,
-      promptError: null,
+      terminalState,
       attemptCompactionCount: 0,
-      timedOutDuringCompaction: false,
-      timedOutDuringToolExecution: false,
       sessionIdUsed: attempt.sessionIdUsed,
       sessionFileUsed: attempt.sessionFileUsed,
       prepared,
       lastRunPromptUsage,
-      lastTurnTotal,
-      finalizationAttempted: true,
-      finalizationSucceeded: true,
+      finalizationOutcome:
+        finalization.outcome === "empty" ? ("completed-empty" as const) : ("answered" as const),
     };
   } catch (error) {
     log.warn(
@@ -162,68 +162,58 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       ...initial,
       prepared,
       lastRunPromptUsage,
-      lastTurnTotal,
-      finalizationAttempted: true,
-      finalizationSucceeded: false,
+      finalizationOutcome: "failed" as const,
     };
   }
 }
 
 async function runPreparedSettledTurnFinalization(input: {
   attempt: EmbeddedRunAttemptParams;
-  settledAttempt: EmbeddedRunAttemptResult;
+  settledAttempt: EmbeddedRunAttemptWithReceiptEvidence;
   harness: AgentHarness;
   prompt: string;
   noteLaneTaskProgress: () => void;
-}): Promise<EmbeddedRunAttemptResult> {
-  input.noteLaneTaskProgress();
-  const progressInterval = setInterval(input.noteLaneTaskProgress, EMBEDDED_RUN_LANE_HEARTBEAT_MS);
-  progressInterval.unref?.();
-  try {
-    const result = await runEmbeddedSettledTurnFinalizationWithBackend(
+}): Promise<{ outcome: "answered" | "empty"; attempt: EmbeddedRunAttemptWithReceiptEvidence }> {
+  return await withEmbeddedRunLaneProgressHeartbeat(input.noteLaneTaskProgress, async () => {
+    const finalization = await runEmbeddedSettledTurnFinalizationWithBackend(
       {
         ...input.attempt,
         operation: "settled-tool-finalization",
         prompt: input.prompt,
         disableTools: true,
         skipPreparedUserTurnMessage: true,
+        suppressNextUserMessagePersistence: true,
         initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
       },
       input.settledAttempt,
       input.harness,
     );
-    return buildSettledTurnFinalizationAttemptResult({
-      result,
-      settledAttempt: input.settledAttempt,
-      prompt: input.prompt,
-      agentHarnessId: input.attempt.agentHarnessId,
-    });
-  } finally {
-    clearInterval(progressInterval);
-    input.noteLaneTaskProgress();
-  }
+    return {
+      outcome: finalization.outcome,
+      attempt: buildSettledTurnFinalizationAttemptResult({
+        outcome: finalization.outcome,
+        result: finalization.result,
+        settledAttempt: input.settledAttempt,
+        prompt: input.prompt,
+        agentHarnessId: input.attempt.agentHarnessId,
+      }),
+    };
+  });
 }
 
 function buildSettledTurnFinalizationAttemptResult(input: {
+  outcome: "answered" | "empty";
   result: AgentHarnessSettledTurnFinalizationResult;
-  settledAttempt: EmbeddedRunAttemptResult;
+  settledAttempt: EmbeddedRunAttemptWithReceiptEvidence;
   prompt: string;
   agentHarnessId?: string;
-}): EmbeddedRunAttemptResult {
+}): EmbeddedRunAttemptWithReceiptEvidence {
   const { result, settledAttempt } = input;
-  const text = resolveSettledTurnFinalizationText(result);
-  // Finalization bypasses ordinary attempt normalization. Rebuild only the
-  // terminal projection so settled side effects and retry state cannot leak in.
+  const text = input.outcome === "empty" ? "" : resolveSettledTurnFinalizationText(result);
+  // Finalization replaces terminal ownership, not host-private facts from settled tools.
+  // Keep those facts while replay, abort, and lifecycle state remain finalizer-local.
   return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
-    timedOutByRunBudget: false,
-    promptError: null,
-    promptErrorSource: null,
+    terminal: { kind: "ok" },
     sessionIdUsed: settledAttempt.sessionIdUsed,
     sessionFileUsed: settledAttempt.sessionFileUsed,
     ...(input.agentHarnessId ? { agentHarnessId: input.agentHarnessId } : {}),
@@ -231,6 +221,7 @@ function buildSettledTurnFinalizationAttemptResult(input: {
     runtimeArtifact: settledAttempt.runtimeArtifact,
     systemPromptReport: settledAttempt.systemPromptReport,
     finalPromptText: input.prompt,
+    ...copyAttemptDeliveryState(settledAttempt),
     messagesSnapshot: [...settledAttempt.messagesSnapshot, result.assistant],
     assistantTexts: [text],
     assistantTranscriptOwned: result.assistantTranscriptOwned,
@@ -239,19 +230,13 @@ function buildSettledTurnFinalizationAttemptResult(input: {
     lastAssistant: result.assistant,
     currentAttemptAssistant: result.assistant,
     currentAttemptCompletedAssistant: result.assistant,
-    toolMetas: [],
-    acceptedSessionSpawns: [],
-    didSendViaMessagingTool: false,
-    didDeliverSourceReplyViaMessageTool: false,
-    didSendDeterministicApprovalPrompt: false,
-    messagingToolSentTexts: [],
-    messagingToolSentMediaUrls: [],
-    messagingToolSentTargets: [],
-    messagingToolSourceReplyPayloads: [],
+    toolMetas: settledAttempt.toolMetas,
+    successfulNestedToolNames: settledAttempt.successfulNestedToolNames,
     hasToolMediaBlockReply: false,
-    successfulCronAdds: 0,
     cloudCodeAssistFormatError: false,
     attemptUsage: result.usage,
+    codeModeEngaged: settledAttempt.codeModeEngaged,
+    assistantTurns: 1,
     replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },

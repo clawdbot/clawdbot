@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
-import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/path-constants.js";
+import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   activateSecretsRuntimeSnapshot,
@@ -152,7 +152,7 @@ async function expectSchemaLookupInvalid(pathValue: unknown) {
 
 async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
   deleteTestEnvValue(missingEnvVar);
-  const authStorePath = path.join(resolveDefaultAgentDir({}), AUTH_PROFILE_FILENAME);
+  const authStorePath = path.join(resolveDefaultAgentDir({}), "auth-profiles.json");
   await fs.mkdir(path.dirname(authStorePath), { recursive: true });
   await fs.writeFile(
     authStorePath,
@@ -320,13 +320,158 @@ describe("gateway config methods", () => {
     requireConfigObject(res.payload?.config, "updated config");
   });
 
-  it("returns the persisted config from config.set responses", async () => {
+  it.each([
+    { change: "deletes an earlier mapping", ids: ["bravo"], unidentifiedFirst: false },
+    { change: "reorders existing mappings", ids: ["bravo", "alpha"], unidentifiedFirst: false },
+    { change: "deletes an earlier unidentified mapping", ids: ["bravo"], unidentifiedFirst: true },
+  ])(
+    "keeps redacted hook secrets with their owner when config.set $change",
+    async ({ ids, unidentifiedFirst }) => {
+      const { resetConfigRuntimeState } = await import("../config/config.js");
+      const original = await getCurrentConfigObject();
+      const configured = structuredClone(original.config);
+      configured.hooks = {
+        ...requireConfigObject(configured.hooks ?? {}, "original hooks config"),
+        mappings: [
+          {
+            ...(unidentifiedFirst ? {} : { id: "alpha" }),
+            sessionKey: "synthetic-alpha-session",
+          },
+          { id: "bravo", sessionKey: "synthetic-bravo-session" },
+        ],
+      };
+
+      try {
+        await writeJsonFile(original.path, configured);
+        resetConfigRuntimeState();
+        const current = await getCurrentConfigObject();
+        const visibleHooks = requireConfigObject(current.config.hooks, "redacted hooks config");
+        const visibleMappings = visibleHooks.mappings as Array<{
+          id: string;
+          sessionKey: string;
+        }>;
+        expect(visibleMappings.map((mapping) => mapping.sessionKey)).toEqual([
+          REDACTED_SENTINEL,
+          REDACTED_SENTINEL,
+        ]);
+
+        const submitted = structuredClone(current.config);
+        const submittedHooks = requireConfigObject(submitted.hooks, "submitted hooks config");
+        submittedHooks.mappings = ids.map((id) =>
+          visibleMappings.find((mapping) => mapping.id === id),
+        );
+
+        const response = await sendConfigSet(configRawPayload(submitted, current.hash));
+
+        expect(response.error).toBeUndefined();
+        expect(response.ok).toBe(true);
+        expect(JSON.stringify(response.payload)).not.toContain("synthetic-alpha-session");
+        expect(JSON.stringify(response.payload)).not.toContain("synthetic-bravo-session");
+        const persisted = JSON.parse(await fs.readFile(original.path, "utf-8")) as {
+          hooks?: { mappings?: Array<{ id: string; sessionKey: string }> };
+        };
+        expect(persisted.hooks?.mappings).toEqual(
+          ids.map((id) => ({ id, sessionKey: `synthetic-${id}-session` })),
+        );
+      } finally {
+        await restoreConfigFileForTest(original);
+        resetConfigRuntimeState();
+      }
+    },
+  );
+
+  it("rejects config.set when a stale snapshot drops an agent entry without changing disk", async () => {
+    const { resetConfigRuntimeState } = await import("../config/config.js");
+    const original = await getCurrentConfigObject();
+    const rosterConfig = structuredClone(original.config);
+    const agents = requireConfigObject(rosterConfig.agents ?? {}, "agents config");
+    rosterConfig.agents = {
+      ...agents,
+      entries: {
+        main: { default: true },
+        worker: { workspace: "/srv/worker" },
+      },
+    };
+    delete (rosterConfig.agents as Record<string, unknown>).list;
+
+    try {
+      await writeJsonFile(original.path, rosterConfig);
+      resetConfigRuntimeState();
+      const current = await getCurrentConfigObject();
+      const staleConfig = structuredClone(current.config);
+      const staleAgents = requireConfigObject(staleConfig.agents, "stale agents config");
+      const staleEntries = requireConfigObject(staleAgents.entries, "stale agent entries");
+      delete staleEntries.worker;
+      const before = await fs.readFile(original.path, "utf-8");
+
+      const res = await sendConfigSet(configRawPayload(staleConfig, current.hash));
+
+      expect(res.ok).toBe(false);
+      expect(res.error?.code).toBe("INVALID_REQUEST");
+      expect(res.error?.message ?? "").toContain("worker");
+      expect(res.error?.message ?? "").toContain("agents.delete RPC");
+      expect(res.error?.message ?? "").toContain("openclaw agents delete");
+      await expect(fs.readFile(original.path, "utf-8")).resolves.toBe(before);
+    } finally {
+      await restoreConfigFileForTest(original);
+      resetConfigRuntimeState();
+    }
+  });
+
+  it("accepts config.set when the submitted roster keeps every agent entry", async () => {
+    const { resetConfigRuntimeState } = await import("../config/config.js");
+    const original = await getCurrentConfigObject();
+    const rosterConfig = structuredClone(original.config);
+    const agents = requireConfigObject(rosterConfig.agents ?? {}, "agents config");
+    rosterConfig.agents = {
+      ...agents,
+      ownership: "explicit",
+      entries: {
+        main: {},
+        Worker: { workspace: "/srv/worker" },
+      },
+    };
+    delete (rosterConfig.agents as Record<string, unknown>).list;
+
+    try {
+      await writeJsonFile(original.path, rosterConfig);
+      resetConfigRuntimeState();
+      const current = await getCurrentConfigObject();
+      const submittedConfig = structuredClone(current.config);
+      const submittedAgents = requireConfigObject(
+        submittedConfig.agents,
+        "submitted agents config",
+      );
+      const submittedEntries = requireConfigObject(
+        submittedAgents.entries,
+        "submitted agent entries",
+      );
+      const worker = submittedEntries.Worker ?? submittedEntries.worker;
+      delete submittedEntries.Worker;
+      submittedEntries.worker = worker;
+
+      const res = await sendConfigSet(configRawPayload(submittedConfig, current.hash));
+
+      expect(res.error).toBeUndefined();
+      expect(res.ok).toBe(true);
+      const persisted = JSON.parse(await fs.readFile(original.path, "utf-8")) as {
+        agents?: { entries?: Record<string, unknown> };
+      };
+      expect(Object.keys(persisted.agents?.entries ?? {}).toSorted()).toEqual(["main", "worker"]);
+    } finally {
+      await restoreConfigFileForTest(original);
+      resetConfigRuntimeState();
+    }
+  });
+
+  it("invalidates a warm config.get response when config.set commits", async () => {
     const current = await getCurrentConfigObject();
     const nextConfig = structuredClone(current.config);
     delete nextConfig.meta;
-
-    const gateway = (nextConfig.gateway ??= {}) as Record<string, unknown>;
-    gateway.port = 19001;
+    const ui = (nextConfig.ui ??= {}) as Record<string, unknown>;
+    const prefs = (ui.prefs ??= {}) as Record<string, unknown>;
+    const locale = prefs.locale === "de" ? "en" : "de";
+    prefs.locale = locale;
 
     const res = await rpcReq<{
       ok?: boolean;
@@ -342,6 +487,10 @@ describe("gateway config methods", () => {
     }>(requireWs(), "config.get", {});
     expect(after.ok).toBe(true);
     expect(res.payload?.config).toEqual(after.payload?.config);
+    expect(
+      ((after.payload?.config?.ui as Record<string, unknown>)?.prefs as Record<string, unknown>)
+        ?.locale,
+    ).toBe(locale);
     requireConfigObject(res.payload?.config, "response config");
   });
 
@@ -937,8 +1086,9 @@ describe("gateway config methods", () => {
     const original = await getCurrentConfigObject();
     const agents = {
       ...(original.config.agents as Record<string, unknown> | undefined),
+      ownership: "explicit",
       entries: {
-        main: { default: true, skills: ["alpha", "beta"] },
+        main: { skills: ["alpha", "beta"] },
         worker: { skills: ["gamma"] },
       },
     };
@@ -949,6 +1099,7 @@ describe("gateway config methods", () => {
 
     try {
       const before = await getCurrentConfigObject();
+      const beforeEntries = (before.config.agents as { entries?: Record<string, unknown> }).entries;
       const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
         raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
         baseHash: before.hash,
@@ -961,7 +1112,7 @@ describe("gateway config methods", () => {
       const after = await getCurrentConfigObject();
       expect(after.hash).toBe(before.hash);
       expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual(
-        agents.entries,
+        beforeEntries,
       );
     } finally {
       await restoreConfigFileForTest(original);
@@ -972,8 +1123,9 @@ describe("gateway config methods", () => {
     const original = await getCurrentConfigObject();
     const agents = {
       ...(original.config.agents as Record<string, unknown> | undefined),
+      ownership: "explicit",
       entries: {
-        main: { default: true, skills: ["alpha", "beta"] },
+        main: { skills: ["alpha", "beta"] },
         worker: { skills: ["gamma"] },
       },
     };
@@ -984,6 +1136,7 @@ describe("gateway config methods", () => {
 
     try {
       const before = await getCurrentConfigObject();
+      const beforeEntries = (before.config.agents as { entries?: Record<string, unknown> }).entries;
       const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
         raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
         baseHash: before.hash,
@@ -997,7 +1150,7 @@ describe("gateway config methods", () => {
       const after = await getCurrentConfigObject();
       expect(after.hash).toBe(before.hash);
       expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual(
-        agents.entries,
+        beforeEntries,
       );
     } finally {
       await restoreConfigFileForTest(original);
@@ -1008,7 +1161,8 @@ describe("gateway config methods", () => {
     const original = await getCurrentConfigObject();
     const agents = {
       ...(original.config.agents as Record<string, unknown> | undefined),
-      entries: { main: { default: true, skills: ["alpha"] }, worker: {} },
+      ownership: "explicit",
+      entries: { main: { skills: ["alpha"] }, worker: {} },
     };
     const seed = await sendConfigApply(
       configRawPayload({ ...original.config, agents }, original.hash),
@@ -1037,9 +1191,9 @@ describe("gateway config methods", () => {
     const original = await getCurrentConfigObject();
     const agents = {
       ...(original.config.agents as Record<string, unknown> | undefined),
+      ownership: "explicit",
       entries: {
         main: {
-          default: true,
           subagents: { allowAgents: ["worker"] },
         },
         worker: {},
@@ -1072,8 +1226,9 @@ describe("gateway config methods", () => {
     const original = await getCurrentConfigObject();
     const agents = {
       ...(original.config.agents as Record<string, unknown> | undefined),
+      ownership: "explicit",
       entries: {
-        main: { default: true, skills: ["alpha", "beta"] },
+        main: { skills: ["alpha", "beta"] },
         worker: { skills: ["gamma"] },
       },
     };
@@ -1084,6 +1239,7 @@ describe("gateway config methods", () => {
 
     try {
       const before = await getCurrentConfigObject();
+      const beforeEntries = (before.config.agents as { entries?: Record<string, unknown> }).entries;
       const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
         raw: JSON.stringify({ agents: { entries: { main: { skills: ["alpha"] } } } }),
         baseHash: before.hash,
@@ -1093,8 +1249,11 @@ describe("gateway config methods", () => {
       expect(res.ok).toBe(true);
       const after = await getCurrentConfigObject();
       expect((after.config.agents as { entries?: Record<string, unknown> }).entries).toEqual({
-        main: { default: true, skills: ["alpha"] },
-        worker: { skills: ["gamma"] },
+        ...beforeEntries,
+        main: {
+          ...(beforeEntries?.main as Record<string, unknown> | undefined),
+          skills: ["alpha"],
+        },
       });
     } finally {
       await restoreConfigFileForTest(original);

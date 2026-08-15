@@ -7,6 +7,7 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatInvalidPortOption } from "../cli/error-format.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isValidEnvSecretRefId } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -22,6 +23,8 @@ import { resolveProviderInstallCatalogEntries } from "../plugins/provider-instal
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import { t } from "../wizard/i18n/index.js";
+import { withSetupMigrationTargetLock } from "../wizard/setup.migration-snapshot.js";
 import {
   formatDeprecatedNonInteractiveAuthChoiceError,
   isDeprecatedAuthChoice,
@@ -38,6 +41,7 @@ import {
 } from "./onboard-custom-config.js";
 import { runGuidedOnboarding } from "./onboard-guided.js";
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
+import { hasInteractiveOnboardingTty } from "./onboard-interactive-runner.js";
 import { runInteractiveSetup } from "./onboard-interactive.js";
 import { runNonInteractiveSetup } from "./onboard-non-interactive.js";
 import { resolveNonInteractiveApiKey as resolveNonInteractiveCredential } from "./onboard-non-interactive/api-keys.js";
@@ -65,6 +69,16 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
     return rejectOption(
       runtime,
       `Invalid --mode "${String(opts.mode)}". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
+    );
+  }
+  const remoteOnlyFlags = [
+    opts.remoteUrl !== undefined ? "--remote-url" : undefined,
+    opts.remoteToken !== undefined ? "--remote-token" : undefined,
+  ].filter((flag): flag is string => flag !== undefined);
+  if (opts.nonInteractive && (opts.mode ?? "local") === "local" && remoteOnlyFlags.length > 0) {
+    return rejectOption(
+      runtime,
+      `${remoteOnlyFlags.join(" and ")} ${remoteOnlyFlags.length === 1 ? "requires" : "require"} --mode remote in non-interactive setup.`,
     );
   }
   const choiceValidations: Array<readonly [string, string | undefined, readonly string[]]> = [
@@ -312,7 +326,6 @@ async function validateResetAuthChoice(params: {
             workspaceDir: params.workspaceDir,
             mode: "setup",
             includeUntrustedWorkspacePlugins: false,
-            bundledProviderVitestCompat: true,
             providerRefs: [providerAuthChoice.providerId],
             activate: true,
           }),
@@ -398,10 +411,11 @@ function validateResetNonInteractiveGateway(params: {
  * Interactive onboarding defaults to guided setup. Any explicit
  * setup flag beyond this allowlist keeps the classic wizard — those flags are
  * a public automation contract and guided setup does not honor them.
- * Boolean false and undefined mean "not passed" (Commander coerces unset
- * booleans to false); explicit `--no-install-daemon` arrives as `false` via
- * resolveInstallDaemonFlag and is special-cased. `--modern` never reaches this
- * dispatch; the command layer routes it through the inference-gated OpenClaw.
+ * Most false booleans mean "not passed" because the command layer normalizes
+ * them with Boolean(). False-valued explicit choices preserve undefined when
+ * omitted, so daemon, Tailscale-reset, and custom-model input overrides are
+ * special-cased. `--modern` never reaches this dispatch; the command layer
+ * routes it through the inference-gated OpenClaw.
  */
 const GUIDED_SAFE_ONBOARD_KEYS = new Set([
   "workspace",
@@ -411,13 +425,18 @@ const GUIDED_SAFE_ONBOARD_KEYS = new Set([
   "nonInteractive",
   "classic",
   "tui",
+  "skipUi",
 ]);
 
 function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
   if (opts.classic === true) {
     return true;
   }
-  if (opts.installDaemon !== undefined) {
+  if (
+    opts.installDaemon !== undefined ||
+    opts.tailscaleResetOnExit !== undefined ||
+    opts.customImageInput !== undefined
+  ) {
     return true;
   }
   for (const [key, value] of Object.entries(opts)) {
@@ -463,12 +482,28 @@ export async function setupWizardCommand(
     normalizedAuthChoice === opts.authChoice && flow === opts.flow
       ? opts
       : { ...opts, authChoice: normalizedAuthChoice, flow };
+  if (normalizedOpts.agentName !== undefined) {
+    const { validateFirstOnboardingAgentName } = await import("./onboard-agent.js");
+    const error = validateFirstOnboardingAgentName(normalizedOpts.agentName);
+    if (error) {
+      runtime.error(`Invalid --agent-name: ${error}`);
+      runtime.exit(1);
+      return;
+    }
+  }
   if (!validatePreflightOptions(normalizedOpts, runtime)) {
     return;
   }
   if (normalizedOpts.classic && normalizedOpts.nonInteractive) {
     runtime.error(
       "--classic cannot be combined with --non-interactive. Remove --non-interactive to open the classic wizard, or remove --classic for automated setup.",
+    );
+    runtime.exit(1);
+    return;
+  }
+  if (normalizedOpts.tui && normalizedOpts.nonInteractive) {
+    runtime.error(
+      "--tui cannot be combined with --non-interactive. Remove --tui for automation, or remove --non-interactive to open the terminal hatch.",
     );
     runtime.exit(1);
     return;
@@ -492,6 +527,13 @@ export async function setupWizardCommand(
     runtime.exit(1);
     return;
   }
+  if (normalizedOpts.resetScope && !normalizedOpts.reset) {
+    runtime.error(
+      `--reset-scope requires --reset. Re-run with ${formatCliCommand(`openclaw onboard --reset --reset-scope ${normalizedOpts.resetScope}`)}.`,
+    );
+    runtime.exit(1);
+    return;
+  }
 
   if (normalizedOpts.nonInteractive && normalizedOpts.acceptRisk !== true) {
     // Non-interactive setup can write credentials and daemon config without a
@@ -503,6 +545,14 @@ export async function setupWizardCommand(
         `Re-run with: ${formatCliCommand("openclaw onboard --non-interactive --accept-risk ...")}`,
       ].join("\n"),
     );
+    runtime.exit(1);
+    return;
+  }
+
+  if (!normalizedOpts.nonInteractive && !hasInteractiveOnboardingTty()) {
+    // Reset is destructive, so prove the selected interactive surface can run
+    // before reading or moving any operator state.
+    runtime.error(t("wizard.guided.ttyRequired"));
     runtime.exit(1);
     return;
   }
@@ -524,74 +574,80 @@ export async function setupWizardCommand(
       ? runInteractiveSetup
       : runGuidedOnboarding;
 
-  if (normalizedOpts.reset) {
-    const snapshot = await readConfigFileSnapshot();
-    const baseConfig = snapshot.sourceConfig ?? (snapshot.valid ? snapshot.config : {});
-    const resetScope: ResetScope = normalizedOpts.resetScope ?? "config+creds+sessions";
-    // Every reset scope removes the config file. Validate setup against the
-    // empty config and requested/default workspace that dispatch will see.
-    const setupBaseConfig: OpenClawConfig = {};
-    const setupWorkspaceDir = resolveUserPath(normalizedOpts.workspace ?? DEFAULT_WORKSPACE);
-    const configuredWorkspace: unknown =
-      normalizedOpts.workspace ?? baseConfig.agents?.defaults?.workspace;
-    if (
-      resetScope === "full" &&
-      normalizedOpts.workspace === undefined &&
-      snapshot.exists &&
-      !snapshot.valid &&
-      !snapshot.sourceConfig
-    ) {
-      rejectOption(
-        runtime,
-        "Cannot determine the configured workspace from an unreadable config. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
+  const runSetupAfterOptionalReset = async () => {
+    if (normalizedOpts.reset) {
+      const snapshot = await readConfigFileSnapshot();
+      const baseConfig = snapshot.sourceConfig ?? (snapshot.valid ? snapshot.config : {});
+      const resetScope: ResetScope = normalizedOpts.resetScope ?? "config+creds+sessions";
+      // Every reset scope removes the config file. Validate setup against the
+      // empty config and requested/default workspace that dispatch will see.
+      const setupBaseConfig: OpenClawConfig = {};
+      const setupWorkspaceDir = resolveUserPath(normalizedOpts.workspace ?? DEFAULT_WORKSPACE);
+      const configuredWorkspace: unknown =
+        normalizedOpts.workspace ?? baseConfig.agents?.defaults?.workspace;
+      if (
+        resetScope === "full" &&
+        normalizedOpts.workspace === undefined &&
+        snapshot.exists &&
+        !snapshot.valid &&
+        // A snapshot always carries a sourceConfig object (empty on failure), so
+        // only readError distinguishes "config could not be read" from "config
+        // parsed but configures no workspace", where the default is correct.
+        snapshot.readError !== undefined
+      ) {
+        rejectOption(
+          runtime,
+          "Cannot determine the configured workspace from an unreadable config. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
+        );
+        return;
+      }
+      if (
+        resetScope === "full" &&
+        configuredWorkspace !== undefined &&
+        (typeof configuredWorkspace !== "string" || !configuredWorkspace.trim())
+      ) {
+        rejectOption(
+          runtime,
+          "Configured workspace is invalid. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
+        );
+        return;
+      }
+      // Non-full scopes never touch the workspace, so the fallback is only an
+      // inert handleReset argument when an invalid config contains bad data.
+      const workspaceDir = resolveUserPath(
+        typeof configuredWorkspace === "string" && configuredWorkspace.trim()
+          ? configuredWorkspace
+          : DEFAULT_WORKSPACE,
       );
-      return;
+      if (
+        !(await validateResetAuthChoice({
+          opts: normalizedOpts,
+          runtime,
+          baseConfig: setupBaseConfig,
+          workspaceDir: setupWorkspaceDir,
+          resetScope,
+        }))
+      ) {
+        return;
+      }
+      if (
+        !validateResetNonInteractiveGateway({
+          opts: normalizedOpts,
+          runtime,
+          baseConfig: setupBaseConfig,
+        })
+      ) {
+        return;
+      }
+      if (!validateResetMigrationImport({ opts: normalizedOpts, runtime })) {
+        return;
+      }
+      // Reset is deliberately the final pre-dispatch step: no rejectable option
+      // checks may run after user state has moved to Trash.
+      await handleReset(resetScope, workspaceDir, runtime);
     }
-    if (
-      resetScope === "full" &&
-      configuredWorkspace !== undefined &&
-      (typeof configuredWorkspace !== "string" || !configuredWorkspace.trim())
-    ) {
-      rejectOption(
-        runtime,
-        "Configured workspace is invalid. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
-      );
-      return;
-    }
-    // Non-full scopes never touch the workspace, so the fallback is only an
-    // inert handleReset argument when an invalid config contains bad data.
-    const workspaceDir = resolveUserPath(
-      typeof configuredWorkspace === "string" && configuredWorkspace.trim()
-        ? configuredWorkspace
-        : DEFAULT_WORKSPACE,
-    );
-    if (
-      !(await validateResetAuthChoice({
-        opts: normalizedOpts,
-        runtime,
-        baseConfig: setupBaseConfig,
-        workspaceDir: setupWorkspaceDir,
-        resetScope,
-      }))
-    ) {
-      return;
-    }
-    if (
-      !validateResetNonInteractiveGateway({
-        opts: normalizedOpts,
-        runtime,
-        baseConfig: setupBaseConfig,
-      })
-    ) {
-      return;
-    }
-    if (!validateResetMigrationImport({ opts: normalizedOpts, runtime })) {
-      return;
-    }
-    // Reset is deliberately the final pre-dispatch step: no rejectable option
-    // checks may run after user state has moved to Trash.
-    await handleReset(resetScope, workspaceDir, runtime);
-  }
 
-  await runSetup(normalizedOpts, runtime);
+    await runSetup(normalizedOpts, runtime);
+  };
+  await withSetupMigrationTargetLock(resolveStateDir(), runSetupAfterOptionalReset);
 }

@@ -4,7 +4,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 const MIN_DUPLICATE_TEXT_LENGTH = 10;
-const MIN_REVERSE_SUBSTRING_DUPLICATE_RATIO = 0.5;
+const MIN_SUBSTRING_DUPLICATE_RATIO = 0.5;
 
 /**
  * Normalize text for duplicate comparison.
@@ -36,11 +36,11 @@ export function isMessagingToolDuplicateNormalized(
       return false;
     }
     if (normalized.includes(normalizedSent)) {
-      return true;
+      return normalizedSent.length >= normalized.length * MIN_SUBSTRING_DUPLICATE_RATIO;
     }
     return (
       normalizedSent.includes(normalized) &&
-      normalized.length >= normalizedSent.length * MIN_REVERSE_SUBSTRING_DUPLICATE_RATIO
+      normalized.length >= normalizedSent.length * MIN_SUBSTRING_DUPLICATE_RATIO
     );
   });
 }

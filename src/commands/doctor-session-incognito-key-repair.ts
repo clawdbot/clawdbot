@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { publishSessionEntryCacheInvalidation } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -9,12 +10,15 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-
 import {
   closeOpenClawAgentDatabaseByPath,
   isOpenClawAgentDatabaseOpen,
+  type OpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
+import { writeValidatedDoctorSessionEntryJson } from "./doctor-session-entry-rewrite.js";
 import {
   collectSharedStateSessionKeys,
   deleteRepairJournal,
@@ -46,20 +50,25 @@ export function repairReservedIncognitoSessionKeys(params: {
     ? collectSharedStateSessionKeys(sharedDatabase.db)
     : new Set<string>();
   for (const target of targets) {
-    const inspected = withOpenClawAgentDatabaseReadOnly(
-      (database) => ({
-        occupied: params.apply ? collectOccupiedSessionKeys(database.db) : new Set<string>(),
-        reserved: listReservedIncognitoKeys(database.db),
-      }),
-      { agentId: target.agentId, env: params.env, path: target.sqlitePath },
-    );
-    if (!inspected.found) {
+    const operation = runDoctorAgentDatabaseOperation({
+      agentId: target.agentId,
+      path: target.sqlitePath,
+      run: () =>
+        withOpenClawAgentDatabaseReadOnly(
+          (database) => ({
+            occupied: params.apply ? collectOccupiedSessionKeys(database.db) : new Set<string>(),
+            reserved: listReservedIncognitoKeys(database.db),
+          }),
+          { agentId: target.agentId, env: params.env, path: target.sqlitePath },
+        ),
+    });
+    if (!operation.ok || !operation.value.found) {
       continue;
     }
-    for (const key of inspected.value.reserved) {
+    for (const key of operation.value.value.reserved) {
       reservedKeys.add(key);
     }
-    for (const key of inspected.value.occupied) {
+    for (const key of operation.value.value.occupied) {
       occupiedKeys.add(key);
     }
   }
@@ -99,7 +108,7 @@ export function repairReservedIncognitoSessionKeys(params: {
     const options = { agentId: target.agentId, env: params.env, path: target.sqlitePath };
     try {
       runOpenClawAgentWriteTransaction(
-        (database) => applyReservedIncognitoKeyRenames(database.db, renames),
+        (database) => applyReservedIncognitoKeyRenames(database, renames),
         options,
         { operationLabel: "doctor.rename-reserved-incognito-session-keys" },
       );
@@ -156,18 +165,20 @@ function planReservedIncognitoKeyRenames(
 }
 
 function applyReservedIncognitoKeyRenames(
-  database: DatabaseSync,
+  database: OpenClawAgentDatabase,
   renames: readonly ReservedKeyRename[],
 ): void {
   if (renames.length === 0) {
     return;
   }
   // Board widget foreign keys are immediate; defer them so every key-bearing row renames atomically.
-  database.exec("PRAGMA defer_foreign_keys = ON;"); // sqlite-allow-raw -- transaction-local FK deferral.
+  database.db.exec("PRAGMA defer_foreign_keys = ON;"); // sqlite-allow-raw -- transaction-local FK deferral.
   for (const rename of renames) {
-    updateSessionKeyColumns(database, rename);
+    updateSessionKeyColumns(database.db, rename);
   }
   rewriteSessionEntryJsonReferences(database, new Map(renames.map((item) => [item.from, item.to])));
+  // Key and lineage columns reshape the cached map even when no entry JSON needs rewriting.
+  publishSessionEntryCacheInvalidation(database);
 }
 
 function legacyIncognitoSessionKey(sessionKey: string): string {
@@ -345,13 +356,15 @@ function updateSessionKeyColumns(database: DatabaseSync, rename: ReservedKeyRena
 }
 
 function rewriteSessionEntryJsonReferences(
-  database: DatabaseSync,
+  database: OpenClawAgentDatabase,
   renames: ReadonlyMap<string, string>,
 ): void {
-  const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
+  const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
   const rows = executeSqliteQuerySync(
-    database,
-    db.selectFrom("session_nodes").select(["session_key", "entry_json"]),
+    database.db,
+    db
+      .selectFrom("session_nodes")
+      .select(["session_key", "current_session_id", "entry_json", "updated_at"]),
   ).rows;
   for (const row of rows) {
     let parsed: unknown;
@@ -365,13 +378,7 @@ function rewriteSessionEntryJsonReferences(
     if (entryJson === row.entry_json) {
       continue;
     }
-    executeSqliteQuerySync(
-      database,
-      db
-        .updateTable("session_nodes")
-        .set({ entry_json: entryJson })
-        .where("session_key", "=", row.session_key),
-    );
+    writeValidatedDoctorSessionEntryJson(database, row, entryJson);
   }
 }
 

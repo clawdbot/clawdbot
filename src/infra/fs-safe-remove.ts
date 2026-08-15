@@ -3,6 +3,7 @@ import "./fs-safe-defaults.js";
 import path from "node:path";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
+import { isMissingPathError } from "./errors.js";
 
 async function listDirectoryEntries(root: Root, relativePath: string) {
   return await root.list(relativePath, { withFileTypes: true });
@@ -17,9 +18,19 @@ function compareDirectoryEntryNames(left: DirectoryEntry, right: DirectoryEntry)
   return left.name < right.name ? -1 : 1;
 }
 
-function isNotFoundError(error: unknown): error is NodeJS.ErrnoException {
-  const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  return code === "not-found" || code === "ENOENT";
+function isNotFoundError(error: unknown): boolean {
+  return isMissingPathError(error) || isMissingPathError(findPathAliasFilesystemCause(error));
+}
+
+function findPathAliasFilesystemCause(error: unknown): NodeJS.ErrnoException | undefined {
+  if ((error as NodeJS.ErrnoException | undefined)?.code !== "path-alias") {
+    return undefined;
+  }
+  const cause = (error as Error & { cause?: unknown }).cause;
+  const causeCode = (cause as NodeJS.ErrnoException | undefined)?.code;
+  return typeof causeCode === "string" && /^E[A-Z0-9_]+$/u.test(causeCode)
+    ? (cause as NodeJS.ErrnoException)
+    : undefined;
 }
 
 function relativeParentPath(relativePath: string): string {
@@ -58,6 +69,10 @@ async function removeRootRelativePath(
       throw new FsSafeError("not-found", "file not found", {
         cause: error instanceof Error ? error : undefined,
       });
+    }
+    const filesystemCause = findPathAliasFilesystemCause(error);
+    if (filesystemCause) {
+      throw filesystemCause;
     }
     throw error;
   }

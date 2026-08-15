@@ -6,7 +6,7 @@ import {
   embeddedAgentLog,
   formatToolExecutionErrorMessage,
   resolveToolExecutionErrorKind,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   hasPendingInternalDiagnosticEvent,
@@ -334,13 +334,25 @@ export function toCodexDynamicToolProtocolResponse(
 export function toCodexDynamicToolProgressResponse(
   response: CodexDynamicToolRuntimeResponse,
   protocolResponse: CodexDynamicToolCallResponse,
-): CodexDynamicToolCallResponse & { details?: { async: true; status: "started" } } {
-  if (response.asyncStarted !== true) {
+): CodexDynamicToolCallResponse & {
+  details?: { async: true; status: "started" } | { mcpAppPreview: unknown };
+} {
+  const transcriptDetails = response.transcriptDetails;
+  if (response.asyncStarted !== true && transcriptDetails === undefined) {
     return protocolResponse;
   }
   return {
     ...protocolResponse,
-    details: { async: true, status: "started" },
+    ...(transcriptDetails ? { details: transcriptDetails } : {}),
+    ...(response.asyncStarted === true
+      ? {
+          details: {
+            ...transcriptDetails,
+            async: true as const,
+            status: "started" as const,
+          },
+        }
+      : {}),
   };
 }
 

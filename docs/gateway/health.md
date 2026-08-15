@@ -39,7 +39,32 @@ health commands above for live connectivity checks.
 
 - `channels.<provider>.healthMonitor.enabled`: disable health-monitor restarts for a specific channel while leaving global monitoring enabled.
 - `channels.<provider>.accounts.<accountId>.healthMonitor.enabled`: multi-account override that wins over the channel-level setting.
-- These per-channel overrides apply to the built-in channels that expose them today: Discord, Google Chat, iMessage, IRC, Microsoft Teams, Signal, Slack, Telegram, and WhatsApp.
+- These per-channel overrides apply to the channels that expose them today: Discord, Google Chat, iMessage, IRC, Microsoft Teams, Signal, Slack, Telegram, and WhatsApp.
+- A crashing channel is recovered by its own auto-restart backoff first (`auto-restart attempt N/10` in the logs). The health monitor stays out of the way until that ladder ends with `giving up after 10 restart attempts`, then takes over as the last restart owner.
+
+## Inbound ingress health
+
+Channel connectivity and inbound admission are separate failure domains. A channel can hold a healthy transport connection — sending replies normally — while its durable ingress queue is unavailable, so not a single inbound message is admitted.
+
+- When a channel cannot open its durable ingress queue, its start fails and the gateway records the account as unable to receive. `openclaw channels status` reports `Channel cannot admit inbound events; its durable ingress queue is unavailable. Outbound may still work.`
+- Such an account is **unhealthy** regardless of transport state, and readiness reports it as failing. Previously it reported `health: healthy` and the health monitor never touched it.
+- Recovery stays automatic. The ingress verdict describes the account's last start attempt and is cleared by the next one, so the ordinary restart path is also how a transient queue-open failure recovers. Those restarts log as `health-monitor: restarting (reason: ingress-unavailable)` instead of the generic `stuck`.
+- If the restarts keep repeating, the cause is not transient. Check the logged ingress failure: a plugin denied the `openChannelIngressQueue` capability, for example, needs operator action rather than another restart.
+- Channels that never report ingress state are unaffected: absence means "no signal", never "broken". There is no traffic-staleness heuristic, so a genuinely quiet channel is never marked unhealthy for having received nothing.
+
+## HTTP probes
+
+The Gateway exposes three unauthenticated `GET`/`HEAD` probe pairs:
+
+| Endpoints               | Meaning                                                                                                       | Use                                                            |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `/health`, `/healthz`   | The HTTP server is live.                                                                                      | Process liveness and restart decisions.                        |
+| `/startup`, `/startupz` | Startup work is complete and the Gateway is not draining. Channel health is not consulted.                    | Orchestrator startup and traffic admission.                    |
+| `/ready`, `/readyz`     | Startup is complete, the Gateway is not draining, and configured channel accounts pass deep readiness checks. | Operator monitoring that should surface hard channel failures. |
+
+`/startupz` returns `503` with `status: "starting"` while startup sidecars are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. Use it for Kubernetes, Fly, Render, and similar traffic admission. A broken Telegram or other channel account can make `/readyz` return `503` without taking a healthy Control UI out of service through `/startupz`.
+
+Remote unauthenticated startup responses contain only `ok` and `status`. Local-direct and authenticated callers also receive `version`, `uptimeMs`, and `pendingReason` while startup is pending. Readiness details follow the same local-or-authenticated gate because they can name failing subsystems.
 
 ## Uptime monitoring
 
@@ -71,6 +96,27 @@ The command reports linked creds/auth age when available, per-channel probe summ
 session-store summary, and probe duration. It exits non-zero if the gateway is
 unreachable or the probe fails/times out.
 
+### Queue warnings
+
+A successful health RPC reports top-level `ok: true`. That value means the Gateway
+produced the snapshot; it does not mean every delivery queue is clear. Check
+`deliveryQueues.ingressPressure` for durable inbound lanes that may be blocking later
+events. The field is omitted when no pressured lanes are found.
+
+Ingress pressure uses conservative built-in diagnostic thresholds, not authoritative
+retry or claim policy for any plugin. A durable lane appears only when an active pending
+or claimed row has either reached at least eight attempts and has a recorded delivery
+error, or a claimed row has not refreshed its claim for 30 minutes. Ordinary retries
+1-7 are absent. Claim-recovery increments without a recorded error are also absent,
+while live claims stay absent because their claim timestamp is refreshed. Rows without
+a durable lane key are omitted because they cannot prove that later events are blocked;
+runtime persists a derived lane after a real derived-lane retry.
+
+Each result is grouped by channel account and reports pressured lane, pending, claimed,
+and blocked counts plus the oldest affected receive time. All active rows in a pressured
+lane contribute to those counts. The snapshot never includes lane IDs, event IDs,
+payloads, claim owners or tokens, recorded errors, or session and target identifiers.
+
 Options:
 
 - `--json`: machine-readable JSON output
@@ -78,7 +124,7 @@ Options:
 - `--verbose`: force a live probe and print gateway connection details
 - `--debug`: alias for `--verbose`
 
-The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (probe time), per-channel status, agent availability, and session-store summary.
+The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (probe time), per-channel status, agent availability, session-store summary, and optional delivery-queue warnings.
 
 ## Related
 

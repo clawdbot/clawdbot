@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
-import { isLiveAuthDrift, isLiveBillingDrift } from "./live-test-provider-drift.test-support.js";
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? "";
@@ -119,56 +118,69 @@ describeLive("embedded agent extra params (live)", () => {
 });
 
 describeAnthropicLive("embedded agent extra params (anthropic live)", () => {
-  it("verifies Anthropic fast-mode service_tier semantics against the live API", async () => {
+  it("verifies Claude Opus 5 default fallback against the live API", async () => {
     const headers = {
       "content-type": "application/json",
       "x-api-key": ANTHROPIC_KEY,
       "anthropic-version": "2023-06-01",
+      "anthropic-beta": "server-side-fallback-2026-07-01",
     };
 
-    const runProbe = async (serviceTier: "auto" | "standard_only") => {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 32,
-          service_tier: serviceTier,
-          messages: [{ role: "user", content: "Reply with OK." }],
-        }),
-      });
-      const json = (await res.json()) as {
-        error?: { message?: string };
-        stop_reason?: string;
-        usage?: { service_tier?: string };
-      };
-      const errorMessage = json.error?.message ?? `HTTP ${res.status}`;
-      if (!res.ok) {
-        if (isLiveBillingDrift(errorMessage)) {
-          console.warn(`[anthropic:live] skip service_tier ${serviceTier}: billing drift`);
-          return null;
-        }
-        if (isLiveAuthDrift(errorMessage)) {
-          console.warn(`[anthropic:live] skip service_tier ${serviceTier}: auth drift`);
-          return null;
-        }
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: "claude-opus-5",
+        max_tokens: 32,
+        fallbacks: "default",
+        messages: [{ role: "user", content: "Reply with OK." }],
+      }),
+    });
+    const json = (await res.json()) as {
+      error?: { message?: string };
+      model?: string;
+      stop_reason?: string;
+    };
+
+    expect(res.ok, json.error?.message ?? `HTTP ${res.status}`).toBe(true);
+    expect(json.model).toBe("claude-opus-5");
+    expect(json.stop_reason).toBe("end_turn");
+  }, 45_000);
+
+  it("verifies Claude Opus 5 native fast-mode contract against the live API", async () => {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": ANTHROPIC_KEY,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "fast-mode-2026-02-01",
+      },
+      body: JSON.stringify({
+        model: "claude-opus-5",
+        max_tokens: 32,
+        speed: "fast",
+        messages: [{ role: "user", content: "Reply with OK." }],
+      }),
+    });
+    const json = (await res.json()) as {
+      error?: { message?: string; type?: string };
+      stop_reason?: string;
+      usage?: { speed?: string };
+    };
+
+    if (!res.ok) {
+      if (res.status === 429) {
+        expect(json.error?.type).toBe("rate_limit_error");
+        expect(json.error?.message).toContain("fast mode");
+        return;
       }
-      expect(res.ok, errorMessage).toBe(true);
-      return json;
-    };
-
-    const standard = await runProbe("standard_only");
-    if (!standard) {
+      expect(res.status).toBe(529);
+      expect(json.error?.type).toBe("overloaded_error");
       return;
     }
-    expect(standard.usage?.service_tier).toBe("standard");
-    expect(standard.stop_reason).toBe("end_turn");
 
-    const fast = await runProbe("auto");
-    if (!fast) {
-      return;
-    }
-    expect(["standard", "priority"]).toContain(fast.usage?.service_tier);
-    expect(fast.stop_reason).toBe("end_turn");
+    expect(json.usage?.speed).toBe("fast");
+    expect(json.stop_reason).toBe("end_turn");
   }, 45_000);
 });

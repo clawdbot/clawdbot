@@ -1,10 +1,6 @@
+import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 // Tlon type declarations define plugin contracts.
-import {
-  DEFAULT_ACCOUNT_ID,
-  listCombinedAccountIds,
-  normalizeAccountId,
-  resolveMergedAccountConfig,
-} from "openclaw/plugin-sdk/account-resolution";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { ResolvedChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -60,6 +56,17 @@ function resolveTlonChannelConfig(cfg: OpenClawConfig): TlonAccountConfig | unde
   return cfg.channels?.tlon as TlonAccountConfig | undefined;
 }
 
+const {
+  listAccountIds: listTlonAccountIds,
+  resolveAccountConfig: resolveMergedNamedTlonAccountConfig,
+} = createAccountListHelpers<TlonAccountConfig>("tlon", {
+  normalizeAccountId,
+  fallbackAccountIdWhenEmpty: false,
+  hasImplicitDefaultAccount: (cfg) => Boolean(resolveTlonChannelConfig(cfg)?.ship),
+});
+
+export { listTlonAccountIds };
+
 function resolveMergedTlonAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
@@ -68,14 +75,8 @@ function resolveMergedTlonAccountConfig(
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return (channel ?? {}) as Record<string, unknown> & TlonAccountConfig;
   }
-  return resolveMergedAccountConfig<Record<string, unknown> & TlonAccountConfig>({
-    channelConfig: (channel ?? {}) as Record<string, unknown> & TlonAccountConfig,
-    accounts: channel?.accounts as
-      | Record<string, Partial<Record<string, unknown> & TlonAccountConfig>>
-      | undefined,
-    accountId,
-    normalizeAccountId,
-  });
+  return resolveMergedNamedTlonAccountConfig(cfg, accountId) as Record<string, unknown> &
+    TlonAccountConfig;
 }
 
 export function resolveTlonAccount(
@@ -149,15 +150,4 @@ export function resolveTlonAccount(
     defaultAuthorizedShips,
     ownerShip,
   };
-}
-
-export function listTlonAccountIds(cfg: OpenClawConfig): string[] {
-  const base = resolveTlonChannelConfig(cfg);
-  if (!base) {
-    return [];
-  }
-  return listCombinedAccountIds({
-    configuredAccountIds: Object.keys(base.accounts ?? {}).map(normalizeAccountId),
-    implicitAccountId: base.ship ? DEFAULT_ACCOUNT_ID : undefined,
-  });
 }

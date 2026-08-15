@@ -1,12 +1,12 @@
 import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import { CORE_BOARD_DATA_BINDING_IDS } from "../boards/board-host-capability-ids.js";
 import { BoardValidationError } from "../boards/board-layout.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { getActivePluginSessionExtensionRegistry } from "../plugins/runtime.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { agentsHandlers } from "./server-methods/agents.js";
 import { cronHandlers } from "./server-methods/cron.js";
 import { healthHandlers } from "./server-methods/health.js";
-import { sessionsHandlers } from "./server-methods/sessions.js";
+import { sessionReadHandlers } from "./server-methods/sessions-read.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { usageHandlers } from "./server-methods/usage.js";
 
@@ -14,7 +14,7 @@ type BoardDataBindingId = (typeof CORE_BOARD_DATA_BINDING_IDS)[number];
 type GatewayHandlerInvocation = Parameters<GatewayRequestHandlers[string]>[0];
 
 const BOARD_DATA_HANDLERS: Record<BoardDataBindingId, GatewayRequestHandlers[string]> = {
-  "sessions.list": sessionsHandlers["sessions.list"]!,
+  "sessions.list": sessionReadHandlers["sessions.list"]!,
   "usage.status": usageHandlers["usage.status"]!,
   "usage.cost": usageHandlers["usage.cost"]!,
   "cron.list": cronHandlers["cron.list"]!,
@@ -79,7 +79,9 @@ export async function readBoardDataBinding(
       invocation,
     );
   }
-  const registration = getActivePluginRegistry()?.dashboardDataBindings.get(bindingId);
+  // Widget grants belong to the attached gateway, not an agent-scoped runtime registry.
+  const registration =
+    getActivePluginSessionExtensionRegistry()?.dashboardDataBindings.get(bindingId);
   if (!registration) {
     throw new BoardValidationError(
       "invalid_operation",
@@ -94,7 +96,8 @@ export async function runBoardActionVerb(
   params: Record<string, unknown>,
   invocation: GatewayHandlerInvocation,
 ): Promise<unknown> {
-  const registration = getActivePluginRegistry()?.dashboardActionVerbs.get(actionId);
+  const registration =
+    getActivePluginSessionExtensionRegistry()?.dashboardActionVerbs.get(actionId);
   if (!registration) {
     throw new BoardValidationError(
       "invalid_operation",

@@ -1,7 +1,10 @@
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
-import { registerAgentRunContext } from "../../../infra/agent-events.js";
+import { registerAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
+import {
+  resolveAgentRunSessionTarget,
+  type AgentRunSessionTarget,
+} from "../../run-session-target.js";
 import { log } from "../logger.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import { buildContextEngineCompactionSessionTarget } from "./session-bootstrap.js";
@@ -14,6 +17,11 @@ type ActivePrompt = {
   persisted: boolean;
   internal: boolean;
 };
+
+type SessionWriterFence = Pick<
+  AgentRunSessionTarget,
+  "expectedLifecycleRevision" | "expectedWriterRunId"
+>;
 
 export function createEmbeddedRunSessionPromptState(input: {
   runParams: PreparedEmbeddedRunInput["runParams"];
@@ -33,6 +41,16 @@ export function createEmbeddedRunSessionPromptState(input: {
       sessionKey: resolvedSessionKey,
       sessionTarget: params.sessionTarget,
     });
+  const expectedWriterRunId = params.sessionTarget?.expectedWriterRunId?.trim();
+  const sessionWriterFence: SessionWriterFence | undefined = expectedWriterRunId
+    ? {
+        ...(params.sessionTarget?.expectedLifecycleRevision !== undefined
+          ? { expectedLifecycleRevision: params.sessionTarget.expectedLifecycleRevision }
+          : {}),
+        expectedWriterRunId,
+      }
+    : undefined;
+  let sessionTargetAdopted = false;
   let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
   let activePrompt: ActivePrompt = {
     persisted: suppressNextUserMessagePersistence,
@@ -60,17 +78,23 @@ export function createEmbeddedRunSessionPromptState(input: {
     const resolvedTarget = await resolveAgentRunSessionTarget({
       agentId: nextSessionTarget.agentId ?? sessionAgentId,
       config: params.config,
+      missingSessionKey: "resolve-existing",
       sessionId: nextSessionTarget.sessionId ?? activeSessionId,
       sessionKey: nextSessionTarget.sessionKey ?? resolvedSessionKey,
       sessionTarget: nextSessionTarget,
     });
-    activeSessionTarget = nextSessionTarget;
-    activeSessionFile = resolvedTarget.sessionFile;
+    activeSessionTarget = {
+      ...resolvedTarget,
+      ...(nextSessionTarget.threadId !== undefined ? { threadId: nextSessionTarget.threadId } : {}),
+    };
+    sessionTargetAdopted = true;
+    activeSessionFile = resolvedTarget.sessionKey;
     adoptSessionId(resolvedTarget.sessionId);
   };
-  const activateInternalPrompt = (prompt: string, persisted: boolean) => {
-    activePrompt = { override: prompt, persisted, internal: true };
-    suppressNextUserMessagePersistence = persisted;
+  // Internal control prompts are model-only context, never operator-authored transcript turns.
+  const activateInternalPrompt = (prompt: string) => {
+    activePrompt = { override: prompt, persisted: true, internal: true };
+    suppressNextUserMessagePersistence = true;
   };
   const onUserMessagePersisted: NonNullable<
     PreparedEmbeddedRunInput["runParams"]["onUserMessagePersisted"]
@@ -127,6 +151,15 @@ export function createEmbeddedRunSessionPromptState(input: {
     },
     set sessionTarget(value: ContextEngineSessionTarget | undefined) {
       activeSessionTarget = value;
+      sessionTargetAdopted = true;
+    },
+    get sessionTargetAdopted() {
+      return sessionTargetAdopted;
+    },
+    // Context engines receive only portable session identity. Keep the admitted
+    // writer fact private while carrying it across rebased/adopted targets.
+    get sessionWriterFence() {
+      return sessionWriterFence;
     },
     get activePrompt() {
       return activePrompt;
@@ -141,7 +174,7 @@ export function createEmbeddedRunSessionPromptState(input: {
     adoptSessionTarget,
     activateInternalPrompt,
     continueFromCurrentTranscript: () =>
-      activateInternalPrompt(MID_TURN_PRECHECK_CONTINUATION_PROMPT, true),
+      activateInternalPrompt(MID_TURN_PRECHECK_CONTINUATION_PROMPT),
     onUserMessagePersisted,
     waitForCurrentUserMessagePersistence,
     prepareCompactedTranscriptRetry: async () => {
@@ -149,7 +182,7 @@ export function createEmbeddedRunSessionPromptState(input: {
       if (activePrompt.internal) {
         suppressNextUserMessagePersistence = activePrompt.persisted;
       } else if (activePrompt.persisted) {
-        activateInternalPrompt(MID_TURN_PRECHECK_CONTINUATION_PROMPT, true);
+        activateInternalPrompt(MID_TURN_PRECHECK_CONTINUATION_PROMPT);
       }
     },
   };

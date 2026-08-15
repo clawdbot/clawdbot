@@ -8,8 +8,12 @@ struct ChatSessionSidebarModelTests {
     private func entry(
         key: String,
         displayName: String? = nil,
+        label: String? = nil,
+        subject: String? = nil,
+        sessionId: String? = nil,
         updatedAt: Double? = nil,
         pinned: Bool? = nil,
+        pinnedAt: Double? = nil,
         archived: Bool? = nil,
         unread: Bool? = nil,
         lastReadAt: Double? = nil,
@@ -31,11 +35,11 @@ struct ChatSessionSidebarModelTests {
             kind: nil,
             displayName: displayName,
             surface: nil,
-            subject: nil,
+            subject: subject,
             room: nil,
             space: nil,
             updatedAt: updatedAt,
-            sessionId: nil,
+            sessionId: sessionId,
             systemSent: nil,
             abortedLastRun: nil,
             thinkingLevel: nil,
@@ -46,8 +50,10 @@ struct ChatSessionSidebarModelTests {
             modelProvider: nil,
             model: nil,
             contextTokens: nil,
+            label: label,
             category: category,
             pinned: pinned,
+            pinnedAt: pinnedAt,
             archived: archived,
             unread: unread,
             agentStatus: agentStatus,
@@ -78,6 +84,49 @@ struct ChatSessionSidebarModelTests {
         #expect(sections[0].nodes.map(\.session.key) == ["b"])
         #expect(sections[1].nodes.map(\.session.key) == ["c", "a"])
         #expect(sections[1].title == "Recent")
+    }
+
+    @Test func `pinned sidebar sessions follow gateway pin chronology`() {
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: [
+                self.entry(key: "pinned-old", updatedAt: 300, pinned: true, pinnedAt: 100),
+                self.entry(key: "pinned-new", updatedAt: 100, pinned: true, pinnedAt: 300),
+                self.entry(key: "recent", updatedAt: 400),
+            ],
+            currentSessionKey: "recent",
+            query: "")
+
+        #expect(sections.map(\.id) == ["pinned", "recent"])
+        #expect(sections[0].nodes.map(\.session.key) == ["pinned-new", "pinned-old"])
+        #expect(sections[1].nodes.map(\.session.key) == ["recent"])
+    }
+
+    @Test func `sidebar sessions preserve deterministic gateway key ties`() {
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: [
+                self.entry(key: "z-tie", updatedAt: 100),
+                self.entry(key: "a-tie", updatedAt: 100),
+                self.entry(key: "m-tie", updatedAt: 100),
+            ],
+            currentSessionKey: "a-tie",
+            query: "")
+
+        #expect(sections.flatMap(\.nodes).map(\.session.key) == ["a-tie", "m-tie", "z-tie"])
+    }
+
+    @Test func `gateway groups preserve canonical session order`() {
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: [
+                self.entry(key: "project-z", updatedAt: 100, category: "Projects"),
+                self.entry(key: "project-a", updatedAt: 100, category: "Projects"),
+                self.entry(key: "recent", updatedAt: 50),
+            ],
+            currentSessionKey: "recent",
+            groups: [OpenClawChatSessionGroup(name: "Projects", position: 0)],
+            query: "")
+
+        #expect(sections.map(\.id) == ["group:Projects", "recent"])
+        #expect(sections[0].nodes.map(\.session.key) == ["project-a", "project-z"])
     }
 
     @Test func `single unpinned section carries no title`() {
@@ -258,6 +307,52 @@ struct ChatSessionSidebarModelTests {
         #expect(sections.flatMap(\.nodes).map(\.session.key) == ["agent:main:research"])
     }
 
+    @Test(arguments: ["holiday", "KYOTO", "session-123", "  HoLiDaY  "])
+    func `sidebar search matches every canonical gateway session field`(_ query: String) {
+        let matching = self.entry(
+            key: "agent:main:roadmap",
+            displayName: "Planning",
+            label: "Summer holiday",
+            subject: "Kyoto itinerary",
+            sessionId: "session-123",
+            updatedAt: 200)
+        let other = self.entry(
+            key: "agent:main:other",
+            displayName: "Unrelated",
+            updatedAt: 100)
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: [other, matching],
+            currentSessionKey: other.key,
+            query: query)
+
+        #expect(sections.flatMap(\.nodes).map(\.session.key) == [matching.key])
+    }
+
+    @Test(arguments: ["holiday", "KYOTO", "session-123"])
+    func `canonical search never reveals hidden or archived sidebar sessions`(_ query: String) {
+        let archived = self.entry(
+            key: "agent:main:archived",
+            label: "Summer holiday",
+            subject: "Kyoto itinerary",
+            sessionId: "session-123",
+            updatedAt: 300,
+            archived: true)
+        let onboarding = self.entry(
+            key: "agent:main:onboarding",
+            label: "Summer holiday",
+            subject: "Kyoto itinerary",
+            sessionId: "session-123",
+            updatedAt: 200)
+        let active = self.entry(key: "agent:main:active", updatedAt: 100)
+
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: [archived, onboarding, active],
+            currentSessionKey: active.key,
+            query: query)
+
+        #expect(sections.isEmpty)
+    }
+
     @Test func `session keys render as human names`() {
         #expect(ChatSessionSidebarModel.displayName(forKey: "agent:main:main") == "main")
         #expect(ChatSessionSidebarModel.displayName(forKey: "agent:ops:standup") == "standup (ops)")
@@ -288,6 +383,10 @@ struct ChatSessionSidebarModelTests {
         let data = try #require("""
         {
           "key": "agent:main:child",
+          "classification": "subagent",
+          "agentId": "main",
+          "isMain": false,
+          "isBackground": true,
           "parentSessionKey": "agent:main:main",
           "spawnedBy": "agent:main:controller",
           "childSessions": ["agent:main:grandchild"],
@@ -306,6 +405,10 @@ struct ChatSessionSidebarModelTests {
         let entry = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: data)
 
         #expect(entry.parentSessionKey == "agent:main:main")
+        #expect(entry.classification == "subagent")
+        #expect(entry.agentId == "main")
+        #expect(entry.isMain == false)
+        #expect(entry.isBackground == true)
         #expect(entry.spawnedBy == "agent:main:controller")
         #expect(entry.childSessions == ["agent:main:grandchild"])
         #expect(entry.status == "running")
@@ -433,7 +536,13 @@ struct ChatSessionSidebarModelTests {
             self.entry(key: "agent:main:main"),
             mainSessionKey: "agent:main:main"))
         #expect(ChatSessionSidebarModel.canArchiveSession(
-            self.entry(key: "agent:main:child"),
+            self.entry(key: "agent:main:child", sessionId: "session-child"),
+            mainSessionKey: "agent:main:main"))
+        #expect(!ChatSessionSidebarModel.canArchiveSession(
+            self.entry(key: "agent:main:missing-id"),
+            mainSessionKey: "agent:main:main"))
+        #expect(!ChatSessionSidebarModel.canArchiveSession(
+            self.entry(key: "agent:main:blank-id", sessionId: "  "),
             mainSessionKey: "agent:main:main"))
         #expect(!ChatSessionSidebarModel.canArchiveSession(
             self.entry(key: "agent:main:running", status: "running"),
@@ -495,6 +604,54 @@ struct ChatSessionSidebarModelTests {
                 activeRunIds: ["run-1"]),
             to: sessions))
         #expect(sessions[0].observerDigest?.headline == "Projected")
+    }
+
+    @Test func `global reconnect rejects foreign and stale observer projections`() throws {
+        let running = self.entry(
+            key: "global",
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["run-work"],
+            observerDigest: .init(
+                agentId: "work",
+                runId: "run-work",
+                revision: 4,
+                updatedAt: 400,
+                headline: "Current work status",
+                health: "grinding"))
+
+        let foreign = try #require(ChatSessionSidebarModel.applying(
+            sessionChange: .init(
+                sessionKey: "global",
+                agentId: "main",
+                reason: "run-progress",
+                observerDigest: .init(
+                    agentId: "main",
+                    runId: "run-work",
+                    revision: 9,
+                    updatedAt: 900,
+                    headline: "Foreign status",
+                    health: "done")),
+            to: [running],
+            activeAgentId: "work"))
+
+        let replayed = try #require(ChatSessionSidebarModel.applying(
+            sessionChange: .init(
+                sessionKey: "global",
+                agentId: "work",
+                reason: "run-progress",
+                observerDigest: .init(
+                    agentId: "work",
+                    runId: "run-work",
+                    revision: 3,
+                    updatedAt: 1_000,
+                    headline: "Replayed work status",
+                    health: "on-track")),
+            to: foreign,
+            activeAgentId: "work"))
+
+        #expect(replayed[0].observerDigest?.headline == "Current work status")
+        #expect(replayed[0].observerDigest?.revision == 4)
     }
 
     @Test func `run rollover clears a stale digest before the replacement event`() throws {

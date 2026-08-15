@@ -1,5 +1,4 @@
 import OpenClawChatUI
-import OpenClawIPC
 import SwiftUI
 
 /// Onboarding hero mascot with the openclaw.ai hero treatment: the animated
@@ -23,7 +22,12 @@ struct GlowingOpenClawIcon: View {
     }
 
     var body: some View {
-        OpenClawMascotView(mood: self.mood, accessory: self.accessory, interactive: true)
+        // The large vector hero is decorative; 30 fps burns a core while setup sits idle.
+        OpenClawMascotView(
+            mood: self.mood,
+            accessory: self.accessory,
+            interactive: true,
+            minimumFrameInterval: 1.0 / 12.0)
             .frame(width: self.size, height: self.size)
             .shadow(
                 color: OpenClawMascotView.heroGlowColor(for: self.colorScheme),
@@ -38,9 +42,6 @@ extension OnboardingView {
         case connection
         case cli
         case ai
-        case memory
-        case permissions
-        case chat
         case ready
     }
 
@@ -53,9 +54,7 @@ extension OnboardingView {
         var aiPhase: OnboardingAISetupModel.Phase = .idle
         var aiBusy = false
         var aiFailed = false
-        var memoryPhase: OnboardingMemoryImportModel.Phase = .idle
         var remoteProbeState: RemoteOnboardingProbeState = .idle
-        var allPermissionsGranted = false
     }
 
     /// The hero mascot mirrors what setup is doing: curious while choosing,
@@ -70,10 +69,7 @@ extension OnboardingView {
             aiPhase: self.aiSetup.phase,
             aiBusy: self.aiSetup.isBusy,
             aiFailed: Self.aiSetupLooksFailed(self.aiSetup),
-            memoryPhase: self.memoryImport.phase,
-            remoteProbeState: self.remoteProbeState,
-            allPermissionsGranted: Capability.importanceOrdered
-                .allSatisfy { self.permissionMonitor.status[$0]?.isGranted == true }))
+            remoteProbeState: self.remoteProbeState))
     }
 
     var mascotAccessory: OpenClawMascotAccessory {
@@ -85,9 +81,6 @@ extension OnboardingView {
         case self.connectionPageIndex: .connection
         case self.cliPageIndex: .cli
         case self.aiPageIndex: .ai
-        case self.memoryImportPageIndex: .memory
-        case self.permissionsPageIndex: .permissions
-        case self.onboardingChatPageIndex: .chat
         case self.readyPageIndex: .ready
         default: .welcome
         }
@@ -100,6 +93,7 @@ extension OnboardingView {
             return false
         }
         return aiSetup.detectError != nil ||
+            aiSetup.configuredGatewayAuthIssue != nil ||
             aiSetup.exhaustedAutoCandidates ||
             aiSetup.manualError != nil ||
             candidateFailed
@@ -135,12 +129,6 @@ extension OnboardingView {
             } else {
                 .curious
             }
-        case .memory:
-            self.memoryImportMood(for: snapshot.memoryPhase)
-        case .permissions:
-            snapshot.allPermissionsGranted ? .happy : .curious
-        case .chat:
-            .attentive
         case .ready:
             .celebrating
         }
@@ -149,20 +137,7 @@ extension OnboardingView {
     static func mascotAccessory(for page: MascotPage) -> OpenClawMascotAccessory {
         switch page {
         case .ready: .gradCap
-        case .welcome, .connection, .cli, .ai, .memory, .permissions, .chat: .none
-        }
-    }
-
-    static func memoryImportMood(for phase: OnboardingMemoryImportModel.Phase) -> OpenClawMascotMood {
-        switch phase {
-        case .planning, .applying:
-            .thinking
-        case .failed:
-            .sad
-        case .done:
-            .happy
-        case .idle, .offer, .empty:
-            .curious
+        case .welcome, .connection, .cli, .ai: .none
         }
     }
 }

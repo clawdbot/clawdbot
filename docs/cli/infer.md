@@ -106,6 +106,12 @@ A good infer-based skill maps common user intents to the right subcommand, inclu
 - For `image describe`, `--file` accepts local paths and HTTP(S) URLs; remote URLs go through the normal media-fetch SSRF policy.
 - Stateless execution commands (`model run`, `image *`, `audio *`, `video *`, `web *`, `embedding *`) default to local. Gateway-managed state commands (`tts status`) default to gateway.
 - The local path never requires the gateway to be running.
+- Provider inventory commands whose `configured` state can come from saved agent auth accept
+  `--agent <id>`. Without it, they use `agents.defaults.systemAgent.agentId` or the sole configured
+  agent; explicit multi-agent fleets with no system owner must pass `--agent`. The provider catalog
+  remains aggregate; `--agent` scopes saved-auth and per-agent selection facts. Gateway-owned TTS
+  provider state remains Gateway-global, so `tts providers --gateway` does not accept `--agent`.
+- Generated image and video `--output` files are staged beside the destination and replace it only after the complete buffer is written; a failed write leaves an existing destination unchanged.
 - Local `model run` is a lean one-shot provider completion: it resolves the configured agent model and auth but does not start a chat-agent turn, load tools, or open bundled MCP servers.
 - `model run --file` attaches image files (auto-detected MIME type) to the prompt; repeat `--file` for multiple images. Non-image files are rejected — use `infer audio transcribe` or `infer video describe` instead.
 - `model run --gateway` exercises Gateway routing, saved auth, provider selection, and the embedded runtime, but stays a raw model probe: no prior session transcript, bootstrap/AGENTS context, tools, or bundled MCP servers.
@@ -120,7 +126,7 @@ openclaw infer model run --prompt "Reply with exactly: smoke-ok" --json
 openclaw infer model run --prompt "Summarize this changelog entry" --model openai/gpt-5.4 --json
 openclaw infer model run --prompt "Describe this image in one sentence" --file ./photo.jpg --model google/gemini-2.5-flash --json
 openclaw infer model run --prompt "Use more reasoning here" --thinking high --json
-openclaw infer model providers --json
+openclaw infer model providers --agent <id> --json
 openclaw infer model inspect --model gpt-5.6-sol --json
 ```
 
@@ -214,6 +220,7 @@ Speech synthesis and TTS provider/persona state.
 ```bash
 openclaw infer tts convert --text "hello from openclaw" --output ./hello.mp3 --json
 openclaw infer tts convert --text "Your build is complete" --output ./build-complete.mp3 --json
+openclaw infer tts convert --provider xiaomi --text "Provider-only selection" --output ./xiaomi.mp3 --json
 openclaw infer tts providers --json
 openclaw infer tts personas --json
 openclaw infer tts status --json
@@ -222,6 +229,8 @@ openclaw infer tts status --json
 Notes:
 
 - `tts status` only supports `--gateway` (it reflects gateway-managed TTS state).
+- Local and loopback-Gateway `tts convert --output` copies stage beside the destination and replace it only after success; a failed copy leaves an existing file unchanged.
+- Use `tts convert --provider <id>` when selecting a provider without overriding its model.
 - Use `tts providers`, `tts voices`, `tts personas`, `tts set-provider`, and `tts set-persona` to inspect and configure TTS behavior.
 
 ## Video
@@ -238,6 +247,8 @@ openclaw infer video describe --file ./clip.mp4 --model openai/gpt-5.4-mini --js
 Notes:
 
 - `video generate` accepts `--size`, `--aspect-ratio`, `--resolution`, `--duration`, `--audio`, `--watermark`, and `--timeout-ms`, forwarded to the video-generation runtime.
+- Provider-hosted video downloads reject empty, text, and JSON responses instead of reporting an unusable file as successful output.
+- With `--output`, URL-backed video streams to a sibling temporary file and replaces the destination only after the complete non-empty download succeeds; a failed stream leaves an existing destination unchanged.
 - `--model` must be `<provider/model>` for `video describe`.
 
 ## Web
@@ -248,7 +259,7 @@ Search and fetch.
 openclaw infer web search --query "OpenClaw docs" --json
 openclaw infer web search --query "OpenClaw infer web providers" --json
 openclaw infer web fetch --url https://docs.openclaw.ai/cli/infer --json
-openclaw infer web providers --json
+openclaw infer web providers --agent <id> --json
 ```
 
 `web providers` lists available, configured, and selected providers for search and fetch.
@@ -260,7 +271,7 @@ Vector creation and embedding-provider inspection.
 ```bash
 openclaw infer embedding create --text "friendly lobster" --json
 openclaw infer embedding create --text "customer support ticket: delayed shipment" --model openai/text-embedding-3-large --json
-openclaw infer embedding providers --json
+openclaw infer embedding providers --agent <id> --json
 ```
 
 ## JSON output

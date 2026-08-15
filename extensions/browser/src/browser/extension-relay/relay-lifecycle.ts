@@ -11,7 +11,6 @@ import {
   withProfileOperationLease,
 } from "../server-context.lifecycle.js";
 import type { BrowserServerState, ProfileRuntimeState } from "../server-context.types.js";
-import { deliverPageShare } from "./page-share.js";
 import { type ExtensionRelayHandle, startExtensionRelayServer } from "./relay-server.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay");
@@ -19,6 +18,7 @@ const log = createSubsystemLogger("browser").child("extension-relay");
 type PendingRelayEnsure = {
   port: number;
   token: string;
+  allowLegacyAuth: boolean;
   promise: Promise<ExtensionRelayHandle>;
 };
 
@@ -26,13 +26,33 @@ const pendingRelayEnsures = new WeakMap<ProfileRuntimeState, PendingRelayEnsure>
 
 /** Human guidance for a relay without a paired/connected extension. */
 export const EXTENSION_PAIRING_HINT =
-  "Install the OpenClaw Chrome extension, then run `openclaw browser extension pair` and paste the pairing string into the extension popup.";
+  "Run `openclaw browser extension install`, load the printed unpacked directory once, and wait for automatic setup.";
 
 function relays(state: BrowserServerState): Map<string, ExtensionRelayHandle> {
   if (!state.extensionRelays) {
     state.extensionRelays = new Map();
   }
   return state.extensionRelays;
+}
+
+function applyInternalRelayToken(
+  state: BrowserServerState,
+  profileName: string,
+  internalToken: string | null,
+): ResolvedBrowserProfile | null {
+  const tokens = { ...state.resolved.extensionRelayInternalTokens };
+  if (internalToken) {
+    tokens[profileName] = internalToken;
+  } else {
+    delete tokens[profileName];
+  }
+  state.resolved = { ...state.resolved, extensionRelayInternalTokens: tokens };
+  const resolved = resolveProfile(state.resolved, profileName);
+  const runtime = state.profiles.get(profileName);
+  if (resolved?.driver === "extension" && runtime?.profile.driver === "extension") {
+    Object.assign(runtime.profile, resolved);
+  }
+  return resolved;
 }
 
 /**
@@ -51,11 +71,10 @@ export async function ensureExtensionRelayForProfile(
     if (!isBrowserRuntimeRunning(state)) {
       throw new Error("Browser runtime is stopping");
     }
-    // The host-local relay secret can rotate while Browser control stays up.
-    // Resolve one canonical desired profile after applying that token so the
-    // intentional auth-derived cdpUrl change is not mistaken for config drift.
+    // The host-local HMAC key can rotate while Browser control stays up.
+    // Resolve one canonical desired profile after adopting the live key.
     const { ensureExtensionRelayToken, readExtensionRelayToken } = await import("./relay-auth.js");
-    const token = readExtensionRelayToken() ?? ensureExtensionRelayToken();
+    const token = readExtensionRelayToken() ?? (await ensureExtensionRelayToken());
     if (state.resolved.extensionRelayToken !== token) {
       state.resolved = { ...state.resolved, extensionRelayToken: token };
     }
@@ -67,8 +86,7 @@ export async function ensureExtensionRelayForProfile(
     ) {
       throw new Error(`Extension relay profile "${profile.name}" changed during startup.`);
     }
-    // Token rotation changes only the auth-derived CDP URL. Keep the active
-    // request's shared profile object aligned with the relay it will use.
+    // Keep the active request's shared profile object aligned with the relay.
     Object.assign(profile, desiredProfile);
 
     const runtime = getOrCreateProfileRuntime(state, desiredProfile);
@@ -81,8 +99,17 @@ export async function ensureExtensionRelayForProfile(
     }
     const pending = pendingRelayEnsures.get(runtime);
     if (pending) {
-      if (pending.port === desiredProfile.cdpPort && pending.token === token) {
-        return await pending.promise;
+      if (
+        pending.port === desiredProfile.cdpPort &&
+        pending.token === token &&
+        pending.allowLegacyAuth === state.resolved.extensionRelay.allowLegacyAuth
+      ) {
+        const handle = await pending.promise;
+        const current = resolveProfile(state.resolved, profile.name);
+        if (current) {
+          Object.assign(profile, current);
+        }
+        return handle;
       }
       try {
         await pending.promise;
@@ -95,10 +122,20 @@ export async function ensureExtensionRelayForProfile(
     }
 
     const promise = ensureDesiredRelay({ state, runtime, profile: desiredProfile, token });
-    const owned = { port: desiredProfile.cdpPort, token, promise };
+    const owned = {
+      port: desiredProfile.cdpPort,
+      token,
+      allowLegacyAuth: state.resolved.extensionRelay.allowLegacyAuth,
+      promise,
+    };
     pendingRelayEnsures.set(runtime, owned);
     try {
-      return await promise;
+      const handle = await promise;
+      const current = resolveProfile(state.resolved, profile.name);
+      if (current) {
+        Object.assign(profile, current);
+      }
+      return handle;
     } finally {
       if (pendingRelayEnsures.get(runtime) === owned) {
         pendingRelayEnsures.delete(runtime);
@@ -123,7 +160,15 @@ async function ensureDesiredRelay(params: {
       const actor = getProfileLifecycle(runtime);
       const existing = map.get(profile.name);
       if (existing) {
-        if (existing.port === profile.cdpPort && existing.token === token) {
+        if (
+          existing.port === profile.cdpPort &&
+          existing.token === token &&
+          existing.allowLegacyAuth === state.resolved.extensionRelay.allowLegacyAuth
+        ) {
+          const current = applyInternalRelayToken(state, profile.name, existing.internalToken);
+          if (current) {
+            Object.assign(profile, current);
+          }
           return existing;
         }
         // Never drop the exact old handle until close succeeds; shutdown can retry it.
@@ -133,13 +178,14 @@ async function ensureDesiredRelay(params: {
         if (map.get(profile.name) === existing) {
           map.delete(profile.name);
         }
+        applyInternalRelayToken(state, profile.name, null);
       }
       let handle: ExtensionRelayHandle | undefined;
       try {
         handle = await startExtensionRelayServer({
           port: profile.cdpPort,
           token,
-          onPageShare: (payload) => deliverPageShare(payload),
+          allowLegacyAuth: state.resolved.extensionRelay.allowLegacyAuth,
         });
         actor.cleanupRelays.add(handle);
         signal.throwIfAborted();
@@ -147,12 +193,21 @@ async function ensureDesiredRelay(params: {
         if (
           state.profiles.get(profile.name) !== runtime ||
           currentProfile?.driver !== "extension" ||
-          currentProfile.cdpUrl !== profile.cdpUrl ||
+          currentProfile.cdpPort !== profile.cdpPort ||
           state.resolved.extensionRelayToken !== token
         ) {
           throw new Error(`Extension relay profile "${profile.name}" changed during startup.`);
         }
         map.set(profile.name, handle);
+        const currentWithInternalAuth = applyInternalRelayToken(
+          state,
+          profile.name,
+          handle.internalToken,
+        );
+        if (!currentWithInternalAuth) {
+          throw new Error(`Extension relay profile "${profile.name}" disappeared during startup.`);
+        }
+        Object.assign(profile, currentWithInternalAuth);
         actor.cleanupRelays.delete(handle);
         log.info(
           `extension relay for profile "${profile.name}" listening on 127.0.0.1:${handle.port}`,
@@ -209,6 +264,7 @@ export async function stopExtensionRelays(state: BrowserServerState): Promise<vo
       if (map.get(name) === handle) {
         map.delete(name);
       }
+      applyInternalRelayToken(state, name, null);
     } catch (err) {
       log.warn(`extension relay for profile "${name}" failed to stop: ${String(err)}`);
       firstError ??=

@@ -12,6 +12,7 @@ export function resolveBundledChannelSetupPromotionSurface(
   if (!hasBundledChannelPackageSetupFeature(channelKey, "configPromotion")) {
     return null;
   }
-  const setup = getBundledChannelSetupPlugin(channelKey)?.setup;
+  const plugin = getBundledChannelSetupPlugin(channelKey);
+  const setup = plugin?.setupContract ?? plugin?.setup;
   return setup && typeof setup === "object" ? setup : null;
 }

@@ -6,6 +6,7 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 import type { AgentBinding } from "../../config/types.agents.js";
+import type { DmScope } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { ChannelApprovalNativeRuntimeAdapter } from "../../infra/approval-handler-runtime-types.js";
@@ -15,13 +16,14 @@ import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
 } from "../../infra/plugin-approvals.js";
+import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ResolverContext, SecretDefaults } from "../../secrets/runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "../../secrets/target-registry-types.js";
 import type { ChannelApprovalNativeAdapter } from "./approval-native.types.js";
 import type { ChannelRuntimeSurface } from "./channel-runtime-surface.types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
-import type { ChannelSetupInput } from "./setup-input.js";
+export type { ChannelSetupAdapter } from "./setup-adapter.types.js";
 export type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
@@ -73,47 +75,7 @@ export type ChannelCapabilitiesDiagnostics = {
 
 type ChannelAdapterCallback<T extends (...args: never[]) => unknown> = T;
 
-export type ChannelSetupAdapter<Input extends { name?: string } = ChannelSetupInput> = {
-  resolveAccountId?: (params: { cfg: OpenClawConfig; accountId?: string; input?: Input }) => string;
-  prepareAccountConfigInput?: (params: {
-    cfg: OpenClawConfig;
-    accountId: string;
-    input: Input;
-    runtime: RuntimeEnv;
-  }) => Promise<Input> | Input;
-  resolveBindingAccountId?: (params: {
-    cfg: OpenClawConfig;
-    agentId: string;
-    accountId?: string;
-  }) => string | undefined;
-  applyAccountName?: (params: {
-    cfg: OpenClawConfig;
-    accountId: string;
-    name?: string;
-  }) => OpenClawConfig;
-  applyAccountConfig: (params: {
-    cfg: OpenClawConfig;
-    accountId: string;
-    input: Input;
-  }) => OpenClawConfig;
-  afterAccountConfigWritten?: (params: {
-    previousCfg: OpenClawConfig;
-    cfg: OpenClawConfig;
-    accountId: string;
-    input: Input;
-    runtime: RuntimeEnv;
-  }) => Promise<void> | void;
-  validateInput?: (params: {
-    cfg: OpenClawConfig;
-    accountId: string;
-    input: Input;
-  }) => string | null;
-  singleAccountKeysToMove?: readonly string[];
-  namedAccountPromotionKeys?: readonly string[];
-  resolveSingleAccountPromotionTarget?: (params: {
-    channel: Record<string, unknown>;
-  }) => string | undefined;
-};
+export type ChannelAccountLinkState = "linked" | "not-linked" | "unknown";
 
 export type ChannelConfigAdapter<ResolvedAccount> = {
   listAccountIds: (cfg: OpenClawConfig) => string[];
@@ -133,7 +95,16 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
   isConfigured?: ChannelAdapterCallback<
     (account: ResolvedAccount, cfg: OpenClawConfig) => boolean | Promise<boolean>
   >;
+  isLinked?: ChannelAdapterCallback<
+    (
+      account: ResolvedAccount,
+      cfg: OpenClawConfig,
+    ) => ChannelAccountLinkState | Promise<ChannelAccountLinkState>
+  >;
   unconfiguredReason?: ChannelAdapterCallback<
+    (account: ResolvedAccount, cfg: OpenClawConfig) => string
+  >;
+  unlinkedReason?: ChannelAdapterCallback<
     (account: ResolvedAccount, cfg: OpenClawConfig) => string
   >;
   describeAccount?: ChannelAdapterCallback<
@@ -172,8 +143,6 @@ export type ChannelSecretsAdapter = {
 
 export type ChannelGroupAdapter = {
   resolveRequireMention?: (params: ChannelGroupContext) => boolean | undefined;
-  /** @deprecated Core never consumed this; removed after the next release train. */
-  resolveGroupIntroHint?: (params: ChannelGroupContext) => string | undefined;
   resolveToolPolicy?: (params: ChannelGroupContext) => GroupToolPolicyConfig | undefined;
 };
 export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unknown> = {
@@ -247,6 +216,8 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
   log?: ChannelLogSink;
   getStatus: () => ChannelAccountSnapshot;
   setStatus: (next: ChannelAccountSnapshot) => void;
+  /** Clear cached outbound directory lookups after the channel accepts newer directory data. */
+  invalidateDirectoryCache?: () => void;
   /**
    * Optional channel runtime helpers for external channel plugins.
    *
@@ -563,6 +534,10 @@ export type ChannelLifecycleAdapter = {
     trigger?: string;
     logPrefix?: string;
   }) => Promise<void> | void;
+  /**
+   * @deprecated Export stateMigrations from the plugin doctor contract instead.
+   * Removal plan: remove the lifecycle adapter after the 2027.1 external-plugin migration window.
+   */
   detectLegacyStateMigrations?: (params: {
     cfg: OpenClawConfig;
     env: NodeJS.ProcessEnv;
@@ -837,6 +812,11 @@ export type ChannelConversationBindingSupport = {
       }>;
 };
 
+type ChannelSecurityDmRouteContext<ResolvedAccount> = ChannelSecurityContext<ResolvedAccount> & {
+  accountId: string;
+  principalId?: string;
+};
+
 export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
   applyConfigFixes?: (params: {
     cfg: OpenClawConfig;
@@ -845,6 +825,12 @@ export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
   resolveDmPolicy?: ChannelAdapterCallback<
     (ctx: ChannelSecurityContext<ResolvedAccount>) => ChannelSecurityDmPolicy | null
   >;
+  dmRouting?: {
+    resolveDmScope?: (ctx: ChannelSecurityDmRouteContext<ResolvedAccount>) => DmScope | undefined;
+    resolveDmRoute?: (
+      ctx: ChannelSecurityDmRouteContext<ResolvedAccount> & { route: ResolvedAgentRoute },
+    ) => { kind: "core" | "isolated" } | { sessionKey: string } | undefined;
+  };
   collectWarnings?: ChannelAdapterCallback<
     (ctx: ChannelSecurityContext<ResolvedAccount>) => Promise<string[]> | string[]
   >;

@@ -1,4 +1,5 @@
 // Discord plugin module implements setup surface behavior.
+import { resolveBasicAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
   createSetupTranslator,
   type ChannelSetupWizard,
@@ -28,25 +29,11 @@ const t = createSetupTranslator();
 const channel = "discord" as const;
 
 async function resolveDiscordAllowFromEntries(params: { token?: string; entries: string[] }) {
-  return await resolveEntriesWithOptionalToken({
+  return await resolveBasicAllowFromEntries({
     token: params.token,
     entries: params.entries,
-    buildWithoutToken: (input) => ({
-      input,
-      resolved: false,
-      id: null,
-    }),
     resolveEntries: async ({ token, entries }) =>
-      (
-        await resolveDiscordUserAllowlist({
-          token,
-          entries,
-        })
-      ).map((entry) => ({
-        input: entry.input,
-        resolved: entry.resolved,
-        id: entry.id ?? null,
-      })),
+      await resolveDiscordUserAllowlist({ token, entries }),
   });
 }
 

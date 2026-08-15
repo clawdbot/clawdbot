@@ -15,6 +15,7 @@ import {
   resolveEventSessionRoutingPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../infra/event-session-routing.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import { resolveAgentHarnessSessionContextError } from "../sessions/agent-harness-session-key.js";
@@ -23,6 +24,7 @@ import {
   NODE_PRESENCE_ACTIVITY_EVENT,
   normalizeNodePresenceAliveReason,
 } from "../shared/node-presence.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   agentCommandFromIngress,
@@ -34,6 +36,7 @@ import {
   enqueueSystemEvent,
   formatForLog,
   getRuntimeConfig,
+  INLINE_IMAGE_DURABLE_OMISSION_MARKER,
   loadOrCreateProcessDeviceIdentity,
   loadSessionEntry,
   normalizeChannelId,
@@ -42,15 +45,16 @@ import {
   parseMessageWithAttachments,
   registerApnsRegistration,
   requestHeartbeat,
+  resolveSystemMainSessionTarget,
   resolveChatAttachmentMaxBytes,
   resolveGatewayModelSupportsImages,
   resolveOutboundTarget,
   resolveSessionAgentId,
   resolveSessionModelRef,
   persistInboundImagesForTranscript,
-  sanitizeInboundSystemTags,
-  sendDurableMessageBatch,
-  canonicalizeSessionEntryAliases,
+  sendDurableMessageBatchCore,
+  upsertSessionEntryCore,
+  withSystemEventOwner,
 } from "./server-node-events.runtime.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
@@ -172,13 +176,7 @@ function shouldDropDuplicateVoiceTranscript(params: {
         break;
       }
     }
-    while (recentVoiceTranscripts.size > MAX_RECENT_VOICE_TRANSCRIPTS) {
-      const oldestKey = recentVoiceTranscripts.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      recentVoiceTranscripts.delete(oldestKey);
-    }
+    pruneMapToMaxSize(recentVoiceTranscripts, MAX_RECENT_VOICE_TRANSCRIPTS);
   }
 
   return false;
@@ -328,13 +326,7 @@ function shouldDropDuplicateExecFinished(params: {
         break;
       }
     }
-    while (recentExecFinishedRuns.size > MAX_RECENT_EXEC_FINISHED_RUNS) {
-      const oldestKey = recentExecFinishedRuns.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      recentExecFinishedRuns.delete(oldestKey);
-    }
+    pruneMapToMaxSize(recentExecFinishedRuns, MAX_RECENT_EXEC_FINISHED_RUNS);
   }
 
   return false;
@@ -356,13 +348,7 @@ function pruneBoundedTimestampMap(
       return;
     }
   }
-  while (map.size > params.maxEntries) {
-    const oldestKey = map.keys().next().value;
-    if (oldestKey === undefined) {
-      return;
-    }
-    map.delete(oldestKey);
-  }
+  pruneMapToMaxSize(map, params.maxEntries);
 }
 
 function compactExecEventOutput(raw: string) {
@@ -394,7 +380,6 @@ type LoadedSessionEntry = ReturnType<typeof loadSessionEntry>;
 async function touchSessionStore(params: {
   storePath: LoadedSessionEntry["storePath"];
   canonicalKey: LoadedSessionEntry["canonicalKey"];
-  storeKeys: LoadedSessionEntry["storeKeys"];
   entry: LoadedSessionEntry["entry"];
   sessionId: string;
   now: number;
@@ -403,14 +388,12 @@ async function touchSessionStore(params: {
   if (!storePath) {
     return;
   }
-  await canonicalizeSessionEntryAliases({
-    storePath,
-    target: {
-      canonicalKey: params.canonicalKey,
-      storeKeys: params.storeKeys,
+  await upsertSessionEntryCore(
+    {
+      sessionKey: params.canonicalKey,
+      storePath,
     },
-    update: (entry) => ({
-      ...entry,
+    {
       sessionId: params.sessionId,
       updatedAt: params.now,
       thinkingLevel: params.entry?.thinkingLevel,
@@ -419,19 +402,15 @@ async function touchSessionStore(params: {
       reasoningLevel: params.entry?.reasoningLevel,
       systemSent: params.entry?.systemSent,
       sendPolicy: params.entry?.sendPolicy,
-      lastChannel: params.entry?.lastChannel,
-      lastTo: params.entry?.lastTo,
-      lastAccountId: params.entry?.lastAccountId,
-      lastThreadId: params.entry?.lastThreadId,
-    }),
-  });
+      delivery: params.entry?.delivery,
+    },
+  );
 }
 
 function queueSessionStoreTouch(params: {
   ctx: NodeEventContext;
   storePath: LoadedSessionEntry["storePath"];
   canonicalKey: LoadedSessionEntry["canonicalKey"];
-  storeKeys: LoadedSessionEntry["storeKeys"];
   entry: LoadedSessionEntry["entry"];
   sessionId: string;
   now: number;
@@ -446,7 +425,6 @@ function queueSessionStoreTouch(params: {
     await touchSessionStore({
       storePath: params.storePath,
       canonicalKey: params.canonicalKey,
-      storeKeys: params.storeKeys,
       entry: params.entry,
       sessionId: params.sessionId,
       now: params.now,
@@ -539,7 +517,7 @@ async function sendReceiptAck(params: {
     cfg: params.cfg,
     sessionKey: params.sessionKey,
   });
-  const send = await sendDurableMessageBatch({
+  const send = await sendDurableMessageBatchCore({
     cfg: params.cfg,
     channel: params.channel,
     to: resolved.to,
@@ -587,7 +565,7 @@ export const handleNodeEvent = async (
       const cfg = getRuntimeConfig();
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
-      const { storePath, entry, canonicalKey, storeKeys } = loadSessionEntry(sessionKey);
+      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
         return undefined;
       }
@@ -626,18 +604,17 @@ export const handleNodeEvent = async (
             ctx,
             storePath,
             canonicalKey,
-            storeKeys,
             entry,
             sessionId,
             now: receivedAt,
             isConnectionCurrent: opts?.isConnectionCurrent,
           });
 
-          // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).
-          // This maps agent bus events (keyed by per-turn runId) to chat events (keyed by clientRunId).
+          // Voice now has a unique per-turn run id, so it is also the stable
+          // client identity for chat streaming and abort lifecycle ownership.
           ctx.addChatRun(runId, {
             sessionKey: canonicalKey,
-            clientRunId: `voice-${randomUUID()}`,
+            clientRunId: runId,
           });
         },
       });
@@ -676,17 +653,17 @@ export const handleNodeEvent = async (
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
       const cfg = getRuntimeConfig();
-      const { storePath, entry, canonicalKey, storeKeys } = loadSessionEntry(sessionKey);
+      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
         return undefined;
       }
 
       let message = (link?.message ?? "").trim();
-      const transcriptMessage = message;
+      let transcriptMessage = message;
       const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
         link?.attachments ?? undefined,
       );
-      let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+      let images: Awaited<ReturnType<typeof parseMessageWithAttachments>>["images"] = [];
       let imageOrder: PromptImageOrderEntry[] = [];
       let offloadedRefs: Awaited<ReturnType<typeof parseMessageWithAttachments>>["offloadedRefs"] =
         [];
@@ -701,6 +678,8 @@ export const handleNodeEvent = async (
         const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
         const supportsInlineImages = await resolveGatewayModelSupportsImages({
           loadGatewayModelCatalog: ctx.loadGatewayModelCatalog,
+          loadGatewayModelCatalogSnapshot: ctx.loadGatewayModelCatalogSnapshot,
+          agentId: sessionAgentId,
           provider: modelRef.provider,
           model: modelRef.model,
         });
@@ -771,7 +750,6 @@ export const handleNodeEvent = async (
       await touchSessionStore({
         storePath,
         canonicalKey,
-        storeKeys,
         entry,
         sessionId,
         now,
@@ -785,11 +763,11 @@ export const handleNodeEvent = async (
       }
 
       if (deliverRequested && (!channel || !to)) {
-        const entryChannel =
-          typeof entry?.lastChannel === "string"
-            ? normalizeChannelId(entry.lastChannel)
-            : undefined;
-        const entryTo = normalizeOptionalString(entry?.lastTo) ?? "";
+        const entryContext = deliveryContextFromSession(entry);
+        const entryChannel = entryContext?.channel
+          ? normalizeChannelId(entryContext.channel)
+          : undefined;
+        const entryTo = normalizeOptionalString(entryContext?.to) ?? "";
         if (!channel && entryChannel) {
           channel = entryChannel;
         }
@@ -815,22 +793,23 @@ export const handleNodeEvent = async (
       }
       const persistedTranscriptMedia = await persistInboundImagesForTranscript({
         images,
-        imageOrder,
         offloadedRefs,
         log: ctx.logGateway,
         logContext: "agent.request",
       });
       if (!(await isNodeEventConnectionCurrent(opts))) {
         await cleanupNodeEventMedia(
-          persistedTranscriptMedia.map((media) => media.id),
+          persistedTranscriptMedia.entries.map((media) => media.id),
           ctx,
         );
         return pairingChangedResult(evt.event);
       }
-      const transcriptMedia = persistedTranscriptMedia.map((media) => ({
-        path: media.path,
-        contentType: media.contentType,
-      }));
+      if (persistedTranscriptMedia.omission === "inline-image-save-failed") {
+        transcriptMessage = [transcriptMessage, INLINE_IMAGE_DURABLE_OMISSION_MARKER]
+          .filter(Boolean)
+          .join("\n");
+      }
+      const transcriptMedia = persistedTranscriptMedia.entries.map((media) => media.fact);
 
       if (wantsReceipt && deliveryChannel && deliveryTo) {
         // Delivery stays detached from agent startup, but remains part of the
@@ -864,7 +843,10 @@ export const handleNodeEvent = async (
           message,
           images,
           imageOrder,
-          ...(transcriptMedia.length > 0 ? { transcriptMessage, transcriptMedia } : {}),
+          ...(transcriptMedia.length > 0 ||
+          persistedTranscriptMedia.omission === "inline-image-save-failed"
+            ? { transcriptMessage, ...(transcriptMedia.length > 0 ? { transcriptMedia } : {}) }
+            : {}),
           sessionId,
           sessionKey: canonicalKey,
           thinking: link?.thinking ?? undefined,
@@ -879,7 +861,7 @@ export const handleNodeEvent = async (
         opts?.isConnectionCurrent,
         () =>
           cleanupNodeEventMedia(
-            persistedTranscriptMedia.map((media) => media.id),
+            persistedTranscriptMedia.entries.map((media) => media.id),
             ctx,
           ),
       );
@@ -900,20 +882,28 @@ export const handleNodeEvent = async (
       if (!keyRaw) {
         return undefined;
       }
-      const key = sanitizeInboundSystemTags(keyRaw);
-      const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
+      const key = keyRaw;
+      const requestedSessionKey = normalizeOptionalString(obj.sessionKey);
+      let target: { sessionKey: string; agentId?: string };
+      try {
+        target = requestedSessionKey
+          ? { sessionKey: requestedSessionKey }
+          : resolveSystemMainSessionTarget(getRuntimeConfig());
+      } catch (error) {
+        ctx.logGateway.warn(
+          `notification event not delivered node=${nodeId}: ${formatErrorMessage(error)}`,
+        );
+        return undefined;
+      }
+      const sessionKeyRaw = target.sessionKey;
       const { canonicalKey: sessionKey, entry } = loadSessionEntry(sessionKeyRaw);
       if (resolveAgentHarnessSessionContextError(sessionKey, entry)) {
         return undefined;
       }
       const packageNameRaw = normalizeOptionalString(obj.packageName);
-      const packageName = packageNameRaw ? sanitizeInboundSystemTags(packageNameRaw) : null;
-      const title = compactNotificationEventText(
-        sanitizeInboundSystemTags(normalizeOptionalString(obj.title) ?? ""),
-      );
-      const text = compactNotificationEventText(
-        sanitizeInboundSystemTags(normalizeOptionalString(obj.text) ?? ""),
-      );
+      const packageName = packageNameRaw ?? null;
+      const title = compactNotificationEventText(normalizeOptionalString(obj.title) ?? "");
+      const text = compactNotificationEventText(normalizeOptionalString(obj.text) ?? "");
 
       let summary = `Notification ${change} (node=${nodeId} key=${key}`;
       if (packageName) {
@@ -927,15 +917,20 @@ export const handleNodeEvent = async (
         }
       }
 
-      const queued = enqueueSystemEvent(summary, {
+      const eventOptions = {
         sessionKey,
         contextKey: `notification:${keyRaw}`,
-      });
+      };
+      const queued = enqueueSystemEvent(
+        summary,
+        target.agentId ? withSystemEventOwner(eventOptions, target.agentId) : eventOptions,
+      );
       if (queued) {
         requestHeartbeat({
           source: "notifications-event",
           intent: "event",
           reason: "notifications-event",
+          ...(target.agentId ? { agentId: target.agentId } : {}),
           sessionKey,
         });
       }
@@ -949,7 +944,9 @@ export const handleNodeEvent = async (
       if (!sessionKey) {
         return undefined;
       }
-      await ctx.nodeSubscribe(nodeId, sessionKey, opts?.connId);
+      const { canonicalKey } = loadSessionEntry(sessionKey);
+      // Fanout is keyed by the canonical session; retain the connection owner for safe reconnect.
+      await ctx.nodeSubscribe(nodeId, canonicalKey, opts?.connId);
       return undefined;
     }
     case "chat.unsubscribe": {
@@ -960,7 +957,8 @@ export const handleNodeEvent = async (
       if (!sessionKey) {
         return undefined;
       }
-      await ctx.nodeUnsubscribe(nodeId, sessionKey, opts?.connId);
+      const { canonicalKey } = loadSessionEntry(sessionKey);
+      await ctx.nodeUnsubscribe(nodeId, canonicalKey, opts?.connId);
       return undefined;
     }
     case "exec.started":
@@ -1007,22 +1005,17 @@ export const handleNodeEvent = async (
       if (evt.event === "exec.denied") {
         return undefined;
       }
-      const command = sanitizeInboundSystemTags(normalizeOptionalString(obj.command) ?? "");
+      const command = normalizeOptionalString(obj.command) ?? "";
       const exitCode =
         typeof obj.exitCode === "number" && Number.isFinite(obj.exitCode)
           ? obj.exitCode
           : undefined;
       const timedOut = obj.timedOut === true;
-      const output = sanitizeInboundSystemTags(normalizeOptionalString(obj.output) ?? "");
-      // Strip parens from the untrusted RAW reason before sanitizeInboundSystemTags
-      // runs: the `Exec denied (node=..., <reason>): cmd` wire format is parsed by
-      // matching the first balanced `(...)` and stray parens in user-supplied
-      // input would break the metadata/body boundary. We strip pre-sanitize so
-      // that legitimate `[System Message]` style tags can still be converted to
-      // `(System Message)` by sanitizeInboundSystemTags afterward.
-      const reason = sanitizeInboundSystemTags(
-        (normalizeOptionalString(obj.reason) ?? "").replace(/[()]/g, ""),
-      );
+      const output = normalizeOptionalString(obj.output) ?? "";
+      // Strip parens from the raw reason: the `Exec denied (node=..., <reason>): cmd`
+      // wire format is parsed by matching the first balanced `(...)`, and stray
+      // parens in user-supplied input would break the metadata/body boundary.
+      const reason = (normalizeOptionalString(obj.reason) ?? "").replace(/[()]/g, "");
 
       let text;
       if (evt.event === "exec.started") {
@@ -1228,7 +1221,7 @@ export const handleNodeEvent = async (
       }
     }
     default:
-      return undefined;
+      return { ok: true, event: evt.event, handled: false, reason: "unsupported_event" };
   }
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

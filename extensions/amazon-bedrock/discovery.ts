@@ -22,6 +22,7 @@ import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaudeAdaptiveThinking,
 } from "openclaw/plugin-sdk/provider-model-shared";
@@ -71,6 +72,7 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   "anthropic.claude-mythos-5": 1_000_000,
   // AWS publishes Sonnet 5 on both bedrock-runtime (Invoke/Converse) and Mantle.
   "anthropic.claude-sonnet-5": 1_000_000,
+  "anthropic.claude-opus-5": 1_000_000,
   "anthropic.claude-3-7-sonnet-20250219-v1:0": 200_000,
   "anthropic.claude-opus-4-8": 1_000_000,
   "anthropic.claude-opus-4-7": 1_000_000,
@@ -149,7 +151,8 @@ function resolveKnownContextWindow(modelId: string): number | undefined {
     if (
       resolveClaudeFable5ModelIdentity({ id: candidate }) ||
       resolveClaudeMythos5ModelIdentity({ id: candidate }) ||
-      resolveClaudeSonnet5ModelIdentity({ id: candidate })
+      resolveClaudeSonnet5ModelIdentity({ id: candidate }) ||
+      resolveClaudeOpus5ModelIdentity({ id: candidate })
     ) {
       return 1_000_000;
     }
@@ -186,7 +189,8 @@ function resolveKnownThinkingLevelMap(
 function resolveKnownMaxTokens(modelId: string): number | undefined {
   return resolveClaudeFable5ModelIdentity({ id: modelId }) ||
     resolveClaudeMythos5ModelIdentity({ id: modelId }) ||
-    resolveClaudeSonnet5ModelIdentity({ id: modelId })
+    resolveClaudeSonnet5ModelIdentity({ id: modelId }) ||
+    resolveClaudeOpus5ModelIdentity({ id: modelId })
     ? 128_000
     : undefined;
 }
@@ -194,7 +198,8 @@ function resolveKnownMaxTokens(modelId: string): number | undefined {
 function resolveKnownInput(modelId: string): ModelDefinitionConfig["input"] | undefined {
   return resolveClaudeFable5ModelIdentity({ id: modelId }) ||
     resolveClaudeMythos5ModelIdentity({ id: modelId }) ||
-    resolveClaudeSonnet5ModelIdentity({ id: modelId })
+    resolveClaudeSonnet5ModelIdentity({ id: modelId }) ||
+    resolveClaudeOpus5ModelIdentity({ id: modelId })
     ? ["text", "image"]
     : undefined;
 }

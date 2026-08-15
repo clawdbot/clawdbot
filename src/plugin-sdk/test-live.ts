@@ -5,6 +5,7 @@ export {
   extractNonEmptyAssistantText,
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
+  readLiveTestConfig,
 } from "../agents/live-test-config.js";
 export { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 export {
@@ -13,5 +14,5 @@ export {
   isOverloadedErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
-} from "../agents/embedded-agent-helpers/failover-matches.js";
+} from "../agents/failover/classify.js";
 export { isTruthyEnvValue } from "../infra/env.js";

@@ -1,7 +1,10 @@
+import {
+  clampTimerTimeoutMs,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 // Gateway discovery runtime.
 // Starts local mDNS plugin discovery and optional wide-area DNS-SD publishing.
 import { isTruthyEnvValue } from "../infra/env.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { resolveWideAreaDiscoveryDomain, writeWideAreaGatewayZone } from "../infra/widearea-dns.js";
@@ -23,7 +26,7 @@ function resolveDiscoveryAdvertiseTimeoutMs(env: NodeJS.ProcessEnv): number {
   if (parsed === undefined) {
     return DEFAULT_DISCOVERY_ADVERTISE_TIMEOUT_MS;
   }
-  return parsed;
+  return clampTimerTimeoutMs(parsed) ?? DEFAULT_DISCOVERY_ADVERTISE_TIMEOUT_MS;
 }
 
 /** Start configured Gateway discovery publishers and return their shutdown hook. */

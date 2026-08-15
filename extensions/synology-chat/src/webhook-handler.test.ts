@@ -86,6 +86,7 @@ function makeAccount(
     enabled: true,
     token: "valid-token",
     incomingUrl: "https://nas.example.com/incoming",
+    webhookUrl: "https://gateway.example.com/webhook/synology",
     nasHost: "nas.example.com",
     webhookPath: "/webhook/synology",
     webhookPathSource: "default",
@@ -265,10 +266,12 @@ describe("createWebhookHandler", () => {
     const pending = handler(makeReq("POST", validBody), res);
     await vi.waitFor(() => expect(receive).toHaveBeenCalledTimes(1));
     expect(res.status).toBe(0);
+    expect(res.headers["x-openclaw-delivery-accepted"]).toBeUndefined();
 
     resolveAdmission?.({ kind: "durable" });
     await pending;
     expect(res.status).toBe(204);
+    expect(res.headers["x-openclaw-delivery-accepted"]).toBe("durable");
   });
 
   it("returns 503 without acknowledging when durable admission fails", async () => {
@@ -283,6 +286,7 @@ describe("createWebhookHandler", () => {
     await handler(makeReq("POST", validBody), res);
 
     expect(res.status).toBe(503);
+    expect(res.headers["x-openclaw-delivery-accepted"]).toBeUndefined();
     expect(res.body).toContain("Webhook admission failed");
   });
 

@@ -2,9 +2,10 @@
 // Centralizes Vitest mock wiring for agent, channel, plugin, and runtime seams.
 import path from "node:path";
 import { vi } from "vitest";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
-  agentCommand,
+  agentCommandMock,
   cronIsolatedRun,
   embeddedRunMock,
   type GetReplyFromConfigFn,
@@ -22,6 +23,7 @@ function createEmbeddedRunMockExports() {
     compactEmbeddedAgentSession: (...args: unknown[]) =>
       embeddedRunMock.compactEmbeddedAgentSession(...args),
     isEmbeddedAgentRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
+    isEmbeddedAgentRunInProgress: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
     abortEmbeddedAgentRun: (sessionId: string) => {
       embeddedRunMock.abortCalls.push(sessionId);
       return embeddedRunMock.activeIds.has(sessionId);
@@ -36,6 +38,7 @@ function createEmbeddedRunMockExports() {
       embeddedRunMock.waitCalls.push(sessionId);
       const ended = embeddedRunMock.waitResults.get(sessionId) ?? true;
       if (ended) {
+        embeddedRunMock.activeIds.delete(sessionId);
         embeddedRunMock.endWaiters.get(sessionId)?.(true);
       } else if (embeddedRunMock.resolveEndBeforeTimeoutIds.delete(sessionId)) {
         embeddedRunMock.endWaiters.get(sessionId)?.(true);
@@ -71,6 +74,20 @@ function createDispatchInboundMessageMockExports(
             typeof actual.dispatchInboundMessage
           >)
         : actual.dispatchInboundMessage(...args);
+    },
+    dispatchInboundMessageWithProjectedDispatcher: (
+      ...args: Parameters<typeof actual.dispatchInboundMessageWithProjectedDispatcher>
+    ) => {
+      const impl = gatewayTestHoisted.dispatchInboundMessage.getMockImplementation();
+      if (!impl) {
+        return actual.dispatchInboundMessageWithProjectedDispatcher(...args);
+      }
+      const [params] = args;
+      const { dispatcherOptions, ...dispatchParams } = params;
+      return gatewayTestHoisted.dispatchInboundMessage({
+        ...dispatchParams,
+        dispatcher: createReplyDispatcher(dispatcherOptions),
+      }) as ReturnType<typeof actual.dispatchInboundMessageWithProjectedDispatcher>;
     },
   };
 }
@@ -225,16 +242,16 @@ vi.mock("/src/agents/embedded-agent-runner/runs.js", async () => {
   >("../agents/embedded-agent-runner/runs.js", { includeActiveCount: true });
 });
 
-vi.mock("../commands/health.js", () => ({
-  getHealthSnapshot: vi.fn().mockResolvedValue({ ok: true, stub: true }),
+vi.mock("./health/collector.js", () => ({
+  collectGatewayHealthSnapshot: vi.fn().mockResolvedValue({ ok: true, stub: true }),
 }));
-vi.mock("../commands/status.js", () => ({
+vi.mock("../status/summary.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
 vi.mock("../commands/agent.js", () => ({
-  agentCommand,
-  agentCommandFromGatewayIngress: agentCommand,
-  agentCommandFromIngress: agentCommand,
+  agentCommand: agentCommandMock,
+  agentCommandFromGatewayIngress: agentCommandMock,
+  agentCommandFromIngress: agentCommandMock,
 }));
 vi.mock("../agents/btw.js", () => ({
   runBtwSideQuestion: (...args: Parameters<RunBtwSideQuestionFn>) =>
@@ -268,10 +285,12 @@ vi.mock("/src/auto-reply/reply.js", () => ({
 vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
     gatewayTestHoisted.getReplyFromConfig(...args),
+  prewarmConfigDrivenReplyRuntime: vi.fn(async () => {}),
 }));
 vi.mock("/src/auto-reply/reply/get-reply-from-config.runtime.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
     gatewayTestHoisted.getReplyFromConfig(...args),
+  prewarmConfigDrivenReplyRuntime: vi.fn(async () => {}),
 }));
 vi.mock("../cli/deps.js", async () => {
   const actual = await vi.importActual<typeof import("../cli/deps.js")>("../cli/deps.js");
@@ -294,5 +313,5 @@ vi.mock("../plugins/loader.js", async () => {
     loadOpenClawPlugins: () => getTestPluginRegistry(),
   };
 });
-process.env.OPENCLAW_SKIP_CHANNELS = "1";
-process.env.OPENCLAW_SKIP_CRON = "1";
+vi.stubEnv("OPENCLAW_SKIP_CHANNELS", "1");
+vi.stubEnv("OPENCLAW_SKIP_CRON", "1");

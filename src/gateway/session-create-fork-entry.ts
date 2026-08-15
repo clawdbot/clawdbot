@@ -1,5 +1,5 @@
-import { buildMainSessionRecoveryClearPatch } from "../agents/main-session-recovery-clear.js";
-import type { SessionEntry } from "../config/sessions.js";
+import { buildMainSessionRecoveryClearPatch } from "../agents/main-session-recovery/main-session-recovery-clear.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 
 export function buildForkedGatewaySessionEntry(
   entry: SessionEntry,
@@ -12,12 +12,13 @@ export function buildForkedGatewaySessionEntry(
     ...entry,
     ...buildMainSessionRecoveryClearPatch(entry),
     sessionId: fork.sessionId,
-    sessionFile: fork.sessionFile,
+    lifecycleRunId: undefined,
     forkSource: previousEntry?.forkSource ?? forkSource,
     ...(previousEntry?.sessionId && previousEntry.sessionId !== fork.sessionId
       ? { previousSessionId: previousEntry.sessionId }
       : {}),
     totalTokens: undefined,
     totalTokensFresh: false,
+    totalTokensVersion: undefined,
   };
 }

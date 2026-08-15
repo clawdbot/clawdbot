@@ -4,11 +4,12 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
+import { renderDocsHeadingMap } from "./docs-list.js";
 import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(HERE, "..");
+const ROOT = resolveRepoRoot(import.meta.url);
 const SOURCE_DOCS_DIR = path.join(ROOT, "docs");
 const SOURCE_CONFIG_PATH = path.join(SOURCE_DOCS_DIR, "docs.json");
 const INTERNAL_DOCS_DIRS = ["internal"];
@@ -23,6 +24,14 @@ const SYNC_SUPPORT_FILES = [
   {
     source: path.join(ROOT, "scripts", "check-docs-mdx.mjs"),
     target: path.join(".openclaw-sync", "check-docs-mdx.mjs"),
+  },
+  {
+    source: path.join(ROOT, "scripts", "check-docs-mdx.mts"),
+    target: path.join(".openclaw-sync", "check-docs-mdx.mts"),
+  },
+  {
+    source: path.join(ROOT, "scripts", "lib", "tsx-cli-shim.mjs"),
+    target: path.join(".openclaw-sync", "lib", "tsx-cli-shim.mjs"),
   },
   {
     source: path.join(ROOT, "scripts", "lib", "mintlify-accordion.mjs"),
@@ -400,14 +409,101 @@ function cloneEnglishLanguageNav(englishNav, locale) {
   };
 }
 
-function composeLocaleNav(locale, englishNav) {
-  if (locale.navMode === "clone-en") {
-    return cloneEnglishLanguageNav(englishNav, locale);
+function collectNavPages(entry, pages = new Set()) {
+  if (typeof entry === "string") {
+    pages.add(entry);
+    return pages;
   }
-  return readJson(path.join(SOURCE_DOCS_DIR, ".i18n", locale.navFile));
+  if (Array.isArray(entry)) {
+    for (const item of entry) {
+      collectNavPages(item, pages);
+    }
+    return pages;
+  }
+  if (!entry || typeof entry !== "object") {
+    return pages;
+  }
+  if (typeof entry.page === "string") {
+    pages.add(entry.page);
+  }
+  collectNavPages(entry.pages, pages);
+  collectNavPages(entry.groups, pages);
+  collectNavPages(entry.tabs, pages);
+  return pages;
 }
 
-function composeDocsConfig() {
+function findBestNavMatchIndex(candidates, overlayEntry, excludedIndexes = new Set()) {
+  const overlayPages = collectNavPages(overlayEntry);
+  let bestIndex = -1;
+  let bestScore = 0;
+  for (const [index, candidate] of candidates.entries()) {
+    if (excludedIndexes.has(index)) {
+      continue;
+    }
+    const candidatePages = collectNavPages(candidate);
+    let score = 0;
+    for (const page of overlayPages) {
+      if (candidatePages.has(page)) {
+        score += 1;
+      }
+    }
+    if (score > bestScore) {
+      bestIndex = index;
+      bestScore = score;
+    }
+  }
+  return bestIndex;
+}
+
+export function applyLocaleNavLabelOverlay(fullNav, labelOverlay) {
+  const tabs = Array.isArray(fullNav.tabs)
+    ? fullNav.tabs.map((tab) => ({
+        ...tab,
+        groups: Array.isArray(tab.groups) ? tab.groups.map((group) => ({ ...group })) : tab.groups,
+      }))
+    : fullNav.tabs;
+  const composed = { ...fullNav, tabs };
+  if (!Array.isArray(tabs) || !Array.isArray(labelOverlay?.tabs)) {
+    return composed;
+  }
+
+  for (const overlayTab of labelOverlay.tabs) {
+    const tabIndex = findBestNavMatchIndex(tabs, overlayTab);
+    if (tabIndex < 0) {
+      continue;
+    }
+    const tab = tabs[tabIndex];
+    if (typeof overlayTab.tab === "string") {
+      tab.tab = overlayTab.tab;
+    }
+    if (!Array.isArray(tab.groups) || !Array.isArray(overlayTab.groups)) {
+      continue;
+    }
+    const matchedGroupIndexes = new Set();
+    for (const overlayGroup of overlayTab.groups) {
+      const groupIndex = findBestNavMatchIndex(tab.groups, overlayGroup, matchedGroupIndexes);
+      if (groupIndex >= 0 && typeof overlayGroup.group === "string") {
+        tab.groups[groupIndex].group = overlayGroup.group;
+        matchedGroupIndexes.add(groupIndex);
+      }
+    }
+  }
+  return composed;
+}
+
+function composeLocaleNav(locale, englishNav) {
+  const cloned = cloneEnglishLanguageNav(englishNav, locale);
+  if (!locale.navFile) {
+    return cloned;
+  }
+  const overlayPath = path.join(SOURCE_DOCS_DIR, ".i18n", locale.navFile);
+  if (!fs.existsSync(overlayPath)) {
+    return cloned;
+  }
+  return applyLocaleNavLabelOverlay(cloned, readJson(overlayPath));
+}
+
+export function composeDocsConfig() {
   const sourceConfig = readJson(SOURCE_CONFIG_PATH);
   const languages = sourceConfig?.navigation?.languages;
 
@@ -697,6 +793,7 @@ function syncDocsTree(targetRoot, options = {}) {
     `${targetDocsDir}/`,
   ]);
   pruneInternalDocs(targetDocsDir);
+  writePublishedDocsMap(targetDocsDir);
 
   for (const locale of GENERATED_LOCALES) {
     const sourceTmPath = path.join(SOURCE_DOCS_DIR, ".i18n", locale.tmFile);
@@ -716,6 +813,13 @@ function syncDocsTree(targetRoot, options = {}) {
   repairGeneratedLocaleDocs(targetDocsDir);
   writeJson(path.join(targetDocsDir, "docs.json"), composeDocsConfig());
   return { clawhub: clawhubSource };
+}
+
+/** Writes the public heading map into the publish tree without committing an expanded mirror. */
+export function writePublishedDocsMap(targetDocsDir) {
+  const outputPath = path.join(targetDocsDir, "docs_map.md");
+  fs.writeFileSync(outputPath, renderDocsHeadingMap(SOURCE_DOCS_DIR), "utf8");
+  return outputPath;
 }
 
 function writeSyncMetadata(targetRoot, args, sources) {

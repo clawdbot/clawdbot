@@ -17,7 +17,7 @@ vi.mock("./setup-verify.js", () => ({
 }));
 import {
   applyClickClackCredentialConfig,
-  clickClackSetupAdapter,
+  clickClackSetupContract,
   normalizeClickClackBaseUrl,
 } from "./setup-core.js";
 
@@ -39,7 +39,7 @@ function validate(params: {
   accountId?: string;
   input: ClickClackSetupInput;
 }) {
-  return clickClackSetupAdapter.validateInput?.({
+  return clickClackSetupContract.validateInput?.({
     cfg: params.cfg ?? {},
     accountId: params.accountId ?? DEFAULT_ACCOUNT_ID,
     input: params.input,
@@ -47,7 +47,7 @@ function validate(params: {
 }
 
 async function prepare(input: ClickClackSetupInput, cfg: OpenClawConfig = {}) {
-  return await clickClackSetupAdapter.prepareAccountConfigInput?.({
+  return await clickClackSetupContract.prepareAccountConfigInput?.({
     cfg,
     accountId: DEFAULT_ACCOUNT_ID,
     input,
@@ -324,7 +324,7 @@ describe("ClickClack setup adapter", () => {
 
   it("writes setup-code defaults through the existing account patch", () => {
     expect(
-      clickClackSetupAdapter.applyAccountConfig({
+      clickClackSetupContract.applyAccountConfig({
         cfg: {},
         accountId: DEFAULT_ACCOUNT_ID,
         input: {
@@ -427,7 +427,7 @@ describe("ClickClack setup adapter", () => {
 
   it("writes normalized default and named account config", () => {
     expect(
-      clickClackSetupAdapter.applyAccountConfig({
+      clickClackSetupContract.applyAccountConfig({
         cfg: {},
         accountId: DEFAULT_ACCOUNT_ID,
         input: {
@@ -450,7 +450,7 @@ describe("ClickClack setup adapter", () => {
     });
 
     expect(
-      clickClackSetupAdapter.applyAccountConfig({
+      clickClackSetupContract.applyAccountConfig({
         cfg: { channels: { clickclack: { name: "Legacy" } } } as OpenClawConfig,
         accountId: "Work Team",
         input: {
@@ -481,7 +481,7 @@ describe("ClickClack setup adapter", () => {
 
   it("keeps --use-env config free of token fields", () => {
     expect(
-      clickClackSetupAdapter.applyAccountConfig({
+      clickClackSetupContract.applyAccountConfig({
         cfg: {},
         accountId: DEFAULT_ACCOUNT_ID,
         input: {
@@ -511,7 +511,7 @@ describe("ClickClack setup adapter", () => {
       },
     } as OpenClawConfig;
 
-    const withToken = clickClackSetupAdapter.applyAccountConfig({
+    const withToken = clickClackSetupContract.applyAccountConfig({
       cfg: {
         channels: {
           clickclack: {
@@ -530,7 +530,7 @@ describe("ClickClack setup adapter", () => {
     expect(withToken.channels?.clickclack).toMatchObject({ token: "ccb_new" });
     expect(withToken.channels?.clickclack).not.toHaveProperty("tokenFile");
 
-    const withFile = clickClackSetupAdapter.applyAccountConfig({
+    const withFile = clickClackSetupContract.applyAccountConfig({
       cfg: {
         channels: {
           clickclack: {
@@ -551,7 +551,7 @@ describe("ClickClack setup adapter", () => {
     });
     expect(withFile.channels?.clickclack).not.toHaveProperty("token");
 
-    const withEnv = clickClackSetupAdapter.applyAccountConfig({
+    const withEnv = clickClackSetupContract.applyAccountConfig({
       cfg: {
         channels: {
           clickclack: {
@@ -572,7 +572,7 @@ describe("ClickClack setup adapter", () => {
       workspace: "default",
     });
 
-    const namedWithToken = clickClackSetupAdapter.applyAccountConfig({
+    const namedWithToken = clickClackSetupContract.applyAccountConfig({
       cfg: {
         channels: {
           clickclack: {
@@ -629,7 +629,7 @@ describe("ClickClack setup adapter", () => {
     } as OpenClawConfig;
     const runtime = createNonExitingRuntimeEnv();
 
-    await clickClackSetupAdapter.afterAccountConfigWritten?.({
+    await clickClackSetupContract.afterAccountConfigWritten?.({
       previousCfg: {},
       cfg,
       accountId: DEFAULT_ACCOUNT_ID,

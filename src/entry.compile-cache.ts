@@ -180,10 +180,11 @@ function buildOpenClawCompileCacheRespawnPlan(params: {
   };
 }
 
-export function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
+export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
   currentFile: string;
   installRoot: string;
-}): boolean {
+  prepareWriteError?: () => Promise<(message: string) => void>;
+}): Promise<boolean> {
   const plan = buildOpenClawCompileCacheRespawnPlan({
     currentFile: params.currentFile,
     installRoot: params.installRoot,
@@ -192,7 +193,18 @@ export function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
   if (!plan) {
     return false;
   }
-  runOpenClawCompileCacheRespawnPlan(plan);
+  const writeError = await params.prepareWriteError?.();
+  runOpenClawCompileCacheRespawnPlan(
+    plan,
+    writeError
+      ? {
+          spawn,
+          attachChildProcessBridge,
+          exit: process.exit.bind(process) as (code?: number) => never,
+          writeError,
+        }
+      : undefined,
+  );
   return true;
 }
 
@@ -238,7 +250,6 @@ export function enableOpenClawCompileCache(params: {
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.entryCompileCacheTestApi")] = {
     buildOpenClawCompileCacheRespawnPlan,
-    isNodeVersionAffectedByCompileCacheDeadlock,
     isSourceCheckoutInstallRoot,
     resolveOpenClawCompileCacheDirectory,
     runOpenClawCompileCacheRespawnPlan,

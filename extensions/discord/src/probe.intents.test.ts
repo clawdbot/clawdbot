@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchDiscordApplicationId,
   fetchDiscordApplicationSummary,
+  probeDiscordApplicationId,
   probeDiscord,
   resolveDiscordPrivilegedIntentsFromFlags,
 } from "./probe.js";
@@ -168,6 +169,45 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
     expect(calls).toBe(2);
   });
 
+  it.each([
+    { status: 401, kind: "rejected" },
+    { status: 403, kind: "rejected" },
+    { status: 503, kind: "unavailable" },
+  ] as const)("classifies application id HTTP $status as $kind", async ({ status, kind }) => {
+    vi.useFakeTimers();
+    try {
+      const fetcher = withFetchPreconnect(
+        async () =>
+          new Response(JSON.stringify({ message: "probe failed" }), {
+            status,
+            headers: { "content-type": "application/json" },
+          }),
+      );
+      const probe = probeDiscordApplicationId("unparseable.token", 1_000, fetcher);
+      await vi.runAllTimersAsync();
+
+      await expect(probe).resolves.toMatchObject({ kind, status });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves application id network failure as unavailable without an HTTP status", async () => {
+    vi.useFakeTimers();
+    try {
+      const error = new Error("fetch failed");
+      const fetcher = withFetchPreconnect(async () => {
+        throw error;
+      });
+      const probe = probeDiscordApplicationId("unparseable.token", 1_000, fetcher);
+      await vi.runAllTimersAsync();
+
+      await expect(probe).resolves.toEqual({ kind: "unavailable", status: null, error });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not retry Cloudflare HTML rate limits during application summary probes", async () => {
     let calls = 0;
     const fetcher = withFetchPreconnect(async () => {
@@ -196,6 +236,27 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
       error: "getMe failed (401)",
     });
     expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects invalid UTF-8 in getMe probe JSON responses", async () => {
+    const prefix = new TextEncoder().encode('{"id":"bot-1","username":"bad');
+    const suffix = new TextEncoder().encode('"}');
+    const body = new Uint8Array(prefix.length + 1 + suffix.length);
+    body.set(prefix);
+    body[prefix.length] = 0xff;
+    body.set(suffix, prefix.length + 1);
+    const fetcher = withFetchPreconnect(
+      async () =>
+        new Response(body, {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        }),
+    );
+
+    await expect(probeDiscord("MTIz.abc.def", 1_000, { fetcher })).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining("discord.probe.getMe: malformed JSON response"),
+    });
   });
 
   it("bounds oversized getMe probe JSON responses and cancels the stream", async () => {

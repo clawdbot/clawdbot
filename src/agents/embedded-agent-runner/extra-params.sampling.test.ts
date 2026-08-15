@@ -238,7 +238,7 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
     expect(callOptions?.temperature).toBe(0.4);
   });
 
-  it("lets request responseFormat override configured response_format", () => {
+  it("threads a run-scoped responseFormat schema ahead of configured response_format", () => {
     const underlying = vi.fn(() => ({
       push: vi.fn(),
       result: vi.fn(async () => undefined),
@@ -248,6 +248,12 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
     })) as unknown as StreamFn;
     const agent: { streamFn?: StreamFn } = { streamFn: underlying };
 
+    const responseFormat = {
+      type: "object",
+      properties: { reply: { type: "string" } },
+      required: ["reply"],
+      additionalProperties: false,
+    };
     applyExtraParamsToAgent(
       agent,
       {
@@ -266,7 +272,7 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
       "openai",
       "gpt-5.4",
       {
-        responseFormat: { type: "json_object" },
+        responseFormat,
       },
     );
 
@@ -282,7 +288,7 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
 
     const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
       .calls[0]?.[2] as { responseFormat?: Record<string, unknown> } | undefined;
-    expect(callOptions?.responseFormat).toEqual({ type: "json_object" });
+    expect(callOptions?.responseFormat).toEqual(responseFormat);
   });
 
   it("keeps request-scoped response_format out of prepared extra params cache", () => {

@@ -1,3 +1,4 @@
+import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { MessagePresentation } from "../interactive/payload.js";
 
 /**
@@ -7,6 +8,7 @@ import type { MessagePresentation } from "../interactive/payload.js";
 export type BlockReplyPayload = {
   text?: string;
   mediaUrls?: string[];
+  attachments?: ReplyMediaAttachment[];
   audioAsVoice?: boolean;
   trustedLocalMedia?: boolean;
   sensitiveMedia?: boolean;

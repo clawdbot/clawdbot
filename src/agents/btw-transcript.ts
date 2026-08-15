@@ -1,23 +1,27 @@
 /**
  * Reads prior session transcript context for `/btw` side-question handoffs.
  */
-import { readFile } from "node:fs/promises";
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
   type SessionEntry as StoredSessionEntry,
 } from "../config/sessions.js";
-import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import {
+  listSessionEntriesCore,
+  loadSessionEntry,
+  loadTranscriptEvents,
+} from "../config/sessions/session-accessor.js";
 import {
   scanSessionTranscriptTree,
   type SessionTranscriptTree,
 } from "../config/sessions/transcript-tree.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import {
   buildSessionContext,
   migrateSessionEntries,
-  parseSessionEntries,
+  type FileEntry,
   type SessionEntry as AgentSessionEntry,
 } from "./sessions/session-manager.js";
 
@@ -34,7 +38,7 @@ export function resolveBtwSessionTranscriptPath(params: {
       agentId,
       storePath: params.storePath,
     });
-    return resolveSessionFilePath(params.sessionId, params.sessionEntry, pathOpts);
+    return resolveSessionFilePathCore(params.sessionId, params.sessionEntry, pathOpts);
   } catch (error) {
     diag.debug(
       `resolveSessionTranscriptPath failed: sessionId=${params.sessionId} err=${String(error)}`,
@@ -101,21 +105,67 @@ function isTrailingUserMessage(entry: AgentSessionEntry | undefined): boolean {
  * messages.
  */
 export async function readBtwTranscriptMessages(params: {
+  agentId?: string;
   sessionFile: string;
   sessionId: string;
   sessionKey?: string;
+  storePath?: string;
   snapshotLeafId?: string | null;
 }): Promise<unknown[]> {
   try {
     const marker = parseSqliteSessionFileMarker(params.sessionFile);
-    const entries = marker
-      ? ((await loadTranscriptEvents({
-          agentId: marker.agentId,
-          sessionId: marker.sessionId,
-          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-          storePath: marker.storePath,
-        })) as AgentSessionEntry[])
-      : parseSessionEntries(await readFile(params.sessionFile, "utf-8"));
+    const completeTarget = Boolean(
+      params.agentId?.trim() &&
+      params.sessionId.trim() &&
+      params.sessionKey?.trim() &&
+      params.storePath?.trim(),
+    );
+    const agentId = completeTarget ? params.agentId : (params.agentId ?? marker?.agentId);
+    const sessionId = completeTarget ? params.sessionId : (marker?.sessionId ?? params.sessionId);
+    const storePath = completeTarget ? params.storePath : (params.storePath ?? marker?.storePath);
+    const markerMatches =
+      marker && !completeTarget
+        ? listSessionEntriesCore({
+            agentId: marker.agentId,
+            storePath: marker.storePath,
+          }).filter(({ entry }) => entry.sessionId === marker.sessionId)
+        : [];
+    const suppliedEntry =
+      marker && params.sessionKey && !completeTarget
+        ? loadSessionEntry({
+            agentId: marker.agentId,
+            sessionKey: params.sessionKey,
+            storePath: marker.storePath,
+          })
+        : undefined;
+    if (
+      marker &&
+      !completeTarget &&
+      params.sessionKey &&
+      ((suppliedEntry && suppliedEntry.sessionId !== marker.sessionId) ||
+        (!suppliedEntry && markerMatches.length > 0))
+    ) {
+      return [];
+    }
+    const sessionKey = completeTarget
+      ? params.sessionKey
+      : marker
+        ? suppliedEntry?.sessionId === marker.sessionId
+          ? params.sessionKey
+          : (resolvePreferredSessionKeyForSessionIdMatches(
+              markerMatches.map(({ sessionKey: mappedKey, entry }) => [mappedKey, entry]),
+              marker.sessionId,
+            ) ?? (markerMatches.length === 0 ? params.sessionKey : undefined))
+        : params.sessionKey;
+    if (!sessionKey || !storePath) {
+      return [];
+    }
+    const entries = (await loadTranscriptEvents({
+      agentId,
+      sessionId,
+      sessionKey,
+      storePath,
+    })) as FileEntry[];
     migrateSessionEntries(entries);
     const sessionEntries = entries.filter(
       (entry): entry is AgentSessionEntry => entry.type !== "session",
@@ -131,7 +181,7 @@ export async function readBtwTranscriptMessages(params: {
       : undefined;
     if (hasSnapshotLeaf && branchEntries === undefined) {
       diag.debug(
-        `btw snapshot leaf unavailable: sessionId=${params.sessionId} leaf=${params.snapshotLeafId}`,
+        `btw snapshot leaf unavailable: sessionId=${sessionId} leaf=${params.snapshotLeafId}`,
       );
     }
     branchEntries ??= buildSessionBranchEntries(tree, tree.leafId);

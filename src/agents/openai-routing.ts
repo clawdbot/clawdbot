@@ -6,13 +6,13 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRouteOverridePresence } from "../plugin-sdk/provider-model-types.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
   resolveAgentScopedRuntimeOverride,
 } from "./agent-runtime-id.js";
-import { hasModelExtraParams } from "./model-extra-params.js";
+import { resolveSessionAgentIds } from "./agent-scope.js";
+import { hasAuthoredProviderRequestParams } from "./model-extra-params.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import { resolveOpenAIModelRoutes } from "./openai-model-routes.js";
 import { canonicalizeProviderModelId } from "./provider-model-route.js";
@@ -51,16 +51,23 @@ export function resolveOpenAIImplicitAgentRuntime(params: {
   }
   const modelId = params.modelId;
   const agentId =
-    params.agentId ??
-    (params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined);
-  const hasConfiguredParams = hasModelExtraParams({
+    params.config && (params.agentId?.trim() || params.sessionKey?.trim())
+      ? resolveSessionAgentIds({
+          config: params.config,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+        }).sessionAgentId
+      : params.agentId;
+  const hasConfiguredProviderRequestParams = hasAuthoredProviderRequestParams({
     config: params.config,
     provider: params.provider ?? OPENAI_PROVIDER_ID,
     modelId,
     agentId,
   });
   const requestTransportOverrides =
-    params.requestTransportOverrides === "present" || hasConfiguredParams ? "present" : "none";
+    params.requestTransportOverrides === "present" || hasConfiguredProviderRequestParams
+      ? "present"
+      : "none";
   const resolution = resolveOpenAIModelRoutes({
     provider: params.provider,
     modelId,

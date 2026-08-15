@@ -1,3 +1,5 @@
+export { createDeferredCore as createDeferred } from "../../src/shared/deferred.js";
+
 export async function withTestTimeout<T>(
   promise: PromiseLike<T>,
   timeoutMs: number,

@@ -8,7 +8,6 @@ scenario:
   docsRefs:
     - docs/concepts/streaming.md
   execution:
-    profiles: { "matrix:all": 7, "matrix:transport": 6 }
     kind: flow
     channel: matrix
     timeoutMs: 45000

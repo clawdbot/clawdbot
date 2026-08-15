@@ -1,5 +1,7 @@
 // Builds OpenAI-compatible embedding provider entries for plugins.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import type {
@@ -109,11 +111,6 @@ function normalizeDimensions(value: number | undefined): number | undefined {
 function normalizeOptionalInputType(value: string | undefined): string | undefined {
   const inputType = value?.trim();
   return inputType ? inputType : undefined;
-}
-
-function normalizeOptionalString(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? normalized : undefined;
 }
 
 function chooseSecretInputOverride<T>(
@@ -255,12 +252,6 @@ function embeddingInputToText(input: EmbeddingInput): string {
     textParts.push(part.text);
   }
   return textParts.join("");
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function malformedEmbeddingResponse(): Error {

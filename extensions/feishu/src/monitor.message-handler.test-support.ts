@@ -1,4 +1,5 @@
 // Feishu test support covers monitor.message handler plugin behavior.
+import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import { describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./event-types.js";
@@ -6,6 +7,9 @@ import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js"
 
 type MessageReceiveHandlerContext = Parameters<typeof createFeishuMessageReceiveHandler>[0];
 type HandleMessageParams = Parameters<MessageReceiveHandlerContext["handleMessage"]>[0];
+type InboundDebounceFlush = ReturnType<
+  Parameters<PluginRuntime["channel"]["debounce"]["createInboundDebouncer"]>[0]["onFlush"]
+>;
 
 function createTextEvent(params: {
   messageId: string;
@@ -28,9 +32,14 @@ function createTextEvent(params: {
 }
 
 function createHandler() {
-  let onFlush: ((entries: FeishuMessageEvent[]) => Promise<void>) | undefined;
+  let onFlush:
+    | ((
+        entries: FeishuMessageEvent[],
+        createFlush: typeof createTestInboundDebounceFlush,
+      ) => InboundDebounceFlush)
+    | undefined;
   const enqueue = vi.fn(async (event: FeishuMessageEvent) => {
-    await onFlush?.([event]);
+    await onFlush?.([event], createTestInboundDebounceFlush).completion;
   });
   const channelRuntime = {
     commands: {
@@ -40,7 +49,12 @@ function createHandler() {
       resolveInboundDebounceMs: () => 0,
       createInboundDebouncer: vi.fn((params: { onFlush: typeof onFlush }) => {
         onFlush = params.onFlush;
-        return { enqueue };
+        return {
+          enqueue,
+          flushKey: async () => {},
+          cancelKey: () => false,
+          drain: async () => {},
+        };
       }),
     },
   } as unknown as PluginRuntime["channel"];

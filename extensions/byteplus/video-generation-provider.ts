@@ -2,7 +2,10 @@
  * BytePlus Seedance video generation provider implementation.
  */
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
-import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import {
+  downloadGeneratedVideoAsset,
+  resolveGeneratedMediaMaxBytes,
+} from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -17,7 +20,6 @@ import {
   resolveProviderHttpRequestConfig,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   asSafeIntegerInRange,
   isRecord,
@@ -37,7 +39,6 @@ const MAX_POLL_ATTEMPTS = 120;
 const BYTEPLUS_SEED_MAX = 2_147_483_647;
 const BYTEPLUS_MIN_DURATION_SECONDS = 2;
 const BYTEPLUS_MAX_DURATION_SECONDS = 12;
-const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 
 type BytePlusTaskCreateResponse = {
   id?: unknown;
@@ -105,14 +106,6 @@ function resolveBytePlusVideoBaseUrl(req: VideoGenerationRequest): string {
   return (
     normalizeOptionalString(req.cfg?.models?.providers?.byteplus?.baseUrl) ?? BYTEPLUS_BASE_URL
   );
-}
-
-function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
 function resolveBytePlusImageUrl(req: VideoGenerationRequest): string | undefined {
@@ -188,37 +181,27 @@ async function downloadBytePlusVideo(params: {
   fetchFn: typeof fetch;
   maxBytes: number;
 }): Promise<GeneratedVideoAsset> {
-  const deadline = createProviderOperationDeadline({
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    label: "BytePlus generated video download",
-  });
-  const timeoutMs = createProviderOperationTimeoutResolver({
-    deadline,
-    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
-  const response = await fetchProviderDownloadResponse({
+  return await downloadGeneratedVideoAsset({
     url: params.url,
-    init: { method: "GET" },
-    deadline,
+    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     fetchFn: params.fetchFn,
     provider: "byteplus",
+    label: "BytePlus generated video download",
     requestFailedMessage: "BytePlus generated video download failed",
+    maxBytes: params.maxBytes,
+    validateBinaryResponse: true,
+    fetchResponse: async ({ deadline }) => ({
+      response: await fetchProviderDownloadResponse({
+        url: params.url,
+        init: { method: "GET" },
+        deadline,
+        fetchFn: params.fetchFn,
+        provider: "byteplus",
+        requestFailedMessage: "BytePlus generated video download failed",
+      }),
+    }),
   });
-  const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-  const buffer = await readResponseWithLimit(response, params.maxBytes, {
-    timeoutMs,
-    onTimeout: ({ timeoutMs: bodyTimeoutMs }) =>
-      new Error(
-        `BytePlus generated video download timed out after ${deadline.timeoutMs ?? bodyTimeoutMs}ms`,
-      ),
-    onOverflow: ({ maxBytes }) =>
-      new Error(`BytePlus generated video download exceeds ${maxBytes} bytes`),
-  });
-  return {
-    buffer,
-    mimeType,
-    fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
-  };
 }
 
 /** Builds the BytePlus video generation provider registered by the plugin. */
@@ -228,11 +211,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
     label: "BytePlus",
     defaultModel: DEFAULT_BYTEPLUS_VIDEO_MODEL,
     models: [DEFAULT_BYTEPLUS_VIDEO_MODEL, "seedance-1-5-pro-251215"],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "byteplus",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "byteplus", ...ctx }),
     capabilities: {
       providerOptions: {
         seed: "number",
@@ -386,7 +365,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
             defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           }),
           fetchFn,
-          maxBytes: resolveGeneratedVideoMaxBytes(req),
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
         });
         return {
           videos: [video],

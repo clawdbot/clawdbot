@@ -1,46 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildCliBackendToolAvailability,
   resolveCliRuntimeToolsAllow,
-  resolveLoopbackToolsAllowFromMcpPermissions,
   stripOpenClawMcpToolPrefix,
 } from "./tool-policy.js";
 
-describe("resolveLoopbackToolsAllowFromMcpPermissions", () => {
-  it("returns undefined when no MCP permission list is set", () => {
-    expect(resolveLoopbackToolsAllowFromMcpPermissions(undefined)).toBeUndefined();
-  });
-
-  it("maps prefixed loopback names to gateway tool names", () => {
+describe("buildCliBackendToolAvailability", () => {
+  it("keeps canonical names and projects the shipped beta MCP transport names", () => {
     expect(
-      resolveLoopbackToolsAllowFromMcpPermissions([
-        "mcp__openclaw__memory_search",
-        "mcp__openclaw__memory_get",
-      ]),
-    ).toEqual(["memory_search", "memory_get"]);
-  });
-
-  it("keeps the full surface on wildcard entries", () => {
-    expect(resolveLoopbackToolsAllowFromMcpPermissions(["mcp__openclaw__*"])).toBeUndefined();
-    expect(
-      resolveLoopbackToolsAllowFromMcpPermissions(["mcp__openclaw__memory_search", "*"]),
-    ).toBeUndefined();
-  });
-
-  it("drops tools owned by other MCP servers and fails closed when none remain", () => {
-    expect(
-      resolveLoopbackToolsAllowFromMcpPermissions([
-        "mcp__other__thing",
-        "mcp__openclaw__memory_search",
-      ]),
-    ).toEqual(["memory_search"]);
-    // Only foreign-server entries: the loopback surface exposes nothing.
-    expect(resolveLoopbackToolsAllowFromMcpPermissions(["mcp__other__thing"])).toEqual([]);
-  });
-
-  it("normalizes and dedupes unprefixed entries", () => {
-    expect(
-      resolveLoopbackToolsAllowFromMcpPermissions([" Memory_Search ", "memory_search"]),
-    ).toEqual(["memory_search"]);
+      buildCliBackendToolAvailability({ native: ["Read"], openClaw: ["message", "write"] }),
+    ).toEqual({
+      native: ["Read"],
+      openClaw: ["message", "write"],
+      mcp: ["mcp__openclaw__message", "mcp__openclaw__write"],
+    });
   });
 });
 
@@ -53,9 +26,9 @@ describe("stripOpenClawMcpToolPrefix", () => {
 });
 
 describe("resolveCliRuntimeToolsAllow", () => {
-  it("keeps only real restrictions", () => {
+  it("keeps every concrete restriction, including server-managed defaults", () => {
     expect(resolveCliRuntimeToolsAllow(undefined)).toBeUndefined();
-    expect(resolveCliRuntimeToolsAllow(["memory_search"], true)).toBeUndefined();
+    expect(resolveCliRuntimeToolsAllow(["memory_search"], true)).toEqual(["memory_search"]);
     expect(resolveCliRuntimeToolsAllow(["*"])).toBeUndefined();
     expect(resolveCliRuntimeToolsAllow(["memory_search"])).toEqual(["memory_search"]);
   });

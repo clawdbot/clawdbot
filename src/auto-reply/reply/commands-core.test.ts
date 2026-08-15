@@ -38,7 +38,12 @@ function firstBeforeResetCall() {
 }
 
 describe("emitResetCommandHooks", () => {
-  async function runBeforeResetContext(sessionKey?: string) {
+  async function runBeforeResetContext(
+    sessionKey?: string,
+    cfg: HandleCommandsParams["cfg"] = {
+      agents: { entries: { main: { default: true } } },
+    },
+  ) {
     const command = {
       surface: "discord",
       senderId: "rai",
@@ -51,7 +56,7 @@ describe("emitResetCommandHooks", () => {
     await emitResetCommandHooks({
       action: "new",
       ctx: {} as HandleCommandsParams["ctx"],
-      cfg: {} as HandleCommandsParams["cfg"],
+      cfg,
       command,
       sessionKey,
       previousSessionEntry: {
@@ -87,9 +92,11 @@ describe("emitResetCommandHooks", () => {
     expect(ctx?.workspaceDir).toBe("/tmp/openclaw-workspace");
   });
 
-  it("falls back to main when the reset hook has no session key", async () => {
-    const ctx = await runBeforeResetContext(undefined);
-    expect(ctx?.agentId).toBe("main");
+  it("uses the configured default when the reset hook has no session key", async () => {
+    const ctx = await runBeforeResetContext(undefined, {
+      agents: { entries: { ops: { default: true } } },
+    });
+    expect(ctx?.agentId).toBe("ops");
     expect(ctx?.sessionKey).toBeUndefined();
     expect(ctx?.sessionId).toBe("prev-session");
     expect(ctx?.workspaceDir).toBe("/tmp/openclaw-workspace");

@@ -76,6 +76,26 @@ describe("runCommand", () => {
     expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 
+  it.runIf(process.platform !== "win32")("force-kills cancelled command trees", async () => {
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    const cancelling = setTimeout(() => controller.abort(), 25);
+    try {
+      const result = await testing.runCommand(
+        [process.execPath, "-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
+        undefined,
+        undefined,
+        undefined,
+        controller.signal,
+      );
+
+      expect(result).toMatchObject({ timedOut: false, success: false, error: null });
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+    } finally {
+      clearTimeout(cancelling);
+    }
+  });
+
   it("keeps the combined output prefix bounded", async () => {
     const result = await testing.runCommand(
       [process.execPath, "-e", "process.stdout.write('x'.repeat(200_001))"],

@@ -8,7 +8,8 @@ enum NodeServiceManager {
             .appendingPathComponent("Library/LaunchAgents/\(nodeLaunchdLabel).plist")
     }
 
-    static func start() async -> String? {
+    static func start(profile: AppProfile = .current) async -> String? {
+        if self.skipUnderProfile(profile, action: "start") { return nil }
         let result = await self.runServiceCommandResult(
             ["start"],
             timeout: 20,
@@ -20,7 +21,8 @@ enum NodeServiceManager {
         return nil
     }
 
-    static func stop() async -> String? {
+    static func stop(profile: AppProfile = .current) async -> String? {
+        if self.skipUnderProfile(profile, action: "stop") { return nil }
         let result = await self.runServiceCommandResult(
             ["stop"],
             timeout: 15,
@@ -32,7 +34,8 @@ enum NodeServiceManager {
         return nil
     }
 
-    static func restart() async -> String? {
+    static func restart(profile: AppProfile = .current) async -> String? {
+        if self.skipUnderProfile(profile, action: "restart") { return nil }
         let result = await self.runServiceCommandResult(
             ["restart"],
             timeout: 20,
@@ -46,13 +49,15 @@ enum NodeServiceManager {
 
     /// Empty means no node LaunchAgent. Nil means the on-disk ownership proof
     /// exists but could not be read, so callers must not treat it as external.
-    static func launchdProgramArguments() -> [String]? {
-        self.launchdProgramArguments(
+    static func launchdProgramArguments(profile: AppProfile = .current) -> [String]? {
+        if self.skipUnderProfile(profile, action: "status") { return [] }
+        return self.launchdProgramArguments(
             plistURL: self.launchdPlistURL,
             fileManager: .default)
     }
 
-    static func waitUntilRunning() async -> Bool {
+    static func waitUntilRunning(profile: AppProfile = .current) async -> Bool {
+        if self.skipUnderProfile(profile, action: "status poll") { return false }
         var consecutiveRunningChecks = 0
         for attempt in 0..<20 {
             let result = await self.runServiceCommandResult(
@@ -77,8 +82,14 @@ enum NodeServiceManager {
 }
 
 extension NodeServiceManager {
-    private static func serviceCommand(_ args: [String]) -> [String] {
-        CommandResolver.openclawCommand(
+    private static func skipUnderProfile(_ profile: AppProfile, action: String) -> Bool {
+        guard profile.isActive else { return false }
+        self.logger.info("node service \(action, privacy: .public) skipped (unavailable under app profile)")
+        return true
+    }
+
+    private static func serviceCommand(_ args: [String]) async -> [String] {
+        await CommandResolver.openclawCommand(
             subcommand: "node",
             extraArgs: self.withJsonFlag(args),
             // Service management must always run locally, even if remote mode is configured.
@@ -107,7 +118,10 @@ extension NodeServiceManager {
         timeout: Double,
         quiet: Bool) async -> CommandResult
     {
-        let command = self.serviceCommand(args)
+        #if DEBUG
+        self.testingServiceCommandCalls.append(args)
+        #endif
+        let command = await self.serviceCommand(args)
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
         let response = await ShellExecutor.runDetailed(command: command, cwd: nil, env: env, timeout: timeout)
@@ -187,6 +201,9 @@ extension NodeServiceManager {
         plistURL: URL,
         fileManager: FileManager) -> [String]?
     {
+        #if DEBUG
+        self.testingOwnershipReadCount += 1
+        #endif
         guard fileManager.fileExists(atPath: plistURL.path) else { return [] }
         return LaunchAgentPlist.snapshot(url: plistURL)?.programArguments
     }
@@ -206,8 +223,20 @@ extension NodeServiceManager {
 
 #if DEBUG
 extension NodeServiceManager {
-    static func _testServiceCommand(_ args: [String]) -> [String] {
-        self.serviceCommand(args)
+    private nonisolated(unsafe) static var testingServiceCommandCalls: [[String]] = []
+    private nonisolated(unsafe) static var testingOwnershipReadCount = 0
+
+    static func _testResetPersistentServiceCalls() {
+        self.testingServiceCommandCalls = []
+        self.testingOwnershipReadCount = 0
+    }
+
+    static func _testPersistentServiceCallSnapshot() -> (commands: [[String]], ownershipReads: Int) {
+        (self.testingServiceCommandCalls, self.testingOwnershipReadCount)
+    }
+
+    static func _testServiceCommand(_ args: [String]) async -> [String] {
+        await self.serviceCommand(args)
     }
 
     static func _testLaunchdProgramArguments(plistURL: URL) -> [String]? {

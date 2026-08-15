@@ -129,11 +129,11 @@ If a provider does not support any of the above cache modes, `cacheRetention` ha
 
 ## System-prompt cache boundary
 
-OpenClaw splits the system prompt into a **stable prefix** and a **volatile suffix** at an internal cache-prefix boundary. Content above the boundary (tool definitions, skills metadata, workspace files) is ordered to stay byte-identical across turns. Content below the boundary (for example `HEARTBEAT.md`, runtime timestamps, other per-turn metadata) can change without invalidating the cached prefix.
+OpenClaw splits the system prompt into a **stable prefix** and a **volatile suffix** at an internal cache-prefix boundary. Content above the boundary (tool definitions, skills metadata, workspace files) is ordered to stay byte-identical across turns. Content below the boundary (for example runtime timestamps and other per-turn metadata) can change without invalidating the cached prefix.
 
 Key design choices:
 
-- Stable workspace project-context files are ordered before `HEARTBEAT.md` so heartbeat churn does not bust the stable prefix.
+- Stable workspace project-context files are ordered before volatile per-turn metadata so routine churn does not bust the stable prefix.
 - The boundary applies across Anthropic-family, OpenAI-family, Google, and CLI transport shaping, so all supported providers benefit from the same prefix stability.
 - Codex Responses and Anthropic Vertex requests are routed through boundary-aware cache shaping so cache reuse stays aligned with what providers actually receive.
 - System-prompt fingerprints are normalized (whitespace, line endings, hook-added context, runtime capability ordering) so semantically unchanged prompts share cache across turns.
@@ -181,7 +181,7 @@ agents:
 OpenClaw runs one combined live cache regression gate covering repeated prefixes, tool turns, image turns, MCP-style tool transcripts, and an Anthropic no-cache control.
 
 - `src/agents/live-cache-regression.live.test.ts`
-- `src/agents/live-cache-regression-runner.ts`
+- `src/agents/test-helpers/live-cache-regression-runner.ts`
 - `src/agents/live-cache-regression-baseline.ts`
 
 Run it with:
@@ -221,20 +221,9 @@ Why the assertions differ: Anthropic exposes explicit cache breakpoints and movi
 diagnostics:
   cacheTrace:
     enabled: true
-    filePath: "~/.openclaw/logs/cache-trace.jsonl" # optional
-    includeMessages: false # default true
-    includePrompt: false # default true
-    includeSystem: false # default true
 ```
 
-Defaults:
-
-| Key               | Default                                      |
-| ----------------- | -------------------------------------------- |
-| `filePath`        | `$OPENCLAW_STATE_DIR/logs/cache-trace.jsonl` |
-| `includeMessages` | `true`                                       |
-| `includePrompt`   | `true`                                       |
-| `includeSystem`   | `true`                                       |
+`enabled` defaults to `false`. Cache traces otherwise write to `$OPENCLAW_STATE_DIR/logs/cache-trace.jsonl` and include messages, prompt text, and the system prompt by default. Output-path and payload-inclusion overrides are environment-only controls for one-off debugging.
 
 ### Env toggles (one-off debugging)
 

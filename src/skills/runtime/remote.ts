@@ -3,9 +3,9 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NodeRegistry, NodeSession } from "../../gateway/node-registry.js";
-import { listNodePairing, updatePairedNodeBins } from "../../infra/node-pairing.js";
+import { listNodePairing, updatePairedNodeBins } from "../../infra/device-pairing-node.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
+import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import type { SkillEligibilityContext } from "../types.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
 import {
@@ -14,6 +14,7 @@ import {
   collectRequiredBins,
   extractErrorMessage,
   isMacPlatform,
+  isRemoteSkillEligibilityNode,
   parseBinProbePayload,
   supportsSystemRun,
   supportsSystemWhich,
@@ -352,6 +353,7 @@ export function recordRemoteNodeInfo(node: {
   pairingGeneration?: string;
 }) {
   const existing = remoteNodes.get(node.nodeId);
+  const wasEligible = isRemoteSkillEligibilityNode(existing);
   const pairingGenerationChanged = Boolean(
     existing && existing.pairingGeneration !== node.pairingGeneration,
   );
@@ -364,6 +366,11 @@ export function recordRemoteNodeInfo(node: {
     remoteNodeProbeStates.delete(node.nodeId);
   }
   upsertNode({ ...node, connected: true }, { pairingGenerationAuthoritative: true });
+  if (wasEligible !== isRemoteSkillEligibilityNode(remoteNodes.get(node.nodeId))) {
+    // Connectivity and command-surface changes affect OS-only skills even before
+    // the delayed bin probe; the probe emits a second invalidation if bins change.
+    bumpSkillsSnapshotVersion({ reason: "remote-node" });
+  }
   recordRemoteSkillNodeInfo({
     nodeId: node.nodeId,
     connId: node.connId,
@@ -485,7 +492,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
   const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
   const requiredBins = new Set<string>();
   for (const workspaceDir of workspaceDirs) {
-    const entries = loadWorkspaceSkillEntries(workspaceDir, { config: params.cfg });
+    const entries = loadWorkspaceSkills(workspaceDir, { config: params.cfg });
     for (const bin of collectRequiredBins(entries, "darwin")) {
       requiredBins.add(bin);
     }

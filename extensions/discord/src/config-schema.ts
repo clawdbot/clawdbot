@@ -281,6 +281,7 @@ const DiscordAccountSchema = z
       .optional(),
     intents: z
       .object({
+        messageContent: z.boolean().optional(),
         presence: z.boolean().optional(),
         guildMembers: z.boolean().optional(),
         voiceStates: z.boolean().optional(),

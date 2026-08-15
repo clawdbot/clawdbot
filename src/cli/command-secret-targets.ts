@@ -5,6 +5,7 @@ import { sortUniqueStrings } from "@openclaw/normalization-core/string-normaliza
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
@@ -731,6 +732,7 @@ function pathTargetsScopedChannelAccount(params: {
 export function getScopedChannelsCommandSecretTargets(params: {
   config: OpenClawConfig;
   channel?: string | null;
+  channels?: readonly string[];
   accountId?: string | null;
   defaultAccountWhenMissing?: boolean;
 }): {
@@ -738,7 +740,19 @@ export function getScopedChannelsCommandSecretTargets(params: {
   allowedPaths?: Set<string>;
 } {
   const channel = normalizeOptionalString(params.channel);
-  const targetIds = selectChannelTargetIds(channel);
+  const channels =
+    params.channels === undefined
+      ? undefined
+      : sortUniqueStrings(
+          params.channels.flatMap((candidate) => {
+            const normalized = normalizeOptionalString(candidate);
+            return normalized ? [normalized] : [];
+          }),
+        );
+  const targetIds =
+    channels === undefined
+      ? selectChannelTargetIds(channel)
+      : new Set(channels.flatMap((candidate) => [...selectChannelTargetIds(candidate)]));
   const explicitAccountId = normalizeOptionalAccountId(params.accountId);
   const channelPlugin =
     channel && !explicitAccountId && params.defaultAccountWhenMissing
@@ -753,18 +767,21 @@ export function getScopedChannelsCommandSecretTargets(params: {
           resolveChannelDefaultAccountId({ plugin: channelPlugin, cfg: params.config }),
         )
       : undefined);
-  if (!channel || !normalizedAccountId) {
+  const scopedChannels = channels ?? (channel ? [channel] : []);
+  if (scopedChannels.length === 0 || !normalizedAccountId) {
     return { targetIds };
   }
 
   const allowedPaths = new Set<string>();
   for (const target of discoverConfigSecretTargetsByIds(params.config, targetIds)) {
     if (
-      pathTargetsScopedChannelAccount({
-        pathSegments: target.pathSegments,
-        channel,
-        accountId: normalizedAccountId,
-      })
+      scopedChannels.some((scopedChannel) =>
+        pathTargetsScopedChannelAccount({
+          pathSegments: target.pathSegments,
+          channel: scopedChannel,
+          accountId: normalizedAccountId,
+        }),
+      )
     ) {
       allowedPaths.add(target.path);
     }
@@ -813,6 +830,31 @@ export function getAgentRuntimeCommandSecretTargetIds(params?: {
     return toTargetIdSet(getAgentRuntimeBaseTargetIds());
   }
   return toTargetIdSet(getCommandSecretTargets().agentRuntime);
+}
+
+/**
+ * Web credentials are needed only if the model invokes the corresponding tool.
+ * Keep them materializable for agent runs without making tool-owner outages block turn startup.
+ */
+export function getAgentRuntimeOptionalCommandSecretPaths(config: OpenClawConfig): Set<string> {
+  const targetIds = new Set([
+    ...getCapabilityWebSearchTargetIds(),
+    ...getCapabilityWebFetchTargetIds(),
+  ]);
+  const defaults = config.secrets?.defaults;
+  return new Set(
+    discoverConfigSecretTargetsByIds(config, targetIds)
+      .filter((target) =>
+        Boolean(
+          resolveSecretInputRef({
+            value: target.value,
+            refValue: target.refValue,
+            defaults,
+          }).ref,
+        ),
+      )
+      .map((target) => target.path),
+  );
 }
 
 /** Static web-fetch capability targets plus plugin-provided web-fetch credential targets. */

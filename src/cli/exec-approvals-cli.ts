@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command } from "commander";
@@ -16,7 +17,10 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import {
+  getTerminalTableWidth,
+  renderTerminalSafeTable,
+} from "../../packages/terminal-core/src/table.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, type OperatorScope } from "../gateway/method-scopes.js";
@@ -39,7 +43,7 @@ import {
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
-import { nodesCallOpts, resolveNodeId } from "./nodes-cli/rpc.js";
+import { nodesCallOpts, resolveCliNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
@@ -147,7 +151,7 @@ async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string |
   if (!raw) {
     return null;
   }
-  return await resolveNodeId(opts as NodesRpcOpts, raw);
+  return await resolveCliNodeId(opts as NodesRpcOpts, raw);
 }
 
 async function loadSnapshot(
@@ -180,10 +184,6 @@ function isNativeApprovalsSnapshot(
   snapshot: ExecApprovalsSnapshot,
 ): snapshot is NativeExecApprovalsSnapshot {
   return "enabled" in snapshot;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parseNativeAction(value: unknown, label: string): NativeExecApprovalAction {
@@ -537,7 +537,7 @@ function renderPendingApprovals(entries: PendingApprovalCliEntry[]): void {
   const now = Date.now();
   defaultRuntime.log(`${theme.heading("Pending approvals")} ${theme.muted(`(${entries.length})`)}`);
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: getTerminalTableWidth(),
       columns: [
         { key: "ID", header: "ID", minWidth: 16, flex: true },
@@ -760,7 +760,7 @@ function buildEffectivePolicyReport(params: {
       scopes: [],
       note: params.nativePolicy
         ? "This node enforces a host-native exec policy; OpenClaw approvals-file policy math does not apply."
-        : "Approvals file unavailable.",
+        : "Host approvals policy unavailable.",
     };
   }
   if (params.source === "node") {
@@ -787,7 +787,7 @@ function buildEffectivePolicyReport(params: {
         hostDefaultSource: "node-reported resolved defaults",
       }),
       note:
-        "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy. " +
+        "Effective exec policy is the node host approvals policy intersected with gateway tools.exec policy. " +
         SESSION_EXEC_OVERRIDES_NOTE,
     };
   }
@@ -804,7 +804,7 @@ function buildEffectivePolicyReport(params: {
       hostPath: params.hostPath,
     }),
     note:
-      "Effective exec policy is the host approvals file intersected with requested tools.exec policy. " +
+      "Effective exec policy is the host approvals policy intersected with requested tools.exec policy. " +
       SESSION_EXEC_OVERRIDES_NOTE,
   };
 }
@@ -830,7 +830,7 @@ function renderEffectivePolicy(params: { report: EffectivePolicyReport }) {
     Notes: `${summary.security.note}; ${summary.ask.note}`,
   }));
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: getTerminalTableWidth(),
       columns: [
         { key: "Scope", header: "Scope", minWidth: 12 },
@@ -890,7 +890,10 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
   const summaryRows = [
     { Field: "Target", Value: targetLabel },
     { Field: "Path", Value: snapshot.path },
-    { Field: "Exists", Value: snapshot.exists ? "yes" : "no" },
+    {
+      Field: "State",
+      Value: snapshot.exists ? "stored" : "defaults (no stored overrides)",
+    },
     { Field: "Hash", Value: snapshot.hash },
     { Field: "Version", Value: String(file.version ?? 1) },
     { Field: "Socket", Value: file.socket?.path ?? "default" },
@@ -901,7 +904,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
 
   defaultRuntime.log(heading("Approvals"));
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: tableWidth,
       columns: [
         { key: "Field", header: "Field", minWidth: 8 },
@@ -920,7 +923,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
   defaultRuntime.log("");
   defaultRuntime.log(heading("Allowlist"));
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: tableWidth,
       columns: [
         { key: "Target", header: "Target", minWidth: 10 },
@@ -951,7 +954,7 @@ function renderNativeApprovalsSnapshot(snapshot: NativeExecApprovalsSnapshot, ta
   ];
   defaultRuntime.log(heading("Approvals"));
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: getTerminalTableWidth(),
       columns: [
         { key: "Field", header: "Field", minWidth: 8 },
@@ -968,7 +971,7 @@ function renderNativeApprovalsSnapshot(snapshot: NativeExecApprovalsSnapshot, ta
   defaultRuntime.log("");
   defaultRuntime.log(heading("Rules"));
   defaultRuntime.log(
-    renderTable({
+    renderTerminalSafeTable({
       width: getTerminalTableWidth(),
       columns: [
         { key: "Pattern", header: "Pattern", minWidth: 20, flex: true },

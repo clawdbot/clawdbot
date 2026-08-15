@@ -1,4 +1,7 @@
 // Transcript tree helpers keep append-only leaf controls consistent across readers.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+
 type TranscriptRecord = Record<string, unknown>;
 
 type SessionTranscriptTreeEntry = {
@@ -24,14 +27,6 @@ export type SessionTranscriptTree<T> = {
   hasExplicitLeafUpdate: boolean;
   hasInvalidLeafControl: boolean;
 };
-
-function isRecord(value: unknown): value is TranscriptRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
 
 function isCanonicalSessionEntryType(value: unknown): boolean {
   switch (value) {

@@ -8,6 +8,12 @@ describe("extractUrls", () => {
     expect(urls).toEqual(["https://example.com"]);
   });
 
+  it("stops bare URLs before bidi formatting controls", () => {
+    const url = "https://example.com/path";
+    expect(extractUrls(`مرحبا ${url}\u2069`)).toEqual([url]);
+    expect(extractUrls(`مرحبا ${url}\u200f`)).toEqual([url]);
+  });
+
   it("extracts multiple bare URLs", () => {
     const urls = extractUrls("Visit https://foo.com and http://bar.com");
     expect(urls).toContain("https://foo.com");
@@ -100,6 +106,13 @@ describe("addOsc8Hyperlinks", () => {
     expect(result[0]).toContain(`\x1b]8;;\x07`);
     // The URL text should be between open and close
     expect(result[0]).toBe(`Visit \x1b]8;;${url}\x07${url}\x1b]8;;\x07 for info`);
+  });
+
+  it("keeps bidi isolation outside the exact OSC 8 target", () => {
+    const url = "https://example.com/path";
+    expect(addOsc8Hyperlinks([`\u2067مرحبا ${url}\u2069`], [url])).toEqual([
+      `\u2067مرحبا \x1b]8;;${url}\x07${url}\x1b]8;;\x07\u2069`,
+    ]);
   });
 
   it("wraps a URL broken across two lines", () => {

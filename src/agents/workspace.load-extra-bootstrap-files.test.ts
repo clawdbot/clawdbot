@@ -4,7 +4,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { loadExtraBootstrapFilesWithDiagnostics } from "./workspace.js";
+import {
+  loadExtraBootstrapFilesWithDiagnostics,
+  loadWorkspacePatternFilesWithDiagnostics,
+} from "./workspace.js";
 
 describe("loadExtraBootstrapFilesWithDiagnostics", () => {
   let fixtureRoot = "";
@@ -35,16 +38,16 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     const workspaceDir = await createWorkspaceDir("glob");
     const packageDir = path.join(workspaceDir, "packages", "core");
     await fs.mkdir(packageDir, { recursive: true });
-    await fs.writeFile(path.join(packageDir, "TOOLS.md"), "tools", "utf-8");
+    await fs.writeFile(path.join(packageDir, "SOUL.md"), "soul", "utf-8");
     await fs.writeFile(path.join(packageDir, "README.md"), "not bootstrap", "utf-8");
 
     const files = await loadExtraBootstrapFileList(workspaceDir, ["packages/*/*"]);
 
     expect(files).toStrictEqual([
       {
-        name: "TOOLS.md",
-        path: path.join(packageDir, "TOOLS.md"),
-        content: "tools",
+        name: "SOUL.md",
+        path: path.join(packageDir, "SOUL.md"),
+        content: "soul",
         missing: false,
       },
     ]);
@@ -81,6 +84,24 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
         name: "AGENTS.md",
         path: path.join(packageDir, "AGENTS.md"),
         content: "literal agents",
+        missing: false,
+      },
+    ]);
+  });
+
+  it("loads bootstrap files from valid child directories beginning with two dots", async () => {
+    const workspaceDir = await createWorkspaceDir("dotdot-name");
+    const packageDir = path.join(workspaceDir, "..notes");
+    await fs.mkdir(packageDir);
+    await fs.writeFile(path.join(packageDir, "AGENTS.md"), "agents", "utf-8");
+
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["..notes/AGENTS.md"]);
+
+    expect(files).toStrictEqual([
+      {
+        name: "AGENTS.md",
+        path: path.join(packageDir, "AGENTS.md"),
+        content: "agents",
         missing: false,
       },
     ]);
@@ -163,4 +184,67 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     expect(files).toHaveLength(0);
     expect(diagnostics.map((diagnostic) => diagnostic.reason)).toContain("security");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "reports unreadable glob branches during strict doctor discovery",
+    async () => {
+      const workspaceDir = await createWorkspaceDir("strict-unreadable");
+      const blockedDir = path.join(workspaceDir, "packages", "blocked");
+      const readableDir = path.join(workspaceDir, "packages", "readable");
+      await fs.mkdir(blockedDir, { recursive: true });
+      await fs.mkdir(readableDir, { recursive: true });
+      await fs.writeFile(path.join(blockedDir, "TOOLS.md"), "blocked", "utf-8");
+      await fs.writeFile(path.join(readableDir, "TOOLS.md"), "readable", "utf-8");
+      await fs.chmod(blockedDir, 0o000);
+      try {
+        const result = await loadWorkspacePatternFilesWithDiagnostics(
+          workspaceDir,
+          ["packages/*/TOOLS.md"],
+          {
+            acceptedBasenames: new Set(["TOOLS.md"]),
+            strictPatternRead: true,
+          },
+        );
+        expect(result.files).toEqual([]);
+        expect(result.diagnostics).toEqual([
+          expect.objectContaining({
+            reason: "io",
+            path: path.join(workspaceDir, "packages", "*", "TOOLS.md"),
+          }),
+        ]);
+      } finally {
+        await fs.chmod(blockedDir, 0o700);
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not descend into unreadable branches that cannot satisfy a shallow pattern",
+    async () => {
+      const workspaceDir = await createWorkspaceDir("strict-pruned");
+      const privateDir = path.join(workspaceDir, "packages", "blocked", "node_modules", "private");
+      const readableDir = path.join(workspaceDir, "packages", "readable");
+      await fs.mkdir(privateDir, { recursive: true });
+      await fs.mkdir(readableDir, { recursive: true });
+      await fs.writeFile(path.join(privateDir, "TOOLS.md"), "irrelevant", "utf-8");
+      await fs.writeFile(path.join(readableDir, "TOOLS.md"), "readable", "utf-8");
+      await fs.chmod(privateDir, 0o000);
+      try {
+        const result = await loadWorkspacePatternFilesWithDiagnostics(
+          workspaceDir,
+          ["packages/*/TOOLS.md"],
+          {
+            acceptedBasenames: new Set(["TOOLS.md"]),
+            strictPatternRead: true,
+          },
+        );
+        expect(result.diagnostics).toEqual([]);
+        expect(result.files).toEqual([
+          expect.objectContaining({ path: path.join(readableDir, "TOOLS.md") }),
+        ]);
+      } finally {
+        await fs.chmod(privateDir, 0o700);
+      }
+    },
+  );
 });

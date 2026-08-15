@@ -10,8 +10,8 @@ import { getSkillsSnapshotVersion } from "./refresh-state.js";
 import { resetSkillsRefreshForTest } from "./refresh.test-support.js";
 import { mergeRemoteNodeSkillEntries, replaceRemoteNodeSkills } from "./remote-skills.js";
 
-vi.mock("../../infra/node-pairing.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/node-pairing.js")>();
+vi.mock("../../infra/device-pairing-node.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/device-pairing-node.js")>();
   return { ...actual, updatePairedNodeBins: vi.fn(async () => true) };
 });
 
@@ -209,6 +209,24 @@ describe("skills-remote", () => {
     const after = getSkillsSnapshotVersion(workspaceDir);
 
     expect(after).toBeGreaterThan(before);
+  });
+
+  it("bumps the skills snapshot version when an eligible remote node connects", async () => {
+    await resetSkillsRefreshForTest();
+    const workspaceDir = `/tmp/ws-${randomUUID()}`;
+    const nodeId = `node-${randomUUID()}`;
+
+    const before = getSkillsSnapshotVersion(workspaceDir);
+    recordRemoteNodeInfo({
+      nodeId,
+      displayName: "Remote Mac",
+      platform: "darwin",
+      commands: ["system.run"],
+    });
+    const after = getSkillsSnapshotVersion(workspaceDir);
+
+    expect(after).toBeGreaterThan(before);
+    removeRemoteNodeInfo(nodeId);
   });
 
   it("ignores non-mac and non-system.run nodes for eligibility", () => {

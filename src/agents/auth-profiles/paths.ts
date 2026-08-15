@@ -1,13 +1,9 @@
 /**
  * Public path barrel for auth-profile stores.
- * Import through this file so JSON, SQLite, display, and lock paths stay on the
- * shared resolver contract.
+ * Import through this file for canonical SQLite display and lock paths.
  */
 export {
-  resolveAuthStatePath,
   resolveAuthStatePathForDisplay,
-  resolveAuthStorePath,
   resolveAuthStorePathForDisplay,
-  resolveLegacyAuthStorePath,
   resolveOAuthRefreshLockPath,
 } from "./path-resolve.js";

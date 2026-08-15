@@ -1,13 +1,25 @@
 export type DockPanelSide = "bottom" | "left" | "right";
+export type DockPanelPlacement = DockPanelSide | "main";
 
-type DockPanelLayout<TDock extends DockPanelSide> = {
+type DockPanelLayout<TDock extends DockPanelPlacement> = {
   open: boolean;
   dock: TDock;
+  previousDock?: TDock;
   height: number;
   width: number;
 };
 
-type DockPanelLayoutOptions<TDock extends DockPanelSide> = {
+export type DockPanelLayoutStore<TDock extends DockPanelPlacement> = {
+  defaults: DockPanelLayout<TDock>;
+  minHeight: number;
+  minWidth: number;
+  maxHeight(): number;
+  maxWidth(): number;
+  load(): DockPanelLayout<TDock>;
+  save(layout: DockPanelLayout<TDock>): void;
+};
+
+type DockPanelLayoutOptions<TDock extends DockPanelPlacement> = {
   storageKey: string;
   minHeight: number;
   minWidth: number;
@@ -17,7 +29,7 @@ type DockPanelLayoutOptions<TDock extends DockPanelSide> = {
   defaultWidth: number;
 };
 
-export function createDockPanelLayout<TDock extends DockPanelSide>(
+export function createDockPanelLayout<TDock extends DockPanelPlacement>(
   options: DockPanelLayoutOptions<TDock>,
 ) {
   const defaults: DockPanelLayout<TDock> = {
@@ -56,6 +68,9 @@ export function createDockPanelLayout<TDock extends DockPanelSide>(
           dock: options.supportedDocks.includes(parsed.dock as TDock)
             ? (parsed.dock as TDock)
             : defaults.dock,
+          ...(options.supportedDocks.includes(parsed.previousDock as TDock)
+            ? { previousDock: parsed.previousDock as TDock }
+            : {}),
           height: clampSize(parsed.height, options.minHeight, maxHeight(), defaults.height),
           width: clampSize(parsed.width, options.minWidth, maxWidth(), defaults.width),
         };

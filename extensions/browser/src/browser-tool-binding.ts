@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 type BrowserTabToolBinding = {
   kind: "tab";
   tabId: number;
@@ -9,10 +11,6 @@ type BrowserTabToolBinding = {
 
 type BindingResult = { ok: true; binding: BrowserTabToolBinding } | { ok: false; error: string };
 
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 /** Validate the plugin-owned run binding before any browser route is resolved. */
 export function parseBrowserTabToolBinding(value: unknown): BindingResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -20,9 +18,9 @@ export function parseBrowserTabToolBinding(value: unknown): BindingResult {
   }
   const record = value as Record<string, unknown>;
   const target = record.target === "host" || record.target === "node" ? record.target : undefined;
-  const node = nonEmptyString(record.node);
-  const profile = nonEmptyString(record.profile);
-  const targetId = nonEmptyString(record.targetId);
+  const node = normalizeOptionalString(record.node);
+  const profile = normalizeOptionalString(record.profile);
+  const targetId = normalizeOptionalString(record.targetId);
   if (record.kind !== "tab") {
     return { ok: false, error: 'browser tool binding kind must be "tab"' };
   }
@@ -65,7 +63,7 @@ const TAB_BOUND_ACTIONS = new Set([
 ]);
 
 function bindTargetId(record: Record<string, unknown>, targetId: string): Record<string, unknown> {
-  const requestedTargetId = nonEmptyString(record.targetId);
+  const requestedTargetId = normalizeOptionalString(record.targetId);
   if (requestedTargetId && requestedTargetId !== targetId) {
     throw new Error("browser action cannot override its run-bound tab target");
   }
@@ -84,13 +82,13 @@ export function applyBrowserTabToolBinding(
   input: Record<string, unknown>,
   binding: BrowserTabToolBinding,
 ): Record<string, unknown> {
-  const action = nonEmptyString(input.action);
+  const action = normalizeOptionalString(input.action);
   if (!action || !TAB_BOUND_ACTIONS.has(action)) {
     throw new Error(`browser action ${JSON.stringify(action)} is unavailable in a tab-bound run`);
   }
-  const requestedTarget = nonEmptyString(input.target);
-  const requestedNode = nonEmptyString(input.node);
-  const requestedProfile = nonEmptyString(input.profile);
+  const requestedTarget = normalizeOptionalString(input.target);
+  const requestedNode = normalizeOptionalString(input.node);
+  const requestedProfile = normalizeOptionalString(input.profile);
   if (requestedTarget && requestedTarget !== binding.target) {
     throw new Error("browser action cannot override its run-bound target");
   }

@@ -7,6 +7,7 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   bindingStoreKey,
@@ -15,6 +16,7 @@ import {
   createStoredCodexAppServerBinding,
   hashCodexAppServerBindingFingerprint,
   readCodexAppServerThreadBinding,
+  reclaimCurrentCodexSessionGeneration,
   type StoredCodexAppServerBinding,
 } from "./session-binding.js";
 
@@ -93,6 +95,70 @@ describe("Codex app-server binding store", () => {
       state: "active",
       binding: { threadId: "thread-1" },
     });
+  });
+
+  it("replaces only the exact ordinary thread owner", async () => {
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = { kind: "session" as const, agentId: "main", sessionId: "session-cas" };
+    await store.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-old", cwd: "/repo" },
+    });
+
+    await expect(
+      store.mutate(identity, {
+        kind: "replace-thread",
+        expectedThreadId: "thread-stale",
+        binding: { threadId: "thread-new", cwd: "/repo" },
+      }),
+    ).resolves.toBe(false);
+    await expect(store.read(identity)).resolves.toMatchObject({ threadId: "thread-old" });
+
+    await expect(
+      store.mutate(identity, {
+        kind: "replace-thread",
+        expectedThreadId: "thread-old",
+        binding: { threadId: "thread-new", cwd: "/repo" },
+      }),
+    ).resolves.toBe(true);
+    await expect(store.read(identity)).resolves.toMatchObject({ threadId: "thread-new" });
+  });
+
+  it("rejects same-thread and supervision ownership through replacement CAS", async () => {
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-cas-boundary",
+    };
+    await store.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-old", cwd: "/repo" },
+    });
+
+    await expect(
+      store.mutate(identity, {
+        kind: "replace-thread",
+        expectedThreadId: "thread-old",
+        binding: { threadId: "thread-old", cwd: "/repo" },
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      store.mutate(identity, {
+        kind: "replace-thread",
+        expectedThreadId: "thread-old",
+        binding: {
+          threadId: "thread-private",
+          cwd: "/repo",
+          connectionScope: "supervision",
+          supervisionSourceThreadId: "thread-private",
+          preserveNativeModel: true,
+        },
+      }),
+    ).resolves.toBe(false);
+    await expect(store.read(identity)).resolves.toMatchObject({ threadId: "thread-old" });
   });
 
   it("does not report the exact session or conversation binding owner as another owner", async () => {
@@ -359,6 +425,7 @@ describe("Codex app-server binding store", () => {
           source: "account" as const,
           appName: "ChatGPT Meetings",
           allowDestructiveActions: true,
+          allowOpenWorld: false,
           destructiveApprovalMode: "auto" as const,
           mcpServerNames: [],
         },
@@ -382,21 +449,85 @@ describe("Codex app-server binding store", () => {
     expect(imported?.binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
   });
 
+  it("round-trips repository marketplace app ownership through stored and imported bindings", async () => {
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-security-review",
+    };
+    const pluginAppPolicyContext = {
+      fingerprint: "repository-plugin-policy",
+      apps: {
+        github: {
+          configKey: "security-review@company-tools",
+          marketplaceName: "company-tools",
+          pluginName: "security-review",
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "ask" as const,
+          mcpServerNames: ["github"],
+        },
+      },
+      pluginAppIds: { "security-review@company-tools": ["github"] },
+    };
+
+    await store.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-security-review", cwd: "/repo/company", pluginAppPolicyContext },
+    });
+    await expect(store.read(identity)).resolves.toMatchObject({ pluginAppPolicyContext });
+
+    const imported = createStoredCodexAppServerBinding({
+      schemaVersion: 2,
+      threadId: "thread-security-review",
+      cwd: "/repo/company",
+      pluginAppPolicyContext,
+    });
+    expect(imported?.binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
+  });
+
+  it("rejects unsafe marketplace names in imported plugin app ownership", () => {
+    const imported = createStoredCodexAppServerBinding({
+      schemaVersion: 2,
+      threadId: "thread-unsafe-plugin",
+      cwd: "/repo/company",
+      pluginAppPolicyContext: {
+        fingerprint: "unsafe-plugin-policy",
+        apps: {
+          github: {
+            configKey: "security-review",
+            marketplaceName: "../unsafe-marketplace",
+            pluginName: "security-review",
+            allowDestructiveActions: true,
+            mcpServerNames: ["github"],
+          },
+        },
+        pluginAppIds: { "security-review": ["github"] },
+      },
+    });
+
+    expect(imported?.binding.pluginAppPolicyContext).toBeUndefined();
+  });
+
   it("normalizes legacy fingerprints without rehashing canonical values", () => {
     const rawDynamicToolsFingerprint = JSON.stringify([{ name: "legacy_tool" }]);
     const rawUserMcpServersFingerprint = JSON.stringify({
       mcp_servers: { legacy: { command: "node" } },
     });
+    const nativeSkillIsolationFingerprint = `sha256:${"b".repeat(64)}`;
     const imported = createStoredCodexAppServerBinding({
       schemaVersion: 2,
       threadId: "thread-legacy-fingerprints",
       cwd: "/repo",
       updatedAt: "2026-01-01T00:00:00.000Z",
       dynamicToolsFingerprint: rawDynamicToolsFingerprint,
+      nativeSkillIsolationFingerprint,
       userMcpServersFingerprint: rawUserMcpServersFingerprint,
     });
     expect(imported?.binding).toMatchObject({
       dynamicToolsFingerprint: hashCodexAppServerBindingFingerprint(rawDynamicToolsFingerprint),
+      nativeSkillIsolationFingerprint,
       userMcpServersFingerprint: hashCodexAppServerBindingFingerprint(rawUserMcpServersFingerprint),
     });
 
@@ -956,6 +1087,120 @@ describe("Codex app-server binding store", () => {
       }),
     ).resolves.toBe(true);
     await expect(store.read(current)).resolves.toMatchObject({ threadId: "thread-new" });
+  });
+
+  it("keeps a retired in-place generation fenced until it is verified", async () => {
+    const { state, values } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:telegram:chat-1",
+    };
+    await store.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-old", cwd: "/old" },
+    });
+    await store.retireSessionGeneration(identity);
+
+    await expect(store.resetSessionGeneration(identity)).resolves.toBe("conflict");
+    expect(values.get(bindingStoreKey(identity))).toEqual({
+      version: 1,
+      state: "cleared",
+      retired: true,
+      sessionId: identity.sessionId,
+    });
+    await expect(
+      store.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-unverified", cwd: "/new" },
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("verifies and releases a retired fence for the still-current stable session id", async () => {
+    const { state, values } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:telegram:chat-1",
+    };
+    await store.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-old", cwd: "/old" },
+    });
+    await store.retireSessionGeneration(identity);
+
+    const plan = await store.prepareSessionGenerationReclaim(identity);
+    expect(plan).toEqual({
+      kind: "verify",
+      expectedPreviousSessionId: identity.sessionId,
+    });
+    if (plan.kind !== "verify") {
+      throw new Error("expected the current retired generation to require verification");
+    }
+    await expect(
+      store.mutate(identity, {
+        kind: "reclaim-generation",
+        expectedPreviousSessionId: plan.expectedPreviousSessionId,
+      }),
+    ).resolves.toBe(true);
+    expect(values.get(bindingStoreKey(identity))).toEqual({
+      version: 1,
+      state: "cleared",
+      sessionId: identity.sessionId,
+    });
+    await expect(
+      store.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-recovered", cwd: "/new" },
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("recovers a retired in-place generation through the authoritative session store", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-reset-reclaim-"));
+    const storePath = path.join(root, "sessions.json");
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionId: "session-current",
+      sessionKey: "agent:main:telegram:direct:123",
+    };
+    try {
+      await upsertSessionEntry({
+        agentId: identity.agentId,
+        sessionKey: identity.sessionKey,
+        storePath,
+        entry: { sessionId: identity.sessionId, updatedAt: 1 },
+      });
+      await store.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-before-reset", cwd: "/repo" },
+      });
+      await store.retireSessionGeneration(identity);
+
+      await expect(
+        reclaimCurrentCodexSessionGeneration({
+          bindingStore: store,
+          identity,
+          config: { session: { store: storePath } },
+        }),
+      ).resolves.toBe(true);
+      await expect(
+        store.mutate(identity, {
+          kind: "set",
+          binding: { threadId: "thread-after-reset", cwd: "/repo" },
+        }),
+      ).resolves.toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("drains an in-flight ownership mutation and rejects late attachment during archive", async () => {

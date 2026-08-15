@@ -8,7 +8,6 @@ import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
 import { resolveEntryInstallRoot } from "./entry.compile-cache.js";
 import {
   buildOpenClawCompileCacheRespawnPlan,
-  isNodeVersionAffectedByCompileCacheDeadlock,
   isSourceCheckoutInstallRoot,
   resolveOpenClawCompileCacheDirectory,
   runOpenClawCompileCacheRespawnPlan,
@@ -86,6 +85,37 @@ describe("entry compile cache", () => {
     expect(directory).toContain(path.join(".node-cache", "openclaw"));
     expect(directory).toContain("2026.4.29");
     expect(path.basename(directory)).toMatch(/^\d+-\d+$/);
+  });
+
+  it("invalidates a replaced installation without deleting shared compile caches", async () => {
+    const root = tempDirs.make("openclaw-compile-cache-package-reinstall-");
+    const packageJsonPath = path.join(root, "package.json");
+    const cacheRoot = path.join(root, ".node-cache");
+    await fs.writeFile(packageJsonPath, '{"version":"2026.4.29"}\n', "utf8");
+
+    const originalDirectory = resolveOpenClawCompileCacheDirectory({
+      env: { NODE_COMPILE_CACHE: cacheRoot },
+      installRoot: root,
+    });
+    await fs.mkdir(originalDirectory, { recursive: true });
+    const originalCacheEntry = path.join(originalDirectory, "keep.txt");
+    await fs.writeFile(originalCacheEntry, "previous cached installation\n", "utf8");
+
+    await fs.writeFile(
+      packageJsonPath,
+      '{"version":"2026.4.29","installation":"replacement"}\n',
+      "utf8",
+    );
+    const replacementDirectory = resolveOpenClawCompileCacheDirectory({
+      env: { NODE_COMPILE_CACHE: cacheRoot },
+      installRoot: root,
+    });
+
+    expect(replacementDirectory).toContain(path.join("openclaw", "2026.4.29"));
+    expect(replacementDirectory).not.toBe(originalDirectory);
+    await expect(fs.readFile(originalCacheEntry, "utf8")).resolves.toBe(
+      "previous cached installation\n",
+    );
   });
 
   it("builds a one-shot no-cache respawn plan when source checkout inherits NODE_COMPILE_CACHE", async () => {
@@ -413,30 +443,5 @@ describe("entry compile cache", () => {
         platform: "win32",
       }),
     ).toBe(true);
-  });
-});
-
-describe("isNodeVersionAffectedByCompileCacheDeadlock", () => {
-  it("flags Node 24.0 through 24.14 as affected", () => {
-    expect(isNodeVersionAffectedByCompileCacheDeadlock("24.0.0")).toBe(true);
-    expect(isNodeVersionAffectedByCompileCacheDeadlock("24.1.0")).toBe(true);
-    expect(isNodeVersionAffectedByCompileCacheDeadlock("24.14.0")).toBe(true);
-  });
-
-  it("does not flag Node 24.15+", () => {
-    expect(isNodeVersionAffectedByCompileCacheDeadlock("24.15.0")).toBe(false);
-    expect(isNodeVersionAffectedByCompileCacheDeadlock("24.20.1")).toBe(false);
-  });
-
-  it("does not flag other major versions", () => {
-    expect(isNodeVersionAffectedByCompileCacheDeadlock("22.22.0")).toBe(false);
-    expect(isNodeVersionAffectedByCompileCacheDeadlock("23.11.0")).toBe(false);
-    expect(isNodeVersionAffectedByCompileCacheDeadlock("25.0.0")).toBe(false);
-  });
-
-  it("handles missing or invalid versions", () => {
-    expect(isNodeVersionAffectedByCompileCacheDeadlock(undefined)).toBe(false);
-    expect(isNodeVersionAffectedByCompileCacheDeadlock("")).toBe(false);
-    expect(isNodeVersionAffectedByCompileCacheDeadlock("not-a-version")).toBe(false);
   });
 });

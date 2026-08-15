@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { relative, resolve, sep } from "node:path";
+import { resolve, sep } from "node:path";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { ClawAddPlan } from "./types.js";
@@ -8,6 +9,7 @@ import {
   CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION,
   deleteClawWorkspaceFileRecord,
   readClawWorkspaceFiles,
+  readClawWorkspaceActionSource,
   upsertClawWorkspaceFile,
   type PersistedClawWorkspaceFile,
 } from "./workspace.js";
@@ -31,14 +33,6 @@ export class ClawWorkspaceUpdateError extends Error {
 
 function digest(content: Uint8Array): string {
   return `sha256:${createHash("sha256").update(content).digest("hex")}`;
-}
-
-function relativeWithin(root: string, target: string): string {
-  const value = relative(root, target);
-  if (!value || value === ".." || value.startsWith(`..${sep}`)) {
-    throw new ClawWorkspaceUpdateError(`Path ${JSON.stringify(target)} escapes its owned root.`);
-  }
-  return value;
 }
 
 export async function applyClawWorkspaceUpdate(
@@ -81,7 +75,7 @@ export async function applyClawWorkspaceUpdate(
       try {
         await revert();
       } catch (error) {
-        failures.push(error instanceof Error ? error.message : String(error));
+        failures.push(coerceErrorMessage(error));
       }
     }
     if (failures.length > 0) {
@@ -148,8 +142,12 @@ export async function applyClawWorkspaceUpdate(
           `Target workspace action ${JSON.stringify(path)} lacks source provenance.`,
         );
       }
-      const sourceRelative = relativeWithin(packageRoot, resolve(target.source));
-      const content = await source.readBytes(sourceRelative, { maxBytes: MAX_UPDATE_FILE_BYTES });
+      const resolvedSource = await readClawWorkspaceActionSource({
+        action: target,
+        packageRoot,
+        sourceRoot: source,
+      });
+      const content = resolvedSource.content;
       if (digest(content) !== target.digest || target.digest !== action.desiredDigest) {
         throw new ClawWorkspaceUpdateError(
           `Workspace source for ${JSON.stringify(path)} changed after planning.`,
@@ -161,7 +159,7 @@ export async function applyClawWorkspaceUpdate(
         agentId: updatePlan.agentId,
         workspace: workspace.rootReal,
         path,
-        sourcePath: resolve(target.source),
+        sourcePath: resolvedSource.sourceRelative.replaceAll(sep, "/"),
         contentDigest: target.digest,
         status: "complete",
         createdAtMs: previousRef?.createdAtMs ?? nowMs,
@@ -197,7 +195,7 @@ export async function applyClawWorkspaceUpdate(
       await rollback();
     } catch (rollbackError) {
       throw new ClawWorkspaceUpdateError(
-        `${error instanceof Error ? error.message : String(error)}; rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+        `${coerceErrorMessage(error)}; rollback failed: ${coerceErrorMessage(rollbackError)}`,
         true,
       );
     }

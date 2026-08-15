@@ -128,6 +128,7 @@ function createSandboxBackendTestConfig(
     scope: "session",
     workspaceAccess: "rw",
     workspaceRoot: "/workspace-root",
+    dockerTmpfsSource: "configured",
     docker: {
       binds: [],
       capDrop: [],
@@ -203,6 +204,21 @@ async function withProcessEnv(
     vi.unstubAllEnvs();
   }
 }
+
+describe("createMxcSandboxBackendFactory", () => {
+  test("hashes workspace-qualified scopes without truncating their identity", async () => {
+    const createBackend = createMxcSandboxBackendFactory(baseConfig);
+    const handle = await createBackend({
+      sessionKey: "agent:main:main",
+      scopeKey: `agent:main:workspace:${"a".repeat(32)}`,
+      workspaceDir: baseParams.workdir,
+      agentWorkspaceDir: baseParams.workdir,
+      cfg: createSandboxBackendTestConfig({ workspaceAccess: "rw" }),
+    });
+
+    expect(handle.runtimeId).toMatch(/^openclaw-mxc-workspace-[a-f0-9]{32}$/u);
+  });
+});
 
 describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests)", () => {
   beforeEach(() => {
@@ -281,6 +297,29 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       executablePath: "mxc-test-binary",
       usePty: false,
     });
+  });
+
+  test("normalizes agent-tool workdirs before execution", async () => {
+    const childDir = path.join(baseParams.workdir, "child");
+    mkdirSync(childDir);
+    const handle = createMxcSandboxBackendHandle(baseParams);
+
+    expect(handle.workdirValidation).toBe("backend");
+    await expect(handle.validateWorkdir?.(`${baseParams.workdir}/child`)).resolves.toBe(childDir);
+    await expect(
+      handle.validateWorkdir?.(path.join(baseParams.workdir, "missing")),
+    ).resolves.toBeNull();
+  });
+
+  test("reports workdirs nested under a file as unavailable instead of throwing", async () => {
+    // A file parent surfaces ENOTDIR on Linux (CI truth) and ENOENT on Windows.
+    // Both must reach the contract's null result rather than a raw filesystem error.
+    const filePath = path.join(baseParams.workdir, "not-a-directory.txt");
+    writeFileSync(filePath, "content");
+    const handle = createMxcSandboxBackendHandle(baseParams);
+
+    await expect(handle.validateWorkdir?.(path.join(filePath, "child"))).resolves.toBeNull();
+    await expect(handle.validateWorkdir?.(filePath)).resolves.toBeNull();
   });
 
   test("buildExecSpec keeps command and env payload out of process argv", async () => {
@@ -722,10 +761,43 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       });
       expect(bridge).toBeDefined();
 
+      const createFileExclusive = bridge?.createFileExclusive?.bind(bridge);
+      expect(createFileExclusive).toBeTypeOf("function");
+      await expect(
+        createFileExclusive!({ filePath: "notes/exclusive.txt", data: "first", cwd: workdir }),
+      ).resolves.toBe("created");
+      await expect(
+        createFileExclusive!({
+          filePath: "notes/exclusive.txt",
+          data: "replacement",
+          cwd: workdir,
+        }),
+      ).resolves.toBe("exists");
+      expect(readFileSync(path.join(workdir, "notes", "exclusive.txt"), "utf-8")).toBe("first");
+      const raceOutcomes = await Promise.all([
+        createFileExclusive!({ filePath: "notes/race.txt", data: "one", cwd: workdir }),
+        createFileExclusive!({ filePath: "notes/race.txt", data: "two", cwd: workdir }),
+      ]);
+      expect(raceOutcomes.toSorted()).toEqual(["created", "exists"]);
+
       await bridge?.writeFile({ filePath: "notes/one.txt", data: "hello mxc", cwd: workdir });
       expect(await bridge?.readFile({ filePath: "notes/one.txt", cwd: workdir })).toEqual(
         Buffer.from("hello mxc"),
       );
+      await expect(
+        bridge?.readFile({
+          filePath: "notes/one.txt",
+          cwd: workdir,
+          maxBytes: "hello mxc".length,
+        }),
+      ).resolves.toEqual(Buffer.from("hello mxc"));
+      await expect(
+        bridge?.readFile({
+          filePath: "notes/one.txt",
+          cwd: workdir,
+          maxBytes: "hello mxc".length - 1,
+        }),
+      ).rejects.toThrow();
       expect(await bridge?.stat({ filePath: "notes/one.txt", cwd: workdir })).toMatchObject({
         type: "file",
         size: "hello mxc".length,

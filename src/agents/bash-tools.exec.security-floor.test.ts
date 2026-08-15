@@ -7,11 +7,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { createExecTool } from "./bash-tools.exec.js";
+import { createExecTool as createExecToolImpl } from "./bash-tools.exec-run.js";
 import { callGatewayTool } from "./tools/gateway.js";
+
+const createExecTool = (
+  defaults?: Parameters<typeof createExecToolImpl>[0],
+): ReturnType<typeof createExecToolImpl> => createExecToolImpl({ agentId: "main", ...defaults });
 
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
@@ -31,10 +37,8 @@ function installAllowlistedGogFixture(root: string): string {
   return binDir;
 }
 
-function writeExecApprovalsFixture(root: string, file: Record<string, unknown>): void {
-  const stateDir = process.env.OPENCLAW_STATE_DIR ?? path.join(root, "state");
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.writeFileSync(path.join(stateDir, "exec-approvals.json"), `${JSON.stringify(file)}\n`);
+function writeExecApprovalsFixture(_root: string, file: Record<string, unknown>): void {
+  saveExecApprovals(file as ExecApprovalsFile);
 }
 
 function writeDenyExecApprovalsFixture(root: string): void {
@@ -51,6 +55,29 @@ function writeFullAskExecApprovalsFixture(root: string): void {
     defaults: { security: "full", ask: "always" },
     agents: {},
   });
+}
+
+function mockPendingApprovalGateway(): string[] {
+  const calls: string[] = [];
+  vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+    calls.push(method);
+    if (method === "exec.approval.request") {
+      return { status: "accepted", id: "approval-id" };
+    }
+    if (method === "exec.approval.waitDecision") {
+      return { decision: null };
+    }
+    return { ok: true };
+  });
+  return calls;
+}
+
+function createAskingAutoReviewer() {
+  return vi.fn<ExecAutoReviewer>(async () => ({
+    decision: "ask",
+    risk: "high",
+    rationale: "test reviewer asks for approval",
+  }));
 }
 
 describe("exec security floor", () => {
@@ -87,6 +114,7 @@ describe("exec security floor", () => {
   afterEach(() => {
     const dir = tempRoot;
     tempRoot = undefined;
+    closeOpenClawStateDatabaseForTest();
     envSnapshot.restore();
     if (dir) {
       fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
@@ -329,17 +357,7 @@ describe("exec security floor", () => {
 
   it("preserves host ask floors for elevated full gateway exec", async () => {
     writeFullAskExecApprovalsFixture(tempRoot ?? os.tmpdir());
-    const calls: string[] = [];
-    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
-      calls.push(method);
-      if (method === "exec.approval.request") {
-        return { status: "accepted", id: "approval-id" };
-      }
-      if (method === "exec.approval.waitDecision") {
-        return { decision: null };
-      }
-      return { ok: true };
-    });
+    const calls = mockPendingApprovalGateway();
     const tool = createExecTool({
       host: "gateway",
       security: "full",
@@ -358,22 +376,8 @@ describe("exec security floor", () => {
   });
 
   it("honors normalized auto mode before elevated full bypass", async () => {
-    const calls: string[] = [];
-    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
-      calls.push(method);
-      if (method === "exec.approval.request") {
-        return { status: "accepted", id: "approval-id" };
-      }
-      if (method === "exec.approval.waitDecision") {
-        return { decision: null };
-      }
-      return { ok: true };
-    });
-    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
-      decision: "ask",
-      risk: "high",
-      rationale: "test reviewer asks for approval",
-    }));
+    const calls = mockPendingApprovalGateway();
+    const autoReviewer = createAskingAutoReviewer();
     const tool = createExecTool({
       host: "gateway",
       mode: "auto",
@@ -401,22 +405,8 @@ describe("exec security floor", () => {
   it.each(["on-miss", "off"] as const)(
     "keeps auto review enabled when legacy ask=%s does not strengthen auto mode",
     async (ask) => {
-      const calls: string[] = [];
-      vi.mocked(callGatewayTool).mockImplementation(async (method) => {
-        calls.push(method);
-        if (method === "exec.approval.request") {
-          return { status: "accepted", id: "approval-id" };
-        }
-        if (method === "exec.approval.waitDecision") {
-          return { decision: null };
-        }
-        return { ok: true };
-      });
-      const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
-        decision: "ask",
-        risk: "high",
-        rationale: "test reviewer asks for approval",
-      }));
+      const calls = mockPendingApprovalGateway();
+      const autoReviewer = createAskingAutoReviewer();
       const tool = createExecTool({
         host: "gateway",
         mode: "auto",

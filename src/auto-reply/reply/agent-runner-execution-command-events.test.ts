@@ -3,7 +3,7 @@ import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   setupAgentRunnerExecutionTestState,
-  getRunAgentTurnWithFallback,
+  getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
 } from "./agent-runner-execution.test-support.js";
@@ -11,7 +11,7 @@ import type { EmbeddedAgentParams } from "./agent-runner-execution.test-support.
 
 const state = setupAgentRunnerExecutionTestState();
 
-describe("runAgentTurnWithFallback: command events", () => {
+describe("executeAgentTurn: command events", () => {
   it("forwards plan, approval, command output, and patch events", async () => {
     const onPlanUpdate = vi.fn();
     const onApprovalEvent = vi.fn();
@@ -69,9 +69,9 @@ describe("runAgentTurnWithFallback: command events", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const pendingToolTasks = new Set<Promise<void>>();
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -171,8 +171,8 @@ describe("runAgentTurnWithFallback: command events", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -228,8 +228,8 @@ describe("runAgentTurnWithFallback: command events", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -290,8 +290,8 @@ describe("runAgentTurnWithFallback: command events", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {

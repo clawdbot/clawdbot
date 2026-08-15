@@ -1,3 +1,5 @@
+import { resolveGlobalMap } from "../shared/global-singleton.js";
+
 export type ChildAdmissionCap =
   | "subagents.maxSpawnDepth"
   | "subagents.maxChildrenPerAgent"
@@ -14,6 +16,58 @@ type ChildAdmissionParams = {
   activeChildren: number;
   maxActiveChildren: number;
 } & ({ collect: false } | { collect: true; totalChildren: number; maxTotalChildren: number });
+
+/** ACP child keys deduplicate task rows; symbols keep anonymous starts distinct. */
+const pendingChildAdmissions = resolveGlobalMap<string, Set<string | symbol>>(
+  Symbol.for("openclaw.pendingChildAdmissions"),
+  "close-only",
+);
+
+type ReservableChildAdmission = { ok: true } | { ok: false };
+
+type ChildAdmissionReservation<TAdmission extends ReservableChildAdmission> =
+  | Extract<TAdmission, { ok: false }>
+  | (Extract<TAdmission, { ok: true }> & { release: () => void });
+
+type ChildAdmissionReservationParams<TAdmission extends ReservableChildAdmission> = {
+  controllerSessionKey: string;
+  childSessionKey?: string;
+  resolveAdmission: (
+    pendingChildren: number,
+    pendingChildSessionKeys: ReadonlySet<string>,
+  ) => TAdmission;
+};
+
+// Infer the complete decision once so native, ACP, and visible payloads survive narrowing.
+export function reserveChildAdmissionSlot<TAdmission extends ReservableChildAdmission>(
+  params: ChildAdmissionReservationParams<TAdmission>,
+): ChildAdmissionReservation<TAdmission>;
+export function reserveChildAdmissionSlot(
+  params: ChildAdmissionReservationParams<ReservableChildAdmission>,
+): ChildAdmissionReservation<ReservableChildAdmission> {
+  const pending = pendingChildAdmissions.get(params.controllerSessionKey) ?? new Set();
+  const pendingChildSessionKeys = new Set(
+    [...pending].filter((sessionKey): sessionKey is string => typeof sessionKey === "string"),
+  );
+  const admission = params.resolveAdmission(pending.size, pendingChildSessionKeys);
+  if (!admission.ok) {
+    return admission;
+  }
+  const reservation = params.childSessionKey ?? Symbol("pending child admission");
+  pending.add(reservation);
+  pendingChildAdmissions.set(params.controllerSessionKey, pending);
+  return {
+    ...admission,
+    release() {
+      if (!pending.delete(reservation)) {
+        return;
+      }
+      if (pending.size === 0) {
+        pendingChildAdmissions.delete(params.controllerSessionKey);
+      }
+    },
+  };
+}
 
 const rejectChildAdmission = (
   governingCap: ChildAdmissionCap,

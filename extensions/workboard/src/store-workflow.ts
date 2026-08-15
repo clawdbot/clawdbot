@@ -9,10 +9,12 @@ import type {
 } from "@openclaw/workboard-contract";
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   appendEvent,
   assertCanMutateClaimedCard,
   capText,
+  cardBoardId,
   cardChildIds,
   cardParentIds,
   cardRunId,
@@ -23,6 +25,7 @@ import {
 import {
   addWorkboardDurationMs,
   DEFAULT_CLAIM_TTL_MS,
+  isWorkboardClaimReclaimable,
   MAX_CARD_ARTIFACTS,
   MAX_CARD_COMMENTS,
   MAX_CARD_NOTIFICATIONS,
@@ -49,7 +52,6 @@ import {
   normalizeArtifact,
   normalizeAutomation,
   normalizeBoundedString,
-  normalizeOptionalString,
   normalizeProofInput,
   normalizeStatus,
   normalizeStringList,
@@ -91,10 +93,15 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         ttlSeconds ? secondsToDurationMs(ttlSeconds) : DEFAULT_CLAIM_TTL_MS,
       );
       const guarded = await this.promoteDependencyReady(id, now);
+      if (guarded.metadata?.archivedAt) {
+        throw new Error("card is archived.");
+      }
       const expectedAuthority = options.expectedAuthority;
       if (
         expectedAuthority &&
-        (guarded.agentId !== expectedAuthority.agentId ||
+        (guarded.status !== expectedAuthority.status ||
+          cardBoardId(guarded) !== expectedAuthority.boardId ||
+          guarded.agentId !== expectedAuthority.agentId ||
           !isDeepStrictEqual(
             guarded.metadata?.automation?.workspace,
             expectedAuthority.workspace,
@@ -108,7 +115,11 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       }
       const existingClaim = guarded.metadata?.claim;
       const activeClaim =
-        existingClaim && isFutureDateTimestampMs(existingClaim.expiresAt, { nowMs: now })
+        existingClaim &&
+        (isFutureDateTimestampMs(existingClaim.expiresAt, { nowMs: now }) ||
+          // Direct claims must honor the same running-worker heartbeat grace
+          // as dispatcher recovery; otherwise they silently steal live tokens.
+          (guarded.status === "running" && !isWorkboardClaimReclaimable(existingClaim, now)))
           ? existingClaim
           : undefined;
       if (cardParentIds(guarded).length > 0 && guarded.status !== "ready" && !activeClaim) {

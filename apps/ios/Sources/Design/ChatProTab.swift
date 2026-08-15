@@ -235,11 +235,16 @@ struct ChatProTab: View {
                     ? self.dictationControl
                     : nil,
                 voiceNoteControl: self.voiceNoteControl,
-                speech: self.speech)
+                speech: self.speech,
+                mediaPlaybackAllowed: {
+                    !self.appModel.talkMode.isEnabled &&
+                        !self.appModel.talkMode.hasActivePushToTalkSession &&
+                        !self.appModel.voiceNoteRecorder.ownsPendingChatAttachment
+                })
                 // iMessage-style grey bubbles for agent replies in the clean chrome.
-                    .environment(\.openClawAssistantBubblesInCleanChrome, true)
-                    .id(ObjectIdentifier(viewModel))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .environment(\.openClawAssistantBubblesInCleanChrome, true)
+                .id(ObjectIdentifier(viewModel))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
             ContentUnavailableView(
                 "Preparing Chat",
@@ -285,12 +290,12 @@ struct ChatProTab: View {
     }
 
     private var headerAgentIdentity: some View {
-        HStack {
-            self.headerAgentIdentityControl
-        }
-        .frame(minHeight: 44)
-        .accessibilityIdentifier("chat-agent-identity")
-        .animation(.snappy(duration: 0.24), value: self.showsExpandedGatewayStatus)
+        HStack { self.headerAgentIdentityControl }
+            .frame(minHeight: 44)
+            .accessibilityElement(children: .contain) // Keep the parent reachable and its child actionable.
+            .accessibilityIdentifier("chat-agent-identity")
+            .accessibilityValue(self.showsExpandedGatewayStatus ? "Expanded" : "Collapsed")
+            .animation(.snappy(duration: 0.24), value: self.showsExpandedGatewayStatus)
     }
 
     @ViewBuilder

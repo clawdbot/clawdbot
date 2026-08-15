@@ -2,6 +2,8 @@
  * Reports prompt pressure and owns explicit mid-turn recovery routing.
  */
 import type { AssembleResult } from "../../../context-engine/types.js";
+import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
+import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SessionManager } from "../../sessions/index.js";
@@ -10,8 +12,8 @@ import {
   resolveLiveToolResultMaxChars,
   truncateOversizedToolResultsInSessionManager,
 } from "../tool-result-truncation.js";
-import type { AttemptContextEngine } from "./attempt.context-engine-helpers.js";
-import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
+import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
+import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
@@ -31,7 +33,7 @@ type AttemptPromptPreflightState = {
   contextBudgetStatus: EmbeddedRunAttemptResult["contextBudgetStatus"];
   preflightRecovery: EmbeddedRunAttemptResult["preflightRecovery"];
   promptError: unknown;
-  promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"];
+  promptErrorSource: AgentRunAttemptFailureSource | null;
   skipPromptSubmission: boolean;
 };
 
@@ -82,8 +84,6 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
     const contextTokenBudget = attempt.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
     const toolResultMaxChars = resolveLiveToolResultMaxChars({
       contextWindowTokens: contextTokenBudget,
-      cfg: attempt.config,
-      agentId: input.sessionAgentId,
     });
     const truncationResult = truncateOversizedToolResultsInSessionManager({
       sessionManager: input.sessionManager,
@@ -102,10 +102,30 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
         handled: true as const,
         truncatedCount: truncationResult.truncatedCount,
       };
-      input.replaceSessionMessages(input.sessionManager.buildSessionContext().messages);
+      input.replaceSessionMessages(
+        sanitizeCompactionReplayMessages(input.sessionManager.buildSessionContext().messages),
+      );
       logMidTurnPrecheck(
         request.route,
         `handled=true truncatedCount=${truncationResult.truncatedCount}`,
+      );
+      return { preflightRecovery };
+    }
+
+    if (truncationResult.reason === "no oversized or aggregate tool results") {
+      const preflightRecovery = {
+        route: "truncate_tool_results_only" as const,
+        source: "mid-turn" as const,
+        ...buildPreflightRecoveryBudgetSnapshot(request),
+        handled: true as const,
+        truncatedCount: 0,
+      };
+      // The mid-turn estimate sees the in-memory prompt view, while persisted
+      // recovery may already have capped the same tool results. Retry without
+      // manufacturing compaction when the persisted branch has nothing to trim.
+      logMidTurnPrecheck(
+        request.route,
+        `handled=true truncatedCount=0 truncateSkippedReason=${truncationResult.reason}`,
       );
       return { preflightRecovery };
     }
@@ -240,8 +260,8 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
       }),
     );
     if (preemptiveCompaction.route !== "fits") {
-      // Character pressure remains observable, but it is not authoritative enough to
-      // discard history or manufacture an overflow before the provider sees the payload.
+      // This pressure estimate is diagnostic only; it never compacts or discards history.
+      // Real compaction runs through explicit preflight or provider-overflow recovery.
       log.info(
         `[context-pressure-diagnostic] admitted provider attempt for ` +
           `${attempt.provider}/${attempt.modelId} route=${preemptiveCompaction.route} ` +

@@ -9,79 +9,70 @@ import {
   addEnvBackedAgentCredentials,
   type AgentDiscoveryAuthLookupOptions,
 } from "./agent-auth-discovery-core.js";
+import { isAmbientCredentialAllowedByProviderAuthPin } from "./auth-profiles/ambient-auth.js";
 import type { ExternalCliAuthDiscovery } from "./auth-profiles/external-cli-discovery.js";
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
-  loadAuthProfileStoreWithoutExternalProfiles,
-  loadAuthProfileStoreForRuntime,
-  loadAuthProfileStoreForSecretsRuntime,
 } from "./auth-profiles/store.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 /** Options for discovering credentials without prompting for secret material. */
 export type DiscoverAuthStorageOptions = {
+  ambientCredentials?: Readonly<AgentCredentialMap>;
   externalCli?: ExternalCliAuthDiscovery;
   inheritedAuthDir?: string;
+  preparedStore?: AuthProfileStore;
   readOnly?: boolean;
   skipExternalAuthProfiles?: boolean;
   skipCredentials?: boolean;
   syntheticAuthProviderRefs?: Iterable<string>;
 } & AgentDiscoveryAuthLookupOptions;
 
-/** Resolves agent credentials from auth profiles, env, and synthetic auth hooks. */
-export function resolveAgentCredentialsForDiscovery(
-  agentDir: string,
-  options?: DiscoverAuthStorageOptions,
+type AmbientAgentCredentialOptions = AgentDiscoveryAuthLookupOptions & {
+  resolveSyntheticAuth?: (provider: string) => { apiKey?: string } | undefined;
+  syntheticAuthProviderRefs?: Iterable<string>;
+};
+
+/** Resolves workspace/config/env-stable credentials independently of agent-local profiles. */
+export function resolveAmbientAgentCredentialsForDiscovery(
+  options: AmbientAgentCredentialOptions = {},
 ): AgentCredentialMap {
-  const storeOptions = {
-    allowKeychainPrompt: false,
-    ...(options?.config ? { config: options.config } : {}),
-    ...(options?.externalCli ? { externalCli: options.externalCli } : {}),
-    ...(options?.inheritedAuthDir ? { inheritedAuthDir: options.inheritedAuthDir } : {}),
-  };
-  const store =
-    options?.skipExternalAuthProfiles === true
-      ? options.readOnly === true
-        ? loadAuthProfileStoreWithoutExternalProfiles(
-            agentDir,
-            options.inheritedAuthDir ? { inheritedAuthDir: options.inheritedAuthDir } : undefined,
-          )
-        : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-            allowKeychainPrompt: false,
-            ...(options?.inheritedAuthDir ? { inheritedAuthDir: options.inheritedAuthDir } : {}),
-          })
-      : options?.readOnly === true
-        ? options.externalCli || options.config || options.inheritedAuthDir
-          ? loadAuthProfileStoreForRuntime(agentDir, { readOnly: true, ...storeOptions })
-          : loadAuthProfileStoreForSecretsRuntime(agentDir)
-        : ensureAuthProfileStore(agentDir, storeOptions);
-  const credentials = addEnvBackedAgentCredentials(
-    resolveAgentCredentialMapFromStore(store, {
-      includeSecretRefPlaceholders: options?.readOnly === true,
-      config: options?.config,
-    }),
-    {
-      config: options?.config,
-      workspaceDir: options?.workspaceDir,
-      env: options?.env,
-    },
-  );
+  const credentials = addEnvBackedAgentCredentials({}, options);
   const syntheticAuthProviderRefs =
-    options?.syntheticAuthProviderRefs ?? resolveRuntimeSyntheticAuthProviderRefs();
+    options.syntheticAuthProviderRefs ?? resolveRuntimeSyntheticAuthProviderRefs();
+  const resolveSyntheticAuth =
+    options.resolveSyntheticAuth ??
+    ((provider: string) =>
+      resolveProviderSyntheticAuthWithPlugin({
+        provider,
+        config: options.config,
+        workspaceDir: options.workspaceDir,
+        env: options.env,
+        context: {
+          config: options.config,
+          provider,
+          providerConfig: options.config?.models?.providers?.[provider],
+        },
+      }));
   for (const provider of syntheticAuthProviderRefs) {
     if (credentials[provider]) {
       continue;
     }
-    // Synthetic auth is a plugin/runtime fallback. Only fill empty providers so
-    // persisted profiles and env-backed credentials remain authoritative.
-    const resolved = resolveProviderSyntheticAuthWithPlugin({
-      provider,
-      context: {
-        config: undefined,
+    if (
+      !isAmbientCredentialAllowedByProviderAuthPin({
+        config: options.config,
+        authAliasLookupParams: {
+          ...(options.env ? { env: options.env } : {}),
+          ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
+        },
         provider,
-        providerConfig: undefined,
-      },
-    });
+        type: "api_key",
+      })
+    ) {
+      continue;
+    }
+    const resolved = resolveSyntheticAuth(provider);
     const apiKey = resolved?.apiKey?.trim();
     if (!apiKey) {
       continue;
@@ -92,4 +83,49 @@ export function resolveAgentCredentialsForDiscovery(
     };
   }
   return credentials;
+}
+
+/** Resolves the effective auth store and provider credentials for one discovery generation. */
+export function resolveAgentDiscoveryAuthFacts(
+  agentDir: string,
+  options?: DiscoverAuthStorageOptions,
+): { store: AuthProfileStore; credentials: AgentCredentialMap } {
+  const storeOptions = {
+    allowKeychainPrompt: false,
+    ...(options?.config ? { config: options.config } : {}),
+    ...(options?.externalCli ? { externalCli: options.externalCli } : {}),
+    ...(options?.inheritedAuthDir ? { inheritedAuthDir: options.inheritedAuthDir } : {}),
+  };
+  const store = options?.preparedStore
+    ? options.preparedStore
+    : options?.skipExternalAuthProfiles === true
+      ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+          allowKeychainPrompt: false,
+          ...(options?.inheritedAuthDir ? { inheritedAuthDir: options.inheritedAuthDir } : {}),
+          ...(options?.readOnly === true ? { readOnly: true } : {}),
+        })
+      : ensureAuthProfileStore(agentDir, {
+          ...storeOptions,
+          ...(options?.readOnly === true ? { readOnly: true } : {}),
+        });
+  const credentials = resolveAgentCredentialMapFromStore(store, {
+    includeSecretRefPlaceholders: options?.readOnly === true,
+    config: options?.config,
+  });
+  const ambientCredentials =
+    options?.ambientCredentials ??
+    resolveAmbientAgentCredentialsForDiscovery({
+      config: options?.config,
+      workspaceDir: options?.workspaceDir,
+      env: options?.env,
+      syntheticAuthProviderRefs: options?.syntheticAuthProviderRefs,
+    });
+  for (const [provider, credential] of Object.entries(ambientCredentials)) {
+    if (credentials[provider]) {
+      continue;
+    }
+    // Ambient auth is a lifecycle-owned fallback. Agent-local profiles remain authoritative.
+    credentials[provider] = credential;
+  }
+  return { store, credentials };
 }

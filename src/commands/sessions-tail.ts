@@ -1,31 +1,19 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 /**
  * Session trajectory tail command.
  *
  * It selects active or requested sessions, renders recent trajectory events,
- * and can follow append-only trajectory files across rotation/truncation.
+ * and can follow newly appended SQLite trajectory rows.
  */
-import fs from "node:fs";
-import path from "node:path";
-import { StringDecoder } from "node:string_decoder";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as toOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { resolveSessionFilePath } from "../config/sessions/paths.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { readFileWindowFullySync } from "../infra/file-read.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
-import { readRegularFileSync } from "../infra/regular-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  resolveTrajectoryFilePath,
-  TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
-} from "../trajectory/paths.js";
-import { resolveTrajectoryRuntimeFile } from "../trajectory/runtime-file.js";
 import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
@@ -48,177 +36,32 @@ type TailSelection = {
   source: TailTrajectorySource;
 };
 
-type TailTrajectorySource =
-  | {
-      kind: "file";
-      path: string;
-    }
-  | {
-      agentId: string;
-      kind: "sqlite";
-      sessionId: string;
-      storePath: string;
-    };
-
-type FileFollowState = {
-  cursor: TrajectoryCursor | null;
-  decoder: StringDecoder;
-  fileState: FollowFileState | null;
-  kind: "file";
-  offset: number;
-  pending: string;
-  selection: TailSelection & { source: Extract<TailTrajectorySource, { kind: "file" }> };
+type TailTrajectorySource = {
+  agentId: string;
+  sessionId: string;
+  storePath: string;
 };
 
 type SqliteFollowState = {
-  cursor: TrajectoryCursor | null;
-  kind: "sqlite";
   lastStorageSeq: number;
-  selection: TailSelection & { source: Extract<TailTrajectorySource, { kind: "sqlite" }> };
+  selection: TailSelection;
 };
-
-type FollowState = FileFollowState | SqliteFollowState;
 
 type TrajectorySnapshot = {
   events: TrajectoryEvent[];
-  fileDecoder?: StringDecoder;
-  filePending?: string;
-  fileState: FollowFileState | null;
-  maxStorageSeq?: number;
-  offset: number;
-};
-
-type FollowFileState = {
-  dev: number;
-  ino: number;
-  mtimeMs: number;
-  size: number;
-};
-
-type TrajectoryCursor = {
-  seq: number | null;
-  tsMs: number;
+  maxStorageSeq: number;
 };
 
 const DEFAULT_TAIL_COUNT = 80;
 const SESSION_KEY_PAD = 30;
 const EVENT_TYPE_PAD = 16;
 const FOLLOW_INTERVAL_MS = 1_000;
-let followIntervalMsForTests: number | undefined;
-
-/** Overrides the follow polling interval for tests. */
-function setSessionsTailFollowIntervalMsForTests(intervalMs?: number): void {
-  followIntervalMsForTests = intervalMs;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionsTailTestApi")] = {
-    setSessionsTailFollowIntervalMsForTests,
-  };
-}
-
-function resolveFollowIntervalMs(): number {
-  return followIntervalMsForTests ?? FOLLOW_INTERVAL_MS;
-}
 
 function parseTailCount(value: string | number | undefined): number | null {
   if (value === undefined) {
     return DEFAULT_TAIL_COUNT;
   }
   return parseStrictNonNegativeInteger(value) ?? null;
-}
-
-function toOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function isTrajectoryEvent(value: unknown): value is TrajectoryEvent {
-  return (
-    isRecord(value) &&
-    value.traceSchema === "openclaw-trajectory" &&
-    value.schemaVersion === 1 &&
-    typeof value.type === "string" &&
-    typeof value.ts === "string" &&
-    typeof value.sessionId === "string"
-  );
-}
-
-function parseTrajectoryEventLine(line: string): TrajectoryEvent | null {
-  const trimmed = line.trim();
-  if (!trimmed) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    return isTrajectoryEvent(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function parseTrajectoryEventLines(lines: string[]): TrajectoryEvent[] {
-  return lines.flatMap((line) => {
-    const event = parseTrajectoryEventLine(line);
-    return event ? [event] : [];
-  });
-}
-
-function eventSequence(event: TrajectoryEvent): number | null {
-  const seq = event.sourceSeq ?? event.seq;
-  return Number.isFinite(seq) ? seq : null;
-}
-
-function eventTimestampMs(event: TrajectoryEvent): number {
-  const parsed = Date.parse(event.ts);
-  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
-}
-
-function eventCursor(event: TrajectoryEvent): TrajectoryCursor {
-  return {
-    seq: eventSequence(event),
-    tsMs: eventTimestampMs(event),
-  };
-}
-
-function compareCursors(left: TrajectoryCursor, right: TrajectoryCursor): number {
-  if (left.seq !== null && right.seq !== null && left.seq !== right.seq) {
-    return left.seq - right.seq;
-  }
-  // Some trajectory events lack sequence numbers; timestamp fallback keeps
-  // follow mode from replaying already-rendered events after file rewrites.
-  const byTimestamp = left.tsMs - right.tsMs;
-  if (byTimestamp !== 0) {
-    return byTimestamp;
-  }
-  if (left.seq !== null && right.seq !== null) {
-    return left.seq - right.seq;
-  }
-  return 0;
-}
-
-function maxCursorValue(
-  current: TrajectoryCursor | null,
-  candidate: TrajectoryCursor,
-): TrajectoryCursor {
-  return !current || compareCursors(candidate, current) > 0 ? candidate : current;
-}
-
-function maxCursor(current: TrajectoryCursor | null, event: TrajectoryEvent): TrajectoryCursor {
-  return maxCursorValue(current, eventCursor(event));
-}
-
-function maxCursorFromEvents(events: TrajectoryEvent[]): TrajectoryCursor | null {
-  return events.reduce<TrajectoryCursor | null>((cursor, event) => maxCursor(cursor, event), null);
-}
-
-function eventsAfterCursor(
-  events: TrajectoryEvent[],
-  cursor: TrajectoryCursor | null,
-): TrajectoryEvent[] {
-  if (!cursor) {
-    return events;
-  }
-  return events.filter((event) => compareCursors(eventCursor(event), cursor) > 0);
 }
 
 function formatTimestamp(ts: string): string {
@@ -311,85 +154,29 @@ function formatProgressLine(event: TrajectoryEvent): string {
   return [formatTimestamp(event.ts), typeLabel, sessionLabel, preview].join(" ").trimEnd();
 }
 
-function readTrajectorySnapshot(filePath: string): TrajectorySnapshot {
-  try {
-    // Use the runtime trajectory limit so tail accepts any file the runtime
-    // would have written and rejects anything larger.
-    const { buffer, stat } = readRegularFileSync({
-      filePath,
-      maxBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
-    });
-    const fileDecoder = new StringDecoder("utf8");
-    const lines = fileDecoder.write(buffer).split(/\r?\n/u);
-    const trailing = lines.pop() ?? "";
-    const trailingEvent = parseTrajectoryEventLine(trailing);
-    return {
-      events: [...parseTrajectoryEventLines(lines), ...(trailingEvent ? [trailingEvent] : [])],
-      fileDecoder,
-      filePending: trailingEvent ? "" : trailing,
-      fileState: fileStateFromStat(stat),
-      offset: buffer.length,
-    };
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { events: [], fileState: null, offset: 0 };
-    }
-    throw error;
-  }
-}
-
 function readSqliteTrajectorySnapshot(
-  source: Extract<TailTrajectorySource, { kind: "sqlite" }>,
+  source: TailTrajectorySource,
+  tailEvents: number,
 ): TrajectorySnapshot {
   const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
     agentId: source.agentId,
     sessionId: source.sessionId,
     storePath: source.storePath,
+    tailEvents,
   });
   return {
     events: rows.map((row) => row.event),
-    fileState: null,
     maxStorageSeq: rows.at(-1)?.seq ?? -1,
-    offset: 0,
   };
 }
 
-function readTailSnapshot(selection: TailSelection): TrajectorySnapshot {
-  return selection.source.kind === "sqlite"
-    ? readSqliteTrajectorySnapshot(selection.source)
-    : readTrajectorySnapshot(selection.source.path);
+function readTailSnapshot(selection: TailSelection, tailEvents: number): TrajectorySnapshot {
+  return readSqliteTrajectorySnapshot(selection.source, tailEvents);
 }
 
-function renderEvents(events: TrajectoryEvent[], runtime: RuntimeEnv): TrajectoryCursor | null {
-  let cursor: TrajectoryCursor | null = null;
+function renderEvents(events: TrajectoryEvent[], runtime: RuntimeEnv): void {
   for (const event of events) {
     runtime.log(formatProgressLine(event));
-    cursor = maxCursor(cursor, event);
-  }
-  return cursor;
-}
-
-function fileStateFromStat(stat: fs.Stats): FollowFileState {
-  return {
-    dev: stat.dev,
-    ino: stat.ino,
-    mtimeMs: stat.mtimeMs,
-    size: stat.size,
-  };
-}
-
-function sameFileIdentity(left: FollowFileState | null, right: FollowFileState): boolean {
-  return Boolean(left && left.dev === right.dev && left.ino === right.ino);
-}
-
-function readFollowFileState(filePath: string): FollowFileState | null {
-  try {
-    return fileStateFromStat(fs.statSync(filePath));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw error;
   }
 }
 
@@ -409,69 +196,24 @@ function compareSelectionsByUpdatedAt(a: TailSelection, b: TailSelection): numbe
   return (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0);
 }
 
-async function resolveTailTrajectoryPath(params: {
-  sessionFile: string;
-  sessionId: string;
-}): Promise<string> {
-  return (
-    (await resolveTrajectoryRuntimeFile({
-      sessionFile: params.sessionFile,
-      sessionId: params.sessionId,
-    })) ??
-    resolveTrajectoryFilePath({
-      sessionFile: params.sessionFile,
-      sessionId: params.sessionId,
-    })
-  );
-}
-
-async function buildTailSelection(params: {
+function buildTailSelection(params: {
   agentId: string;
   entry: SessionEntry;
   key: string;
   storePath: string;
-}): Promise<TailSelection | null> {
+}): TailSelection | null {
   const sessionId = params.entry.sessionId?.trim();
   if (!sessionId) {
     return null;
   }
-  const sessionsDir = path.dirname(params.storePath);
-  let sessionFile: string;
-  try {
-    const entrySessionFile = params.entry.sessionFile?.trim();
-    const marker = entrySessionFile ? parseSqliteSessionFileMarker(entrySessionFile) : null;
-    if (marker && marker.sessionId === sessionId) {
-      return {
-        agentId: params.agentId,
-        entry: params.entry,
-        key: params.key,
-        source: {
-          agentId: marker.agentId,
-          kind: "sqlite",
-          sessionId: marker.sessionId,
-          storePath: marker.storePath,
-        },
-        storePath: params.storePath,
-      };
-    }
-    sessionFile = resolveSessionFilePath(sessionId, params.entry, {
-      agentId: params.agentId,
-      sessionsDir,
-    });
-  } catch {
-    return null;
-  }
-  const trajectoryPath = await resolveTailTrajectoryPath({
-    sessionFile,
-    sessionId,
-  });
   return {
     agentId: params.agentId,
     entry: params.entry,
     key: params.key,
     source: {
-      kind: "file",
-      path: trajectoryPath,
+      agentId: params.agentId,
+      sessionId,
+      storePath: params.storePath,
     },
     storePath: params.storePath,
   };
@@ -494,71 +236,6 @@ function selectSessionsToTail(selections: TailSelection[], sessionKey?: string):
   return latest ? [latest] : [];
 }
 
-function statFileSize(filePath: string): number {
-  try {
-    return fs.statSync(filePath).size;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return 0;
-    }
-    throw error;
-  }
-}
-
-function readNewFileFollowEvents(state: FileFollowState): TrajectoryEvent[] {
-  const fileState = readFollowFileState(state.selection.source.path);
-  if (!fileState) {
-    state.decoder = new StringDecoder("utf8");
-    state.fileState = null;
-    state.offset = 0;
-    state.pending = "";
-    return [];
-  }
-
-  const replaced = !sameFileIdentity(state.fileState, fileState);
-  const truncated = fileState.size < state.offset;
-  const possiblyRewrittenSameSize =
-    fileState.size === state.offset && state.fileState?.mtimeMs !== fileState.mtimeMs;
-
-  if (replaced || truncated || possiblyRewrittenSameSize) {
-    // Log rotation, truncation, and same-size rewrites all require a full
-    // rescan; cursor filtering prevents duplicate event output.
-    const snapshot = readTrajectorySnapshot(state.selection.source.path);
-    state.decoder = snapshot.fileDecoder ?? new StringDecoder("utf8");
-    state.fileState = snapshot.fileState;
-    state.offset = snapshot.offset;
-    state.pending = snapshot.filePending ?? "";
-    return eventsAfterCursor(snapshot.events, state.cursor);
-  }
-
-  if (fileState.size === state.offset) {
-    state.fileState = fileState;
-    return [];
-  }
-
-  const fd = fs.openSync(state.selection.source.path, "r");
-  try {
-    const deltaBytes = fileState.size - state.offset;
-    if (deltaBytes > TRAJECTORY_RUNTIME_FILE_MAX_BYTES) {
-      throw new Error(
-        `Trajectory delta exceeds ${TRAJECTORY_RUNTIME_FILE_MAX_BYTES} bytes: ${deltaBytes}`,
-      );
-    }
-    const buffer = Buffer.alloc(deltaBytes);
-    const bytesRead = readFileWindowFullySync(fd, buffer, state.offset);
-    state.offset += bytesRead;
-    state.fileState = fileState;
-    const combined = `${state.pending}${state.decoder.write(buffer.subarray(0, bytesRead))}`;
-    // Keep an incomplete trailing JSON line until the next poll, matching
-    // append-only writers that flush in chunks.
-    const lines = combined.split(/\r?\n/u);
-    state.pending = lines.pop() ?? "";
-    return parseTrajectoryEventLines(lines);
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
 function readNewSqliteFollowEvents(state: SqliteFollowState): TrajectoryEvent[] {
   const rows = loadSqliteTrajectoryRuntimeEventRowsSync({
     agentId: state.selection.source.agentId,
@@ -573,50 +250,16 @@ function readNewSqliteFollowEvents(state: SqliteFollowState): TrajectoryEvent[] 
   return rows.map((row) => row.event);
 }
 
-function readNewFollowEvents(state: FollowState): TrajectoryEvent[] {
-  return state.kind === "sqlite"
-    ? readNewSqliteFollowEvents(state)
-    : readNewFileFollowEvents(state);
-}
-
-function renderFollowEvents(
-  events: TrajectoryEvent[],
-  state: FollowState,
-  runtime: RuntimeEnv,
-): void {
-  const cursor = renderEvents(events, runtime);
-  if (cursor) {
-    state.cursor = maxCursorValue(state.cursor, cursor);
-  }
-}
-
 async function followSelections(
   selections: TailSelection[],
   runtime: RuntimeEnv,
   initialSnapshots: Map<TailSelection, TrajectorySnapshot>,
 ): Promise<void> {
-  const states = selections.map((selection): FollowState => {
+  const states = selections.map((selection): SqliteFollowState => {
     const snapshot = initialSnapshots.get(selection);
-    if (selection.source.kind === "sqlite") {
-      return {
-        cursor: snapshot ? maxCursorFromEvents(snapshot.events) : null,
-        kind: "sqlite",
-        lastStorageSeq: snapshot?.maxStorageSeq ?? -1,
-        selection: selection as TailSelection & {
-          source: Extract<TailTrajectorySource, { kind: "sqlite" }>;
-        },
-      };
-    }
     return {
-      cursor: snapshot ? maxCursorFromEvents(snapshot.events) : null,
-      decoder: snapshot?.fileDecoder ?? new StringDecoder("utf8"),
-      fileState: snapshot?.fileState ?? readFollowFileState(selection.source.path),
-      kind: "file",
-      offset: snapshot?.offset ?? statFileSize(selection.source.path),
-      pending: snapshot?.filePending ?? "",
-      selection: selection as TailSelection & {
-        source: Extract<TailTrajectorySource, { kind: "file" }>;
-      },
+      lastStorageSeq: snapshot?.maxStorageSeq ?? -1,
+      selection,
     };
   });
 
@@ -624,7 +267,7 @@ async function followSelections(
     const interval = setInterval(() => {
       for (const state of states) {
         try {
-          renderFollowEvents(readNewFollowEvents(state), state, runtime);
+          renderEvents(readNewSqliteFollowEvents(state), runtime);
         } catch (error) {
           runtime.error(
             `Failed to read trajectory progress for ${state.selection.key}: ${formatErrorMessage(
@@ -633,7 +276,7 @@ async function followSelections(
           );
         }
       }
-    }, resolveFollowIntervalMs());
+    }, FOLLOW_INTERVAL_MS);
 
     const stop = () => {
       clearInterval(interval);
@@ -685,7 +328,7 @@ export async function sessionsTailCommand(
       agentId: target.agentId,
       storePath: target.storePath,
     })) {
-      const selection = await buildTailSelection({
+      const selection = buildTailSelection({
         agentId: target.agentId,
         entry,
         key: sessionKey,
@@ -705,7 +348,7 @@ export async function sessionsTailCommand(
 
   const followSnapshots = new Map<TailSelection, TrajectorySnapshot>();
   for (const selection of selected) {
-    const snapshot = readTailSnapshot(selection);
+    const snapshot = readTailSnapshot(selection, Math.max(tailCount, opts.follow ? 1 : 0));
     followSnapshots.set(selection, snapshot);
     renderEvents(tailCount > 0 ? snapshot.events.slice(-tailCount) : [], runtime);
   }

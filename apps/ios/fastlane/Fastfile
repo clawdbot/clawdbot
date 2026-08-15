@@ -39,12 +39,20 @@ REQUIRED_SCREENSHOT_FAMILIES = {
   "iPhone" => /iPhone/,
   "13-inch iPad" => /iPad (Air|Pro) 13-inch/
 }.freeze
-REQUIRED_IOS_SCREENSHOT_NAMES = [
-  "01-control-connected",
-  "02-chat-connected",
-  "03-agent-connected",
-  "04-settings-connected"
+RELEASE_IOS_SCREENSHOT_TESTS = [
+  { test: "testReleaseControlScreenshot", name: "01-control-connected" },
+  { test: "testReleaseChatScreenshot", name: "02-chat-connected" },
+  { test: "testReleaseAgentScreenshot", name: "03-agent-connected" },
+  { test: "testReleaseSettingsScreenshot", name: "04-settings-connected" }
 ].freeze
+REQUIRED_IOS_SCREENSHOT_NAMES = RELEASE_IOS_SCREENSHOT_TESTS.map { |entry| entry.fetch(:name) }.freeze
+IOS_SCREENSHOT_TEST_TIMEOUT_SECONDS = 180
+IOS_SCREENSHOT_XCARGS = [
+  "-allowProvisioningUpdates",
+  "-test-timeouts-enabled YES",
+  "-default-test-execution-time-allowance #{IOS_SCREENSHOT_TEST_TIMEOUT_SECONDS}",
+  "-maximum-test-execution-time-allowance #{IOS_SCREENSHOT_TEST_TIMEOUT_SECONDS}"
+].join(" ").freeze
 PNG_SIGNATURE = "\x89PNG\r\n\x1A\n".b.freeze
 PUBLIC_METADATA_FILENAMES = [
   "description.txt",
@@ -1425,19 +1433,6 @@ def resolve_release_build_number(api_key:, short_version:, explicit_build_number
   next_build.to_s
 end
 
-def verify_app_store_binary!(api_key:, ipa_path:)
-  deliver(
-    api_key: api_key,
-    app_identifier: APP_STORE_APP_IDENTIFIER,
-    ipa: ipa_path,
-    platform: "ios",
-    verify_only: true,
-    skip_metadata: true,
-    skip_screenshots: true,
-    submit_for_review: false
-  )
-end
-
 def release_build_number_needs_app_store_connect_auth?(explicit_build_number: nil)
   explicit = explicit_build_number.to_s.strip
   !env_present?(explicit)
@@ -1609,6 +1604,88 @@ def verify_snapshot_test_result!(result_bundle_path, device)
   UI.test_failure!("Screenshot UI tests failed on #{device}: result=#{result}, failedTests=#{failed_tests}.")
 rescue JSON::ParserError, KeyError => e
   UI.user_error!("Invalid screenshot test result summary for #{device}: #{e.message}")
+end
+
+def archive_snapshot_test_result!(result_bundle_path:, archive_directory:, device:, screenshot_name:, attempt:)
+  return unless File.directory?(result_bundle_path)
+
+  archive_path = File.join(
+    archive_directory,
+    "#{device}-#{screenshot_name}-attempt-#{attempt}.xcresult"
+  )
+  FileUtils.rm_rf(archive_path)
+  FileUtils.mv(result_bundle_path, archive_path)
+end
+
+def capture_release_ios_screenshot!(
+  project:,
+  device:,
+  screenshot:,
+  output_directory:,
+  result_bundle_path:,
+  result_bundle_archive_directory:,
+  derived_data_path:,
+  clear_previous_screenshots:
+)
+  test_name = screenshot.fetch(:test)
+  screenshot_name = screenshot.fetch(:name)
+  expected_screenshot_path = File.join(output_directory, "en-US", "#{device}-#{screenshot_name}.png")
+
+  1.upto(2) do |attempt|
+    FileUtils.rm_f(expected_screenshot_path)
+    FileUtils.rm_rf(result_bundle_path)
+    begin
+      # Keep retry ownership outside Snapshot. Every action call creates a new
+      # xcodebuild/TestManager session and reboots the selected simulator.
+      capture_ios_screenshots(
+        project: project,
+        scheme: "OpenClawUITests",
+        configuration: "Debug",
+        devices: [device],
+        languages: ["en-US"],
+        only_testing: ["OpenClawUITests/OpenClawSnapshotUITests/#{test_name}"],
+        launch_arguments: ["--openclaw-screenshot-mode"],
+        output_directory: output_directory,
+        clear_previous_screenshots: clear_previous_screenshots && attempt == 1,
+        derived_data_path: derived_data_path,
+        test_without_building: true,
+        result_bundle: true,
+        number_of_retries: 0,
+        stop_after_first_error: true,
+        reinstall_app: true,
+        concurrent_simulators: false,
+        override_status_bar: true,
+        override_status_bar_arguments: SNAPSHOT_STATUS_BAR_ARGUMENTS,
+        skip_open_summary: true,
+        xcargs: IOS_SCREENSHOT_XCARGS
+      )
+      verify_snapshot_test_result!(result_bundle_path, "#{device} #{screenshot_name} attempt #{attempt}")
+    rescue StandardError => error
+      archive_snapshot_test_result!(
+        result_bundle_path: result_bundle_path,
+        archive_directory: result_bundle_archive_directory,
+        device: device,
+        screenshot_name: screenshot_name,
+        attempt: attempt
+      )
+      raise if attempt == 2
+
+      UI.important(
+        "Screenshot #{screenshot_name} failed on #{device}; " \
+          "retrying once in a fresh simulator session (#{error.message})."
+      )
+      next
+    end
+
+    archive_snapshot_test_result!(
+      result_bundle_path: result_bundle_path,
+      archive_directory: result_bundle_archive_directory,
+      device: device,
+      screenshot_name: screenshot_name,
+      attempt: attempt
+    )
+    return
+  end
 end
 
 def build_app_store_release(context)
@@ -1894,9 +1971,9 @@ platform :ios do
     end
     verify_apple_release_source!(release_sha)
     build = build_app_store_release(context)
-    verify_app_store_binary!(api_key: context[:api_key], ipa_path: build[:ipa_path])
     # Release operations have one active uploader by policy. This final read
-    # catches human state changes; it is not a cross-uploader lock.
+    # catches human state changes before the first App Store mutation; it is
+    # not a cross-uploader lock.
     resolve_ios_release_plan!(
       release_version: context[:version],
       app_store_revision: context[:app_store_revision],
@@ -2040,34 +2117,34 @@ platform :ios do
     FileUtils.mkdir_p(result_bundle_archive_directory)
     FileUtils.rm_rf(derived_data_path)
     devices = snapshot_devices
-    devices.each_with_index do |device, index|
-      capture_ios_screenshots(
-        project: File.join(ios_root, "OpenClaw.xcodeproj"),
-        scheme: "OpenClawUITests",
-        configuration: "Debug",
-        devices: [device],
-        languages: ["en-US"],
-        # App Store capture is isolated from functional UI checks; this lane only
-        # needs the deterministic four-screenshot release flow.
-        only_testing: ["OpenClawUITests/OpenClawSnapshotUITests/testConnectedGatewayTabs"],
-        launch_arguments: ["--openclaw-screenshot-mode"],
-        output_directory: output_directory,
-        clear_previous_screenshots: index.zero?,
-        derived_data_path: derived_data_path,
-        result_bundle: true,
-        number_of_retries: 0,
-        stop_after_first_error: true,
-        reinstall_app: true,
-        concurrent_simulators: false,
-        override_status_bar: true,
-        override_status_bar_arguments: SNAPSHOT_STATUS_BAR_ARGUMENTS,
-        skip_open_summary: true,
-        xcargs: "-allowProvisioningUpdates"
-      )
-      verify_snapshot_test_result!(result_bundle_path, device)
-      archived_result_bundle_path = File.join(result_bundle_archive_directory, "#{device}.xcresult")
-      FileUtils.rm_rf(archived_result_bundle_path)
-      FileUtils.mv(result_bundle_path, archived_result_bundle_path)
+    project = File.join(ios_root, "OpenClaw.xcodeproj")
+    run_tests(
+      project: project,
+      scheme: "OpenClawUITests",
+      configuration: "Debug",
+      devices: [devices.first],
+      derived_data_path: derived_data_path,
+      build_for_testing: true,
+      clean: true,
+      number_of_retries: 0,
+      xcargs: "-allowProvisioningUpdates"
+    )
+
+    capture_index = 0
+    devices.each do |device|
+      RELEASE_IOS_SCREENSHOT_TESTS.each do |screenshot|
+        capture_release_ios_screenshot!(
+          project: project,
+          device: device,
+          screenshot: screenshot,
+          output_directory: output_directory,
+          result_bundle_path: result_bundle_path,
+          result_bundle_archive_directory: result_bundle_archive_directory,
+          derived_data_path: derived_data_path,
+          clear_previous_screenshots: capture_index.zero?
+        )
+        capture_index += 1
+      end
     end
     verify_release_ios_screenshot_manifest!(
       output_directory: output_directory,

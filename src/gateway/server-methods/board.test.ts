@@ -84,6 +84,38 @@ describe("board gateway methods", () => {
     expect(store.listSessionsWithBoards()).toEqual([]);
   });
 
+  it("scopes bare boards by explicit owner and rejects ambiguous ownerless requests", async () => {
+    const { invoke, store } = createHarness(undefined, undefined, undefined, {
+      getRuntimeConfig: () => ({
+        agents: { ownership: "explicit", list: [{ id: "main" }, { id: "work" }] },
+      }),
+    });
+    const work = await invoke("board.widget.put", {
+      sessionKey: "global",
+      agentId: "work",
+      name: "owner",
+      content: { kind: "html", html: "work" },
+    });
+    expect(work).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ sessionKey: "agent:work:global" }),
+    );
+    expect(store.listSessionsWithBoards()).toContain("agent:work:global");
+
+    const main = await invoke("board.get", { sessionKey: "global", agentId: "main" });
+    expect(main).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ sessionKey: "agent:main:global", revision: 0 }),
+    );
+
+    const ambiguous = await invoke("board.get", { sessionKey: "global" });
+    expect(ambiguous).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+  });
+
   it("adds fresh frame URLs only to admitted HTML widgets on board.get", async () => {
     const { invoke, store } = createHarness();
     await invoke("board.widget.put", {
@@ -147,7 +179,7 @@ describe("board gateway methods", () => {
     );
     expect(first.widgets.find((widget) => widget.name === "plain")).toMatchObject({
       viewTicket: expect.stringMatching(/^v1\./u),
-      viewTicketTtlMs: 120_000,
+      viewTicketTtlMs: 1_200_000,
       viewGeneration: expect.stringMatching(/^[a-f0-9]{32}$/u),
       sandboxUrl: expect.stringMatching(/^\/mcp-app-sandbox\?csp=/u),
       sandboxPort: 18790,
@@ -200,6 +232,27 @@ describe("board gateway methods", () => {
     expect(snapshot.widgets[0]).toMatchObject({ sandboxPort: 18790 });
   });
 
+  it("prepares HTML view metadata with the snapshot instead of rereading the store", async () => {
+    const { invoke, store } = createHarness();
+    await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "first",
+      content: { kind: "html", html: "<p>first</p>" },
+    });
+    await invoke("board.widget.put", {
+      sessionKey: "agent:main:main",
+      name: "second",
+      content: { kind: "html", html: "<p>second</p>" },
+    });
+    const preparedRead = vi.spyOn(store, "getSnapshotWithHtmlViewMetadata");
+    const documentRead = vi.spyOn(store, "readWidgetHtml");
+
+    await invoke("board.get", { sessionKey: "agent:main:main" });
+
+    expect(preparedRead).toHaveBeenCalledOnce();
+    expect(documentRead).not.toHaveBeenCalled();
+  });
+
   it("applies updates and broadcasts board.changed", async () => {
     const { invoke, broadcast } = createHarness();
     const response = await invoke("board.update", {
@@ -208,10 +261,10 @@ describe("board gateway methods", () => {
     });
     expect(response).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({ sessionKey: "session", revision: 1 }),
+      expect.objectContaining({ sessionKey: "agent:main:session", revision: 1 }),
     );
     expect(broadcast).toHaveBeenCalledWith("board.changed", {
-      sessionKey: "session",
+      sessionKey: "agent:main:session",
       revision: 1,
     });
   });
@@ -219,7 +272,7 @@ describe("board gateway methods", () => {
   it("puts widgets, emits iframe-specific changes, and grants declared capabilities", async () => {
     const { invoke, broadcast } = createHarness();
     const put = await invoke("board.widget.put", {
-      sessionKey: "session",
+      sessionKey: "agent:main:session",
       name: "weather",
       content: { kind: "html", html: "<p>weather</p>" },
       declared: { tools: ["weather.refresh"] },
@@ -227,6 +280,7 @@ describe("board gateway methods", () => {
     expect(put).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
+        resolvedWidgetName: "weather",
         widgets: [expect.objectContaining({ name: "weather", grantState: "pending" })],
       }),
     );
@@ -236,14 +290,14 @@ describe("board gateway methods", () => {
       }),
     );
     expect(broadcast).toHaveBeenCalledWith("board.changed", {
-      sessionKey: "session",
+      sessionKey: "agent:main:session",
       revision: 1,
       widget: "weather",
     });
 
     const snapshot = put.mock.calls[0]?.[1] as BoardSnapshot;
     const grant = await invoke("board.widget.grant", {
-      sessionKey: "session",
+      sessionKey: "agent:main:session",
       name: "weather",
       decision: "granted",
       revision: 1,
@@ -257,7 +311,7 @@ describe("board gateway methods", () => {
       }),
     );
     expect(broadcast).toHaveBeenLastCalledWith("board.changed", {
-      sessionKey: "session",
+      sessionKey: "agent:main:session",
       revision: 2,
     });
   });
@@ -575,7 +629,7 @@ describe("board gateway methods", () => {
       expect.objectContaining({ widgets: [expect.objectContaining({ name: "canvas-widget" })] }),
     );
     expect(broadcast).toHaveBeenCalledWith("board.changed", {
-      sessionKey: "session",
+      sessionKey: "agent:main:session",
       revision: 1,
       widget: "canvas-widget",
     });
@@ -770,7 +824,9 @@ describe("board gateway methods", () => {
     });
     expect(first.mock.calls[0]?.[1]).toEqual({ ok: true, appended: true });
     expect(duplicate.mock.calls[0]?.[1]).toEqual({ ok: true, appended: false });
-    expect(peekSystemEvents("session")).toEqual(['[dashboard] {"count":1} on widget counter']);
+    expect(peekSystemEvents("agent:main:session")).toEqual([
+      '[dashboard] {"count":1} on widget counter',
+    ]);
   });
 
   it("binds state.emit notices to the widget view ticket", async () => {
@@ -787,7 +843,9 @@ describe("board gateway methods", () => {
     const response = await invoke("board.event", { ticket, payload: { count: 2 } });
 
     expect(response.mock.calls[0]?.[1]).toEqual({ ok: true, appended: true });
-    expect(peekSystemEvents("session")).toEqual(['[dashboard] {"count":2} on widget counter']);
+    expect(peekSystemEvents("agent:main:session")).toEqual([
+      '[dashboard] {"count":2} on widget counter',
+    ]);
   });
 
   it("skips prompt confirmation only for an explicitly granted prompt tool", async () => {
@@ -937,19 +995,27 @@ describe("board gateway methods", () => {
     expect(triggerCronJob).toHaveBeenCalledWith("job-1", expect.any(Object));
   });
 
-  it("caps board.event payloads at 8KB and notices at 500 characters", async () => {
+  it("caps board.event payloads and preserves Unicode at the notice boundary", async () => {
     const { invoke } = createHarness();
     await invoke("board.widget.put", {
       sessionKey: "session",
       name: "counter",
       content: { kind: "html", html: "ok" },
     });
+    const clippedCodeUnits = 500 - "[dashboard] ".length - " on widget counter".length - 1;
+    // JSON's opening quote places the emoji across the legacy slice boundary.
+    const payload = `${"x".repeat(clippedCodeUnits - 2)}😀tail`;
+    await invoke("board.event", { sessionKey: "session", widget: "counter", payload });
+    const unicodeNotice = peekSystemEvents("agent:main:session")[0] ?? "";
+    expect(unicodeNotice.length).toBeLessThanOrEqual(500);
+    expect(unicodeNotice).not.toContain(String.fromCharCode(0xd83d));
+    expect(unicodeNotice).toMatch(/… on widget counter$/u);
     await invoke("board.event", {
       sessionKey: "session",
       widget: "counter",
       payload: "x".repeat(1_000),
     });
-    expect(peekSystemEvents("session")[0]).toHaveLength(500);
+    expect(peekSystemEvents("agent:main:session")[1]).toHaveLength(500);
     const oversized = await invoke("board.event", {
       sessionKey: "session",
       widget: "counter",

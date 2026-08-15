@@ -3,11 +3,14 @@ import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model, SimpleStreamOptions, TextContent } from "../types.js";
+import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 
 type DeepPartial<T> = { [P in keyof T]?: DeepPartial<T[P]> };
 type OpenAICompatibleDelta = DeepPartial<ChatCompletionChunk["choices"][number]["delta"]> & {
   reasoning_content?: string;
+  reasoning?: string;
+  reasoning_text?: string;
 };
 type OpenAICompatibleChoice = Omit<
   DeepPartial<ChatCompletionChunk["choices"][number]>,
@@ -24,10 +27,12 @@ type OpenAICompatibleChatCompletionChunk = Omit<
   choices?: OpenAICompatibleChoice[];
   usage?: DeepPartial<ChatCompletionChunk["usage"]> & { cost?: unknown };
 };
-type FirstEventSimpleStreamOptions = SimpleStreamOptions & {
+type FirstEventOptions = {
   firstEventTimeoutMs?: number;
   onFirstEventTimeout?: (reason: Error) => void;
 };
+type FirstEventOpenAIStreamOptions = OpenAICompletionsOptions & FirstEventOptions;
+type FirstEventSimpleStreamOptions = SimpleStreamOptions & FirstEventOptions;
 
 const mockChunksRef: {
   chunks: OpenAICompatibleChatCompletionChunk[];
@@ -76,7 +81,11 @@ vi.mock("openai", () => {
   return { default: MockOpenAI };
 });
 
-import { streamOpenAICompletions, streamSimpleOpenAICompletions } from "./openai-completions.js";
+import {
+  streamOpenAICompletions,
+  streamSimpleOpenAICompletions,
+  type OpenAICompletionsOptions,
+} from "./openai-completions.js";
 
 beforeEach(() => {
   mockChunksRef.chunks = [];
@@ -204,6 +213,32 @@ function createNeverYieldingStream(): AsyncIterable<OpenAICompatibleChatCompleti
 }
 
 describe("OpenAI-compatible completions params", () => {
+  it.each([
+    { thinkingFormat: "zai", expected: { thinking: { type: "disabled" } } },
+    { thinkingFormat: "qwen", expected: { enable_thinking: false } },
+    { thinkingFormat: "deepseek", expected: { thinking: { type: "disabled" } } },
+    { thinkingFormat: "together", expected: { reasoning: { enabled: false } } },
+  ] as const)(
+    "treats reasoningEffort none as disabled for $thinkingFormat payloads",
+    async ({ thinkingFormat, expected }) => {
+      mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+      const compatibleModel = {
+        ...reasoningModel,
+        provider: "custom-openai-compatible",
+        baseUrl: "https://third-party.test/v1",
+        compat: { thinkingFormat, supportsReasoningEffort: true },
+      } satisfies Model<"openai-completions">;
+
+      await streamOpenAICompletions(compatibleModel, context, {
+        apiKey: "sk-test",
+        reasoningEffort: "none",
+      }).result();
+
+      expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject(expected);
+      expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("reasoning_effort");
+    },
+  );
+
   it("omits reasoning_effort when deepseek-format compatibility disables it", async () => {
     mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
     const compatibleModel = {
@@ -406,7 +441,7 @@ describe("OpenAI-compatible completions params", () => {
         apiKey: "sk-test",
         firstEventTimeoutMs: 5,
         onFirstEventTimeout,
-      } as FirstEventSimpleStreamOptions);
+      } as FirstEventOpenAIStreamOptions);
       const resultPromise = stream.result();
 
       await vi.advanceTimersByTimeAsync(5);
@@ -507,6 +542,46 @@ describe("OpenAI-compatible completions params", () => {
       type: "function",
       function: { name: "lookup" },
     });
+  });
+
+  it("keeps request bytes stable across equivalent tool input order", async () => {
+    const tools = [
+      {
+        name: "zeta_tool",
+        description: "Zeta tool",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        name: "alpha_tool",
+        description: "Alpha tool",
+        parameters: { type: "object", properties: {} },
+      },
+    ];
+    const payloads: string[] = [];
+
+    for (const orderedTools of [tools, tools.toReversed()]) {
+      const stream = streamOpenAICompletions(
+        model,
+        { ...context, tools: orderedTools },
+        {
+          apiKey: "sk-test",
+          onPayload(payload) {
+            payloads.push(JSON.stringify(payload));
+            throw new Error("stop before network");
+          },
+        },
+      );
+      await stream.result();
+    }
+
+    expect(payloads[0]).toBe(payloads[1]);
+    expect(
+      (
+        JSON.parse(payloads[0] ?? "{}") as {
+          tools: Array<{ function: { name: string } }>;
+        }
+      ).tools.map((tool) => tool.function.name),
+    ).toEqual(["alpha_tool", "zeta_tool"]);
   });
 
   it("fails locally when a pinned official OpenAI tool is unreadable", async () => {
@@ -1127,68 +1202,29 @@ describe("OpenAI-compatible completions params", () => {
 });
 
 describe("openai-completions stop-reason tool-call guard", () => {
-  it("keeps literal reasoning tag examples visible when no reasoning field is mirrored", async () => {
-    mockChunksRef.chunks = [
-      makeTextChunk("Use `<think>private</think>` only as an example."),
-      makeFinishChunk("stop"),
-    ];
-
-    const stream = streamOpenAICompletions(reasoningModel, context, {
-      apiKey: "sk-test",
-      reasoningEffort: "medium",
-    });
-    const result = await stream.result();
-
-    expect(result.content).toContainEqual({
-      type: "text",
+  it.each([
+    {
+      title: "keeps literal reasoning tag examples visible when no reasoning field is mirrored",
       text: "Use `<think>private</think>` only as an example.",
-    });
-    expect(result.content.some((block) => block.type === "thinking")).toBe(false);
-  });
-
-  it("keeps prose mentions of unclosed reasoning tags visible without mirrored reasoning", async () => {
-    mockChunksRef.chunks = [
-      makeTextChunk("The <reasoning> tag is deprecated in this example."),
-      makeFinishChunk("stop"),
-    ];
-
-    const stream = streamOpenAICompletions(reasoningModel, context, {
-      apiKey: "sk-test",
-      reasoningEffort: "medium",
-    });
-    const result = await stream.result();
-
-    expect(result.content).toContainEqual({
-      type: "text",
+      expectedText: "Use `<think>private</think>` only as an example.",
+    },
+    {
+      title: "keeps prose mentions of unclosed reasoning tags visible without mirrored reasoning",
       text: "The <reasoning> tag is deprecated in this example.",
-    });
-    expect(result.content.some((block) => block.type === "thinking")).toBe(false);
-  });
-
-  it("keeps prose mentions of unmatched close tags visible without mirrored reasoning", async () => {
-    mockChunksRef.chunks = [
-      makeTextChunk("Use </think> to close the tag."),
-      makeFinishChunk("stop"),
-    ];
-
-    const stream = streamOpenAICompletions(reasoningModel, context, {
-      apiKey: "sk-test",
-      reasoningEffort: "medium",
-    });
-    const result = await stream.result();
-
-    expect(result.content).toContainEqual({
-      type: "text",
+      expectedText: "The <reasoning> tag is deprecated in this example.",
+    },
+    {
+      title: "keeps prose mentions of unmatched close tags visible without mirrored reasoning",
       text: "Use </think> to close the tag.",
-    });
-    expect(result.content.some((block) => block.type === "thinking")).toBe(false);
-  });
-
-  it("strips content-only reasoning tags from visible text", async () => {
-    mockChunksRef.chunks = [
-      makeTextChunk("Before <think>private reasoning</think> after"),
-      makeFinishChunk("stop"),
-    ];
+      expectedText: "Use </think> to close the tag.",
+    },
+    {
+      title: "strips content-only reasoning tags from visible text",
+      text: "Before <think>private reasoning</think> after",
+      expectedText: "Before  after",
+    },
+  ])("$title", async ({ text, expectedText }) => {
+    mockChunksRef.chunks = [makeTextChunk(text), makeFinishChunk("stop")];
 
     const stream = streamOpenAICompletions(reasoningModel, context, {
       apiKey: "sk-test",
@@ -1198,7 +1234,7 @@ describe("openai-completions stop-reason tool-call guard", () => {
 
     expect(result.content).toContainEqual({
       type: "text",
-      text: "Before  after",
+      text: expectedText,
     });
     expect(result.content.some((block) => block.type === "thinking")).toBe(false);
   });
@@ -1397,6 +1433,40 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(visibleText).toBe("");
     expect(result.content.some((block) => block.type === "thinking")).toBe(false);
   });
+
+  it.each(["reasoning_content", "reasoning", "reasoning_text"] as const)(
+    "reports hidden %s chunks as request activity",
+    async (reasoningField) => {
+      mockChunksRef.chunks = [
+        {
+          id: "chatcmpl-test",
+          choices: [{ index: 0, delta: { [reasoningField]: "private reasoning" } }],
+        },
+        {
+          id: "chatcmpl-test",
+          choices: [{ index: 0, delta: { [reasoningField]: "still private" } }],
+        },
+        makeTextChunk("visible answer"),
+        makeFinishChunk("stop"),
+      ];
+      const abortController = new AbortController();
+      const onActivity = vi.fn();
+      const unsubscribe = onLlmRequestActivity(abortController.signal, onActivity);
+
+      try {
+        const result = await streamOpenAICompletions(model, context, {
+          apiKey: "sk-test",
+          signal: abortController.signal,
+        }).result();
+
+        expect(onActivity).toHaveBeenCalledTimes(mockChunksRef.chunks.length);
+        expect(result.content).toContainEqual({ type: "text", text: "visible answer" });
+        expect(result.content.some((block) => block.type === "thinking")).toBe(false);
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
 
   it("seals the native reasoning block before the answer text begins", async () => {
     // deepseek streams reasoning_content, then switches to content with no

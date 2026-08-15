@@ -46,12 +46,12 @@ describe("buildDraftSessionCreateParams", () => {
     ).toEqual({ agentId: "main", message: "hello" });
   });
 
-  it("adds incognito only when the draft toggle is on", () => {
+  it("adds incognito only when that visibility is selected", () => {
     expect(
       buildDraftSessionCreateParams({
         agentId: "main",
         message: "private task",
-        incognito: true,
+        visibility: "incognito",
         worktree: false,
       }),
     ).toEqual({ agentId: "main", message: "private task", incognito: true });
@@ -63,7 +63,7 @@ describe("buildDraftSessionCreateParams", () => {
         agentId: "main",
         message: "private work in progress",
         worktree: false,
-        startAsDraft: true,
+        visibility: "draft",
       }),
     ).toEqual({
       agentId: "main",
@@ -155,6 +155,25 @@ describe("buildDraftSessionCreateParams", () => {
     });
   });
 
+  it("assigns a session created from a custom group", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "start grouped work",
+        worktree: true,
+        cwd: "/repos/client",
+        workspace: "/workspace",
+        category: " Client work ",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "start grouped work",
+      category: "Client work",
+      cwd: "/repos/client",
+      worktree: true,
+    });
+  });
+
   it("sends a custom Gateway folder without requiring a worktree", () => {
     expect(
       buildDraftSessionCreateParams({
@@ -168,6 +187,25 @@ describe("buildDraftSessionCreateParams", () => {
       agentId: "main",
       message: "bootstrap here",
       cwd: "/home",
+    });
+  });
+
+  it("submits a selected project by id without leaking its host path", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "work in the recorded repo",
+        projectId: "openclaw",
+        worktree: true,
+        cwd: "/recorded/openclaw",
+        workspace: "/workspace",
+        execNode: "ignored-node",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "work in the recorded repo",
+      projectId: "openclaw",
+      worktree: true,
     });
   });
 

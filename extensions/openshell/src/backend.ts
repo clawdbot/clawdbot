@@ -1,4 +1,5 @@
 // Openshell plugin module implements backend behavior.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -16,6 +17,7 @@ import {
   resolvePreferredOpenClawTmpDir,
   runSshSandboxCommand,
   sanitizeEnvVars,
+  shellEscape,
   withTempWorkspace,
 } from "openclaw/plugin-sdk/sandbox";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -258,7 +260,11 @@ async function createOpenShellSandboxBackend(params: {
     throw new Error("OpenShell sandbox backend does not support sandbox.docker.binds.");
   }
 
-  const sandboxName = buildOpenShellSandboxName(params.createParams.scopeKey);
+  const resolvedSandboxName = resolveOpenShellSandboxName({
+    scopeKey: params.createParams.scopeKey,
+    registeredRuntimeIds: params.createParams.registeredRuntimeIds,
+  });
+  const sandboxName = resolvedSandboxName.sandboxName;
   const execContext: OpenShellExecContext = {
     config: params.pluginConfig,
     sandboxName,
@@ -266,6 +272,7 @@ async function createOpenShellSandboxBackend(params: {
   const impl = new OpenShellSandboxBackendImpl({
     createParams: params.createParams,
     execContext,
+    legacyRuntimeAdopted: resolvedSandboxName.legacyRuntimeAdopted,
     remoteWorkspaceDir: params.pluginConfig.remoteWorkspaceDir,
     remoteAgentWorkspaceDir: params.pluginConfig.remoteAgentWorkspaceDir,
   });
@@ -334,6 +341,7 @@ class OpenShellSandboxBackendImpl {
     private readonly params: {
       createParams: CreateSandboxBackendParams;
       execContext: OpenShellExecContext;
+      legacyRuntimeAdopted: boolean;
       remoteWorkspaceDir: string;
       remoteAgentWorkspaceDir: string;
     },
@@ -710,7 +718,21 @@ class OpenShellSandboxBackendImpl {
       cwd: this.params.createParams.workspaceDir,
     });
     if (getResult.code === 0) {
+      if (this.params.legacyRuntimeAdopted) {
+        const phase = await this.resolveLegacyRuntimePhase();
+        if (!phase) {
+          throw this.buildLegacyRuntimeUnavailableError(
+            "OpenShell did not report a lifecycle phase for this sandbox.",
+          );
+        }
+        if (phase !== "Ready") {
+          throw this.buildLegacyRuntimeUnavailableError(`OpenShell reports phase "${phase}".`);
+        }
+      }
       return;
+    }
+    if (this.params.legacyRuntimeAdopted) {
+      throw this.buildLegacyRuntimeUnavailableError(getResult.stderr.trim());
     }
     const createArgs = [
       "sandbox",
@@ -740,6 +762,57 @@ class OpenShellSandboxBackendImpl {
       throw new Error(createResult.stderr.trim() || "openshell sandbox create failed");
     }
     this.remoteSeedPending = true;
+  }
+
+  private async resolveLegacyRuntimePhase(): Promise<string | undefined> {
+    const pageSize = 100;
+    for (let offset = 0; ; offset += pageSize) {
+      const listResult = await runOpenShellCli({
+        context: this.params.execContext,
+        args: [
+          "sandbox",
+          "list",
+          "--limit",
+          String(pageSize),
+          "--offset",
+          String(offset),
+          "--output",
+          "json",
+        ],
+        cwd: this.params.createParams.workspaceDir,
+      });
+      if (listResult.code !== 0) {
+        throw this.buildLegacyRuntimeUnavailableError(listResult.stderr.trim());
+      }
+      const page = parseOpenShellSandboxPhasePage(
+        listResult.stdout,
+        this.params.execContext.sandboxName,
+      );
+      if (!page) {
+        throw this.buildLegacyRuntimeUnavailableError(
+          "OpenShell returned malformed sandbox lifecycle data.",
+        );
+      }
+      if (page.phase) {
+        return page.phase;
+      }
+      if (page.count < pageSize) {
+        return undefined;
+      }
+    }
+  }
+
+  private buildLegacyRuntimeUnavailableError(detail: string): Error {
+    const recreateCommand = `openclaw sandbox recreate --session ${shellEscape(this.params.createParams.scopeKey)}`;
+    return new Error(
+      [
+        `Registered legacy OpenShell sandbox "${this.params.execContext.sandboxName}" is not usable.`,
+        detail,
+        `OpenClaw will not recreate this retired runtime name. Run \`${recreateCommand}\` to migrate this scope to the current naming format.`,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    );
   }
 
   private async syncWorkspaceToRemote(): Promise<void> {
@@ -893,6 +966,23 @@ function resolveOpenShellPluginConfigFromConfig(
 
 function buildOpenShellSandboxName(scopeKey: string): string {
   const trimmed = scopeKey.trim() || "session";
+  if (/:workspace:[a-f0-9]{32}$/i.test(trimmed)) {
+    // OpenShell's 19-character DNS-label cap leaves 16 payload characters.
+    // Base36 retains 80 hash bits within that cap.
+    const hash = createHash("sha256").update(trimmed).digest("hex").slice(0, 20);
+    const encoded = BigInt(`0x${hash}`).toString(36).padStart(16, "0");
+    return `oc-${encoded}`;
+  }
+  // OpenShell reserves 19 characters so workspace--sandbox--service remains
+  // a valid DNS label. Keep 64 hash bits to make opaque scope names collision-resistant.
+  const hash = createHash("sha256").update(trimmed).digest("hex").slice(0, 16);
+  return `oc-${hash}`;
+}
+
+function buildLegacyOpenShellSandboxName(scopeKey: string): string {
+  const trimmed = scopeKey.trim() || "session";
+  // Keep this byte-for-byte compatible with the naming contract shipped before
+  // the 19-character OpenShell limit; registered remote workspaces depend on it.
   const safe = normalizeLowercaseStringOrEmpty(trimmed)
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "")
@@ -902,6 +992,45 @@ function buildOpenShellSandboxName(scopeKey: string): string {
     5381,
   );
   return `openclaw-${safe || "session"}-${hash.toString(16).slice(0, 8)}`;
+}
+
+function resolveOpenShellSandboxName(params: {
+  scopeKey: string;
+  registeredRuntimeIds?: readonly string[];
+}): { sandboxName: string; legacyRuntimeAdopted: boolean } {
+  const sandboxName = buildOpenShellSandboxName(params.scopeKey);
+  if (params.registeredRuntimeIds?.includes(sandboxName)) {
+    return { sandboxName, legacyRuntimeAdopted: false };
+  }
+  const legacySandboxName = buildLegacyOpenShellSandboxName(params.scopeKey);
+  if (params.registeredRuntimeIds?.includes(legacySandboxName)) {
+    return { sandboxName: legacySandboxName, legacyRuntimeAdopted: true };
+  }
+  return { sandboxName, legacyRuntimeAdopted: false };
+}
+
+function parseOpenShellSandboxPhasePage(
+  stdout: string,
+  sandboxName: string,
+): { count: number; phase?: string } | undefined {
+  try {
+    const parsed: unknown = JSON.parse(stdout);
+    if (!Array.isArray(parsed)) {
+      return undefined;
+    }
+    for (const entry of parsed) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      const record = entry as Record<string, unknown>;
+      if (record.name === sandboxName && typeof record.phase === "string") {
+        return { count: parsed.length, phase: record.phase };
+      }
+    }
+    return { count: parsed.length };
+  } catch {
+    return undefined;
+  }
 }
 
 function resolveRemoteMaterializedSkillsWorkspaceDir(remoteWorkspaceDir: string): string {

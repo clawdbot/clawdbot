@@ -1,6 +1,9 @@
+import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 // Memory Core plugin module implements hybrid behavior.
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { applyImportanceMultiplier } from "./importance.js";
 import { applyMMRToHybridResults, type MMRConfig, DEFAULT_MMR_CONFIG } from "./mmr.js";
+import { applyProjectRanking, projectScoreMultiplier } from "./project-ranking.js";
 import {
   applyTemporalDecayToHybridResults,
   type TemporalDecayConfig,
@@ -10,28 +13,51 @@ import {
 type HybridSource = string;
 type ExactPathSpecificity = 0 | 1 | 2 | 3;
 
-type HybridVectorResult = {
-  id: string;
+export type HybridSearchResult<TSource extends HybridSource = HybridSource> = {
   path: string;
   startLine: number;
   endLine: number;
-  source: HybridSource;
-  snippet: string;
+  score: number;
   vectorScore: number;
-  exactPathSpecificity?: ExactPathSpecificity;
+  textScore: number;
+  snippet: string;
+  source: TSource;
+  importance?: number;
+  triggers?: string;
+  projectKey?: string;
+  provenance?: MemoryEntryProvenance;
 };
 
-type HybridKeywordResult = {
+type HybridVectorResult<TSource extends HybridSource = HybridSource> = {
   id: string;
   path: string;
   startLine: number;
   endLine: number;
-  source: HybridSource;
+  source: TSource;
+  snippet: string;
+  vectorScore: number;
+  importance?: number;
+  triggers?: string;
+  projectKey?: string;
+  exactPathSpecificity?: ExactPathSpecificity;
+  provenance?: MemoryEntryProvenance;
+};
+
+type HybridKeywordResult<TSource extends HybridSource = HybridSource> = {
+  id: string;
+  path: string;
+  startLine: number;
+  endLine: number;
+  source: TSource;
   snippet: string;
   textScore: number;
+  importance?: number;
+  triggers?: string;
+  projectKey?: string;
   rankingScore?: number;
   pathScore?: number;
   exactPathSpecificity?: ExactPathSpecificity;
+  provenance?: MemoryEntryProvenance;
 };
 
 export function buildFtsQuery(raw: string): string | null {
@@ -58,9 +84,9 @@ export function scoreExactPathTieForTemporalDecay(contentScore: number): number 
   return (1 + Math.max(0, Math.min(1, contentScore))) / 2;
 }
 
-export async function mergeHybridResults(params: {
-  vector: HybridVectorResult[];
-  keyword: HybridKeywordResult[];
+export async function mergeHybridResults<TSource extends HybridSource>(params: {
+  vector: HybridVectorResult<TSource>[];
+  keyword: HybridKeywordResult<TSource>[];
   vectorWeight: number;
   textWeight: number;
   isNonTextMediaPath?: (path: string) => boolean;
@@ -69,20 +95,10 @@ export async function mergeHybridResults(params: {
   mmr?: Partial<MMRConfig>;
   /** Temporal decay configuration for recency-aware scoring */
   temporalDecay?: Partial<TemporalDecayConfig>;
+  activeProjectKeys?: readonly string[];
   /** Test hook for deterministic time-dependent behavior */
   nowMs?: number;
-}): Promise<
-  Array<{
-    path: string;
-    startLine: number;
-    endLine: number;
-    score: number;
-    vectorScore: number;
-    textScore: number;
-    snippet: string;
-    source: HybridSource;
-  }>
-> {
+}): Promise<HybridSearchResult<TSource>[]> {
   const byId = new Map<
     string,
     {
@@ -90,7 +106,7 @@ export async function mergeHybridResults(params: {
       path: string;
       startLine: number;
       endLine: number;
-      source: HybridSource;
+      source: TSource;
       snippet: string;
       vectorScore: number;
       textScore: number;
@@ -99,6 +115,10 @@ export async function mergeHybridResults(params: {
       exactPathSpecificity: ExactPathSpecificity;
       hasVector: boolean;
       hasKeyword: boolean;
+      importance?: number;
+      triggers?: string;
+      projectKey?: string;
+      provenance?: MemoryEntryProvenance;
     }
   >();
 
@@ -117,6 +137,10 @@ export async function mergeHybridResults(params: {
       exactPathSpecificity: r.exactPathSpecificity ?? 0,
       hasVector: true,
       hasKeyword: false,
+      importance: r.importance,
+      triggers: r.triggers,
+      projectKey: r.projectKey,
+      ...(r.provenance ? { provenance: r.provenance } : {}),
     });
   }
 
@@ -132,6 +156,12 @@ export async function mergeHybridResults(params: {
         exactPathSpecificity,
       ) as ExactPathSpecificity;
       existing.hasKeyword = true;
+      existing.importance ??= r.importance;
+      existing.triggers ??= r.triggers;
+      existing.projectKey ??= r.projectKey;
+      if (!existing.provenance && r.provenance) {
+        existing.provenance = r.provenance;
+      }
       if (r.snippet && r.snippet.length > 0) {
         existing.snippet = r.snippet;
       }
@@ -150,6 +180,10 @@ export async function mergeHybridResults(params: {
         exactPathSpecificity,
         hasVector: false,
         hasKeyword: true,
+        importance: r.importance,
+        triggers: r.triggers,
+        projectKey: r.projectKey,
+        ...(r.provenance ? { provenance: r.provenance } : {}),
       });
     }
   }
@@ -184,7 +218,7 @@ export async function mergeHybridResults(params: {
             ? contentScore
             : 1
         : contentScore;
-    return {
+    const result = {
       path: entry.path,
       startLine: entry.startLine,
       endLine: entry.endLine,
@@ -195,7 +229,14 @@ export async function mergeHybridResults(params: {
       hasWeightedContentRelevance,
       snippet: entry.snippet,
       source: entry.source,
+      importance: entry.importance,
+      triggers: entry.triggers,
+      projectKey: entry.projectKey,
     };
+    if (entry.provenance) {
+      Object.assign(result, { provenance: entry.provenance });
+    }
+    return result;
   });
 
   // Keep component scores as raw retrieval diagnostics. Temporal decay and MMR
@@ -206,18 +247,30 @@ export async function mergeHybridResults(params: {
     workspaceDir: params.workspaceDir,
     nowMs: params.nowMs,
   });
-  const rankable = decayed.map((entry) => {
+  const rankable = applyProjectRanking(
+    applyImportanceMultiplier(decayed),
+    params.activeProjectKeys,
+  ).map((entry) => {
     // Specificity owns cross-tier precedence. Keep the decayed weighted score
     // separately for within-tier ranking while exact public scores stay at 1.
     const exactPathTieScore = entry.score;
     return Object.assign(entry, {
       exactPathTieScore,
-      score: entry.exactPathSpecificity > 0 ? 1 : entry.score,
+      score:
+        entry.exactPathSpecificity > 0
+          ? projectScoreMultiplier(entry.projectKey, params.activeProjectKeys)
+          : entry.score,
     });
   });
   const nonExact = rankable
     .filter((entry) => entry.exactPathSpecificity === 0)
-    .toSorted((a, b) => b.score - a.score);
+    .toSorted(
+      (a, b) =>
+        b.score - a.score ||
+        a.path.localeCompare(b.path) ||
+        a.startLine - b.startLine ||
+        a.endLine - b.endLine,
+    );
 
   // Apply MMR re-ranking if enabled
   const mmrConfig = { ...DEFAULT_MMR_CONFIG, ...params.mmr };
@@ -228,7 +281,11 @@ export async function mergeHybridResults(params: {
     return applyMMRToHybridResults(
       entries.map((entry) => Object.assign(entry, { score: entry.exactPathTieScore })),
       mmrConfig,
-    ).map((entry) => Object.assign(entry, { score: 1 }));
+    ).map((entry) =>
+      Object.assign(entry, {
+        score: projectScoreMultiplier(entry.projectKey, params.activeProjectKeys),
+      }),
+    );
   };
   const compareExactTieScores = (a: (typeof rankable)[number], b: (typeof rankable)[number]) =>
     b.exactPathTieScore - a.exactPathTieScore ||
@@ -259,4 +316,55 @@ export async function mergeHybridResults(params: {
       ...entry
     }) => entry,
   );
+}
+
+type HybridResultRange<TSource extends HybridSource = HybridSource> = Pick<
+  HybridSearchResult<TSource>,
+  "source" | "path" | "startLine" | "endLine"
+>;
+
+function hybridResultRangeKey(entry: HybridResultRange): string {
+  return `${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`;
+}
+
+export function selectHybridSearchResults<TSource extends HybridSource>(params: {
+  merged: HybridSearchResult<TSource>[];
+  keyword: HybridResultRange<TSource>[];
+  maxResults: number;
+  minScore: number;
+}): HybridSearchResult<TSource>[] {
+  const strict = params.merged.filter((entry) => entry.score >= params.minScore);
+  const selected = strict.slice(0, params.maxResults);
+  if (params.keyword.length === 0 || selected.length === params.maxResults) {
+    return selected;
+  }
+
+  const keywordKeys = new Set(params.keyword.map((entry) => hybridResultRangeKey(entry)));
+  if (strict.length === 0) {
+    // Preserve the established all-lexical fallback when every weighted score
+    // is below the configured threshold.
+    return params.merged
+      .filter((entry) => entry.score >= 0 && keywordKeys.has(hybridResultRangeKey(entry)))
+      .slice(0, params.maxResults);
+  }
+
+  // Strict recall owns the result window. MMR-ranked keyword-only hits may use
+  // spare capacity, but must never displace a qualifying result.
+  const seen = new Set(selected.map((entry) => hybridResultRangeKey(entry)));
+  for (const entry of params.merged) {
+    if (selected.length === params.maxResults) {
+      break;
+    }
+    const key = hybridResultRangeKey(entry);
+    if (
+      entry.score < params.minScore &&
+      entry.vectorScore === 0 &&
+      keywordKeys.has(key) &&
+      !seen.has(key)
+    ) {
+      seen.add(key);
+      selected.push(entry);
+    }
+  }
+  return selected;
 }

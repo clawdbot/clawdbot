@@ -9,6 +9,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetProviderAuthAliasMapCacheForTest } from "../provider-auth-aliases.test-support.js";
+import { isAmbientCredentialAllowedByProviderAuthPin } from "./ambient-auth.js";
 import { saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 
@@ -45,6 +46,7 @@ vi.mock("./external-auth.js", () => ({
 
 import {
   isStoredCredentialCompatibleWithAuthProvider,
+  resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
   resolveAuthProfileOrderWithMetadata,
 } from "./order.js";
@@ -75,6 +77,96 @@ describe("resolveAuthProfileOrder", () => {
     });
 
     expect(order).toEqual(["fixture-provider:default"]);
+  });
+
+  it("does not apply the provider auth pin to stored profiles", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "fixture-provider": {
+            auth: "api-key",
+            baseUrl: "https://example.invalid",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "fixture-provider:oauth": {
+          type: "oauth",
+          provider: "fixture-provider",
+          access: "oauth-access",
+          refresh: "oauth-refresh",
+          expires: Date.now() + 60_000,
+        },
+        "fixture-provider:api-key": {
+          type: "api_key",
+          provider: "fixture-provider",
+          key: "api-key",
+        },
+      },
+    };
+
+    expect(
+      resolveAuthProfileOrder({
+        cfg,
+        store,
+        provider: "fixture-provider",
+      }),
+    ).toEqual(["fixture-provider:oauth", "fixture-provider:api-key"]);
+  });
+
+  it("applies provider auth pins to ambient credentials through auth aliases", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "fixture-provider": { auth: "oauth", baseUrl: "https://example.invalid", models: [] },
+          "fixture-provider-plan": { baseUrl: "https://example.invalid", models: [] },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      isAmbientCredentialAllowedByProviderAuthPin({
+        config: cfg,
+        provider: "fixture-provider-plan",
+        type: "api_key",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps configured AWS SDK profiles eligible without stored credentials", () => {
+    const cfg = {
+      auth: {
+        profiles: {
+          "amazon-bedrock:default": { provider: "amazon-bedrock", mode: "aws-sdk" },
+        },
+      },
+      models: {
+        providers: {
+          "amazon-bedrock": {
+            auth: "aws-sdk",
+            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+
+    expect(
+      resolveAuthProfileEligibility({
+        cfg,
+        store,
+        provider: "amazon-bedrock",
+        profileId: "amazon-bedrock:default",
+      }),
+    ).toEqual({ eligible: true, reasonCode: "ok" });
+    expect(resolveAuthProfileOrder({ cfg, store, provider: "amazon-bedrock" })).toEqual([
+      "amazon-bedrock:default",
+    ]);
   });
 
   it("uses canonical provider auth order for alias providers", async () => {

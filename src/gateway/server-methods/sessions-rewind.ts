@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   ErrorCodes,
   errorShape,
@@ -6,7 +7,6 @@ import {
   validateSessionsForkParams,
   validateSessionsRewindParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listRegisteredAgentHarnesses } from "../../agents/harness/registry.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import {
@@ -18,6 +18,7 @@ import {
   type SessionBranchSwitchMutationResult,
   type SessionMessageCutMutationResult,
 } from "../../config/sessions/session-accessor.js";
+import { MEDIA_MAX_BYTES, readMediaBuffer } from "../../media/store.js";
 import {
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
@@ -27,12 +28,13 @@ import {
   readSessionUpstreamLink,
   type SessionUpstreamLink,
 } from "../../sessions/session-upstream-links.js";
+import { buildDashboardSessionKey } from "../session-create-service.js";
 import {
-  buildDashboardSessionKey,
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
-} from "../session-create-service.js";
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "../session-request-agent.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
-import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
+import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import {
@@ -44,9 +46,47 @@ import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./typ
 import { assertValidParams } from "./validation.js";
 
 type MessageCutAction = "fork" | "rewind" | "switch";
+type MessageCutMutationResult =
+  | SessionMessageCutMutationResult
+  | SessionBranchSwitchMutationResult
+  | { status: "conflict" };
 
 const EXTERNAL_CONVERSATION_ERROR =
   "Session history changes are unavailable because this session is owned by an external agent harness.";
+
+// A message realistically carries a handful of images; a corrupt transcript must
+// not turn rewind into a bulk media read.
+const EDITOR_MEDIA_REF_LIMIT = 10;
+
+async function resolveEditorMediaAttachments(
+  refs: Array<{ path: string; contentType: string }> | undefined,
+): Promise<Array<{ mimeType: string; data: string }>> {
+  if (!refs) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const attachments: Array<{ mimeType: string; data: string }> = [];
+  for (const ref of refs) {
+    // Transcript paths are untrusted hints; only the basename is read through the
+    // media store (its traversal guards and byte cap stay authoritative), so
+    // dedupe on that resolved id — path aliases must not repeat the same read.
+    const id = path.basename(ref.path);
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    if (seen.size > EDITOR_MEDIA_REF_LIMIT) {
+      break;
+    }
+    try {
+      const media = await readMediaBuffer(id, "inbound", MEDIA_MAX_BYTES);
+      attachments.push({ mimeType: ref.contentType, data: media.buffer.toString("base64") });
+    } catch {
+      // Skipped refs (missing file, oversized, guard rejection) never fail the cut.
+    }
+  }
+  return attachments;
+}
 
 function resolveUpstreamForkHarness(link: SessionUpstreamLink) {
   const matches = listRegisteredAgentHarnesses().filter((entry) =>
@@ -137,7 +177,9 @@ async function listBranches(options: GatewayRequestHandlerOptions): Promise<void
     return;
   }
   if (readSessionUpstreamLink(current.canonicalKey, current.target.agentId)) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, EXTERNAL_CONVERSATION_ERROR));
+    // Upstream-linked sessions truthfully have no local branches; only the
+    // mutating siblings (rewind/switch/fork) must fail closed on them.
+    respond(true, { branches: [] }, undefined);
     return;
   }
   const result = await listSessionBranches({
@@ -242,14 +284,14 @@ async function mutateSessionAtMessage(
           initialSessionId,
         ) ??
           false) ||
-        hasVisibleActiveSessionRun({
+        resolveVisibleActiveSessionRunState({
           context,
           requestedKey: sessionKey,
           canonicalKey: current.canonicalKey,
           sessionId: initialSessionId,
           agentId: requestedAgent.agentId,
-          defaultAgentId: resolveDefaultAgentId(cfg),
-        });
+          defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey),
+        }).active;
     },
     run: async () => {
       if (!targetStillCurrent) {
@@ -310,6 +352,10 @@ async function mutateSessionAtMessage(
       }
       const targetKey =
         action === "fork" ? buildDashboardSessionKey(current.target.agentId) : current.canonicalKey;
+      const expectedState = {
+        sessionId: current.entry.sessionId,
+        lifecycleRevision: current.entry.lifecycleRevision,
+      };
       const upstreamForkHarness = upstreamLink
         ? resolveUpstreamForkHarness(upstreamLink)
         : undefined;
@@ -370,40 +416,47 @@ async function mutateSessionAtMessage(
         );
         emitSessionsChanged(context, {
           sessionKey: upstreamFork.key,
-          ...(upstreamFork.key === "global" && requestedAgent.agentId
-            ? { agentId: requestedAgent.agentId }
-            : {}),
+          agentId: requestedAgent.agentId,
           reason: "fork",
         });
         return;
       }
-      let result: SessionMessageCutMutationResult | SessionBranchSwitchMutationResult;
+      let result: MessageCutMutationResult;
       try {
         result = await (action === "fork"
-          ? forkSessionAtMessage({
-              agentId: current.target.agentId,
-              entryId,
-              sessionKey: current.canonicalKey,
-              sessionStoreKey: current.sessionStoreKey,
-              storePath: current.storePath,
-              targetKey,
-              creation: resolveOperatorSessionCreation(client),
-            })
-          : action === "rewind"
-            ? rewindSessionToMessage({
+          ? forkSessionAtMessage(
+              {
                 agentId: current.target.agentId,
                 entryId,
                 sessionKey: current.canonicalKey,
                 sessionStoreKey: current.sessionStoreKey,
                 storePath: current.storePath,
-              })
-            : switchSessionBranch({
-                agentId: current.target.agentId,
-                leafEntryId: entryId,
-                sessionKey: current.canonicalKey,
-                sessionStoreKey: current.sessionStoreKey,
-                storePath: current.storePath,
-              }));
+                targetKey,
+                creation: resolveOperatorSessionCreation(client),
+              },
+              expectedState,
+            )
+          : action === "rewind"
+            ? rewindSessionToMessage(
+                {
+                  agentId: current.target.agentId,
+                  entryId,
+                  sessionKey: current.canonicalKey,
+                  sessionStoreKey: current.sessionStoreKey,
+                  storePath: current.storePath,
+                },
+                expectedState,
+              )
+            : switchSessionBranch(
+                {
+                  agentId: current.target.agentId,
+                  leafEntryId: entryId,
+                  sessionKey: current.canonicalKey,
+                  sessionStoreKey: current.sessionStoreKey,
+                  storePath: current.storePath,
+                },
+                expectedState,
+              ));
       } catch {
         respond(
           false,
@@ -416,6 +469,15 @@ async function mutateSessionAtMessage(
         respondMessageCutError(result, action, entryId, respond);
         return;
       }
+      const editorAttachments =
+        action === "switch"
+          ? []
+          : [
+              ...("editorAttachments" in result ? (result.editorAttachments ?? []) : []),
+              ...(await resolveEditorMediaAttachments(
+                "editorMediaRefs" in result ? result.editorMediaRefs : undefined,
+              )),
+            ];
       if (action !== "fork") {
         clearSessionQueues(lifecycleIdentities);
       } else {
@@ -433,18 +495,21 @@ async function mutateSessionAtMessage(
               ...("editorText" in result && result.editorText
                 ? { editorText: result.editorText }
                 : {}),
+              ...(editorAttachments.length > 0 ? { editorAttachments } : {}),
             }
-          : action === "rewind" && "editorText" in result && result.editorText
-            ? { editorText: result.editorText }
+          : action === "rewind"
+            ? {
+                ...("editorText" in result && result.editorText
+                  ? { editorText: result.editorText }
+                  : {}),
+                ...(editorAttachments.length > 0 ? { editorAttachments } : {}),
+              }
             : {},
         undefined,
       );
       emitSessionsChanged(context, {
         sessionKey: action === "fork" ? result.key : current.canonicalKey,
-        ...((action === "fork" ? result.key : current.canonicalKey) === "global" &&
-        requestedAgent.agentId
-          ? { agentId: requestedAgent.agentId }
-          : {}),
+        agentId: requestedAgent.agentId,
         reason: action === "switch" ? "branch-switch" : action,
       });
     },
@@ -452,31 +517,30 @@ async function mutateSessionAtMessage(
 }
 
 function respondMessageCutError(
-  result: Exclude<
-    SessionMessageCutMutationResult | SessionBranchSwitchMutationResult,
-    { status: "created" }
-  >,
+  result: Exclude<MessageCutMutationResult, { status: "created" }>,
   action: MessageCutAction,
   entryId: string,
   respond: GatewayRequestHandlerOptions["respond"],
 ): void {
   const actionLabel = action === "switch" ? "branch switch" : action;
   const message =
-    result.status === "missing-session"
-      ? "session not found"
-      : result.status === "missing-entry"
-        ? `${action === "switch" ? "branch" : "message"} entry not found: ${entryId}`
-        : result.status === "not-branch-tip"
-          ? `entry is not a branch tip: ${entryId}`
-          : result.status === "already-active"
-            ? `branch is already active: ${entryId}`
-            : result.status === "not-user-message"
-              ? `entry is not a user message: ${entryId}`
-              : result.status === "off-active-path"
-                ? `message entry is not on the active path: ${entryId}`
-                : result.status === "unsupported-storage"
-                  ? `session transcript storage does not support ${actionLabel}`
-                  : `failed to ${actionLabel} session`;
+    result.status === "conflict"
+      ? `Session changed; retry ${action}.`
+      : result.status === "missing-session"
+        ? "session not found"
+        : result.status === "missing-entry"
+          ? `${action === "switch" ? "branch" : "message"} entry not found: ${entryId}`
+          : result.status === "not-branch-tip"
+            ? `entry is not a branch tip: ${entryId}`
+            : result.status === "already-active"
+              ? `branch is already active: ${entryId}`
+              : result.status === "not-user-message"
+                ? `entry is not a user message: ${entryId}`
+                : result.status === "off-active-path"
+                  ? `message entry is not on the active path: ${entryId}`
+                  : result.status === "unsupported-storage"
+                    ? `session transcript storage does not support ${actionLabel}`
+                    : `failed to ${actionLabel} session`;
   respond(
     false,
     undefined,

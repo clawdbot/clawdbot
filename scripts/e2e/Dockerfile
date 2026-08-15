@@ -45,15 +45,14 @@ FROM bare AS functional-manifest
 # manifest alone so the expensive install layer below is keyed on it and stays
 # a warm-cache hit until dependencies actually change.
 COPY --from=openclaw_package --chown=appuser:appuser openclaw-current.tgz /tmp/openclaw-current.tgz
-# Bundled dependencies ship inside the tarball and are absent from the
-# shrinkwrap, and the packaged lifecycle scripts reference files outside this
-# manifest-only tree; drop both (plus dev deps, which the shrinkwrap omits) so
-# the install below reifies registry dependencies only.
+# Bundled dependencies ship inside the tarball, and the packaged lifecycle
+# scripts reference files outside this manifest-only tree. Drop both plus dev
+# dependencies so the install below reifies registry dependencies only.
 RUN <<'PREPARE_MANIFEST'
 set -eu
 mkdir -p /tmp/openclaw-deps
 tar -xzf /tmp/openclaw-current.tgz -C /tmp/openclaw-deps --strip-components=1 \
-  package/package.json package/npm-shrinkwrap.json
+  package/package.json
 node - <<'NODE'
 const fs = require("node:fs");
 const manifestPath = "/tmp/openclaw-deps/package.json";
@@ -70,14 +69,11 @@ PREPARE_MANIFEST
 
 FROM bare AS functional-deps
 
-# Cache key: normalized manifest + shrinkwrap contents only (COPY hashes file
-# content, not the tarball), so unchanged dependencies skip the full reify.
+# Cache key: normalized manifest contents only, so unchanged dependencies skip
+# the full reify.
 COPY --from=functional-manifest --chown=appuser:appuser /tmp/openclaw-deps /tmp/openclaw-deps
-# `npm install` (not `npm ci`) because the generated shrinkwrap is not
-# guaranteed to pass `npm ci`'s strict manifest sync check; the shrinkwrap
-# still pins every synced edge, and this reify follows it more faithfully than
-# `npm install -g <tarball>` does. Drop npm's hidden tree manifest so the
-# copied node_modules matches a plain package install.
+# Drop npm's hidden tree manifest so the copied node_modules matches a plain
+# package install.
 # The pinned Node image owns uid 1000, so useradd assigns appuser uid/gid 1001.
 RUN --mount=type=cache,target=/home/appuser/.npm,uid=1001,gid=1001,sharing=locked \
     cd /tmp/openclaw-deps \

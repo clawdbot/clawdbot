@@ -20,6 +20,14 @@ Status: native external CLI integration. The Gateway spawns `imsg rpc` and speak
 
 For the common local setup, OpenClaw setup can offer a user-confirmed Homebrew install or update for `imsg` on the signed-in Messages Mac. Manual setup and SSH-wrapper topologies remain operator-managed: install or update `imsg` in the same user context that will run the Gateway or wrapper.
 
+## Install the plugin
+
+Install the official iMessage plugin on the Gateway host, then restart the Gateway:
+
+```bash
+openclaw plugins install @openclaw/imessage
+```
+
 <CardGroup cols={3}>
   <Card title="Private API actions" icon="wand-sparkles" href="#private-api-actions">
     Replies, tapbacks, effects, polls, attachments, and group management.
@@ -92,7 +100,7 @@ openclaw pairing approve imessage <CODE>
   </Tab>
 
   <Tab title="Remote Mac over SSH">
-    Most setups do not need SSH. Use this topology only when the Gateway cannot run on the signed-in Messages Mac. OpenClaw only requires a stdio-compatible `cliPath`, so you can point `cliPath` at a wrapper script that SSHes to a remote Mac and runs `imsg`.
+    Most setups do not need SSH. Use this topology only when the Gateway cannot run on the signed-in Messages Mac. Point `cliPath` at a stdio-compatible wrapper on the **Gateway host** that SSHes to the Messages Mac and runs `imsg`. Use the wrapper's absolute path so service launches do not depend on shell home expansion.
     Install and update `imsg` on that remote Mac, not on the Gateway host:
 
 ```bash
@@ -111,8 +119,10 @@ exec ssh -T messages-mac imsg "$@"
   channels: {
     imessage: {
       enabled: true,
-      cliPath: "~/.openclaw/scripts/imsg-ssh",
-      remoteHost: "user@gateway-host", // used for SCP attachment fetches
+      cliPath: "/home/openclaw/.openclaw/scripts/imsg-ssh",
+      remoteHost: "user@messages-mac", // Mac that runs Messages.app and imsg
+      // This path is interpreted on the Messages Mac, not on the Gateway host.
+      dbPath: "/Users/user/Library/Messages/chat.db",
       includeAttachments: true,
       // Optional: extra allowed attachment roots (merged with the default
       // /Users/*/Library/Messages/Attachments).
@@ -123,9 +133,11 @@ exec ssh -T messages-mac imsg "$@"
 }
 ```
 
-    If `remoteHost` is not set, OpenClaw attempts to auto-detect it by parsing the SSH wrapper script.
+    `remoteHost` identifies the Messages Mac. OpenClaw uses it for both inbound attachment fetches and outbound attachment staging. For outbound files, OpenClaw creates an owner-only temporary path on that Mac, copies the file over the existing strict SSH/SCP transport, passes only the remote path to `imsg`, and attempts removal after success, failure, or timeout. A failed cleanup SSH call emits a warning and can leave the owner-only temporary directory behind.
+
+    An explicit `remoteHost` is recommended and wins when set. For compatibility, OpenClaw auto-detects the existing transparent `exec ssh ... imsg "$@"` wrapper shape once per process and reuses that host across monitoring, probes, sends, and private actions. Auto-detection covers only the simple documented transparent wrapper; option-rich wrappers such as ProxyJump/ProxyCommand must configure `remoteHost`.
     `remoteHost` must be `host` or `user@host` (no spaces or SSH options); unsafe values are ignored.
-    OpenClaw uses strict host-key checking for SCP, so the relay host key must already exist in `~/.ssh/known_hosts`.
+    OpenClaw uses strict host-key checking for SSH/SCP, so the Messages Mac host key must already exist in `~/.ssh/known_hosts` on the Gateway host.
     Attachment paths are validated against allowed roots (`attachmentRoots` / `remoteAttachmentRoots`).
 
 <Warning>
@@ -200,7 +212,7 @@ The helper-injection technique uses `imsg`'s own dylib to reach Messages private
 <Warning>
 **Disabling SIP is a real security tradeoff.** SIP is one of macOS's core protections against running modified system code; turning it off system-wide opens up additional attack surface and side effects. Notably, **disabling SIP on Apple Silicon Macs also disables the ability to install and run iOS apps on your Mac**.
 
-Treat this as a deliberate operational choice, especially on a primary personal Mac. For production-quality OpenClaw iMessage, prefer a dedicated Mac or bot macOS user where you are comfortable enabling the bridge. If your threat model cannot tolerate SIP being off anywhere, bundled iMessage is limited to basic mode — text and media send/receive only, no reactions / edit / unsend / effects / group ops.
+Treat this as a deliberate operational choice, especially on a primary personal Mac. For production-quality OpenClaw iMessage, prefer a dedicated Mac or bot macOS user where you are comfortable enabling the bridge. If your threat model cannot tolerate SIP being off anywhere, the iMessage plugin is limited to basic mode — text and media send/receive only, no reactions / edit / unsend / effects / group ops.
 </Warning>
 
 ### Setup
@@ -399,15 +411,15 @@ Example:
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "codex",
+    entries: {
+      codex: {
+        default: true,
         runtime: {
           type: "acp",
           acp: { agent: "codex", backend: "acpx", mode: "persistent" },
         },
       },
-    ],
+    },
   },
   bindings: [
     {
@@ -450,7 +462,7 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
     - gateway runs on Linux/VM
     - iMessage + `imsg` runs on a Mac in your tailnet
     - `cliPath` wrapper uses SSH to run `imsg`
-    - `remoteHost` enables SCP attachment fetches
+    - `remoteHost` enables inbound fetches and owner-only outbound staging over SSH/SCP
 
     Example:
 
@@ -459,7 +471,7 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
       channels: {
         imessage: {
           enabled: true,
-          cliPath: "~/.openclaw/scripts/imsg-ssh",
+          cliPath: "/home/openclaw/.openclaw/scripts/imsg-ssh",
           remoteHost: "bot@mac-mini.tailnet-1234.ts.net",
           includeAttachments: true,
           dbPath: "/Users/bot/Library/Messages/chat.db",
@@ -472,6 +484,8 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
     #!/usr/bin/env bash
     exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
     ```
+
+    `cliPath` is an absolute, Gateway-local wrapper path. `remoteHost` and `dbPath` refer to the Messages Mac; do not rewrite the remote database path using the Gateway user's home directory.
 
     Use SSH keys so both SSH and SCP are non-interactive.
     Ensure the host key is trusted first (for example `ssh bot@mac-mini.tailnet-1234.ts.net`) so `known_hosts` is populated.
@@ -498,7 +512,8 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
 <AccordionGroup>
   <Accordion title="Attachments and media">
     - inbound attachment ingestion is **off by default** — set `channels.imessage.includeAttachments: true` to forward photos, voice memos, video, and other attachments to the agent. With it disabled, attachment-only iMessages are dropped before reaching the agent and may produce no `Inbound message` log line at all.
-    - remote attachment paths can be fetched via SCP when `remoteHost` is set
+    - remote inbound attachment paths can be fetched via SCP when `remoteHost` is set
+    - outbound files are staged into an owner-only temporary path on the configured or auto-detected Messages Mac, passed to `imsg` by that remote path, and cleaned up best-effort after success, failure, or timeout; cleanup failure emits a warning and can leave owner-only residue
     - attachment paths must match allowed roots:
       - `channels.imessage.attachmentRoots` (local)
       - `channels.imessage.remoteAttachmentRoots` (remote SCP mode)
@@ -570,16 +585,16 @@ All actions are enabled by default; use `channels.imessage.actions` to turn indi
 <AccordionGroup>
   <Accordion title="Available actions">
     - **react**: Add/remove iMessage tapbacks (`messageId`, `emoji`, `remove`). Supported tapbacks map to love, like, dislike, laugh, emphasize, and question. Removing without an emoji clears whichever tapback was set.
-    - **reply**: Send a threaded reply to an existing message (`messageId`, `text` or `message`, plus `chatGuid`, `chatId`, `chatIdentifier`, or `to`). Reply-with-attachment additionally needs an `imsg` build whose `send-rich` supports `--file`.
+    - **reply**: Send a threaded reply to an existing message (`messageId`, `text` or `message`, plus `chatGuid`, `chatId`, `chatIdentifier`, or `to`). Local reply-with-attachment additionally needs an `imsg` build whose `send-rich` supports `--file`. With remote `imsg` v0.13.4, attachment replies use JSON-RPC and support the whole message or part index `0`; nonzero attachment part indices are not supported by the RPC method.
     - **sendWithEffect**: Send text with an iMessage effect (`text` or `message`, `effect` or `effectId`). Short names: slam, loud, gentle, invisibleink, confetti, lasers, fireworks, balloon, heart, echo, happybirthday, shootingstar, sparkles, spotlight.
     - **edit**: Edit a sent message on supported macOS/private API versions (`messageId`, `text` or `newText`). Only messages the gateway itself sent can be edited.
     - **unsend**: Retract a sent message on supported macOS/private API versions (`messageId`). Only messages the gateway itself sent can be unsent.
     - **upload-file**: Send media/files (`buffer` as base64 or a hydrated `media`/`path`/`filePath`, `filename`, optional `asVoice`). Legacy alias: `sendAttachment`.
     - **renameGroup**, **setGroupIcon**, **addParticipant**, **removeParticipant**, **leaveGroup**: Manage group chats when the current target is a group conversation. These mutate the host's Messages identity, so they require an owner sender or an `operator.admin` Gateway client.
     - **poll**: Create a native Apple Messages poll (`pollQuestion`, `pollOption` repeated 2 to 12 times, plus `chatGuid`, `chatId`, `chatIdentifier`, or `to`). Recipients on iOS/iPadOS/macOS 26+ see and vote on it natively; older OS versions get a "Sent a poll" text fallback. Requires `selectors.pollPayloadMessage`.
-    - **poll-vote**: Vote on an existing poll (`pollId` or `messageId`, plus exactly one of `pollOptionIndex`, `pollOptionId`, or `pollOptionText`). Requires `selectors.pollVoteMessage` and the `poll.vote` RPC method.
+    - **poll-vote**: Vote on an existing poll (`pollId` or `messageId`, plus exactly one of `pollOptionIndex`, `pollOptionId`, or `pollOptionText`). Requires `selectors.pollVoteMessage` and the `poll.vote` RPC method. Remote `imsg` v0.13.4 RPC accepts only the option ID, so remote setups must use `pollOptionId`; index and text selectors remain available to local setups.
 
-    Accepted inbound polls are rendered for the agent with the question, numbered option labels, vote counts, and the poll message ID needed by `poll-vote`.
+    Accepted inbound polls are rendered for the agent with the question, option labels, vote counts, and the poll message ID needed by `poll-vote`. Remote accounts also include each stable option ID and direct the agent to use `pollOptionId`.
 
   </Accordion>
 
@@ -623,19 +638,21 @@ All actions are enabled by default; use `channels.imessage.actions` to turn indi
 
   </Accordion>
 
-  <Accordion title="Approval reactions (👍 / 👎)">
-    When `approvals.exec.enabled` or `approvals.plugin.enabled` is true and the request routes to iMessage, the gateway delivers an approval prompt natively and accepts a tapback to resolve it:
+  <Accordion title="Approval polls and reactions">
+    When `approvals.exec.enabled` or `approvals.plugin.enabled` is true and the request routes natively to iMessage, the gateway delivers an approval prompt with native controls:
 
-    - `👍` (Like tapback) → `allow-once`
-    - `👎` (Dislike tapback) → `deny`
-    - `allow-always` remains a manual fallback: send `/approve <id> allow-always` as a regular reply.
+    - On a probed private API bridge with poll and caption-suppression support, the prompt includes a Messages poll with each allowed decision. Older `imsg` releases without `poll send --no-comment` stay on text controls.
+    - If polls are disabled with `channels.imessage.actions.polls: false`, the bridge lacks poll support, the poll send fails, or fewer than two decisions are available, the prompt keeps the text and tapback controls.
+    - The text fallback maps `👍` (Like) to `allow-once` and `👎` (Dislike) to `deny`. It also includes `/approve <id> <decision>` commands, including `allow-always` when the request permits it.
 
-    Reaction handling requires the reacting user's handle to be an explicit approver. The approver list is read from `channels.imessage.allowFrom` (or `channels.imessage.accounts.<id>.allowFrom`); add the user's phone number in E.164 form or their Apple ID email (chat targets such as `chat_id:*` are not valid approver entries). The wildcard entry `"*"` is honored but allows any sender to approve; an empty approver list disables the reaction shortcut entirely. The reaction shortcut intentionally bypasses `reactionNotifications`, `dmPolicy`, and `groupAllowFrom` because the explicit-approver allowlist is the only gate that matters for approval resolution.
+    Poll votes and reactions require the acting user's handle to be an explicit approver. The approver list is read from `channels.imessage.allowFrom` (or `channels.imessage.accounts.<id>.allowFrom`); add the user's phone number in E.164 form or their Apple ID email (chat targets such as `chat_id:*` are not valid approver entries). The wildcard entry `"*"` is honored but allows any sender to approve; an empty approver list disables poll and reaction shortcuts entirely. These shortcuts intentionally bypass `reactionNotifications`, `dmPolicy`, and `groupAllowFrom` because the explicit-approver allowlist is the only gate that matters for approval resolution.
+
+    Native poll controls are currently limited to channel-native delivery in the originating iMessage session or an iMessage approver DM. Explicit forwarding targets selected by `approvals.exec.mode: "targets"` (and the target half of `"both"`) continue to use the existing forwarded approval message instead of an iMessage poll.
 
     `/approve` text command authorization follows the same list: when `channels.imessage.allowFrom` is non-empty, `/approve <id> <decision>` is authorized against that approver list (not the broader DM allowlist), and senders permitted on the DM allowlist but not in `allowFrom` receive an explicit denial. When `allowFrom` is empty, the same-chat fallback stays in effect and `/approve` authorizes anyone the DM allowlist permits. Add every operator who should approve — via `/approve` or via reactions — to `allowFrom`.
 
     Operator notes:
-    - The reaction binding is stored both in memory and in the gateway's persistent keyed store (TTL matched to the approval expiry), and the gateway also polls pending prompts for tapbacks, so a tapback that lands shortly after a gateway restart still resolves the approval.
+    - Poll and reaction bindings are stored both in memory and in the gateway's persistent keyed store (TTL matched to the approval expiry), and the gateway also polls pending prompts for tapbacks. After a gateway restart, a tap on an old control is recognized and swallowed instead of entering agent chat, but the restart ends the in-flight command; request a new approval rather than expecting the old control to resume it.
     - The operator's own `is_from_me=true` tapback (for example from a paired Apple device) resolves the approval when that handle is an explicit approver.
     - Approval prompts route into a group conversation only when explicit approvers are configured; otherwise any group member could approve.
     - Legacy text-style tapbacks (`Liked "…"` plain text from very old Apple clients) cannot resolve approvals because they carry no message GUID; reaction resolution requires the structured tapback metadata that current macOS / iOS clients emit.

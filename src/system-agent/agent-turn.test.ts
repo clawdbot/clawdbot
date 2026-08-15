@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -13,7 +14,12 @@ import {
 import { runSystemAgentTurnWithDeps, type SystemAgentTurnDeps } from "./agent-turn.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
-import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
+import {
+  createSystemAgentVerifiedInferenceTestFixture,
+  installSystemAgentClaudeCliBackendTestFixture,
+  installSystemAgentPluginMetadataTestSnapshot,
+  type SystemAgentPluginMetadataTestSnapshot,
+} from "./system-agent.test-helpers.js";
 import { createSystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 
 vi.mock("../plugins/providers.js", async (importOriginal) => ({
@@ -57,11 +63,14 @@ vi.mock("../config/config.js", async (importOriginal) => ({
 }));
 
 const tempDirs: string[] = [];
+let restoreCliBackendFixture: (() => void) | undefined;
+let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
 function useTempStateDir(): string {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-turn-"));
   tempDirs.push(stateDir);
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  pluginMetadataSnapshot?.rebindForCurrentEnv();
   return stateDir;
 }
 
@@ -93,37 +102,23 @@ async function createVerifiedSession(config: OpenClawConfig) {
   };
 }
 
+beforeAll(() => {
+  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot();
+});
+
+afterAll(() => {
+  pluginMetadataSnapshot?.restore();
+});
+
 beforeEach(() => {
-  // Core tests install a contract-level selectable backend instead of loading
-  // a plugin's generated setup artifact from dist/.
-  cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        pluginId: "anthropic",
-        modelProvider: "anthropic",
-        bundleMcp: true,
-        bundleMcpMode: "claude-config-file",
-        config: { command: "claude" },
-        normalizeConfig: (config, context) => ({
-          ...config,
-          args: [
-            ...(config.args ?? []),
-            "--test-exec-policy",
-            JSON.stringify(context?.config?.tools?.exec ?? null),
-          ],
-        }),
-        nativeToolMode: "selectable",
-        sideQuestionToolMode: "disabled",
-        resolveExecutionArgs: (context) => context.baseArgs,
-      },
-    ],
-  });
+  restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
 });
 
 afterEach(() => {
-  cliBackendsTesting.resetDepsForTest();
+  restoreCliBackendFixture?.();
+  restoreCliBackendFixture = undefined;
   vi.unstubAllEnvs();
+  pluginMetadataSnapshot?.rebindForCurrentEnv();
   vi.clearAllMocks();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -266,13 +261,12 @@ describe("runSystemAgentTurn", () => {
       mocks.runEmbeddedAgent.mock.calls[1]?.[0]?.sessionFile,
       "missing second embedded transcript path",
     );
-    expect(firstPath).toContain(`${first.sessionId}.jsonl`);
-    expect(secondPath).toContain(`${second.sessionId}.jsonl`);
+    expect(firstPath).toBe(`in-memory:${first.sessionId}`);
+    expect(secondPath).toBe(`in-memory:${second.sessionId}`);
     expect(firstPath).not.toBe(secondPath);
-
-    await fs.promises.writeFile(firstPath, "transcript");
+    expect(first.sessionManager).not.toBe(second.sessionManager);
     await cleanupSystemAgentSession(first);
-    await expect(fs.promises.access(firstPath)).rejects.toThrow();
+    expect(first.sessionManager).toBeUndefined();
   });
 
   it("uses the default agent CLI route while keeping OpenClaw session identity", async () => {
@@ -329,7 +323,7 @@ describe("runSystemAgentTurn", () => {
       sessionKey: "agent:openclaw:main",
       sessionId: session.sessionId,
       workspaceDir: path.join(stateDir, "openclaw", "workspace"),
-      sessionFile: path.join(stateDir, "openclaw", "sessions", `${session.sessionId}.jsonl`),
+      sessionFile: `in-memory:${session.sessionId}`,
       messageChannel: "openclaw",
       messageProvider: "openclaw",
     });
@@ -337,7 +331,7 @@ describe("runSystemAgentTurn", () => {
     expect(call.cleanupCliLiveSessionOnRunEnd).toBe(true);
     expect(call.cliToolAvailability).toEqual({
       native: [],
-      mcp: ["mcp__openclaw__openclaw"],
+      openClaw: ["openclaw"],
     });
     expect(call.toolsAllow).toBeUndefined();
     expect(requireValue(call.systemAgentTool, "missing CLI OpenClaw tool").proposalRef).toBe(
@@ -403,7 +397,7 @@ describe("runSystemAgentTurn", () => {
   });
 
   it("resumes Claude's native transcript through fresh per-turn processes", async () => {
-    const stateDir = useTempStateDir();
+    useTempStateDir();
     const config = {
       agents: {
         defaults: {
@@ -452,13 +446,10 @@ describe("runSystemAgentTurn", () => {
       disableCliLiveSession: true,
       cleanupCliLiveSessionOnRunEnd: true,
     });
-    const transcript = path.join(stateDir, "openclaw", "sessions", `${session.sessionId}.jsonl`);
-    await fs.promises.writeFile(transcript, "transcript");
-
     await cleanupSystemAgentSession(session);
 
     expect(session.cliSession).toBeUndefined();
-    await expect(fs.promises.access(transcript)).rejects.toThrow();
+    expect(session.sessionManager).toBeUndefined();
   });
 
   it("runs a canonical Anthropic model through its configured Claude CLI runtime", async () => {
@@ -762,6 +753,7 @@ describe("runSystemAgentTurn", () => {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-global" },
+          systemAgent: { agentId: "ops" },
           models: {
             "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } },
           },
@@ -811,6 +803,7 @@ describe("runSystemAgentTurn", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     expect(runCliAgent).not.toHaveBeenCalled();
     const call = requireValue(runEmbeddedAgent.mock.calls[0]?.[0], "missing embedded runner call");
+    expect(call).not.toHaveProperty("streamParams");
     expect(call).toMatchObject({
       provider: "openai",
       model: "gpt-5.4",
@@ -822,14 +815,14 @@ describe("runSystemAgentTurn", () => {
       sessionKey: "agent:openclaw:main",
       sessionId: session.sessionId,
       workspaceDir: path.join(stateDir, "openclaw", "workspace"),
-      sessionFile: path.join(stateDir, "openclaw", "sessions", `${session.sessionId}.jsonl`),
+      sessionFile: `in-memory:${session.sessionId}`,
       messageChannel: "openclaw",
       messageProvider: "openclaw",
       toolsAllow: ["openclaw"],
       disableMessageTool: true,
     });
     expect(call.agentHarnessId).toBeUndefined();
-    expect(call.config?.agents?.list?.find((agent) => agent.id === "openclaw")).toEqual({
+    expect(listAgentEntries(call.config ?? {}).find((agent) => agent.id === "openclaw")).toEqual({
       id: "openclaw",
       params: { temperature: 0.2 },
       tools: { allow: ["read"], deny: ["exec"] },

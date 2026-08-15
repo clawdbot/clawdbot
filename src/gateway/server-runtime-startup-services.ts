@@ -45,7 +45,6 @@ export function startGatewayRuntimeServices(params: {
 }): {
   heartbeatRunner: ReturnType<typeof createNoopHeartbeatRunner>;
   channelHealthMonitor: ChannelHealthMonitor | null;
-  stopModelPricingRefresh: () => void;
 } {
   const channelHealthMonitor = startGatewayChannelHealthMonitor({
     cfg: params.cfgAtStart,
@@ -55,6 +54,5 @@ export function startGatewayRuntimeServices(params: {
   return {
     heartbeatRunner: createNoopHeartbeatRunner(),
     channelHealthMonitor,
-    stopModelPricingRefresh: () => {},
   };
 }

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import type { CronJobCreate, CronJobPatch, CronPacing } from "../types.js";
-import { add, update } from "./ops.js";
+import { add, update } from "./ops-mutations.js";
 import { createCronServiceState } from "./state.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-pacing-ops" });

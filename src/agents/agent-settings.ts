@@ -9,6 +9,7 @@ import { resolveProviderEndpoint } from "./provider-attribution.js";
 export const DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
 
 type AgentSettingsManagerLike = {
+  getCompactionEnabled?: () => boolean;
   getCompactionReserveTokens: () => number;
   getCompactionKeepRecentTokens: () => number;
   applyOverrides: (overrides: {
@@ -40,6 +41,9 @@ export function applyAgentCompactionSettingsFromConfig(params: {
   const currentReserveTokens = params.settingsManager.getCompactionReserveTokens();
   const currentKeepRecentTokens = params.settingsManager.getCompactionKeepRecentTokens();
   const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+  // Omission preserves embedded/project settings. OpenClaw config reloads create a new
+  // prepared manager; same-manager resource reloads reuse cfg and reapply explicit values.
+  const configuredEnabled = compactionCfg?.enabled;
 
   const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);
   let reserveTokensFloor = DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR;
@@ -76,10 +80,18 @@ export function applyAgentCompactionSettingsFromConfig(params: {
     overrides.keepRecentTokens = targetKeepRecentTokens;
   }
 
-  const didOverride = Object.keys(overrides).length > 0;
-  if (didOverride) {
+  const shouldApplyEnabled =
+    configuredEnabled !== undefined &&
+    typeof params.settingsManager.setCompactionEnabled === "function" &&
+    (typeof params.settingsManager.getCompactionEnabled !== "function" ||
+      params.settingsManager.getCompactionEnabled() !== configuredEnabled);
+  if (shouldApplyEnabled) {
+    params.settingsManager.setCompactionEnabled!(configuredEnabled);
+  }
+  if (Object.keys(overrides).length > 0) {
     params.settingsManager.applyOverrides({ compaction: overrides });
   }
+  const didOverride = shouldApplyEnabled || Object.keys(overrides).length > 0;
 
   return {
     didOverride,

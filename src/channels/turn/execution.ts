@@ -13,6 +13,7 @@ import {
   type ChannelTurnDispatchResultLike,
   type ChannelTurnVisibleDeliverySignals,
 } from "./dispatch-result.js";
+import { deliverPendingDeliveryNotice } from "./pending-delivery-notice.js";
 import type {
   ChannelTurnAdmission,
   ChannelTurnHistoryFinalizeOptions,
@@ -62,6 +63,23 @@ function isSystemChannelTurn(ctx: FinalizedMsgContext): boolean {
   return (
     ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event"
   );
+}
+
+function resolveRecordSessionKey<TDispatchResult>(
+  params: PreparedChannelTurn<TDispatchResult>,
+): string {
+  const explicitSessionKey = params.record?.sessionKey;
+  if (explicitSessionKey === undefined) {
+    return params.ctxPayload.SessionKey ?? params.routeSessionKey;
+  }
+  const normalizedSessionKey = explicitSessionKey.trim();
+  if (!normalizedSessionKey) {
+    throw new Error("Channel turn record.sessionKey must be non-empty.");
+  }
+  if (normalizedSessionKey !== explicitSessionKey) {
+    throw new Error("Channel turn record.sessionKey must not include surrounding whitespace.");
+  }
+  return explicitSessionKey;
 }
 
 function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
@@ -217,13 +235,16 @@ async function runPreparedChannelTurnCoreInTrace<
     await params.runDispatchLifecycle?.onDispatchSkipped("botLoopProtection");
     return botLoopDrop;
   }
+  // Native commands can execute in an isolated command session while updating the
+  // provider-routed target session. Keep that record target separate from dispatch.
+  const recordSessionKey = resolveRecordSessionKey(params);
   if (params.ctxPayload.SessionTranscriptContext) {
     const { mergeSessionTranscriptContext } =
       await import("../inbound-event/session-transcript-context.runtime.js");
     await mergeSessionTranscriptContext({
       agentId: params.ctxPayload.AgentId,
       ctx: params.ctxPayload,
-      sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+      sessionKey: recordSessionKey,
       storePath: params.storePath,
     });
   }
@@ -233,14 +254,14 @@ async function runPreparedChannelTurnCoreInTrace<
       stage: "record",
       event: "start",
       messageId: params.messageId,
-      sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+      sessionKey: recordSessionKey,
       admission: admission.kind,
     },
   });
   try {
     await params.recordInboundSession({
       storePath: params.storePath,
-      sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+      sessionKey: recordSessionKey,
       ctx: params.ctxPayload,
       groupResolution: params.record?.groupResolution,
       createIfMissing: params.record?.createIfMissing,
@@ -254,11 +275,12 @@ async function runPreparedChannelTurnCoreInTrace<
         stage: "record",
         event: "done",
         messageId: params.messageId,
-        sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+        sessionKey: recordSessionKey,
         admission: admission.kind,
       },
     });
     await params.afterRecord?.();
+    await deliverPendingDeliveryNotice(recordSessionKey, params.storePath);
   } catch (err) {
     emit({
       ...params,
@@ -266,7 +288,7 @@ async function runPreparedChannelTurnCoreInTrace<
         stage: "record",
         event: "error",
         messageId: params.messageId,
-        sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+        sessionKey: recordSessionKey,
         admission: admission.kind,
         error: err,
       },
@@ -340,10 +362,8 @@ async function runPreparedChannelTurnCoreInTrace<
   };
 }
 
-async function runPreparedChannelTurn<
+export async function runPreparedChannelTurn<
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
 >(params: PreparedChannelTurn<TDispatchResult>): Promise<ChannelTurnResult<TDispatchResult>> {
   return await runPreparedChannelTurnCore(params, { suppressObserveOnlyDispatch: true });
 }
-
-export const runPreparedInboundReply = runPreparedChannelTurn;

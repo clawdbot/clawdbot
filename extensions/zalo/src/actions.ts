@@ -7,7 +7,7 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
-import { listEnabledZaloAccounts, resolveZaloAccount } from "./accounts.js";
+import { inspectZaloAccount, listZaloAccountIds } from "./accounts.js";
 
 const loadZaloActionsRuntime = createLazyRuntimeNamedExport(
   () => import("./actions.runtime.js"),
@@ -19,8 +19,12 @@ const ZALO_ACTIONS = new Set<ChannelMessageActionName>(["send"]);
 
 function listEnabledAccounts(cfg: OpenClawConfig, accountId?: string | null) {
   return (
-    accountId ? [resolveZaloAccount({ cfg, accountId })] : listEnabledZaloAccounts(cfg)
-  ).filter((account) => account.enabled && account.tokenSource !== "none");
+    accountId
+      ? [inspectZaloAccount({ cfg, accountId })]
+      : listZaloAccountIds(cfg).map((listedAccountId) =>
+          inspectZaloAccount({ cfg, accountId: listedAccountId }),
+        )
+  ).filter((account) => account.enabled && account.tokenStatus === "available");
 }
 
 export const zaloMessageActions: ChannelMessageActionAdapter = {

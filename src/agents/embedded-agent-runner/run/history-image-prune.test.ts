@@ -186,16 +186,15 @@ describe("pruneProcessedHistoryImages", () => {
     expect(user?.content).toBe(`please remember ${PRUNED_HISTORY_MEDIA_REFERENCE_MARKER}`);
   });
 
-  it("prunes fact-owned and factless legacy late-media projections", () => {
-    const fields = {
-      role: "user" as const,
-      MediaPath: "media://inbound/stale-image.png",
-      MediaPaths: ["media://inbound/stale-image.png"],
-    };
+  it("prunes fact-owned and factless late-media projections", () => {
+    const fields = { role: "user" as const };
     const markedString = castAgentMessage({
       ...fields,
       content: "",
-      __openclaw: { lateMedia: true },
+      __openclaw: {
+        lateMedia: true,
+        media: [{ path: "media://inbound/stale-image.png" }],
+      },
     });
     const legacyString = castAgentMessage({
       content: "[media attached: media://inbound/stale-image.png]",
@@ -204,7 +203,10 @@ describe("pruneProcessedHistoryImages", () => {
     const markedArray = castAgentMessage({
       ...fields,
       content: [{ ...image }],
-      __openclaw: { lateMedia: true },
+      __openclaw: {
+        lateMedia: true,
+        media: [{ path: "media://inbound/stale-image.png" }],
+      },
     });
     const legacyArray = castAgentMessage({
       role: "user",
@@ -239,15 +241,20 @@ describe("pruneProcessedHistoryImages", () => {
     const message = castAgentMessage({
       role: "user",
       content: "resolved subtitle",
-      MediaPath: "media://inbound/stale-image.png",
-      MediaPaths: ["media://inbound/stale-image.png"],
-      __openclaw: { lateMedia: true },
+      __openclaw: {
+        lateMedia: true,
+        media: [{ path: "media://inbound/stale-image.png" }],
+      },
     });
 
     const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
-    const output = pruned as unknown as Array<{ content?: unknown; MediaPath?: unknown }>;
+    const output = pruned as unknown as Array<{
+      content?: unknown;
+      __openclaw?: { media?: unknown; mediaImagePruned?: boolean };
+    }>;
     expect(output[0]?.content).toBe("resolved subtitle");
-    expect(output[0]?.MediaPath).toBeUndefined();
+    expect(output[0]?.["__openclaw"]?.media).toBeUndefined();
+    expect(output[0]?.["__openclaw"]?.mediaImagePruned).toBe(true);
   });
 
   it("drops runtime facts from captioned old turns without changing their text", () => {
@@ -383,15 +390,12 @@ describe("pruneProcessedHistoryImages", () => {
     ]);
   });
 
-  it("redacts a fact-backed legacy image-source projection", () => {
+  it("redacts a fact-backed image-source projection", () => {
     const imagePath = "/tmp/legacy-owned.jpg";
     const message = castAgentMessage({
       role: "user",
       content: `[Image: source: ${imagePath}]\ncaption stays`,
-      MediaPath: imagePath,
-      MediaPaths: [imagePath],
-      MediaType: "image/jpeg",
-      MediaTypes: ["image/jpeg"],
+      __openclaw: { media: [{ path: imagePath, contentType: "image/jpeg" }] },
     });
 
     const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
@@ -404,10 +408,7 @@ describe("pruneProcessedHistoryImages", () => {
     const message = castAgentMessage({
       role: "user",
       content: `caption mentions ${mediaRef} as text`,
-      MediaPath: mediaRef,
-      MediaPaths: [mediaRef],
-      MediaType: "image/png",
-      MediaTypes: ["image/png"],
+      __openclaw: { media: [{ path: mediaRef, contentType: "image/png" }] },
     });
 
     const pruned = expectPrunedMessages([message, ...oldEnoughTail()]);
@@ -647,7 +648,7 @@ describe("installHistoryImagePruneContextTransform", () => {
       castAgentMessage({
         role: "user",
         content: `caption mentions ${mediaRef} as text`,
-        media: [{ url: mediaRef, contentType: "image/png" }],
+        __openclaw: { media: [{ url: mediaRef, contentType: "image/png" }] },
       }),
       ...oldEnoughTail(),
     ];
@@ -708,7 +709,9 @@ describe("installHistoryImagePruneContextTransform", () => {
   it("strips nested media metadata before old turns can rehydrate", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pruned-nested-media-"));
     const imagePath = path.join(workspaceDir, "old.png");
+    const videoPath = path.join(workspaceDir, "old.mp4");
     await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    await fs.writeFile(videoPath, Buffer.from("0000001c6674797069736f6d", "hex"));
     const baseBridge = createHostSandboxFsBridge(workspaceDir);
     let hydrationReadCount = 0;
     const bridge = {
@@ -722,7 +725,10 @@ describe("installHistoryImagePruneContextTransform", () => {
       role: "user",
       content: "[media attached: ./old.png (image/png)]",
       __openclaw: {
-        media: [{ path: "./old.png", contentType: "image/png" }],
+        media: [
+          { path: "./old.png", contentType: "image/png" },
+          { path: "./old.mp4", contentType: "video/mp4" },
+        ],
         mediaImageBlockFactIndexes: [0],
         mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
       },

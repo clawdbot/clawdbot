@@ -1,5 +1,6 @@
 /** Module-level session MCP runtime manager entry APIs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -32,6 +33,7 @@ export async function getOrCreateSessionMcpRuntime(params: {
   requesterSenderId?: string | null;
   agentAccountId?: string | null;
   messageChannel?: string | null;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 }): Promise<SessionMcpRuntime> {
   return await getSessionMcpRuntimeManager().getOrCreate(params);
 }
@@ -50,6 +52,7 @@ export async function getOrCreateRequesterScopedMcpRuntime(params: {
   requesterSenderId?: string | null;
   agentAccountId?: string | null;
   messageChannel?: string | null;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 }): Promise<SessionMcpRuntime | undefined> {
   return await getSessionMcpRuntimeManager().getOrCreateRequesterScoped(params);
 }

@@ -1,3 +1,4 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 // Cron scratch CLI: private per-job prompt context reads and compare-and-swap writes.
 import type { Command } from "commander";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
@@ -18,8 +19,8 @@ function parseExpectedRevision(value: string | undefined): number | undefined {
   if (value === undefined) {
     return undefined;
   }
-  const revision = Number(value);
-  if (!Number.isSafeInteger(revision) || revision < 0) {
+  const revision = parseStrictNonNegativeInteger(value);
+  if (revision === undefined) {
     throw new Error("--expected-revision must be a non-negative integer");
   }
   return revision;
@@ -29,7 +30,7 @@ export function registerCronScratchCommand(cron: Command) {
   addGatewayClientOptions(
     cron
       .command("scratch")
-      .description("Read or replace a cron job's private scratch")
+      .description("Read or replace an automation's private scratch")
       .argument("<id>", "Job id")
       .option("--set <text>", "Replace scratch with exact text")
       .option("--file <path>", "Replace scratch from a file, or - for stdin")

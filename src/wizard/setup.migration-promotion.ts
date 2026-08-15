@@ -1,11 +1,12 @@
 // Setup migration promotion owns durable journals, rollback, and path validation.
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDurableJsonFile, writeJsonAtomic } from "../infra/json-files.js";
 import { isNotFoundPathError } from "../infra/path-guards.js";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
+import { hashSetupMigrationConfig } from "./setup.migration-canonical.js";
+import { SetupMigrationTargetChangedError } from "./setup.migration-snapshot.js";
 
 export const PROMOTION_JOURNAL_FILE = "onboarding-promotion.json";
 export const PROMOTION_JOURNAL_VERSION = 1;
@@ -65,29 +66,6 @@ export type SetupMigrationPromotionResume = {
   acknowledge: () => Promise<void>;
   cleanup: () => Promise<void>;
 };
-
-function canonicalize(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(canonicalize);
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  const record = value as Record<string, unknown>;
-  return Object.fromEntries(
-    Object.keys(record)
-      .toSorted()
-      .filter((key) => record[key] !== undefined)
-      .map((key) => [key, canonicalize(record[key])]),
-  );
-}
-
-function hashConfig(config: OpenClawConfig): string {
-  return crypto
-    .createHash("sha256")
-    .update(JSON.stringify(canonicalize(config)))
-    .digest("hex");
-}
 
 async function pathExists(candidate: string): Promise<boolean> {
   try {
@@ -308,7 +286,7 @@ export async function recoverSetupMigrationPromotion(params: {
       `An onboarding migration promotion is indeterminate. Review ${found.path} and run openclaw doctor before retrying.`,
     );
   }
-  const currentConfigHash = hashConfig(await params.readConfigFile());
+  const currentConfigHash = hashSetupMigrationConfig(await params.readConfigFile());
   const allFinal = (
     await Promise.all(journal.components.map((component) => pathExists(component.finalPath)))
   ).every(Boolean);
@@ -381,7 +359,9 @@ export async function recordPromotionTargetState(component: PromotionComponent):
   }
   const stat = await fs.lstat(component.finalPath);
   if (!stat.isDirectory() || (await fs.readdir(component.finalPath)).length > 0) {
-    throw new Error(`Migration target changed before promotion: ${component.finalPath}`);
+    throw new SetupMigrationTargetChangedError(
+      `Migration target changed before promotion: ${component.finalPath}`,
+    );
   }
   component.targetWasEmptyDirectory = true;
   component.emptyTargetBackupPath = await reserveEmptyTargetBackupPath(component.finalPath);
@@ -393,7 +373,9 @@ export async function moveRecordedEmptyTarget(component: PromotionComponent): Pr
   }
   const entries = await fs.readdir(component.finalPath);
   if (entries.length > 0) {
-    throw new Error(`Migration target changed before promotion: ${component.finalPath}`);
+    throw new SetupMigrationTargetChangedError(
+      `Migration target changed before promotion: ${component.finalPath}`,
+    );
   }
   if (component.emptyTargetBackupPath) {
     await fs.rename(component.finalPath, component.emptyTargetBackupPath);

@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 
 const BOARD_EVENT_MAX_BYTES = 8 * 1024;
@@ -27,7 +28,9 @@ function formatNotice(widget: string, summary: string): string {
   const suffix = ` on widget ${widget}`;
   const available = BOARD_NOTICE_MAX_CHARS - prefix.length - suffix.length;
   const clipped =
-    summary.length <= available ? summary : `${summary.slice(0, Math.max(0, available - 1))}…`;
+    summary.length <= available
+      ? summary
+      : `${truncateUtf16Safe(summary, Math.max(0, available - 1))}…`;
   return `${prefix}${clipped}${suffix}`;
 }
 

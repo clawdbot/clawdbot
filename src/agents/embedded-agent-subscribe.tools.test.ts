@@ -9,10 +9,10 @@ import {
   extractToolResultText,
   extractToolErrorCode,
   extractToolErrorMessage,
-  isToolResultError,
   sanitizeToolArgs,
   sanitizeToolResult,
-} from "./embedded-agent-subscribe.tools.js";
+} from "./embedded-agent-tool-results.js";
+import { isToolResultError } from "./tool-result-error.js";
 
 afterEach(() => {
   // Logging config spies are global module state; restore after every sanitizer
@@ -195,8 +195,9 @@ describe("isToolResultError", () => {
     expect(isToolResultError({ details: { status: "blocked" } })).toBe(true);
     expect(isToolResultError({ details: { status: "approval-unavailable" } })).toBe(true);
     expect(isToolResultError({ details: { status: "completed", timedOut: true } })).toBe(true);
-    expect(isToolResultError({ details: { status: "completed", exitCode: 1 } })).toBe(true);
+    expect(isToolResultError({ details: { status: "completed", exitCode: 1 } })).toBe(false);
     expect(isToolResultError({ details: { status: "completed", exitCode: 0 } })).toBe(false);
+    expect(isToolResultError({ details: { exitCode: 1 } })).toBe(true);
     expect(isToolResultError({ details: { ok: true, status: "cancelled" } })).toBe(false);
     expect(isToolResultError({ details: { success: true, status: "canceled" } })).toBe(false);
     expect(isToolResultError({ details: { ok: false, status: "completed" } })).toBe(true);

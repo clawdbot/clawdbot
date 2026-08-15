@@ -3,10 +3,10 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import { ConversationDeliveryInputError } from "../config/sessions/conversation-delivery-store.js";
 import {
   resolveConversation,
+  resolveConversationRegistryScope,
   type ConversationRecord,
   type ConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../infra/outbound/channel-resolution.js";
 import {
@@ -52,19 +52,6 @@ const defaultDeps: ConversationTurnDeps = {
   bindOutboundSessionEntry,
   resolveOutboundSessionRoute,
 };
-
-function resolveConversationScope(params: {
-  agentId: string;
-  config: OpenClawConfig;
-}): ConversationRegistryScope {
-  const configuredStore = params.config.session?.store;
-  return {
-    agentId: params.agentId,
-    ...(configuredStore
-      ? { storePath: resolveStorePath(configuredStore, { agentId: params.agentId }) }
-      : {}),
-  };
-}
 
 function resultForCompletedOperation(params: {
   operation: ReturnType<ConversationDeliveryDeps["beginOperation"]>["record"];
@@ -227,7 +214,7 @@ export async function runGatewayConversationTurn(
   },
   deps: ConversationTurnDeps = defaultDeps,
 ): Promise<ConversationTurnResult> {
-  const scope = resolveConversationScope(params);
+  const scope = resolveConversationRegistryScope(params);
   const prior = deps.getOperation(scope, params.turnId);
   let begun: ReturnType<ConversationDeliveryDeps["beginOperation"]> | undefined;
   try {

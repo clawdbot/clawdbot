@@ -73,12 +73,19 @@ describe("onboarding recommendations scope migration", () => {
         });
 
         const result = migrateLegacyOnboardingRecommendationsScope({
-          cfg: { agents: { defaults: { workspace: state.workspaceDir } } } as OpenClawConfig,
+          cfg: {
+            agents: {
+              defaults: { workspace: state.workspaceDir },
+              entries: { main: { default: true } },
+            },
+          } as OpenClawConfig,
           env: state.env,
         });
 
         expect(result).toEqual({
-          changes: ["Migrated onboarding recommendation state to the default workspace scope."],
+          changes: [
+            "Migrated onboarding recommendation state to the legacy owner workspace scope.",
+          ],
           warnings: [],
         });
         expect(
@@ -120,13 +127,18 @@ describe("onboarding recommendations scope migration", () => {
         });
 
         const result = migrateLegacyOnboardingRecommendationsScope({
-          cfg: { agents: { defaults: { workspace: state.workspaceDir } } } as OpenClawConfig,
+          cfg: {
+            agents: {
+              defaults: { workspace: state.workspaceDir },
+              entries: { main: { default: true } },
+            },
+          } as OpenClawConfig,
           env: state.env,
         });
 
         expect(result).toEqual({
           changes: [
-            "Removed ambiguous legacy onboarding recommendation state; kept the default workspace record.",
+            "Removed ambiguous legacy onboarding recommendation state; kept the legacy owner workspace record.",
           ],
           warnings: [],
         });

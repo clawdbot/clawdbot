@@ -1,6 +1,7 @@
 // Matrix plugin module implements approval reactions behavior.
 import { createApprovalReactionTargetStore } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-runtime";
+import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeAccountId, normalizeOptionalAccountId } from "openclaw/plugin-sdk/routing";
 import { getOptionalMatrixRuntime } from "./runtime.js";
 
@@ -68,15 +69,12 @@ type MatrixApprovalReactionTargetRef = {
   eventId: string;
 };
 
-function reportPersistentApprovalReactionError(error: unknown): void {
-  try {
-    getOptionalMatrixRuntime()
-      ?.logging.getChildLogger({ plugin: "matrix", feature: "approval-reaction-state" })
-      .warn("Matrix persistent approval reaction state failed", { error: String(error) });
-  } catch {
-    // Best effort only: persistent state must never break Matrix reactions.
-  }
-}
+const reportPersistentApprovalReactionError = createPluginStateErrorReporter(
+  getOptionalMatrixRuntime,
+  "matrix",
+  "approval-reaction-state",
+  "Matrix persistent approval reaction state failed",
+);
 
 function readPersistedTarget(target: unknown): MatrixApprovalReactionTarget | null {
   const value = target as Partial<MatrixApprovalReactionTarget> | null | undefined;

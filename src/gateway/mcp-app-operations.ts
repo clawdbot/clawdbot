@@ -19,11 +19,13 @@ import type { McpCatalogTool, SessionMcpRuntime } from "../agents/agent-bundle-m
 import {
   acquireMcpAppViewRequest,
   getMcpAppViewLease,
+  getMcpAppViewLeaseForSession,
   type McpAppViewLease,
 } from "../agents/mcp-ui-resource.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { restoreMcpAppView } from "./mcp-app-reconstruction.js";
 
 export type McpAppActiveView = {
@@ -110,14 +112,29 @@ async function requireCallableTool(
 
 export async function resolveMcpAppActiveView(params: {
   sessionKey: string;
+  agentId?: string;
   viewId: string;
   cfg?: OpenClawConfig;
 }): Promise<McpAppActiveView> {
-  const existingRuntime = peekSessionMcpRuntime({ sessionKey: params.sessionKey });
-  if (
-    (existingRuntime && existingRuntime.mcpAppsEnabled !== true) ||
-    (params.cfg && params.cfg.mcp?.apps?.enabled !== true)
-  ) {
+  if (params.cfg && params.cfg.mcp?.apps?.enabled !== true) {
+    throw new Error("MCP App runtime is unavailable");
+  }
+  const liveView = params.agentId
+    ? getMcpAppViewLeaseForSession(params.viewId, params.sessionKey, params.agentId)
+    : undefined;
+  if (liveView) {
+    if (liveView.runtime.mcpAppsEnabled !== true) {
+      throw new Error("MCP App runtime is unavailable");
+    }
+    return { runtime: liveView.runtime, view: liveView };
+  }
+  // An unscoped runtime key cannot prove its owning agent. Prefer transcript
+  // restoration with the prepared owner instead of adopting a sibling runtime.
+  const existingRuntime =
+    params.agentId && !parseAgentSessionKey(params.sessionKey)
+      ? undefined
+      : peekSessionMcpRuntime({ sessionKey: params.sessionKey });
+  if (existingRuntime && existingRuntime.mcpAppsEnabled !== true) {
     throw new Error("MCP App runtime is unavailable");
   }
   const existingView = existingRuntime
@@ -129,6 +146,7 @@ export async function resolveMcpAppActiveView(params: {
       : params.cfg
         ? await restoreMcpAppView({
             cfg: params.cfg,
+            agentId: params.agentId,
             sessionKey: params.sessionKey,
             viewId: params.viewId,
           })

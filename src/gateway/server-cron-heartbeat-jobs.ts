@@ -51,19 +51,24 @@ export async function reconcileHeartbeatMonitorJobs(params: {
     }
   }
 
-  try {
-    for (const job of jobs) {
-      const agentId = heartbeatMonitorAgentId(job);
-      // Disabled heartbeats retain their stable monitor row (and scratch). Only
-      // agents no longer enrolled in heartbeat are pruned.
-      if (!agentId || desired.has(agentId)) {
-        continue;
-      }
-      await params.cron.remove(job.id, { systemOwned: true });
+  for (const job of jobs) {
+    const agentId = heartbeatMonitorAgentId(job);
+    // Disabled heartbeats retain their stable monitor row (and scratch). Only
+    // agents no longer enrolled in heartbeat are pruned.
+    if (!agentId || desired.has(agentId)) {
+      continue;
     }
-  } catch (error) {
-    ok = false;
-    params.logger.warn({ err: String(error) }, "cron-heartbeat: stale monitor cleanup failed");
+    // Keep cleanup isolated per agent; a failed removal must not strand later
+    // stale monitors or suppress the existing reconciliation retry.
+    try {
+      await params.cron.remove(job.id, { systemOwned: true });
+    } catch (error) {
+      ok = false;
+      params.logger.warn(
+        { agentId, err: String(error) },
+        "cron-heartbeat: stale monitor cleanup failed",
+      );
+    }
   }
   return { ok };
 }

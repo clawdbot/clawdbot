@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 /**
  * Builds prepared runtime plans consumed by embedded agent runs. A plan
  * centralizes provider hooks, auth, tool schema policy, transcript policy,
@@ -46,9 +47,7 @@ function formatResolvedRef(params: { provider: string; modelId: string }): strin
 }
 
 function asOpenClawConfig(value: unknown): OpenClawConfig | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as OpenClawConfig)
-    : undefined;
+  return asOptionalRecord(value) as OpenClawConfig | undefined;
 }
 
 function asProviderRuntimeModel(
@@ -185,6 +184,7 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       modelRoute: params.modelRoute,
       config,
       workspaceDir: params.workspaceDir,
+      metadataSnapshot: toolPlanningMetadataSnapshot,
       harnessId: params.harnessId,
       harnessRuntime: params.harnessRuntime,
       allowHarnessAuthProfileForwarding: params.allowHarnessAuthProfileForwarding,

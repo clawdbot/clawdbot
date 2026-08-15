@@ -8,7 +8,6 @@ import { readLatestAssistantReplySnapshot, waitForAgentRun } from "../run-wait.j
 import { runAgentStep } from "./agent-step.js";
 import type { GatewaySessionListRow } from "./sessions-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
-import { testing } from "./sessions-send-tool.a2a.test-support.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
 
@@ -67,9 +66,6 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       text: "Test announce reply",
       fingerprint: "test-announce-reply",
     });
-    testing.setDepsForTest({
-      callGateway,
-    });
   });
 
   function requireGatewayCall(method: string): CallGatewayOptions {
@@ -81,7 +77,6 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
   }
 
   afterEach(() => {
-    testing.setDepsForTest();
     vi.restoreAllMocks();
   });
 
@@ -136,6 +131,45 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(sendParams.channel).toBe("discord");
     expect(sendParams.to).toBe("channel:target-room");
     expect(sendParams.message).toBe("Substantive channel reply");
+  });
+
+  it.each([
+    {
+      name: "generated media",
+      reply: "Your image is ready.\nMEDIA:./generated.png",
+      expected: {
+        message: "Your image is ready.",
+        mediaUrls: ["./generated.png"],
+        agentId: "orion",
+      },
+    },
+    {
+      name: "a generated voice note",
+      reply: "Your voice note is ready.\nMEDIA:./generated.ogg\n[[audio_as_voice]]",
+      expected: {
+        message: "Your voice note is ready.",
+        mediaUrls: ["./generated.ogg"],
+        agentId: "orion",
+        asVoice: true,
+      },
+    },
+  ])("projects $name into the gateway announcement contract", async ({ reply, expected }) => {
+    vi.mocked(runAgentStep).mockResolvedValueOnce(reply);
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:orion:discord:channel:target-room",
+      displayKey: "agent:orion:discord:channel:target-room",
+      message: "Generate the requested media.",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 0,
+      requesterSessionKey: "agent:main:discord:channel:requester-room",
+      requesterChannel: "discord",
+      roundOneReply: "The target agent completed.",
+    });
+
+    const sendParams = requireGatewayCall("send").params as Record<string, unknown>;
+    expect(sendParams).toMatchObject(expected);
+    expect(sendParams).not.toHaveProperty("sessionKey");
   });
 
   it("bypasses the announce decider for delayed same-session channel replies", async () => {
@@ -283,34 +317,19 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 
-  it.each([
-    {
-      source: "deliveryContext.accountId",
-      accountId: "thinker",
-      session: {
-        key: "agent:main:discord:channel:target-room",
-        kind: "group",
+  it("uses the projected delivery context for the Discord announce account", async () => {
+    const accountId = "thinker";
+    const session = {
+      key: "agent:main:discord:channel:target-room",
+      kind: "group",
+      classification: "channel",
+      channel: "discord",
+      deliveryContext: {
         channel: "discord",
-        deliveryContext: {
-          channel: "discord",
-          to: "channel:target-room",
-          accountId: "thinker",
-        },
-      } satisfies GatewaySessionListRow,
-    },
-    {
-      source: "lastAccountId",
-      accountId: "scout",
-      session: {
-        key: "agent:main:discord:channel:target-room",
-        kind: "group",
-        channel: "discord",
-        lastChannel: "discord",
-        lastTo: "channel:target-room",
-        lastAccountId: "scout",
-      } satisfies GatewaySessionListRow,
-    },
-  ])("uses Discord session $source for announce accountId", async ({ accountId, session }) => {
+        to: "channel:target-room",
+        accountId,
+      },
+    } satisfies GatewaySessionListRow;
     sessionListRows = [session];
 
     await runSessionsSendA2AFlow({
@@ -382,8 +401,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
   it("notifies the requester when delayed target delivery fails after acceptance", async () => {
     vi.mocked(waitForAgentRun).mockResolvedValueOnce({
       status: "timeout",
-      error:
-        "SessionWriteLockTimeoutError: session file locked (timeout 60000ms): pid=43 alive=true",
+      error: "target run failed after delivery acceptance",
       pendingError: true,
     });
 
@@ -412,15 +430,14 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     });
     const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
     expect(stepInput.message).toContain("sessions_send delivery to");
-    expect(stepInput.message).toContain("SessionWriteLockTimeoutError");
+    expect(stepInput.message).toContain("target run failed after delivery acceptance");
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 
   it("does not notify the requester for waited sends that already returned the error inline", async () => {
     vi.mocked(waitForAgentRun).mockResolvedValueOnce({
       status: "timeout",
-      error:
-        "SessionWriteLockTimeoutError: session file locked (timeout 60000ms): pid=43 alive=true",
+      error: "target run failed after delivery acceptance",
       pendingError: true,
     });
 

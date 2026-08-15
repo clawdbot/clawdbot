@@ -3,52 +3,175 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
 describe("config schema regressions", () => {
-  it('accepts memorySearch fallback "voyage"', () => {
-    const res = validateConfigObject({
-      memory: {
-        search: {
-          fallback: "voyage",
-        },
-      },
+  it.each([true, false])("accepts and preserves gateway.cliAgents.enabled=%s", (enabled) => {
+    const result = validateConfigObject({ gateway: { cliAgents: { enabled } } });
 
-      agents: {
-        defaults: {},
-      },
-    });
-
-    expect(res.ok).toBe(true);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.gateway?.cliAgents?.enabled).toBe(enabled);
+    }
   });
 
-  it('accepts memorySearch provider "mistral"', () => {
-    const res = validateConfigObject({
-      memory: {
-        search: {
-          provider: "mistral",
+  it.each([0, 3_000])(
+    "accepts the documented global exec approval running notice delay %i",
+    (approvalRunningNoticeMs) => {
+      const result = validateConfigObject({
+        tools: {
+          exec: {
+            approvalRunningNoticeMs,
+          },
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.config.tools?.exec?.approvalRunningNoticeMs).toBe(approvalRunningNoticeMs);
+      }
+    },
+  );
+
+  it.each([0, 3_000])(
+    "preserves the per-agent exec approval running notice delay %i",
+    (approvalRunningNoticeMs) => {
+      const result = validateConfigObject({
+        agents: {
+          entries: {
+            main: {
+              tools: {
+                exec: {
+                  approvalRunningNoticeMs,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.config.agents?.entries?.main?.tools?.exec?.approvalRunningNoticeMs).toBe(
+          approvalRunningNoticeMs,
+        );
+      }
+    },
+  );
+
+  it.each([-1, 1.5, "3000"])(
+    "rejects invalid global exec approval running notice delay %s",
+    (approvalRunningNoticeMs) => {
+      const result = validateConfigObject({
+        tools: {
+          exec: {
+            approvalRunningNoticeMs,
+          },
+        },
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.issues.map((issue) => issue.path)).toContain(
+          "tools.exec.approvalRunningNoticeMs",
+        );
+      }
+    },
+  );
+
+  it.each([-1, 1.5, "3000"])(
+    "rejects invalid per-agent exec approval running notice delay %s",
+    (approvalRunningNoticeMs) => {
+      const result = validateConfigObject({
+        agents: {
+          entries: {
+            main: {
+              tools: {
+                exec: {
+                  approvalRunningNoticeMs,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.issues.map((issue) => issue.path)).toContain(
+          "agents.entries.main.tools.exec.approvalRunningNoticeMs",
+        );
+      }
+    },
+  );
+
+  it.each([
+    {
+      scope: "global",
+      config: {
+        tools: {
+          exec: {
+            approvalRunningNoticeMs: 0,
+            unknownApprovalRunningNoticeMs: 0,
+          },
         },
       },
-
-      agents: {
-        defaults: {},
+    },
+    {
+      scope: "per-agent",
+      config: {
+        agents: {
+          entries: {
+            main: {
+              tools: {
+                exec: {
+                  approvalRunningNoticeMs: 0,
+                  unknownApprovalRunningNoticeMs: 0,
+                },
+              },
+            },
+          },
+        },
       },
-    });
-
-    expect(res.ok).toBe(true);
+    },
+  ])("keeps $scope exec configuration strict", ({ config }) => {
+    expect(validateConfigObject(config).ok).toBe(false);
   });
 
-  it('accepts memorySearch provider "bedrock"', () => {
-    const res = validateConfigObject({
-      memory: {
-        search: {
-          provider: "bedrock",
+  it.each([
+    { field: "fallback", value: "voyage" },
+    { field: "provider", value: "mistral" },
+    { field: "provider", value: "bedrock" },
+  ])('accepts memorySearch $field "$value"', ({ field, value }) => {
+    expect(
+      validateConfigObject({
+        memory: { search: { [field]: value } },
+        agents: { defaults: {} },
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("accepts mixed extra memory path entries", () => {
+    expect(
+      validateConfigObject({
+        memory: {
+          search: {
+            extraPaths: ["../team-notes", { path: "../shared", pattern: "runbooks/**/*.md" }],
+          },
         },
-      },
+        agents: { defaults: {} },
+      }).ok,
+    ).toBe(true);
+  });
 
-      agents: {
-        defaults: {},
-      },
-    });
-
-    expect(res.ok).toBe(true);
+  it.each([
+    { pattern: "**/*.md" },
+    { path: "../shared", pattern: 42 },
+    { path: "../shared", name: "legacy-qmd-name" },
+  ])("rejects invalid extra memory path object %j", (entry) => {
+    expect(
+      validateConfigObject({
+        memory: { search: { extraPaths: [entry] } },
+        agents: { defaults: {} },
+      }).ok,
+    ).toBe(false);
   });
 
   it("rejects local memorySearch GPU policy", () => {
@@ -68,48 +191,6 @@ describe("config schema regressions", () => {
     });
 
     expect(res.ok).toBe(false);
-  });
-
-  it("accepts memorySearch.qmd.extraCollections", () => {
-    const res = validateConfigObject({
-      memory: {
-        search: {
-          qmd: {
-            extraCollections: [
-              { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
-            ],
-          },
-        },
-      },
-
-      agents: {
-        defaults: {},
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts agents.entries.*.memory.search.qmd.extraCollections", () => {
-    const res = validateConfigObject({
-      agents: {
-        entries: {
-          main: {
-            memory: {
-              search: {
-                qmd: {
-                  extraCollections: [
-                    { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
-                  ],
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
   });
 
   it("accepts agents.defaults.startupContext overrides", () => {
@@ -146,28 +227,12 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("accepts 1M-character tool result caps for long-context agents", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          contextLimits: {
-            toolResultMaxChars: 1_000_000,
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
   it("accepts agents.defaults and agents.entries contextLimits overrides", () => {
     const res = validateConfigObject({
       agents: {
         defaults: {
           contextLimits: {
             memoryGetMaxChars: 20_000,
-            memoryGetDefaultLines: 180,
-            toolResultMaxChars: 24_000,
             postCompactionMaxChars: 4_000,
           },
         },
@@ -203,47 +268,13 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts agents.defaults.compaction.truncateAfterCompaction", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          compaction: {
-            truncateAfterCompaction: true,
-            maxActiveTranscriptBytes: "20mb",
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts Matrix queue byChannel overrides", () => {
-    const res = validateConfigObject({
-      messages: {
-        queue: {
-          byChannel: {
-            matrix: "steer",
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts Matrix interrupt queue byChannel overrides", () => {
-    const res = validateConfigObject({
-      messages: {
-        queue: {
-          byChannel: {
-            matrix: "interrupt",
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
+  it.each([
+    { name: "accepts Matrix queue byChannel overrides", mode: "steer" },
+    { name: "accepts Matrix interrupt queue byChannel overrides", mode: "interrupt" },
+  ])("$name", ({ mode }) => {
+    expect(validateConfigObject({ messages: { queue: { byChannel: { matrix: mode } } } }).ok).toBe(
+      true,
+    );
   });
 
   it("keeps queue byChannel schema and config type providers aligned", () => {
@@ -357,6 +388,31 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
+  it("accepts the browser extension relay legacy-auth migration gate", () => {
+    const res = validateConfigObject({
+      browser: {
+        extensionRelay: {
+          allowLegacyAuth: false,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects unknown keys under browser.extensionRelay", () => {
+    const res = validateConfigObject({
+      browser: {
+        extensionRelay: {
+          allowLegacyAuth: true,
+          unknownKey: true as unknown,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
   it("accepts discovery.wideArea.domain for unicast DNS-SD", () => {
     const res = validateConfigObject({
       discovery: {
@@ -416,7 +472,61 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("skips binding agentId check when agents.entries is absent", () => {
+  it("accepts exact main bindings when agents.entries omits the implicit main agent", () => {
+    const res = validateConfigObject({
+      agents: {
+        entries: { alpha: { model: "anthropic/claude-3-5-sonnet" } },
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects normalized main binding variants when agents.entries omits them", () => {
+    const res = validateConfigObject({
+      agents: {
+        entries: { alpha: { model: "anthropic/claude-3-5-sonnet" } },
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "MAIN",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((iss) => iss.message.includes('Unknown agent id "MAIN"'))).toBe(true);
+    }
+  });
+
+  it("accepts a normalized main binding variant when that agent is explicitly configured", () => {
+    const res = validateConfigObject({
+      agents: {
+        entries: { MAIN: { model: "anthropic/claude-3-5-sonnet" } },
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "MAIN",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects non-default bindings when the implicit-main roster is materialized", () => {
     const res = validateConfigObject({
       bindings: [
         {
@@ -427,7 +537,7 @@ describe("config schema regressions", () => {
       ],
     });
 
-    expect(res.ok).toBe(true);
+    expect(res.ok).toBe(false);
   });
 
   it("accepts a microsoft-foundry model entry carrying thinkingLevelMap (openclaw#91011)", () => {

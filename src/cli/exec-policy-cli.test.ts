@@ -326,6 +326,26 @@ describe("exec-policy CLI", () => {
     });
   });
 
+  it("renders an unstored fresh-install policy as defaults instead of missing", async () => {
+    mocks.readExecApprovalsSnapshot.mockImplementationOnce(() => ({
+      path: "~/.openclaw/state/openclaw.sqlite#exec_approvals_config",
+      exists: false,
+      raw: null,
+      hash: "missing-hash",
+      file: { version: 1, agents: {} },
+    }));
+
+    await runExecPolicyCommand(["exec-policy", "show"]);
+
+    const output = stripAnsi(
+      mocks.defaultRuntime.log.mock.calls.map((call) => String(call[0] ?? "")).join("\n"),
+    );
+    expect(output).toContain("Approvals State");
+    expect(output).toContain("defaults (no stored overrides)");
+    expect(output).not.toContain("Approvals File");
+    expect(output).not.toContain("missing");
+  });
+
   it("marks host=node scopes as node-managed in show output", async () => {
     mocks.setConfig({
       tools: {

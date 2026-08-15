@@ -248,6 +248,8 @@ async function guardGatewayRunSelectedConfig(
     { normalizeEnv },
     { normalizeStateDirEnv, resolveStateDir },
     { resolveConfigDir },
+    { collectEnvSecretRefIds },
+    { clearMissingManagedServiceEnvKeys, readManagedSystemdServiceEnvKeysFromEnvironment },
   ] = await Promise.all([
     import("node:path"),
     import("../../config/config-env-vars.js"),
@@ -255,6 +257,8 @@ async function guardGatewayRunSelectedConfig(
     import("../../infra/env.js"),
     import("../../config/paths.js"),
     import("../../utils.js"),
+    import("../../config/types.secrets.js"),
+    import("../../daemon/service-managed-env.js"),
   ]);
   const invocationDestructiveOverride = resolveInvocationDestructiveOverride();
   if (params.environmentSelection) {
@@ -269,6 +273,7 @@ async function guardGatewayRunSelectedConfig(
     normalizeStateDirEnv(process.env);
     const loaded = loadGlobalRuntimeDotEnvFiles({
       ...(gatewayRunTargetSelectedByConfig ? { entryFilter: isConfigRuntimeEnvVarAllowed } : {}),
+      overrideKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
       quiet: true,
       ...resolveGatewayRunDotEnvPaths({
         env: process.env,
@@ -340,6 +345,14 @@ async function guardGatewayRunSelectedConfig(
       }
       return params.opts.reset === true;
     }
+    // The service marker also owns config SecretRefs. Only dotenv-absent keys with no current
+    // config reference are stale; clearing the broad marker blindly would drop file-backed refs.
+    clearMissingManagedServiceEnvKeys({
+      environment: process.env,
+      managedKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
+      presentKeys: trustedEnvLoad.dotenvPresentKeys,
+      preserveKeys: collectEnvSecretRefIds(snapshot.sourceConfig),
+    });
     const selectionSignature = resolveGatewayConfigSelectionSignature(process.env);
     applySelectedConfigEnv(snapshot);
     // Only selection inputs survive a selection hop. Reload credentials once the final config and
@@ -547,6 +560,7 @@ export async function reloadTrustedGatewayRunEnvironment(params: {
     { normalizeEnv },
     { normalizeStateDirEnv, resolveStateDir },
     { resolveConfigDir },
+    { readManagedSystemdServiceEnvKeysFromEnvironment },
   ] = await Promise.all([
     import("node:path"),
     import("../../config/env-vars.js"),
@@ -554,6 +568,7 @@ export async function reloadTrustedGatewayRunEnvironment(params: {
     import("../../infra/env.js"),
     import("../../config/paths.js"),
     import("../../utils.js"),
+    import("../../daemon/service-managed-env.js"),
   ]);
   const envBeforeReload = { ...process.env };
   const selectionSignature = resolveGatewayConfigSelectionSignature(process.env);
@@ -561,6 +576,7 @@ export async function reloadTrustedGatewayRunEnvironment(params: {
   normalizeStateDirEnv(process.env);
   loadGlobalRuntimeDotEnvFiles({
     ...(gatewayRunTargetSelectedByConfig ? { entryFilter: isConfigRuntimeEnvVarAllowed } : {}),
+    overrideKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
     quiet: true,
     ...resolveGatewayRunDotEnvPaths({
       env: process.env,

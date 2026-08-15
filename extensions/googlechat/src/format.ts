@@ -1,36 +1,28 @@
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  FormatCapabilityProfile,
   markdownToIR,
   renderMarkdownIRChunksWithinLimit,
   renderMarkdownWithMarkers,
   sanitizeAssistantVisibleText,
-  type FormatCapabilityProfile,
   type MarkdownIR,
 } from "openclaw/plugin-sdk/text-chunking";
 
-export const GOOGLE_CHAT_FORMAT_PROFILE = {
+export const GOOGLE_CHAT_FORMAT_PROFILE = FormatCapabilityProfile.define({
   mechanism: "markdown",
   constructs: {
-    bold: "native",
-    italic: "native",
     underline: "fallback",
-    strikethrough: "native",
     spoiler: "fallback",
-    codeInline: "native",
-    codeBlock: "native",
     codeLanguage: "fallback",
-    linkLabel: "native",
     heading: "fallback",
-    bulletList: "native",
     orderedList: "fallback",
     taskList: "fallback",
     table: "fallback",
-    blockquote: "native",
     image: "fallback",
     mention: "strip",
   },
   chunk: { limit: 32_000, unit: "bytes" },
-} satisfies FormatCapabilityProfile;
+});
 
 const GOOGLE_CHAT_LITERAL_FALLBACKS = new Map([
   ["*", "＊"],

@@ -5,9 +5,8 @@ import {
 } from "../config/sessions/conversation-delivery-store.js";
 import {
   resolveConversation,
-  type ConversationRegistryScope,
+  resolveConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   ConversationDeliveryRejectedError,
@@ -28,19 +27,6 @@ const defaultDeps: ConversationSendDeps = {
   ...defaultConversationDeliveryDeps,
   resolveConversation,
 };
-
-function resolveConversationScope(params: {
-  agentId: string;
-  config: OpenClawConfig;
-}): ConversationRegistryScope {
-  const configuredStore = params.config.session?.store;
-  return {
-    agentId: params.agentId,
-    ...(configuredStore
-      ? { storePath: resolveStorePath(configuredStore, { agentId: params.agentId }) }
-      : {}),
-  };
-}
 
 function resultForCompletedOperation(
   operation: ConversationDeliveryRecord,
@@ -94,7 +80,7 @@ export async function runGatewayConversationSend(
   },
   deps: ConversationSendDeps = defaultDeps,
 ): Promise<ConversationSendResult> {
-  const scope = resolveConversationScope(params);
+  const scope = resolveConversationRegistryScope(params);
   try {
     const prior = deps.getOperation(scope, params.operationId);
     let operation: ConversationDeliveryRecord | undefined;

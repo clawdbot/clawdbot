@@ -12,10 +12,218 @@ import {
   createSessions,
   deferred,
   mountSidebar,
+  TWO_AGENTS,
 } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar session catalog pagination", () => {
+  it("keeps an in-flight catalog refresh across a stable same-client Gateway notification", async () => {
+    vi.useFakeTimers();
+    let provider: HTMLElement | undefined;
+    try {
+      // Shared UI workers retain real custom elements despite later module mocks.
+      await vi.importActual("../../components/sidebar-attention.ts");
+      const pendingPage = deferred<SessionsCatalogListResult>();
+      const request = vi.fn().mockReturnValue(pendingPage.promise);
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      expect(gateway.gateway.connection).toEqual({
+        gatewayUrl: "ws://gateway.test",
+        token: "",
+        bootstrapToken: "",
+        password: "",
+      });
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const mounted = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      const { sidebar } = mounted;
+      provider = mounted.provider;
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(request).toHaveBeenCalledTimes(1);
+      const generation = sidebar.sessionData.sessionScopeGeneration;
+
+      gateway.publish({ offlineStable: true });
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sidebar.sessionData.sessionScopeGeneration).toBe(generation);
+      expect(request).toHaveBeenCalledTimes(1);
+
+      pendingPage.resolve(catalogPage([{ threadId: "thread-1", name: "Current session" }]));
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      expect(sidebar.textContent).toContain("Current session");
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally {
+      provider?.remove();
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases a pending catalog page across a same-client Gateway reconnect", async () => {
+    vi.useFakeTimers();
+    let provider: HTMLElement | undefined;
+    try {
+      const pendingStalePage = deferred<SessionsCatalogListResult>();
+      const pendingFreshPage = deferred<SessionsCatalogListResult>();
+      const firstPage = catalogPage([{ threadId: "thread-1", name: "Newest" }], "page-2");
+      const expandedPage = catalogPage([{ threadId: "thread-2", name: "Expanded" }], "page-3");
+      let requestedThirdPages = 0;
+      const request = vi.fn((_method: string, params: { cursors?: Record<string, string> }) => {
+        const cursor = params.cursors?.["gateway:local"];
+        if (cursor === "page-2") {
+          return Promise.resolve(expandedPage);
+        }
+        if (cursor === "page-3") {
+          requestedThirdPages += 1;
+          return requestedThirdPages === 1 ? pendingStalePage.promise : pendingFreshPage.promise;
+        }
+        return Promise.resolve(firstPage);
+      });
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      const hello = {
+        features: { methods: ["sessions.catalog.list"] },
+      } as ApplicationGatewaySnapshot["hello"];
+      gateway.publish({ hello });
+      const mounted = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      const { sidebar } = mounted;
+      provider = mounted.provider;
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      await sidebar.sessionData.loadMoreSessionCatalog("codex");
+      await sidebar.updateComplete;
+      expect(sidebar.textContent).toContain("Expanded");
+      expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(1);
+
+      const staleLoad = sidebar.sessionData.loadMoreSessionCatalog("codex");
+      await sidebar.updateComplete;
+      expect(sidebar.sessionData.loadingMoreSessionCatalogIds.has("codex")).toBe(true);
+
+      gateway.publish({ phase: "reconnecting", hello: null });
+      sidebar.sessionData.hostUpdate();
+      expect(sidebar.sessionData.loadingMoreSessionCatalogIds.has("codex")).toBe(false);
+      await sidebar.updateComplete;
+      expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(1);
+
+      gateway.publish({ phase: "connected", hello });
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      expect(sidebar.textContent).toContain("Expanded");
+      const loadMore = sidebar.querySelector<HTMLButtonElement>(
+        '[data-session-catalog-load-more="codex"]',
+      );
+      expect(loadMore?.disabled).toBe(false);
+      loadMore?.click();
+      await sidebar.updateComplete;
+      expect(sidebar.sessionData.loadingMoreSessionCatalogIds.has("codex")).toBe(true);
+
+      pendingStalePage.resolve(catalogPage([{ threadId: "stale", name: "Stale page" }]));
+      await staleLoad;
+      await sidebar.updateComplete;
+      expect(sidebar.sessionData.loadingMoreSessionCatalogIds.has("codex")).toBe(true);
+      expect(sidebar.textContent).not.toContain("Stale page");
+
+      pendingFreshPage.resolve(catalogPage([{ threadId: "thread-3", name: "Fresh page" }]));
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+      expect(sidebar.sessionData.loadingMoreSessionCatalogIds.has("codex")).toBe(false);
+      expect(sidebar.textContent).toContain("Fresh page");
+    } finally {
+      provider?.remove();
+      vi.useRealTimers();
+    }
+  });
+
+  it("retires visible catalog rows and expanded cursors when the agent changes", async () => {
+    vi.useFakeTimers();
+    try {
+      const pendingResearch = deferred<SessionsCatalogListResult>();
+      const mainFirstPage = catalogPage(
+        [{ threadId: "main-newest", name: "Main newest" }],
+        "main-page-2",
+      );
+      const mainSecondPage = catalogPage([{ threadId: "main-older", name: "Main older" }]);
+      const researchFirstPage = catalogPage(
+        [{ threadId: "research-newest", name: "Research newest" }],
+        "research-page-2",
+      );
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(mainFirstPage)
+        .mockResolvedValueOnce(mainSecondPage)
+        .mockReturnValueOnce(pendingResearch.promise)
+        .mockResolvedValue(catalogPage([{ threadId: "research-older", name: "Research older" }]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar, context } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+        "panel",
+        TWO_AGENTS,
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      expect(sidebar.textContent).toContain("Main newest");
+      expect(sidebar.textContent).toContain("Main older");
+      expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(1);
+
+      context.agentSelection.state.selectedId = "research";
+      context.agentSelection.state.scopeId = "research";
+      sidebar.requestUpdate();
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(50);
+      await sidebar.updateComplete;
+
+      expect(sidebar.textContent).not.toContain("Main newest");
+      expect(sidebar.textContent).not.toContain("Main older");
+      expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(0);
+
+      pendingResearch.resolve(researchFirstPage);
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      expect(sidebar.textContent).toContain("Research newest");
+      expect(sidebar.textContent).not.toContain("Research older");
+      expect(request).not.toHaveBeenCalledWith(
+        "sessions.catalog.list",
+        expect.objectContaining({
+          agentId: "research",
+          catalogId: "codex",
+          cursors: { "gateway:local": "research-page-2" },
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["catalog", "host"] as const)(
     "preserves the current page while exposing a structured %s load-more error",
     async (errorOwner) => {
@@ -400,7 +608,7 @@ describe("AppSidebar session catalog pagination", () => {
         .mockResolvedValueOnce(
           catalogPage([{ threadId: "thread-3", name: "Reappeared" }], "page-2"),
         )
-        .mockResolvedValueOnce(catalogErrorPage("Replay failed"));
+        .mockResolvedValue(catalogErrorPage("Replay failed"));
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {

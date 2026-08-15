@@ -2,6 +2,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -23,11 +24,7 @@ function resolveAgentHeartbeatModelRaw(params: {
   const defaultModel = normalizeOptionalString(params.cfg.agents?.defaults?.heartbeat?.model);
   const agentId = normalizeLowercaseStringOrEmpty(params.agentId);
   const agentModel = agentId
-    ? normalizeOptionalString(
-        params.cfg.agents?.list?.find(
-          (entry) => normalizeLowercaseStringOrEmpty(entry?.id) === agentId,
-        )?.heartbeat?.model,
-      )
+    ? normalizeOptionalString(resolveAgentConfig(params.cfg, agentId)?.heartbeat?.model)
     : undefined;
   return agentModel ?? defaultModel;
 }
@@ -75,11 +72,7 @@ function resolveAgentContextTokensForHint(params: {
   );
   const agentId = normalizeLowercaseStringOrEmpty(params.agentId);
   const agentContextTokens = agentId
-    ? normalizePositiveContextTokens(
-        params.cfg.agents?.list?.find(
-          (entry) => normalizeLowercaseStringOrEmpty(entry?.id) === agentId,
-        )?.contextTokens,
-      )
+    ? normalizePositiveContextTokens(resolveAgentConfig(params.cfg, agentId)?.contextTokens)
     : undefined;
   return agentContextTokens ?? defaultContextTokens;
 }

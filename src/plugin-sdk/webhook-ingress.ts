@@ -28,6 +28,7 @@ export {
   type WebhookInFlightLimiter,
 } from "./webhook-request-guards.js";
 export {
+  canonicalizeWebhookRouteKey,
   registerPluginHttpRoute,
   registerWebhookTarget,
   registerWebhookTargetWithPluginRoute,

@@ -1,13 +1,33 @@
 // Defines agent-related Zod schema fragments for config parsing.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 
-const AgentEntryConfigSchema = AgentEntrySchema.omit({ id: true });
+const AgentEntryConfigSchema = z.preprocess(
+  (value, ctx) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      for (const key of Object.getOwnPropertyNames(value)) {
+        if (!isBlockedObjectKey(key)) {
+          continue;
+        }
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message: "agent entries must not contain blocked object keys",
+        });
+        return z.NEVER;
+      }
+    }
+    return value;
+  },
+  AgentEntrySchema.omit({ id: true }).extend({ default: z.boolean().optional() }),
+);
 
 export const AgentsSchema = z
   .object({
+    ownership: z.literal("explicit").optional(),
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
     entries: z
       .record(
@@ -17,6 +37,39 @@ export const AgentsSchema = z
       .optional(),
   })
   .strict()
+  .superRefine((value, ctx) => {
+    const entries = Object.entries(value.entries ?? {});
+    if (entries.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["entries"],
+        message: "agents.entries must contain at least one configured agent",
+      });
+    }
+    const marked = entries.filter(([, entry]) => entry.default === true);
+    if (marked.length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["entries"],
+        message: `agents.entries must contain at most one default=true entry (found ${marked.length})`,
+      });
+    }
+    if (value.ownership === "explicit" && marked.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ownership"],
+        message: "agents.ownership=explicit cannot be combined with a legacy default=true marker",
+      });
+    }
+    if (entries.length > 1 && marked.length === 0 && value.ownership !== "explicit") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ownership"],
+        message:
+          'multi-agent rosters require agents.ownership="explicit" or one legacy default=true marker; add agents.ownership="explicit" or run openclaw doctor',
+      });
+    }
+  })
   .optional();
 
 const BindingMatchSchema = z

@@ -1,16 +1,15 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   loadSessionEntry,
   replaceSessionEntrySync,
+  replaceTranscriptEventsSync,
+  withTranscriptWriteTransaction,
 } from "../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
+import { projectCanonicalSessionEntryShape } from "../../config/sessions/store-entry-shape.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
-import {
-  isJsonRecord,
-  parseOpaqueLeafEntry,
-  parseParentLinkedOpaqueEntry,
-} from "./session-manager-codec.js";
+import { parseOpaqueLeafEntry, parseParentLinkedOpaqueEntry } from "./session-manager-codec.js";
 import { SessionManagerEntries } from "./session-manager-entries.js";
-import { createSessionId, generateSessionEntryId } from "./session-manager-id.js";
+import { createManagedSessionId, generateSessionEntryId } from "./session-manager-id.js";
 import type {
   LabelEntry,
   PreservedOpaqueFileEntry,
@@ -33,7 +32,7 @@ export class SessionManagerBranching extends SessionManagerEntries {
     for (const opaqueEntry of this.opaqueFileEntries) {
       const leafEntry = parseOpaqueLeafEntry(opaqueEntry.record);
       const link = leafEntry ?? parseParentLinkedOpaqueEntry(opaqueEntry.record);
-      if (link && isJsonRecord(opaqueEntry.record)) {
+      if (link && isRecord(opaqueEntry.record)) {
         opaqueById.set(link.id, opaqueEntry.record);
       }
     }
@@ -102,24 +101,16 @@ export class SessionManagerBranching extends SessionManagerEntries {
     return { entries, opaqueEntries, tailId, usedIds };
   }
 
-  createBranchedSession(leafId: string): string | undefined {
-    const previousSessionFile = this.sessionFile;
+  async createBranchedSession(leafId: string): Promise<string | undefined> {
+    const previousSessionId = this.sessionId;
     const branchPath = this.collectBranchedSessionPath(leafId);
     if (branchPath.entries.length === 0) {
       throw new Error(`Entry ${leafId} not found`);
     }
 
-    const newSessionId = createSessionId();
+    const newSessionId = createManagedSessionId();
     const timestamp = new Date().toISOString();
-    const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-    const sqlitePersistence = this.sqlitePersistence;
-    const newSessionFile = sqlitePersistence
-      ? formatSqliteSessionFileMarker({
-          agentId: sqlitePersistence.agentId,
-          sessionId: newSessionId,
-          storePath: sqlitePersistence.storePath,
-        })
-      : join(this.getSessionDir(), `${fileTimestamp}_${newSessionId}.jsonl`);
+    const persistenceTarget = this.persistenceTarget;
 
     const header: SessionHeader = {
       type: "session",
@@ -127,7 +118,7 @@ export class SessionManagerBranching extends SessionManagerEntries {
       id: newSessionId,
       timestamp,
       cwd: this.cwd,
-      parentSession: this.shouldPersist ? previousSessionFile : undefined,
+      parentSession: persistenceTarget ? previousSessionId : undefined,
     };
     const pathEntryIds = new Set(branchPath.entries.map((entry) => entry.id));
     const labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }> = [];
@@ -160,46 +151,61 @@ export class SessionManagerBranching extends SessionManagerEntries {
     this.fileEntries = [header, ...branchPath.entries, ...labelEntries];
     this.opaqueFileEntries = branchPath.opaqueEntries;
     this.sessionId = newSessionId;
-    this.sessionFileSnapshot = undefined;
-    if (this.shouldPersist) {
-      this.sessionFile = newSessionFile;
-      if (sqlitePersistence) {
-        const updatedAt = Date.now();
-        const previousEntry = loadSessionEntry({
-          agentId: sqlitePersistence.agentId,
-          sessionKey: sqlitePersistence.sessionKey,
-          storePath: sqlitePersistence.storePath,
-        });
-        this.sqlitePersistence = { ...sqlitePersistence, sessionId: newSessionId };
-        replaceSessionEntrySync(
-          {
-            agentId: sqlitePersistence.agentId,
-            sessionKey: sqlitePersistence.sessionKey,
-            storePath: sqlitePersistence.storePath,
-          },
-          {
-            ...(previousEntry ?? { updatedAt }),
-            sessionFile: newSessionFile,
-            sessionId: newSessionId,
-            updatedAt,
-          },
-        );
-      }
-      this.buildIndex();
-      const hasAssistant = this.fileEntries.some(
-        (entry) => entry.type === "message" && entry.message.role === "assistant",
-      );
-      if (hasAssistant) {
-        this.replacePersistedTranscript();
-        this.flushed = true;
-      } else {
-        this.flushed = false;
-      }
-      return newSessionFile;
+    this.buildIndex();
+    if (!persistenceTarget) {
+      return undefined;
     }
 
-    this.buildIndex();
-    return undefined;
+    const entryScope = {
+      agentId: persistenceTarget.agentId,
+      sessionKey: persistenceTarget.sessionKey,
+      storePath: persistenceTarget.storePath,
+    };
+    const previousEntry = loadSessionEntry(entryScope);
+    const updatedAt = Date.now();
+    const nextTarget = { ...persistenceTarget, sessionId: newSessionId };
+    const nextEntry = {
+      ...(previousEntry ? projectCanonicalSessionEntryShape({ ...previousEntry }) : { updatedAt }),
+      sessionId: newSessionId,
+      updatedAt,
+    };
+    try {
+      const persisted = await withTranscriptWriteTransaction(persistenceTarget, () => {
+        const currentEntry = loadSessionEntry(entryScope);
+        if (
+          currentEntry?.sessionId !== previousSessionId ||
+          currentEntry.lifecycleRevision !== previousEntry?.lifecycleRevision
+        ) {
+          return false;
+        }
+        replaceSessionEntrySync(entryScope, nextEntry);
+        if (!replaceTranscriptEventsSync(nextTarget, this.getPersistedFileEntries())) {
+          throw new Error("Branched session transcript was not persisted");
+        }
+        return true;
+      });
+      if (!persisted) {
+        const actualEntry = loadSessionEntry(entryScope);
+        const cause = actualEntry
+          ? {
+              actualSessionId: actualEntry.sessionId,
+              code: "session-rebound" as const,
+              expectedSessionId: previousSessionId,
+              sessionKey: persistenceTarget.sessionKey,
+            }
+          : {
+              code: "session-entry-missing" as const,
+              expectedSessionId: previousSessionId,
+              sessionKey: persistenceTarget.sessionKey,
+            };
+        throw new Error(`Branched session was not persisted: ${cause.code}`, { cause });
+      }
+    } catch (error) {
+      this.setSessionTarget(persistenceTarget);
+      throw error;
+    }
+    this.persistenceTarget = nextTarget;
+    this.persistenceHeaderPending = false;
+    return newSessionId;
   }
 }
-import { join } from "node:path";

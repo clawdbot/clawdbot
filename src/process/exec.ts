@@ -1,3 +1,4 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 // Exec helpers run subprocesses with normalized output, timeout, and abort handling.
 import { danger, shouldLogVerbose } from "../globals.js";
 import {
@@ -5,7 +6,6 @@ import {
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
 import { logDebug, logError } from "../logger.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { releaseChildProcessOutputAfterExit } from "./child-process.js";
 import { resolveMaxOutputBytes, type CommandOutputStream } from "./exec-output.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
@@ -26,6 +26,7 @@ export type RunExecOptions = {
   baseEnv?: NodeJS.ProcessEnv;
   env?: NodeJS.ProcessEnv;
   input?: string | Uint8Array;
+  stdinFileDescriptor?: number;
   signal?: AbortSignal;
 };
 
@@ -46,6 +47,9 @@ export async function runExec(
       ? DEFAULT_EXEC_MAX_BUFFER_BYTES
       : (opts.maxBuffer ?? DEFAULT_EXEC_MAX_BUFFER_BYTES);
   const resolvedOptions = typeof opts === "number" ? undefined : opts;
+  if (resolvedOptions?.input !== undefined && resolvedOptions.stdinFileDescriptor !== undefined) {
+    throw new Error("runExec accepts either input or stdinFileDescriptor, not both");
+  }
   try {
     const subprocess = spawnCommand([command, ...args], {
       baseEnv: resolvedOptions?.baseEnv,
@@ -57,11 +61,16 @@ export async function runExec(
       ...(resolvedOptions?.input !== undefined ? { input: resolvedOptions.input } : {}),
       maxBuffer,
       reject: true,
-      stdin: resolvedOptions?.input === undefined ? "ignore" : undefined,
+      ...(resolvedOptions?.stdinFileDescriptor === undefined
+        ? { stdin: resolvedOptions?.input === undefined ? "ignore" : undefined }
+        : {
+            // Execa forwards arbitrary numeric stdin descriptors to Node, but its type narrows them to fd 0.
+            stdin: resolvedOptions.stdinFileDescriptor as 0,
+          }),
       stripFinalNewline: false,
       timeout,
     });
-    const releaseOutput = releaseChildProcessOutputAfterExit(subprocess);
+    const releaseOutput = releaseChildProcessOutputAfterExit(subprocess.nodeChildProcess);
     const { stdout, stderr } = await subprocess.finally(releaseOutput);
     const windowsEncoding = resolveWindowsConsoleEncoding();
     const decodedStdout = decodeWindowsOutputBuffer({

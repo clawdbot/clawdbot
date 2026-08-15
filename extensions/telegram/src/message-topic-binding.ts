@@ -7,11 +7,12 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { resolveDefaultTelegramAccountId } from "./accounts.js";
+import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
 import {
   createTelegramMessageCache,
   hasProviderObservedTelegramThreadBinding,
-  resolveTelegramMessageCacheScope,
 } from "./message-cache.js";
 import { parseTelegramTarget } from "./targets.js";
 
@@ -112,7 +113,14 @@ export async function resolveTelegramMessageMutationChatId(params: {
   }
 
   const cache = createTelegramMessageCache({
-    scope: resolveTelegramMessageCacheScope(resolveStorePath(params.cfg.session?.store)),
+    scope: resolveTelegramMessageCacheScope(
+      resolveStorePath(params.cfg.session?.store, {
+        agentId: resolveTelegramAccountOwnerAgentId({
+          cfg: params.cfg,
+          accountId: selectedAccountId,
+        }),
+      }),
+    ),
   });
   const cached = await cache.get({
     accountId: selectedAccountId,

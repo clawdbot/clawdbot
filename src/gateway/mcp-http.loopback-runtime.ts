@@ -1,4 +1,5 @@
 // Process-local MCP loopback runtime state for owner/non-owner HTTP access.
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 type McpLoopbackRuntime = {
   port: number;
   ownerToken: string;
@@ -55,7 +56,14 @@ type McpLoopbackToolCallCaptureHandle = {
 
 let activeRuntime: McpLoopbackRuntime | undefined;
 let nextToolCallCaptureGeneration = 0;
-const toolCallCaptures = new Map<string, McpLoopbackToolCallCapture>();
+const toolCallCaptures = resolveGlobalMap<string, McpLoopbackToolCallCapture>(
+  Symbol.for("openclaw.mcpLoopbackToolCallCaptures"),
+  (captures) => {
+    for (const key of captures.keys()) {
+      deleteMcpLoopbackToolCallCapture(key);
+    }
+  },
+);
 
 function deleteMcpLoopbackToolCallCapture(captureKey: string): void {
   const capture = toolCallCaptures.get(captureKey);

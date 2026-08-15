@@ -49,7 +49,7 @@ else
   echo "Proving manifest ids and known dependency-only plugins remain stageable..."
   docker_build_run docker-selected-plugins-dependency-only \
     --target workspace-deps \
-    --build-arg OPENCLAW_EXTENSIONS=whatsapp,qqbot,kimi \
+    --build-arg OPENCLAW_EXTENSIONS=whatsapp,kimi \
     -t "$DEPENDENCY_ONLY_IMAGE" \
     -f "$ROOT_DIR/Dockerfile" \
     "$ROOT_DIR"
@@ -57,7 +57,7 @@ else
   docker_e2e_docker_run_cmd run --rm \
     --entrypoint sh \
     "$DEPENDENCY_ONLY_IMAGE" \
-    -c 'test -f /out/extensions/whatsapp/package.json && test -f /out/extensions/qqbot/package.json && test -f /out/extensions/kimi-coding/package.json && grep -qx kimi-coding /out/openclaw-selected-plugin-dirs'
+    -c 'test -f /out/extensions/whatsapp/package.json && test -f /out/extensions/kimi-coding/package.json && grep -qx kimi-coding /out/openclaw-selected-plugin-dirs'
 
   echo "Building selected-plugin runtime image: $IMAGE_NAME"
   docker_build_run docker-selected-plugins-build \

@@ -1,37 +1,61 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { readSessionCustomGroupNames, reorderSessionCustomGroups } from "./custom-groups.ts";
+import {
+  mergeSessionGroupDefaults,
+  readSessionCustomGroups,
+  readSidebarSectionOrder,
+} from "./custom-groups.ts";
 
-describe("readSessionCustomGroupNames", () => {
+describe("session group catalog readers", () => {
   it("normalizes valid names and ignores malformed entries", () => {
     expect(
-      readSessionCustomGroupNames({
+      readSessionCustomGroups({
         groups: [{ name: " Alpha " }, { name: "" }, { name: 42 }, null],
       }),
-    ).toEqual(["Alpha"]);
-    expect(readSessionCustomGroupNames(null)).toEqual([]);
+    ).toEqual([{ name: "Alpha", position: 0 }]);
+    expect(readSessionCustomGroups(null)).toEqual([]);
   });
-});
 
-describe("reorderSessionCustomGroups", () => {
-  it("moves a group before the drop target and keeps the rest stable", () => {
-    expect(reorderSessionCustomGroups(["Alpha", "Beta", "Gamma"], "Gamma", "Alpha")).toEqual([
-      "Gamma",
-      "Alpha",
-      "Beta",
-    ]);
-    expect(reorderSessionCustomGroups(["Alpha", "Beta", "Gamma"], "Alpha", "Gamma")).toEqual([
-      "Beta",
-      "Alpha",
-      "Gamma",
+  it("keeps the catalog path-free and merges validated New Session defaults", () => {
+    const groups = readSessionCustomGroups({
+      groups: [
+        { name: " Client ", position: 4, cwd: " /leaked/client ", worktree: false },
+        { name: "Local", position: "bad", cwd: "/leaked/local", worktree: true },
+      ],
+    });
+    expect(groups).toEqual([
+      { name: "Client", position: 4 },
+      { name: "Local", position: 1 },
     ]);
     expect(
-      reorderSessionCustomGroups(["Alpha", "Beta", "Gamma"], "Alpha", "Gamma", "after"),
-    ).toEqual(["Beta", "Gamma", "Alpha"]);
+      mergeSessionGroupDefaults(groups, {
+        defaults: [
+          { name: " Client ", cwd: " /repos/client ", worktree: true },
+          { name: "Local", cwd: 42, worktree: false },
+          { name: "Missing", cwd: "/repos/missing", worktree: true },
+          null,
+        ],
+      }),
+    ).toEqual([
+      { name: "Client", position: 4, cwd: "/repos/client", worktree: true },
+      { name: "Local", position: 1, worktree: false },
+    ]);
   });
 
-  it("dedupes and drops blank names before reordering", () => {
-    expect(reorderSessionCustomGroups(["A", " A ", "", "B"], "B", "A")).toEqual(["B", "A"]);
-    expect(reorderSessionCustomGroups(["A", "B"], "missing", "A")).toEqual(["A", "B"]);
+  it("reads normalized section order", () => {
+    expect(
+      readSidebarSectionOrder({
+        sectionOrder: [
+          " work ",
+          "",
+          42,
+          "work",
+          "category: Alpha ",
+          " catalog: codex ",
+          "catalog:",
+        ],
+      }),
+    ).toEqual(["work", "category:Alpha", "catalog:codex"]);
+    expect(readSidebarSectionOrder({})).toEqual([]);
   });
 });

@@ -234,14 +234,24 @@ only for behavior that really belongs to the backend.
 | `defaultAuthProfileId`             | Prefer a specific OpenClaw auth profile                                     |
 | `authEpochMode`                    | Decide how auth changes invalidate stored CLI sessions                      |
 | `nativeToolMode`                   | Declare whether native tools are absent, always on, or host-selectable      |
+| `toolAvailabilityEnforcement`      | Declare whether exact tool caps are enforced in argv or execution staging   |
 | `sideQuestionToolMode`             | Declare disabled native tools for `/btw` side questions                     |
 | `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge                                |
-| `ownsNativeCompaction`             | Backend owns its own compaction - OpenClaw defers                           |
+| `ownsNativeCompaction`             | Backend owns its own automatic compaction - OpenClaw defers                 |
+| `manualCompaction`                 | Atomic command, transport, and positive-acknowledgement contract            |
 | `subscriptionAuthDispatch`         | Opted-in embedded runs on subscription credentials execute via this backend |
 | `runtimeArtifact`                  | Bound a script launcher to its complete bundled package tree                |
+| `liveSessionRequirement`           | Require an init capability before trusting long-lived session output        |
 
 Keep these hooks provider-owned. Do not add CLI-specific branches to core when
 a backend hook can express the behavior.
+
+`liveSessionRequirement` declares one exact capability that the CLI must
+advertise in its initialization record before OpenClaw trusts streamed output.
+It also supplies the first known compatible version, version-probe arguments,
+and update command used by setup and Doctor. Runtime support remains
+capability-based, so a compatible backport or wrapper is not rejected only
+because of its version string.
 
 `prepareExecution(ctx)` receives `ctx.contextTokenBudget`, the effective token
 limit selected for the run. Backends that own native compaction can map that
@@ -271,34 +281,66 @@ side-question argv reliably disables those tools, also set
 `sideQuestionToolMode: "disabled"`; otherwise OpenClaw fails closed when BTW
 requires a no-tools CLI run.
 
-Set `nativeToolMode: "selectable"` only when `resolveExecutionArgs` can disable
-every backend-native tool for an individual run. For those restricted runs,
-`ctx.toolAvailability.native` is the exact backend-native tool list and
-`ctx.toolAvailability.mcp` is the exact host-isolated MCP allowlist. The hook
-must replace conflicting tool flags, disable backend customization surfaces
-that can execute outside those tools, and return argv that enforces both
-values. OpenClaw calls it once with the final fresh or resume argv and fails
-closed when the backend cannot enforce the restriction. MCP names in this
-context are safe to auto-approve only because the host has already limited the
-generated MCP configuration to those servers and tools.
+Set `nativeToolMode: "selectable"` only when the backend can disable every
+backend-native tool for an individual run. Restricted runs receive a canonical
+contract: `ctx.toolAvailability.native` is the exact backend-native list and
+`ctx.toolAvailability.openClaw` is the exact list of OpenClaw tool names. The
+host independently limits the generated MCP configuration and grant to that
+OpenClaw list; plugins must not translate it in core or add transport prefixes.
 
-To support OpenClaw runtime caps such as cron `toolsAllow`, also implement
-`resolveRuntimeToolAvailability(ctx)`. OpenClaw passes a normalized,
-group-expanded allowlist and always disables backend-native tools. Return only
-host-isolated MCP names selected from that allowlist. Returning `null` or
-`undefined` keeps the generic runner fail-closed. A backend may omit an allowed
-tool it cannot represent, but must never add authority absent from the
-allowlist. Before minting a grant, the host rejects any returned entry that is
-not the exact `mcp__openclaw__<tool>` name for one of the allowed tools.
+Declare how the backend enforces that contract:
+
+- `toolAvailabilityEnforcement: "execution-args"` requires
+  `resolveExecutionArgs`. The hook must replace conflicting tool flags, disable
+  customization surfaces that can execute outside the selected tools, and
+  return enforcing argv for both fresh and resumed runs.
+- `toolAvailabilityEnforcement: "prepare-execution"` requires
+  `prepareExecution`. The hook must stage an exact per-run policy and return
+  `toolAvailabilityEnforced: true`; missing acknowledgement fails closed and
+  OpenClaw cleans up the staged resources before launch.
+
+Runtime caps such as cron `toolsAllow` are normalized and group-expanded by
+OpenClaw before this contract is built. Native tools are disabled, and a
+backend without a complete declared enforcement path fails before execution.
+
+Plugins built against `v2026.7.2-beta.1` through `v2026.7.2-beta.3` may still
+read the deprecated `ctx.toolAvailability.mcp` transport-name projection and
+may omit `toolAvailabilityEnforcement` when a selectable backend implements
+`resolveExecutionArgs`. OpenClaw recognizes that shipped beta path from the
+plugin package's required `openclaw.build.openclawVersion` metadata and
+preserves it through the `2026.8.x` line. New and updated plugins should use canonical
+`ctx.toolAvailability.openClaw` names and declare
+`toolAvailabilityEnforcement: "execution-args"` explicitly; the beta
+compatibility path is scheduled for removal after that window.
+
+### `parseJsonlEvent`: provider-specific JSONL streams
+
+Set `parseJsonlEvent` when a backend emits line-delimited JSON that does not
+match the built-in Claude, Codex, or Gemini dialects. The hook receives one raw
+line plus the resolved backend id and config, and returns one normalized event,
+multiple events, or `null` to let the built-in parser try the line.
+
+Supported events are incremental assistant text, incremental thinking, native
+tool start/result display, session ids, and terminal results. Terminal results
+may include final text, usage, an error, and a successor session id. Session ids
+reported by either event shape participate in resumed-session and fork
+persistence.
+
+Tool events describe work the backend already performed. OpenClaw renders and
+summarizes them, but does not treat them as host tool execution, trusted
+diagnostics, loopback correlation, or message-delivery evidence.
 
 ### `ownsNativeCompaction`: opting out of OpenClaw compaction
 
 If your backend runs an agent that compacts its **own** transcript, set
 `ownsNativeCompaction: true` so OpenClaw's safeguard summarizer never runs
-against its sessions - the CLI compaction lifecycle returns a no-op and the
+against its sessions - automatic CLI compaction defers to the backend and the
 turn proceeds. `claude-cli` declares it because Claude Code compacts
-internally with no harness endpoint. Native-harness sessions such as Codex
-keep routing to their harness compaction endpoint instead.
+internally with no harness endpoint. It also declares
+`manualCompaction`, so an explicit OpenClaw `/compact` resumes the
+bound Claude Code session and invokes its native `/compact` command without
+recording a conversation turn. Native-harness sessions such as Codex keep
+routing to their harness compaction endpoint instead.
 
 **Only declare it when all of the following hold**, or a deferred
 over-budget session can stay over budget or go stale (OpenClaw no longer
@@ -310,6 +352,27 @@ rescues it):
   (for example `--resume` / `--session-id`);
 - it is not a native-harness compaction session - matching `agentHarnessId`
   sessions route to the harness endpoint instead.
+
+If the backend supports an in-place manual command, declare it alongside the
+ownership flag:
+
+```typescript
+manualCompaction: {
+  buildPrompt: (instructions) =>
+    instructions ? `/compact ${instructions}` : "/compact",
+  input: "arg",
+  validateOutput: (rawOutput) =>
+    rawOutput.includes('"type":"compaction_complete"')
+      ? { ok: true }
+      : { ok: false, reason: "CLI did not confirm compaction." },
+},
+```
+
+The builder receives optional `/compact` instructions. The validator receives
+the bounded raw process output and must require a backend-owned positive
+acknowledgement; a zero exit alone is not proof of compaction. Do not declare
+this capability for a command that creates a separate session or requires an
+ordinary model turn.
 
 ## MCP tool bridge
 

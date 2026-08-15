@@ -82,6 +82,97 @@ describe("install.sh", () => {
     }
   });
 
+  it("rejects malformed managed scripts without rendering their content", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-script-validation-"));
+    writeFileSync(join(tmp, "empty.sh"), "");
+    writeFileSync(join(tmp, "html.sh"), "<html><body>unexpected response</body></html>\n");
+    writeFileSync(join(tmp, "nul-prefix.sh"), Buffer.from("\0#!/bin/bash\necho unexpected\n"));
+    writeFileSync(join(tmp, "valid.sh"), "#!/bin/bash\necho valid\n");
+
+    try {
+      const result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "for fixture in empty.sh html.sh nul-prefix.sh; do",
+          '  if validate_downloaded_script "$FIXTURE_DIR/$fixture" "https://example.invalid/$fixture"; then',
+          '    printf "unexpectedly accepted: %s\\n" "$fixture"',
+          "    exit 91",
+          "  fi",
+          "done",
+          'validate_downloaded_script "$FIXTURE_DIR/valid.sh" "https://example.invalid/valid.sh"',
+        ].join("\n"),
+        { FIXTURE_DIR: tmp },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout + result.stderr).not.toContain("unexpected response");
+      expect(result.stdout + result.stderr).not.toContain("echo unexpected");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("does not execute a shebang-prefixed partial file after download failure", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-partial-download-"));
+    const marker = join(tmp, "executed");
+
+    try {
+      const result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          'download_file() { printf \'#!/bin/bash\\n: > "$EXECUTION_MARKER"\\n\' > "$2"; return 23; }',
+          "set +e",
+          'run_remote_bash "https://example.invalid/partial.sh"',
+          "status=$?",
+          "set -e",
+          'printf "status=%s\\n" "$status"',
+          '[[ "$status" -ne 0 ]]',
+        ].join("\n"),
+        { EXECUTION_MARKER: marker },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("status=1");
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("denies redirects for managed script downloads", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-managed-download-"));
+
+    try {
+      const result = runInstallShell(
+        `
+          set -euo pipefail
+          source "${SCRIPT_PATH}"
+          curl() { printf 'curl=%s\n' "$*"; }
+          wget() { printf 'wget=%s\n' "$*"; }
+          DOWNLOADER=curl
+          download_file "https://example.invalid/setup.sh" "$DOWNLOAD_DIR/curl-setup.sh" deny
+          DOWNLOADER=wget
+          download_file "https://example.invalid/setup.sh" "$DOWNLOAD_DIR/wget-setup.sh" deny
+          download_file() {
+            printf 'managed-mode=%s\n' "\${3:-}"
+            printf '#!/bin/bash\n' > "$2"
+          }
+          download_validated_script "https://example.invalid/setup.sh" "$DOWNLOAD_DIR/managed-setup.sh"
+        `,
+        { DOWNLOAD_DIR: tmp },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("curl=-fsSL --max-redirs 0");
+      expect(result.stdout).toContain("wget=-q --max-redirect=0");
+      expect(result.stdout).toContain("managed-mode=deny");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
   it("bounds stalled curl downloads and propagates timeout failures", () => {
     const result = runInstallShell(`
       set -euo pipefail
@@ -99,9 +190,67 @@ describe("install.sh", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("--speed-limit 1 --speed-time 30");
     expect(result.stdout).not.toContain("--connect-timeout");
+    expect(result.stdout).not.toContain("--max-redirs");
     expect(result.stdout).toContain("--retry 3 --retry-delay 1 --retry-connrefused");
     expect(result.stdout).toContain("status=28");
   });
+
+  it.each(["apt-get", "dnf", "yum"])(
+    "rejects an invalid NodeSource response before %s repository setup",
+    (packageManager) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-nodesource-validation-"));
+      const marker = join(tmp, "configured");
+
+      try {
+        const result = runInstallShell(
+          `
+            set -euo pipefail
+            source "${SCRIPT_PATH}"
+            OS=linux
+            PACKAGE_MANAGER="$PACKAGE_MANAGER_UNDER_TEST"
+            require_sudo() { :; }
+            install_build_tools_linux() { return 0; }
+            is_root() { return 0; }
+            command() {
+              if [[ "\${1:-}" == "-v" ]]; then
+                case "\${2:-}" in
+                  pacman|apk) return 1 ;;
+                  apt-get|dnf|yum) [[ "$PACKAGE_MANAGER" == "$2" ]]; return ;;
+                esac
+              fi
+              builtin command "$@"
+            }
+            download_file() {
+              printf '<html>unexpected response</html>\n' > "$2"
+            }
+            ui_info() { printf 'info:%s\n' "$*"; }
+            ui_success() { :; }
+            ui_error() { printf 'error:%s\n' "$*"; }
+            run_quiet_step() {
+              local title="$1"
+              shift
+              printf 'step:%s|%s\n' "$title" "$*"
+              if [[ "$title" == "Downloading NodeSource setup script" ]]; then
+                "$@"
+                return
+              fi
+              : > "$EXECUTION_MARKER"
+              return 0
+            }
+            install_node
+          `,
+          { EXECUTION_MARKER: marker, PACKAGE_MANAGER_UNDER_TEST: packageManager },
+        );
+
+        expect(result.status).toBe(1);
+        expect(result.stdout).toContain("step:Downloading NodeSource setup script");
+        expect(result.stdout).not.toContain("unexpected response");
+        expect(existsSync(marker)).toBe(false);
+      } finally {
+        rmSync(tmp, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("runs apt-get through noninteractive wrappers", () => {
     expect(script).toContain("apt_get()");
@@ -174,6 +323,9 @@ NODE
       ui_success() { :; }
       ui_error() { printf 'error:%s\\n' "$*"; }
       git() {
+        if [[ "$1" == "--git-dir=$repo/.git" && "$2" == "--work-tree=$repo" && "$3" == "rev-parse" && "$6" == "HEAD^{commit}" ]]; then
+          return 0
+        fi
         if [[ "$1" == "-C" && "$3" == "status" ]]; then
           return 0
         fi
@@ -193,6 +345,40 @@ NODE
     expect(result.stdout).toContain("/node-bin/node");
     expect(result.stdout).toContain("fake-node:");
     expect(result.stdout).toContain("/repo/dist/entry.js --version");
+  });
+
+  it("rejects a git checkout without a commit without modifying it", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      tmp="$(mktemp -d)"
+      parent="$tmp/parent"
+      repo="$parent/repo"
+      git -C "$tmp" init -q parent
+      git -C "$parent" config user.email test@example.invalid
+      git -C "$parent" config user.name test
+      touch "$parent/seed"
+      git -C "$parent" add seed
+      git -C "$parent" commit -qm seed
+      mkdir -p "$repo"
+      git -C "$repo" init -q
+      printf 'ref: refs/heads/main\\n' > "$repo/.git/HEAD"
+      mkdir -p "$repo/.git/refs/heads"
+      printf '1111111111111111111111111111111111111111\\n' > "$repo/.git/refs/heads/main"
+      printf 'keep\\n' > "$repo/local.txt"
+      ui_info() { :; }
+      ui_error() { :; }
+
+      set +e
+      validate_git_checkout_head "$repo"
+      status="$?"
+      set -e
+      [[ "$status" -eq 1 ]]
+      [[ -f "$repo/local.txt" ]]
+      [[ -d "$repo/.git" ]]
+    `);
+
+    expect(result.status).toBe(0);
   });
 
   it("accepts GNU and musl Linux shells in OS detection", () => {
@@ -220,6 +406,33 @@ NODE
     const nodeSourceIndex = script.indexOf('ui_info "Installing Node.js via NodeSource"');
     expect(apkIndex).toBeGreaterThan(-1);
     expect(nodeSourceIndex).toBeGreaterThan(apkIndex);
+  });
+
+  it("propagates package manager failure out of install_build_tools_linux", () => {
+    // PATH="" hides real package managers so only the stubbed function below is
+    // discoverable, keeping the selected branch identical on macOS and Linux.
+    for (const packageManager of ["apt-get", "dnf", "yum", "apk", "pacman"]) {
+      const result = runInstallShell(`
+        set -uo pipefail
+        source "${SCRIPT_PATH}"
+        PATH=""
+        require_sudo() { :; }
+        is_root() { return 0; }
+        is_arch_linux() { [[ "${packageManager}" == "pacman" ]]; }
+        is_alpine_linux() { [[ "${packageManager}" == "apk" ]]; }
+        ui_warn() { printf 'warn:%s\\n' "$*"; }
+        ${packageManager}() { :; }
+        run_quiet_step() { return 1; }
+        if install_build_tools_linux; then
+          printf 'result:success\\n'
+        else
+          printf 'result:failure\\n'
+        fi
+      `);
+
+      expect(result.stdout, packageManager).toContain("result:failure");
+      expect(result.stdout, packageManager).not.toContain("result:success");
+    }
   });
 
   it("uses the apk Node.js installer path on Alpine", () => {
@@ -259,6 +472,7 @@ NODE
       is_alpine_linux() { return 1; }
       pacman() { printf 'pacman:%s\\n' "$*"; }
       apt-get() { :; }
+      download_validated_script() { :; }
       ui_info() { printf 'info:%s\\n' "$*"; }
       ui_success() { :; }
       run_required_step() { printf 'step:%s|%s\\n' "$1" "\${*:2}"; }
@@ -383,7 +597,7 @@ NODE
       "error:Alpine apk repositories did not provide Node.js with WAL-reset-safe SQLite",
     );
     expect(result.stdout).toContain(
-      "Use an official node:24-alpine container or a glibc-based host",
+      "Use an official node:26-alpine container or a glibc-based host",
     );
   });
 
@@ -397,7 +611,7 @@ NODE
       is_root() { return 0; }
       is_alpine_linux() { return 1; }
       apt-get() { :; }
-      download_file() { :; }
+      download_validated_script() { return 0; }
       ui_info() { printf 'info:%s\\n' "$*"; }
       ui_success() { printf 'success:%s\\n' "$*"; }
       ui_error() { printf 'error:%s\\n' "$*"; }
@@ -436,7 +650,7 @@ NODE
       is_root() { return 0; }
       is_alpine_linux() { return 1; }
       apt-get() { :; }
-      download_file() { :; }
+      download_validated_script() { return 0; }
       ui_info() { printf 'info:%s\\n' "$*"; }
       ui_success() { printf 'success:%s\\n' "$*"; }
       ui_error() { printf 'error:%s\\n' "$*"; }
@@ -803,12 +1017,45 @@ NODE
     const output = result?.stdout ?? "";
     expect(output).toContain(`git=${join(openclawHome, "openclaw")}`);
     const mkdirParentIndex = script.indexOf('mkdir -p "$(dirname "$repo_dir")"');
-    const cloneIndex = script.indexOf(
-      'run_quiet_step "Cloning OpenClaw" git clone "$repo_url" "$repo_dir"',
-    );
+    // Ordering only. The clone flags are asserted behaviorally below, so this
+    // needle stays short enough to survive future changes to them.
+    const cloneIndex = script.indexOf('run_quiet_step "Cloning OpenClaw" git clone');
     expect(mkdirParentIndex).toBeGreaterThan(-1);
     expect(cloneIndex).toBeGreaterThan(-1);
     expect(mkdirParentIndex).toBeLessThan(cloneIndex);
+  });
+
+  it("uses a blobless partial clone for new git installs", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      repo="$HOME/openclaw"
+      check_git() { return 0; }
+      ensure_pnpm() { :; }
+      ensure_pnpm_binary_for_scripts() { :; }
+      resolve_git_openclaw_ref() { printf 'main\\n'; }
+      checkout_git_openclaw_ref() { :; }
+      cleanup_legacy_submodules() { :; }
+      activate_repo_pnpm_version() { :; }
+      git_install_lockfile_flag() { printf '%s\\n' '--frozen-lockfile'; }
+      run_quiet_step() {
+        printf 'step:%s|%s\\n' "$1" "\${*:2}"
+        [[ "$1" == "Cloning OpenClaw" ]] && mkdir -p "$repo"
+        return 0
+      }
+      ensure_user_local_bin_on_path() { mkdir -p "$HOME/.local/bin"; }
+      ui_info() { :; }
+      ui_success() { :; }
+      ui_error() { printf 'error:%s\\n' "$*"; }
+      git() { return 0; }
+
+      install_openclaw_from_git "$repo"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "step:Cloning OpenClaw|git clone --filter=blob:none https://github.com/openclaw/openclaw.git",
+    );
   });
 
   it("does not treat OS HOME config as active when OPENCLAW_HOME is set", () => {
@@ -1938,15 +2185,13 @@ describe("install.sh macOS Homebrew Node behavior", () => {
 
   it("stops when Homebrew node installation fails", () => {
     expect(script).toContain(
-      'if ! run_quiet_step "Installing node@${NODE_DEFAULT_MAJOR}" brew install "node@${NODE_DEFAULT_MAJOR}"; then',
+      'if ! run_quiet_step "Installing ${NODE_BREW_FORMULA}" brew install "${NODE_BREW_FORMULA}"; then',
     );
 
     const failedInstallIndex = script.indexOf(
-      'if ! run_quiet_step "Installing node@${NODE_DEFAULT_MAJOR}" brew install "node@${NODE_DEFAULT_MAJOR}"; then',
+      'if ! run_quiet_step "Installing ${NODE_BREW_FORMULA}" brew install "${NODE_BREW_FORMULA}"; then',
     );
-    const brewLinkIndex = script.indexOf(
-      'brew link "node@${NODE_DEFAULT_MAJOR}" --overwrite --force',
-    );
+    const brewLinkIndex = script.indexOf('brew link "${NODE_BREW_FORMULA}" --overwrite --force');
     expect(failedInstallIndex).toBeGreaterThanOrEqual(0);
     expect(brewLinkIndex).toBeGreaterThan(failedInstallIndex);
   });
@@ -1968,7 +2213,7 @@ describe("install.sh macOS Homebrew Node behavior", () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain(
-      "Re-run with --verbose or run 'brew install node@24' directly, then rerun the installer.",
+      "Re-run with --verbose or run 'brew install node' directly, then rerun the installer.",
     );
     expect(result.stdout).not.toContain("brew:link");
     expect(result.stdout).not.toContain("ensure-called");
@@ -1981,9 +2226,7 @@ describe("install.sh macOS Homebrew Node behavior", () => {
     const pathAdviceIndex = script.indexOf("Add this to your shell profile and restart shell:");
 
     expect(missingNodeGuardIndex).toBeGreaterThanOrEqual(0);
-    expect(script).toContain(
-      'ui_error "Homebrew node@${NODE_DEFAULT_MAJOR} is not installed on disk"',
-    );
+    expect(script).toContain('ui_error "Homebrew ${NODE_BREW_FORMULA} is not installed on disk"');
     expect(script).toContain('echo "  export PATH=\\"${brew_node_prefix}/bin:\\$PATH\\""');
     expect(pathAdviceIndex).toBeGreaterThan(missingNodeGuardIndex);
   });
@@ -1993,7 +2236,7 @@ describe("install.sh macOS Homebrew Node behavior", () => {
       set -euo pipefail
       source "${SCRIPT_PATH}"
       OS=macos
-      missing_prefix="$(mktemp -d)/node@24"
+      missing_prefix="$(mktemp -d)/node"
       brew() {
         if [[ "$1" == "--prefix" ]]; then
           echo "$missing_prefix"
@@ -2010,9 +2253,9 @@ describe("install.sh macOS Homebrew Node behavior", () => {
     `);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Homebrew node@24 is not installed on disk");
+    expect(result.stdout).toContain("Homebrew node is not installed on disk");
     expect(result.stdout).toContain("ensure returned failure");
-    expect(result.stdout).not.toContain("Node.js v24 was installed");
+    expect(result.stdout).not.toContain("Node.js v26 was installed");
     expect(result.stdout).not.toContain("Add this to your shell profile");
   });
 

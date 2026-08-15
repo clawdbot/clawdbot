@@ -3,12 +3,13 @@ import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { collectIncludePathsRecursive } from "./includes-scan.js";
 import {
   CircularIncludeError,
   ConfigIncludeError,
   MAX_INCLUDE_DEPTH,
+  type ConfigIncludeResolutionEvent,
   type IncludeResolver,
   resolveConfigIncludeWritePath,
   resolveConfigIncludes,
@@ -170,6 +171,95 @@ describe("resolveConfigIncludes", () => {
     expect(resolve(obj, files)).toEqual({
       nested: { deep: "value" },
     });
+  });
+
+  it("reports exact include ownership through arrays, nesting, and sibling overrides", () => {
+    const files = {
+      [configPath("first.json")]: { id: "first" },
+      [configPath("second.json")]: { enabled: true },
+      [configPath("third.json")]: { mode: "strict" },
+    };
+    const events: ConfigIncludeResolutionEvent[] = [];
+    const resolver = createMockResolver(files);
+    resolver.onIncludeResolved = (event) => events.push(event);
+
+    expect(
+      resolveConfigIncludes(
+        {
+          plugins: [
+            { $include: "./first.json" },
+            {
+              policy: {
+                $include: ["./second.json", "./third.json"],
+                enabled: false,
+              },
+            },
+          ],
+        },
+        DEFAULT_BASE_PATH,
+        resolver,
+      ),
+    ).toEqual({
+      plugins: [{ id: "first" }, { policy: { enabled: false, mode: "strict" } }],
+    });
+    expect(events).toEqual([
+      {
+        path: ["plugins", "0"],
+        value: { id: "first" },
+        kind: "single",
+        hasSiblingOverrides: false,
+        targetPath: configPath("first.json"),
+      },
+      {
+        path: ["plugins", "1", "policy"],
+        value: { enabled: true, mode: "strict" },
+        kind: "multiple",
+        hasSiblingOverrides: true,
+        targetPaths: [configPath("second.json"), configPath("third.json")],
+      },
+    ]);
+  });
+
+  it("reports the enclosing include after nested delegates at the same logical path", () => {
+    const files = {
+      [configPath("delegating.json")]: { $include: "./nested.json" },
+      [configPath("nested.json")]: { mode: "nested" },
+      [configPath("override.json")]: { mode: "override" },
+    };
+    const events: ConfigIncludeResolutionEvent[] = [];
+    const resolver = createMockResolver(files);
+    resolver.onIncludeResolved = (event) => events.push(event);
+
+    expect(
+      resolveConfigIncludes(
+        {
+          agents: { $include: ["./delegating.json", "./override.json"] },
+        },
+        DEFAULT_BASE_PATH,
+        resolver,
+      ),
+    ).toEqual({ agents: { mode: "override" } });
+    expect(
+      events.map(({ path: logicalPath, kind, targetPath, targetPaths }) => ({
+        path: logicalPath,
+        kind,
+        targetPath,
+        targetPaths,
+      })),
+    ).toEqual([
+      {
+        path: ["agents"],
+        kind: "single",
+        targetPath: configPath("nested.json"),
+        targetPaths: undefined,
+      },
+      {
+        path: ["agents"],
+        kind: "multiple",
+        targetPath: undefined,
+        targetPaths: [configPath("delegating.json"), configPath("override.json")],
+      },
+    ]);
   });
 
   it.each([
@@ -342,7 +432,7 @@ describe("collectIncludePathsRecursive", () => {
   it.runIf(process.platform !== "win32")(
     "only reports includes the production resolver can safely open",
     async () => {
-      await withTempDir({ prefix: "openclaw-include-scan-" }, async (tempRoot) => {
+      await withTestDir({ prefix: "openclaw-include-scan-" }, async (tempRoot) => {
         const configDir = path.join(tempRoot, "config");
         const safeIncludePath = path.join(configDir, "safe.json5");
         const outsideIncludePath = path.join(tempRoot, "outside.json5");
@@ -367,7 +457,7 @@ describe("collectIncludePathsRecursive", () => {
   it.runIf(process.platform !== "win32")(
     "keeps the original root boundary after a parent symlink swap",
     async () => {
-      await withTempDir({ prefix: "openclaw-include-root-swap-" }, async (tempRoot) => {
+      await withTestDir({ prefix: "openclaw-include-root-swap-" }, async (tempRoot) => {
         const trustedDir = path.join(tempRoot, "trusted");
         const outsideDir = path.join(tempRoot, "outside");
         const configLink = path.join(tempRoot, "config-link");
@@ -408,7 +498,7 @@ describe("collectIncludePathsRecursive", () => {
   );
 
   it("honors explicitly allowed include roots", async () => {
-    await withTempDir({ prefix: "openclaw-include-scan-roots-" }, async (tempRoot) => {
+    await withTestDir({ prefix: "openclaw-include-scan-roots-" }, async (tempRoot) => {
       const configDir = path.join(tempRoot, "config");
       const sharedDir = path.join(tempRoot, "shared");
       const sharedIncludePath = path.join(sharedDir, "shared.json5");
@@ -427,7 +517,7 @@ describe("collectIncludePathsRecursive", () => {
   });
 
   it("continues past rejected nested includes to later safe siblings", async () => {
-    await withTempDir({ prefix: "openclaw-include-scan-nested-" }, async (tempRoot) => {
+    await withTestDir({ prefix: "openclaw-include-scan-nested-" }, async (tempRoot) => {
       const configDir = path.join(tempRoot, "config");
       const nestedDir = path.join(configDir, "nested");
       const outerIncludePath = path.join(nestedDir, "outer.json5");
@@ -455,7 +545,7 @@ describe("collectIncludePathsRecursive", () => {
   });
 
   it("revisits an include reached later at a shallower depth", async () => {
-    await withTempDir({ prefix: "openclaw-include-scan-depth-" }, async (tempRoot) => {
+    await withTestDir({ prefix: "openclaw-include-scan-depth-" }, async (tempRoot) => {
       const configDir = path.join(tempRoot, "config");
       const sharedIncludePath = path.join(configDir, "shared.json5");
       const leafIncludePath = path.join(configDir, "leaf.json5");
@@ -486,7 +576,7 @@ describe("resolveConfigIncludeWritePath", () => {
   it.runIf(process.platform !== "win32")(
     "canonicalizes missing targets through symlinks into allowed roots",
     async () => {
-      await withTempDir({ prefix: "openclaw-include-write-path-" }, async (tempRoot) => {
+      await withTestDir({ prefix: "openclaw-include-write-path-" }, async (tempRoot) => {
         const configDir = path.join(tempRoot, "config");
         const allowedDir = path.join(tempRoot, "allowed");
         const linkDir = path.join(configDir, "shared");
@@ -779,7 +869,7 @@ describe("security: path traversal protection (CWE-22)", () => {
     });
 
     it("allows include files when the config root path is a symlink", async () => {
-      await withTempDir({ prefix: "openclaw-includes-symlink-" }, async (tempRoot) => {
+      await withTestDir({ prefix: "openclaw-includes-symlink-" }, async (tempRoot) => {
         const realRoot = path.join(tempRoot, "real");
         const linkRoot = path.join(tempRoot, "link");
         await fs.mkdir(path.join(realRoot, "includes"), { recursive: true });
@@ -829,7 +919,7 @@ describe("security: path traversal protection (CWE-22)", () => {
       if (process.platform === "win32") {
         return;
       }
-      await withTempDir({ prefix: "openclaw-includes-hardlink-" }, async (tempRoot) => {
+      await withTestDir({ prefix: "openclaw-includes-hardlink-" }, async (tempRoot) => {
         const configDir = path.join(tempRoot, "config");
         const outsideDir = path.join(tempRoot, "outside");
         await fs.mkdir(configDir, { recursive: true });
@@ -856,7 +946,7 @@ describe("security: path traversal protection (CWE-22)", () => {
     });
 
     it("rejects include files larger than the guarded read limit", async () => {
-      await withTempDir({ prefix: "openclaw-includes-big-" }, async (tempRoot) => {
+      await withTestDir({ prefix: "openclaw-includes-big-" }, async (tempRoot) => {
         const configDir = path.join(tempRoot, "config");
         await fs.mkdir(configDir, { recursive: true });
         await fs.writeFile(
@@ -923,7 +1013,7 @@ describe("OPENCLAW_INCLUDE_ROOTS allowlist", () => {
   });
 
   it("resolves a symlinked include whose realpath lands inside an allowed root", async () => {
-    await withTempDir({ prefix: "openclaw-includes-allowed-symlink-" }, async (tempRoot) => {
+    await withTestDir({ prefix: "openclaw-includes-allowed-symlink-" }, async (tempRoot) => {
       const configDir = path.join(tempRoot, "config");
       const sharedDir = path.join(tempRoot, "shared");
       await fs.mkdir(configDir, { recursive: true });
@@ -948,7 +1038,7 @@ describe("OPENCLAW_INCLUDE_ROOTS allowlist", () => {
   });
 
   it("rejects a symlinked include that escapes both the config directory and every allowed root", async () => {
-    await withTempDir({ prefix: "openclaw-includes-allowed-escape-" }, async (tempRoot) => {
+    await withTestDir({ prefix: "openclaw-includes-allowed-escape-" }, async (tempRoot) => {
       const configDir = path.join(tempRoot, "config");
       const allowedDir = path.join(tempRoot, "allowed");
       const offRootDir = path.join(tempRoot, "off-limits");

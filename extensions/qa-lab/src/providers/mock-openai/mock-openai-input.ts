@@ -24,6 +24,21 @@ export function extractLastUserText(input: ResponsesInputItem[]) {
   return "";
 }
 
+export function extractLastMatchingUserTurn(input: ResponsesInputItem[], pattern: RegExp) {
+  const matcher = new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ""));
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    const item = input[index];
+    if (item?.role !== "user" || !Array.isArray(item.content)) {
+      continue;
+    }
+    const text = extractInputText(item.content);
+    if (text && !isInternalRuntimeContextCarrierText(text) && matcher.test(text)) {
+      return { index, text };
+    }
+  }
+  return null;
+}
+
 function findLastUserIndex(input: ResponsesInputItem[]) {
   return input.findLastIndex(
     (item) =>
@@ -41,7 +56,7 @@ function isInternalRuntimeContextCarrierText(text: string) {
   );
 }
 
-function isToolOutputContinuationText(text: string) {
+function isContinuationUserText(text: string) {
   const trimmed = text.trim();
   if (!trimmed) {
     return false;
@@ -100,123 +115,70 @@ function stringifyFunctionCallOutput(output: unknown): string {
   return "";
 }
 
+function isResponsesToolCallOutput(item: ResponsesInputItem) {
+  return item.type === "function_call_output" || item.type === "custom_tool_call_output";
+}
+
 function extractFunctionCallOutputText(item: ResponsesInputItem) {
-  if (item.type !== "function_call_output") {
+  if (!isResponsesToolCallOutput(item)) {
     return "";
   }
   return stringifyFunctionCallOutput(item.output);
 }
 
-function extractFunctionCallOutputCallId(item: ResponsesInputItem) {
-  if (item.type !== "function_call_output") {
-    return "";
+function findCurrentToolOutput(input: ResponsesInputItem[]): ResponsesInputItem | undefined {
+  const lastUserIndex = findLastUserIndex(input);
+  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
+    if (isResponsesToolCallOutput(item)) {
+      return item;
+    }
   }
-  const record = item as {
-    call_id?: unknown;
-    tool_call_id?: unknown;
-    tool_use_id?: unknown;
-  };
+  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
+    if (!isResponsesToolCallOutput(candidateItem)) {
+      continue;
+    }
+    const laterUserTexts = input
+      .slice(candidateIndex + 1)
+      .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
+      .map((laterItem) => extractInputText(laterItem.content as unknown[]))
+      .filter(Boolean);
+    if (laterUserTexts.length > 0 && laterUserTexts.every(isContinuationUserText)) {
+      return candidateItem;
+    }
+  }
+  return undefined;
+}
+
+export function hasToolOutput(input: ResponsesInputItem[]) {
+  return findCurrentToolOutput(input) !== undefined;
+}
+
+export function extractToolOutput(input: ResponsesInputItem[]) {
+  const item = findCurrentToolOutput(input);
+  return item ? stringifyFunctionCallOutput(item.output) : "";
+}
+
+export const extractToolOutputValue = (input: ResponsesInputItem[]) =>
+  findCurrentToolOutput(input)?.output;
+
+export function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
+  const item = findCurrentToolOutput(input);
+  return item?.is_error === true || item?.isError === true;
+}
+
+export function extractToolOutputCallId(input: ResponsesInputItem[]) {
+  const item = findCurrentToolOutput(input);
   return (
-    [record.call_id, record.tool_call_id, record.tool_use_id].find(
+    [item?.call_id, item?.tool_call_id, item?.tool_use_id].find(
       (value): value is string => typeof value === "string" && value.trim().length > 0,
     ) ?? ""
   );
 }
 
-function functionCallOutputIsStructuredError(item: ResponsesInputItem) {
-  if (item.type !== "function_call_output") {
-    return false;
-  }
-  return item.is_error === true || item.isError === true;
-}
-
-export function extractToolOutput(input: ResponsesInputItem[]) {
-  const lastUserIndex = findLastUserIndex(input);
-  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
-    const output = extractFunctionCallOutputText(item);
-    if (output) {
-      return output;
-    }
-  }
-  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
-    const output = extractFunctionCallOutputText(candidateItem);
-    if (output) {
-      const laterUserTexts = input
-        .slice(candidateIndex + 1)
-        .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
-        .map((laterItem) => extractInputText(laterItem.content as unknown[]))
-        .filter(Boolean);
-      if (
-        laterUserTexts.length > 0 &&
-        laterUserTexts.every((text) => isToolOutputContinuationText(text))
-      ) {
-        return output;
-      }
-      continue;
-    }
-  }
-  return "";
-}
-
-export function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
-  const lastUserIndex = findLastUserIndex(input);
-  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
-    const output = extractFunctionCallOutputText(item);
-    if (output) {
-      return functionCallOutputIsStructuredError(item);
-    }
-  }
-  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
-    const output = extractFunctionCallOutputText(candidateItem);
-    if (output) {
-      const laterUserTexts = input
-        .slice(candidateIndex + 1)
-        .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
-        .map((laterItem) => extractInputText(laterItem.content as unknown[]))
-        .filter(Boolean);
-      if (
-        laterUserTexts.length > 0 &&
-        laterUserTexts.every((text) => isToolOutputContinuationText(text))
-      ) {
-        return functionCallOutputIsStructuredError(candidateItem);
-      }
-    }
-  }
-  return false;
-}
-
-export function extractToolOutputCallId(input: ResponsesInputItem[]) {
-  const lastUserIndex = findLastUserIndex(input);
-  for (const item of input.slice(lastUserIndex + 1).toReversed()) {
-    const output = extractFunctionCallOutputText(item);
-    if (output) {
-      return extractFunctionCallOutputCallId(item);
-    }
-  }
-  for (const [candidateIndex, candidateItem] of Array.from(input.entries()).toReversed()) {
-    const output = extractFunctionCallOutputText(candidateItem);
-    if (output) {
-      const laterUserTexts = input
-        .slice(candidateIndex + 1)
-        .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
-        .map((laterItem) => extractInputText(laterItem.content as unknown[]))
-        .filter(Boolean);
-      if (
-        laterUserTexts.length > 0 &&
-        laterUserTexts.every((text) => isToolOutputContinuationText(text))
-      ) {
-        return extractFunctionCallOutputCallId(candidateItem);
-      }
-    }
-  }
-  return "";
-}
-
 export function extractLatestToolOutput(input: ResponsesInputItem[]) {
   for (const item of input.toReversed()) {
-    const output = extractFunctionCallOutputText(item);
-    if (output) {
-      return output;
+    if (isResponsesToolCallOutput(item)) {
+      return stringifyFunctionCallOutput(item.output);
     }
   }
   return "";
@@ -230,9 +192,7 @@ export function extractAllToolOutputText(input: ResponsesInputItem[]) {
 }
 
 export function extractUserTextAfterLatestToolOutput(input: ResponsesInputItem[]) {
-  const latestToolOutputIndex = input.findLastIndex((item) =>
-    Boolean(extractFunctionCallOutputText(item)),
-  );
+  const latestToolOutputIndex = input.findLastIndex(isResponsesToolCallOutput);
   if (latestToolOutputIndex < 0) {
     return "";
   }
@@ -272,28 +232,42 @@ export function extractAllUserTexts(input: ResponsesInputItem[]) {
   return texts;
 }
 
-export function extractSystemInputText(input: ResponsesInputItem[]) {
-  const texts: string[] = [];
-  for (const item of input) {
-    if (item.role !== "system") {
+export function extractSlackMpimRetainedBotNonce(
+  prompt: string,
+  botReplyPrefix: string,
+): string | undefined {
+  const historyHeader = "[Thread history - for context]\n";
+  const historyStart = prompt.indexOf(historyHeader);
+  if (historyStart < 0) {
+    return undefined;
+  }
+  const historyBodyStart = historyStart + historyHeader.length;
+  const currentTurnStart = prompt.lastIndexOf("Slack MPIM assistant-history recall check.");
+  if (currentTurnStart < historyBodyStart) {
+    return undefined;
+  }
+  for (const line of prompt.slice(historyBodyStart, currentTurnStart).split(/\r?\n/u)) {
+    const headerEnd = line.indexOf("] ");
+    if (headerEnd < 0) {
       continue;
     }
-    if (typeof item.content === "string" && item.content.trim()) {
-      texts.push(item.content.trim());
+    const header = line.slice(0, headerEnd);
+    if (!header.startsWith("[Slack ") || !header.includes(" (this assistant) (assistant) ")) {
       continue;
     }
-    if (!Array.isArray(item.content)) {
+    const reply = line.slice(headerEnd + 2);
+    if (!reply.startsWith(botReplyPrefix)) {
       continue;
     }
-    const text = extractInputText(item.content);
-    if (text) {
-      texts.push(text);
+    const nonce = reply.slice(botReplyPrefix.length);
+    if (/^[A-Z0-9]{8,32}$/u.test(nonce)) {
+      return nonce;
     }
   }
-  return texts.join("\n");
+  return undefined;
 }
 
-export function extractAllInputTexts(input: ResponsesInputItem[]) {
+function extractAllInputTexts(input: ResponsesInputItem[]) {
   const texts: string[] = [];
   for (const item of input) {
     if (typeof item.output === "string" && item.output.trim()) {
@@ -433,7 +407,7 @@ export function countImageInputs(value: unknown): number {
   return count;
 }
 
-export function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
+function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
   const latestUserIndex = findLastUserIndex(input);
   if (latestUserIndex < 0) {
     return { text: "", imageInputCount: 0 };
@@ -455,6 +429,28 @@ export function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
       .filter(Boolean)
       .join("\n"),
     imageInputCount,
+  };
+}
+
+export function extractCurrentImageRequest(
+  input: ResponsesInputItem[],
+  body: Record<string, unknown>,
+) {
+  // Match only the current request. Historical image prompts must not override
+  // a later non-image turn just because they remain in transcript context.
+  const imageUserTurn = extractLatestImageUserTurn(input);
+  if (imageUserTurn.imageInputCount === 0) {
+    return imageUserTurn;
+  }
+  const developerInstructions = input
+    .filter((item) => item.role === "developer" && Array.isArray(item.content))
+    .map((item) => extractInputText(item.content as unknown[]))
+    .filter(Boolean);
+  return {
+    text: [extractInstructionsText(body), ...developerInstructions, imageUserTurn.text]
+      .filter(Boolean)
+      .join("\n"),
+    imageInputCount: imageUserTurn.imageInputCount,
   };
 }
 

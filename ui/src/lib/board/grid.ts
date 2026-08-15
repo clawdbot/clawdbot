@@ -216,11 +216,11 @@ export function boardChromeRowPx(): number {
     : 0;
 }
 
-export function effectiveBoardWidgetRows(
+function autoBoardWidgetHeightPx(
   widget: BoardWidgetSizingInput,
   contentHeightPx: number | undefined,
-  chromeRowPx = 0,
-): number {
+  chromeRowPx: number,
+): number | undefined {
   // Absent heightMode means auto BY DESIGN, including widgets pinned before
   // the contract existed: retroactive content-fitting is the product goal, and
   // one menu click re-pins. Only an explicit "fixed" preserves stored height.
@@ -231,16 +231,55 @@ export function effectiveBoardWidgetRows(
     !Number.isFinite(contentHeightPx) ||
     contentHeightPx <= 0
   ) {
-    return widget.sizeH;
+    return undefined;
   }
-  const requiredHeight =
+  return (
     contentHeightPx +
     chromeRowPx +
-    ((widget.presentation ?? "card") === "card" ? BOARD_WIDGET_FRAME_INSET * 2 : 0);
+    ((widget.presentation ?? "card") === "card" ? BOARD_WIDGET_FRAME_INSET * 2 : 0)
+  );
+}
+
+function boardRowSpanPx(rows: number): number {
+  return rows * BOARD_GRID_ROW_HEIGHT + (rows - 1) * BOARD_GRID_GAP;
+}
+
+export function effectiveBoardWidgetRows(
+  widget: BoardWidgetSizingInput,
+  contentHeightPx: number | undefined,
+  chromeRowPx = 0,
+): number {
+  const requiredHeight = autoBoardWidgetHeightPx(widget, contentHeightPx, chromeRowPx);
+  if (requiredHeight === undefined) {
+    return widget.sizeH;
+  }
   const rows = Math.ceil(
     (requiredHeight + BOARD_GRID_GAP) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP),
   );
   return Math.min(BOARD_WIDGET_AUTO_MAX_ROWS, Math.max(BOARD_WIDGET_AUTO_MIN_ROWS, rows));
+}
+
+/**
+ * Exact card height for auto-sized HTML widgets. The grid cell stays quantized
+ * to rows (`effectiveBoardWidgetRows`), but the card hugs its content so the
+ * ceil-to-row slack lands outside the card as background spacing instead of
+ * dead space inside it. Undefined means "fill the cell" (fixed/non-HTML).
+ */
+export function exactBoardWidgetHeightPx(
+  widget: BoardWidgetSizingInput,
+  contentHeightPx: number | undefined,
+  chromeRowPx = 0,
+): number | undefined {
+  const requiredHeight = autoBoardWidgetHeightPx(widget, contentHeightPx, chromeRowPx);
+  if (requiredHeight === undefined) {
+    return undefined;
+  }
+  // Never exceed the quantized cell: at the row cap the content is taller than
+  // the cell, so the card fills the cell and the body scrolls/clips as before.
+  return Math.min(
+    requiredHeight,
+    boardRowSpanPx(effectiveBoardWidgetRows(widget, contentHeightPx, chromeRowPx)),
+  );
 }
 
 /** Structural sizing inputs so pure grid math stays free of view-type imports. */

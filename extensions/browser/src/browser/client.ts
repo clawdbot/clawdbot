@@ -130,6 +130,7 @@ export type SnapshotResult =
       targetId: string;
       url: string;
       nodes: SnapshotAriaNode[];
+      truncated?: boolean;
       blockedByDialog?: boolean;
       browserState?: unknown;
     }
@@ -140,6 +141,7 @@ export type SnapshotResult =
       url: string;
       snapshot: string;
       truncated?: boolean;
+      newElements?: number;
       refs?: Record<string, { role: string; name?: string; nth?: number }>;
       stats?: {
         lines: number;

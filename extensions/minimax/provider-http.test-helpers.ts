@@ -160,6 +160,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
   const actual = await importActual<typeof import("openclaw/plugin-sdk/provider-http")>();
   return {
     assertOkOrThrowHttpError: minimaxProviderHttpMocks.assertOkOrThrowHttpErrorMock,
+    assertProviderBinaryResponseContent: actual.assertProviderBinaryResponseContent,
     createProviderOperationDeadline: ({
       label,
       timeoutMs,

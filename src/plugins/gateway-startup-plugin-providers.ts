@@ -1,4 +1,5 @@
 // Collects configured model, generation, voice, and memory provider ownership.
+import { listModelRefsFromConfigValue } from "@openclaw/model-catalog-core/configured-model-refs";
 import {
   buildModelCatalogMergeKey,
   parseModelCatalogRef,
@@ -9,8 +10,9 @@ import {
 } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
+import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
 import { resolveConfiguredGenericEmbeddingProviderId } from "./embedding-provider-config.js";
 import { listRegisteredEmbeddingProviders } from "./embedding-providers.js";
 import type {
@@ -57,29 +59,8 @@ export function manifestOwnsConfiguredWebSearchProvider(params: {
   });
 }
 
-function listModelProviderRefs(value: unknown): string[] {
-  if (typeof value === "string") {
-    return [value];
-  }
-  if (!isRecord(value)) {
-    return [];
-  }
-  const refs: string[] = [];
-  if (typeof value.primary === "string") {
-    refs.push(value.primary);
-  }
-  if (Array.isArray(value.fallbacks)) {
-    for (const fallback of value.fallbacks) {
-      if (typeof fallback === "string") {
-        refs.push(fallback);
-      }
-    }
-  }
-  return refs;
-}
-
 function listModelProviderRefParts(value: unknown): Array<{ providerId: string; modelId: string }> {
-  return listModelProviderRefs(value)
+  return listModelRefsFromConfigValue(value)
     .map(parseModelCatalogRef)
     .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
     .map(({ provider, modelId }) => ({ providerId: provider, modelId }));
@@ -87,7 +68,7 @@ function listModelProviderRefParts(value: unknown): Array<{ providerId: string; 
 
 function collectModelProviderIds(value: unknown): ReadonlySet<string> {
   return new Set(
-    listModelProviderRefs(value)
+    listModelRefsFromConfigValue(value)
       .map((ref) => {
         const slashIndex = ref.indexOf("/");
         return slashIndex > 0 ? normalizeProviderId(ref.slice(0, slashIndex)) : "";
@@ -103,9 +84,10 @@ type ManifestModelProviderLookup = {
 
 function buildManifestModelProviderLookup(
   manifestRegistry: PluginManifestRegistry,
+  config: OpenClawConfig,
 ): ManifestModelProviderLookup {
   const modelApis = new Map(
-    planManifestModelCatalogRows({ registry: manifestRegistry }).rows.flatMap((row) =>
+    planEffectiveModelCatalogRows({ registry: manifestRegistry, config }).rows.flatMap((row) =>
       row.api ? [[row.mergeKey, row.api] as const] : [],
     ),
   );
@@ -122,7 +104,7 @@ export function collectConfiguredAgentModelProviderIds(
   manifestRegistry: PluginManifestRegistry,
 ): ReadonlySet<string> {
   const modelIdsByProvider = new Map<string, Set<string>>();
-  const manifestModelProviders = buildManifestModelProviderLookup(manifestRegistry);
+  const manifestModelProviders = buildManifestModelProviderLookup(manifestRegistry, config);
   const addModelProviderRefs = (value: unknown) => {
     for (const { providerId, modelId } of listModelProviderRefParts(value)) {
       const modelIds = modelIdsByProvider.get(providerId) ?? new Set<string>();
@@ -144,8 +126,7 @@ export function collectConfiguredAgentModelProviderIds(
   addModelProviderRefs(defaults?.utilityModel);
   addModelMapProviderIds(defaults?.models);
 
-  const agents = Array.isArray(config.agents?.list) ? config.agents.list : [];
-  for (const agent of agents) {
+  for (const agent of listAgentEntries(config)) {
     if (!isRecord(agent)) {
       continue;
     }
@@ -366,8 +347,7 @@ export function collectConfiguredMemoryEmbeddingStartupProviderOwners(
     }
   };
   addEffectiveProviders(undefined);
-  const agents = config.agents?.list;
-  const agentEntries = Array.isArray(agents) ? agents.filter(isRecord) : [];
+  const agentEntries = listAgentEntries(config);
   if (agentEntries.length === 0) {
     return [...byConfiguredIdAndSource.values()];
   }

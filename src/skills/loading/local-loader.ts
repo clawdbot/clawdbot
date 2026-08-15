@@ -3,8 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { openRootFileSync } from "../../infra/boundary-file-read.js";
 import type { ParsedSkillFrontmatter } from "../types.js";
-import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
-import { createSyntheticSourceInfo, type Skill } from "./skill-contract.js";
+import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
+import {
+  createSyntheticSourceInfo,
+  resolveSkillDisplayName,
+  type Skill,
+} from "./skill-contract.js";
 import { computeSkillPromptVersion } from "./skill-version.js";
 
 type LoadedLocalSkill = {
@@ -28,6 +32,9 @@ function readSkillFileSync(params: {
     rootPath: params.rootRealPath,
     rootRealPath: params.rootRealPath,
     boundaryLabel: "skill root",
+    // Operator skill roots are commonly symlinked; fs-safe still rejects hops
+    // whose canonical target escapes the skill root.
+    rejectSymlinks: false,
     maxBytes: params.maxBytes,
   });
   if (!opened.ok) {
@@ -59,7 +66,7 @@ function loadSingleSkillDirectory(params: {
 
   let frontmatter: Record<string, string>;
   try {
-    frontmatter = parseFrontmatter(raw);
+    frontmatter = parseSkillFrontmatter(raw);
   } catch (error) {
     const message = error instanceof Error ? error.message : "failed to parse skill frontmatter";
     params.onDiagnostic?.({ path: skillFilePath, message });
@@ -79,6 +86,7 @@ function loadSingleSkillDirectory(params: {
   return {
     skill: {
       name,
+      displayName: resolveSkillDisplayName(raw, name),
       description,
       filePath,
       baseDir,
@@ -185,7 +193,7 @@ export function readSkillFrontmatterSafe(params: {
     return null;
   }
   try {
-    return parseFrontmatter(raw);
+    return parseSkillFrontmatter(raw);
   } catch {
     return null;
   }

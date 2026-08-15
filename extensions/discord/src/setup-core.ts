@@ -1,12 +1,12 @@
 // Discord plugin module implements setup core behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import type { DiscordGuildEntry, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup-runtime";
 import {
   createSetupTranslator,
   createStandardChannelSetupStatus,
   defineTokenCredential,
-  mergeAllowFromEntries,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -114,44 +114,20 @@ export function createDiscordSetupWizardBase(handlers: {
     NonNullable<NonNullable<ChannelSetupWizard["groupAccess"]>["resolveAllowlist"]>
   >;
 }) {
-  const discordDmPolicy: ChannelSetupDmPolicy = {
+  const discordDmPolicy = createChannelDmPolicy({
     label: "Discord",
     channel,
-    policyKey: "channels.discord.dmPolicy",
-    allowFromKey: "channels.discord.allowFrom",
-    resolveConfigKeys: (_cfg, accountId) =>
-      accountId && accountId !== DEFAULT_ACCOUNT_ID
-        ? {
-            policyKey: `channels.discord.accounts.${accountId}.dmPolicy`,
-            allowFromKey: `channels.discord.accounts.${accountId}.allowFrom`,
-          }
-        : {
-            policyKey: "channels.discord.dmPolicy",
-            allowFromKey: "channels.discord.allowFrom",
-          },
-    getCurrent: (cfg, accountId) =>
-      resolveDiscordSetupAccountConfig({ cfg, accountId }).config.dmPolicy ?? "pairing",
-    setPolicy: (cfg, policy, accountId) => {
-      const resolved = resolveDiscordSetupAccountConfig({ cfg, accountId });
-      return patchChannelConfigForAccount({
-        cfg,
-        channel,
-        accountId: resolved.accountId,
-        patch: {
-          dmPolicy: policy,
-          ...(policy === "open"
-            ? { allowFrom: mergeAllowFromEntries(resolved.config.allowFrom ?? [], ["*"]) }
-            : {}),
-          dm: {
-            ...resolved.config.dm,
-            enabled:
-              typeof resolved.config.dm?.enabled === "boolean" ? resolved.config.dm.enabled : true,
-          },
-        },
-      });
-    },
+    resolveAccount: (cfg, accountId) => resolveDiscordSetupAccountConfig({ cfg, accountId }),
+    buildPatch: ({ account, policy, allowFrom }) => ({
+      dmPolicy: policy,
+      ...(allowFrom === undefined ? {} : { allowFrom }),
+      dm: {
+        ...account.config.dm,
+        enabled: typeof account.config.dm?.enabled === "boolean" ? account.config.dm.enabled : true,
+      },
+    }),
     promptAllowFrom: handlers.promptAllowFrom,
-  };
+  });
 
   return {
     channel,

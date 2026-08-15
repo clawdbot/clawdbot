@@ -1,6 +1,6 @@
 // Control UI chat module implements chat avatar behavior.
 import { html } from "lit";
-import type { GatewayHelloOk } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import { normalizeBasePath } from "../../app-route-paths.ts";
 import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
 import {
@@ -8,6 +8,12 @@ import {
   resolveLocalUserAvatarUrl,
   resolveLocalUserName,
 } from "../../app/user-identity.ts";
+import {
+  identityAvatarClass,
+  renderIdentityAvatarImage,
+  resolveIdentityAvatarView,
+  type IdentityAvatarView,
+} from "../../components/identity-avatar-view.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import {
   assistantAvatarFallbackUrl,
@@ -17,11 +23,7 @@ import {
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
-import {
-  resolveAvatar,
-  resolveAvatarInitials,
-  resolveIdentityHue,
-} from "../../lib/identity-avatar.ts";
+import { resolveAvatarImageUrl, resolveAvatarInitials } from "../../lib/identity-avatar.ts";
 import {
   DEFAULT_AGENT_ID,
   isUiGlobalSessionKey,
@@ -41,40 +43,7 @@ export function renderChatAvatar(
   // Attributed multi-user messages show the author's own avatar (profile
   // upload → gateway Gravatar proxy → initials), not the local viewer's.
   if (normalized === "user" && sender) {
-    const label = formatSenderLabel(sender) ?? "";
-    const initials = resolveAvatarInitials(sender);
-    const initialsAvatar = html`<div
-      class="chat-avatar user chat-avatar--sender-initials"
-      style=${`background: hsl(${resolveIdentityHue(sender)} 48% 42%)`}
-      aria-label="${label}"
-    >
-      ${initials.initials}
-    </div>`;
-    const resolved = resolveAvatar(sender);
-    if (resolved.kind === "initials") {
-      return initialsAvatar;
-    }
-    // The derived route may 404 (no upload, no Gravatar); swap to initials
-    // instead of a broken image. Lit reuses DOM parts, so a load must clear a
-    // prior sender's error state.
-    return html`<span class="chat-avatar-slot">
-      <img
-        class="chat-avatar user"
-        src="${resolved.url}"
-        alt="${label}"
-        @error=${(event: Event) => {
-          (event.currentTarget as HTMLElement)
-            .closest(".chat-avatar-slot")
-            ?.classList.add("is-fallback");
-        }}
-        @load=${(event: Event) => {
-          (event.currentTarget as HTMLElement)
-            .closest(".chat-avatar-slot")
-            ?.classList.remove("is-fallback");
-        }}
-      />
-      ${initialsAvatar}
-    </span>`;
+    return renderUserAvatarSlot(resolveIdentityAvatarView(sender), formatSenderLabel(sender) ?? "");
   }
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";
@@ -130,11 +99,19 @@ export function renderChatAvatar(
           : "other";
 
   if (normalized === "user" && userAvatarUrl) {
-    return html`<img class="chat-avatar ${className}" src="${userAvatarUrl}" alt="${userName}" />`;
+    const imageUrl = resolveAvatarImageUrl(userAvatarUrl) ?? userAvatarUrl;
+    return renderUserAvatarSlot(
+      {
+        fallback: resolveAvatarInitials({ name: userName }),
+        imageUrl,
+        pending: typeof imageUrl !== "string",
+      },
+      userName,
+    );
   }
 
   if (normalized === "user" && userAvatarText) {
-    return html`<div class="chat-avatar ${className}" aria-label="${userName}">
+    return html`<div class="chat-avatar ${className}" role="img" aria-label="${userName}">
       ${userAvatarText}
     </div>`;
   }
@@ -155,7 +132,7 @@ export function renderChatAvatar(
       />`;
     }
     if (assistantAvatarText) {
-      return html`<div class="chat-avatar ${className}" aria-label="${assistantName}">
+      return html`<div class="chat-avatar ${className}" role="img" aria-label="${assistantName}">
         ${assistantAvatarText}
       </div>`;
     }
@@ -177,6 +154,33 @@ export function renderChatAvatar(
   return html`<div class="chat-avatar ${className}">${initial}</div>`;
 }
 
+/**
+ * The avatar URL may 404 or be unreachable (missing upload, dead Gravatar,
+ * stale configured URL); swap to initials instead of a broken image. Lit
+ * reuses DOM parts, so a load must clear a prior identity's error state.
+ */
+function renderUserAvatarSlot(view: IdentityAvatarView, label: string) {
+  const initialsAvatar = html`<div
+    class="chat-avatar user chat-avatar--sender-initials"
+    style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
+    role="img"
+    aria-label="${label}"
+  >
+    ${view.fallback.initials}
+  </div>`;
+  if (!view.imageUrl) {
+    return initialsAvatar;
+  }
+  return html`<span class=${identityAvatarClass("chat-avatar-slot", view)}>
+    ${renderIdentityAvatarImage({
+      view,
+      fallbackSelector: ".chat-avatar-slot",
+      className: "chat-avatar user",
+      alt: label,
+    })}${initialsAvatar}
+  </span>`;
+}
+
 function isAvatarUrl(value: string): boolean {
   const trimmed = value.trim();
   return trimmed.startsWith("blob:") || isRenderableControlUiAvatarUrl(trimmed);
@@ -190,6 +194,7 @@ type ChatAvatarHost = {
   chatAvatarSource?: string | null;
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   chatAvatarUrl: string | null;
+  client?: GatewayBrowserClient | null;
   connected: boolean;
   hello: GatewayHelloOk | null;
   password?: string | null;
@@ -198,7 +203,33 @@ type ChatAvatarHost = {
 };
 
 const chatAvatarRequestVersions = new WeakMap<object, number>();
-const chatAvatarObjectUrls = new WeakMap<object, string>();
+const chatAvatarDisplayedAgents = new WeakMap<object, string>();
+
+type ChatAvatarSnapshot = {
+  reason: string | null;
+  source: string | null;
+  status: "none" | "local" | "remote" | "data" | null;
+  url: string | null;
+};
+
+type ChatAvatarSnapshotEntry = {
+  kind: "snapshot";
+  snapshot: ChatAvatarSnapshot;
+  cachedAt: number;
+  retired?: ChatAvatarSnapshot[];
+};
+
+type ChatAvatarCacheEntry =
+  | {
+      kind: "pending";
+      pending: Promise<ChatAvatarSnapshot | null>;
+      stale?: ChatAvatarSnapshotEntry;
+    }
+  | ChatAvatarSnapshotEntry;
+
+const CHAT_AVATAR_CACHE_LIMIT = 24;
+const CHAT_AVATAR_CACHE_TTL_MS = 60_000;
+const chatAvatarCaches = new WeakMap<object, Map<string, ChatAvatarCacheEntry>>();
 
 function readHelloDefaultAgentId(host: Pick<ChatAvatarHost, "hello">): string | undefined {
   const snapshot = host.hello?.snapshot as
@@ -207,7 +238,9 @@ function readHelloDefaultAgentId(host: Pick<ChatAvatarHost, "hello">): string | 
   return snapshot?.sessionDefaults?.defaultAgentId?.trim() || undefined;
 }
 
-export function resolveAgentIdForSession(host: ChatAvatarHost): string | null {
+export function resolveAgentIdForSession(
+  host: Pick<ChatAvatarHost, "sessionKey" | "assistantAgentId" | "agentsList" | "hello">,
+): string | null {
   const parsed = parseAgentSessionKey(host.sessionKey);
   if (parsed?.agentId) {
     return parsed.agentId;
@@ -245,12 +278,6 @@ function buildAvatarMetaUrl(basePath: string, agentId: string): string {
 }
 
 function clearChatAvatarUrl(host: ChatAvatarHost) {
-  const key = host as object;
-  const previousBlobUrl = chatAvatarObjectUrls.get(key);
-  if (previousBlobUrl) {
-    URL.revokeObjectURL(previousBlobUrl);
-    chatAvatarObjectUrls.delete(key);
-  }
   host.chatAvatarUrl = null;
 }
 
@@ -262,42 +289,136 @@ function clearChatAvatarState(host: ChatAvatarHost) {
 }
 
 function setChatAvatarUrl(host: ChatAvatarHost, nextUrl: string | null) {
-  const key = host as object;
-  const previousBlobUrl = chatAvatarObjectUrls.get(key);
-  if (previousBlobUrl && previousBlobUrl !== nextUrl) {
-    URL.revokeObjectURL(previousBlobUrl);
-    chatAvatarObjectUrls.delete(key);
-  }
-  if (nextUrl?.startsWith("blob:")) {
-    chatAvatarObjectUrls.set(key, nextUrl);
-  }
   host.chatAvatarUrl = nextUrl;
 }
 
-function setChatAvatarMeta(
+function applyChatAvatarSnapshot(
   host: ChatAvatarHost,
-  data: {
-    avatarSource?: unknown;
-    avatarStatus?: unknown;
-    avatarReason?: unknown;
-  },
-) {
-  const status =
-    data.avatarStatus === "none" ||
-    data.avatarStatus === "local" ||
-    data.avatarStatus === "remote" ||
-    data.avatarStatus === "data"
-      ? data.avatarStatus
-      : null;
-  host.chatAvatarSource =
-    typeof data.avatarSource === "string" && data.avatarSource.trim()
-      ? data.avatarSource.trim()
-      : null;
-  host.chatAvatarStatus = status;
-  host.chatAvatarReason =
-    typeof data.avatarReason === "string" && data.avatarReason.trim()
-      ? data.avatarReason.trim()
-      : null;
+  agentId: string,
+  snapshot: ChatAvatarSnapshot,
+): void {
+  host.chatAvatarSource = snapshot.source;
+  host.chatAvatarStatus = snapshot.status;
+  host.chatAvatarReason = snapshot.reason;
+  setChatAvatarUrl(host, snapshot.url);
+  chatAvatarDisplayedAgents.set(host as object, agentId);
+}
+
+function revokeChatAvatarEntry(entry: ChatAvatarCacheEntry | undefined): void {
+  const snapshots =
+    entry?.kind === "snapshot"
+      ? [entry.snapshot, ...(entry.retired ?? [])]
+      : entry?.stale
+        ? [entry.stale.snapshot, ...(entry.stale.retired ?? [])]
+        : [];
+  for (const snapshot of snapshots) {
+    if (snapshot.url?.startsWith("blob:")) {
+      URL.revokeObjectURL(snapshot.url);
+    }
+  }
+}
+
+function revokeRetiredChatAvatarSnapshots(entry: ChatAvatarSnapshotEntry): void {
+  for (const snapshot of entry.retired ?? []) {
+    if (snapshot.url?.startsWith("blob:")) {
+      URL.revokeObjectURL(snapshot.url);
+    }
+  }
+  entry.retired = undefined;
+}
+
+function isFreshChatAvatarEntry(entry: ChatAvatarSnapshotEntry): boolean {
+  return Date.now() - entry.cachedAt < CHAT_AVATAR_CACHE_TTL_MS;
+}
+
+function clearChatAvatarCache(host: ChatAvatarHost): void {
+  const key = host as object;
+  const cache = chatAvatarCaches.get(key);
+  if (cache) {
+    for (const entry of cache.values()) {
+      revokeChatAvatarEntry(entry);
+    }
+    chatAvatarCaches.delete(key);
+  }
+  chatAvatarDisplayedAgents.delete(key);
+}
+
+export function invalidateChatAvatarCache(host: ChatAvatarHost): void {
+  beginChatAvatarRequest(host);
+  clearChatAvatarCache(host);
+  clearChatAvatarState(host);
+}
+
+function chatAvatarCacheFor(host: ChatAvatarHost): Map<string, ChatAvatarCacheEntry> {
+  const key = host as object;
+  const current = chatAvatarCaches.get(key);
+  if (current) {
+    return current;
+  }
+  const entries = new Map<string, ChatAvatarCacheEntry>();
+  chatAvatarCaches.set(key, entries);
+  return entries;
+}
+
+function rememberChatAvatarEntry(
+  cache: Map<string, ChatAvatarCacheEntry>,
+  agentId: string,
+  entry: ChatAvatarCacheEntry,
+): void {
+  cache.delete(agentId);
+  cache.set(agentId, entry);
+  while (cache.size > CHAT_AVATAR_CACHE_LIMIT) {
+    const oldestAgentId = cache.keys().next().value;
+    if (typeof oldestAgentId !== "string") {
+      break;
+    }
+    const oldest = cache.get(oldestAgentId);
+    cache.delete(oldestAgentId);
+    revokeChatAvatarEntry(oldest);
+  }
+}
+
+function loadChatAvatarSnapshot(
+  host: ChatAvatarHost,
+  cache: Map<string, ChatAvatarCacheEntry>,
+  agentId: string,
+): Promise<ChatAvatarSnapshot | null> {
+  const cached = cache.get(agentId);
+  if (cached?.kind === "snapshot" && isFreshChatAvatarEntry(cached)) {
+    return Promise.resolve(cached.snapshot);
+  }
+  if (cached?.kind === "pending") {
+    return cached.pending;
+  }
+  const stale = cached?.kind === "snapshot" ? cached : undefined;
+  const pending = fetchChatAvatarSnapshot(host, agentId).then((snapshot) => {
+    const current = cache.get(agentId);
+    if (
+      chatAvatarCaches.get(host as object) === cache &&
+      current?.kind === "pending" &&
+      current.pending === pending
+    ) {
+      if (snapshot) {
+        rememberChatAvatarEntry(cache, agentId, {
+          kind: "snapshot",
+          snapshot,
+          cachedAt: Date.now(),
+          ...(stale && stale.snapshot.url !== snapshot.url
+            ? { retired: [stale.snapshot, ...(stale.retired ?? [])] }
+            : {}),
+        });
+      } else if (stale) {
+        rememberChatAvatarEntry(cache, agentId, stale);
+      } else {
+        cache.delete(agentId);
+      }
+    } else if (snapshot?.url?.startsWith("blob:")) {
+      URL.revokeObjectURL(snapshot.url);
+    }
+    return snapshot ?? stale?.snapshot ?? null;
+  });
+  rememberChatAvatarEntry(cache, agentId, { kind: "pending", pending, stale });
+  return pending;
 }
 
 function buildControlUiAuthHeaders(authHeader: string | null): Record<string, string> | undefined {
@@ -318,8 +439,89 @@ function scheduleChatAvatarFetchTimeout(controller: AbortController, label: stri
   );
 }
 
+async function fetchChatAvatarSnapshot(
+  host: ChatAvatarHost,
+  agentId: string,
+): Promise<ChatAvatarSnapshot | null> {
+  const authHeader = resolveControlUiAuthHeader(host);
+  const headers = buildControlUiAuthHeaders(authHeader);
+  const url = buildAvatarMetaUrl(host.basePath, agentId);
+  const metaController = new AbortController();
+  const metaTimeout = scheduleChatAvatarFetchTimeout(metaController, "chat avatar metadata fetch");
+  let data: {
+    avatarUrl?: unknown;
+    avatarSource?: unknown;
+    avatarStatus?: unknown;
+    avatarReason?: unknown;
+  };
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      ...(headers ? { headers } : {}),
+      signal: metaController.signal,
+    });
+    if (!res.ok) {
+      return null;
+    }
+    data = (await res.json()) as typeof data;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(metaTimeout);
+  }
+
+  const status =
+    data.avatarStatus === "none" ||
+    data.avatarStatus === "local" ||
+    data.avatarStatus === "remote" ||
+    data.avatarStatus === "data"
+      ? data.avatarStatus
+      : null;
+  const snapshot: ChatAvatarSnapshot = {
+    source:
+      typeof data.avatarSource === "string" && data.avatarSource.trim()
+        ? data.avatarSource.trim()
+        : null,
+    status,
+    reason:
+      typeof data.avatarReason === "string" && data.avatarReason.trim()
+        ? data.avatarReason.trim()
+        : null,
+    url: null,
+  };
+  const avatarUrl = typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
+  if (!avatarUrl || !isRenderableControlUiAvatarUrl(avatarUrl)) {
+    return snapshot;
+  }
+  if (!isLocalControlUiAvatarUrl(avatarUrl)) {
+    return { ...snapshot, url: avatarUrl };
+  }
+  if (!host.connected || resolveAgentIdForSession(host) !== agentId) {
+    return null;
+  }
+
+  const avatarController = new AbortController();
+  const avatarTimeout = scheduleChatAvatarFetchTimeout(avatarController, "chat avatar image fetch");
+  try {
+    const avatarRes = await fetch(avatarUrl, {
+      method: "GET",
+      ...(headers ? { headers } : {}),
+      signal: avatarController.signal,
+    });
+    if (!avatarRes.ok) {
+      return null;
+    }
+    return { ...snapshot, url: URL.createObjectURL(await avatarRes.blob()) };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(avatarTimeout);
+  }
+}
+
 export async function refreshChatAvatar(host: ChatAvatarHost) {
   if (!host.connected) {
+    clearChatAvatarCache(host);
     clearChatAvatarState(host);
     return;
   }
@@ -332,80 +534,31 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
     }
     return;
   }
-  clearChatAvatarState(host);
-  const authHeader = resolveControlUiAuthHeader(host);
-  const headers = buildControlUiAuthHeaders(authHeader);
-  const url = buildAvatarMetaUrl(host.basePath, agentId);
-
-  const metaController = new AbortController();
-  const metaTimeout = scheduleChatAvatarFetchTimeout(metaController, "chat avatar metadata fetch");
-  let avatarUrl: string;
-  try {
-    const res = await fetch(url, {
-      method: "GET",
-      ...(headers ? { headers } : {}),
-      signal: metaController.signal,
-    });
-    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
+  const cache = chatAvatarCacheFor(host);
+  const cached = cache.get(agentId);
+  if (cached?.kind === "snapshot") {
+    rememberChatAvatarEntry(cache, agentId, cached);
+    applyChatAvatarSnapshot(host, agentId, cached.snapshot);
+    revokeRetiredChatAvatarSnapshots(cached);
+    if (isFreshChatAvatarEntry(cached)) {
       return;
     }
-    if (!res.ok) {
-      clearChatAvatarState(host);
-      return;
-    }
-    const data = (await res.json()) as {
-      avatarUrl?: unknown;
-      avatarSource?: unknown;
-      avatarStatus?: unknown;
-      avatarReason?: unknown;
-    };
-    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
-      return;
-    }
-    setChatAvatarMeta(host, data);
-    avatarUrl = typeof data.avatarUrl === "string" ? data.avatarUrl.trim() : "";
-    if (!avatarUrl || !isRenderableControlUiAvatarUrl(avatarUrl)) {
-      clearChatAvatarUrl(host);
-      return;
-    }
-    if (!isLocalControlUiAvatarUrl(avatarUrl)) {
-      setChatAvatarUrl(host, avatarUrl);
-      return;
-    }
-  } catch {
-    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
-      clearChatAvatarState(host);
-    }
-    return;
-  } finally {
-    clearTimeout(metaTimeout);
   }
-
-  const avatarController = new AbortController();
-  const avatarTimeout = scheduleChatAvatarFetchTimeout(avatarController, "chat avatar image fetch");
-  try {
-    const avatarRes = await fetch(avatarUrl, {
-      method: "GET",
-      ...(headers ? { headers } : {}),
-      signal: avatarController.signal,
-    });
-    if (!avatarRes.ok) {
-      if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
-        clearChatAvatarUrl(host);
-      }
-      return;
+  const showingSameAgent = chatAvatarDisplayedAgents.get(host as object) === agentId;
+  if (!showingSameAgent) {
+    clearChatAvatarState(host);
+  }
+  const snapshot = await loadChatAvatarSnapshot(host, cache, agentId);
+  if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
+    return;
+  }
+  if (snapshot) {
+    applyChatAvatarSnapshot(host, agentId, snapshot);
+    const current = cache.get(agentId);
+    if (current?.kind === "snapshot" && current.snapshot === snapshot) {
+      revokeRetiredChatAvatarSnapshots(current);
     }
-    const blobUrl = URL.createObjectURL(await avatarRes.blob());
-    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
-      URL.revokeObjectURL(blobUrl);
-      return;
-    }
-    setChatAvatarUrl(host, blobUrl);
-  } catch {
-    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
-      clearChatAvatarState(host);
-    }
-  } finally {
-    clearTimeout(avatarTimeout);
+  } else if (!showingSameAgent) {
+    clearChatAvatarState(host);
   }
 }

@@ -1,5 +1,7 @@
+import { t } from "../../i18n/index.ts";
 import {
-  buildAnnotationPrompt,
+  buildBrowserAnnotationContent,
+  type BrowserAnnotationDispatchResult,
   composeAnnotatedImage,
   dispatchBrowserAnnotation,
   paintAnnotations,
@@ -41,7 +43,9 @@ export function loadBrowserPanelImage(dataUrl: string): Promise<HTMLImageElement
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.addEventListener("load", () => resolve(image));
-    image.addEventListener("error", () => reject(new Error("screenshot decode failed")));
+    image.addEventListener("error", () =>
+      reject(new Error(t("browser.errors.screenshotDecodeFailed"))),
+    );
     image.src = dataUrl;
   });
 }
@@ -132,10 +136,10 @@ export function dispatchCompositedBrowserAnnotation(
   strokes: AnnotationStroke[],
   element: BrowserInspectedNode | null,
   highlight: AnnotationRegion | null,
-): boolean {
+): BrowserAnnotationDispatchResult {
   const url = view.metrics?.url || view.url || tab?.url || "";
   const title = view.metrics?.title || tab?.title || "";
-  const text = buildAnnotationPrompt({ url, title, strokes, element });
+  const content = buildBrowserAnnotationContent({ url, title, strokes, element });
   const dataUrl = composeAnnotatedImage({
     image: view.image,
     width: view.image.naturalWidth,
@@ -143,5 +147,5 @@ export function dispatchCompositedBrowserAnnotation(
     strokes,
     highlight,
   });
-  return dispatchBrowserAnnotation({ text, dataUrl, fileName: "annotated-page.png" });
+  return dispatchBrowserAnnotation({ ...content, dataUrl, fileName: "annotated-page.png" });
 }

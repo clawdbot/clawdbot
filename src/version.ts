@@ -47,6 +47,26 @@ function readVersionFromJsonCandidates(
   }
 }
 
+function readBuildIdFromJsonCandidates(moduleUrl: string): string | null {
+  try {
+    const require = createRequire(moduleUrl);
+    for (const candidate of BUILD_INFO_CANDIDATES) {
+      try {
+        const parsed = require(candidate) as { buildId?: unknown };
+        const buildId = normalizeOptionalString(parsed.buildId);
+        if (buildId && buildId.length <= 96) {
+          return buildId;
+        }
+      } catch {
+        // ignore missing or unreadable candidate
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
   for (const value of values) {
     const trimmed = normalizeOptionalString(value);
@@ -69,6 +89,10 @@ export function readVersionFromPackageJsonForModuleUrl(moduleUrl: string): strin
 
 export function readVersionFromBuildInfoForModuleUrl(moduleUrl: string): string | null {
   return readVersionFromJsonCandidates(moduleUrl, BUILD_INFO_CANDIDATES);
+}
+
+export function readBuildIdFromBuildInfoForModuleUrl(moduleUrl: string): string | null {
+  return readBuildIdFromJsonCandidates(moduleUrl);
 }
 
 export function resolveVersionFromModuleUrl(moduleUrl: string): string | null {
@@ -103,7 +127,7 @@ type RuntimeVersionPreference = "env-first" | "runtime-first";
 export function resolveUsableRuntimeVersion(version: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(version);
   // "0.0.0" is the resolver's hard fallback when module metadata cannot be read.
-  // Prefer explicit service/package markers in that edge case.
+  // Prefer explicit runtime/package markers in that edge case.
   if (!trimmed || trimmed === "0.0.0") {
     return undefined;
   }
@@ -121,11 +145,7 @@ function resolveVersionFromRuntimeSources(params: {
       ? [params.env["OPENCLAW_VERSION"], params.runtimeVersion]
       : [params.runtimeVersion, params.env["OPENCLAW_VERSION"]];
   return (
-    firstNonEmpty(
-      ...preferredCandidates,
-      params.env["OPENCLAW_SERVICE_VERSION"],
-      params.env["npm_package_version"],
-    ) ?? params.fallback
+    firstNonEmpty(...preferredCandidates, params.env["npm_package_version"]) ?? params.fallback
   );
 }
 
@@ -139,6 +159,14 @@ export function resolveRuntimeServiceVersion(
     fallback,
     preference: "env-first",
   });
+}
+
+// Generated build provenance is immutable for a process. Resolve it once so
+// handshakes never poll the filesystem on the connection hot path.
+const RUNTIME_SERVICE_BUILD_ID = readBuildIdFromBuildInfoForModuleUrl(import.meta.url);
+
+export function resolveRuntimeServiceBuildId(): string | null {
+  return RUNTIME_SERVICE_BUILD_ID;
 }
 
 export function resolveCompatibilityHostVersion(

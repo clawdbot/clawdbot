@@ -86,11 +86,20 @@ function isLocalMacNode(node: NodeListNode): boolean {
   );
 }
 
-function compareDefaultNodeOrder(a: NodeListNode, b: NodeListNode): number {
-  const aConnectedAt = Number.isFinite(a.connectedAtMs) ? (a.connectedAtMs ?? 0) : -1;
-  const bConnectedAt = Number.isFinite(b.connectedAtMs) ? (b.connectedAtMs ?? 0) : -1;
-  if (aConnectedAt !== bConnectedAt) {
-    return bConnectedAt - aConnectedAt;
+function compareNewestTimestamp(a?: number, b?: number): number {
+  const aValue = Number.isFinite(a) ? (a ?? 0) : -1;
+  const bValue = Number.isFinite(b) ? (b ?? 0) : -1;
+  return bValue - aValue;
+}
+
+function compareDefaultNodeOrder(
+  a: NodeListNode,
+  b: NodeListNode,
+  recencyField: "connectedAtMs" | "lastSeenAtMs",
+): number {
+  const recencyOrder = compareNewestTimestamp(a[recencyField], b[recencyField]);
+  if (recencyOrder !== 0) {
+    return recencyOrder;
   }
   return a.nodeId.localeCompare(b.nodeId);
 }
@@ -127,10 +136,10 @@ export function selectDefaultNodeFromList(
     return null;
   }
 
-  const ordered = [...candidates].toSorted(compareDefaultNodeOrder);
-  // Multiple candidates — pick the first connected canvas-capable node.
-  // For A2UI and other canvas operations, any node works since multi-node
-  // setups broadcast surfaces across devices.
+  // Once the pool is known to be offline, stale connection timestamps must not
+  // outrank the durable last-seen signal used to choose the wake target.
+  const recencyField = connected.length > 0 ? "connectedAtMs" : "lastSeenAtMs";
+  const ordered = [...candidates].toSorted((a, b) => compareDefaultNodeOrder(a, b, recencyField));
   return ordered[0] ?? null;
 }
 
@@ -238,16 +247,16 @@ export function resolveEligibleNodeFromList(
 }
 
 /** Loads nodes from the Gateway and resolves the requested or default node id. */
-export async function resolveNodeId(
+export async function resolveAgentNodeId(
   opts: GatewayCallOptions,
   query?: string,
   allowDefault = false,
 ) {
-  return (await resolveNode(opts, query, allowDefault)).nodeId;
+  return (await resolveAgentNode(opts, query, allowDefault)).nodeId;
 }
 
 /** Loads nodes from the Gateway and returns the requested or default node record. */
-export async function resolveNode(
+export async function resolveAgentNode(
   opts: GatewayCallOptions,
   query?: string,
   allowDefault = false,

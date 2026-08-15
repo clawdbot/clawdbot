@@ -231,8 +231,10 @@ describe("google meet chrome transport", () => {
       if (params.path === "/act") {
         return {
           result: JSON.stringify({
-            manualActionRequired: true,
-            manualActionReason: "meet-admission-required",
+            manualAction: {
+              reason: "meet-admission-required",
+              message: "Waiting for admission",
+            },
           }),
         };
       }

@@ -2,12 +2,15 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { PluginHealthErrorSummary } from "../../commands/health.types.js";
+import { classifyGatewayConnectFailure } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createConfigIO } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
 import { probeGateway } from "../../gateway/probe.js";
-import { inspectPortUsage, type PortUsage } from "../../infra/ports.js";
+import { inspectPortUsage } from "../../infra/ports-inspect.js";
+import { LOOPBACK_PORT_PROBE_HOSTS } from "../../infra/ports-probe.js";
+import type { PortUsage } from "../../infra/ports-types.js";
 import type { GatewayPortHealthSnapshot } from "./restart-health.types.js";
 import { allListenersOwnedByRuntimePid } from "./restart-port-ownership.js";
 
@@ -31,6 +34,13 @@ function looksLikeAuthClose(code: number | undefined, reason: string | undefined
   if (!normalized) {
     return false;
   }
+  const pairingFailure = classifyGatewayConnectFailure({ reason: normalized });
+  if (
+    pairingFailure.kind === "pairing-required" &&
+    (normalized === "pairing required" || normalized.startsWith("pairing required:"))
+  ) {
+    return true;
+  }
   // The restart probe runs against loopback only and only decides restart
   // liveness, not authorization. Keep this allowlist exact so a local listener
   // cannot satisfy the health check with broad device/auth-looking text.
@@ -39,8 +49,6 @@ function looksLikeAuthClose(code: number | undefined, reason: string | undefined
     normalized === "owner auth required" ||
     normalized === "connect failed" ||
     normalized === "device required" ||
-    normalized === "pairing required" ||
-    normalized.startsWith("pairing required:") ||
     normalized.startsWith("unauthorized: gateway token missing") ||
     normalized.startsWith("unauthorized: gateway token mismatch") ||
     normalized.startsWith("unauthorized: gateway token not configured") ||
@@ -176,6 +184,7 @@ export async function resolveGatewayRestartProbeAuth(
   } as NodeJS.ProcessEnv;
   const cfg = await createConfigIO({
     env: mergedEnv,
+    observe: false,
     pluginValidation: "skip",
     suppressFutureVersionWarning: true,
   })
@@ -196,7 +205,9 @@ export async function inspectGatewayPortHealth(params: {
 }): Promise<GatewayPortHealthSnapshot> {
   let portUsage: PortUsage;
   try {
-    portUsage = await inspectPortUsage(params.port);
+    portUsage = await inspectPortUsage(params.port, {
+      probeHosts: LOOPBACK_PORT_PROBE_HOSTS,
+    });
   } catch (err) {
     portUsage = {
       port: params.port,

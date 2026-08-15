@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
+import { syncDirectoryIfSupported } from "./directory-durability.js";
 import { root as createFsSafeRoot } from "./fs-safe.js";
-import { syncDirectoryBestEffort } from "./sqlite-snapshot.js";
 import {
   legacyAuditRawCheckpointKey,
   legacyAuditRawCheckpointsMatch,
@@ -63,7 +63,7 @@ async function syncAuditRecoveryDirectory(
   root: AuditMigrationRoot,
   relativePath: string,
 ): Promise<void> {
-  await syncDirectoryBestEffort(path.join(root.rootReal, path.dirname(relativePath)));
+  await syncDirectoryIfSupported(path.join(root.rootReal, path.dirname(relativePath)));
 }
 
 export async function readLegacyAuditSourceSnapshot(

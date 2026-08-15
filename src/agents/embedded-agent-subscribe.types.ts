@@ -66,7 +66,7 @@ export type SubscribeEmbeddedAgentSessionParams = {
   onBlockReplyFlush?: (context: BlockReplyFlushContext) => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
-  onPartialReply?: (payload: PartialReplyPayload) => void | Promise<void>;
+  onPartialReply?: (payload: PartialReplyPayload) => boolean | void | Promise<boolean | void>;
   onAssistantMessageStart?: () => void | Promise<void>;
   onExecutionPhase?: (info: {
     phase: "tool_execution_started";
@@ -91,6 +91,7 @@ export type SubscribeEmbeddedAgentSessionParams = {
   onBeforeTerminalDelivery?: (event: {
     messages: AgentMessage[];
     willRetry: boolean;
+    assistantEntryId?: string;
     lastAssistant?: AgentMessage;
     assistantTexts: readonly string[];
     hasAssistantVisibleText: boolean;

@@ -1,3 +1,4 @@
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   admitGuardAdapter,
@@ -199,8 +200,4 @@ function hasDuplicateKeys(text: string): boolean {
     keys.add(key);
   }
   return false;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }

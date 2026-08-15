@@ -1,4 +1,5 @@
 // Defines gateway runtime and networking configuration types.
+import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { SecretInput } from "./types.secrets.js";
 
 /** Gateway bind-address policy for local server startup. */
@@ -88,6 +89,8 @@ export type ResolvedTalkConfig = {
 };
 
 export type TalkConfig = {
+  /** Agent that owns Talk sessions created without an agent-scoped session key. */
+  agentId?: string;
   /** Active Talk TTS provider (for example "acme-speech"). */
   provider?: string;
   /** Provider-specific Talk config keyed by provider id. */
@@ -107,7 +110,7 @@ export type TalkConfig = {
     | "ultra";
   /** Optional fast mode override for the agent run behind Talk realtime consults. */
   consultFastMode?: boolean;
-  /** BCP 47 locale id used for Talk speech recognition on device nodes. */
+  /** BCP 47 locale id used for Talk speech recognition on device nodes and the iOS system-voice fallback. */
   speechLocale?: string;
   /** Stop speaking when user starts talking (default: true). */
   interruptOnSpeech?: boolean;
@@ -223,6 +226,8 @@ export type GatewayAuthConfig = {
   password?: SecretInput;
   /** Allow Tailscale identity headers when serve mode is enabled. */
   allowTailscale?: boolean;
+  /** Operator scopes granted to verified trusted-proxy or Tailscale identities. */
+  identityScopes?: Record<string, OperatorScope[]>;
   /** Rate-limit configuration for failed authentication attempts. */
   rateLimit?: GatewayAuthRateLimitConfig;
   /**
@@ -265,9 +270,9 @@ export type GatewayTailscaleConfig = {
 export type GatewayRemoteConfig = {
   /** Remote Gateway WebSocket URL (ws:// or wss://). */
   url?: string;
-  /** Transport for macOS remote connections (ssh tunnel or direct WS). */
+  /** macOS app-only transport (SSH tunnel or direct WS); core validates/preserves but does not read it. */
   transport?: "ssh" | "direct";
-  /** Gateway port on the remote SSH host. Defaults to 18789. */
+  /** macOS app-only remote SSH port (default 18789); core validates/preserves but does not read it. */
   remotePort?: number;
   /** Token for remote auth (when the gateway requires token auth). */
   token?: SecretInput;
@@ -279,7 +284,7 @@ export type GatewayRemoteConfig = {
   sshTarget?: string;
   /** SSH identity file path for tunneling remote Gateway. */
   sshIdentity?: string;
-  /** macOS SSH host-key policy. Defaults to strict; openssh delegates to effective SSH config. */
+  /** macOS app-only; core validates/preserves but does not read it. Defaults to strict; see docs/platforms/mac/remote.md. */
   sshHostKeyPolicy?: "strict" | "openssh";
 };
 
@@ -294,7 +299,7 @@ export type GatewayRemoteConfig = {
  * host terminal is allowed.
  */
 export type GatewayTerminalConfig = {
-  /** Master switch for the operator terminal. Default: false. */
+  /** Master switch for the operator terminal. Default: true; set false to opt out. */
   enabled?: boolean;
   /**
    * Shell executable to launch. When unset the host login shell is used
@@ -307,6 +312,12 @@ export type GatewayTerminalConfig = {
    * immediately. Default: 300.
    */
   detachedSessionTimeoutSeconds?: number;
+};
+
+/** Labs-gated external CLI session targets in the Control UI. */
+export type GatewayCliAgentsConfig = {
+  /** Show catalog-backed CLI agents in the new-session model picker. Default: false. */
+  enabled?: boolean;
 };
 
 /** Gateway config reload strategy for managed installs. */
@@ -454,6 +465,12 @@ export type GatewayPushConfig = {
 
 export type GatewayNodePairingConfig = {
   /**
+   * Silently approve trusted local device pairing and access upgrades.
+   * Set false to require explicit approval; metadata refreshes remain automatic.
+   * Default: true.
+   */
+  autoApproveLocal?: boolean;
+  /**
    * Opt-in CIDR/IP allowlist for auto-approving first-time node-role pairing.
    * Only applies to fresh node pairing requests with no requested scopes.
    * Default: unset/disabled.
@@ -540,7 +557,10 @@ export type GatewayConfig = {
   bind?: GatewayBindMode;
   /** Custom IPv4 address for bind="custom" mode. IPv6-only BYOH requires an IPv4 sidecar or proxy. */
   customBindHost?: string;
+  /** Externally reachable HTTPS origin for Gateway callback routes; HTTP only on loopback. */
+  publicOrigin?: string;
   controlUi?: GatewayControlUiConfig;
+  cliAgents?: GatewayCliAgentsConfig;
   terminal?: GatewayTerminalConfig;
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;

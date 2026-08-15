@@ -52,6 +52,7 @@ async function describeQwenVideo(params: VideoDescriptionRequest): Promise<Video
       buffer: params.buffer,
     }),
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn,
     allowPrivateNetwork,
     dispatcherPolicy,

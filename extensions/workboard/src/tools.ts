@@ -5,6 +5,7 @@ import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { Type } from "typebox";
+import { redactClaimToken } from "./card-redaction.js";
 import { WorkboardStore } from "./store.js";
 import { cardIdField, claimTokenField, createWorkboardMoveTool } from "./tools-card-mutations.js";
 
@@ -107,23 +108,6 @@ function summarizeCard(card: WorkboardCard) {
     diagnostics: card.metadata?.diagnostics,
     archivedAt: card.metadata?.archivedAt,
     updatedAt: card.updatedAt,
-  };
-}
-
-function redactClaimToken(card: WorkboardCard): WorkboardCard {
-  const claim = card.metadata?.claim;
-  if (!claim) {
-    return card;
-  }
-  return {
-    ...card,
-    metadata: {
-      ...card.metadata,
-      claim: {
-        ...claim,
-        token: "[redacted]",
-      },
-    },
   };
 }
 
@@ -995,10 +979,7 @@ export function createWorkboardTools(params: {
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
-        const record =
-          rawParams && typeof rawParams === "object" && !Array.isArray(rawParams)
-            ? (rawParams as Record<string, unknown>)
-            : {};
+        const record = asNonArrayRecord(rawParams);
         const result = await store.dispatch({ boardId: record.boardId });
         return jsonResult({
           ...result,
@@ -1052,3 +1033,4 @@ export function createWorkboardTools(params: {
   ];
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";

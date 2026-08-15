@@ -8,6 +8,7 @@ import type { GatewayClient } from "../gateway/client.js";
 import { saveExecApprovals, type ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { SkillBinsProvider } from "./invoke-types.js";
 import { handleInvoke } from "./invoke.js";
@@ -191,6 +192,109 @@ describe("node host invoke", () => {
       sendNodeEvent,
       sessionKey: "agent:main:canvas",
     });
+  });
+
+  it("does not publish a canceled non-duplex plugin result", async () => {
+    const controller = new AbortController();
+    let resolvePlugin: ((result: string) => void) | undefined;
+    const handle = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolvePlugin = resolve;
+        }),
+    );
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "canvas",
+        pluginName: "Canvas",
+        command: { command: "canvas.present", cap: "canvas", handle },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+
+    const invoking = handleInvoke(
+      {
+        id: "invoke-canvas-canceled",
+        nodeId: "node-1",
+        command: "canvas.present",
+        paramsJSON: "{}",
+      },
+      { request } as unknown as GatewayClient,
+      { current: async () => [] },
+      undefined,
+      { signal: controller.signal },
+    );
+    await vi.waitFor(() => expect(handle).toHaveBeenCalledOnce());
+
+    controller.abort();
+    resolvePlugin?.('{"stale":true}');
+    await invoking;
+
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("publishes only the replacement result for a redelivered plugin invocation", async () => {
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    const resolvePlugins: Array<(result: string) => void> = [];
+    const handle = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolvePlugins.push(resolve);
+        }),
+    );
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "canvas",
+        pluginName: "Canvas",
+        command: { command: "canvas.present", cap: "canvas", handle },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+    const client = { request } as unknown as GatewayClient;
+    const skillBins: SkillBinsProvider = { current: async () => [] };
+    const frame = {
+      id: "invoke-canvas-redelivered",
+      nodeId: "node-1",
+      command: "canvas.present",
+      paramsJSON: "{}",
+    };
+
+    const first = handleInvoke(frame, client, skillBins, undefined, {
+      signal: firstController.signal,
+    });
+    await vi.waitFor(() => expect(handle).toHaveBeenCalledOnce());
+    firstController.abort();
+
+    const replacement = handleInvoke(frame, client, skillBins, undefined, {
+      signal: secondController.signal,
+    });
+    await vi.waitFor(() => expect(handle).toHaveBeenCalledTimes(2));
+
+    resolvePlugins[0]?.('{"stale":true}');
+    await first;
+    expect(request).not.toHaveBeenCalled();
+
+    resolvePlugins[1]?.('{"replacement":true}');
+    await replacement;
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith(
+      "node.invoke.result",
+      expect.objectContaining({
+        id: frame.id,
+        nodeId: frame.nodeId,
+        ok: true,
+        payloadJSON: '{"replacement":true}',
+      }),
+    );
+    expect(secondController.signal.aborted).toBe(false);
   });
 
   it("lists node-host directories for the folder browser", async () => {
@@ -674,8 +778,9 @@ describe("node host invoke", () => {
 
   it("forwards suppressNotifyOnExit on completed system.run events", async () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-event-suppress-"));
+    const stateDir = path.join(tempHome, ".openclaw");
     try {
-      await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+      await withEnvAsync({ OPENCLAW_HOME: tempHome, OPENCLAW_STATE_DIR: stateDir }, async () => {
         saveExecApprovals({
           version: 1,
           defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
@@ -736,6 +841,7 @@ describe("node host invoke", () => {
         });
       });
     } finally {
+      closeOpenClawStateDatabaseForTest();
       fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });

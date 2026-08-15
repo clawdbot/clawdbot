@@ -83,7 +83,7 @@ export async function runClawsUpdateCommand(
 
   let source = opts.from;
   if (!source) {
-    const database = openExistingOpenClawStateDatabaseReadOnly();
+    const database = await openExistingOpenClawStateDatabaseReadOnly();
     let status: Awaited<ReturnType<typeof readClawStatus>> | { records: never[] } = {
       records: [],
     };
@@ -136,7 +136,9 @@ export async function runClawsUpdateCommand(
     source = recorded.kind === "package" ? recorded.packageRoot : recorded.manifestPath;
   }
 
-  const loaded = await readClawManifestFile(source);
+  const loaded = await readClawManifestFile(source, {
+    allowLegacyDynamicToolProfile: !opts.from,
+  });
   if (!loaded.ok) {
     const diagnostics = opts.from
       ? loaded.diagnostics
@@ -169,6 +171,8 @@ export async function runClawsUpdateCommand(
   const plan = await buildClawUpdatePlan({
     agentId: target,
     targetManifest: loaded.manifest,
+    targetClawMarkdownBody: loaded.clawMarkdownBody,
+    targetOpenClawProfile: loaded.openClawProfile,
     targetSource: loaded.source,
     config,
     sourceMcpServers: listedMcpServers.mcpServers,
@@ -195,12 +199,18 @@ export async function runClawsUpdateCommand(
   try {
     const result = await applyClawUpdatePlan(
       plan,
-      { targetManifest: loaded.manifest, targetSource: loaded.source },
+      {
+        targetManifest: loaded.manifest,
+        targetClawMarkdownBody: loaded.clawMarkdownBody,
+        targetOpenClawProfile: loaded.openClawProfile,
+        targetSource: loaded.source,
+      },
       {
         config,
         sourceMcpServers: listedMcpServers.mcpServers,
         consentPlanIntegrity: opts.planIntegrity,
         packagePreflight: preflightClawPackage,
+        runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
         cronGateway: {
           add: async (input) => await callGatewayFromCli("cron.add", {}, input),
           get: async (id) => await callGatewayFromCli("cron.get", {}, { id }),

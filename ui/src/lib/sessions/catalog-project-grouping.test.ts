@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionCatalogSession } from "../../../../packages/gateway-protocol/src/index.ts";
 import {
+  groupCatalogSessionsByPerson,
   groupCatalogSessionsByProject,
   normalizeCatalogProjectGrouping,
 } from "./catalog-project-grouping.ts";
@@ -8,6 +9,7 @@ import {
 describe("normalizeCatalogProjectGrouping", () => {
   it.each([
     ["project", "project"],
+    ["person", "person"],
     ["none", "none"],
     [undefined, "project"],
     [null, "project"],
@@ -87,6 +89,42 @@ describe("groupCatalogSessionsByProject", () => {
       label: expectedLabel,
       title: expectedKey,
     });
+  });
+});
+
+describe("groupCatalogSessionsByPerson", () => {
+  it("groups attributed sessions by creator, sorted by label, and keeps session order", () => {
+    const result = groupCatalogSessionsByPerson([
+      { ...session("z-1"), createdActor: { type: "human", id: "profile-zoe", label: "Zoe" } },
+      { ...session("a-1"), createdActor: { type: "human", id: "profile-ada", label: "Ada" } },
+      { ...session("z-2"), createdActor: { type: "human", id: "profile-zoe", label: "Zoe" } },
+    ]);
+
+    expect(result.groups.map((group) => group.key)).toEqual([
+      "person:profile-ada",
+      "person:profile-zoe",
+    ]);
+    expect(result.groups.map((group) => group.label)).toEqual(["Ada", "Zoe"]);
+    expect(result.groups[1]?.sessions.map((item) => item.threadId)).toEqual(["z-1", "z-2"]);
+    expect(result.groups[0]?.title).toBe("Created by Ada");
+  });
+
+  it("falls back to the actor id when the label is missing or blank", () => {
+    const result = groupCatalogSessionsByPerson([
+      { ...session("one"), createdActor: { type: "human", id: "profile-ada", label: "  " } },
+    ]);
+
+    expect(result.groups[0]).toMatchObject({ key: "person:profile-ada", label: "profile-ada" });
+  });
+
+  it("leaves unattributed sessions in the flat ungrouped tail", () => {
+    const result = groupCatalogSessionsByPerson([
+      session("native"),
+      { ...session("adopted"), createdActor: { type: "human", id: "profile-ada", label: "Ada" } },
+    ]);
+
+    expect(result.groups).toHaveLength(1);
+    expect(result.ungrouped.map((item) => item.threadId)).toEqual(["native"]);
   });
 });
 

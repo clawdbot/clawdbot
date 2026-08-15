@@ -30,7 +30,7 @@ const HeartbeatResponseToolSchema = Type.Object(
     scratch: Type.Optional(
       Type.String({
         description:
-          "Complete replacement for heartbeat monitor prose. Recurring schedules belong in cron jobs, not scratch.",
+          "Complete replacement for heartbeat monitor prose. Recurring schedules belong in automations, not scratch.",
       }),
     ),
   },
@@ -51,6 +51,9 @@ export function createHeartbeatResponseTool(): AnyAgentTool {
   return {
     label: "Heartbeat",
     name: HEARTBEAT_RESPONSE_TOOL_NAME,
+    // Heartbeat prompts instruct the model to call this one-shot tool; hiding
+    // it behind tool search would break the heartbeat contract.
+    catalogMode: "direct-only",
     displaySummary: "Record heartbeat outcome/notify choice.",
     description:
       "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only; manage recurring tasks with cron.",

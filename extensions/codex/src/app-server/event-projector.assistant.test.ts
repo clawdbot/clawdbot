@@ -1,3 +1,4 @@
+import { normalizeUsage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -71,6 +72,7 @@ describe("CodexAppServerEventProjector assistant projection", () => {
       promptTokens: 5,
       totalTokens: 12,
     });
+    expect(result.attemptUsage?.reasoningTokens).toBe(3);
     expectUsageFields(result.lastAssistant?.usage, {
       input: 2,
       output: 7,
@@ -83,7 +85,31 @@ describe("CodexAppServerEventProjector assistant projection", () => {
       promptTokens: 5,
       totalTokens: 12,
     });
+    expect(normalizeUsage(result.lastAssistant?.usage)?.reasoningTokens).toBe(3);
+    expect(normalizeUsage(result.currentAttemptAssistant?.usage)?.reasoningTokens).toBe(3);
     expect(result.replayMetadata.replaySafe).toBe(true);
+  });
+
+  it("projects a current-turn model reroute onto the terminal assistant", async () => {
+    const projector = await createProjector();
+    await projector.handleNotification(
+      forCurrentTurn("model/rerouted", {
+        fromModel: "gpt-5.4-codex",
+        toModel: "gpt-5.4-codex-mini",
+        reason: "high_risk_cyber_activity",
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "msg-rerouted", text: "done" }]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.currentAttemptAssistant?.responseModel).toBe("gpt-5.4-codex-mini");
+    expect(result.lastAssistant?.responseModel).toBe("gpt-5.4-codex-mini");
+    expect(result).toMatchObject({
+      terminalTurnId: "turn-1",
+    });
   });
 
   it("keeps reopened final answers as Activity candidates until turn completion selects one", async () => {
@@ -150,13 +176,6 @@ describe("CodexAppServerEventProjector assistant projection", () => {
       turnCompleted([
         {
           type: "agentMessage",
-          id: "answer-1",
-          phase: "final_answer",
-          text: "First candidate",
-        },
-        lateTool,
-        {
-          type: "agentMessage",
           id: "answer-2",
           phase: "final_answer",
           text: "Second candidate",
@@ -199,6 +218,431 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     expect(result.assistantTexts).toEqual(["Second candidate"]);
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("First candidate");
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("answer_candidate");
+  });
+
+  it("keeps an earlier final answer when a later coda arrives with no tool work between them", async () => {
+    const projector = await createProjector(await createParams());
+    const summary = "Read-only; inspected actual diffs, no mutations: - #122457 — Copies";
+    const coda = "The summary above already incorporates the final review results.";
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta(summary, "answer-1"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-1",
+          phase: "final_answer",
+          text: summary,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta(coda, "answer-2"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-2",
+          phase: "final_answer",
+          text: coda,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "agentMessage",
+          id: "answer-2",
+          phase: "final_answer",
+          text: coda,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const snapshot = JSON.stringify(result.messagesSnapshot);
+
+    expect(result.assistantTexts).toEqual([summary, coda]);
+    expect(result.lastAssistant?.content).toEqual([
+      { type: "text", text: `${summary}\n\n${coda}` },
+    ]);
+    expect(snapshot).toContain(summary);
+    expect(snapshot).toContain(coda);
+  });
+
+  it("drops a pre-unphased final when a later final follows the replacement", async () => {
+    const projector = await createProjector(await createParams());
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("First candidate", "answer-1"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-1",
+          phase: "final_answer",
+          text: "First candidate",
+        },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("Replacement draft", "answer-2"));
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-3", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("Later final", "answer-3"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-3",
+          phase: "final_answer",
+          text: "Later final",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "answer-3", phase: "final_answer", text: "Later final" },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual(["Later final"]);
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("First candidate");
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("Replacement draft");
+  });
+
+  it("keeps the unphased replacement when a later silent final follows", async () => {
+    const projector = await createProjector(await createParams());
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("First candidate", "answer-1"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-1",
+          phase: "final_answer",
+          text: "First candidate",
+        },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("Replacement draft", "answer-2"));
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-3", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("NO_REPLY", "answer-3"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-3",
+          phase: "final_answer",
+          text: "NO_REPLY",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "answer-3", phase: "final_answer", text: "NO_REPLY" },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual(["Replacement draft"]);
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("First candidate");
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("NO_REPLY");
+  });
+
+  it("drops a pre-sleep final after a later sleep handoff", async () => {
+    const projector = await createProjector(await createParams());
+    const sleepItem = { type: "sleep", id: "sleep-1", durationMs: 250 };
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("First candidate", "answer-1"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-1",
+          phase: "final_answer",
+          text: "First candidate",
+        },
+      }),
+    );
+    await projector.handleNotification(forCurrentTurn("item/started", { item: sleepItem }));
+    await projector.handleNotification(forCurrentTurn("item/completed", { item: sleepItem }));
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("After sleep", "answer-2"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-2",
+          phase: "final_answer",
+          text: "After sleep",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "After sleep" },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual(["After sleep"]);
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("First candidate");
+  });
+
+  it("drops a trailing JSON silent payload when an earlier audible final remains", async () => {
+    const projector = await createProjector(await createParams());
+    const jsonSilent = '{"action":"NO_REPLY"}';
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("Keep this answer", "answer-1"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-1",
+          phase: "final_answer",
+          text: "Keep this answer",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta(jsonSilent, "answer-2"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-2",
+          phase: "final_answer",
+          text: jsonSilent,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "answer-2", phase: "final_answer", text: jsonSilent },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual(["Keep this answer"]);
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain(jsonSilent);
+  });
+
+  it("keeps a final answer that arrives while an earlier native tool is still active", async () => {
+    const projector = await createProjector(await createParams());
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "imageGeneration", id: "ig_1", status: "inProgress" },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("Done.", "answer-1"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-1",
+          phase: "final_answer",
+          text: "Done.",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "imageGeneration", id: "ig_1", status: "completed" },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "Done." },
+      ]),
+    );
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual(["Done."]);
+  });
+
+  it("drops a pre-handoff final after a later dynamic tool call", async () => {
+    const projector = await createProjector(await createParams());
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("First candidate", "answer-1"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-1",
+          phase: "final_answer",
+          text: "First candidate",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "dynamicToolCall",
+          id: "call-search",
+          tool: "memory_search",
+          status: "inProgress",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "dynamicToolCall",
+          id: "call-search",
+          tool: "memory_search",
+          status: "completed",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("Second candidate", "answer-2"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-2",
+          phase: "final_answer",
+          text: "Second candidate",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "agentMessage",
+          id: "answer-2",
+          phase: "final_answer",
+          text: "Second candidate",
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual(["Second candidate"]);
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("First candidate");
+  });
+
+  it("keeps a post-handoff silent final instead of recovering the pre-tool answer", async () => {
+    const projector = await createProjector(await createParams());
+    const lateTool = {
+      type: "commandExecution",
+      id: "late-tool",
+      command: "/bin/bash -lc 'printf late'",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "completed",
+      commandActions: [],
+      aggregatedOutput: "late",
+      exitCode: 0,
+      durationMs: 1,
+    };
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("First candidate", "answer-1"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-1",
+          phase: "final_answer",
+          text: "First candidate",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { ...lateTool, status: "inProgress", aggregatedOutput: null, exitCode: null },
+      }),
+    );
+    await projector.handleNotification(forCurrentTurn("item/completed", { item: lateTool }));
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("NO_REPLY", "answer-2"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-2",
+          phase: "final_answer",
+          text: "NO_REPLY",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "NO_REPLY" },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual(["NO_REPLY"]);
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("First candidate");
   });
 
   it("does not reselect a final answer superseded by late tool work", async () => {
@@ -263,6 +707,40 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     expect(candidateStatuses).toEqual(["candidate", "superseded"]);
   });
 
+  it("selects an unphased final answer supplied only by the completed-turn snapshot", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAgentEvent,
+    });
+
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "answer-unphased", text: "done" }]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual(["done"]);
+    expect(result.messagesSnapshot.at(-1)).toEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+      }),
+    );
+    expect(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .filter((event) => event.stream === "item" && event.data.kind === "answer_candidate")
+        .map((event) => event.data),
+    ).toEqual([
+      expect.objectContaining({
+        itemId: "answer-unphased",
+        status: "selected",
+        progressText: "done",
+        hideFromChannelProgress: true,
+      }),
+    ]);
+  });
+
   it("streams final-answer assistant deltas into partial replies", async () => {
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();
@@ -301,9 +779,8 @@ describe("CodexAppServerEventProjector assistant projection", () => {
   });
 
   it("streams assistant deltas when the app-server omits the item phase", async () => {
-    // Newer Codex app-servers (>= 0.139) stream agentMessage deltas without a
-    // "final_answer" phase. These surface on the replaceable agent-event path;
-    // legacy append-oriented partial callbacks stay quiet.
+    // Codex can stream agentMessage deltas without a final-answer phase. Route
+    // them through replaceable events, not append-oriented partial callbacks.
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();
     const params = await createParams();

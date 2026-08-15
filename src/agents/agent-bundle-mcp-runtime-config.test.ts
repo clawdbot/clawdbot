@@ -6,16 +6,24 @@ import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
 const mocks = vi.hoisted(() => ({
   loadCount: 0,
   diagnostics: [] as Array<{ pluginId: string; message: string }>,
+  prepareDataDirsByServer: {} as Record<string, { pluginId: string; dataDir: string }>,
 }));
 
 vi.mock("./embedded-agent-mcp.js", () => ({
   loadEmbeddedAgentMcpConfig: (params: {
     cfg?: { mcp?: { servers?: Record<string, unknown> } };
+    toolOverrides?: { mcpServers?: Record<string, boolean> };
   }) => {
     mocks.loadCount += 1;
+    const servers = Object.fromEntries(
+      Object.entries(params.cfg?.mcp?.servers ?? {}).filter(
+        ([name]) => params.toolOverrides?.mcpServers?.[name] !== false,
+      ),
+    );
     return {
       diagnostics: structuredClone(mocks.diagnostics),
-      mcpServers: params.cfg?.mcp?.servers ?? {},
+      mcpServers: servers,
+      prepareDataDirsByServer: structuredClone(mocks.prepareDataDirsByServer),
     };
   },
 }));
@@ -23,10 +31,41 @@ vi.mock("./embedded-agent-mcp.js", () => ({
 afterEach(() => {
   mocks.loadCount = 0;
   mocks.diagnostics = [];
+  mocks.prepareDataDirsByServer = {};
   clearPluginMetadataLifecycleCaches();
 });
 
 describe("session MCP config discovery cache", () => {
+  it("keeps Agent Plugins launch ownership out of fingerprints and filtered partitions", () => {
+    const cfg = {
+      mcp: { servers: { alpha: { command: "alpha" }, beta: { command: "beta" } } },
+    };
+    mocks.prepareDataDirsByServer = {
+      alpha: { pluginId: "agent-plugin", dataDir: "/state/one" },
+      beta: { pluginId: "agent-plugin", dataDir: "/state/two" },
+    };
+    const first = loadSessionMcpConfig({ workspaceDir: "/ownership-workspace", cfg });
+    const filtered = loadSessionMcpConfig({
+      workspaceDir: "/ownership-workspace",
+      cfg,
+      includeServerNames: new Set(["alpha"]),
+    });
+
+    expect(first.loaded.prepareDataDirsByServer).toEqual({
+      alpha: { pluginId: "agent-plugin", dataDir: "/state/one" },
+      beta: { pluginId: "agent-plugin", dataDir: "/state/two" },
+    });
+    expect(filtered.loaded.prepareDataDirsByServer).toEqual({
+      alpha: { pluginId: "agent-plugin", dataDir: "/state/one" },
+    });
+    clearPluginMetadataLifecycleCaches();
+    mocks.prepareDataDirsByServer = {
+      alpha: { pluginId: "agent-plugin", dataDir: "/different/state" },
+    };
+    const changedOwnership = loadSessionMcpConfig({ workspaceDir: "/ownership-workspace", cfg });
+    expect(changedOwnership.fingerprint).toBe(first.fingerprint);
+  });
+
   it("reuses immutable discovery across full and filtered catalog preparation", () => {
     const cfg = {
       mcp: {
@@ -99,6 +138,30 @@ describe("session MCP config discovery cache", () => {
 
     expect(mocks.loadCount).toBe(4);
     expect(first.fingerprint).not.toBe(second.fingerprint);
+  });
+
+  it("keeps process-wide discovery isolated across sessions on the same agent", () => {
+    const cfg = { mcp: { servers: { docs: { command: "docs" } } } };
+    const disabled = loadSessionMcpConfig({
+      workspaceDir: "/same-agent-workspace",
+      cfg,
+      toolOverrides: { mcpServers: { docs: false } },
+    });
+    const enabled = loadSessionMcpConfig({
+      workspaceDir: "/same-agent-workspace",
+      cfg,
+      toolOverrides: { mcpServers: { docs: true } },
+    });
+    const disabledAgain = loadSessionMcpConfig({
+      workspaceDir: "/same-agent-workspace",
+      cfg,
+      toolOverrides: { mcpServers: { docs: false } },
+    });
+
+    expect(Object.keys(disabled.loaded.mcpServers)).toEqual([]);
+    expect(Object.keys(enabled.loaded.mcpServers)).toEqual(["docs"]);
+    expect(disabledAgain).toEqual(disabled);
+    expect(mocks.loadCount).toBe(2);
   });
 
   it("snapshots nested config values at the cache boundary", () => {

@@ -269,7 +269,7 @@ describe("managed npm root", () => {
       npmRoot,
       packageName: "@openclaw/feishu",
       dependencySpec: "2026.5.4",
-      omitUnsupportedManagedOverrides: true,
+      overrideOmissions: { npmAliases: true },
       managedOverrides: {
         axios: "1.18.0",
         "node-domexception": "npm:@nolyfill/domexception@1.0.28",

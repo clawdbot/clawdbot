@@ -1,94 +1,33 @@
 import { css } from "lit";
 
 export const terminalPanelStyles = css`
-  :host {
-    position: fixed;
-    z-index: 60;
-    color: var(--text, #d7dae0);
-    font-family: var(--font-sans, system-ui, sans-serif);
-  }
-  .tp {
-    position: fixed;
-    display: flex;
-    flex-direction: column;
-    background: var(--bg, #0e1015);
-    overflow: hidden;
-  }
   .tp--bottom {
     left: var(--shell-nav-width, 0);
     right: 0;
     bottom: 0;
-    border-top: 1px solid var(--border, #262b34);
     --tp-session-menu-max-height: calc(var(--tp-panel-height) - 44px);
   }
   .tp--right {
     top: var(--shell-topbar-height, 0);
     right: 0;
     bottom: 0;
-    border-left: 1px solid var(--border, #262b34);
+    --tp-session-menu-max-height: calc(100dvh - var(--shell-topbar-height, 0px) - 44px);
+  }
+  .tp--main {
+    /* Main mode owns the content region; later sibling docks may overlay it. */
+    top: var(--shell-topbar-height, 0);
+    left: var(--shell-nav-width, 0);
+    right: 0;
+    bottom: 0;
     --tp-session-menu-max-height: calc(100dvh - var(--shell-topbar-height, 0px) - 44px);
   }
   .tp--fullscreen {
     inset: 0;
   }
-  .tp-resizer {
-    position: absolute;
-    z-index: 2;
-    background: transparent;
-  }
-  .tp-resizer:hover {
-    background: var(--accent, #ff5c5c);
-    opacity: 0.5;
-  }
-  .tp-resizer--bottom {
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 5px;
-    cursor: ns-resize;
-  }
-  .tp-resizer--right {
-    top: 0;
-    bottom: 0;
-    left: 0;
-    width: 5px;
-    cursor: ew-resize;
-  }
-  .tp-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 0 6px 0 4px;
-    border-bottom: 1px solid var(--border, #262b34);
-    background: var(--bg, #0e1015);
-    min-height: 36px;
-  }
-  .tp-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    border: none;
-    background: transparent;
-    color: var(--muted, #8a919e);
-    border-radius: 6px;
-    padding: 0;
-  }
-  .tp-icon:hover {
-    background: color-mix(in srgb, var(--text, #d7dae0) 12%, transparent);
-    color: var(--text, #d7dae0);
-  }
-  .tp-icon.is-active {
-    color: var(--text, #d7dae0);
-    background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);
-  }
-  .tp-actions {
+  .tp-dock-modes {
     display: flex;
     align-items: center;
     gap: 2px;
-    padding-left: 6px;
   }
   .tp-session-picker {
     position: relative;
@@ -101,11 +40,11 @@ export const terminalPanelStyles = css`
     width: min(360px, calc(100vw - 24px));
     max-height: min(420px, var(--tp-session-menu-max-height));
     overflow-y: auto;
-    border: 1px solid var(--border, #262b34);
-    border-radius: 8px;
-    background: var(--bg, #0e1015);
-    box-shadow: 0 12px 30px rgb(0 0 0 / 35%);
-    padding: 6px;
+    padding: var(--menu-padding);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--menu-radius);
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-md);
   }
   .tp-session-menu__header {
     display: flex;
@@ -131,7 +70,8 @@ export const terminalPanelStyles = css`
     gap: 8px;
     width: 100%;
     border: 0;
-    border-radius: 6px;
+    min-height: var(--menu-item-height);
+    border-radius: var(--menu-item-radius);
     background: transparent;
     color: var(--text, #d7dae0);
     padding: 7px 8px;
@@ -139,7 +79,7 @@ export const terminalPanelStyles = css`
   }
   .tp-session:not(:disabled):hover,
   .tp-session:not(:disabled):focus-visible {
-    background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);
+    background: var(--bg-hover);
   }
   .tp-session:disabled {
     opacity: 0.55;
@@ -208,13 +148,9 @@ export const terminalPanelStyles = css`
     border-radius: 50%;
     animation: tp-spin 0.8s linear infinite;
   }
-  .tp-empty,
   .tp-error {
     padding: 10px 12px;
     font-size: 12px;
-    color: var(--muted, #8a919e);
-  }
-  .tp-error {
     color: var(--danger, #ff6b6b);
   }
   @keyframes tp-spin {

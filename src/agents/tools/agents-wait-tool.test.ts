@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SubagentRunRecord } from "../subagent-registry.types.js";
+import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 
 const records = new Map<string, SubagentRunRecord>();
 const registryEvents = vi.hoisted(() => ({ listeners: new Set<() => void>() }));
 
-vi.mock("../subagent-registry.js", () => ({
+vi.mock("../subagents/registry/subagent-registry.js", () => ({
   getSubagentRunsByRunIds: (runIds: readonly string[]) => ({
     entries: new Map(
       runIds.flatMap((runId) => {
@@ -20,15 +20,15 @@ vi.mock("../subagent-registry.js", () => ({
   }),
 }));
 
-vi.mock("../subagent-registry-state.js", () => ({
+vi.mock("../subagents/registry/subagent-registry-state.js", () => ({
   onSubagentRegistryPersisted: (listener: () => void) => {
     registryEvents.listeners.add(listener);
     return () => registryEvents.listeners.delete(listener);
   },
 }));
 
+import { isToolResultError } from "../tool-result-error.js";
 import { createAgentsWaitTool, waitForCollectorCompletion } from "./agents-wait-tool.js";
-import { testing } from "./agents-wait-tool.test-support.js";
 
 function collectorRun(
   runId: string,
@@ -44,6 +44,7 @@ function collectorRun(
     task: runId,
     cleanup: "keep",
     createdAt: Date.now(),
+    execution: { status: completion ? "terminal" : "running" },
     collect: true,
     swarmRequesterSessionKey: requesterSessionKey,
     groupId: "group",
@@ -80,6 +81,24 @@ describe("agents_wait", () => {
     expect(registryEvents.listeners.size).toBe(0);
   });
 
+  it("returns retained visible output when a successful collector ends with NO_REPLY", async () => {
+    const entry = collectorRun("retained", "agent:main:main", { status: "done" });
+    entry.execution = { status: "terminal", outcome: { status: "ok" } };
+    entry.completion = {
+      required: false,
+      resultText: "NO_REPLY",
+      fallbackResultText: "retained collector result",
+    };
+    records.set(entry.runId, entry);
+
+    await expect(
+      waitForCollectorCompletion({
+        runId: entry.runId,
+        currentSessionKeys: new Set(["agent:main:main"]),
+      }),
+    ).resolves.toMatchObject({ result: "retained collector result" });
+  });
+
   it("rejects when abort wins the listener-registration race", async () => {
     const entry = collectorRun("abort-race", "agent:main:main");
     records.set(entry.runId, entry);
@@ -98,11 +117,6 @@ describe("agents_wait", () => {
       }),
     ).rejects.toThrow("agents.run wait aborted");
     expect(registryEvents.listeners.size).toBe(0);
-  });
-
-  it("exposes ownership helpers through test support", () => {
-    const entry = collectorRun("owned", "agent:main:main");
-    expect(testing.ownsRun(entry, new Set(["agent:main:main"]))).toBe(true);
   });
 
   it("returns the first completed child and leaves siblings pending", async () => {
@@ -138,6 +152,45 @@ describe("agents_wait", () => {
       ],
       pending: ["one"],
     });
+  });
+
+  it("projects an authorized collector failure without failing a mixed batch", async () => {
+    const failed = collectorRun("failed", "agent:main:main", {
+      status: "failed",
+      structured: { partial: true },
+    });
+    failed.execution = {
+      status: "terminal",
+      outcome: { status: "error", error: "provider failed after tool output" },
+    };
+    failed.completion = { required: false, resultText: null, capturedAt: 10 };
+    records.set(failed.runId, failed);
+    records.set("pending", collectorRun("pending", "agent:main:main"));
+    const tool = createAgentsWaitTool({
+      agentSessionKey: "agent:main:main",
+      agentId: "main",
+      config: { tools: { swarm: true } },
+    });
+
+    const result = await tool.execute("call", {
+      ids: [failed.runId, "pending"],
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toEqual({
+      completed: [
+        {
+          runId: failed.runId,
+          status: "failed",
+          result: "",
+          structured: { partial: true },
+          error: "provider failed after tool output",
+          sessionKey: failed.childSessionKey,
+        },
+      ],
+      pending: ["pending"],
+    });
+    expect(isToolResultError(result)).toBe(false);
   });
 
   it("orders completions by their durable capture time instead of input order", async () => {
@@ -193,6 +246,7 @@ describe("agents_wait", () => {
         { runId: "missing", error: "not_found" },
       ],
     });
+    expect(isToolResultError(first)).toBe(false);
   });
 
   it("authorizes a snapshotted ancestor after the ordinary spawner row is archived", async () => {
@@ -206,6 +260,7 @@ describe("agents_wait", () => {
       task: "spawn collector",
       cleanup: "delete",
       createdAt: Date.now(),
+      execution: { status: "running" },
     });
     const completed = collectorRun("nested", ownerSessionKey, { status: "done" });
     completed.swarmWaitOwnerSessionKeys = [ownerSessionKey, "agent:main:main"];
@@ -293,8 +348,101 @@ describe("agents_wait", () => {
       completed: [],
       pending: [],
       errors: [{ runId: "routed", error: "not_owner" }],
+      success: false,
+    });
+    expect(isToolResultError(denied)).toBe(true);
+  });
+
+  it("rejects a foreign collector with the same bare requester key", async () => {
+    const foreign = collectorRun("foreign-global", "global", { status: "done" });
+    foreign.requesterAgentId = "ops";
+    records.set(foreign.runId, foreign);
+    const tool = createAgentsWaitTool({
+      agentSessionKey: "global",
+      agentId: "research",
+      config: {
+        agents: { ownership: "explicit", entries: { research: {}, ops: {} } },
+        tools: { swarm: true },
+      },
+    });
+
+    const result = await tool.execute("wait", {
+      ids: [foreign.runId],
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      errors: [{ runId: foreign.runId, error: "not_owner" }],
+      success: false,
     });
   });
+
+  it("marks entirely missing collector batches as failures without losing per-id errors", async () => {
+    const tool = createAgentsWaitTool({
+      agentSessionKey: "agent:main:main",
+      agentId: "main",
+      config: { tools: { swarm: true } },
+    });
+
+    const result = await tool.execute("call", { ids: ["missing"], timeoutSeconds: 0 });
+
+    expect(result.details).toEqual({
+      completed: [],
+      pending: [],
+      errors: [{ runId: "missing", error: "not_found" }],
+      success: false,
+    });
+    expect(isToolResultError(result)).toBe(true);
+  });
+
+  it("rejects collector batches containing only blank run ids", async () => {
+    const tool = createAgentsWaitTool({
+      agentSessionKey: "agent:main:main",
+      agentId: "main",
+      config: { tools: { swarm: true } },
+    });
+
+    await expect(tool.execute("call", { ids: [" ", "\t"], timeoutSeconds: 0 })).rejects.toThrow(
+      "at least one non-empty run id",
+    );
+  });
+
+  it.each(["before", "during", "registration"] as const)(
+    "rejects when the wait is aborted %s collector polling",
+    async (abortTiming) => {
+      records.set("pending", collectorRun("pending", "agent:main:main"));
+      const tool = createAgentsWaitTool({
+        agentSessionKey: "agent:main:main",
+        agentId: "main",
+        config: { tools: { swarm: true } },
+      });
+      const controller = new AbortController();
+      if (abortTiming === "before") {
+        controller.abort();
+      }
+      if (abortTiming === "registration") {
+        const addEventListener = controller.signal.addEventListener.bind(controller.signal);
+        vi.spyOn(controller.signal, "addEventListener").mockImplementation((...args) => {
+          controller.abort();
+          addEventListener(...args);
+        });
+      }
+
+      const result = tool.execute(
+        "call",
+        { ids: ["pending"], timeoutSeconds: 1 },
+        controller.signal,
+      );
+      if (abortTiming === "during") {
+        controller.abort();
+      }
+
+      await expect(result).rejects.toMatchObject({
+        name: "AbortError",
+        message: "agents_wait aborted.",
+      });
+    },
+  );
 
   it("rejects oversized wait batches before polling", async () => {
     const tool = createAgentsWaitTool({

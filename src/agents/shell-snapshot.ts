@@ -10,6 +10,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { withTempWorkspace } from "../infra/private-temp-workspace.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { killProcessTree } from "../process/kill-tree.js";
 
 const SNAPSHOT_VERSION = 1;
@@ -260,39 +262,41 @@ async function validateSnapshot(
 
 async function captureShellSnapshot(opts: ShellSnapshotWrapOptions): Promise<string | null> {
   const shellName = path.basename(opts.shell);
-  const captureOutputDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-shell-snapshot-"));
-  await fs.chmod(captureOutputDir, 0o700);
-  const captureOutputPath = path.join(captureOutputDir, "snapshot.out");
-  const captureOutputFile = await fs.open(captureOutputPath, "wx", 0o600);
-  await captureOutputFile.close();
-  const captureCommand = [
-    "{",
-    buildStartupSourceScript(shellName),
-    `printf '\\n%s\\n' ${shQuote(CAPTURE_MARKER)}`,
-    buildAliasCaptureScript(shellName),
-    "(typeset -f 2>/dev/null || declare -f 2>/dev/null || true)",
-    `printf '\\n%s\\n' ${shQuote(ENV_MARKER)}`,
-    `${shQuote(process.execPath)} -e ${shQuote(ENV_CAPTURE_NODE_SCRIPT)}`,
-    `} > ${shQuote(captureOutputPath)}`,
-  ].join("\n");
+  return await withTempWorkspace(
+    {
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-shell-snapshot-",
+      dirMode: 0o700,
+      mode: 0o600,
+    },
+    async (workspace) => {
+      const captureOutputPath = await workspace.writeText("snapshot.out", "");
+      const captureCommand = [
+        "{",
+        buildStartupSourceScript(shellName),
+        `printf '\\n%s\\n' ${shQuote(CAPTURE_MARKER)}`,
+        buildAliasCaptureScript(shellName),
+        "(typeset -f 2>/dev/null || declare -f 2>/dev/null || true)",
+        `printf '\\n%s\\n' ${shQuote(ENV_MARKER)}`,
+        `${shQuote(process.execPath)} -e ${shQuote(ENV_CAPTURE_NODE_SCRIPT)}`,
+        `} > ${shQuote(captureOutputPath)}`,
+      ].join("\n");
 
-  try {
-    const result = await runShell({
-      shell: opts.shell,
-      shellArgs: buildCaptureShellArgs(shellName, opts.shellArgs),
-      cwd: opts.cwd,
-      env: buildTrustedSnapshotCaptureEnv(opts.env),
-      command: captureCommand,
-      timeoutMs: 5_000,
-    });
-    if (result.status !== 0) {
-      return null;
-    }
-    const stdout = await fs.readFile(captureOutputPath, "utf8");
-    return buildSnapshotFile(stdout);
-  } finally {
-    await fs.rm(captureOutputDir, { force: true, recursive: true });
-  }
+      const result = await runShell({
+        shell: opts.shell,
+        shellArgs: buildCaptureShellArgs(shellName, opts.shellArgs),
+        cwd: opts.cwd,
+        env: buildTrustedSnapshotCaptureEnv(opts.env),
+        command: captureCommand,
+        timeoutMs: 5_000,
+      });
+      if (result.status !== 0) {
+        return null;
+      }
+      const stdout = await fs.readFile(captureOutputPath, "utf8");
+      return buildSnapshotFile(stdout);
+    },
+  );
 }
 
 function buildCaptureShellArgs(shellName: string, shellArgs: string[]): string[] {

@@ -18,7 +18,6 @@ import {
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
   setActiveEmbeddedRun,
-  updateActiveEmbeddedRunSessionFile,
 } from "./runs.js";
 import { testing } from "./runs.test-support.js";
 
@@ -117,12 +116,6 @@ describe("embedded run registry lifecycle generations", () => {
       "agent:main:stale",
       "/tmp/stale-session.jsonl",
     );
-    updateActiveEmbeddedRunSessionFile(
-      "shared-session",
-      "/tmp/stale-update.jsonl",
-      priorLifecycleGeneration,
-    );
-
     await expect(
       queueEmbeddedAgentMessageWithOutcomeAsync("shared-session", "still live"),
     ).resolves.toMatchObject({ queued: true, target: "embedded_run" });
@@ -133,9 +126,6 @@ describe("embedded run registry lifecycle generations", () => {
     expect(listActiveEmbeddedRunSessionIds()).toContain("shared-session");
     expect(listActiveEmbeddedRunSessionKeys()).toEqual(["agent:main:current"]);
     expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:stale")).toBeUndefined();
-    expect(
-      resolveActiveEmbeddedRunHandleSessionIdBySessionFile("/tmp/stale-update.jsonl"),
-    ).toBeUndefined();
     expect(isEmbeddedAgentRunAbortableForRunId("current-run")).toBe(false);
     expect(isEmbeddedAgentRunAbortableForRunId("stale-run")).toBe(true);
   });

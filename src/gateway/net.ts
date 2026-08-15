@@ -19,6 +19,7 @@ import {
   type NetworkInterfacesSnapshot,
 } from "../infra/network-interfaces.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
+import { normalizeWebSocketProtocol } from "./websocket-protocol.js";
 
 /** Pick the primary non-internal IPv4 address, preferring common LAN interface names. */
 export function pickPrimaryLanIPv4(): string | undefined {
@@ -55,6 +56,32 @@ export function resolveHostName(hostHeader?: string): string {
 
 export function isLoopbackAddress(ip: string | undefined): boolean {
   return isLoopbackIpAddress(ip);
+}
+
+/** Detect forwarded/proxy headers that make loopback requests ineligible for direct-local auth. */
+export function hasForwardedRequestHeaders(req?: IncomingMessage): boolean {
+  if (!req) {
+    return false;
+  }
+  const headers = req.headers ?? {};
+  return Boolean(
+    headers.forwarded ||
+    headers["x-real-ip"] ||
+    Object.keys(headers).some((header) =>
+      normalizeLowercaseStringOrEmpty(header).startsWith("x-forwarded-"),
+    ),
+  );
+}
+
+/** Return whether a request is a clean loopback request without forwarded identity headers. */
+export function isLocalDirectRequest(
+  req?: IncomingMessage,
+  _trustedProxies?: string[],
+  _allowRealIpFallback = false,
+): boolean {
+  return Boolean(
+    req && !hasForwardedRequestHeaders(req) && isLoopbackAddress(req.socket?.remoteAddress),
+  );
 }
 
 export function resolveLocalInterfaceAddressMatch(
@@ -343,14 +370,9 @@ export async function resolveGatewayListenHosts(
   bindHost: string,
   opts?: { canBindToHost?: (host: string) => Promise<boolean> },
 ): Promise<string[]> {
+  const requiredHosts = resolveGatewayRequiredListenHosts(bindHost);
   if (bindHost !== "127.0.0.1") {
-    if (!isValidIPv4(bindHost) || bindHost === "0.0.0.0") {
-      return [bindHost];
-    }
-    // Same-host clients use the canonical loopback URL even when external access is
-    // pinned to one interface. Startup requires both listeners so a foreign loopback
-    // process cannot receive credentials intended for the local Gateway.
-    return [bindHost, "127.0.0.1"];
+    return requiredHosts;
   }
   // Windows: uv_tcp_bind6 creates a dual-stack socket (no UV_TCP_IPV6ONLY), which
   // also accepts ::ffff:127.0.0.1 connections. Binding both ::1 and 127.0.0.1 on
@@ -363,6 +385,16 @@ export async function resolveGatewayListenHosts(
     return [bindHost, "::1"];
   }
   return [bindHost];
+}
+
+/** Returns every address whose bind must succeed for Gateway startup to succeed. */
+export function resolveGatewayRequiredListenHosts(bindHost: string): string[] {
+  if (!isValidIPv4(bindHost) || bindHost === "0.0.0.0" || bindHost === "127.0.0.1") {
+    return [bindHost];
+  }
+  // Same-host clients use the canonical loopback URL even when external access is
+  // pinned to one interface. Lifecycle checks must therefore cover both listeners.
+  return [bindHost, "127.0.0.1"];
 }
 
 /**
@@ -484,8 +516,7 @@ export function isSecureWebSocketUrl(
   // Node's ws client accepts http(s) URLs and normalizes them to ws(s).
   // Treat those aliases the same way here so loopback cron announce delivery
   // and TLS-backed https endpoints follow the same security policy.
-  const protocol =
-    parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
+  const protocol = normalizeWebSocketProtocol(parsed.protocol);
 
   if (protocol === "wss:") {
     return true;

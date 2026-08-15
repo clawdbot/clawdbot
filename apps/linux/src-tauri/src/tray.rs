@@ -1,4 +1,5 @@
 use crate::gateway::{GatewayAction, GatewaySnapshot};
+use crate::gateway_operation_queue::GatewayOperationQueue;
 use crate::quickchat;
 use crate::DesktopState;
 use std::fs;
@@ -235,6 +236,12 @@ pub fn build(
         ])
         .build()?;
 
+    // macOS draws menu bar icons from the alpha channel alone (see
+    // icon_as_template below), so it needs the knocked-out silhouette; the
+    // rounded-tile 32x32.png is opaque edge to edge and renders as a solid blob.
+    #[cfg(target_os = "macos")]
+    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-template.png"))?;
+    #[cfg(not(target_os = "macos"))]
     let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
     let menu_state = state.clone();
     let menu_start_at_login = start_at_login.clone();
@@ -335,9 +342,9 @@ pub fn show_window(app: &AppHandle) {
     }
 }
 
-pub fn open_dashboard(app: &AppHandle, state: &DesktopState) {
+pub fn open_dashboard(app: &AppHandle) {
     show_window(app);
-    spawn_connect(app.clone(), state.clone());
+    app.state::<GatewayOperationQueue>().submit_connect();
 }
 
 fn handle_menu(
@@ -354,7 +361,7 @@ fn handle_menu(
             app.exit(0);
         }
         QUICKCHAT_ID => quickchat::toggle_quickchat(app),
-        OPEN_ID => open_dashboard(app, state),
+        OPEN_ID => open_dashboard(app),
         CHECK_UPDATES_ID => {
             show_window(app);
             crate::updater::spawn_check(app.clone());
@@ -370,9 +377,18 @@ fn handle_menu(
                 toggle_global_shortcut(app, global_shortcut);
             }
         }
-        START_ID => spawn_action(app.clone(), state.clone(), GatewayAction::Start),
-        STOP_ID => spawn_action(app.clone(), state.clone(), GatewayAction::Stop),
-        RESTART_ID => spawn_action(app.clone(), state.clone(), GatewayAction::Restart),
+        START_ID => {
+            app.state::<GatewayOperationQueue>()
+                .submit_action(GatewayAction::Start);
+        }
+        STOP_ID => {
+            app.state::<GatewayOperationQueue>()
+                .submit_action(GatewayAction::Stop);
+        }
+        RESTART_ID => {
+            app.state::<GatewayOperationQueue>()
+                .submit_action(GatewayAction::Restart);
+        }
         _ => {}
     }
 }
@@ -505,22 +521,6 @@ fn toggle_autostart(app: &AppHandle, item: &CheckMenuItem<tauri::Wry>) {
             let _ = item.set_checked(enabled);
         }
     }
-}
-
-fn spawn_connect(app: AppHandle, state: DesktopState) {
-    std::thread::spawn(move || {
-        if let Err(error) = state.connect_explicit_local(&app) {
-            state.show_error(&app, &error);
-        }
-    });
-}
-
-fn spawn_action(app: AppHandle, state: DesktopState, action: GatewayAction) {
-    std::thread::spawn(move || {
-        if let Err(error) = state.gateway_action(&app, action) {
-            state.show_error(&app, &error);
-        }
-    });
 }
 
 #[cfg(test)]

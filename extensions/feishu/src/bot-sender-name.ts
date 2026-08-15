@@ -25,13 +25,24 @@ type FeishuContactUserGetResponse = Awaited<
 
 type FeishuLogger = (...args: unknown[]) => void;
 
+type FeishuApiError = {
+  code: number;
+  message: string;
+};
+
+type SenderNameCacheEntry =
+  | { kind: "resolved"; name: string; expireAt: number }
+  | { kind: "unavailable"; expireAt: number };
+
 const IGNORED_PERMISSION_SCOPE_TOKENS = ["contact:contact.base:readonly"];
 const FEISHU_SCOPE_CORRECTIONS: Record<string, string> = {
   "contact:contact.base:readonly": "contact:user.base:readonly",
 };
+const FEISHU_USER_LOOKUP_UNAUTHORIZED_CODE = 41050;
 const SENDER_NAME_TTL_MS = 10 * 60 * 1000;
+const SENDER_NAME_NEGATIVE_TTL_MS = 30 * 60 * 1000;
 const SENDER_NAME_CACHE_MAX_SIZE = 500;
-const senderNameCache = new Map<string, { name: string; expireAt: number }>();
+const senderNameCache = new Map<string, SenderNameCacheEntry>();
 
 function correctFeishuScopeInUrl(url: string): string {
   let corrected = url;
@@ -47,7 +58,7 @@ function shouldSuppressPermissionErrorNotice(permissionError: FeishuPermissionEr
   return IGNORED_PERMISSION_SCOPE_TOKENS.some((token) => message.includes(token));
 }
 
-function extractPermissionError(err: unknown): FeishuPermissionError | null {
+function extractFeishuApiError(err: unknown): FeishuApiError | null {
   if (!err || typeof err !== "object") {
     return null;
   }
@@ -56,17 +67,32 @@ function extractPermissionError(err: unknown): FeishuPermissionError | null {
   if (!data || typeof data !== "object") {
     return null;
   }
-  const feishuErr = data as { code?: number; msg?: string };
-  if (feishuErr.code !== 99991672) {
+  const feishuErr = data as { code?: unknown; msg?: unknown };
+  if (typeof feishuErr.code !== "number") {
     return null;
   }
-  const msg = feishuErr.msg ?? "";
-  const urlMatch = msg.match(/https:\/\/[^\s,]+\/app\/[^\s,]+/);
   return {
     code: feishuErr.code,
-    message: msg,
+    message: typeof feishuErr.msg === "string" ? feishuErr.msg : "",
+  };
+}
+
+function extractPermissionError(feishuErr: FeishuApiError | null): FeishuPermissionError | null {
+  if (feishuErr?.code !== 99991672) {
+    return null;
+  }
+  const urlMatch = feishuErr.message.match(/https:\/\/[^\s,]+\/app\/[^\s,]+/);
+  return {
+    code: feishuErr.code,
+    message: feishuErr.message,
     grantUrl: urlMatch?.[0] ? correctFeishuScopeInUrl(urlMatch[0]) : undefined,
   };
+}
+
+function writeSenderNameCache(key: string, entry: SenderNameCacheEntry): void {
+  senderNameCache.delete(key);
+  senderNameCache.set(key, entry);
+  pruneMapToMaxSize(senderNameCache, SENDER_NAME_CACHE_MAX_SIZE);
 }
 
 function resolveSenderLookupIdType(senderId: string): "open_id" | "user_id" | "union_id" {
@@ -95,14 +121,15 @@ export async function resolveFeishuSenderName(params: {
     return {};
   }
 
-  const cached = senderNameCache.get(normalizedSenderId);
+  const cacheKey = `${account.accountId}:${normalizedSenderId}`;
+  const cached = senderNameCache.get(cacheKey);
   const now = asDateTimestampMs(Date.now());
   const cachedExpireAt = cached ? asDateTimestampMs(cached.expireAt) : undefined;
   if (cached && now !== undefined && cachedExpireAt !== undefined && cachedExpireAt > now) {
-    return { name: cached.name };
+    return cached.kind === "resolved" ? { name: cached.name } : {};
   }
   if (cached) {
-    senderNameCache.delete(normalizedSenderId);
+    senderNameCache.delete(cacheKey);
   }
 
   try {
@@ -118,14 +145,14 @@ export async function resolveFeishuSenderName(params: {
     if (name) {
       const expireAt = resolveExpiresAtMsFromDurationMs(SENDER_NAME_TTL_MS);
       if (expireAt !== undefined) {
-        senderNameCache.set(normalizedSenderId, { name, expireAt });
-        pruneMapToMaxSize(senderNameCache, SENDER_NAME_CACHE_MAX_SIZE);
+        writeSenderNameCache(cacheKey, { kind: "resolved", name, expireAt });
       }
       return { name };
     }
     return {};
   } catch (err) {
-    const permErr = extractPermissionError(err);
+    const feishuErr = extractFeishuApiError(err);
+    const permErr = extractPermissionError(feishuErr);
     if (permErr) {
       if (shouldSuppressPermissionErrorNotice(permErr)) {
         log(`feishu: ignoring stale permission scope error: ${permErr.message}`);
@@ -133,6 +160,15 @@ export async function resolveFeishuSenderName(params: {
       }
       log(`feishu: permission error resolving sender name: code=${permErr.code}`);
       return { permissionError: permErr };
+    }
+    if (feishuErr?.code === FEISHU_USER_LOOKUP_UNAUTHORIZED_CODE) {
+      // 41050 means this app cannot see the user. Cache the account-scoped miss
+      // so later messages avoid repeating the same failing API request and SDK log.
+      const expireAt = resolveExpiresAtMsFromDurationMs(SENDER_NAME_NEGATIVE_TTL_MS);
+      if (expireAt !== undefined) {
+        writeSenderNameCache(cacheKey, { kind: "unavailable", expireAt });
+      }
+      return {};
     }
     log(`feishu: failed to resolve sender name for ${normalizedSenderId}: ${String(err)}`);
     return {};

@@ -2,21 +2,17 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
-import {
-  applySessionEntryLifecycleMutation,
-  loadSessionEntry,
-  replaceSessionEntry,
-} from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import type { AgentCommandOpts } from "./command/types.js";
-import { claimMainSessionRecoveryOwner } from "./main-session-recovery-store.js";
+import { claimMainSessionRecoveryOwner } from "./main-session-recovery/main-session-recovery-store.js";
 
 const recoveryOwnerMocks = vi.hoisted(() => ({
   scheduleMainSessionRecoveryPendingTarget: vi.fn(),
 }));
 
-vi.mock("./main-session-recovery-owner-release.js", () => ({
+vi.mock("./main-session-recovery/main-session-recovery-owner-release.js", () => ({
   scheduleMainSessionRecoveryPendingTarget:
     recoveryOwnerMocks.scheduleMainSessionRecoveryPendingTarget,
 }));
@@ -113,78 +109,6 @@ describe("agent command restart recovery ownership", () => {
     );
   });
 
-  it("rejects standalone work owned by a legacy session-key alias", async () => {
-    const target = createTarget();
-    await applySessionEntryLifecycleMutation({
-      storePath: target.storePath,
-      upserts: [
-        {
-          sessionKey: "main",
-          entry: {
-            sessionId: target.sessionId,
-            updatedAt: 100,
-            status: "running",
-            abortedLastRun: true,
-          },
-        },
-      ],
-      skipMaintenance: true,
-    });
-    const run = vi.fn();
-
-    await expect(
-      runWithAgentCommandRecoveryOwner({
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        mode: "reject_uncoordinated",
-        opts: {} as AgentCommandOpts,
-        prepare: async () => target,
-        run,
-      }),
-    ).rejects.toThrow("interrupted work pending restart recovery");
-    expect(run).not.toHaveBeenCalled();
-  });
-
-  it("rejects a legacy interrupted predecessor after the canonical key is reused", async () => {
-    const base = createTarget();
-    const target = {
-      ...base,
-      isNewSession: true,
-      previousSessionId: base.sessionId,
-      sessionId: "replacement-session",
-    };
-    await applySessionEntryLifecycleMutation({
-      storePath: target.storePath,
-      upserts: [
-        {
-          sessionKey,
-          entry: { sessionId: target.sessionId, updatedAt: 200 },
-        },
-        {
-          sessionKey: "main",
-          entry: {
-            sessionId: target.previousSessionId,
-            updatedAt: 100,
-            status: "running",
-            abortedLastRun: true,
-          },
-        },
-      ],
-      skipMaintenance: true,
-    });
-    const run = vi.fn();
-
-    await expect(
-      runWithAgentCommandRecoveryOwner({
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        mode: "reject_uncoordinated",
-        opts: {} as AgentCommandOpts,
-        prepare: async () => target,
-        run,
-      }),
-    ).rejects.toThrow("interrupted work pending restart recovery");
-    expect(run).not.toHaveBeenCalled();
-  });
-
   it("allows standalone work when interruption clears during preparation", async () => {
     const target = createTarget();
     await write(target, {
@@ -208,6 +132,64 @@ describe("agent command restart recovery ownership", () => {
       }),
     ).resolves.toBe("ran");
     expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("admits foreground work after clearing terminal recovery residue", async () => {
+    const target = createTarget();
+    await write(target, {
+      sessionId: target.sessionId,
+      updatedAt: 100,
+      status: "failed",
+      abortedLastRun: true,
+      restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "dead-generation" }],
+    });
+    const run = vi.fn(async () => "ran");
+
+    await expect(
+      runWithAgentCommandRecoveryOwner({
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        mode: "claim",
+        opts: {} as AgentCommandOpts,
+        prepare: async () => target,
+        run,
+      }),
+    ).resolves.toBe("ran");
+    expect(run).toHaveBeenCalledOnce();
+    const stored = loadSessionEntry({ sessionKey, storePath: target.storePath }) as SessionEntry;
+    expect(stored).toMatchObject({ status: "failed", abortedLastRun: false });
+    expect(stored.restartRecoveryRuns).toBeUndefined();
+    expect(stored.mainRestartRecovery).toBeUndefined();
+  });
+
+  it("allows read-only standalone inspection of terminal recovery residue", async () => {
+    const target = createTarget();
+    const residue: SessionEntry = {
+      sessionId: target.sessionId,
+      updatedAt: 100,
+      status: "done",
+      abortedLastRun: true,
+      restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "dead-generation" }],
+    };
+    await write(target, residue);
+    const run = vi.fn(async () => "ran");
+
+    await expect(
+      runWithAgentCommandRecoveryOwner({
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        mode: "reject_uncoordinated",
+        opts: {} as AgentCommandOpts,
+        prepare: async () => target,
+        run,
+      }),
+    ).resolves.toBe("ran");
+    expect(run).toHaveBeenCalledOnce();
+    const stored = loadSessionEntry({ sessionKey, storePath: target.storePath }) as SessionEntry;
+    expect(stored).toMatchObject({
+      status: "done",
+      abortedLastRun: true,
+      restartRecoveryRuns: residue.restartRecoveryRuns,
+    });
+    expect(stored.mainRestartRecovery).toBeUndefined();
   });
 
   it("runs a Gateway-admitted recovery without acquiring a foreground owner", async () => {

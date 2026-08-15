@@ -5,16 +5,8 @@ function shortSessionHash(sessionKey: string): string {
   return createHash("sha256").update(sessionKey).digest("hex").slice(0, 32);
 }
 
-export function fallbackDiscussionLabel(sessionKey: string): string {
-  return `s-${shortSessionHash(sessionKey)}`;
-}
-
-export function resolveDiscussionLabel(label: string | undefined, sessionKey: string): string {
-  return label?.trim() || fallbackDiscussionLabel(sessionKey);
-}
-
-export function slugifyDiscussionLabel(label: string, sessionKey: string): string {
-  const slug = label
+function slugifyLabel(label: string): string {
+  return label
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/gu, "")
     .toLowerCase()
@@ -22,6 +14,38 @@ export function slugifyDiscussionLabel(label: string, sessionKey: string): strin
     .replace(/^-+|-+$/gu, "")
     .slice(0, 80)
     .replace(/-+$/gu, "");
+}
+
+export function fallbackDiscussionLabel(sessionKey: string, agentId?: string): string {
+  const agentSegment = agentId?.trim() ? slugifyLabel(agentId) : "";
+  const hash = shortSessionHash(sessionKey).slice(0, 8);
+  // Channel identity lives in external_ref/channelId; this short name is display-only.
+  // resolveAvailableChannelName suffixes collisions instead of relying on a long hash.
+  return `s-${agentSegment ? `${agentSegment}-` : ""}${hash}`;
+}
+
+export function resolveDiscussionLabel(
+  entry: { label?: string; displayName?: string; subject?: string },
+  sessionKey: string,
+  agentId?: string,
+): string {
+  // Keep this entry-only prefix aligned with deriveSessionTitle in src/gateway/session-utils-core.ts.
+  return (
+    entry.label?.trim() ||
+    entry.displayName?.trim() ||
+    entry.subject?.trim() ||
+    fallbackDiscussionLabel(sessionKey, agentId)
+  );
+}
+
+export function truncateDiscussionDisplayTitle(label: string): string {
+  // Mirror the server's normalization (trim after the 200-rune cut) so the
+  // display_title equality assertions cannot fail on a whitespace boundary.
+  return Array.from(label).slice(0, 200).join("").trim();
+}
+
+export function slugifyDiscussionLabel(label: string, sessionKey: string): string {
+  const slug = slugifyLabel(label);
   return slug || fallbackDiscussionLabel(sessionKey);
 }
 
@@ -56,12 +80,11 @@ export function isDiscussionSessionKey(sessionKey: string): boolean {
 export function discussionExternalRef(
   installationId: string,
   mainSessionKey: string,
-  sessionId: string,
   destinationIdentity: string,
   bindingGeneration: string,
 ): string {
   return `openclaw:${installationId}:${shortSessionHash(
-    [mainSessionKey, sessionId, destinationIdentity, bindingGeneration].join("\0"),
+    [mainSessionKey, destinationIdentity, bindingGeneration].join("\0"),
   )}`;
 }
 

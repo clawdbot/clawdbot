@@ -4,10 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CopilotClient } from "@github/copilot-sdk";
 import type { SessionConfig } from "@github/copilot-sdk";
-import type { AgentHarnessAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
+  AgentHarnessV2,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it, vi } from "vitest";
 import { createCopilotAgentHarness } from "../harness.js";
+import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
+
+type SettledTurnFinalizationAttemptParams = Parameters<
+  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
+>[0]["attempt"];
 import type { CopilotClientPool } from "./runtime.js";
 
 const liveToolState = vi.hoisted(() => ({
@@ -179,6 +187,7 @@ function createAttemptParams(params: {
     authProfileId: profileId,
     copilotHome: params.copilotHome,
     cwd: process.cwd(),
+    hostCapabilities: createCopilotTestHostCapabilities(),
     messages: [{ content: params.prompt, role: "user", timestamp: now }],
     model: {
       api: "openai-responses",
@@ -197,6 +206,17 @@ function createAttemptParams(params: {
     timeoutMs: 90_000,
     workspaceDir: process.cwd(),
   } as unknown as AgentHarnessAttemptParams;
+}
+
+function createFinalizationAttempt(
+  attempt: AgentHarnessAttemptParams,
+  overrides: Partial<AgentHarnessAttemptParams>,
+): SettledTurnFinalizationAttemptParams {
+  const { hostCapabilities: _hostCapabilities, ...finalizationAttempt } = {
+    ...attempt,
+    ...overrides,
+  };
+  return finalizationAttempt;
 }
 
 describeLive("copilot agent runtime live smoke", () => {
@@ -231,11 +251,13 @@ describeLive("copilot agent runtime live smoke", () => {
         prompt,
       });
       const settledResult = await harness.runAttempt(attempt);
+      if (!("terminal" in settledResult)) {
+        throw new Error("Copilot harness returned the deprecated attempt result shape");
+      }
       const matchingCalls = liveToolState.calls.filter(
         (text) => text === liveToolState.expectedText,
       );
-      expect(settledResult.promptError).toBeUndefined();
-      expect(settledResult.timedOut).toBe(false);
+      expect(settledResult.terminal).toEqual({ kind: "ok" });
       expect(matchingCalls).toHaveLength(1);
       expect(
         settledResult.toolMetas.some(
@@ -247,8 +269,7 @@ describeLive("copilot agent runtime live smoke", () => {
 
       const finalPrompt = "Reply with exactly COPILOT-SETTLED-FINALIZER-OK and nothing else.";
       const finalResult = await harness.finalizeSettledTurn?.({
-        attempt: {
-          ...attempt,
+        attempt: createFinalizationAttempt(attempt, {
           onAgentEvent: (event: unknown) => {
             const type = (event as { type?: unknown } | undefined)?.type;
             if (typeof type === "string") {
@@ -257,7 +278,7 @@ describeLive("copilot agent runtime live smoke", () => {
           },
           prompt: finalPrompt,
           runId: `${attempt.runId}-finalize`,
-        },
+        }),
         settledAttempt: settledResult,
       });
       if (!finalResult) {

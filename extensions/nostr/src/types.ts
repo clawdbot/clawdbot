@@ -1,19 +1,17 @@
+import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 // Nostr type declarations define plugin contracts.
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
-import {
-  listCombinedAccountIds,
-  resolveListedDefaultAccountId,
-} from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { normalizeSecretInputString, type SecretInput } from "openclaw/plugin-sdk/secret-input";
+import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { NostrProfile } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
 import { getPublicKeyFromPrivate } from "./nostr-key-utils.js";
+import { resolveNostrPrivateKey } from "./private-key.js";
 
 interface NostrAccountConfig {
   enabled?: boolean;
@@ -38,38 +36,20 @@ export interface ResolvedNostrAccount {
   config: NostrAccountConfig;
 }
 
-function resolveConfiguredDefaultNostrAccountId(cfg: OpenClawConfig): string | undefined {
-  const nostrCfg = (cfg.channels as Record<string, unknown> | undefined)?.nostr as
-    | NostrAccountConfig
-    | undefined;
-  return normalizeOptionalAccountId(nostrCfg?.defaultAccount);
-}
+const {
+  listAccountIds: listNostrAccountIds,
+  resolveDefaultAccountId: resolveDefaultNostrAccountId,
+} = createAccountListHelpers("nostr", {
+  fallbackAccountIdWhenEmpty: false,
+  resolveImplicitAccountId: (cfg) => {
+    const account = cfg.channels?.nostr as NostrAccountConfig | undefined;
+    return resolveNostrPrivateKey(account?.privateKey)
+      ? (normalizeOptionalAccountId(account?.defaultAccount) ?? DEFAULT_ACCOUNT_ID)
+      : undefined;
+  },
+});
 
-/**
- * List all configured Nostr account IDs
- */
-export function listNostrAccountIds(cfg: OpenClawConfig): string[] {
-  const nostrCfg = (cfg.channels as Record<string, unknown> | undefined)?.nostr as
-    | NostrAccountConfig
-    | undefined;
-  const privateKey = normalizeSecretInputString(nostrCfg?.privateKey);
-  return listCombinedAccountIds({
-    configuredAccountIds: [],
-    implicitAccountId: privateKey
-      ? (resolveConfiguredDefaultNostrAccountId(cfg) ?? DEFAULT_ACCOUNT_ID)
-      : undefined,
-  });
-}
-
-/**
- * Get the default account ID
- */
-export function resolveDefaultNostrAccountId(cfg: OpenClawConfig): string {
-  return resolveListedDefaultAccountId({
-    accountIds: listNostrAccountIds(cfg),
-    configuredDefaultAccountId: resolveConfiguredDefaultNostrAccountId(cfg),
-  });
-}
+export { listNostrAccountIds, resolveDefaultNostrAccountId };
 
 /**
  * Resolve a Nostr account from config
@@ -84,7 +64,7 @@ export function resolveNostrAccount(opts: {
     | undefined;
 
   const baseEnabled = nostrCfg?.enabled !== false;
-  const privateKey = normalizeSecretInputString(nostrCfg?.privateKey) ?? "";
+  const privateKey = resolveNostrPrivateKey(nostrCfg?.privateKey);
   const configured = Boolean(privateKey);
 
   let publicKey = "";

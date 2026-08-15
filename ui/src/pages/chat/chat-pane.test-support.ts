@@ -1,6 +1,9 @@
 import type { TemplateResult } from "lit";
 import { vi } from "vitest";
 import type {
+  SessionSuggestion,
+  SessionSuggestionEvent,
+  SessionTypingEvent,
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
   TaskSuggestion,
@@ -8,20 +11,27 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayEventFrame, GatewayEventListener } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
-import type { ChatPageHost } from "./chat-state.ts";
+import type { TaskSuggestionAcceptMode } from "../../lib/task-suggestion-acceptance.ts";
+import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
+import type { HeaderMenuAction } from "./components/chat-header-session-menu.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 
 export type TestChatPane = HTMLElement & {
   catalogMessages: unknown[];
   active: boolean;
+  presented: boolean;
+  presentationId: string;
   chatMessagesBySession?: ChatMessageCache;
   chatState: { attach: (state: ChatPageHost) => void };
   context: ApplicationContext;
@@ -30,18 +40,63 @@ export type TestChatPane = HTMLElement & {
   applyGatewaySnapshot: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void;
   connectedCallback: () => void;
   connectionGeneration: number;
+  catalogLoadGeneration: number;
+  continueCatalogSession: (key: CatalogSessionKey) => Promise<void>;
   createSession: () => Promise<boolean>;
+  recoverSession: () => Promise<boolean>;
+  restartRecoveryComposerBanner: () =>
+    | {
+        text: string;
+        actionLabel: string;
+        actionStyle?: "primary";
+        busy?: boolean;
+        busyLabel?: string;
+        onAction: () => void;
+      }
+    | undefined;
+  prepareForEviction: () => void;
+  restoreArchivedSession: (sessionKey: string, expectedSessionId: string) => Promise<void>;
   disconnectedCallback: () => void;
-  acceptTaskSuggestion: (suggestion: TaskSuggestion) => Promise<void>;
+  discardStagedAttachments?: () => void;
+  resumeStagedAttachments?: () => void;
+  acceptTaskSuggestion: (
+    suggestion: TaskSuggestion,
+    mode: TaskSuggestionAcceptMode,
+    cloudProfileId?: string,
+  ) => Promise<void>;
+  copyTaskSuggestionPrompt: (suggestion: TaskSuggestion) => Promise<void>;
   handleDocumentKeydown: (event: KeyboardEvent) => void;
   handleTaskSuggestionEvent: (event: TaskSuggestionEvent) => void;
   refreshTaskSuggestions: () => Promise<void>;
   refreshSessionPullRequests: (options?: { refresh?: boolean }) => Promise<void>;
   sessionPullRequests: ControlUiSessionPullRequest[];
   taskSuggestions: TaskSuggestion[];
+  presencePayload?: { presence: unknown[] };
+  sessionSuggestionAddOperation: symbol | undefined;
+  sessionSuggestionRole: "admin" | "owner" | "member" | "viewer" | undefined;
+  addCurrentSessionSuggestion: () => Promise<void>;
+  resetSessionSuggestions: () => void;
+  sessionSuggestions: SessionSuggestion[];
+  sessionSuggestionsRequestVersion: number;
+  sessionSuggestionsRefreshPromise: Promise<void> | undefined;
+  sessionSuggestionTargetSignature: string;
+  syncSessionSuggestionTarget: (agentId: string, session: GatewaySessionRow | undefined) => void;
+  handleSessionSuggestionEvent: (event: SessionSuggestionEvent) => void;
+  handleSessionTypingEvent: (event: SessionTypingEvent) => void;
+  typingActors: Map<string, { label: string; expiresAt: number }>;
+  refreshSessionSuggestions: () => Promise<void>;
+  resolveCurrentSessionSuggestion: (
+    suggestion: SessionSuggestion,
+    resolution: "send" | "queue" | "edit" | "dismiss",
+  ) => Promise<void>;
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
+  paneId: string;
   sessionKey: string;
-  switchPaneSession: (nextSessionKey: string) => void;
+  updateComplete: Promise<boolean>;
+  deferSessionHydrationUntilTranscript: (
+    sessionKey: string,
+    transcriptLoad: Promise<unknown>,
+  ) => void;
   paneTitle: string;
   catalogSession: SessionCatalogSession | null;
   catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
@@ -63,6 +118,7 @@ export type TestChatPane = HTMLElement & {
   headerEditing: boolean;
   headerRenameValue: string;
   beginHeaderRename: (row: GatewaySessionRow) => void;
+  handleHeaderSessionAction: (action: HeaderMenuAction, row: GatewaySessionRow) => Promise<void>;
   cancelHeaderRename: () => void;
   commitHeaderRename: () => void;
   handleHeaderMenuAction: (
@@ -77,11 +133,14 @@ export type TestChatPane = HTMLElement & {
     agentWorkspace: string | undefined,
     workspaceGit: boolean,
   ) => Promise<void>;
+  headerPlacementReclaimingKey: string | null;
+  reclaimHeaderPlacement: (row: GatewaySessionRow) => Promise<void>;
   markSessionRead: (row: GatewaySessionRow | undefined) => void;
+  applySessionsState: (stateValue: ApplicationContext["sessions"]["state"]) => void;
   renderPaneHeader: (
     workspace: ReturnType<typeof createSessionWorkspaceProps>,
     tasks: ReturnType<typeof createBackgroundTasksProps>,
-    row: undefined,
+    row: GatewaySessionRow | undefined,
     catalog: boolean,
     agentWorkspace: undefined,
     workspaceGit: boolean,
@@ -92,15 +151,58 @@ export function createSessionContext(
   client: GatewayBrowserClient,
   sessions: SessionCapability,
 ): ApplicationContext {
+  const eventListeners = new Set<GatewayEventListener>();
+  const agentSelectionListeners = new Set<(state: { selectedId: string | null }) => void>();
+  const agentSelectionState = { selectedId: "main" as string | null };
+  const snapshotListeners = new Set<
+    (snapshot: ApplicationContext["gateway"]["snapshot"]) => void
+  >();
   return {
     gateway: {
       snapshot: {
         client,
         phase: "connected" as const,
-        hello: { features: { methods: ["taskSuggestions.list"] } },
+        hello: {
+          features: {
+            methods: ["taskSuggestions.list", "session.suggestions.list", "sessions.patch"],
+          },
+        },
+      },
+      connection: { gatewayUrl: "ws://example.test", token: "", bootstrapToken: "", password: "" },
+      eventLog: [],
+      subscribe: (listener: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void) => {
+        snapshotListeners.add(listener);
+        return () => snapshotListeners.delete(listener);
+      },
+      subscribeEvents: (listener: GatewayEventListener) => {
+        eventListeners.add(listener);
+        return () => eventListeners.delete(listener);
+      },
+      subscribeEventLog: () => () => {},
+      connect: vi.fn(),
+      setSessionKey: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+      emitTestEvent: (event: GatewayEventFrame) => {
+        for (const listener of eventListeners) {
+          listener(event);
+        }
       },
     },
     agents: { state: { agentsList: null } },
+    agentSelection: {
+      state: agentSelectionState,
+      set: (agentId: string | null) => {
+        agentSelectionState.selectedId = agentId;
+        for (const listener of agentSelectionListeners) {
+          listener(agentSelectionState);
+        }
+      },
+      subscribe: (listener: (state: { selectedId: string | null }) => void) => {
+        agentSelectionListeners.add(listener);
+        return () => agentSelectionListeners.delete(listener);
+      },
+    },
     config: {
       current: {
         assistantIdentity: { name: "Molty" },
@@ -108,6 +210,8 @@ export function createSessionContext(
       },
     },
     initialUserMessage: createInitialUserMessageHandoff(),
+    chatAttachmentHandoff: createChatAttachmentHandoff(),
+    nativeChatDrafts: { subscribe: () => () => undefined },
     sessions,
   } as unknown as ApplicationContext;
 }
@@ -125,6 +229,8 @@ export function createTestChatPane(params: {
   const state = {
     agentsList: null,
     assistantAgentId: null,
+    chatAttachments: [],
+    chatComposerFallbackByScope: {},
     chatError: null,
     chatHistoryPagination: { hasMore: false },
     chatLoading: false,
@@ -144,18 +250,40 @@ export function createTestChatPane(params: {
     sessionsError: null,
     sessionsLoading: false,
     sidebarContent: null,
-    sidebarOpen: false,
+    sidebarFocusPanelId: "",
+    sidebarFocusVersion: 0,
+    sidebarLayout: { columns: [] },
+    ...createInitialChatRealtimeState(),
     // Minimal scroll host so scheduleChatScroll is a no-op instead of throwing.
     chatScrollGeneration: 0,
     chatScrollCommitCleanup: null,
     handleChatScroll: vi.fn(),
-    realtimeTalkInputLevel: { set: vi.fn() },
     resetToolStream: vi.fn(),
     renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
   } as unknown as ChatPageHost;
+  attachChatRealtimeActions(state);
+  state.updateSidebarLayout = (layout) => {
+    state.sidebarLayout = layout;
+  };
+  state.updateSidebarActivePanel = (panelId) => {
+    state.sidebarFocusPanelId = panelId;
+    state.sidebarFocusVersion += 1;
+  };
   pane.context = createSessionContext(params.client, params.sessions);
   pane.state = state;
   pane.connectedClient = params.client;
   pane.connectionGeneration = 4;
-  return { pane, requestUpdate, state };
+  return {
+    pane,
+    requestUpdate,
+    state,
+    emitGatewayEvent: (event: string, payload: unknown) => {
+      const emit = (
+        pane.context.gateway as ApplicationContext["gateway"] & {
+          emitTestEvent: (event: GatewayEventFrame) => void;
+        }
+      ).emitTestEvent;
+      emit({ type: "event", event, payload, seq: 1 });
+    },
+  };
 }

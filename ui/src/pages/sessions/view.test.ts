@@ -31,6 +31,8 @@ function buildMultiResult(sessions: SessionsListResult["sessions"]): SessionsLis
 function buildProps(result: SessionsListResult): SessionsProps {
   return {
     loading: false,
+    agentId: "main",
+    mainKey: "main",
     result,
     error: null,
     activeMinutes: "",
@@ -101,6 +103,161 @@ function sessionTableHeaders(container: HTMLElement): Array<string | undefined> 
 const SESSION_TABLE_HEADERS = ["", "Key", "Kind", "Status", "Updated", "Tokens", "Actions"];
 
 describe("sessions view", () => {
+  it("makes every session sort header a keyboard-accessible button", async () => {
+    const container = document.createElement("div");
+    const onSortChange = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(buildMultiResult([])),
+        onSortChange,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    for (const [label, column] of [
+      ["Key", "key"],
+      ["Kind", "kind"],
+      ["Updated", "updated"],
+      ["Tokens", "tokens"],
+    ] as const) {
+      const header = [...container.querySelectorAll<HTMLTableCellElement>("thead th")].find(
+        (cell) => cell.textContent?.trim() === label,
+      );
+      const button = header?.querySelector("button");
+
+      expect(button, `${label} must be a native keyboard-accessible button`).toBeInstanceOf(
+        HTMLButtonElement,
+      );
+      expect(button?.type).toBe("button");
+      const initialCallCount = onSortChange.mock.calls.length;
+      button?.click();
+      expect(onSortChange).toHaveBeenCalledTimes(initialCallCount + 1);
+      expect(onSortChange).toHaveBeenLastCalledWith(column, column === "updated" ? "asc" : "desc");
+
+      header?.click();
+      expect(onSortChange).toHaveBeenCalledTimes(initialCallCount + 2);
+      expect(onSortChange).toHaveBeenLastCalledWith(column, column === "updated" ? "asc" : "desc");
+    }
+  });
+
+  it.each([
+    { direction: "asc", ariaSort: "ascending" },
+    { direction: "desc", ariaSort: "descending" },
+  ] as const)(
+    "announces only the active $direction session sort",
+    async ({ direction, ariaSort }) => {
+      const container = document.createElement("div");
+      render(
+        renderSessions({
+          ...buildProps(buildMultiResult([])),
+          sortColumn: "kind",
+          sortDir: direction,
+        }),
+        container,
+      );
+      await Promise.resolve();
+
+      const headers = [
+        ...container.querySelectorAll<HTMLTableCellElement>("thead th[data-sortable]"),
+      ];
+      expect(headers).toHaveLength(4);
+      expect(
+        headers.find((header) => header.textContent?.trim() === "Kind")?.getAttribute("aria-sort"),
+      ).toBe(ariaSort);
+      expect(
+        headers
+          .filter((header) => header.textContent?.trim() !== "Kind")
+          .map((header) => header.hasAttribute("aria-sort")),
+      ).toEqual([false, false, false]);
+    },
+  );
+
+  it("announces session-list and mutation failures to assistive technology", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(buildMultiResult([])),
+        error: "group name exceeds 512 characters",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.classList.contains("sessions-error")).toBe(true);
+    expect(alert?.textContent).toContain("group name exceeds 512 characters");
+  });
+
+  it("announces checkpoint failures in their expanded session details", async () => {
+    const sessionKey = "agent:main:checkpoint-failure";
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(buildResult({ key: sessionKey, kind: "direct", updatedAt: 1 })),
+        expandedSessionKey: sessionKey,
+        checkpointErrorByKey: { [sessionKey]: "Checkpoint request timed out" },
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const alert = container.querySelector('.session-details-panel [role="alert"]');
+    expect(alert?.textContent).toContain("Checkpoint request timed out");
+  });
+
+  it("identifies each selectable session before destructive bulk actions", async () => {
+    const container = document.createElement("div");
+    const onToggleSelect = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            { key: "agent:main:first", kind: "direct", updatedAt: 2 },
+            { key: "agent:main:second", kind: "direct", updatedAt: 1 },
+          ]),
+        ),
+        onToggleSelect,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const checkboxes = [
+      ...container.querySelectorAll<HTMLInputElement>('tbody input[type="checkbox"]'),
+    ];
+    expect(checkboxes.map((checkbox) => checkbox.getAttribute("aria-label"))).toEqual([
+      "Select session: agent:main:first",
+      "Select session: agent:main:second",
+    ]);
+
+    checkboxes[0]?.dispatchEvent(new Event("change", { bubbles: true }));
+    checkboxes[1]?.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onToggleSelect.mock.calls).toEqual([["agent:main:first"], ["agent:main:second"]]);
+  });
+
+  it("uses the stored face for generic session links", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+            kind: "direct",
+            boardFace: "dashboard",
+            updatedAt: 1,
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector<HTMLAnchorElement>(".session-link")?.getAttribute("href")).toBe(
+      "/dashboard/main/12345678",
+    );
+  });
+
   it("keeps transcript search distinct from the loaded-roster filter", async () => {
     const container = document.createElement("div");
     const onTranscriptSearchChange = vi.fn();
@@ -226,17 +383,21 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const buttons = container.querySelectorAll<HTMLButtonElement>(".sessions-view-segment button");
-    expect([...buttons].map((button) => button.textContent?.trim())).toEqual([
+    const radios = container.querySelectorAll<HTMLElement & { checked: boolean }>(
+      ".sessions-view-segment wa-radio",
+    );
+    expect([...radios].map((radio) => radio.textContent?.trim())).toEqual([
       "Active",
       "Archived",
       "All",
     ]);
-    expect(buttons[0]?.getAttribute("aria-pressed")).toBe("true");
-    expect(buttons[1]?.getAttribute("aria-pressed")).toBe("false");
-    expect(buttons[2]?.getAttribute("aria-pressed")).toBe("false");
+    expect([...radios].map((radio) => radio.checked)).toEqual([true, false, false]);
 
-    buttons[2]?.click();
+    const group = radios[2]?.closest<HTMLElement & { value: string }>("wa-radio-group");
+    if (group) {
+      group.value = "all";
+      group.dispatchEvent(new Event("change", { bubbles: true }));
+    }
 
     expect(onStatusFilterChange).toHaveBeenCalledWith("all");
   });
@@ -286,8 +447,30 @@ describe("sessions view", () => {
     const counts = Array.from(container.querySelectorAll(".session-group-row__count")).map((el) =>
       el.textContent?.trim(),
     );
-    expect(counts).toEqual(["2 threads", "1 thread"]);
+    expect(counts).toEqual(["2 sessions", "1 session"]);
     expect(container.querySelector(".data-table-pagination")).toBeNull();
+  });
+
+  it("selects and names the current page size on first render", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            { key: "one", kind: "direct", updatedAt: 2 },
+            { key: "two", kind: "direct", updatedAt: 1 },
+          ]),
+        ),
+        pageSize: 25,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const pageSize = container.querySelector<HTMLSelectElement>(".data-table-pagination__size");
+    expect(pageSize?.getAttribute("aria-label")).toBe("Rows per page");
+    expect(pageSize?.value).toBe("25");
+    expect(pageSize?.selectedOptions[0]?.textContent?.trim()).toBe("25 per page");
   });
 
   it("keeps the filtered empty state when grouping is active", async () => {
@@ -335,7 +518,7 @@ describe("sessions view", () => {
 
     // Rows render in group order: Research (agent:main:main) first, then Ungrouped (discord).
     const select = container.querySelectorAll<HTMLSelectElement>(
-      'select[aria-label="Move thread to a group"]',
+      'select[aria-label="Move session to a group"]',
     )[1];
     if (!select) {
       throw new Error("Expected group select");
@@ -366,7 +549,50 @@ describe("sessions view", () => {
     expect(onAssignCategory).toHaveBeenCalledWith("agent:main:main", "Research");
   });
 
-  it("opens the session menu from the kebab and row context menu", async () => {
+  it("disables category assignment controls without group write access", async () => {
+    const container = document.createElement("div");
+    const onAssignCategory = vi.fn();
+    const reason = "Operator write access is required.";
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            { key: "agent:main:main", kind: "direct", updatedAt: 1, category: "Research" },
+          ]),
+        ),
+        groupBy: "category",
+        knownCategories: ["Research"],
+        groupWriteDisabledReason: reason,
+        onAssignCategory,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const select = container.querySelector<HTMLSelectElement>(
+      'select[aria-label="Move session to a group"]',
+    );
+    expect(select?.disabled).toBe(true);
+    expect(select?.title).toBe(reason);
+    if (select) {
+      select.value = "";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    const headerRow = container.querySelector(".session-group-row");
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", {
+      value: {
+        types: ["application/x-openclaw-session-key"],
+        getData: () => "agent:main:main",
+      },
+    });
+    headerRow?.dispatchEvent(drop);
+
+    expect(onAssignCategory).not.toHaveBeenCalled();
+  });
+
+  it("opens the session menu from the kebab and row context-menu shortcuts", async () => {
     const container = document.createElement("div");
     const onOpenSessionMenu = vi.fn();
     const session = {
@@ -384,7 +610,7 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const button = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Open thread menu"]',
+      'button[aria-label="Open session menu"]',
     );
     if (!button) {
       throw new Error("Expected session menu button");
@@ -416,6 +642,21 @@ describe("sessions view", () => {
       null,
     );
     expect(contextMenu.defaultPrevented).toBe(true);
+
+    const keyboardContextMenu = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "F10",
+      shiftKey: true,
+    });
+    row.dispatchEvent(keyboardContextMenu);
+    expect(onOpenSessionMenu).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ key: session.key }),
+      { x: expect.any(Number), y: expect.any(Number) },
+      button,
+    );
+    expect(keyboardContextMenu.defaultPrevented).toBe(true);
   });
 
   it("keeps pinned sessions above newer unpinned sessions", async () => {
@@ -458,10 +699,10 @@ describe("sessions view", () => {
 
     expect(activeField?.querySelector(".session-filter-label")?.textContent).toBe("Updated within");
     expect(tooltips).toEqual([
-      "Loads threads updated in the last 120 minutes.",
-      "Max threads to load.",
-      "Include global threads.",
-      "Include unknown threads.",
+      "Loads sessions updated in the last 120 minutes.",
+      "Max sessions to load.",
+      "Include global sessions.",
+      "Include unknown sessions.",
     ]);
   });
 
@@ -488,7 +729,7 @@ describe("sessions view", () => {
 
     const toggleGroup = container.querySelector(".session-filter-toggle-group");
     expect(toggleGroup?.getAttribute("role")).toBe("group");
-    expect(toggleGroup?.getAttribute("aria-label")).toBe("Thread source filters");
+    expect(toggleGroup?.getAttribute("aria-label")).toBe("Session source filters");
     expect(toggleGroup?.querySelectorAll(".session-filter-check")).toHaveLength(2);
     expect(
       Array.from(toggleGroup?.querySelectorAll(".session-filter-check") ?? []).map((toggle) => [
@@ -959,7 +1200,7 @@ describe("sessions view", () => {
 
     expect(onToggleDetails).toHaveBeenCalledWith("agent:main:main");
     const tokenCell = container.querySelector(".session-token-cell");
-    expect(tokenCell?.textContent?.trim()).toBe("123k / 200k");
+    expect(tokenCell?.textContent?.trim()).toBe("123.5k / 200k");
   });
 
   it("renders the checkpoint count on the details disclosure", async () => {
@@ -1053,6 +1294,7 @@ describe("sessions view", () => {
           }),
         ),
         expandedSessionKey: "agent:main:main",
+        patchAdminDisabledReason: "Operator admin access is required.",
         checkpointItemsByKey: {
           "agent:main:main": [
             {
@@ -1076,7 +1318,7 @@ describe("sessions view", () => {
 
     const details = container.querySelector(".session-details-panel");
     expect(details?.querySelector(".session-details-panel__eyebrow")?.textContent?.trim()).toBe(
-      "Thread details",
+      "Session details",
     );
     expect(details?.querySelector(".session-details-panel__title")?.textContent?.trim()).toBe(
       "agent:main:main",
@@ -1111,6 +1353,12 @@ describe("sessions view", () => {
         (label) => label.textContent?.trim(),
       ),
     ).toEqual(["Label", "Thinking", "Fast", "Verbose", "Reasoning"]);
+    for (const select of overridesSection?.querySelectorAll<HTMLSelectElement>(
+      ".session-override-field select",
+    ) ?? []) {
+      expect(select.disabled).toBe(true);
+      expect(select.title).toBe("Operator admin access is required.");
+    }
 
     expect(
       compactionSection?.querySelector(".session-details-panel__eyebrow")?.textContent?.trim(),
@@ -1313,7 +1561,7 @@ describe("sessions view", () => {
     const emptyState = container.querySelector(".data-table-empty-state");
     expect(emptyState?.getAttribute("role")).toBe("status");
     expect(emptyState?.firstElementChild?.textContent?.trim()).toBe(
-      "No threads match your filters.",
+      "No sessions match your filters.",
     );
     const showAll = emptyState?.querySelector<HTMLButtonElement>("button");
     if (!(showAll instanceof HTMLButtonElement)) {
@@ -1364,7 +1612,7 @@ describe("sessions view", () => {
 
     const emptyState = container.querySelector(".data-table-empty-state");
     expect(emptyState?.firstElementChild?.textContent?.trim()).toBe(
-      testCase.filtered ? "No threads match your filters." : "No archived sessions.",
+      testCase.filtered ? "No sessions match your filters." : "No archived sessions.",
     );
     expect(emptyState?.querySelector("button") !== null).toBe(testCase.filtered);
   });
@@ -1403,7 +1651,7 @@ describe("sessions view", () => {
       tile.querySelector(".sessions-overview__value")?.textContent?.trim(),
     ];
     expect(tiles.map(readTile)).toEqual([
-      ["Threads", "2"],
+      ["Sessions", "2"],
       ["Live", "1"],
       ["Unread", "1"],
       ["Tokens", "1.5k"],

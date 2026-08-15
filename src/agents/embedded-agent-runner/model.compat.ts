@@ -32,7 +32,7 @@ export function resolveConfiguredFallbackReasoning(params: {
   return resolveConfiguredModelReasoning(params) ?? false;
 }
 
-export function resolveConfiguredModelReasoning(params: {
+function resolveConfiguredModelReasoning(params: {
   provider: string;
   compat?: unknown;
   reasoning?: boolean;

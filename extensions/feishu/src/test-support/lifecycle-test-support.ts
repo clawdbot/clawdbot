@@ -1,15 +1,24 @@
 // Feishu plugin module implements lifecycle test support behavior.
 import { randomUUID } from "node:crypto";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  createPluginRuntimeMock,
+  createTestInboundDebounceFlush,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import { expect, vi, type Mock } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
 import { getFeishuRuntime, setFeishuRuntime } from "../runtime.js";
 import type { ResolvedFeishuAccount } from "../types.js";
 
 const FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS = 10_000;
+type InboundDebounceFlush = ReturnType<
+  Parameters<PluginRuntime["channel"]["debounce"]["createInboundDebouncer"]>[0]["onFlush"]
+>;
 
 type InboundDebouncerParams<T> = {
-  onFlush?: (items: T[]) => Promise<void>;
+  onFlush?: (
+    items: T[],
+    createFlush: typeof createTestInboundDebounceFlush,
+  ) => InboundDebounceFlush;
   onError?: (err: unknown, items: T[]) => void;
 };
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
@@ -80,13 +89,14 @@ function createImmediateInboundDebounce() {
     createInboundDebouncer: <T>(params: InboundDebouncerParams<T>) => ({
       enqueue: async (item: T) => {
         try {
-          await params.onFlush?.([item]);
+          await params.onFlush?.([item], createTestInboundDebounceFlush).completion;
         } catch (err) {
           params.onError?.(err, [item]);
         }
       },
       flushKey: async () => {},
       cancelKey: () => false,
+      drain: async () => {},
     }),
   };
 }

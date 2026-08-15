@@ -2,6 +2,8 @@ use crate::gateway_device_identity::{
     GatewayAuth, GatewayDeviceIdentity, GatewayDeviceIdentityStore, CLIENT_DEVICE_FAMILY,
     CLIENT_ID, CLIENT_MODE, CLIENT_PLATFORM, CLIENT_ROLE, CLIENT_SCOPES,
 };
+#[cfg(any(target_os = "linux", test))]
+use crate::gateway_sleep::SleepPrepareOutcome;
 use crate::quickchat::QUICKCHAT_LABEL;
 use futures_util::{SinkExt, StreamExt};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -14,10 +16,14 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt;
 use std::io::ErrorKind;
+#[cfg(any(target_os = "linux", test))]
+use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
+#[cfg(any(target_os = "linux", test))]
+use tauri::Url;
 use tauri::{AppHandle, Emitter, Manager, Webview};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::tungstenite::{Error as TungsteniteError, Message};
@@ -35,6 +41,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(35);
+#[cfg(any(target_os = "linux", test))]
+const SUSPEND_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const DRIVER_TICK: Duration = Duration::from_secs(1);
 const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
 const PAIRING_REQUIRED_DETAIL_CODE: &str = "PAIRING_REQUIRED";
@@ -248,21 +256,62 @@ struct PluginSurfaceRefreshResponse {
     plugin_surface_urls: Option<HashMap<String, String>>,
 }
 
+#[cfg(any(target_os = "linux", test))]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SuspendPrepareResponse {
+    status: Option<String>,
+    suspension_id: Option<String>,
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl SuspendPrepareResponse {
+    fn into_outcome(self) -> SleepPrepareOutcome {
+        match (self.status.as_deref(), self.suspension_id) {
+            (Some("ready"), Some(suspension_id)) if !suspension_id.trim().is_empty() => {
+                SleepPrepareOutcome::Ready { suspension_id }
+            }
+            _ => SleepPrepareOutcome::Busy,
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+#[derive(Deserialize)]
+struct SuspendResumeResponse {
+    resumed: bool,
+}
+
 enum GatewayRequest {
     AgentsList,
     ChatSend(ChatSendParams),
-    RefreshCanvasSurface { observed_url: Option<String> },
+    RefreshCanvasSurface {
+        observed_url: Option<String>,
+    },
+    #[cfg(target_os = "linux")]
+    SuspendPrepare {
+        request_id: String,
+    },
+    #[cfg(target_os = "linux")]
+    SuspendResume {
+        suspension_id: String,
+    },
 }
 
 enum GatewayResponse {
     AgentsList(AgentsListResult),
     ChatSend(ChatSendAck),
     CanvasSurface(Option<String>),
+    #[cfg(target_os = "linux")]
+    SuspendPrepare(SuspendPrepareResponse),
+    #[cfg(target_os = "linux")]
+    SuspendResume(SuspendResumeResponse),
 }
 
 enum DriverCommand {
     Request {
         request: GatewayRequest,
+        budget: Option<Duration>,
         reply: oneshot::Sender<Result<GatewayResponse, String>>,
     },
     Reconfigure,
@@ -385,6 +434,7 @@ struct GatewayClientInner {
     connection_notice: Mutex<Option<String>>,
     connection_state: AtomicU64,
     reconnect_paused: AtomicBool,
+    sleep_cycle_depth: AtomicU64,
     running: AtomicBool,
 }
 
@@ -406,6 +456,7 @@ impl GatewayClient {
                 connection_notice: Mutex::new(None),
                 connection_state: AtomicU64::new(GatewayConnectionState::Down as u64),
                 reconnect_paused: AtomicBool::new(false),
+                sleep_cycle_depth: AtomicU64::new(0),
                 running: AtomicBool::new(false),
             }),
         }
@@ -581,10 +632,73 @@ impl GatewayClient {
         Ok(Some(refreshed))
     }
 
+    #[cfg(target_os = "linux")]
+    pub async fn suspend_prepare(&self, request_id: String) -> Result<SleepPrepareOutcome, String> {
+        let response = tokio::time::timeout(SUSPEND_REQUEST_TIMEOUT, async {
+            self.wait_for_sleep_connection().await;
+            self.request_with_budget(
+                GatewayRequest::SuspendPrepare { request_id },
+                Some(SUSPEND_REQUEST_TIMEOUT),
+            )
+            .await
+        })
+        .await
+        .map_err(|_| "Gateway sleep preparation timed out.".to_string())??;
+        let GatewayResponse::SuspendPrepare(response) = response else {
+            return Err(
+                "Gateway returned the wrong response for gateway.suspend.prepare.".to_string(),
+            );
+        };
+        Ok(response.into_outcome())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub async fn suspend_resume(&self, suspension_id: String) -> Result<bool, String> {
+        let response = tokio::time::timeout(SUSPEND_REQUEST_TIMEOUT, async {
+            self.wait_for_sleep_connection().await;
+            self.request_with_budget(
+                GatewayRequest::SuspendResume { suspension_id },
+                Some(SUSPEND_REQUEST_TIMEOUT),
+            )
+            .await
+        })
+        .await
+        .map_err(|_| "Gateway sleep resume timed out.".to_string())??;
+        let GatewayResponse::SuspendResume(response) = response else {
+            return Err(
+                "Gateway returned the wrong response for gateway.suspend.resume.".to_string(),
+            );
+        };
+        Ok(response.resumed)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn route_token(&self) -> Option<String> {
+        self.inner
+            .config
+            .lock()
+            .expect("gateway config mutex poisoned")
+            .as_ref()
+            .map(|config| config.ws_url.clone())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn is_loopback_route(&self) -> bool {
+        self.loopback_route_token().is_some()
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn loopback_route_token(&self) -> Option<String> {
+        self.inner
+            .config
+            .lock()
+            .expect("gateway config mutex poisoned")
+            .as_ref()
+            .map(|config| config.ws_url.clone())
+            .filter(|route| is_loopback_ws_url(route))
+    }
+
     pub fn resume_reconnect(&self) {
-        if !self.inner.reconnect_paused.load(Ordering::SeqCst) {
-            return;
-        }
         if let Some(commands) = self
             .inner
             .commands
@@ -596,7 +710,45 @@ impl GatewayClient {
         }
     }
 
+    pub fn resume_paused_reconnect(&self) {
+        if self.inner.reconnect_paused.load(Ordering::SeqCst) {
+            self.resume_reconnect();
+        }
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    pub(crate) fn begin_sleep_cycle(&self) {
+        self.inner.sleep_cycle_depth.fetch_add(1, Ordering::SeqCst);
+    }
+
+    #[cfg(any(target_os = "linux", test))]
+    pub(crate) fn end_sleep_cycle(&self) {
+        // Depth, not a boolean: an older wake task ending late must not park the
+        // driver while a newer sleep cycle is still active. Saturate at zero so
+        // an unbalanced end can never wrap into a permanently active driver.
+        let _ = self.inner.sleep_cycle_depth.fetch_update(
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+            |depth| depth.checked_sub(1),
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn wait_for_sleep_connection(&self) {
+        while !self.is_connected() {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+
     async fn request(&self, request: GatewayRequest) -> Result<GatewayResponse, String> {
+        self.request_with_budget(request, None).await
+    }
+
+    async fn request_with_budget(
+        &self,
+        request: GatewayRequest,
+        budget: Option<Duration>,
+    ) -> Result<GatewayResponse, String> {
         if !self.is_connected() {
             return Err("Gateway unreachable — retrying".to_string());
         }
@@ -609,7 +761,11 @@ impl GatewayClient {
             .ok_or_else(|| "Gateway unreachable — retrying".to_string())?;
         let (reply, response) = oneshot::channel();
         commands
-            .send(DriverCommand::Request { request, reply })
+            .send(DriverCommand::Request {
+                request,
+                budget,
+                reply,
+            })
             .await
             .map_err(|_| "Gateway unreachable — retrying".to_string())?;
         tokio::time::timeout(COMMAND_TIMEOUT, response)
@@ -621,7 +777,10 @@ impl GatewayClient {
     async fn run_driver(&self, app: AppHandle, mut receiver: mpsc::Receiver<DriverCommand>) {
         let mut reconnect_attempt = 0_u32;
         loop {
-            if app.get_webview_window(QUICKCHAT_LABEL).is_none() {
+            if !driver_should_run(
+                app.get_webview_window(QUICKCHAT_LABEL).is_some(),
+                self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
+            ) {
                 self.inner.reconnect_paused.store(false, Ordering::SeqCst);
                 self.set_connection_state(&app, GatewayConnectionState::Down, None);
                 tokio::time::sleep(DRIVER_TICK).await;
@@ -695,7 +854,10 @@ impl GatewayClient {
             if connection_result.is_ok() {
                 reconnect_attempt = 1;
             }
-            if app.get_webview_window(QUICKCHAT_LABEL).is_none() {
+            if !driver_should_run(
+                app.get_webview_window(QUICKCHAT_LABEL).is_some(),
+                self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
+            ) {
                 continue;
             }
             let delay = reconnect_backoff(reconnect_attempt);
@@ -721,8 +883,7 @@ impl GatewayClient {
         let mut socket = tokio::time::timeout(CONNECT_TIMEOUT, connect_gateway_socket(config))
             .await
             .map_err(|_| RequestFailure::transport("Gateway connection timed out."))??;
-        let nonce = wait_for_connect_challenge(&mut socket).await?;
-        let signed_at_ms = unix_time_ms().map_err(RequestFailure::transport)?;
+        let challenge = wait_for_connect_challenge(&mut socket).await?;
         // Native child WebViews use platform HTTP trust and cannot bind the optional
         // WebSocket leaf pin, so pinned Gateway connections remain capability-free.
         let inline_widgets_available = config
@@ -732,21 +893,25 @@ impl GatewayClient {
         let params = connect_params(
             &identity,
             &auth,
-            &nonce,
-            signed_at_ms,
+            &challenge.nonce,
+            challenge.issued_at_ms,
             inline_widgets_available,
         )
         .map_err(RequestFailure::transport)?;
-        let hello = match request_on_socket(app, &mut socket, "connect", params).await {
-            Ok(hello) => hello,
-            Err(failure) => {
-                let failure = failure.classify_connect(&auth);
-                if should_clear_stored_device_token(&failure, &auth) {
-                    self.clear_device_token(&config.ws_url)?;
+        let dispatch = |frame: &Value| dispatch_chat_event(app, frame);
+        let hello =
+            match request_on_socket(&mut socket, "connect", params, REQUEST_TIMEOUT, &dispatch)
+                .await
+            {
+                Ok(hello) => hello,
+                Err(failure) => {
+                    let failure = failure.classify_connect(&auth);
+                    if should_clear_stored_device_token(&failure, &auth) {
+                        self.clear_device_token(&config.ws_url)?;
+                    }
+                    return Err(failure);
                 }
-                return Err(failure);
-            }
-        };
+            };
         drop(auth);
         let hello = validate_hello(hello).map_err(RequestFailure::transport)?;
         if let Some(device_token) = hello.device_token.as_deref() {
@@ -757,7 +922,7 @@ impl GatewayClient {
             gated_canvas_surface_url(hello.canvas_surface_url, inline_widgets_available),
         );
 
-        let agents = request_agents_list(app, &mut socket).await?;
+        let agents = request_agents_list(&mut socket, REQUEST_TIMEOUT, &dispatch).await?;
         if self.inner.config_generation.load(Ordering::SeqCst) != generation {
             return Ok(());
         }
@@ -767,7 +932,10 @@ impl GatewayClient {
 
         loop {
             if self.inner.config_generation.load(Ordering::SeqCst) != generation
-                || app.get_webview_window(QUICKCHAT_LABEL).is_none()
+                || !driver_should_run(
+                    app.get_webview_window(QUICKCHAT_LABEL).is_some(),
+                    self.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0,
+                )
             {
                 return Ok(());
             }
@@ -778,8 +946,8 @@ impl GatewayClient {
                     };
                     match command {
                         DriverCommand::Reconfigure => return Ok(()),
-                        DriverCommand::Request { request, reply } => {
-                            let result = perform_request(app, &mut socket, request).await;
+                        DriverCommand::Request { request, budget, reply } => {
+                            let result = perform_request(&mut socket, request, budget, &dispatch).await;
                             last_gateway_activity = Instant::now();
                             match result {
                                 Ok(response) => {
@@ -990,6 +1158,12 @@ fn reject_disconnected_command(command: DriverCommand) {
     }
 }
 
+fn driver_should_run(window_exists: bool, sleep_active: bool) -> bool {
+    // Sleep cycles temporarily activate the driver; the companion-wide connection lifetime
+    // remains owned by Quick Chat outside that narrow window.
+    window_exists || sleep_active
+}
+
 fn routing_target(scope: &str, selected_agent_id: &str, main_key: &str) -> ChatRoutingTarget {
     if scope.trim().eq_ignore_ascii_case("global") {
         ChatRoutingTarget {
@@ -1127,22 +1301,42 @@ fn request_frame(id: &str, method: &str, params: Value) -> Value {
     })
 }
 
-async fn wait_for_connect_challenge(socket: &mut GatewaySocket) -> Result<String, RequestFailure> {
+#[derive(Debug, PartialEq, Eq)]
+struct ConnectChallenge {
+    nonce: String,
+    issued_at_ms: u64,
+}
+
+fn parse_connect_challenge(value: &Value) -> Result<ConnectChallenge, RequestFailure> {
+    let nonce = value
+        .get("payload")
+        .and_then(|payload| payload.get("nonce"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|nonce| !nonce.is_empty());
+    let issued_at_ms = value
+        .get("payload")
+        .and_then(|payload| payload.get("ts"))
+        .and_then(Value::as_u64)
+        .ok_or_else(|| RequestFailure::transport("Gateway challenge timestamp was invalid."))?;
+    nonce
+        .map(|nonce| ConnectChallenge {
+            nonce: nonce.to_owned(),
+            issued_at_ms,
+        })
+        .ok_or_else(|| RequestFailure::transport("Gateway challenge omitted nonce."))
+}
+
+async fn wait_for_connect_challenge(
+    socket: &mut GatewaySocket,
+) -> Result<ConnectChallenge, RequestFailure> {
     tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
         loop {
             let value = next_json(socket).await?;
             if value.get("type").and_then(Value::as_str) == Some("event")
                 && value.get("event").and_then(Value::as_str) == Some("connect.challenge")
             {
-                let nonce = value
-                    .get("payload")
-                    .and_then(|payload| payload.get("nonce"))
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|nonce| !nonce.is_empty());
-                return nonce
-                    .map(ToOwned::to_owned)
-                    .ok_or_else(|| RequestFailure::transport("Gateway challenge omitted nonce."));
+                return parse_connect_challenge(&value);
             }
         }
     })
@@ -1150,12 +1344,16 @@ async fn wait_for_connect_challenge(socket: &mut GatewaySocket) -> Result<String
     .map_err(|_| RequestFailure::transport("Gateway connect challenge timed out."))?
 }
 
-async fn request_on_socket(
-    app: &AppHandle,
+async fn request_on_socket<F>(
     socket: &mut GatewaySocket,
     method: &str,
     params: Value,
-) -> Result<Value, RequestFailure> {
+    budget: Duration,
+    dispatch: &F,
+) -> Result<Value, RequestFailure>
+where
+    F: Fn(&Value),
+{
     let id = Uuid::new_v4().to_string();
     let encoded = serde_json::to_string(&request_frame(&id, method, params)).map_err(|error| {
         RequestFailure::transport(format!("Could not encode {method}: {error}"))
@@ -1165,10 +1363,10 @@ async fn request_on_socket(
         .await
         .map_err(|error| RequestFailure::transport(format!("Could not send {method}: {error}")))?;
 
-    tokio::time::timeout(REQUEST_TIMEOUT, async {
+    tokio::time::timeout(budget, async {
         loop {
             let value = next_json(socket).await?;
-            dispatch_chat_event(app, &value);
+            dispatch(&value);
             if value.get("type").and_then(Value::as_str) != Some("res")
                 || value.get("id").and_then(Value::as_str) != Some(id.as_str())
             {
@@ -1193,20 +1391,25 @@ async fn request_on_socket(
     .map_err(|_| RequestFailure::transport(format!("Gateway {method} request timed out.")))?
 }
 
-async fn perform_request(
-    app: &AppHandle,
+async fn perform_request<F>(
     socket: &mut GatewaySocket,
     request: GatewayRequest,
-) -> Result<GatewayResponse, RequestFailure> {
+    budget: Option<Duration>,
+    dispatch: &F,
+) -> Result<GatewayResponse, RequestFailure>
+where
+    F: Fn(&Value),
+{
+    let budget = budget.unwrap_or(REQUEST_TIMEOUT);
     match request {
-        GatewayRequest::AgentsList => request_agents_list(app, socket)
+        GatewayRequest::AgentsList => request_agents_list(socket, budget, dispatch)
             .await
             .map(GatewayResponse::AgentsList),
         GatewayRequest::ChatSend(params) => {
             let params = serde_json::to_value(params).map_err(|error| {
                 RequestFailure::transport(format!("Could not encode chat.send: {error}"))
             })?;
-            let payload = request_on_socket(app, socket, "chat.send", params).await?;
+            let payload = request_on_socket(socket, "chat.send", params, budget, dispatch).await?;
             serde_json::from_value(payload)
                 .map(GatewayResponse::ChatSend)
                 .map_err(|error| {
@@ -1218,7 +1421,9 @@ async fn perform_request(
             if let Some(observed_url) = observed_url {
                 params["observedUrl"] = Value::String(observed_url);
             }
-            let payload = request_on_socket(app, socket, "plugin.surface.refresh", params).await?;
+            let payload =
+                request_on_socket(socket, "plugin.surface.refresh", params, budget, dispatch)
+                    .await?;
             let response: PluginSurfaceRefreshResponse =
                 serde_json::from_value(payload).map_err(|error| {
                     RequestFailure::transport(format!(
@@ -1232,14 +1437,71 @@ async fn perform_request(
                 .filter(|url| !url.is_empty());
             Ok(GatewayResponse::CanvasSurface(canvas))
         }
+        #[cfg(target_os = "linux")]
+        GatewayRequest::SuspendPrepare { request_id } => {
+            let payload = request_on_socket(
+                socket,
+                "gateway.suspend.prepare",
+                json!({ "requestId": request_id }),
+                budget,
+                dispatch,
+            )
+            .await?;
+            serde_json::from_value(payload)
+                .map(GatewayResponse::SuspendPrepare)
+                .map_err(|error| {
+                    RequestFailure::transport(format!(
+                        "Invalid gateway.suspend.prepare response: {error}"
+                    ))
+                })
+        }
+        #[cfg(target_os = "linux")]
+        GatewayRequest::SuspendResume { suspension_id } => {
+            let payload = request_on_socket(
+                socket,
+                "gateway.suspend.resume",
+                json!({ "suspensionId": suspension_id }),
+                budget,
+                dispatch,
+            )
+            .await?;
+            serde_json::from_value(payload)
+                .map(GatewayResponse::SuspendResume)
+                .map_err(|error| {
+                    RequestFailure::transport(format!(
+                        "Invalid gateway.suspend.resume response: {error}"
+                    ))
+                })
+        }
     }
 }
 
-async fn request_agents_list(
-    app: &AppHandle,
+#[cfg(any(target_os = "linux", test))]
+fn is_loopback_ws_url(raw: &str) -> bool {
+    let Ok(url) = Url::parse(raw) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "ws" | "wss") {
+        return false;
+    }
+    url.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .trim_matches(['[', ']'])
+                .parse::<IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+    })
+}
+
+async fn request_agents_list<F>(
     socket: &mut GatewaySocket,
-) -> Result<AgentsListResult, RequestFailure> {
-    let payload = request_on_socket(app, socket, "agents.list", json!({})).await?;
+    budget: Duration,
+    dispatch: &F,
+) -> Result<AgentsListResult, RequestFailure>
+where
+    F: Fn(&Value),
+{
+    let payload = request_on_socket(socket, "agents.list", json!({}), budget, dispatch).await?;
     serde_json::from_value(payload).map_err(|error| {
         RequestFailure::transport(format!("Invalid agents.list response: {error}"))
     })
@@ -1458,7 +1720,7 @@ async fn handle_idle_message(
     }
 }
 
-fn dispatch_chat_event(app: &AppHandle, frame: &Value) {
+fn dispatch_chat_event<R: tauri::Runtime>(app: &AppHandle<R>, frame: &Value) {
     if frame.get("type").and_then(Value::as_str) != Some("event")
         || frame.get("event").and_then(Value::as_str) != Some("chat")
     {
@@ -1470,16 +1732,107 @@ fn dispatch_chat_event(app: &AppHandle, frame: &Value) {
     }
 }
 
-fn unix_time_ms() -> Result<u64, String> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .map_err(|error| format!("Could not read system time: {error}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sleep_cycle_runs_driver_without_quick_chat() {
+        let client = GatewayClient::new();
+        let sleep_active =
+            |client: &GatewayClient| client.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0;
+        assert!(!driver_should_run(false, false));
+        assert!(driver_should_run(true, false));
+        client.begin_sleep_cycle();
+        assert!(driver_should_run(false, sleep_active(&client)));
+        client.end_sleep_cycle();
+        assert!(!driver_should_run(false, sleep_active(&client)));
+    }
+
+    #[test]
+    fn late_wake_end_does_not_park_a_newer_sleep_cycle() {
+        let client = GatewayClient::new();
+        let sleep_active =
+            |client: &GatewayClient| client.inner.sleep_cycle_depth.load(Ordering::SeqCst) > 0;
+        client.begin_sleep_cycle(); // cycle 1 sleeps
+        client.begin_sleep_cycle(); // cycle 2 sleeps before cycle 1's wake task ends
+        client.end_sleep_cycle(); // cycle 1's wake ends late
+        assert!(driver_should_run(false, sleep_active(&client)));
+        client.end_sleep_cycle();
+        assert!(!driver_should_run(false, sleep_active(&client)));
+        // An unbalanced extra end saturates at zero instead of wrapping.
+        client.end_sleep_cycle();
+        assert!(!driver_should_run(false, sleep_active(&client)));
+    }
+
+    #[tokio::test]
+    async fn budgeted_driver_request_releases_the_serial_queue() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind websocket fixture");
+        let address = listener.local_addr().expect("fixture address");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept websocket fixture");
+            let mut socket = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("accept websocket handshake");
+            let _request = socket.next().await.expect("request frame");
+            std::future::pending::<()>().await;
+        });
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}"))
+            .await
+            .expect("connect websocket fixture");
+        let (commands, mut receiver) = mpsc::channel(2);
+        let (reply, response) = oneshot::channel();
+        commands
+            .send(DriverCommand::Request {
+                request: GatewayRequest::AgentsList,
+                budget: Some(SUSPEND_REQUEST_TIMEOUT),
+                reply,
+            })
+            .await
+            .expect("queue budgeted request");
+        commands
+            .send(DriverCommand::Reconfigure)
+            .await
+            .expect("queue reconnect");
+
+        let started = Instant::now();
+        let command = receiver.recv().await.expect("budgeted request");
+        let DriverCommand::Request {
+            request,
+            budget,
+            reply,
+        } = command
+        else {
+            panic!("expected request command");
+        };
+        let failure = match perform_request(&mut socket, request, budget, &|_| {}).await {
+            Ok(_) => panic!("hung request should time out"),
+            Err(failure) => failure,
+        };
+        let elapsed = started.elapsed();
+        assert!(failure.disconnect, "timeout must recycle the socket");
+        let _ = reply.send(Err(failure.message));
+
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_millis(250), receiver.recv())
+                .await
+                .expect("serial queue remained blocked"),
+            Some(DriverCommand::Reconfigure)
+        ));
+        assert!(
+            elapsed >= Duration::from_millis(2_750),
+            "elapsed: {elapsed:?}"
+        );
+        assert!(elapsed < Duration::from_secs(4), "elapsed: {elapsed:?}");
+        let reply = response.await.expect("driver reply");
+        match reply {
+            Ok(_) => panic!("expected timeout reply"),
+            Err(error) => assert!(error.contains("agents.list request timed out")),
+        }
+        server.abort();
+    }
 
     #[test]
     fn routing_matches_macos_quick_chat_contract() {
@@ -1660,8 +2013,37 @@ mod tests {
             false,
         )
         .expect("pinned connect params");
-        assert_eq!(pinned_params["caps"], json!([]));
+        // Pinning only withdraws inline widgets; agent-kind is unconditional.
+        assert_eq!(pinned_params["caps"], json!([AGENT_KIND_CLIENT_CAPABILITY]));
         std::fs::remove_dir_all(directory).expect("remove connect fixture");
+    }
+
+    #[test]
+    fn connect_challenge_uses_gateway_timestamp() {
+        let Ok(challenge) = parse_connect_challenge(&json!({
+            "payload": {
+                "nonce": " fixture-nonce ",
+                "ts": 1_700_000_000_123_u64
+            }
+        })) else {
+            panic!("expected valid challenge");
+        };
+
+        assert_eq!(
+            challenge,
+            ConnectChallenge {
+                nonce: "fixture-nonce".to_string(),
+                issued_at_ms: 1_700_000_000_123,
+            }
+        );
+        assert!(parse_connect_challenge(&json!({
+            "payload": { "nonce": "missing-time" }
+        }))
+        .is_err());
+        assert!(parse_connect_challenge(&json!({
+            "payload": { "nonce": "fixture-nonce", "ts": "1700000000123" }
+        }))
+        .is_err());
     }
 
     #[test]
@@ -1710,6 +2092,64 @@ mod tests {
                 .as_deref(),
             Some("https://gateway.example/__openclaw__/cap/refreshed-capability")
         );
+    }
+
+    #[test]
+    fn sleep_gateway_routes_are_loopback_only() {
+        for route in [
+            "ws://localhost:18789",
+            "ws://127.0.0.1:18789",
+            "wss://[::1]:18789",
+        ] {
+            assert!(
+                is_loopback_ws_url(route),
+                "expected loopback route: {route}"
+            );
+        }
+        for route in [
+            "ws://192.168.1.10:18789",
+            "wss://gateway.example:18789",
+            "https://127.0.0.1:18789",
+            "not a URL",
+        ] {
+            assert!(!is_loopback_ws_url(route), "expected remote route: {route}");
+        }
+    }
+
+    #[test]
+    fn suspend_wire_results_decode_leniently() {
+        let ready: SuspendPrepareResponse = serde_json::from_value(json!({
+            "status": "ready",
+            "suspensionId": "suspension-1",
+            "expiresAtMs": 1_800_000_000_000_u64,
+            "activeCount": 0,
+            "blockers": []
+        }))
+        .expect("ready suspension response");
+        assert_eq!(
+            ready.into_outcome(),
+            SleepPrepareOutcome::Ready {
+                suspension_id: "suspension-1".into()
+            }
+        );
+
+        let busy: SuspendPrepareResponse = serde_json::from_value(json!({
+            "status": "busy",
+            "reason": "active-work",
+            "retryAfterMs": 1000,
+            "activeCount": 1,
+            "blockers": []
+        }))
+        .expect("busy suspension response");
+        assert_eq!(busy.into_outcome(), SleepPrepareOutcome::Busy);
+
+        let resumed: SuspendResumeResponse = serde_json::from_value(json!({
+            "ok": true,
+            "status": "running",
+            "resumed": false
+        }))
+        .expect("resume response");
+        assert!(!resumed.resumed);
     }
 
     #[test]

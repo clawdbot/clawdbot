@@ -149,8 +149,7 @@ extension SettingsProTab {
         self.selectGatewayCredentialTarget(entry.stableID, allowManualOverride: false)
     }
 
-    func forgetPendingGateway() async {
-        guard let entry = self.pendingForgetGateway else { return }
+    func forgetGateway(_ entry: GatewaySettingsStore.GatewayRegistryEntry) async {
         self.pendingForgetGateway = nil
         guard await self.gatewayController.forgetGateway(stableID: entry.stableID) else {
             self.setupStatusText = String(
@@ -215,6 +214,15 @@ extension SettingsProTab {
     func syncSettingsState() {
         self.refreshGatewayRegistry()
         self.manualGatewayPortText = self.manualGatewayPort > 0 ? String(self.manualGatewayPort) : ""
+        let activeManual = GatewaySettingsStore.activeGatewayEntry()
+        if activeManual?.kind == .manual,
+           activeManual?.host?.caseInsensitiveCompare(self.manualGatewayHost) == .orderedSame,
+           activeManual?.port == self.manualGatewayPort
+        {
+            self.manualGatewayContextPath = activeManual?.contextPath
+        } else {
+            self.manualGatewayContextPath = nil
+        }
         self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
         self.defaultShareInstruction = ShareToAgentSettings.loadDefaultInstruction()
         self.refreshLocationPermissionSummary()
@@ -241,25 +249,25 @@ extension SettingsProTab {
 
     func refreshLocationPermissionSummary(desiredMode modeOverride: OpenClawLocationMode? = nil) {
         let mode = modeOverride ?? OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
-        let manager = CLLocationManager()
+        let authorization = self.appModel.locationAuthorizationSnapshot
         self.locationPermissionRefreshID &+= 1
         let refreshID = self.locationPermissionRefreshID
         let currentSummary = self.locationPermissionSummary
         self.locationPermissionSummary = LocationPermissionSummary(
             desiredMode: mode,
             locationServicesEnabled: currentSummary.locationServicesEnabled,
-            authorizationStatus: manager.authorizationStatus,
-            accuracyAuthorization: manager.accuracyAuthorization)
+            authorizationStatus: authorization.authorizationStatus,
+            accuracyAuthorization: authorization.accuracyAuthorization)
         Task {
             let locationServicesEnabled = await Self.locationServicesEnabled()
             guard refreshID == self.locationPermissionRefreshID else { return }
-            let latestManager = CLLocationManager()
+            let latestAuthorization = self.appModel.locationAuthorizationSnapshot
             let latestMode = modeOverride ?? OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
             self.locationPermissionSummary = LocationPermissionSummary(
                 desiredMode: latestMode,
                 locationServicesEnabled: locationServicesEnabled,
-                authorizationStatus: latestManager.authorizationStatus,
-                accuracyAuthorization: latestManager.accuracyAuthorization)
+                authorizationStatus: latestAuthorization.authorizationStatus,
+                accuracyAuthorization: latestAuthorization.accuracyAuthorization)
         }
     }
 
@@ -372,6 +380,7 @@ extension SettingsProTab {
         self.manualGatewayPort = link.port
         self.manualGatewayPortText = String(link.port)
         self.manualGatewayTLS = link.tls
+        self.manualGatewayContextPath = link.contextPath
         let instanceId = GatewaySettingsStore.currentInstanceID()
         let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
         self.gatewayCredentialFieldStableID = setupAuth.targetStableID
@@ -544,6 +553,7 @@ extension SettingsProTab {
             host: host,
             port: port,
             useTLS: self.manualGatewayTLS,
+            contextPath: self.manualGatewayContextPath,
             authOverride: authOverride)
         // The controller now owns this attempt's immutable override. A later retry must reload
         // durable state so a spent bootstrap token cannot be resurrected from the live view.
@@ -704,12 +714,12 @@ extension SettingsProTab {
         guard let mode = self.pendingLocationMode else { return }
         Task {
             let locationServicesEnabled = await Self.locationServicesEnabled()
-            let manager = CLLocationManager()
+            let authorization = self.appModel.locationAuthorizationSnapshot
             let summary = LocationPermissionSummary(
                 desiredMode: mode,
                 locationServicesEnabled: locationServicesEnabled,
-                authorizationStatus: manager.authorizationStatus,
-                accuracyAuthorization: manager.accuracyAuthorization)
+                authorizationStatus: authorization.authorizationStatus,
+                accuracyAuthorization: authorization.accuracyAuthorization)
             self.locationPermissionSummary = summary
             let unavailableStatus = self.locationSettingsPresentation(selectedMode: mode).statusText
             self.pendingLocationMode = nil
@@ -831,7 +841,8 @@ extension SettingsProTab {
         guard !host.isEmpty, let port = self.resolvedManualPort(host: host) else { return nil }
         return GatewayConnectionController.ManualAuthOverride.manualStableID(
             host: host,
-            port: port)
+            port: port,
+            contextPath: self.manualGatewayContextPath)
     }
 
     var gatewayCredentialTargetStableID: String? {
@@ -880,6 +891,7 @@ extension SettingsProTab {
             get: { self.manualGatewayHost },
             set: { value in
                 let previousStableID = self.currentManualGatewayStableID
+                self.manualGatewayContextPath = nil
                 self.manualGatewayHost = value
                 if GatewayStableIdentifier.key(previousStableID) !=
                     GatewayStableIdentifier.key(self.currentManualGatewayStableID)
@@ -969,6 +981,7 @@ extension SettingsProTab {
             get: { self.manualGatewayPortText },
             set: { newValue in
                 let previousStableID = self.currentManualGatewayStableID
+                self.manualGatewayContextPath = nil
                 let filtered = newValue.filter(\.isNumber)
                 self.manualGatewayPortText = filtered
                 self.manualGatewayPort = Int(filtered) ?? 0

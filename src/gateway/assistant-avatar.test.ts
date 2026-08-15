@@ -1,9 +1,10 @@
 // Gateway assistant-avatar tests cover selected-source precedence and safe fallbacks.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createGatewayAvatarDataUrlCache } from "./assistant-avatar-cache.js";
 import { openGatewayAssistantAvatar, resolveGatewayAssistantAvatar } from "./assistant-avatar.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 
@@ -31,6 +32,39 @@ function projectAvatar(cfg: OpenClawConfig): GatewayAssistantAvatarProjection {
 }
 
 describe("resolveGatewayAssistantAvatar", () => {
+  it("reuses unchanged pinned files and rereads after mtime or size changes", () => {
+    const read = vi.fn(
+      (opened: { stat: { mtimeMs: number; size: number } }) =>
+        `data:image/png;base64,${opened.stat.mtimeMs}:${opened.stat.size}`,
+    );
+    const close = vi.fn();
+    const cache = createGatewayAvatarDataUrlCache({ maxEntries: 2, read, close });
+    const opened = (
+      fd: number,
+      mtimeMs: number,
+      size: number,
+      identity = { ctimeMs: 5, dev: 1, ino: 2 },
+    ) => ({
+      path: "/workspace/avatar.png",
+      fd,
+      stat: { ...identity, mtimeMs, size },
+    });
+
+    expect(cache.read(opened(1, 10, 20))).toBe("data:image/png;base64,10:20");
+    expect(cache.read(opened(2, 10, 20))).toBe("data:image/png;base64,10:20");
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledWith(2);
+
+    expect(cache.read(opened(3, 11, 20))).toBe("data:image/png;base64,11:20");
+    expect(cache.read(opened(4, 11, 21))).toBe("data:image/png;base64,11:21");
+    expect(read).toHaveBeenCalledTimes(3);
+
+    expect(cache.read(opened(5, 11, 21, { ctimeMs: 6, dev: 1, ino: 3 }))).toBe(
+      "data:image/png;base64,11:21",
+    );
+    expect(read).toHaveBeenCalledTimes(4);
+  });
+
   it("inlines the selected local file", () => {
     const { cfg, workspace } = createWorkspace();
     fs.writeFileSync(path.join(workspace, "avatar.png"), REAL_PNG);

@@ -21,19 +21,10 @@ export type ClickClackDiscussionBinding = {
   section: string;
   archived: boolean;
   label: string;
+  displayTitle?: string;
+  /** Set only while the owning OpenClaw session entry is absent. */
+  detachedAt?: number;
 };
-
-export function bindingMatchesSessionIncarnation(
-  runtime: PluginRuntime,
-  sessionKey: string,
-  binding: ClickClackDiscussionBinding,
-): boolean {
-  const entry = runtime.agent.session.getSessionEntry({
-    sessionKey,
-    readConsistency: "latest",
-  });
-  return Boolean(entry && binding.sessionId && entry.sessionId === binding.sessionId);
-}
 
 export function bindingMatchesActiveSessionIncarnation(
   runtime: PluginRuntime,
@@ -52,8 +43,41 @@ export function bindingMatchesActiveSessionIncarnation(
   );
 }
 
+/**
+ * Refresh the replaceable session attachment without changing the durable room identity.
+ * The store registers persisted state before reindexing, so a failed write leaves the
+ * previous attachment authoritative in both persistence and memory.
+ */
+export function attachBindingToCurrentActiveSession(params: {
+  runtime: PluginRuntime;
+  store: ClickClackDiscussionBindingStore;
+  sessionKey: string;
+  binding: ClickClackDiscussionBinding;
+}): ClickClackDiscussionBinding | undefined {
+  const entry = params.runtime.agent.session.getSessionEntry({
+    sessionKey: params.sessionKey,
+    readConsistency: "latest",
+  });
+  if (!entry?.sessionId || entry.archivedAt !== undefined) {
+    return undefined;
+  }
+  if (entry.sessionId === params.binding.sessionId) {
+    if (params.binding.detachedAt === undefined) {
+      return params.binding;
+    }
+    const { detachedAt: _detachedAt, ...attached } = params.binding;
+    params.store.set(params.sessionKey, attached);
+    return attached;
+  }
+  const { detachedAt: _detachedAt, ...retained } = params.binding;
+  const attached = { ...retained, sessionId: entry.sessionId };
+  params.store.set(params.sessionKey, attached);
+  return attached;
+}
+
 const DISCUSSION_BINDINGS_NAMESPACE = "discussion-bindings";
 const MAX_DISCUSSION_BINDINGS = 10_000;
+export const MAX_RETAINED_DETACHED_DISCUSSION_BINDINGS = 1_000;
 const storesByRuntime = new WeakMap<PluginRuntime, ClickClackDiscussionBindingStore>();
 
 function channelKey(serverBaseUrl: string, channelId: string): string {
@@ -65,6 +89,7 @@ export class ClickClackDiscussionBindingStore {
   readonly #store: PluginStateSyncKeyedStore<ClickClackDiscussionBinding>;
   readonly #sessionByChannel = new Map<string, string>();
   readonly #mainByDiscussionSession = new Map<string, string>();
+  readonly #detachedAtBySession = new Map<string, number>();
   readonly #runtime: PluginRuntime;
 
   constructor(runtime: PluginRuntime) {
@@ -139,6 +164,34 @@ export class ClickClackDiscussionBindingStore {
     return this.#store.entries().map((entry) => ({ sessionKey: entry.key, binding: entry.value }));
   }
 
+  detachedCount(): number {
+    return this.#detachedAtBySession.size;
+  }
+
+  oldestDetached(): { sessionKey: string; binding: ClickClackDiscussionBinding } | undefined {
+    let oldestSessionKey: string | undefined;
+    let oldestDetachedAt = Number.POSITIVE_INFINITY;
+    for (const [sessionKey, detachedAt] of this.#detachedAtBySession) {
+      if (
+        detachedAt < oldestDetachedAt ||
+        (detachedAt === oldestDetachedAt &&
+          (oldestSessionKey === undefined || sessionKey < oldestSessionKey))
+      ) {
+        oldestSessionKey = sessionKey;
+        oldestDetachedAt = detachedAt;
+      }
+    }
+    if (!oldestSessionKey) {
+      return undefined;
+    }
+    const binding = this.get(oldestSessionKey);
+    if (!binding || binding.detachedAt === undefined) {
+      this.#detachedAtBySession.delete(oldestSessionKey);
+      return this.oldestDetached();
+    }
+    return { sessionKey: oldestSessionKey, binding };
+  }
+
   #index(sessionKey: string, binding: ClickClackDiscussionBinding): void {
     this.#sessionByChannel.set(channelKey(binding.serverBaseUrl, binding.channelId), sessionKey);
     const sideSessionKey = discussionSessionKey({
@@ -153,6 +206,9 @@ export class ClickClackDiscussionBindingStore {
     });
     if (sideSessionKey) {
       this.#mainByDiscussionSession.set(sideSessionKey, sessionKey);
+    }
+    if (binding.detachedAt !== undefined) {
+      this.#detachedAtBySession.set(sessionKey, binding.detachedAt);
     }
   }
 
@@ -171,6 +227,7 @@ export class ClickClackDiscussionBindingStore {
     if (sideSessionKey) {
       this.#mainByDiscussionSession.delete(sideSessionKey);
     }
+    this.#detachedAtBySession.delete(sessionKey);
   }
 }
 

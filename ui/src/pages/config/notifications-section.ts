@@ -2,12 +2,19 @@ import { html, nothing } from "lit";
 import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
 import { icons } from "../../components/icons.ts";
 import {
+  renderDocsLink,
   renderSettingsRow,
   renderSettingsStatus,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
+
+const NOTIFICATIONS_DOCS_URL = "https://docs.openclaw.ai/web/notifications";
+
+function renderNotificationsHint(copy: string) {
+  return html`${copy} ${renderDocsLink(NOTIFICATIONS_DOCS_URL, t("common.learnMore"))}`;
+}
 
 export type WebPushUiState = {
   supported: boolean;
@@ -82,7 +89,9 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             <h2 class="settings-section__heading">${t("configView.notifications.nativeTitle")}</h2>
             <div class="settings-section__actions">${renderSettingsStatus(status)}</div>
           </div>
-          <p class="settings-section__desc">${t("configView.notifications.nativeHint")}</p>
+          <p class="settings-section__desc">
+            ${renderNotificationsHint(t("configView.notifications.nativeHint"))}
+          </p>
           <div class="settings-group">
             ${renderSettingsRow({
               title: t("configView.notifications.permission"),
@@ -125,6 +134,9 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
               })}
             </div>
           </div>
+          <p class="settings-section__desc">
+            ${renderNotificationsHint(t("configView.notifications.unavailableHint"))}
+          </p>
           <div class="settings-group">
             <div class="settings-row">
               <div class="settings-row__text">
@@ -207,7 +219,9 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
             ${renderSettingsStatus({ kind: statusKind, label: statusLabel })}
           </div>
         </div>
-        <p class="settings-section__desc">${t("configView.notifications.hint")}</p>
+        <p class="settings-section__desc">
+          ${renderNotificationsHint(t("configView.notifications.hint"))}
+        </p>
         <div class="settings-group">
           ${renderSettingsRow({
             title: t("configView.notifications.browserSupport"),

@@ -1,5 +1,9 @@
 // Discord plugin module implements security audit behavior.
 import { coerceNativeSetting, normalizeAllowFromList } from "openclaw/plugin-sdk/channel-policy";
+import type {
+  DiscordGuildChannelConfig,
+  DiscordGuildEntry,
+} from "openclaw/plugin-sdk/config-contracts";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import {
@@ -10,6 +14,46 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { isDiscordMutableAllowEntry } from "./security-doctor.js";
+
+function isWildcardEntry(value: unknown): boolean {
+  return String(value).trim() === "*";
+}
+
+function hasNarrowMemberRestriction(
+  guild: DiscordGuildEntry,
+  channel?: DiscordGuildChannelConfig,
+): boolean {
+  const users = channel?.users ?? guild.users ?? [];
+  const roles = channel?.roles ?? guild.roles ?? [];
+  if ([...users, ...roles].some((entry) => isWildcardEntry(entry))) {
+    return false;
+  }
+  return users.length > 0 || roles.length > 0;
+}
+
+function listBroadMemberTargetPaths(params: {
+  discordCfg: ResolvedDiscordAccount["config"];
+  pathPrefix: string;
+}): string[] {
+  const paths: string[] = [];
+  for (const [guildKey, guild] of Object.entries(params.discordCfg.guilds ?? {})) {
+    const guildPath = `${params.pathPrefix}.guilds.${guildKey}`;
+    const channels = Object.entries(guild.channels ?? {});
+    if (channels.length === 0) {
+      if (!hasNarrowMemberRestriction(guild)) {
+        paths.push(guildPath);
+      }
+      continue;
+    }
+    for (const [channelKey, channel] of channels) {
+      if (channel.enabled === false || hasNarrowMemberRestriction(guild, channel)) {
+        continue;
+      }
+      paths.push(`${guildPath}.channels.${channelKey}`);
+    }
+  }
+  return paths.toSorted();
+}
 
 function addDiscordNameBasedEntries(params: {
   target: Set<string>;
@@ -57,6 +101,27 @@ export async function collectDiscordSecurityAuditFindings(params: {
     params.orderedAccountIds.length > 1 || params.hasExplicitAccountPath
       ? `channels.discord.accounts.${accountId}`
       : "channels.discord";
+
+  const effectiveGroupPolicy =
+    discordCfg.groupPolicy ?? params.cfg.channels?.defaults?.groupPolicy ?? "allowlist";
+  if (effectiveGroupPolicy === "allowlist") {
+    const broadMemberPaths = listBroadMemberTargetPaths({
+      discordCfg,
+      pathPrefix: discordPathPrefix,
+    });
+    if (broadMemberPaths.length > 0) {
+      findings.push({
+        checkId: "channels.discord.allowlisted_groups.broad_members",
+        severity: "warn",
+        title: "Discord allowlisted groups have broad member access",
+        detail:
+          `These allowlisted Discord targets have no effective users or roles restriction:\n${broadMemberPaths.map((path) => `- ${path}`).join("\n")}\n` +
+          'groupPolicy="allowlist" limits guilds/channels, but all members of a listed target can still trigger the agent.',
+        remediation:
+          "Add users or roles restrictions at each listed guild/channel when only specific members should trigger the agent.",
+      });
+    }
+  }
 
   addDiscordNameBasedEntries({
     target: discordNameBasedAllowEntries,

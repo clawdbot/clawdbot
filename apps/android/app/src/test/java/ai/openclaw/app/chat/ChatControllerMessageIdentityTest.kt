@@ -61,6 +61,30 @@ class ChatControllerMessageIdentityTest {
   }
 
   @Test
+  fun managedImagesParticipateInMessageIdentity() {
+    fun message(artifactId: String) =
+      ChatMessage(
+        id = artifactId,
+        role = "assistant",
+        content =
+          listOf(
+            ChatMessageContent(
+              type = "image",
+              artifactId = artifactId,
+              url = "/api/chat/media/outgoing/main/$artifactId/full",
+              mimeType = "image/png",
+            ),
+          ),
+        timestampMs = 1,
+      )
+
+    assertNotEquals(
+      messageIdentityKey(message("artifact_managed_image_11111111-1111-4111-8111-111111111111")),
+      messageIdentityKey(message("artifact_managed_image_22222222-2222-4222-8222-222222222222")),
+    )
+  }
+
+  @Test
   @OptIn(ExperimentalCoroutinesApi::class)
   fun liveHistoryDropsInternalRoleRows() =
     runTest {
@@ -94,6 +118,69 @@ class ChatControllerMessageIdentityTest {
       assertEquals(
         listOf("hello", "visible plugin notice", "reply"),
         controller.messages.value.map { it.content.single().text },
+      )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun liveHistoryDecodesSystemNoticeMetadataWithoutChangingRoles() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            if (method == "chat.history") {
+              """
+              {
+                "messages": [
+                  {
+                    "role": "user",
+                    "content": "[System] Continue the interrupted turn.",
+                    "provenance": {
+                      "kind": "internal_system",
+                      "sourceTool": "main_session_restart_recovery"
+                    }
+                  },
+                  {
+                    "role": "system",
+                    "content": "Compaction",
+                    "__openclaw": {
+                      "kind": "compaction",
+                      "id": "checkpoint-1",
+                      "tokensBefore": 900000.5,
+                      "tokensAfter": 24700.25
+                    }
+                  }
+                ]
+              }
+              """.trimIndent()
+            } else {
+              "{}"
+            }
+          },
+        )
+
+      controller.load("main")
+      advanceUntilIdle()
+
+      val messages = controller.messages.value
+      assertEquals(listOf("user", "system"), messages.map { it.role })
+      assertEquals(
+        ChatMessageProvenance(
+          kind = "internal_system",
+          sourceTool = "main_session_restart_recovery",
+        ),
+        messages[0].provenance,
+      )
+      assertEquals(
+        ChatTranscriptMarker(
+          kind = "compaction",
+          id = "checkpoint-1",
+          tokensBefore = 900000.5,
+          tokensAfter = 24700.25,
+        ),
+        messages[1].transcriptMarker,
       )
     }
 

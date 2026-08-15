@@ -6,7 +6,6 @@ scenario:
     primary:
       - matrix.mention-gates
   execution:
-    profiles: { "matrix:all": 20, "matrix:transport": 19 }
     kind: flow
     channel: matrix
     timeoutMs: 45000

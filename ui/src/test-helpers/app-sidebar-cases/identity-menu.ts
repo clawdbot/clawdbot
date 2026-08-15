@@ -20,14 +20,20 @@ describe("AppSidebar footer identity menu", () => {
       presence: [
         {
           instanceId: "self-instance",
-          user: { id: "self", name: "Ada" },
+          user: { id: "self", name: "Ada", email: "ada@example.test" },
         },
       ],
     });
     await sidebar.updateComplete;
 
-    const identity = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__identity");
+    const identity = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
     expect(identity?.getAttribute("aria-haspopup")).toBe("menu");
+    vi.spyOn(identity!, "getBoundingClientRect").mockReturnValue({
+      left: 12,
+      right: 224,
+      top: 700,
+      width: 212,
+    } as DOMRect);
     identity?.click();
     await sidebar.updateComplete;
 
@@ -37,7 +43,23 @@ describe("AppSidebar footer identity menu", () => {
       [...(menu?.children ?? [])]
         .filter((element) => element.localName === "wa-dropdown-item")
         .map((element) => element.getAttribute("value")),
-    ).toEqual(["command:profile", "command:pair-mobile", "command:apps", "command:help"]);
+    ).toEqual([
+      "command:profile",
+      "command:settings",
+      "command:usage",
+      "command:pair-mobile",
+      "command:apps",
+      "command:help",
+    ]);
+    expect(menu?.querySelector(".sidebar-identity-menu__header")?.textContent?.trim()).toBe(
+      "ada@example.test",
+    );
+    expect(
+      menu
+        ?.querySelector('wa-dropdown-item[value="command:settings"] .session-menu__shortcut')
+        ?.textContent?.trim(),
+    ).toMatch(/^(⌘⇧,|Ctrl\+Shift\+,)$/u);
+    expect(menu?.style.getPropertyValue("--sidebar-identity-menu-min-width")).toBe("212px");
     expect(menu?.querySelector(".sidebar-pair-mobile")?.hasAttribute("disabled")).toBe(true);
     expect(menu?.querySelector("openclaw-sidebar-build-chip")).not.toBeNull();
     expect(menu?.querySelector("openclaw-theme-mode-toggle")).not.toBeNull();

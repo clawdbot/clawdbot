@@ -2,11 +2,13 @@ import type { UiCommandParams } from "@openclaw/gateway-protocol";
 
 export const TERMINAL_PANEL_TOGGLE_EVENT = "openclaw:terminal-toggle";
 export const BROWSER_PANEL_TOGGLE_EVENT = "openclaw:browser-toggle";
+export const DESKTOP_PANEL_TOGGLE_EVENT = "openclaw:desktop-toggle";
 export const UI_COMMAND_EVENT = "openclaw:ui-command";
 
 export type UiCommandDetail = UiCommandParams;
 
 export type TerminalPanelToggleDetail = {
+  agentId?: string | null;
   dock?: "bottom" | "right";
   open?: boolean;
   terminalSessionId?: string;
@@ -21,6 +23,12 @@ export type BrowserPanelToggleDetail = {
   dock?: "bottom" | "right";
   open?: boolean;
   url?: string;
+};
+
+export type DesktopPanelToggleDetail = {
+  dock?: "bottom" | "right";
+  open?: boolean;
+  environmentId?: string;
 };
 
 export type PanelToggleElement = HTMLElement & {

@@ -5,6 +5,7 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
+import { fnv1aUtf16 } from "../lib/fnv1a.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { PollController } from "../lit/poll-controller.ts";
 
@@ -36,16 +37,6 @@ const WORKING_PHRASE_SHOW_AFTER_MS = 30_000;
 /** How long each phrase holds before rotating to the next. */
 const WORKING_PHRASE_ROTATE_EVERY_MS = 45_000;
 
-// FNV-1a, matching the stance picker: deterministic per seed.
-function fnvHash(key: string): number {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < key.length; i++) {
-    hash ^= key.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash >>> 0;
-}
-
 /** Constant-time stride walk over the phrase list: any stride in
  * [1, len-1] guarantees adjacent buckets differ, and with a prime-length
  * list (currently 19) every stride cycles through all phrases before
@@ -53,8 +44,8 @@ function fnvHash(key: string): number {
  * arbitrarily old timestamp, and this runs on a one-second poll. */
 function displayedPhraseIndex(seed: string, bucket: number): number {
   const length = PHRASE_KEYS.length;
-  const offset = fnvHash(`${seed}:offset`) % length;
-  const stride = 1 + (fnvHash(`${seed}:stride`) % (length - 1));
+  const offset = fnv1aUtf16(`${seed}:offset`) % length;
+  const stride = 1 + (fnv1aUtf16(`${seed}:stride`) % (length - 1));
   return (offset + bucket * stride) % length;
 }
 

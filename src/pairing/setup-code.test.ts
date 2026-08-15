@@ -1,21 +1,55 @@
 // Tests setup code generation and environment-derived defaults.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SecretInput } from "../config/types.secrets.js";
-import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
+import {
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+} from "../shared/device-bootstrap-profile.js";
 import { captureEnv } from "../test-utils/env.js";
 
 vi.mock("../infra/device-bootstrap.js", () => ({
-  issueDeviceBootstrapToken: vi.fn(async () => ({
+  issueDevicePairSetupBootstrapToken: vi.fn(async () => ({
     token: "bootstrap-123",
     expiresAtMs: 123,
+    setupId: "setup-123",
   })),
 }));
 
-const { encodePairingSetupCode, resolvePairingSetupFromConfig } = await import("./setup-code.js");
-const { issueDeviceBootstrapToken: issueDeviceBootstrapTokenMock } =
+const { decodePairingSetupCode, encodePairingSetupCode, resolvePairingSetupFromConfig } =
+  await import("./setup-code.js");
+const { issueDevicePairSetupBootstrapToken: issueDevicePairSetupBootstrapTokenMock } =
   await import("../infra/device-bootstrap.js");
 
 describe("pairing setup code", () => {
+  it("round-trips bare and wrapped setup codes without normalizing payload case", () => {
+    const payload = {
+      url: "wss://gateway.example:8443/openclaw-gw",
+      bootstrapToken: "Bootstrap-AbC123",
+      tlsFingerprint: "sha256:AA:BB",
+      expiresAtMs: 20_000,
+    };
+    const setupCode = encodePairingSetupCode(payload);
+    expect(setupCode).toMatch(/[A-Z]/u);
+
+    expect(decodePairingSetupCode(setupCode, { nowMs: 10_000 })).toEqual(payload);
+    expect(decodePairingSetupCode(`oc-pair://${setupCode}`, { nowMs: 10_000 })).toEqual(payload);
+  });
+
+  it("rejects garbage and expired shipped payload shapes", () => {
+    expect(() => decodePairingSetupCode("not-json")).toThrow("Invalid pairing setup");
+    const expired = encodePairingSetupCode({
+      url: "wss://gateway.example",
+      bootstrapToken: "bootstrap-123",
+      expiresAtMs: 10_000,
+    });
+    expect(() => decodePairingSetupCode(expired, { nowMs: 10_000 })).toThrow("expired");
+  });
+
+  it("accepts older payloads without a TLS fingerprint or expiry", () => {
+    const payload = { url: "wss://gateway.example", bootstrapToken: "bootstrap-123" };
+    expect(decodePairingSetupCode(encodePairingSetupCode(payload))).toEqual(payload);
+  });
+
   type ResolvedSetup = Awaited<ReturnType<typeof resolvePairingSetupFromConfig>>;
   type ResolveSetupConfig = Parameters<typeof resolvePairingSetupFromConfig>[0];
   type ResolveSetupOptions = Parameters<typeof resolvePairingSetupFromConfig>[1];
@@ -130,7 +164,9 @@ describe("pairing setup code", () => {
     }
     expect(resolved.authLabel).toBe(params.authLabel);
     expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
-    expect(issueDeviceBootstrapTokenMock).toHaveBeenCalledWith({
+    expect(resolved.setupId).toBe("setup-123");
+    expect(resolved.expiresAtMs).toBe(123);
+    expect(issueDevicePairSetupBootstrapTokenMock).toHaveBeenCalledWith({
       baseDir: undefined,
       profile: params.bootstrapProfile ?? {
         roles: ["node", "operator"],
@@ -145,6 +181,8 @@ describe("pairing setup code", () => {
         purpose: "mobile-full",
       },
     });
+    expect(resolved.payload).not.toHaveProperty("setupId");
+    expect(resolved.payload).toHaveProperty("expiresAtMs", 123);
     if (params.url) {
       expect(resolved.payload.url).toBe(params.url);
     }
@@ -246,7 +284,7 @@ describe("pairing setup code", () => {
   });
 
   beforeEach(() => {
-    vi.mocked(issueDeviceBootstrapTokenMock).mockClear();
+    vi.mocked(issueDevicePairSetupBootstrapTokenMock).mockClear();
   });
 
   afterEach(() => {
@@ -283,6 +321,20 @@ describe("pairing setup code", () => {
     });
   });
 
+  it("preserves context paths in fully qualified setup urls", async () => {
+    await expectResolvedSetupSuccessCase({
+      config: createCustomGatewayConfig({ mode: "token", token: "tok_123" }),
+      options: {
+        publicUrl: "wss://gateway.example.test:18789/openclaw-gw",
+      },
+      expected: {
+        authLabel: "token",
+        url: "wss://gateway.example.test:18789/openclaw-gw",
+        urlSource: "plugins.entries.device-pair.config.publicUrl",
+      },
+    });
+  });
+
   it("issues a node-only bootstrap profile for companion setup", async () => {
     await expectResolvedSetupSuccessCase({
       config: createCustomGatewayConfig({ mode: "token", token: "tok_123" }),
@@ -297,6 +349,24 @@ describe("pairing setup code", () => {
         urlSource: "plugins.entries.device-pair.config.publicUrl",
         bootstrapProfile: { roles: ["node"], scopes: [] },
         access: "node",
+      },
+    });
+  });
+
+  it("issues a least-privilege voice-node bootstrap profile", async () => {
+    await expectResolvedSetupSuccessCase({
+      config: createCustomGatewayConfig({ mode: "token", token: "tok_123" }),
+      options: {
+        forceSecure: true,
+        publicUrl: "gateway.example.test:18789/setup",
+        bootstrapProfile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      },
+      expected: {
+        authLabel: "token",
+        url: "wss://gateway.example.test:18789",
+        urlSource: "plugins.entries.device-pair.config.publicUrl",
+        bootstrapProfile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+        access: "limited",
       },
     });
   });
@@ -316,7 +386,7 @@ describe("pairing setup code", () => {
       },
       expectedError: "Configured gateway.remote.url is invalid.",
     });
-    expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
+    expect(issueDevicePairSetupBootstrapTokenMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -337,7 +407,7 @@ describe("pairing setup code", () => {
       },
       expectedError: "Configured publicUrl is invalid.",
     });
-    expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
+    expect(issueDevicePairSetupBootstrapTokenMock).not.toHaveBeenCalled();
   });
 
   async function resolveCustomGatewaySetup(params: {
@@ -362,17 +432,6 @@ describe("pairing setup code", () => {
       } as const,
       env: {
         GW_PASSWORD: "resolved-password", // pragma: allowlist secret
-      },
-      expectedAuthLabel: "password",
-    },
-    {
-      name: "uses OPENCLAW_GATEWAY_PASSWORD without resolving configured password SecretRef",
-      auth: {
-        mode: "password",
-        password: { source: "env", provider: "default", id: "MISSING_GW_PASSWORD" },
-      } as const,
-      env: {
-        OPENCLAW_GATEWAY_PASSWORD: "password-from-env", // pragma: allowlist secret
       },
       expectedAuthLabel: "password",
     },
@@ -418,6 +477,20 @@ describe("pairing setup code", () => {
       ),
       options: { env: {} },
       expectedError: "MISSING_GW_TOKEN",
+    },
+    {
+      name: "does not let OPENCLAW_GATEWAY_PASSWORD mask a configured password SecretRef",
+      config: createCustomGatewayConfig(
+        {
+          mode: "password",
+          password: { source: "env", provider: "default", id: "MISSING_GW_PASSWORD" },
+        },
+        defaultEnvSecretProviderConfig,
+      ),
+      options: {
+        env: { OPENCLAW_GATEWAY_PASSWORD: "password-from-env" },
+      },
+      expectedError: "MISSING_GW_PASSWORD",
     },
   ] as const)("$name", async ({ config, options, expectedError }) => {
     await expectResolvedSetupFailureCase({ config, options, expectedError });
@@ -913,5 +986,36 @@ describe("pairing setup code", () => {
       } satisfies ResolveSetupOptions,
       expectedError: "Service MagicDNS could not be derived",
     });
+  });
+
+  it("pins the prepared leaf only for a direct TLS gateway URL", async () => {
+    const config = createCustomGatewayConfig({ mode: "token", token: "tok_123" });
+    config.gateway = { ...config.gateway, tls: { enabled: true } };
+    const direct = await resolvePairingSetupFromConfig(config, {
+      localTlsFingerprint: "sha256:direct-leaf",
+    });
+    const proxied = await resolvePairingSetupFromConfig(config, {
+      publicUrl: "wss://proxy.example",
+      localTlsFingerprint: "sha256:direct-leaf",
+    });
+
+    expect(direct.ok && direct.payload.tlsFingerprint).toBe("sha256:direct-leaf");
+    expect(proxied.ok && proxied.payload.tlsFingerprint).toBeUndefined();
+  });
+
+  it("omits a configured remote TLS pin from a cleartext setup URL", async () => {
+    const config = createCustomGatewayConfig({ mode: "token", token: "tok_123" });
+    config.gateway = {
+      ...config.gateway,
+      remote: {
+        url: "ws://127.0.0.1:18789",
+        tlsFingerprint: "sha256:stale-remote-leaf",
+      },
+    };
+
+    const resolved = await resolvePairingSetupFromConfig(config, { preferRemoteUrl: true });
+
+    expect(resolved.ok).toBe(true);
+    expect(resolved.ok && resolved.payload.tlsFingerprint).toBeUndefined();
   });
 });

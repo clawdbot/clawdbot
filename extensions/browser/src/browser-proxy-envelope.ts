@@ -5,6 +5,8 @@ import { parseBrowserErrorPayload, type BrowserNoDisplayErrorMetadata } from "./
 
 /** Additive opt-in for structured browser route errors over node.invoke. */
 export const BROWSER_PROXY_ERROR_ENVELOPE = "browser-v1" as const;
+/** Additive request envelope for Gateway-owned files sent to a browser node. */
+export const BROWSER_PROXY_UPLOAD_ENVELOPE = "browser-upload-v1" as const;
 
 export const BROWSER_PROXY_MAX_FILE_BYTES = 10 * 1024 * 1024;
 // 16 MiB expands to about 21.4 MiB in base64, leaving JSON/result headroom
@@ -13,9 +15,12 @@ const BROWSER_PROXY_MAX_TOTAL_FILE_BYTES = 16 * 1024 * 1024;
 const BROWSER_PROXY_MAX_FILES = 256;
 
 /** Bound filesystem work even when one action emits many tiny downloads. */
-export function assertBrowserProxyFileCountWithinLimit(fileCount: number): void {
+export function assertBrowserProxyFileCountWithinLimit(
+  fileCount: number,
+  direction: "request" | "response" = "response",
+): void {
   if (fileCount > BROWSER_PROXY_MAX_FILES) {
-    throw new Error("browser proxy response exceeds 256 file limit");
+    throw new Error(`browser proxy ${direction} exceeds 256 file limit`);
   }
 }
 
@@ -36,6 +41,16 @@ export type BrowserProxyFile = {
   path: string;
   base64: string;
   mimeType?: string;
+};
+
+export type BrowserProxyUploadFile = {
+  name: string;
+  contentBase64: string;
+};
+
+export type BrowserProxyUploadV1 = {
+  envelope: typeof BROWSER_PROXY_UPLOAD_ENVELOPE;
+  files: BrowserProxyUploadFile[];
 };
 
 /** Visit the route-owned file paths that may cross the Browser node boundary. */

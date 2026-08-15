@@ -20,9 +20,9 @@
 
 .channels-tile {
   display: grid;
-  width: 44px;
-  height: 44px;
-  flex: 0 0 44px;
+  width: var(--channels-art-size, 44px);
+  height: var(--channels-art-size, 44px);
+  flex: 0 0 var(--channels-art-size, 44px);
   place-items: center;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -122,14 +122,14 @@
 .channels-pairing-filters {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-3);
-  padding: var(--space-3);
+  gap: var(--space-3) var(--space-4);
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border);
 }
 
 .channels-pairing-filters label {
   display: grid;
-  flex: 1 1 180px;
+  flex: 0 1 220px;
   gap: var(--space-1);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
@@ -137,6 +137,14 @@
 
 .channels-pairing-filters select {
   width: 100%;
+}
+
+.channels-pairing-feedback {
+  min-height: 0;
+}
+
+.channels-pairing-feedback + .channels-pairing-feedback {
+  border-top: 0;
 }
 
 .channels-pairing-request {
@@ -163,7 +171,7 @@
 
 .channels-pairing-request__details summary {
   width: fit-content;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .channels-pairing-request__details .settings-kv {
@@ -171,7 +179,7 @@
 }
 
 .channels-pairing-help {
-  padding: var(--space-3);
+  padding: var(--space-2) var(--space-4) var(--space-3);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   line-height: 1.5;
@@ -193,7 +201,7 @@
   align-items: flex-start;
   gap: var(--space-2);
   color: var(--text);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .channels-pairing-dialog__option input {
@@ -286,6 +294,20 @@
   line-height: 1.4;
 }
 
+.channels-wizard__text,
+.channels-wizard__secret {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.channels-wizard__text {
+  display: flex;
+}
+
+.channels-wizard__text > .input {
+  min-height: 44px;
+}
+
 .channels-wizard__options {
   display: grid;
   gap: var(--space-2);
@@ -306,7 +328,7 @@ wa-radio-group.channels-wizard__options::part(radios) {
   padding: var(--space-2) var(--space-3);
   background: var(--card);
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition:
     border-color var(--duration-fast) var(--ease-out),
     background var(--duration-fast) var(--ease-out);
@@ -368,7 +390,7 @@ wa-radio-group.channels-wizard__options::part(radios) {
 .channels-wizard__qr img {
   width: min(260px, 70vw);
   border-radius: var(--radius-md);
-  background: #fff;
+  background: var(--brand-logo-chip-bg);
   padding: var(--space-2);
 }
 
@@ -391,7 +413,7 @@ wa-radio-group.channels-wizard__options::part(radios) {
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .channels-item__detail:focus-visible {

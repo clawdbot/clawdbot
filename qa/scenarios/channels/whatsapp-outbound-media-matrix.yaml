@@ -8,14 +8,14 @@ scenario:
       - whatsapp.outbound-document
       - whatsapp.outbound-audio
   execution:
-    profiles: { "whatsapp:mock-default": 18 }
     kind: flow
     channel: whatsapp
     timeoutMs: 120000
     retryCount: 1
     suiteIsolation: isolated
-    config: { whatsappScenarioId: whatsapp-outbound-media-matrix }
 flow:
   module: ./live-transports/whatsapp/scenario-runtime.js
-  call: runWhatsAppOutboundMediaMatrixScenario
-  args: [{ expr: whatsappScenarioContext }]
+  call: runWhatsAppScenario
+  args:
+    - { expr: whatsappScenarioContext }
+    - { moduleExport: whatsappQaOutboundMediaMatrixScenario }

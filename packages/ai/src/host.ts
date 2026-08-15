@@ -5,6 +5,7 @@
 // consumers get safe, dependency-free behavior without wiring anything.
 import type { Api, Context, Model, StreamFn } from "@openclaw/llm-core";
 import type { ApiRegistry } from "./api-registry.js";
+import { transformMessages } from "./transcript-transform.js";
 
 /** Provider capability facts needed by the package-owned transports. */
 export interface AiProviderRequestCapabilities {
@@ -35,6 +36,8 @@ export interface AiProviderStreamHookContext {
   provider: string;
   modelId: string;
   model: Model;
+  /** Wire-format API before simple completion projects an internal transport alias. */
+  sourceApi?: Api;
 }
 
 /** Narrow plugin-runtime port used by package-owned transports. */
@@ -69,7 +72,16 @@ export interface AiTransportPluginHost {
         transport: "stream" | "websocket";
       };
     },
-  ): { headers?: Record<string, string>; metadata?: Record<string, string> } | undefined;
+  ):
+    | {
+        headers?: Record<string, string>;
+        metadata?: Record<string, string>;
+        websocket?: {
+          headers?: Record<string, string>;
+          degradeCooldownMs?: number;
+        };
+      }
+    | undefined;
   wrapSimpleCompletionStream(
     this: void,
     params: {
@@ -97,6 +109,7 @@ export type AiTransformTransportMessages = (
   options?: {
     normalizeSameModelToolCallIds?: boolean;
     preserveCrossModelToolCallThoughtSignature?: boolean;
+    preserveUnframedToolResults?: boolean;
   },
 ) => Context["messages"];
 
@@ -169,8 +182,6 @@ export interface AiTransportHost {
   transformTransportMessages: AiTransformTransportMessages;
   /** Registers a custom transport API with the host's stream error bridge. */
   registerCustomApi(registry: ApiRegistry, api: Api, streamFn: StreamFn): boolean;
-  /** Prepares the provider-owned Google simple-completion alias when needed. */
-  prepareGoogleSimpleCompletionModel(registry: ApiRegistry, model: Model): Model;
   /**
    * Emits one transport diagnostic; build runs only when the host logs it and
    * may return null to suppress the entry (e.g. de-duplication).
@@ -247,9 +258,9 @@ const inertAiTransportHost: ActiveAiTransportHost = {
   resolveModelRequestTimeoutMs: () => undefined,
   requiresManagedTransport: () => false,
   inheritManagedTransport: (_source, target) => target,
-  transformTransportMessages: (messages) => messages,
+  transformTransportMessages: (messages, model, normalizeToolCallId) =>
+    transformMessages(messages, model, normalizeToolCallId),
   registerCustomApi: queueCustomApiRegistration,
-  prepareGoogleSimpleCompletionModel: (_registry, model) => model,
   logDebug: () => {},
   logInfo: () => {},
   logWarn: () => {},
@@ -307,6 +318,11 @@ export function resolveAiTransportHeaderSentinels(
   const host = getAiTransportHost();
   let resolvedHeaders: Record<string, string> | undefined;
   for (const [name, value] of Object.entries(headers)) {
+    if (value === null) {
+      // applyLocalNoAuthHeaderOverride marks no-auth local providers with a
+      // runtime null marker outside the public string-only Model contract.
+      continue;
+    }
     const resolved = host.resolveSecretSentinel(value);
     if (resolved !== value) {
       resolvedHeaders ??= { ...headers };

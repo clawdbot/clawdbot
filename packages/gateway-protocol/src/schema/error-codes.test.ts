@@ -7,6 +7,7 @@ import {
   isMcpAppViewExpiredError,
   McpAppViewExpiredErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
+  ProjectCloneErrorDetailsSchema,
   missingScopeErrorShape,
   readMissingScopeError,
   readMissingScopeErrorDetails,
@@ -49,6 +50,18 @@ describe("gateway error details", () => {
     expect(Value.Check(WizardNotFoundErrorDetailsSchema, details)).toBe(true);
     expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
     expect(Value.Check(WizardNotFoundErrorDetailsSchema, { ...details, sessionId: "stale" })).toBe(
+      false,
+    );
+  });
+
+  it("validates typed project clone failures", () => {
+    const details = {
+      code: GatewayErrorDetailCodes.PROJECT_CLONE_FAILED,
+      cause: "auth_required",
+    };
+    expect(Value.Check(ProjectCloneErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(ProjectCloneErrorDetailsSchema, { ...details, cause: "unknown" })).toBe(
       false,
     );
   });

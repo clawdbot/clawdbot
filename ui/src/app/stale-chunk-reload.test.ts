@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
 import {
   installMissingStylesheetRecovery,
   installStaleChunkReloadListener,
@@ -358,6 +359,15 @@ describe("installMissingStylesheetRecovery", () => {
   });
 
   it("shows a reload banner when automatic recovery is unavailable", async () => {
+    const translate = vi.spyOn(i18n, "t").mockImplementation((key) => {
+      if (key === "lazyView.stylesFailed") {
+        return "Localized stylesheet failure";
+      }
+      if (key === "common.reload") {
+        return "Localized reload";
+      }
+      return key;
+    });
     setReadyState("complete");
     const retry = vi.fn(async () => false);
     const uninstall = installMissingStylesheetRecovery({
@@ -369,8 +379,10 @@ describe("installMissingStylesheetRecovery", () => {
       await Promise.resolve();
       const banner = document.querySelector<HTMLElement>('[role="alert"]');
       const reloadButton = banner?.querySelector<HTMLButtonElement>("button");
-      expect(banner?.textContent).toContain("Styles failed to load, so the page may look broken.");
-      expect(reloadButton?.textContent).toBe("Reload");
+      expect(banner?.textContent).toContain("Localized stylesheet failure");
+      expect(reloadButton?.textContent).toBe("Localized reload");
+      expect(translate).toHaveBeenCalledWith("lazyView.stylesFailed", undefined);
+      expect(translate).toHaveBeenCalledWith("common.reload", undefined);
       reloadButton?.click();
       expect(retry).toHaveBeenCalledTimes(1);
       expect(banner?.isConnected).toBe(true);

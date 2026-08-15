@@ -532,9 +532,7 @@ internal class WearChatStreamProjector {
     val streamKey = streamKey(projected)
     if (state != "delta") {
       if (state == "final" || state == "aborted" || state == "error") {
-        streamKey?.let { terminalKey ->
-          streams.keys.removeAll { key -> key.sessionKey == terminalKey.sessionKey }
-        }
+        streamKey?.let(::clearTerminalStream)
       }
       return projected
     }
@@ -583,14 +581,24 @@ internal class WearChatStreamProjector {
     }
   }
 
+  private fun clearTerminalStream(terminalKey: StreamKey) {
+    if (terminalKey.runId != null) {
+      // A delayed identified terminal cannot prove that an anonymous
+      // accumulator belongs to the same run or interrupt another live run.
+      streams.remove(terminalKey)
+      return
+    }
+    streams.keys.removeAll { key -> key.sessionKey == terminalKey.sessionKey }
+  }
+
   private fun streamKey(projected: JsonObject): StreamKey? {
     val sessionKey =
       (projected["sessionKey"] as? JsonPrimitive)
         ?.contentOrNull
         ?.takeIf { it.isNotBlank() } ?: return null
     val runId = (projected["runId"] as? JsonPrimitive)?.contentOrNull
-    // Some gateway deltas omit runId. Sessions serialize active runs, and every
-    // terminal event clears all keys for that session before another run starts.
+    // Anonymous deltas adopt the session's latest identified accumulator;
+    // only a runless terminal can safely retire every run in that session.
     return StreamKey(sessionKey = sessionKey, runId = runId)
   }
 

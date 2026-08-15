@@ -1,15 +1,21 @@
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { releaseChatAttachmentPayloads } from "../chat/attachment-payload-store.ts";
+import { ChatAttachmentReadLifecycle } from "../chat/components/chat-attachments.ts";
 
 export class NewSessionAttachmentDraft {
   attachments: ChatAttachment[] = [];
-  pendingReads = 0;
-  private readController = new AbortController();
+  private readonly reads: ChatAttachmentReadLifecycle;
 
-  constructor(private readonly notify: () => void) {}
+  constructor(private readonly notify: () => void) {
+    this.reads = new ChatAttachmentReadLifecycle(notify);
+  }
+
+  get pendingReads(): number {
+    return this.reads.pendingReads;
+  }
 
   get readSignal() {
-    return this.readController.signal;
+    return this.reads.readSignal;
   }
 
   replace(attachments: ChatAttachment[]) {
@@ -18,18 +24,19 @@ export class NewSessionAttachmentDraft {
   }
 
   updatePending(readSignal: AbortSignal, delta: 1 | -1) {
-    if (this.readController.signal !== readSignal) {
-      return;
-    }
-    this.pendingReads = Math.max(0, this.pendingReads + delta);
-    this.notify();
+    this.reads.updatePending(readSignal, delta);
   }
 
   abortReads() {
-    this.readController.abort();
-    this.readController = new AbortController();
-    this.pendingReads = 0;
+    this.reads.abortReads();
+  }
+
+  take(): ChatAttachment[] {
+    this.abortReads();
+    const attachments = this.attachments;
+    this.attachments = [];
     this.notify();
+    return attachments;
   }
 
   reset(options: { release: boolean }) {

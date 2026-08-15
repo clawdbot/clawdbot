@@ -11,7 +11,7 @@ import {
 } from "./goals.js";
 import {
   loadSessionEntry,
-  upsertSessionEntry as upsertAccessorSessionEntry,
+  upsertSessionEntryCore as upsertAccessorSessionEntry,
 } from "./session-accessor.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import type { SessionEntry } from "./types.js";
@@ -50,6 +50,7 @@ describe("session goals", () => {
         updatedAt: 1,
         totalTokens,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
     });
   }
@@ -61,6 +62,8 @@ describe("session goals", () => {
       entry: {
         ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!,
         totalTokens: 100,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
     });
 
@@ -90,6 +93,7 @@ describe("session goals", () => {
         updatedAt: 1,
         totalTokens: 10,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       now: 10,
     });
@@ -219,6 +223,7 @@ describe("session goals", () => {
         ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!,
         totalTokens: 125,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
     });
 
@@ -230,7 +235,7 @@ describe("session goals", () => {
     expect(snapshot.goal?.status).toBe("active");
   });
 
-  it("treats token snapshots as fresh unless explicitly stale", async () => {
+  it("accounts token snapshots with current context provenance", async () => {
     await upsertSessionEntry({
       storePath: fixture.storePath(),
       sessionKey,
@@ -238,6 +243,8 @@ describe("session goals", () => {
         sessionId: "sess-1",
         updatedAt: 1,
         totalTokens: 100,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
     });
     await createSessionGoal({
@@ -252,6 +259,8 @@ describe("session goals", () => {
       entry: {
         ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!,
         totalTokens: 125,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
     });
 
@@ -440,6 +449,7 @@ describe("session goals", () => {
       {
         totalTokens: 140,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         goal: {
           schemaVersion: 1,
           id: "goal-1",
@@ -465,6 +475,7 @@ describe("session goals", () => {
       {
         totalTokens: 140,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         goal: {
           schemaVersion: 1,
           id: "goal-1",

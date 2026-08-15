@@ -4,10 +4,10 @@
  * Sanitizes provider payloads, merges metadata, and formats streamed assistant events.
  */
 import type { Usage } from "@openclaw/llm-core";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { sanitizeSurrogates } from "../internal/shared.js";
+import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAssistantMessageEventStream } from "../utils/event-stream.js";
-import { redactSensitiveText } from "./transport-utils.js";
+import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
+import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 
 type ContextUsage = NonNullable<Usage["contextUsage"]>;
 
@@ -26,12 +26,8 @@ export type WritableTransportStream = {
   end(): void;
 };
 
-type TransportOutputShape = {
+type TransportOutputShape = Partial<Omit<ProviderErrorProjection, "stopReason">> & {
   stopReason: string;
-  errorMessage?: string;
-  errorCode?: string;
-  errorType?: string;
-  errorBody?: string;
 };
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
@@ -51,15 +47,13 @@ export function sanitizeNonEmptyTransportPayloadText(
 }
 
 export function coerceTransportToolCallArguments(argumentsValue: unknown): Record<string, unknown> {
-  if (argumentsValue && typeof argumentsValue === "object" && !Array.isArray(argumentsValue)) {
-    return argumentsValue as Record<string, unknown>;
+  const argumentsRecord = asOptionalRecord(argumentsValue);
+  if (argumentsRecord) {
+    return argumentsRecord;
   }
   if (typeof argumentsValue === "string") {
     try {
-      const parsed = JSON.parse(argumentsValue);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
-      }
+      return asNonArrayRecord(JSON.parse(argumentsValue));
     } catch {
       // Preserve malformed strings in stored history, but send object-shaped payloads to
       // providers that require structured tool-call arguments.
@@ -87,10 +81,7 @@ export function mergeTransportMetadata<T extends Record<string, unknown>>(
   if (!metadata || Object.keys(metadata).length === 0) {
     return payload;
   }
-  const existingMetadata =
-    payload.metadata && typeof payload.metadata === "object" && !Array.isArray(payload.metadata)
-      ? (payload.metadata as Record<string, string>)
-      : undefined;
+  const existingMetadata = asOptionalRecord(payload.metadata) as Record<string, string> | undefined;
   return {
     ...payload,
     metadata: {
@@ -119,6 +110,66 @@ export function createWritableTransportEventStream() {
   };
 }
 
+/**
+ * Abort error to surface for an aborted `signal`.
+ *
+ * Rethrows the caller's abort reason only when it carries a `code`, so that code
+ * survives into `errorCode` on the persisted assistant message and consumers can
+ * recognize an abort's origin without matching error text. A default
+ * `abort()` reason is an uncoded DOMException that carries nothing the synthetic
+ * error does not, so it keeps the "Request was aborted" text every transport
+ * already emits rather than churning it.
+ */
+export function transportAbortError(signal?: AbortSignal): Error {
+  const reason: unknown = signal?.reason;
+  return reason instanceof Error && typeof (reason as { code?: unknown }).code === "string"
+    ? reason
+    : new Error("Request was aborted");
+}
+
+/** Run a provider-response hook before start/body consumption inside the first-event deadline. */
+export function withProviderResponseHook<T = never>(params: {
+  stream?: AsyncIterable<T>;
+  signal: AbortSignal;
+  abort: (reason: Error) => void;
+  hook?: () => void | Promise<void>;
+  onReady?: () => void;
+}): AsyncIterable<T> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      let onAbort: (() => void) | undefined;
+      try {
+        if (params.signal.aborted) {
+          throw transportAbortError(params.signal);
+        }
+        if (params.hook) {
+          await Promise.race([
+            Promise.resolve().then(params.hook),
+            new Promise<never>((_resolve, reject) => {
+              onAbort = () => reject(transportAbortError(params.signal));
+              params.signal.addEventListener("abort", onAbort, { once: true });
+            }),
+          ]);
+        }
+      } catch (error) {
+        params.abort(error instanceof Error ? error : new Error(String(error)));
+        throw error;
+      } finally {
+        if (onAbort) {
+          params.signal.removeEventListener("abort", onAbort);
+        }
+      }
+      if (params.signal.aborted) {
+        throw transportAbortError(params.signal);
+      }
+      params.onReady?.();
+      if (params.stream) {
+        yield* params.stream;
+      }
+    },
+  };
+}
+
 export function finalizeTransportStream(params: {
   stream: WritableTransportStream;
   output: TransportOutputShape;
@@ -126,7 +177,7 @@ export function finalizeTransportStream(params: {
 }): void {
   const { stream, output, signal } = params;
   if (signal?.aborted) {
-    throw new Error("Request was aborted");
+    throw transportAbortError(signal);
   }
   if (output.stopReason === "aborted" || output.stopReason === "error") {
     throw new Error(output.errorMessage ?? "An unknown error occurred");
@@ -135,107 +186,13 @@ export function finalizeTransportStream(params: {
   stream.end();
 }
 
-type TransportErrorDetails = {
-  errorCode?: string;
-  errorType?: string;
-  errorBody?: string;
-};
-
-function readStringLikeProperty(value: unknown, key: string): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const raw = (value as Record<string, unknown>)[key];
-  if (typeof raw === "string") {
-    const trimmed = raw.trim();
-    return trimmed || undefined;
-  }
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return String(raw);
-  }
-  return undefined;
-}
-
-function readObjectProperty(value: unknown, key: string): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const raw = (value as Record<string, unknown>)[key];
-  return raw && typeof raw === "object" && !Array.isArray(raw)
-    ? (raw as Record<string, unknown>)
-    : undefined;
-}
-
-function stringifyErrorBody(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return undefined;
-  }
-}
-
-function stringifyTransportErrorMessage(value: unknown): string | undefined {
-  if (value instanceof Error) {
-    return value.message;
-  }
-  const encoded = stringifyErrorBody(value);
-  if (encoded !== undefined) {
-    return encoded;
-  }
-  try {
-    return String(value);
-  } catch {
-    return undefined;
-  }
-}
-
-function normalizeTransportErrorBody(value: unknown): string | undefined {
-  const text = stringifyErrorBody(value);
-  if (!text?.trim()) {
-    return undefined;
-  }
-  const redacted = redactSensitiveText(text);
-  return redacted.length > 500 ? `${truncateUtf16Safe(redacted, 499)}…` : redacted;
-}
-
-function extractTransportErrorDetails(error: unknown): TransportErrorDetails {
-  const errorObject = error && typeof error === "object" ? error : undefined;
-  const nestedError = readObjectProperty(errorObject, "error");
-  const errorCode =
-    readStringLikeProperty(errorObject, "errorCode") ??
-    readStringLikeProperty(errorObject, "code") ??
-    readStringLikeProperty(nestedError, "code");
-  const errorType =
-    readStringLikeProperty(errorObject, "errorType") ??
-    readStringLikeProperty(errorObject, "type") ??
-    readStringLikeProperty(nestedError, "type");
-  const errorBody =
-    normalizeTransportErrorBody(readStringLikeProperty(errorObject, "errorBody")) ??
-    normalizeTransportErrorBody(readStringLikeProperty(errorObject, "body")) ??
-    normalizeTransportErrorBody(readObjectProperty(errorObject, "body")) ??
-    normalizeTransportErrorBody(nestedError);
-
-  return {
-    ...(errorCode ? { errorCode } : {}),
-    ...(errorType ? { errorType } : {}),
-    ...(errorBody ? { errorBody } : {}),
-  };
-}
-
+/** @deprecated Use projectProviderError. v2026.7.2-beta.5 compatibility; remove after 2026.10. */
 export function assignTransportErrorDetails(
   output: TransportOutputShape,
   error: unknown,
   signal?: AbortSignal,
 ): void {
-  output.stopReason = signal?.aborted ? "aborted" : "error";
-  output.errorMessage = stringifyTransportErrorMessage(error);
-  Object.assign(output, extractTransportErrorDetails(error));
+  Object.assign(output, projectProviderError(error, signal));
 }
 
 export function failTransportStream(params: {

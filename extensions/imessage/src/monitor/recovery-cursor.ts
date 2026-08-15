@@ -6,8 +6,8 @@
 // since_rowid for a different one, or repointing `dbPath`/`remoteHost` to a
 // lower-rowid database silently suppresses every row in it forever (#99638).
 import { createHash } from "node:crypto";
-import os from "node:os";
 import path from "node:path";
+import { resolveIMessageHomeDir } from "../cli-path.js";
 import { getIMessageRuntime } from "../runtime.js";
 
 const IMESSAGE_RECOVERY_CURSOR_NAMESPACE = "imessage.recovery-cursor";
@@ -28,27 +28,12 @@ function openRecoveryCursorStore() {
   });
 }
 
-// Mirrors monitor-provider's local Messages home resolution (HOME first, then
-// os.homedir) so the identity's default path matches the database the monitor
-// actually watches.
-function localMessagesHomeDir(): string | undefined {
-  const home = process.env.HOME?.trim();
-  if (home) {
-    return home;
-  }
-  try {
-    return os.homedir().trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 // Canonicalize a local chat.db path (expand a leading ~, then resolve) so the
 // implicit default and any explicit spelling of the same file share one identity.
 function normalizeLocalDbPath(dbPath: string): string {
   let resolved = dbPath.trim();
   if (resolved.startsWith("~")) {
-    const home = localMessagesHomeDir();
+    const home = resolveIMessageHomeDir();
     if (home) {
       resolved = path.join(home, resolved.slice(1).replace(/^\/+/, ""));
     }
@@ -84,7 +69,7 @@ export function resolveIMessageRecoveryCursorDbIdentity(params: {
   const cliPath = params.cliPath?.trim();
   const isDefaultCli = !cliPath || cliPath === "imsg" || path.basename(cliPath) === "imsg";
   if (isDefaultCli) {
-    const home = localMessagesHomeDir();
+    const home = resolveIMessageHomeDir();
     return home
       ? `local:${normalizeLocalDbPath(path.join(home, "Library", "Messages", "chat.db"))}`
       : "local:default";
@@ -146,6 +131,24 @@ function migrateLegacyCatchupCursor(accountId: string, dbIdentity: string): numb
   }
 }
 
+function reconcileRecoveryCursorToWatermark(
+  accountId: string,
+  dbIdentity: string,
+  cursorRowid: number | null,
+  watermarkRowid: number | null,
+): number | null {
+  if (cursorRowid === null || watermarkRowid === null || cursorRowid <= watermarkRowid) {
+    return cursorRowid;
+  }
+  try {
+    const store = openRecoveryCursorStore();
+    store.register(recoveryCursorStoreKey(accountId, dbIdentity), { lastRowid: watermarkRowid });
+  } catch {
+    return watermarkRowid;
+  }
+  return watermarkRowid;
+}
+
 /**
  * Last durably admitted rowid for this account on `dbIdentity`, or null when
  * none is recorded yet (including when the only stored cursor belongs to a
@@ -154,16 +157,25 @@ function migrateLegacyCatchupCursor(accountId: string, dbIdentity: string): numb
 export function loadIMessageRecoveryCursor(
   accountId: string,
   dbIdentity: string,
-  options: { migrateLegacyCatchup?: boolean } = {},
+  options: { migrateLegacyCatchup?: boolean; watermarkRowid?: number | null } = {},
 ): number | null {
+  const watermarkRowid =
+    typeof options.watermarkRowid === "number" && Number.isFinite(options.watermarkRowid)
+      ? options.watermarkRowid
+      : null;
   const current = readRecoveryCursor(accountId, dbIdentity);
   if (current !== null) {
-    return current;
+    return reconcileRecoveryCursorToWatermark(accountId, dbIdentity, current, watermarkRowid);
   }
   if (options.migrateLegacyCatchup === false) {
     return null;
   }
-  return migrateLegacyCatchupCursor(accountId, dbIdentity);
+  return reconcileRecoveryCursorToWatermark(
+    accountId,
+    dbIdentity,
+    migrateLegacyCatchupCursor(accountId, dbIdentity),
+    watermarkRowid,
+  );
 }
 
 /** Advance the cursor forward to `rowid` (monotonic per database; never rewinds). */

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 323435,
-  "reason": "catalog session activity indicator",
-  "updatedAt": "2026-07-23"
+  "startupJsGzipBytes": 334391,
+  "reason": "cumulative 2026-08-15 UI growth plus folder group defaults catalog and lazy New Session route resolution",
+  "updatedAt": "2026-08-15"
 }

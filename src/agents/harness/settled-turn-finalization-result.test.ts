@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../../llm/types.js";
+import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
+import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-outcome.js";
 import {
   assertSettledTurnFinalizationResult,
   projectSettledTurnFinalizationAttemptResult,
 } from "./settled-turn-finalization-result.js";
-import type {
-  AgentHarnessAttemptResult,
-  AgentHarnessSettledTurnFinalizationResult,
-} from "./types.js";
+import type { AgentHarnessSettledTurnFinalizationResult } from "./types.js";
 
 function assistantMessage(
   content: AssistantMessage["content"],
@@ -39,17 +38,11 @@ function safeResult(): AgentHarnessSettledTurnFinalizationResult {
 }
 
 function successfulAttempt(
-  overrides: Partial<AgentHarnessAttemptResult> = {},
-): AgentHarnessAttemptResult {
+  overrides: Partial<EmbeddedRunAttemptResult> = {},
+): EmbeddedRunAttemptResult {
   const assistant = safeResult().assistant;
   return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    promptError: null,
-    promptErrorSource: null,
+    terminal: { kind: "ok" },
     sessionIdUsed: "session-1",
     messagesSnapshot: [assistant],
     assistantTexts: ["done"],
@@ -85,12 +78,18 @@ describe("assertSettledTurnFinalizationResult", () => {
     ).toThrow("returned a tool call");
   });
 
-  it("rejects an empty answer", () => {
-    expect(() =>
-      assertSettledTurnFinalizationResult({
-        assistant: assistantMessage([{ type: "text", text: "  " }]),
-      }),
-    ).toThrow("without a visible answer");
+  it("classifies a normally completed empty answer", () => {
+    const result = {
+      assistant: assistantMessage([{ type: "text", text: "  " }]),
+    };
+
+    try {
+      assertSettledTurnFinalizationResult(result);
+      throw new Error("expected completed-empty classification");
+    } catch (error) {
+      expect(error).toBeInstanceOf(EmptySettledTurnFinalizationError);
+      expect((error as EmptySettledTurnFinalizationError).result).toBe(result);
+    }
   });
 
   it("rejects an intentionally silent answer", () => {
@@ -139,7 +138,9 @@ describe("assertSettledTurnFinalizationResult", () => {
   it("rejects a failed full attempt even when it contains visible assistant text", () => {
     expect(() =>
       projectSettledTurnFinalizationAttemptResult(
-        successfulAttempt({ promptError: new Error("provider failed") }),
+        successfulAttempt({
+          terminal: { kind: "failed", source: "prompt", error: new Error("provider failed") },
+        }),
       ),
     ).toThrow("did not complete successfully");
   });

@@ -4,7 +4,45 @@ import {
   chunkFeishuMarkdown,
   chunkFeishuPostMarkdown,
   materializeFeishuPostMarkdownSoftBreaks,
+  parseFeishuMarkdown,
 } from "./markdown.js";
+
+describe("parseFeishuMarkdown", () => {
+  it("retains the block tree needed by rich-post and document consumers", () => {
+    const root = parseFeishuMarkdown(
+      [
+        "> quote",
+        "",
+        "- parent",
+        "  1. child",
+        "",
+        "```ts",
+        "const value = `inline`;",
+        "```",
+        "",
+        "| A | B |",
+        "| - | - |",
+        '| [docs](https://example.test) | <at user_id="ou_1"></at> ||spoiler|| |',
+      ].join("\n"),
+    );
+
+    expect(root.children?.map((node) => node.type)).toEqual([
+      "blockquote",
+      "list",
+      "code",
+      "table",
+    ]);
+  });
+
+  it("serializes authored markdown bytes unchanged in the Feishu rich-post element", () => {
+    const markdown = String.raw`\*literal\* [docs](https://example.test) <at user_id="ou_1"></at> ||spoiler||`;
+    const content = JSON.parse(buildFeishuPostMessageContent({ messageText: markdown })) as {
+      zh_cn: { content: Array<Array<{ tag: string; text?: string }>> };
+    };
+
+    expect(content.zh_cn.content[0]?.at(-1)).toEqual({ tag: "md", text: markdown });
+  });
+});
 
 describe("materializeFeishuPostMarkdownSoftBreaks", () => {
   it.each([

@@ -8,10 +8,19 @@ import {
   wizardStateFromResult,
 } from "./state.ts";
 
+export type ModelSetupWizardStartMethod =
+  | "openclaw.setup.auth.start"
+  | "openclaw.setup.prepare.start";
+
+export type ModelSetupWizardCompletion = {
+  startMethod: ModelSetupWizardStartMethod;
+  preparedModelRef?: string;
+};
+
 type WizardRunnerOptions = {
   getClient: () => GatewayBrowserClient | null;
+  getAgentId: () => string | null;
   onChange: (state: ModelSetupWizardState) => void;
-  onDone: () => void;
   requestFailedMessage: () => string;
   cancelledMessage: () => string;
   sessionExpiredMessage: () => string;
@@ -22,6 +31,7 @@ export class ModelSetupWizardRunner {
   private sessionId: string | null = null;
   private abortController: AbortController | null = null;
   private generation = 0;
+  private startMethod: ModelSetupWizardStartMethod = "openclaw.setup.auth.start";
 
   constructor(private readonly options: WizardRunnerOptions) {}
 
@@ -29,57 +39,69 @@ export class ModelSetupWizardRunner {
     return this.currentState;
   }
 
-  async start(authChoice: string): Promise<void> {
+  async start(
+    authChoice: string,
+    startMethod: ModelSetupWizardStartMethod = "openclaw.setup.auth.start",
+  ): Promise<ModelSetupWizardCompletion | null> {
     const client = this.options.getClient();
     if (!client || this.currentState.phase !== "idle") {
-      return;
+      return null;
     }
     const generation = ++this.generation;
     const sessionId = crypto.randomUUID();
     const abortController = new AbortController();
     this.sessionId = sessionId;
     this.abortController = abortController;
+    this.startMethod = startMethod;
     this.setState({ phase: "starting", authChoice });
     try {
+      const agentId = this.options.getAgentId();
       const started = await client.request<SystemAgentSetupAuthStartResult>(
-        "openclaw.setup.auth.start",
-        { sessionId, authChoice },
+        startMethod,
+        {
+          sessionId,
+          authChoice,
+          ...(agentId ? { agentId } : {}),
+        },
         { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS, signal: abortController.signal },
       );
       if (generation !== this.generation) {
-        return;
+        return null;
       }
       if (started.done) {
-        this.applyResult(authChoice, started);
-        return;
+        return this.applyResult(authChoice, started);
       }
-      await this.requestNext(authChoice, undefined, generation);
+      return await this.requestNext(authChoice, undefined, generation);
     } catch (error) {
       this.handleError(error, generation);
+      return null;
     }
   }
 
-  async answer(value: unknown, includeValue = true): Promise<void> {
+  async answer(value: unknown, includeValue = true): Promise<ModelSetupWizardCompletion | null> {
     const state = this.currentState;
     if (state.phase !== "step" || state.busy || !this.sessionId) {
-      return;
+      return null;
     }
     const generation = this.generation;
     this.setState({ ...state, busy: true, validationError: null });
     const answer = includeValue ? { stepId: state.step.id, value } : { stepId: state.step.id };
     try {
-      await this.requestNext(state.authChoice, answer, generation);
+      return await this.requestNext(state.authChoice, answer, generation);
     } catch (error) {
       this.handleError(error, generation);
+      return null;
     }
   }
 
-  async cancel(): Promise<void> {
+  async cancel(options: { settleActiveRequest?: boolean } = {}): Promise<void> {
     const client = this.options.getClient();
     const sessionId = this.sessionId;
     this.generation += 1;
     this.sessionId = null;
-    this.abortController?.abort();
+    if (!options.settleActiveRequest) {
+      this.abortController?.abort();
+    }
     this.abortController = null;
     this.setState({ phase: "idle" });
     if (!client || !sessionId) {
@@ -114,25 +136,41 @@ export class ModelSetupWizardRunner {
     authChoice: string,
     answer: { stepId: string; value?: unknown } | undefined,
     generation: number,
-  ): Promise<void> {
+  ): Promise<ModelSetupWizardCompletion | null> {
     const client = this.options.getClient();
     const sessionId = this.sessionId;
     const signal = this.abortController?.signal;
     if (!client || !sessionId || !signal) {
-      return;
+      return null;
     }
-    const result = await client.request<WizardNextResult>(
-      "wizard.next",
-      { sessionId, ...(answer ? { answer } : {}) },
-      { timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS, signal },
-    );
-    if (generation !== this.generation) {
-      return;
+    let nextAnswer = answer;
+    while (true) {
+      const result = await client.request<WizardNextResult>(
+        "wizard.next",
+        { sessionId, ...(nextAnswer ? { answer: nextAnswer } : {}) },
+        { timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS, signal },
+      );
+      if (generation !== this.generation) {
+        return null;
+      }
+      const completion = this.applyResult(authChoice, result);
+      if (completion) {
+        return completion;
+      }
+      const next = this.currentState;
+      if (next.phase !== "step" || next.step.executor !== "gateway") {
+        return null;
+      }
+      // Gateway-owned progress has no user control to trigger the next poll.
+      // Keep it in this request chain so its mutation owner settles with it.
+      nextAnswer = undefined;
     }
-    this.applyResult(authChoice, result);
   }
 
-  private applyResult(authChoice: string, result: WizardNextResult): void {
+  private applyResult(
+    authChoice: string,
+    result: WizardNextResult,
+  ): ModelSetupWizardCompletion | null {
     const next = wizardStateFromResult(
       authChoice,
       result,
@@ -141,11 +179,15 @@ export class ModelSetupWizardRunner {
         : this.options.requestFailedMessage(),
     );
     this.setState(next);
-    if (next.phase === "done") {
-      this.sessionId = null;
-      this.abortController = null;
-      this.options.onDone();
+    if (next.phase !== "done") {
+      return null;
     }
+    this.sessionId = null;
+    this.abortController = null;
+    return {
+      startMethod: this.startMethod,
+      ...(next.preparedModelRef ? { preparedModelRef: next.preparedModelRef } : {}),
+    };
   }
 
   private handleError(error: unknown, generation: number): void {

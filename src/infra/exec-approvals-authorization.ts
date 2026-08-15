@@ -1,5 +1,4 @@
 // Revalidates and commits exec authority against the current policy.
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 import {
   applyAllowAlwaysDecision,
@@ -18,6 +17,7 @@ import {
   updateExecApprovalsSync,
 } from "./exec-approvals-store.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+import { isGeneratedHashedArgPattern } from "./exec-command-resolution.js";
 
 export type ExecApprovalUsageAuthorization = {
   source: "current-policy" | "ask-fallback" | "explicit-approval" | "auto-review";
@@ -203,7 +203,10 @@ function applyRecordedAllowlistMetadata(params: {
   if (keys.size === 0) {
     return null;
   }
-  const target = params.agentId ?? DEFAULT_AGENT_ID;
+  if (!params.agentId) {
+    throw new Error("Exec allowlist metadata update requires an explicit agent id.");
+  }
+  const target = params.agentId;
   const agents = params.file.agents ?? {};
   let changed = false;
   const nextAgents = { ...agents };
@@ -222,7 +225,7 @@ function applyRecordedAllowlistMetadata(params: {
       return Object.assign({}, entry, {
         id: entry.id ?? crypto.randomUUID(),
         lastUsedAt: Date.now(),
-        lastUsedCommand: params.command,
+        lastUsedCommand: isGeneratedHashedArgPattern(entry.argPattern) ? undefined : params.command,
         lastResolvedPath: params.resolvedPath,
       });
     });

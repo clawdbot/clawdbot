@@ -136,7 +136,6 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
           resolved.phase = "stopped";
           resolved.underlyingStarted = false;
           resolved.state.cron.stop();
-          resolved.state.stopExitWatchers?.();
           await resolved.state.stopStreamWatchers?.();
           return;
         }
@@ -161,7 +160,6 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
           resolved.phase = "stopped";
           resolved.underlyingStarted = false;
           resolved.state.cron.stop();
-          resolved.state.stopExitWatchers?.();
           await resolved.state.stopStreamWatchers?.();
           return;
         }
@@ -185,8 +183,6 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
         loaded.phase = "stopped";
         loaded.underlyingStarted = false;
         loaded.state.cron.stop();
-        loaded.state.stopExitWatchers?.();
-        void loaded.state.stopStreamWatchers?.().catch(() => {});
         return;
       }
       const loading = cronStateLoader.peek();
@@ -201,8 +197,6 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
             resolved.phase = "stopped";
             resolved.underlyingStarted = false;
             resolved.state.cron.stop();
-            resolved.state.stopExitWatchers?.();
-            void resolved.state.stopStreamWatchers?.().catch(() => {});
           })
           .catch(() => {});
       }
@@ -221,7 +215,6 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
         await resolved.state.cron.stopAndDrain();
       } else {
         resolved.state.cron.stop();
-        resolved.state.stopExitWatchers?.();
         await resolved.state.stopStreamWatchers?.();
       }
     },
@@ -260,14 +253,17 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     async add(input, opts) {
       return await (await load()).state.cron.add(input, opts);
     },
-    async update(id, patch) {
-      return await (await load()).state.cron.update(id, patch);
+    async update(id, patch, opts) {
+      return await (await load()).state.cron.update(id, patch, opts);
     },
-    async updateWithPrecondition(id, patch, precondition) {
-      return await (await load()).state.cron.updateWithPrecondition(id, patch, precondition);
+    async updateWithPrecondition(id, patch, precondition, opts) {
+      return await (await load()).state.cron.updateWithPrecondition(id, patch, precondition, opts);
     },
-    async remove(id) {
-      return await (await load()).state.cron.remove(id);
+    async remove(id, opts) {
+      return await (await load()).state.cron.remove(id, opts);
+    },
+    async removeStaleJobFamily(family) {
+      return await (await load()).state.cron.removeStaleJobFamily(family);
     },
     async removeAgentJobsTransactional(agentId, commit) {
       return await (await load()).state.cron.removeAgentJobsTransactional(agentId, commit);
@@ -275,8 +271,8 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
     async run(id, mode, opts) {
       return await (await load()).state.cron.run(id, mode, opts);
     },
-    async enqueueRun(id, mode) {
-      return await (await load()).state.cron.enqueueRun(id, mode);
+    async enqueueRun(id, mode, opts) {
+      return await (await load()).state.cron.enqueueRun(id, mode, opts);
     },
     getJob(id) {
       if (!loaded) {
@@ -298,6 +294,9 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
         return undefined;
       }
       return loaded.state.cron.getDefaultAgentId();
+    },
+    async prepareWake() {
+      await load();
     },
     wake(opts) {
       if (!loaded) {

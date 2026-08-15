@@ -1,5 +1,6 @@
 // Telegram plugin module implements telegram ingress worker behavior.
 import { parentPort, workerData } from "node:worker_threads";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   computeBackoff,
@@ -70,13 +71,6 @@ type TelegramIngressWorkerRuntimeData = TelegramIngressWorkerOptions & {
   runtime: typeof TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER;
 };
 
-function formatErrorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message || err.name;
-  }
-  return String(err);
-}
-
 function readTelegramErrorCode(err: unknown): number | undefined {
   if (err && typeof err === "object" && "error_code" in err) {
     const code = (err as { error_code: unknown }).error_code;
@@ -87,12 +81,22 @@ function readTelegramErrorCode(err: unknown): number | undefined {
   return undefined;
 }
 
-function postPollError(port: TelegramIngressRuntimePort, err: unknown): void {
+function postPollError(
+  port: TelegramIngressRuntimePort,
+  err: unknown,
+  retryAfterMs?: number,
+): void {
   const errorCode = readTelegramErrorCode(err);
   port.postMessage({
     type: "poll-error",
     message: formatErrorMessage(err),
     ...(errorCode === undefined ? {} : { errorCode }),
+    ...(errorCode === 429 &&
+    retryAfterMs !== undefined &&
+    Number.isFinite(retryAfterMs) &&
+    retryAfterMs > 0
+      ? { retryAfterMs }
+      : {}),
     finishedAt: Date.now(),
   });
 }
@@ -196,6 +200,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
   let lastUpdateId = options.initialUpdateId;
   let failures = 0;
   let consecutiveEmptyPolls = 0;
+  let pollingConfirmed = false;
 
   port.onMessage((message) => {
     if (message?.type === "stop") {
@@ -251,7 +256,9 @@ export async function runTelegramIngressWorkerRuntime(params: {
           fetch: fetchImpl,
           url: getUpdatesUrl,
           body: {
-            timeout: pollTimeoutSeconds,
+            // Confirm getUpdates ownership with a completed short poll before
+            // entering the long poll; request start alone cannot prove connectivity.
+            timeout: pollingConfirmed ? pollTimeoutSeconds : 0,
             limit: pollLimit,
             allowed_updates: resolveTelegramAllowedUpdates(),
             ...(offset === null ? {} : { offset }),
@@ -273,6 +280,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
           }
           port.postMessage({ type: "spooled", updateId, queued: result.length });
         }
+        pollingConfirmed = true;
         failures = 0;
         port.postMessage({
           type: "poll-success",
@@ -305,7 +313,9 @@ export async function runTelegramIngressWorkerRuntime(params: {
         }
         consecutiveEmptyPolls = 0;
         failures += 1;
-        postPollError(port, err);
+        const retryAfterMs = readTelegramRetryAfterMs(err);
+        // The parent must observe the exact flood wait this worker actually honors.
+        postPollError(port, err, retryAfterMs);
         // 409 must propagate to the parent: it owns duplicate-poller/webhook
         // conflict recovery. Transient Bot API errors stay local to this worker.
         if (!isRetryableTelegramApiError(err, { context: "polling" })) {
@@ -313,8 +323,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
         }
         try {
           await sleepWithAbort(
-            readTelegramRetryAfterMs(err) ??
-              computeBackoff(TELEGRAM_RETRY_BACKOFF_POLICY, failures),
+            retryAfterMs ?? computeBackoff(TELEGRAM_RETRY_BACKOFF_POLICY, failures),
             stopController.signal,
             { ref: false },
           );

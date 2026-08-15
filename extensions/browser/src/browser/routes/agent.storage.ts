@@ -233,6 +233,47 @@ export function registerBrowserAgentStorageRoutes(
     });
   });
 
+  app.post("/cookies/set-many", async (req, res) => {
+    const body = readBody(req);
+    const targetId = resolveTargetIdFromBody(body);
+    const rawCookies = body.cookies;
+    if (!Array.isArray(rawCookies) || rawCookies.length === 0) {
+      return jsonError(res, 400, "cookies must be a non-empty array");
+    }
+    const cookieRecords: Record<string, unknown>[] = [];
+    for (const cookie of rawCookies) {
+      if (!cookie || typeof cookie !== "object" || Array.isArray(cookie)) {
+        return jsonError(res, 400, "cookies must contain only cookie objects");
+      }
+      cookieRecords.push(cookie as Record<string, unknown>);
+    }
+    let cookies: CookieSetOptions[];
+    try {
+      cookies = cookieRecords.map((cookie) => parseCookieSetOptions(cookie));
+    } catch (err) {
+      return jsonError(res, 400, formatErrorMessage(err));
+    }
+
+    // Intentional: mutation routes are outside the tab-scoped read/export guard scope.
+    await withPlaywrightRouteContext({
+      req,
+      res,
+      ctx,
+      targetId,
+      feature: "cookies set-many",
+      run: async ({ cdpUrl, tab, pw, signal }) => {
+        const result = await pw.cookiesSetManyViaPlaywright({
+          cdpUrl,
+          targetId: tab.targetId,
+          cookies,
+          signal,
+        });
+        signal.throwIfAborted();
+        res.json({ ok: true, targetId: tab.targetId, added: result.added });
+      },
+    });
+  });
+
   app.post("/cookies/clear", async (req, res) => {
     const body = readBody(req);
     const targetId = resolveTargetIdFromBody(body);
@@ -562,6 +603,7 @@ export function registerBrowserAgentStorageRoutes(
           cdpUrl,
           targetId: tab.targetId,
           name,
+          signal,
         });
         signal.throwIfAborted();
         res.json({ ok: true, targetId: tab.targetId });

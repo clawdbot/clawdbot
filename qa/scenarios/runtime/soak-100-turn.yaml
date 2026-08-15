@@ -59,7 +59,16 @@ flow:
               - call: waitForCondition
                 args:
                   - lambda:
-                      expr: "state.getSnapshot().messages.slice(cursor).some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && normalizeLowercaseStringOrEmpty(candidate.text).includes(normalizeLowercaseStringOrEmpty(turn.marker)))"
+                      expr: "state.getSnapshot().messages.slice(cursor).find((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && normalizeLowercaseStringOrEmpty(candidate.text).includes(normalizeLowercaseStringOrEmpty(turn.marker)))"
                   - expr: liveTurnTimeoutMs(env, 60000)
                   - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+        - call: readSessionTranscriptSummary
+          saveAs: transcript
+          args:
+            - ref: env
+            - expr: config.sessionKey
+        - assert:
+            expr: transcript.userMessageCount === config.turnCount
+            message:
+              expr: "`expected ${config.turnCount} persisted user turns, got ${transcript.userMessageCount}`"
       detailsExpr: "`completed ${turns.length} soak turns`"

@@ -68,6 +68,36 @@ class AndroidScreenshotFixtureTest {
   }
 
   @Test
+  fun providesSwarmChildRosterForSwarmScene() {
+    AndroidScreenshotFixture.configure(AndroidScreenshotScene.Swarm)
+    try {
+      val params = "{\"spawnedBy\":\"${AndroidScreenshotFixture.mainSessionKey}\"}"
+      val sessions =
+        json
+          .parseToJsonElement(AndroidScreenshotFixture.request("sessions.list", params))
+          .jsonObject["sessions"]
+          ?.jsonArray
+          .orEmpty()
+      val metadata =
+        json
+          .parseToJsonElement(AndroidScreenshotFixture.request("chat.metadata", null))
+          .jsonObject
+      assertEquals("true", metadata["swarmEnabled"]?.jsonPrimitive?.content)
+      assertEquals(5, sessions.size)
+      assertEquals(
+        "swarm:${AndroidScreenshotFixture.mainSessionKey}:research",
+        sessions
+          .first()
+          .jsonObject["swarmGroupId"]
+          ?.jsonPrimitive
+          ?.content,
+      )
+    } finally {
+      AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
+    }
+  }
+
+  @Test
   fun providesDeterministicChatHistory() {
     val messages =
       json
@@ -85,6 +115,8 @@ class AndroidScreenshotFixtureTest {
             "Once those land, the changelog draft is ready for review and the tag can go out.",
           "1783555080000",
         ),
+        listOf("user", "[System] Continue the interrupted turn.", "1783555100000"),
+        listOf("user", "[System] Gateway restarted during the Android release update.", "1783555120000"),
         listOf("user", "Summarize the open review feedback for me.", "1783555140000"),
         listOf(
           "assistant",
@@ -92,6 +124,8 @@ class AndroidScreenshotFixtureTest {
             "config key documented before merge. Both are small; I can draft patches for each if you want.",
           "1783555200000",
         ),
+        listOf("system", "Compaction", "1783555220000"),
+        listOf("system", "Reset", "1783555240000"),
         listOf("user", "Draft a short status update for the team.", "1783555260000"),
         listOf(
           "assistant",
@@ -109,6 +143,20 @@ class AndroidScreenshotFixtureTest {
         )
       },
     )
+
+    val restartRecovery = messages[2].jsonObject["provenance"]?.jsonObject
+    assertEquals("internal_system", restartRecovery?.get("kind")?.jsonPrimitive?.content)
+    assertEquals("main_session_restart_recovery", restartRecovery?.get("sourceTool")?.jsonPrimitive?.content)
+    val gatewayRestarted = messages[3].jsonObject["provenance"]?.jsonObject
+    assertEquals("restart-sentinel", gatewayRestarted?.get("sourceTool")?.jsonPrimitive?.content)
+    val compaction = messages[6].jsonObject["__openclaw"]?.jsonObject
+    assertEquals("compaction", compaction?.get("kind")?.jsonPrimitive?.content)
+    assertEquals("android-screenshot-compaction", compaction?.get("id")?.jsonPrimitive?.content)
+    assertEquals("900000", compaction?.get("tokensBefore")?.jsonPrimitive?.content)
+    assertEquals("24700", compaction?.get("tokensAfter")?.jsonPrimitive?.content)
+    val reset = messages[7].jsonObject["__openclaw"]?.jsonObject
+    assertEquals("reset", reset?.get("kind")?.jsonPrimitive?.content)
+    assertEquals("android-screenshot-reset", reset?.get("id")?.jsonPrimitive?.content)
   }
 
   @Test

@@ -1,6 +1,7 @@
 // IRC plugin module owns raw PRIVMSG durable admission and replay draining.
 import { randomUUID } from "node:crypto";
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
@@ -15,9 +16,6 @@ import type { IrcInboundMessage } from "./types.js";
 
 const IRC_INGRESS_PAYLOAD_VERSION = 1;
 const IRC_INGRESS_POLL_INTERVAL_MS = 1_000;
-const IRC_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-const IRC_INGRESS_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const IRC_INGRESS_TOMBSTONE_MAX_ENTRIES = 1_000;
 
 type IrcIngressPayload = {
   version: 1;
@@ -40,12 +38,7 @@ type IrcIngressDispatch = (
   context: { connectedNick: string; connectionEpoch: string },
 ) => Promise<IrcIngressDispatchResult | void> | IrcIngressDispatchResult | void;
 
-class IrcIngressPayloadError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "IrcIngressPayloadError";
-  }
-}
+const IrcIngressPayloadError = createChannelIngressError("IrcIngressPayloadError");
 
 function inspectRawPrivmsg(rawLine: string): {
   laneKey: string;
@@ -187,11 +180,8 @@ export function createIrcIngressMonitor(options: {
     },
     pollIntervalMs: options.pollIntervalMs ?? IRC_INGRESS_POLL_INTERVAL_MS,
     retention: {
-      pruneIntervalMs: IRC_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: IRC_INGRESS_TOMBSTONE_TTL_MS,
-      completedMaxEntries: IRC_INGRESS_TOMBSTONE_MAX_ENTRIES,
-      failedTtlMs: IRC_INGRESS_TOMBSTONE_TTL_MS,
-      failedMaxEntries: IRC_INGRESS_TOMBSTONE_MAX_ENTRIES,
+      completedMaxEntries: 1_000,
+      failedMaxEntries: 1_000,
     },
     drain: {
       resolveNonRetryableFailure: resolveIrcIngressNonRetryableFailure,

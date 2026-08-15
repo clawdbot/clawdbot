@@ -1,5 +1,6 @@
-// Matrix tests cover client plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+// Matrix tests cover client plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import type { CoreConfig } from "../types.js";
@@ -53,12 +54,7 @@ vi.mock("./client/logging.js", () => ({
   ensureMatrixSdkLoggingConfigured: authClientMocks.ensureMatrixSdkLoggingConfigured,
 }));
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
@@ -701,6 +697,40 @@ describe("resolveMatrixAuth", () => {
     });
 
     await expect(backfillPromise).resolves.toBeUndefined();
+    expect(repairCurrentTokenStorageMetaDeviceIdMock).not.toHaveBeenCalled();
+    expect(saveBackfilledMatrixDeviceIdMock).not.toHaveBeenCalled();
+  });
+
+  it("stops waiting on whoami retry backoff when startup backfill is aborted", async () => {
+    matrixDoRequestMock.mockRejectedValueOnce(
+      Object.assign(new TypeError("fetch failed"), {
+        cause: Object.assign(new Error("read ECONNRESET"), {
+          code: "ECONNRESET",
+        }),
+      }),
+    );
+    const abortController = new AbortController();
+    const startedAt = Date.now();
+    const backfillPromise = backfillMatrixAuthDeviceIdAfterStartup({
+      auth: {
+        accountId: "default",
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "tok-123",
+      },
+      env: {} as NodeJS.ProcessEnv,
+      abortSignal: abortController.signal,
+    });
+
+    await vi.waitFor(() => {
+      expect(matrixDoRequestMock).toHaveBeenCalledTimes(1);
+    });
+    abortController.abort();
+
+    // The first retry backoff starts at 250ms; an honored abort returns long before it elapses.
+    await expect(backfillPromise).resolves.toBeUndefined();
+    expect(Date.now() - startedAt).toBeLessThan(200);
+    expect(matrixDoRequestMock).toHaveBeenCalledTimes(1);
     expect(repairCurrentTokenStorageMetaDeviceIdMock).not.toHaveBeenCalled();
     expect(saveBackfilledMatrixDeviceIdMock).not.toHaveBeenCalled();
   });

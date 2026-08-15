@@ -1,6 +1,7 @@
 // Connects Chrome MCP transports and bounds handshake/readiness waits.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { toErrorObject } from "../infra/errors.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
@@ -8,7 +9,6 @@ import {
   CHROME_MCP_HANDSHAKE_TIMEOUT_MS,
   type ChromeMcpSession,
   type NormalizedChromeMcpProfileOptions,
-  toChromeMcpError,
 } from "./chrome-mcp-contracts.js";
 import {
   drainStderr,
@@ -146,7 +146,7 @@ export async function waitForChromeMcpReady(
       racers.push(
         new Promise<never>((_, reject) => {
           abortListener = () =>
-            reject(toChromeMcpError(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
+            reject(toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
           signal.addEventListener("abort", abortListener, { once: true });
         }),
       );
@@ -179,7 +179,7 @@ export async function waitForChromeMcpPendingSession(
       pending,
       new Promise<never>((_, reject) => {
         abortListener = () =>
-          reject(toChromeMcpError(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
+          reject(toErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
         signal.addEventListener("abort", abortListener, { once: true });
       }),
     ]);

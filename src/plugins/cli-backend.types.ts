@@ -34,6 +34,8 @@ export type CliBackendConfig = {
   resumeArgs?: string[];
   /** Argument appended to one explicitly forked resume invocation. */
   forkArg?: string;
+  /** Argument followed by an assistant checkpoint id to bound one resumed fork. */
+  resumeAtArg?: string;
   /** When to pass session ids. */
   sessionMode?: "always" | "existing" | "none";
   /** JSON fields to read session id from (in order). */
@@ -113,6 +115,10 @@ export type CliBackendPrepareExecutionContext = {
   contextTokenBudget?: number;
   authProfileId?: string;
   executionMode?: CliBackendExecutionMode;
+  /** Exact runtime tool surface the backend must enforce for this run. */
+  toolAvailability?: CliBackendToolAvailability;
+  /** Core-prepared environment, including any bundled MCP settings path. */
+  env?: Readonly<Record<string, string>>;
 };
 
 export type CliBackendPreparedExecution = {
@@ -124,6 +130,8 @@ export type CliBackendPreparedExecution = {
    */
   beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
+  /** Positive acknowledgement for `prepare-execution` tool enforcement. */
+  toolAvailabilityEnforced?: true;
 };
 
 export type CliBackendThinkingLevel =
@@ -138,26 +146,17 @@ export type CliBackendThinkingLevel =
 
 export type CliBackendExecutionMode = "agent" | "side-question";
 
-/** Exact backend-native surface plus host-isolated MCP permissions for one CLI run. */
+/** Exact backend-native plus canonical OpenClaw tool surface for one CLI run. */
 export type CliBackendToolAvailability = {
   native: readonly string[];
-  /** MCP tools already isolated by the host transport that may be auto-approved. */
+  /** Canonical OpenClaw tool names served through the host-isolated transport. */
+  openClaw: readonly string[];
+  /**
+   * @deprecated Compatibility projection for CLI backend plugins built against
+   * v2026.7.2-beta.1 through v2026.7.2-beta.3. Use `openClaw` for canonical names.
+   */
   mcp: readonly string[];
 };
-
-export type CliBackendResolveRuntimeToolAvailabilityContext = {
-  /** Normalized, group-expanded OpenClaw runtime allowlist. */
-  toolsAllow: readonly string[];
-};
-
-export type CliBackendRuntimeToolAvailability = {
-  /** Host-isolated MCP tools selected from the OpenClaw runtime allowlist. */
-  mcp: readonly string[];
-};
-
-export type CliBackendResolveRuntimeToolAvailability = (
-  ctx: CliBackendResolveRuntimeToolAvailabilityContext,
-) => CliBackendRuntimeToolAvailability | null | undefined;
 
 export type CliBackendResolveExecutionArgsContext = {
   config?: OpenClawConfig;
@@ -176,11 +175,64 @@ export type CliBackendResolveExecutionArgs = (
   ctx: CliBackendResolveExecutionArgsContext,
 ) => readonly string[] | null | undefined;
 
+export type CliBackendJsonlUsage = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+};
+
+export type CliBackendParsedJsonlEvent =
+  | { kind: "text"; text: string }
+  | { kind: "thinking"; text: string }
+  | {
+      kind: "toolStart";
+      toolCallId: string;
+      name: string;
+      args?: Record<string, unknown>;
+    }
+  | {
+      kind: "toolResult";
+      toolCallId: string;
+      name?: string;
+      isError?: boolean;
+      result?: unknown;
+    }
+  | {
+      kind: "result";
+      text?: string;
+      sessionId?: string;
+      usage?: CliBackendJsonlUsage;
+      errorText?: string;
+    }
+  | { kind: "sessionId"; sessionId: string };
+
+export type CliBackendParseJsonlEventContext = {
+  backendId: string;
+  backend: Readonly<CliBackendConfig>;
+};
+
+export type CliBackendParseJsonlEvent = (
+  line: string,
+  ctx: CliBackendParseJsonlEventContext,
+) => CliBackendParsedJsonlEvent | readonly CliBackendParsedJsonlEvent[] | null | undefined;
+
 export type CliBackendAuthEpochMode = "combined" | "profile-only";
 
 export type CliBackendNativeToolMode = "none" | "always-on" | "selectable";
 
+/** Backend-owned mechanism that enforces exact per-run tool availability. */
+export type CliBackendToolAvailabilityEnforcement = "execution-args" | "prepare-execution";
+
 export type CliBackendSideQuestionToolMode = "disabled";
+
+type CliBackendExactToolAvailabilityVersionPolicy = Readonly<{
+  /** Inclusive floor for stable package releases. */
+  stableMinimum: string;
+  /** Inclusive floors keyed by the first SemVer prerelease identifier. */
+  prereleaseMinimums?: Readonly<Record<string, string>>;
+}>;
 
 export type CliBackendNormalizeConfigContext = {
   config?: OpenClawConfig;
@@ -195,12 +247,36 @@ export type CliBackendRuntimeArtifactPolicy = Readonly<{
   packageName: string;
   /** Only the command itself may be the package entrypoint. */
   entrypoint: "command";
+  /** Supported package release lines when a run requests exact tool availability. */
+  exactToolAvailabilityVersionPolicy?: CliBackendExactToolAvailabilityVersionPolicy;
   /** Canonical basenames allowed when this backend ships a self-contained native build. */
   nativeExecutableNames?: readonly string[];
 }>;
 
+/** Provider-owned protocol requirement for a long-lived CLI session. */
+export type CliBackendLiveSessionRequirement = Readonly<{
+  /** Exact capability the CLI must advertise before streamed output is trusted. */
+  capability: string;
+  /** First published version known to advertise the capability; runtime still feature-detects. */
+  minimumVersion: string;
+  /** Arguments used by setup and Doctor to obtain the installed CLI version. */
+  versionArgs: readonly string[];
+  /** Operator command that installs a compatible CLI version. */
+  updateCommand: string;
+}>;
+
+/** Complete backend-owned contract for in-place native session compaction. */
+type CliBackendManualCompaction = Readonly<{
+  /** Builds the exact backend command for the resumed native session. */
+  buildPrompt: (customInstructions?: string) => string;
+  /** Prompt transport required by the backend control command. */
+  input: "arg" | "stdin";
+  /** Positively confirms that a successful process exit performed compaction. */
+  validateOutput: (rawOutput: string) => { ok: true } | { ok: false; reason: string };
+}>;
+
 /** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
-export type CliBackendPlugin = {
+type CliBackendPluginBase = {
   /** Provider id used in model refs, for example `claude-cli/opus`. */
   id: string;
   /** Canonical model provider whose models this CLI backend can execute. */
@@ -212,11 +288,6 @@ export type CliBackendPlugin = {
    * driven through the generic CLI runner.
    */
   contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
-  /**
-   * Backend-owned compaction for non-harness CLI sessions.
-   * Set only when the backend bounds its own transcript and persists resumable state.
-   */
-  ownsNativeCompaction?: boolean;
   /**
    * Whether embedded runs opted into `cliBackendDispatch: "subscription-auth"`
    * execute through this backend when the selected credential is
@@ -244,6 +315,8 @@ export type CliBackendPlugin = {
   };
   /** Required whenever this backend can become a verified inference owner. */
   runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
+  /** Negotiated protocol capability required by this backend's live-session transport. */
+  liveSessionRequirement?: CliBackendLiveSessionRequirement;
   /**
    * Whether OpenClaw should inject bundle MCP config for this backend.
    *
@@ -333,20 +406,19 @@ export type CliBackendPlugin = {
    * native effort flag.
    */
   resolveExecutionArgs?: CliBackendResolveExecutionArgs;
+  /** How this backend enforces an exact per-run `toolAvailability` contract. */
+  toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
   /**
-   * Translate an OpenClaw runtime allowlist into the host-isolated MCP tools
-   * this backend can expose for one run. OpenClaw disables all native tools.
+   * Backend-owned JSONL line parser for provider-specific stream formats.
    *
-   * Return null/undefined when the backend cannot enforce the requested cap.
-   * Omitting an allowed tool is safe; adding MCP authority absent from the
-   * allowlist is not.
+   * Tool events report execution already performed by the backend. OpenClaw
+   * renders them but does not treat them as host tool execution or delivery evidence.
    */
-  resolveRuntimeToolAvailability?: CliBackendResolveRuntimeToolAvailability;
+  parseJsonlEvent?: CliBackendParseJsonlEvent;
   /**
    * Whether this CLI backend can expose native tools outside OpenClaw's tool
-   * catalog. `selectable` backends must enforce `toolAvailability` through
-   * `resolveExecutionArgs`; `always-on` backends fail closed for restricted
-   * callers.
+   * catalog. Exact restricted runs require `selectable` plus a declared
+   * `toolAvailabilityEnforcement`; `always-on` backends fail closed.
    */
   nativeToolMode?: CliBackendNativeToolMode;
   /**
@@ -358,3 +430,19 @@ export type CliBackendPlugin = {
    */
   sideQuestionToolMode?: CliBackendSideQuestionToolMode;
 };
+
+type CliBackendNativeCompactionContract =
+  | {
+      /** Backend-owned compaction for a persisted resumable CLI transcript. */
+      ownsNativeCompaction: true;
+      /** Optional control operation for explicit manual compaction. */
+      manualCompaction?: CliBackendManualCompaction;
+    }
+  | {
+      /** Boolean-compatible ownership for existing plugins without manual compaction. */
+      ownsNativeCompaction?: boolean;
+      manualCompaction?: never;
+    };
+
+/** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
+export type CliBackendPlugin = CliBackendPluginBase & CliBackendNativeCompactionContract;

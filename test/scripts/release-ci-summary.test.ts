@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -23,6 +23,7 @@ import {
   selectManifestArtifact,
   selectManifestParentJob,
   selectedChildKeys,
+  terminalParentJobFailures,
   validateEvidenceReuseChain,
   validateManifestArtifactCompatibility,
   validateManifestArtifactIdentity,
@@ -49,6 +50,238 @@ describe("GitHub API commands", () => {
       "api",
       "repos/owner/repo/actions/artifacts/456/zip",
     ]);
+  });
+
+  it.skipIf(!hasUnzip)("uses cached gh for evidence reads and plain gh only for ZIP bytes", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-ci-gh-routing-"));
+    const workflowSha = "0".repeat(40);
+    const targetSha = "8".repeat(40);
+    const verifierSha = "c".repeat(40);
+    const fixture = trustedMainPackageFixture({ targetSha, workflowSha });
+    const runId = fixture.runId;
+    const childRunId = String(fixture.childRun.id);
+    const artifactId = fixture.artifact.id;
+    const archive = makeStoredZip({
+      [MANIFEST_ARTIFACT_ENTRY]: JSON.stringify(fixture.manifest),
+    });
+    const archivePath = join(root, "manifest.zip");
+    const fixturesPath = join(root, "fixtures.json");
+    const shimLog = join(root, "shim.log");
+    const plainLog = join(root, "plain.log");
+    const shimGh = join(root, "gh");
+    const plainGh = join(root, "plain-gh");
+    fixture.artifact.digest = artifactDigest(archive);
+    fixture.artifact.size_in_bytes = archive.length;
+    writeFileSync(archivePath, archive);
+    writeFileSync(
+      fixturesPath,
+      JSON.stringify({
+        artifact: fixture.artifact,
+        artifactList: { artifacts: [fixture.artifact] },
+        child: fixture.childRun,
+        jobLog: `TARGET_SHA: ${targetSha}\nDispatched: https://github.com/openclaw/openclaw/actions/runs/${childRunId}`,
+        jobs: { jobs: [fixture.parentJob] },
+        lineage: { merge_base_commit: { sha: workflowSha }, status: "ahead" },
+        parent: fixture.parentRun,
+        parentView: fixture.parentView,
+        rate: { resources: { core: { limit: 5000, remaining: 4999, reset: 2_000_000_000 } } },
+      }),
+    );
+    writeFileSync(
+      shimGh,
+      `#!/usr/bin/env node
+import { appendFileSync, readFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(process.env.SHIM_LOG, JSON.stringify(args) + "\\n");
+const fixtures = JSON.parse(readFileSync(process.env.FIXTURES, "utf8"));
+const endpoint = args[1] ?? "";
+let output;
+if (args[0] === "run" && args[1] === "view") output = fixtures.parentView;
+else if (endpoint === "rate_limit") output = fixtures.rate;
+else if (endpoint === "repos/openclaw/openclaw/actions/runs/${runId}") output = fixtures.parent;
+else if (endpoint.startsWith("repos/openclaw/openclaw/actions/runs/${runId}/artifacts?")) output = fixtures.artifactList;
+else if (endpoint === "repos/openclaw/openclaw/actions/artifacts/${artifactId}") output = fixtures.artifact;
+else if (endpoint.startsWith("repos/openclaw/openclaw/actions/runs/${runId}/jobs?")) output = fixtures.jobs;
+else if (endpoint === "repos/openclaw/openclaw/actions/runs/${childRunId}") output = fixtures.child;
+else if (endpoint === "repos/openclaw/openclaw/actions/jobs/${fixture.parentJob.id}/logs") output = fixtures.jobLog;
+else if (endpoint === "repos/openclaw/openclaw/compare/${workflowSha}...${verifierSha}?per_page=1&page=2") output = fixtures.lineage;
+else { console.error("unexpected cached gh request: " + args.join(" ")); process.exit(43); }
+process.stdout.write(typeof output === "string" ? output : JSON.stringify(output));
+`,
+    );
+    writeFileSync(
+      plainGh,
+      `#!/usr/bin/env node
+import { appendFileSync, readFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(process.env.PLAIN_LOG, JSON.stringify(args) + "\\n");
+if (args[0] !== "api" || args[1] !== "repos/openclaw/openclaw/actions/artifacts/${artifactId}/zip") {
+  console.error("plain gh used for evidence read: " + args.join(" "));
+  process.exit(42);
+}
+process.stdout.write(readFileSync(process.env.ARCHIVE));
+`,
+    );
+    chmodSync(shimGh, 0o755);
+    chmodSync(plainGh, 0o755);
+
+    try {
+      const env = {
+        ...process.env,
+        ARCHIVE: archivePath,
+        FIXTURES: fixturesPath,
+        OPENCLAW_GH_BIN: plainGh,
+        PATH: `${root}:${process.env.PATH ?? ""}`,
+        PLAIN_LOG: plainLog,
+        SHIM_LOG: shimLog,
+      };
+      const lineageResult = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          `import { createReleaseEvidenceClient } from ${JSON.stringify(pathToFileURL(resolve(SCRIPT)).href)};
+           process.stdout.write(JSON.stringify(createReleaseEvidenceClient("openclaw/openclaw").compareCommitLineage("${workflowSha}", "${verifierSha}")));`,
+        ],
+        { encoding: "utf8", env },
+      );
+      expect(lineageResult.status).toBe(0);
+      expect(JSON.parse(lineageResult.stdout)).toEqual({
+        merge_base_commit: { sha: workflowSha },
+        status: "ahead",
+      });
+
+      const result = spawnSync(process.execPath, [SCRIPT, runId], { encoding: "utf8", env });
+
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(
+        `child: ${childRunId} OpenClaw Release Checks completed/success`,
+      );
+      const shimCalls = readFileSync(shimLog, "utf8");
+      const plainCalls = readFileSync(plainLog, "utf8");
+      expect(shimCalls).toContain('"run","view"');
+      expect(shimCalls).toContain(`"repos/openclaw/openclaw/actions/runs/${runId}"`);
+      expect(shimCalls).toContain(
+        `"repos/openclaw/openclaw/compare/${workflowSha}...${verifierSha}?per_page=1&page=2"`,
+      );
+      expect(shimCalls).toContain(
+        JSON.stringify([
+          "api",
+          `repos/openclaw/openclaw/actions/jobs/${fixture.parentJob.id}/logs`,
+          "--allow-escape-sequences",
+        ]),
+      );
+      expect(shimCalls).not.toContain(`/actions/artifacts/${artifactId}/zip`);
+      expect(plainCalls.trim()).toBe(
+        JSON.stringify(["api", `repos/openclaw/openclaw/actions/artifacts/${artifactId}/zip`]),
+      );
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+});
+
+function runParentJobLogProbe(shimBody: string) {
+  const root = mkdtempSync(join(tmpdir(), "release-ci-job-log-"));
+  const shimLog = join(root, "shim.log");
+  const shimGh = join(root, "gh");
+  writeFileSync(
+    shimGh,
+    `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(process.env.SHIM_LOG, JSON.stringify(args) + "\\n");
+${shimBody}
+`,
+  );
+  chmodSync(shimGh, 0o755);
+
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `import { createReleaseEvidenceClient } from ${JSON.stringify(pathToFileURL(resolve(SCRIPT)).href)};
+         try {
+           process.stdout.write(createReleaseEvidenceClient("owner/repo").getJobLog("123"));
+         } catch (error) {
+           process.stdout.write(JSON.stringify({
+             message: error instanceof Error ? error.message : String(error),
+             stderr: typeof error === "object" && error !== null && "stderr" in error
+               ? String(error.stderr)
+               : "",
+           }));
+           process.exitCode = 17;
+         }`,
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          PATH: `${root}:${process.env.PATH ?? ""}`,
+          SHIM_LOG: shimLog,
+        },
+      },
+    );
+    return {
+      calls: readFileSync(shimLog, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+      result,
+    };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
+describe("parent job log compatibility", () => {
+  const flaggedArgs = ["api", "repos/owner/repo/actions/jobs/123/logs", "--allow-escape-sequences"];
+  const legacyArgs = ["api", "repos/owner/repo/actions/jobs/123/logs"];
+
+  it("uses one flagged call when gh supports raw escape-sequence output", () => {
+    const { calls, result } = runParentJobLogProbe(
+      'process.stdout.write("\\u001b[31mlog\\u001b[0m");',
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe("\u001b[31mlog\u001b[0m");
+    expect(calls).toEqual([flaggedArgs]);
+  });
+
+  it("retries once without the flag for the exact legacy gh error", () => {
+    const { calls, result } = runParentJobLogProbe(`
+if (args.includes("--allow-escape-sequences")) {
+  process.stderr.write("unknown flag: --allow-escape-sequences\\n\\nUsage: gh api <endpoint> [flags]\\n");
+  process.exit(1);
+}
+process.stdout.write("\\u001b[31mlegacy log\\u001b[0m");
+`);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toBe("\u001b[31mlegacy log\u001b[0m");
+    expect(calls).toEqual([flaggedArgs, legacyArgs]);
+  });
+
+  it("propagates unrelated errors without retrying", () => {
+    const { calls, result } = runParentJobLogProbe(`
+process.stderr.write("error: unknown flag: --allow-escape-sequences\\n");
+process.exit(1);
+`);
+
+    expect(result.status).toBe(17);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toEqual(
+      expect.objectContaining({
+        message: expect.stringContaining("Command failed: gh"),
+        stderr: "error: unknown flag: --allow-escape-sequences\n",
+      }),
+    );
+    expect(calls).toEqual([flaggedArgs]);
   });
 });
 
@@ -235,13 +468,18 @@ function rawManifest({
     runReleaseSoak: "false",
     targetSha,
     validationInputs: {
+      allowUnreleasedChangelog: "false",
       codexPluginSpec: "",
       crossOsSuiteFilter: "",
       liveSuiteFilter: "",
       mode: "direct",
+      npmTelegramPackageSpec: "",
+      npmTelegramProviderMode: "mock-openai",
+      npmTelegramScenario: "",
       packageAcceptancePackageSpec: "",
       provider: "openai",
       releasePackageSpec: "",
+      skipPackageTelegramE2e: "false",
       targetContextRef: "",
     },
     version,
@@ -361,14 +599,16 @@ function trustedMainPackageFixture({
       id: Number(runId),
     },
   };
+  const compareCommits = (base: string, head: string) => {
+    expect(base).toBe(workflowSha);
+    return {
+      merge_base_commit: { sha: workflowSha },
+      status: base === head ? "identical" : "ahead",
+    };
+  };
   const client = {
-    compareCommits(base: string, head: string) {
-      expect(base).toBe(workflowSha);
-      return {
-        merge_base_commit: { sha: workflowSha },
-        status: base === head ? "identical" : "ahead",
-      };
-    },
+    compareCommitLineage: compareCommits,
+    compareCommits,
     getJobLog(jobId: number) {
       expect(jobId).toBe(parentJob.id);
       return [
@@ -400,7 +640,18 @@ function trustedMainPackageFixture({
     },
   };
 
-  return { artifact, childRun, client, manifest, parentRun, runId, targetSha, workflowSha };
+  return {
+    artifact,
+    childRun,
+    client,
+    manifest,
+    parentJob,
+    parentRun,
+    parentView,
+    runId,
+    targetSha,
+    workflowSha,
+  };
 }
 
 describe("release CI summary child correlation", () => {
@@ -490,6 +741,20 @@ describe("release CI summary child correlation", () => {
     ).not.toBe(releaseCiWatchFingerprint(parent));
   });
 
+  it("classifies only terminal unsuccessful parent jobs as failures", () => {
+    expect(
+      terminalParentJobFailures({
+        jobs: [
+          { conclusion: "success", name: "success", status: "completed" },
+          { conclusion: "neutral", name: "neutral", status: "completed" },
+          { conclusion: "skipped", name: "skipped", status: "completed" },
+          { conclusion: "failure", name: "failed", status: "completed" },
+          { conclusion: "", name: "running", status: "in_progress" },
+        ],
+      }),
+    ).toEqual(["failed"]);
+  });
+
   it("summarizes only transitions while watching a release run", async () => {
     const states = [
       { attempt: 1, conclusion: "", jobs: [], status: "queued" },
@@ -520,6 +785,37 @@ describe("release CI summary child correlation", () => {
 
     expect(summaries).toBe(2);
     expect(sleeps).toBe(2);
+  });
+
+  it("stops watching after reporting a terminal parent job failure", async () => {
+    let summaries = 0;
+    let sleeps = 0;
+
+    await expect(
+      watchReleaseCiRun(parseReleaseCiSummaryArgs(["29071366025", "--watch", "--interval", "1"]), {
+        fetchParent: () => ({
+          attempt: 1,
+          conclusion: "",
+          jobs: [
+            {
+              conclusion: "failure",
+              name: "Run release/live/Docker/QA validation",
+              status: "completed",
+            },
+            { conclusion: "", name: "Run normal full CI", status: "in_progress" },
+          ],
+          status: "in_progress",
+        }),
+        sleep: async () => {
+          sleeps += 1;
+        },
+        summarize: () => {
+          summaries += 1;
+        },
+      }),
+    ).rejects.toThrow("Run release/live/Docker/QA validation");
+    expect(summaries).toBe(1);
+    expect(sleeps).toBe(0);
   });
 
   it("selects one immutable manifest artifact bound to the exact parent run", () => {
@@ -838,7 +1134,7 @@ describe("release CI summary child correlation", () => {
 
   it("rejects a legacy producer outside the trusted main verifier lineage", () => {
     const fixture = trustedMainPackageFixture({ workflowSha: "a".repeat(40) });
-    fixture.client.compareCommits = () => ({
+    fixture.client.compareCommitLineage = () => ({
       merge_base_commit: { sha: "d".repeat(40) },
       status: "diverged",
     });
@@ -1262,6 +1558,36 @@ describe("release CI summary child correlation", () => {
     );
   });
 
+  it("requires the npm Telegram child for all-validation with an effective package spec", () => {
+    const raw = rawManifest({});
+    raw.childRuns.npmTelegram = "505";
+    raw.validationInputs.npmTelegramPackageSpec = "openclaw@beta";
+    raw.validationInputs.skipPackageTelegramE2e = "true";
+    const manifest = validateParentManifest(raw, {
+      runAttempt: 2,
+      runId: "29090000000",
+    });
+    const selected = requiredChildKeysForRerunGroup(manifest.rerunGroup, manifest.validationInputs);
+    expect([...selected].toSorted()).toEqual([
+      "normalCi",
+      "npmTelegram",
+      "pluginPrerelease",
+      "productPerformance",
+      "releaseChecks",
+    ]);
+    const missing = {
+      ...manifest,
+      childRunIds: { ...manifest.childRunIds, npmTelegram: "" },
+    };
+    expect(() =>
+      manifestChildEntries(
+        missing,
+        expectedChildDispatches(manifest.runId, manifest.runAttempt, "main"),
+        selected,
+      ),
+    ).toThrow("selected child is missing from manifest: NPM Telegram Beta E2E");
+  });
+
   it("keeps historical non-reuse v2 manifests readable without validation inputs", () => {
     const legacy = rawManifest({});
     delete (legacy as { validationInputs?: unknown }).validationInputs;
@@ -1527,7 +1853,10 @@ describe("release CI summary child correlation", () => {
     );
     const mismatchedRoot = {
       ...root,
-      validationInputs: { ...root.validationInputs, provider: "anthropic" },
+      validationInputs: {
+        ...root.validationInputs,
+        npmTelegramScenario: "telegram-status-command",
+      },
     };
 
     expect(() => validateEvidenceReuseChain(current, mismatchedRoot, mismatchedRoot)).toThrow(

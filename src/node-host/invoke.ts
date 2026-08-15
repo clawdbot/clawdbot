@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -42,8 +43,10 @@ import {
 } from "../infra/node-commands.js";
 import { logWarn } from "../logger.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { NodeHostClient } from "./client.js";
+import { invokeNodeDesktopStream } from "./desktop-stream-command.js";
 import {
   handleClaudeCliNodeInvoke,
   type NodeHostInvokeRuntime,
@@ -65,6 +68,10 @@ import type {
 } from "./invoke-types.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
+import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
+import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-commands.js";
+import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
+import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-host.js";
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
@@ -80,6 +87,12 @@ const MCP_ERROR_MESSAGE_MAX_CHARS = 1_024;
 
 const OUTPUT_EVENT_TAIL = 20_000;
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+type NodeHostPrivateInvokeRuntime = NodeHostInvokeRuntime & {
+  workerBundleInstaller?: NodeWorkerBundleInstallerControl;
+  workerSupervisor?: NodeWorkerSupervisorControl;
+  workerWorkspace?: NodeWorkerWorkspaceRuntime;
+};
 
 const execHostEnforced =
   normalizeLowercaseStringOrEmpty(process.env.OPENCLAW_NODE_EXEC_HOST ?? "") === "app";
@@ -334,6 +347,7 @@ async function runCommand(
   cwd: string | undefined,
   env: Record<string, string> | undefined,
   timeoutMs: number | undefined,
+  signal?: AbortSignal,
 ): Promise<RunResult> {
   try {
     const result = await runCommandWithTimeout(argv, {
@@ -344,6 +358,7 @@ async function runCommand(
       maxOutputBytes: OUTPUT_CAP,
       outputCapture: "head",
       input: Buffer.alloc(0),
+      signal,
       timeoutMs: timeoutMs && timeoutMs > 0 ? timeoutMs : undefined,
     });
     const timedOut = result.termination === "timeout";
@@ -533,16 +548,47 @@ async function sendExecApprovalsStorageErrorResult(
   await sendErrorResult(client, frame, classifyExecApprovalsStorageError(err), String(err));
 }
 
+function createNodeHostInvocationClient(
+  client: NodeHostClient,
+  signal: AbortSignal | undefined,
+): NodeHostClient {
+  if (!signal) {
+    return client;
+  }
+  return {
+    async request<T = Record<string, unknown>>(
+      method: string,
+      params?: unknown,
+      opts?: Parameters<NodeHostClient["request"]>[2],
+    ): Promise<T> {
+      // Superseded invocations share their replacement's Gateway id, so late
+      // results, progress, and events must not outlive invocation ownership.
+      if (
+        signal.aborted &&
+        (method === "node.invoke.result" ||
+          method === "node.invoke.progress" ||
+          method === "node.event")
+      ) {
+        return {} as T;
+      }
+      return opts === undefined
+        ? await client.request<T>(method, params)
+        : await client.request<T>(method, params, opts);
+    },
+  };
+}
+
 /** Handles one node-host command invocation payload and returns serialized results. */
 export async function handleInvoke(
   frame: NodeInvokeRequestPayload,
   client: NodeHostClient,
   skillBins: SkillBinsProvider,
   mcpManager?: NodeHostMcpManager,
-  runtime: NodeHostInvokeRuntime = {},
+  runtime: NodeHostPrivateInvokeRuntime = {},
 ) {
+  const invocationClient = createNodeHostInvocationClient(client, runtime.signal);
   try {
-    await dispatchInvoke(frame, client, skillBins, mcpManager, runtime);
+    await dispatchInvoke(frame, invocationClient, skillBins, mcpManager, runtime);
   } catch (err) {
     // Gateway events launch this handler without awaiting it. Consume unexpected
     // failures here so one bad request cannot terminate the node-host process.
@@ -550,7 +596,7 @@ export async function handleInvoke(
       `node host invoke failed (command=${frame.command ?? "unknown"}, id=${frame.id}): ${String(err)}`,
     );
     try {
-      await sendErrorResult(client, frame, "UNAVAILABLE", "node invocation failed");
+      await sendErrorResult(invocationClient, frame, "UNAVAILABLE", "node invocation failed");
     } catch (sendErr) {
       // The caller intentionally detaches this promise. A failed result send is
       // terminal for this request and must not surface as an unhandled rejection.
@@ -566,9 +612,32 @@ async function dispatchInvoke(
   client: NodeHostClient,
   skillBins: SkillBinsProvider,
   mcpManager?: NodeHostMcpManager,
-  runtime: NodeHostInvokeRuntime = {},
+  runtime: NodeHostPrivateInvokeRuntime = {},
 ) {
   const command = frame.command ?? "";
+  const workerSupervisorResult = await invokeNodeWorkerSupervisorCommand({
+    command,
+    paramsJSON: frame.paramsJSON,
+    bundleInstaller: runtime.workerBundleInstaller,
+    supervisor: runtime.workerSupervisor,
+    workspace: runtime.workerWorkspace,
+    gatewayUrl: runtime.gatewayUrl,
+    gatewayTlsFingerprint: runtime.gatewayTlsFingerprint,
+    signal: runtime.signal,
+  });
+  if (workerSupervisorResult.handled) {
+    if (workerSupervisorResult.ok) {
+      await sendJsonPayloadResult(client, frame, workerSupervisorResult.payload);
+    } else {
+      await sendErrorResult(
+        client,
+        frame,
+        workerSupervisorResult.code,
+        workerSupervisorResult.message,
+      );
+    }
+    return;
+  }
   if (command === NODE_DEVICE_APPS_COMMAND) {
     const result = await invokeDeviceApps({
       paramsJSON: frame.paramsJSON,
@@ -580,6 +649,27 @@ async function dispatchInvoke(
       await sendJsonPayloadResult(client, frame, result.payload);
     } else {
       await sendErrorResult(client, frame, result.code, result.message);
+    }
+    return;
+  }
+  if (command === NODE_DESKTOP_STREAM_COMMAND) {
+    try {
+      await invokeNodeDesktopStream({
+        paramsJSON: frame.paramsJSON,
+        gatewayUrl: runtime.gatewayUrl,
+        gatewayTlsFingerprint: runtime.gatewayTlsFingerprint,
+        config: runtime.desktopHostConfig,
+        signal: runtime.signal,
+        emitStatus: runtime.emitProgress,
+      });
+      await sendJsonPayloadResult(client, frame, { status: "closed" });
+    } catch (error) {
+      await sendErrorResult(
+        client,
+        frame,
+        "UNAVAILABLE",
+        error instanceof Error ? error.message : "desktop stream unavailable",
+      );
     }
     return;
   }
@@ -686,7 +776,7 @@ async function dispatchInvoke(
   }
 
   if (command === NODE_MCP_TOOLS_CALL_COMMAND) {
-    await handleMcpToolsCall(frame, client, mcpManager);
+    await handleMcpToolsCall(frame, client, mcpManager, runtime.signal);
     return;
   }
 
@@ -713,7 +803,13 @@ async function dispatchInvoke(
   try {
     const { pluginCommandIo: io, pluginCommandContext: context } = runtime;
     const invokeContext =
-      context && frame.sessionKey ? { ...context, sessionKey: frame.sessionKey } : context;
+      context && (frame.sessionKey || runtime.signal)
+        ? {
+            ...context,
+            ...(frame.sessionKey ? { sessionKey: frame.sessionKey } : {}),
+            ...(runtime.signal ? { signal: runtime.signal } : {}),
+          }
+        : context;
     const pluginResult = await invokePlugin(command, frame.paramsJSON, io, invokeContext);
     if (pluginResult !== null) {
       await sendRawPayloadResult(client, frame, pluginResult);
@@ -803,6 +899,7 @@ async function dispatchInvoke(
     client,
     params,
     skillBins,
+    signal: runtime.signal,
     execHostEnforced,
     execHostFallbackAllowed,
     resolveExecSecurity,
@@ -834,10 +931,6 @@ async function dispatchInvoke(
     },
     preferMacAppExecHost,
   });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function decodeMcpToolsCallParams(raw?: string | null): McpToolsCallParams {
@@ -978,6 +1071,7 @@ async function handleMcpToolsCall(
   frame: NodeInvokeRequestPayload,
   client: NodeHostClient,
   mcpManager: NodeHostMcpManager | undefined,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (!mcpManager) {
     await sendErrorResult(client, frame, "MCP_SERVER_UNAVAILABLE", "node host MCP is unavailable");
@@ -994,6 +1088,7 @@ async function handleMcpToolsCall(
     const result = await mcpManager.callMcpTool({
       ...params,
       timeoutMs: frame.timeoutMs ?? undefined,
+      ...(signal ? { signal } : {}),
     });
     if (result.isError) {
       await sendErrorResult(client, frame, "MCP_TOOL_ERROR", mcpToolErrorMessage(result));

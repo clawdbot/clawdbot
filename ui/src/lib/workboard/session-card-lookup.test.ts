@@ -75,6 +75,128 @@ describe("Workboard session card lookup", () => {
     expect(removeListener).toHaveBeenCalledOnce();
   });
 
+  it("does not let a newer archived card shadow an active session match", async () => {
+    const { client } = createClient([
+      {
+        cards: [
+          card({
+            id: "card-archived",
+            updatedAt: 3,
+            metadata: { automation: { boardId: "platform" }, archivedAt: 10 },
+          }),
+          card({ id: "card-active", updatedAt: 2 }),
+        ],
+      },
+    ]);
+    const lease = acquireWorkboardSessionCardLookup(client);
+    const listener = vi.fn();
+    const unsubscribe = lease.subscribe("agent:main:workboard-card", listener);
+
+    await vi.waitFor(() =>
+      expect(listener).toHaveBeenCalledWith(expect.objectContaining({ cardId: "card-active" })),
+    );
+    expect(listener).not.toHaveBeenCalledWith(expect.objectContaining({ cardId: "card-archived" }));
+
+    unsubscribe();
+    lease.release();
+  });
+
+  it("matches the newest active card when a session is captured on multiple boards", async () => {
+    const { client } = createClient([
+      {
+        cards: [
+          card({
+            id: "card-old",
+            position: 1000,
+            updatedAt: 2,
+            metadata: { automation: { boardId: "ops" } },
+          }),
+          card({
+            id: "card-new",
+            position: 2000,
+            updatedAt: 3,
+            metadata: { automation: { boardId: "product" } },
+          }),
+        ],
+      },
+    ]);
+    const lease = acquireWorkboardSessionCardLookup(client);
+    const listener = vi.fn();
+    const unsubscribe = lease.subscribe("agent:main:workboard-card", listener);
+
+    await vi.waitFor(() =>
+      expect(listener).toHaveBeenCalledWith({
+        cardId: "card-new",
+        title: "Ship dashboard stitch",
+        status: "running",
+        boardId: "product",
+      }),
+    );
+    expect(listener).not.toHaveBeenCalledWith(expect.objectContaining({ cardId: "card-old" }));
+
+    unsubscribe();
+    lease.release();
+  });
+
+  it("does not match or scan run history for an archived card", async () => {
+    const { client, request } = createClient([
+      {
+        cards: [
+          card({
+            id: "card-archived",
+            runId: "run-archived",
+            metadata: { automation: { boardId: "platform" }, archivedAt: 10 },
+          }),
+        ],
+      },
+    ]);
+    const lease = acquireWorkboardSessionCardLookup(client);
+    const listener = vi.fn();
+    const unsubscribe = lease.subscribe("agent:main:workboard-card", listener);
+
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledWith(null));
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).not.toHaveBeenCalledWith("workboard.cards.runs", expect.anything());
+
+    unsubscribe();
+    lease.release();
+  });
+
+  it("removes archived session matches and restores them after Workboard changes", async () => {
+    const activeCard = card();
+    const archivedCard = card({
+      updatedAt: 3,
+      metadata: { automation: { boardId: "platform" }, archivedAt: 10 },
+    });
+    const restoredCard = card({ updatedAt: 4 });
+    const { client, request, emitChanged } = createClient([
+      { cards: [activeCard] },
+      { cards: [archivedCard] },
+      { cards: [restoredCard] },
+    ]);
+    const lease = acquireWorkboardSessionCardLookup(client);
+    const listener = vi.fn();
+    const unsubscribe = lease.subscribe("agent:main:workboard-card", listener);
+
+    await vi.waitFor(() =>
+      expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({ cardId: activeCard.id })),
+    );
+
+    emitChanged();
+    await vi.waitFor(() => expect(listener).toHaveBeenLastCalledWith(null));
+
+    emitChanged();
+    await vi.waitFor(() =>
+      expect(listener).toHaveBeenLastCalledWith(
+        expect.objectContaining({ cardId: restoredCard.id }),
+      ),
+    );
+    expect(request).toHaveBeenCalledTimes(3);
+
+    unsubscribe();
+    lease.release();
+  });
+
   it("indexes historical attempt sessions and returns no match for unrelated sessions", async () => {
     const { client } = createClient([
       {

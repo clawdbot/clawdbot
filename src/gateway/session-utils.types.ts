@@ -3,18 +3,22 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionCreatedActor,
+  SessionClassification,
+  SessionPeerKind,
   SessionPlacement,
   SessionRow,
+  SessionRunStatus,
   SessionSharingRole,
   SessionVisibility,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { QueueMode } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
-import type { QueueMode } from "../auto-reply/reply/queue/types.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type {
   SessionCompactionCheckpoint,
   SessionEntry,
   SessionGoal,
+  SessionOrigin,
 } from "../config/sessions/types.js";
 import type { PluginSessionExtensionProjection } from "../plugins/host-hooks.js";
 import type { FastModeSource } from "../shared/fast-mode.js";
@@ -22,6 +26,7 @@ import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
   GatewayThinkingLevelOption,
+  SessionBoardFace,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../shared/session-types.js";
@@ -39,9 +44,6 @@ export type GatewaySessionsDefaults = {
   thinkingDefault?: string;
 };
 
-/** Runtime status surfaced for the latest session run. */
-export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
-
 type SubagentRunState = "active" | "interrupted" | "historical";
 
 type SessionCompactionCheckpointPreview = Pick<
@@ -51,6 +53,13 @@ type SessionCompactionCheckpointPreview = Pick<
 
 export type GatewaySessionRow = {
   key: string;
+  /** Optional display metadata; never authoritative for session access or lifecycle. */
+  classification?: SessionClassification;
+  agentId?: string;
+  accountId?: string;
+  peerKind?: SessionPeerKind;
+  isMain?: boolean;
+  isBackground?: boolean;
   /** Additive collaboration state; absent on older gateways. */
   visibility?: SessionVisibility;
   /** Caller-relative role used by Control UI participation controls. */
@@ -80,8 +89,11 @@ export type GatewaySessionRow = {
   previousSessionId?: SessionEntry["previousSessionId"];
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
+  icon?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
+  /** Preferred Control UI face for generic session navigation. */
+  boardFace?: SessionBoardFace;
   displayName?: string;
   derivedTitle?: string;
   lastMessagePreview?: string;
@@ -90,20 +102,19 @@ export type GatewaySessionRow = {
   groupChannel?: string;
   space?: string;
   chatType?: ChatType;
-  origin?: SessionEntry["origin"];
+  origin?: SessionOrigin;
   updatedAt: number | null;
   archived?: boolean;
   archivedAt?: number;
   archivedBy?: SessionEntry["archivedBy"];
   pinned?: boolean;
   pinnedAt?: number;
-  icon?: string;
   unread?: boolean;
   lastReadAt?: number;
   agentStatus?: SessionEntry["agentStatus"];
   observerDigest?: Pick<
     SessionObserverDigest,
-    "runId" | "headline" | "health" | "updatedAt" | "revision"
+    "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   >;
   /** Last real user/channel interaction; background work does not advance it. */
   lastInteractionAt?: number;
@@ -112,11 +123,13 @@ export type GatewaySessionRow = {
   placement?: SessionPlacement;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  restartRecoveryStatus?: "tombstoned";
   thinkingLevel?: string;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
   fastMode?: FastMode;
+  toolOverrides?: SessionEntry["toolOverrides"];
   effectiveFastMode?: FastMode;
   effectiveFastModeSource?: FastModeSource;
   fastAutoOnSeconds?: number;
@@ -161,10 +174,10 @@ export type GatewaySessionRow = {
   contextTokens?: number;
   contextBudgetStatus?: SessionEntry["contextBudgetStatus"];
   deliveryContext?: DeliveryContext;
-  lastChannel?: SessionEntry["lastChannel"];
+  lastChannel?: string;
   lastTo?: string;
   lastAccountId?: string;
-  lastThreadId?: SessionEntry["lastThreadId"];
+  lastThreadId?: string | number;
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
   pluginExtensions?: PluginSessionExtensionProjection[];

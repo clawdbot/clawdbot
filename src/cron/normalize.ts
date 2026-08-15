@@ -6,13 +6,16 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
 import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
 import { parseDeliveryInput } from "./delivery-field-schemas.js";
 import { normalizeCronCommandArgv, normalizeCronPayload } from "./normalize-payload.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
+import { normalizeCronRuntimeAuthority } from "./runtime-authority.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
+import { normalizeCronScheduledToolPolicy } from "./scheduled-tool-policy.js";
 import { inferCronJobName } from "./service/normalize.js";
 import {
   assertSafeCronSessionTargetId,
@@ -370,14 +373,57 @@ export function normalizeCronJobInput(
   if (isRecord(base.owner)) {
     const agentId = normalizeOptionalString(base.owner.agentId);
     const sessionKey = normalizeOptionalString(base.owner.sessionKey);
-    if (agentId || sessionKey) {
+    const accountId = normalizeOptionalAccountId(
+      typeof base.owner.accountId === "string" ? base.owner.accountId : undefined,
+    );
+    if (agentId || sessionKey || accountId) {
       next.owner = {
         ...(agentId ? { agentId: sanitizeAgentId(agentId) } : {}),
         ...(sessionKey ? { sessionKey } : {}),
+        ...(accountId ? { accountId } : {}),
       };
     } else {
       delete next.owner;
     }
+  }
+
+  if ("scheduledToolPolicy" in base) {
+    const scheduledToolPolicy = normalizeCronScheduledToolPolicy(base.scheduledToolPolicy);
+    if (scheduledToolPolicy) {
+      next.scheduledToolPolicy = scheduledToolPolicy;
+    } else {
+      delete next.scheduledToolPolicy;
+    }
+  }
+
+  if ("toolsAllowProvenance" in base) {
+    const provenance = base.toolsAllowProvenance;
+    if (
+      isRecord(provenance) &&
+      provenance.version === 1 &&
+      provenance.source === "final-executable-surface"
+    ) {
+      next.toolsAllowProvenance = {
+        version: 1,
+        source: "final-executable-surface",
+      };
+    } else {
+      delete next.toolsAllowProvenance;
+    }
+  }
+
+  if ("runtimeAuthority" in base) {
+    const runtimeAuthority = normalizeCronRuntimeAuthority(base.runtimeAuthority);
+    if (runtimeAuthority) {
+      next.runtimeAuthority = runtimeAuthority;
+    } else {
+      delete next.runtimeAuthority;
+    }
+  }
+  if (base.runtimeAuthorityRecoveryRequired === true) {
+    next.runtimeAuthorityRecoveryRequired = true;
+  } else {
+    delete next.runtimeAuthorityRecoveryRequired;
   }
 
   if ("agentId" in base) {
@@ -486,11 +532,14 @@ export function normalizeCronJobInput(
     }
     if (!next.sessionTarget && isRecord(next.payload)) {
       const kind = typeof next.payload.kind === "string" ? next.payload.kind : "";
-      // Keep create-time defaults explicit: system events join main, while agent
-      // turns isolate by default to avoid unbounded token accumulation.
+      // Agent turns bind to the creating conversation by default: the run carries
+      // that chat's context and announces its result there. Callers without session
+      // context are downgraded to isolated by resolveCronCurrentSessionTarget.
       if (kind === "systemEvent" || kind === "heartbeat") {
         next.sessionTarget = "main";
-      } else if (kind === "agentTurn" || kind === "command" || kind === "script") {
+      } else if (kind === "agentTurn") {
+        next.sessionTarget = "current";
+      } else if (kind === "command" || kind === "script") {
         next.sessionTarget = "isolated";
       }
     }
@@ -540,8 +589,8 @@ export function normalizeCronJobInput(
     const payload = isRecord(next.payload) ? next.payload : null;
     const payloadKind = payload && typeof payload.kind === "string" ? payload.kind : "";
     const sessionTarget = typeof next.sessionTarget === "string" ? next.sessionTarget : "";
-    // Omitted output targets were canonicalized to "isolated" above. Resolved
-    // "current" and custom session ids share those announce semantics.
+    // Agent turns resolve to current with context and isolated without it.
+    // Current and custom session ids share isolated announce semantics.
     const hasDelivery = "delivery" in next && next.delivery !== undefined;
     if (!hasDelivery && shouldDefaultCronDeliveryToAnnounce({ payloadKind, sessionTarget })) {
       next.delivery = { mode: "announce" };

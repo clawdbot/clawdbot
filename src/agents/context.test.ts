@@ -2,16 +2,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSessionManagerRuntimeRegistry } from "./agent-hooks/session-manager-runtime-registry.js";
-import {
-  MODEL_CONFIGURED_CONTEXT_TOKEN_CACHE,
-  MODEL_CONTEXT_TOKEN_CACHE,
-  MODEL_CONTEXT_WINDOW_CACHE,
-  providerContextTokenCacheKey,
-} from "./context-cache.js";
+import { getContextWindowCaches, providerContextTokenCacheKey } from "./context-cache.js";
 import {
   ANTHROPIC_CONTEXT_1M_TOKENS,
   ANTHROPIC_FABLE_CONTEXT_TOKENS,
   ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS,
+  ANTHROPIC_OPUS_5_CONTEXT_TOKENS,
   ANTHROPIC_SONNET_5_CONTEXT_TOKENS,
   ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS,
   applyConfiguredContextWindows,
@@ -314,8 +310,8 @@ describe("resolveContextTokensForModel", () => {
   ])("resolves the corrected %s/%s context window", (provider, model) => {
     resetContextWindowCacheForTest();
     try {
-      MODEL_CONTEXT_TOKEN_CACHE.set(model, 200_000);
-      MODEL_CONTEXT_TOKEN_CACHE.set(
+      getContextWindowCaches().discoveredTokenCache.set(model, 200_000);
+      getContextWindowCaches().discoveredTokenCache.set(
         providerContextTokenCacheKey(provider, model),
         ANTHROPIC_CONTEXT_1M_TOKENS,
       );
@@ -337,7 +333,10 @@ describe("resolveContextTokensForModel", () => {
     (model) => {
       resetContextWindowCacheForTest();
       try {
-        MODEL_CONTEXT_TOKEN_CACHE.set(providerContextTokenCacheKey("claude-cli", model), 200_000);
+        getContextWindowCaches().discoveredTokenCache.set(
+          providerContextTokenCacheKey("claude-cli", model),
+          200_000,
+        );
         expect(
           resolveContextTokensForModel({
             provider: "claude-cli",
@@ -368,7 +367,7 @@ describe("resolveContextTokensForModel", () => {
     resetContextWindowCacheForTest();
     try {
       applyDiscoveredContextWindows({
-        cache: MODEL_CONTEXT_TOKEN_CACHE,
+        cache: getContextWindowCaches().discoveredTokenCache,
         models: [{ id: "large", contextTokens: 32_000 }],
       });
 
@@ -565,6 +564,9 @@ describe("resolveContextTokensForModel", () => {
     ["anthropic", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
     ["anthropic-vertex", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
     ["claude-cli", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
+    ["anthropic", "claude-opus-5", ANTHROPIC_OPUS_5_CONTEXT_TOKENS],
+    ["anthropic-vertex", "claude-opus-5", ANTHROPIC_OPUS_5_CONTEXT_TOKENS],
+    ["claude-cli", "claude-opus-5", ANTHROPIC_OPUS_5_CONTEXT_TOKENS],
     ["anthropic", "claude-sonnet-4-6", ANTHROPIC_CONTEXT_1M_TOKENS],
     ["anthropic-vertex", "claude-sonnet-4-6", ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS],
   ])(
@@ -706,6 +708,7 @@ describe("resolveContextTokensForModel", () => {
     ["anthropic", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
     ["anthropic-vertex", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
     ["claude-cli", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
+    ["claude-cli", "claude-opus-5", ANTHROPIC_OPUS_5_CONTEXT_TOKENS],
     ["anthropic", "claude-sonnet-4-6", ANTHROPIC_CONTEXT_1M_TOKENS],
     ["anthropic-vertex", "claude-sonnet-4-6", ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS],
   ])(
@@ -928,7 +931,7 @@ describe("resolveContextTokensForModel", () => {
     resetContextWindowCacheForTest();
     try {
       applyDiscoveredContextWindows({
-        cache: MODEL_CONTEXT_TOKEN_CACHE,
+        cache: getContextWindowCaches().discoveredTokenCache,
         models: [
           { id: "gpt-5.5", contextWindow: 272_000 },
           {
@@ -953,7 +956,7 @@ describe("resolveContextTokensForModel", () => {
 
       resetContextWindowCacheForTest();
       applyDiscoveredContextWindows({
-        cache: MODEL_CONTEXT_TOKEN_CACHE,
+        cache: getContextWindowCaches().discoveredTokenCache,
         models: [{ id: "google/gemini-2.5-pro", contextWindow: 128_000 }],
       });
       expect(resolveCached("openrouter", "google/gemini-2.5-pro")).toBe(1_000_000);
@@ -966,12 +969,12 @@ describe("resolveContextTokensForModel", () => {
     resetContextWindowCacheForTest();
     try {
       applyDiscoveredContextWindows({
-        cache: MODEL_CONTEXT_TOKEN_CACHE,
+        cache: getContextWindowCaches().discoveredTokenCache,
         models: [{ provider: "openai", id: "gpt-5.5", contextWindow: 272_000 }],
       });
       applyConfiguredContextWindows({
-        cache: MODEL_CONFIGURED_CONTEXT_TOKEN_CACHE,
-        windowCache: MODEL_CONTEXT_WINDOW_CACHE,
+        cache: getContextWindowCaches().configuredTokenCache,
+        windowCache: getContextWindowCaches().contextWindowCache,
         modelsConfig: {
           providers: {
             openai: {
@@ -998,7 +1001,7 @@ describe("resolveContextTokensForModel", () => {
     resetContextWindowCacheForTest();
     try {
       applyDiscoveredContextWindows({
-        cache: MODEL_CONTEXT_TOKEN_CACHE,
+        cache: getContextWindowCaches().discoveredTokenCache,
         models: [{ provider: "openai", id: "gpt-5.5", contextTokens: 200_000 }],
       });
 
@@ -1021,7 +1024,7 @@ describe("resolveContextTokensForModel", () => {
     resetContextWindowCacheForTest();
     try {
       applyDiscoveredContextWindows({
-        cache: MODEL_CONTEXT_TOKEN_CACHE,
+        cache: getContextWindowCaches().discoveredTokenCache,
         models: [{ provider: "openai", id: "gpt-5.5", contextTokens: 200_000 }],
       });
 
@@ -1053,8 +1056,8 @@ describe("resolveContextTokensForModel", () => {
     resetContextWindowCacheForTest();
     try {
       applyConfiguredContextWindows({
-        cache: MODEL_CONTEXT_TOKEN_CACHE,
-        windowCache: MODEL_CONTEXT_WINDOW_CACHE,
+        cache: getContextWindowCaches().discoveredTokenCache,
+        windowCache: getContextWindowCaches().contextWindowCache,
         modelsConfig: {
           providers: {
             openai: {
@@ -1082,8 +1085,8 @@ describe("resolveContextTokensForModel", () => {
     resetContextWindowCacheForTest();
     try {
       applyConfiguredContextWindows({
-        cache: MODEL_CONTEXT_TOKEN_CACHE,
-        windowCache: MODEL_CONTEXT_WINDOW_CACHE,
+        cache: getContextWindowCaches().discoveredTokenCache,
+        windowCache: getContextWindowCaches().contextWindowCache,
         modelsConfig: {
           providers: {
             openai: {

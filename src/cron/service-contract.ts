@@ -4,12 +4,14 @@ import type {
   CronAddInput,
   CronAddOptions,
   CronAddResult,
+  CronCommitGuardOptions,
   CronListResult,
   CronRemoveResult,
   CronRunMode,
   CronRunResult,
   CronStatusSummary,
   CronUpdateInput,
+  CronUpdateOptions,
   CronUpdatePrecondition,
   CronUpdateResult,
   CronWakeMode,
@@ -31,6 +33,8 @@ export type CronServiceRunOptions = {
   /** Logical source identity; rejects retired batches under same-schedule ABA. */
   streamSourceIdentity?: string;
   onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
+  /** Synchronous caller-authority guard consumed before run reservation. */
+  commitGuard?: () => void;
 };
 
 /** Public cron service facade used by gateway, plugin SDK, and tests. */
@@ -41,15 +45,23 @@ export interface CronServiceContract {
   list(opts?: { includeDisabled?: boolean }): Promise<CronListResult>;
   listPage(opts?: CronListPageOptions): Promise<CronListPageResult>;
   add(input: CronAddInput, opts?: CronAddOptions): Promise<CronAddResult>;
-  update(id: string, patch: CronUpdateInput): Promise<CronUpdateResult>;
+  update(id: string, patch: CronUpdateInput, opts?: CronUpdateOptions): Promise<CronUpdateResult>;
   updateWithPrecondition(
     id: string,
     patch: CronUpdateInput,
     precondition: CronUpdatePrecondition,
+    opts?: CronUpdateOptions,
   ): Promise<CronUpdateResult>;
-  remove(id: string, opts?: { systemOwned?: boolean }): Promise<CronRemoveResult>;
+  remove(
+    id: string,
+    opts?: { systemOwned?: boolean } & CronCommitGuardOptions,
+  ): Promise<CronRemoveResult>;
   run(id: string, mode?: CronRunMode, opts?: CronServiceRunOptions): Promise<CronServiceRunResult>;
-  enqueueRun(id: string, mode?: CronRunMode): Promise<CronServiceRunResult>;
+  enqueueRun(
+    id: string,
+    mode?: CronRunMode,
+    opts?: CronCommitGuardOptions,
+  ): Promise<CronServiceRunResult>;
   getJob(id: string): CronJob | undefined;
   readJob(id: string): Promise<CronJob | undefined>;
   getDefaultAgentId(): string | undefined;

@@ -8,8 +8,12 @@ import {
   removeConnectedNodePluginTools,
   replaceConnectedNodePluginTools,
 } from "../gateway/node-plugin-tool-snapshot.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
+import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
+import { testing } from "./code-mode.test-support.js";
 import { createNodePluginTools } from "./node-plugin-tools.js";
+import { compactToolSearchCatalogEntry, createToolSearchCatalogRef } from "./tool-search.js";
+import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 vi.mock("./tools/gateway.js", () => ({
@@ -29,11 +33,75 @@ function replaceNodePluginTools(
   });
 }
 
+function createCodeModeHarness(tools: AnyAgentTool[]) {
+  const catalogRef = createToolSearchCatalogRef();
+  const config = { tools: { codeMode: true } } as never;
+  const ctx = {
+    config,
+    runtimeConfig: config,
+    sessionId: "session-node-mcp-code-mode",
+    sessionKey: "agent:main:node-mcp-code-mode",
+    runId: "run-node-mcp-code-mode",
+    catalogRef,
+  };
+  const codeModeTools = createCodeModeTools(ctx);
+  const compacted = applyCodeModeCatalog({
+    tools: [...codeModeTools, ...tools],
+    config,
+    sessionId: ctx.sessionId,
+    sessionKey: ctx.sessionKey,
+    runId: ctx.runId,
+    catalogRef,
+  });
+  return { catalogRef, codeModeTools, compacted };
+}
+
+async function runCodeMode(codeModeTools: AnyAgentTool[], code: string) {
+  let details = (
+    await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+      "code-node-mcp",
+      { code },
+    )
+  ).details as Record<string, unknown>;
+  for (let index = 0; index < 8 && details.status === "waiting"; index += 1) {
+    details = (
+      await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
+        `wait-node-mcp-${index}`,
+        { runId: details.runId },
+      )
+    ).details as Record<string, unknown>;
+  }
+  return details;
+}
+
+function gatewayMcpTool(serverName: string): AnyAgentTool {
+  const tool: AnyAgentTool = {
+    name: `${serverName}__status`,
+    label: "status",
+    description: `Read ${serverName} status`,
+    parameters: { type: "object", properties: {} },
+    execute: vi.fn(async () => jsonResult({ source: "gateway" })),
+  };
+  setPluginToolMeta(tool, {
+    pluginId: "bundle-mcp",
+    optional: false,
+    mcp: {
+      serverName,
+      safeServerName: serverName,
+      toolName: "status",
+      operation: "tool",
+    },
+  });
+  return tool;
+}
+
 afterEach(() => {
   for (const nodeId of new Set(listConnectedNodePluginTools().map((tool) => tool.nodeId))) {
     removeConnectedNodePluginTools(nodeId);
   }
   vi.mocked(callGatewayTool).mockReset();
+  testing.activeRuns.clear();
+  testing.resumingRunIds.clear();
 });
 
 describe("createNodePluginTools", () => {
@@ -98,6 +166,80 @@ describe("createNodePluginTools", () => {
     expect(result.content).toEqual([{ type: "text", text: "pong" }]);
   });
 
+  it("forwards the caller abort signal to node gateway invocations", async () => {
+    replaceNodePluginTools({
+      nodeId: "node-1",
+      tools: [
+        {
+          pluginId: "remote-demo",
+          name: "remote_echo",
+          description: "Echo through a remote node",
+          command: "remote.echo",
+        },
+      ],
+    });
+    vi.mocked(callGatewayTool).mockResolvedValueOnce({ payload: { ok: true } });
+    const controller = new AbortController();
+    const tool = expectDefined(
+      createNodePluginTools({})[0],
+      "createNodePluginTools({})[0] test invariant",
+    );
+
+    await tool.execute("call-cancellable", { text: "ping" }, controller.signal);
+
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      {},
+      {
+        nodeId: "node-1",
+        command: "remote.echo",
+        params: { text: "ping" },
+        idempotencyKey: "call-cancellable",
+      },
+      { scopes: ["operator.write"], signal: controller.signal },
+    );
+  });
+
+  it("propagates caller cancellation through node gateway invocations", async () => {
+    replaceNodePluginTools({
+      nodeId: "node-1",
+      tools: [
+        {
+          pluginId: "remote-demo",
+          name: "remote_echo",
+          description: "Echo through a remote node",
+          command: "remote.echo",
+        },
+      ],
+    });
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (_method, _opts, _params, extra) => {
+      extra?.signal?.throwIfAborted();
+      return { payload: { ok: true } };
+    });
+    const controller = new AbortController();
+    const abortError = new DOMException("node call cancelled", "AbortError");
+    controller.abort(abortError);
+    const tool = expectDefined(
+      createNodePluginTools({})[0],
+      "createNodePluginTools({})[0] test invariant",
+    );
+
+    await expect(tool.execute("call-aborted", { text: "ping" }, controller.signal)).rejects.toBe(
+      abortError,
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      {},
+      {
+        nodeId: "node-1",
+        command: "remote.echo",
+        params: { text: "ping" },
+        idempotencyKey: "call-aborted",
+      },
+      { scopes: ["operator.write"], signal: controller.signal },
+    );
+  });
+
   it("wraps node-host MCP arguments and maps MCP content", async () => {
     replaceNodePluginTools({
       nodeId: "node-1",
@@ -142,6 +284,7 @@ describe("createNodePluginTools", () => {
       { scopes: ["operator.write"] },
     );
     expect(tool.executionMode).toBe("sequential");
+    expect(getPluginToolMeta(tool)?.mcp?.node).toEqual({ id: "node-1" });
     expect(result.content).toEqual([
       { type: "image", data: "aW1hZ2UtMQ==", mimeType: "image/png" },
       { type: "text", text: "first" },
@@ -149,6 +292,153 @@ describe("createNodePluginTools", () => {
       { type: "image", data: "aW1hZ2UtMg==", mimeType: "image/png" },
       { type: "text", text: '{\n  "hits": 2\n}' },
     ]);
+  });
+
+  it("projects node MCP schemas and calls through the exact namespace catalog entry", async () => {
+    replaceNodePluginTools({
+      nodeId: "node-1",
+      displayName: "Studio Node",
+      tools: [
+        {
+          pluginId: "node-mcp",
+          name: "docs_search",
+          description: "Search node-local docs",
+          parameters: {
+            type: "object",
+            properties: {
+              query: { type: "string", description: "Search phrase" },
+            },
+            required: ["query"],
+          },
+          command: "mcp.tools.call.v1",
+          mcp: { server: "docs", tool: "search" },
+        },
+      ],
+    });
+    vi.mocked(callGatewayTool).mockResolvedValueOnce({
+      payload: {
+        content: [{ type: "text", text: "found" }],
+        structuredContent: { hits: 1 },
+      },
+    });
+
+    const nodeTools = createNodePluginTools({ agentSessionKey: "agent:main:node-mcp-code-mode" });
+    const { catalogRef, codeModeTools, compacted } = createCodeModeHarness(nodeTools);
+    const nodeEntry = catalogRef.current?.entries.find(
+      (entry) => entry.name === "docs_search" && entry.source === "mcp",
+    );
+
+    expect(nodeEntry?.id).toBe("mcp:docs:docs_search");
+    expect(nodeEntry && compactToolSearchCatalogEntry(nodeEntry).mcp).toEqual({
+      serverName: "docs",
+      safeServerName: "docs",
+      toolName: "search",
+      operation: "tool",
+    });
+    expect(compacted.tools[0]?.description).toContain("docs (node: Studio Node)");
+    const details = await runCodeMode(
+      codeModeTools,
+      `
+        const api = await API.read("mcp/docs.d.ts");
+        const called = await MCP.docs.search({ query: "needle" });
+        const direct = await tools.search("docs_search");
+        return {
+          api: api.content,
+          called: called.details,
+          allHasNodeMcp: ALL_TOOLS.some((entry) => entry.id === "mcp:docs:docs_search"),
+          direct,
+        };
+      `,
+    );
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({
+      api: expect.stringContaining("query: string;"),
+      called: {
+        content: [{ type: "text", text: "found" }],
+        structuredContent: { hits: 1 },
+      },
+      allHasNodeMcp: false,
+      direct: [],
+    });
+    expect((details.value as { api: string }).api).toContain("@param query Search phrase");
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 125_000 },
+      {
+        nodeId: "node-1",
+        command: "mcp.tools.call.v1",
+        params: { server: "docs", tool: "search", arguments: { query: "needle" } },
+        timeoutMs: 120_000,
+        idempotencyKey: expect.stringContaining("docs_search"),
+        sessionKey: "agent:main:node-mcp-code-mode",
+      },
+      { scopes: ["operator.write"], signal: expect.any(AbortSignal) },
+    );
+  });
+
+  it("disambiguates gateway-node and node-node MCP server collisions", async () => {
+    for (const [nodeId, displayName, serverName, toolName] of [
+      ["node-a", "Node A", "tickets", "search_a"],
+      ["node-b", "Node B", "docs", "search_b"],
+      ["node-c", "Node C", "docs", "search_c"],
+    ] as const) {
+      replaceNodePluginTools({
+        nodeId,
+        displayName,
+        tools: [
+          {
+            pluginId: "node-mcp",
+            name: `docs_${toolName}`,
+            description: `Search docs from ${displayName}`,
+            parameters: { type: "object", properties: {} },
+            command: "mcp.tools.call.v1",
+            mcp: { server: serverName, tool: toolName },
+          },
+        ],
+      });
+    }
+    vi.mocked(callGatewayTool).mockResolvedValueOnce({
+      payload: { content: [{ type: "text", text: "node-b" }] },
+    });
+
+    const { codeModeTools, compacted } = createCodeModeHarness([
+      gatewayMcpTool("tickets"),
+      ...createNodePluginTools({}),
+    ]);
+    expect(compacted.tools[0]?.description).toContain(
+      "visible servers: nodeATickets (node: Node A), nodeBDocs (node: Node B), nodeCDocs (node: Node C), tickets",
+    );
+
+    const details = await runCodeMode(
+      codeModeTools,
+      `
+        const files = await API.list("mcp");
+        const called = await MCP.nodeCDocs.searchC({});
+        return { files: files.files.map((file) => file.path), called: called.details };
+      `,
+    );
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({
+      files: [
+        "mcp/index.d.ts",
+        "mcp/nodeATickets.d.ts",
+        "mcp/nodeBDocs.d.ts",
+        "mcp/nodeCDocs.d.ts",
+        "mcp/tickets.d.ts",
+      ],
+      called: { content: [{ type: "text", text: "node-b" }] },
+    });
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 125_000 },
+      expect.objectContaining({
+        nodeId: "node-c",
+        params: { server: "docs", tool: "search_c", arguments: {} },
+      }),
+      { scopes: ["operator.write"], signal: expect.any(AbortSignal) },
+    );
   });
 
   it("disambiguates node tools that collide with existing tool names", () => {

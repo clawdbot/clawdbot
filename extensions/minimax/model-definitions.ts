@@ -80,6 +80,7 @@ export function buildMinimaxModelDefinition(params: {
   maxTokens: number;
 }): ModelDefinitionConfig {
   const catalog = MINIMAX_TEXT_MODEL_CATALOG[params.id as MinimaxCatalogId];
+  const compat = catalog && "compat" in catalog ? catalog.compat : undefined;
   return {
     id: params.id,
     name: params.name ?? catalog?.name ?? `MiniMax ${params.id}`,
@@ -88,6 +89,7 @@ export function buildMinimaxModelDefinition(params: {
     cost: params.cost,
     contextWindow: params.contextWindow,
     maxTokens: params.maxTokens,
+    ...(compat ? { compat: { ...compat } } : {}),
   };
 }
 

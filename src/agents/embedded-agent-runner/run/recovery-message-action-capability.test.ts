@@ -42,6 +42,7 @@ describe("createRecoveryMessageActionTurnCapability", () => {
     ).toMatchObject({
       requesterAccountId: "work",
       requesterSenderId: "user-1",
+      sourceReplySessionKey: "agent:main:telegram:direct:chat-1",
       toolContext: {
         currentChannelId: "chat-1",
         currentChannelProvider: "telegram",

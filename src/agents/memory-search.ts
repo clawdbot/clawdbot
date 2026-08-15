@@ -1,28 +1,24 @@
 /**
  * Resolves memory-search source, sync, and ranking configuration.
  */
-import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   MAX_TIMER_TIMEOUT_MS,
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeStringEntries,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
-import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
+import {
+  normalizeConfiguredMemoryExtraPaths,
+  resolveRememberAcrossConversations,
+} from "../memory-host-sdk/host/config-utils.js";
+import type { MemoryExtraPath } from "../memory-host-sdk/host/types.js";
 import {
   isMemoryMultimodalEnabled,
   normalizeMemoryMultimodalSettings,
   type MemoryMultimodalSettings,
 } from "../memory-host-sdk/multimodal.js";
-import { getEmbeddingProvider } from "../plugins/embedding-provider-runtime.js";
-import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
+import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import { runtimeMemorySecretOwnerId } from "../secrets/runtime-memory-secret-owner.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -36,7 +32,7 @@ export type ResolvedMemorySearchConfig = {
   sources: Array<"memory" | "sessions">;
   /** Sources searched when memory_search omits an explicit corpus. */
   searchSources: Array<"memory" | "sessions">;
-  extraPaths: string[];
+  extraPaths: MemoryExtraPath[];
   multimodal: MemoryMultimodalSettings;
   provider: string;
   remote?: {
@@ -131,9 +127,9 @@ const DEFAULT_HYBRID_ENABLED = true;
 const DEFAULT_HYBRID_VECTOR_WEIGHT = 0.7;
 const DEFAULT_HYBRID_TEXT_WEIGHT = 0.3;
 const DEFAULT_HYBRID_CANDIDATE_MULTIPLIER = 4;
-const DEFAULT_MMR_ENABLED = false;
+const DEFAULT_MMR_ENABLED = true;
 const DEFAULT_MMR_LAMBDA = 0.7;
-const DEFAULT_TEMPORAL_DECAY_ENABLED = false;
+const DEFAULT_TEMPORAL_DECAY_ENABLED = true;
 const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
 const DEFAULT_CACHE_ENABLED = true;
 const DEFAULT_CACHE_MAX_ENTRIES = undefined;
@@ -198,25 +194,7 @@ function getConfiguredMemoryEmbeddingProvider(
   if (normalizeProviderId(providerId) === "none") {
     return undefined;
   }
-  const directAdapter = getMemoryEmbeddingProvider(providerId);
-  if (directAdapter) {
-    return directAdapter;
-  }
-  const genericAdapter = getEmbeddingProvider(providerId, cfg);
-  if (genericAdapter) {
-    return genericAdapter;
-  }
-  const providerConfig = findNormalizedProviderValue(cfg.models?.providers, providerId);
-  const ownerApi = providerConfig?.api?.trim();
-  if (!ownerApi) {
-    return undefined;
-  }
-  const normalizedProvider = normalizeProviderId(providerId);
-  const normalizedOwner = normalizeProviderId(ownerApi);
-  if (!normalizedOwner || normalizedOwner === normalizedProvider) {
-    return undefined;
-  }
-  return getMemoryEmbeddingProvider(normalizedOwner);
+  return getMemoryEmbeddingProvider(providerId, cfg);
 }
 
 function mergeConfig(
@@ -292,11 +270,10 @@ function mergeConfig(
     rememberAcrossConversations ? [...searchSources, "sessions"] : configuredSources,
     sessionMemory,
   );
-  const rawPaths = normalizeStringEntries([
+  const extraPaths = normalizeConfiguredMemoryExtraPaths([
     ...(defaults?.extraPaths ?? []),
     ...(overrides?.extraPaths ?? []),
   ]);
-  const extraPaths = uniqueStrings(rawPaths);
   const multimodal = normalizeMemoryMultimodalSettings({
     enabled: overrides?.multimodal?.enabled ?? defaults?.multimodal?.enabled,
     modalities: overrides?.multimodal?.modalities ?? defaults?.multimodal?.modalities,
@@ -462,9 +439,8 @@ export function resolveMemorySearchConfig(
   if (
     !isFtsOnly &&
     multimodalActive &&
-    ((multimodalProvider &&
-      !(multimodalProvider.supportsMultimodalEmbeddings?.({ model: resolved.model }) ?? false)) ||
-      (!multimodalProvider && getEmbeddingProvider(resolved.provider, cfg)))
+    multimodalProvider &&
+    !(multimodalProvider.supportsMultimodalEmbeddings?.({ model: resolved.model }) ?? false)
   ) {
     throw new Error(
       "memory.search.multimodal requires a provider adapter that supports multimodal embeddings for the configured model.",

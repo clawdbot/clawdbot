@@ -1,10 +1,13 @@
+import { HTTPFetchError } from "@line/bot-sdk";
 // Line tests cover send plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   pushMessageMock,
   replyMessageMock,
+  lineFetchMock,
   showLoadingAnimationMock,
   getProfileMock,
   MessagingApiClientMock,
@@ -17,6 +20,7 @@ const {
 } = vi.hoisted(() => {
   const pushMessageMockLocal = vi.fn();
   const replyMessageMockLocal = vi.fn();
+  const lineFetchMockLocal = vi.fn();
   const showLoadingAnimationMockLocal = vi.fn();
   const getProfileMockLocal = vi.fn();
   const MessagingApiClientMockLocal = vi.fn(function () {
@@ -36,6 +40,7 @@ const {
   return {
     pushMessageMock: pushMessageMockLocal,
     replyMessageMock: replyMessageMockLocal,
+    lineFetchMock: lineFetchMockLocal,
     showLoadingAnimationMock: showLoadingAnimationMockLocal,
     getProfileMock: getProfileMockLocal,
     MessagingApiClientMock: MessagingApiClientMockLocal,
@@ -48,9 +53,13 @@ const {
   };
 });
 
-vi.mock("@line/bot-sdk", () => ({
-  messagingApi: { MessagingApiClient: MessagingApiClientMock },
-}));
+vi.mock("@line/bot-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@line/bot-sdk")>();
+  return {
+    ...actual,
+    messagingApi: { ...actual.messagingApi, MessagingApiClient: MessagingApiClientMock },
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/plugin-config-runtime", () => ({
   requireRuntimeConfig: requireRuntimeConfigMock,
@@ -124,6 +133,7 @@ describe("LINE send helpers", () => {
     vi.setSystemTime(fixedSentAt);
     pushMessageMock.mockReset();
     replyMessageMock.mockReset();
+    lineFetchMock.mockReset();
     showLoadingAnimationMock.mockReset();
     getProfileMock.mockReset();
     MessagingApiClientMock.mockReset();
@@ -149,12 +159,27 @@ describe("LINE send helpers", () => {
       hostname: "example.com",
       addresses: ["93.184.216.34"],
     });
-    pushMessageMock.mockResolvedValue({});
-    replyMessageMock.mockResolvedValue({});
+    pushMessageMock.mockResolvedValue({ sentMessages: [{ id: "push" }] });
+    replyMessageMock.mockResolvedValue({ sentMessages: [{ id: "reply" }] });
     showLoadingAnimationMock.mockResolvedValue({});
+    lineFetchMock.mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
+      const requestUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+      if (typeof init?.body !== "string") {
+        throw new Error("LINE test fetch requires a JSON string request body");
+      }
+      const payload = JSON.parse(init.body);
+      const provider = requestUrl.endsWith("/push") ? pushMessageMock : replyMessageMock;
+      const body = await provider(payload);
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", lineFetchMock);
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.useRealTimers();
   });
 
@@ -165,14 +190,245 @@ describe("LINE send helpers", () => {
     expect(quickReply.items).toHaveLength(13);
   });
 
-  it("truncates quick reply labels without leaving lone surrogates", () => {
+  it("counts quick reply labels in grapheme clusters", () => {
     const label = "1234567890123456789😀";
     const quickReply = sendModule.createQuickReplyItems([label]);
     const item = quickReply.items?.[0] as { action: { label: string; text: string } } | undefined;
 
-    expect(item?.action.label).toBe("1234567890123456789");
+    expect(item?.action.label).toBe(label);
     expect(item?.action.text).toBe(label);
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(item?.action.label ?? "")).toBe(false);
+  });
+
+  it("keeps provider-valid Flex alternative text and bounds oversized Unicode safely", () => {
+    const contents = { type: "bubble" as const };
+
+    expect(sendModule.createFlexMessage("a".repeat(1200), contents).altText).toBe("a".repeat(1200));
+
+    const oversized = sendModule.createFlexMessage(`${"a".repeat(1499)}😀 overflow`, contents);
+    expect(oversized.altText).toBe("a".repeat(1499));
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(oversized.altText)).toBe(false);
+  });
+
+  it("sends the same provider-valid Flex alternative text through direct pushes", async () => {
+    const altText = "a".repeat(1200);
+
+    await sendModule.pushFlexMessage("U123", altText, { type: "bubble" }, { cfg: LINE_TEST_CFG });
+
+    expect(pushMessageMock).toHaveBeenCalledWith({
+      to: "U123",
+      messages: [{ type: "flex", altText, contents: { type: "bubble" } }],
+    });
+  });
+
+  it("normalizes raw Flex actions at both outbound API boundaries", async () => {
+    const oversizedPostback = { type: "postback", label: "Open", data: "x".repeat(301) };
+    const oversizedUri = {
+      type: "uri",
+      label: "Open",
+      uri: `https://e.example/?q=${"x".repeat(1200)}`,
+    };
+    const message = {
+      type: "flex",
+      altText: "Raw Flex",
+      contents: {
+        type: "bubble",
+        action: oversizedPostback,
+        hero: {
+          type: "video",
+          url: "https://e.example/video.mp4",
+          previewUrl: "https://e.example/preview.jpg",
+          altContent: {
+            type: "image",
+            url: "https://e.example/preview.jpg",
+            size: "full",
+          },
+          action: oversizedUri,
+        },
+        body: {
+          type: "box",
+          layout: "vertical",
+          action: oversizedPostback,
+          contents: [
+            { type: "text", text: "Open", action: oversizedUri },
+            { type: "button", action: oversizedPostback },
+            {
+              type: "text",
+              text: "Still works",
+              action: { type: "message", label: "Unavailable", text: "keep" },
+            },
+          ],
+        },
+      },
+    };
+
+    await sendModule.pushMessagesLine("U123", [message] as never, { cfg: LINE_TEST_CFG });
+    await sendModule.replyMessageLine("reply-token", [message] as never, { cfg: LINE_TEST_CFG });
+
+    const pushed = pushMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ contents: Record<string, unknown> }>;
+    };
+    const replied = replyMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ contents: Record<string, unknown> }>;
+    };
+    expect(pushed.messages[0]?.contents).toEqual(replied.messages[0]?.contents);
+
+    const contents = pushed.messages[0]?.contents as {
+      action?: unknown;
+      hero: { type: string; action?: unknown };
+      body: { action?: unknown; contents: Array<{ action?: unknown; text?: string }> };
+    };
+    const unavailableAction = {
+      type: "message",
+      label: "Unavailable",
+      text: "Action unavailable: callback data exceeds LINE's limit.",
+    };
+    expect(contents.action).toBeUndefined();
+    expect(contents.hero).toEqual({
+      type: "video",
+      url: "https://e.example/video.mp4",
+      previewUrl: "https://e.example/preview.jpg",
+      altContent: {
+        type: "image",
+        url: "https://e.example/preview.jpg",
+        size: "full",
+      },
+    });
+    expect(contents.body.action).toBeUndefined();
+    expect(contents.body.contents[0]?.action).toBeUndefined();
+    expect(contents.body.contents[1]?.action).toEqual(unavailableAction);
+    expect(contents.body.contents[2]?.action).toEqual({
+      type: "message",
+      label: "Unavailable",
+      text: "keep",
+    });
+    expect(contents.body.contents.slice(3).map((item) => item.text)).toEqual([
+      "Action unavailable: callback data exceeds LINE's limit.\nLink unavailable: URL exceeds LINE's limit.",
+    ]);
+    expect(message.contents.action).toBe(oversizedPostback);
+  });
+
+  it("normalizes raw imagemap actions at both outbound API boundaries", async () => {
+    const area = { x: 0, y: 0, width: 520, height: 1040 };
+    const videoArea = { x: 520, y: 0, width: 520, height: 1040 };
+    const message = {
+      type: "imagemap",
+      baseUrl: "https://e.example/imagemap",
+      altText: "Map",
+      baseSize: { width: 1040, height: 1040 },
+      actions: [
+        {
+          type: "uri",
+          label: "Open",
+          linkUri: `https://e.example/?q=${"x".repeat(1200)}`,
+          area,
+        },
+        ...Array.from({ length: 49 }, (_, index) => ({
+          type: "message",
+          label: `Item ${index}`,
+          text: `item-${index}`,
+          area,
+        })),
+      ],
+      video: {
+        originalContentUrl: "https://e.example/video.mp4",
+        previewImageUrl: "https://e.example/preview.jpg",
+        area: videoArea,
+        externalLink: {
+          linkUri: `https://e.example/video?q=${"x".repeat(1200)}`,
+          label: "Open video",
+        },
+      },
+    };
+
+    await sendModule.pushMessagesLine("U123", [message] as never, { cfg: LINE_TEST_CFG });
+    await sendModule.replyMessageLine("reply-token", [message] as never, { cfg: LINE_TEST_CFG });
+
+    const pushed = pushMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ actions: unknown[]; video?: { externalLink?: unknown } }>;
+    };
+    const replied = replyMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ actions: unknown[] }>;
+    };
+    expect(pushed.messages[0]?.actions).toEqual(replied.messages[0]?.actions);
+    expect(pushed.messages[0]?.actions).toHaveLength(50);
+    expect(pushed.messages[0]?.actions[0]).toEqual({
+      type: "message",
+      label: "Unavailable",
+      text: "Link unavailable: URL exceeds LINE's limit.",
+      area,
+    });
+    expect(pushed.messages[0]?.actions[1]).toMatchObject({
+      type: "message",
+      text: "item-0",
+    });
+    expect(pushed.messages[0]?.actions[49]).toMatchObject({
+      type: "message",
+      text: "item-48",
+    });
+    expect(pushed.messages[0]?.video?.externalLink).toBeUndefined();
+    expect(message.actions[0]?.type).toBe("uri");
+  });
+
+  it("counts imagemap message text in UTF-16 units at both outbound API boundaries", async () => {
+    const area = { x: 0, y: 0, width: 1040, height: 1040 };
+    const exactText = "😀".repeat(200);
+    const message = {
+      type: "imagemap",
+      baseUrl: "https://e.example/imagemap",
+      altText: "Map",
+      baseSize: { width: 1040, height: 1040 },
+      actions: [
+        { type: "message", label: "Exact", text: exactText, area },
+        { type: "message", label: "Too long", text: `${exactText}😀`, area },
+      ],
+    };
+
+    await sendModule.pushMessagesLine("U123", [message] as never, { cfg: LINE_TEST_CFG });
+    await sendModule.replyMessageLine("reply-token", [message] as never, { cfg: LINE_TEST_CFG });
+
+    const pushed = pushMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ actions: unknown[] }>;
+    };
+    const replied = replyMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ actions: unknown[] }>;
+    };
+    expect(pushed.messages[0]?.actions).toEqual(replied.messages[0]?.actions);
+    expect(pushed.messages[0]?.actions).toEqual([
+      { type: "message", label: "Exact", text: exactText, area },
+      {
+        type: "message",
+        label: "Unavailable",
+        text: "Action unavailable: message text exceeds LINE's limit.",
+        area,
+      },
+    ]);
+  });
+
+  it("counts imagemap video-link labels in UTF-16 units", async () => {
+    const message = {
+      type: "imagemap",
+      baseUrl: "https://e.example/imagemap",
+      altText: "Map",
+      baseSize: { width: 1040, height: 1040 },
+      actions: [],
+      video: {
+        originalContentUrl: "https://e.example/video.mp4",
+        previewImageUrl: "https://e.example/preview.jpg",
+        area: { x: 0, y: 0, width: 1040, height: 1040 },
+        externalLink: {
+          linkUri: "https://e.example/video",
+          label: "😀".repeat(16),
+        },
+      },
+    };
+
+    await sendModule.pushMessagesLine("U123", [message] as never, { cfg: LINE_TEST_CFG });
+
+    const pushed = pushMessageMock.mock.calls[0]?.[0] as {
+      messages: Array<{ video: { externalLink: { label: string } } }>;
+    };
+    expect(pushed.messages[0]?.video.externalLink.label).toBe("😀".repeat(15));
   });
 
   it("pushes images via normalized LINE target", async () => {
@@ -235,6 +491,24 @@ describe("LINE send helpers", () => {
     });
   });
 
+  it("preserves every provider message id returned by a LINE push", async () => {
+    pushMessageMock.mockResolvedValueOnce({
+      sentMessages: [{ id: "613452345678901234" }, { id: "613452345678901235" }],
+    });
+
+    const result = await sendModule.pushMessagesLine(
+      "line:user:U123",
+      [
+        { type: "text", text: "first" },
+        { type: "text", text: "second" },
+      ],
+      { cfg: LINE_TEST_CFG },
+    );
+
+    expect(result.messageId).toBe("613452345678901234");
+    expect(result.receipt.platformMessageIds).toEqual(["613452345678901234", "613452345678901235"]);
+  });
+
   it("replies when reply token is provided", async () => {
     const result = await sendModule.sendMessageLine("line:group:C1", "Hello", {
       cfg: LINE_TEST_CFG,
@@ -294,6 +568,242 @@ describe("LINE send helpers", () => {
         threadId: "C1",
       },
     });
+  });
+
+  it("preserves every provider message id returned by a LINE reply", async () => {
+    replyMessageMock.mockResolvedValueOnce({
+      sentMessages: [{ id: "713452345678901234" }, { id: "713452345678901235" }],
+    });
+
+    const result = await sendModule.sendMessageLine("line:group:C1", "Hello", {
+      cfg: LINE_TEST_CFG,
+      replyToken: "reply-token",
+      mediaUrl: "https://example.com/media.jpg",
+    });
+
+    expect(result.messageId).toBe("713452345678901234");
+    expect(result.receipt.platformMessageIds).toEqual(["713452345678901234", "713452345678901235"]);
+  });
+
+  it.each([
+    {
+      label: "push",
+      send: () => sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
+      provider: pushMessageMock,
+    },
+    {
+      label: "reply",
+      send: () =>
+        sendModule.sendMessageLine("U123", "Hello", {
+          cfg: LINE_TEST_CFG,
+          replyToken: "reply-token",
+        }),
+      provider: replyMessageMock,
+    },
+  ])("preserves a finalized $label when activity recording fails", async ({ send, provider }) => {
+    provider.mockResolvedValueOnce({ sentMessages: [{ id: "line-provider-final" }] });
+    recordChannelActivityMock.mockImplementationOnce(() => {
+      throw new Error("activity store unavailable");
+    });
+
+    let caught: unknown;
+    try {
+      await send();
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    if (!isChannelPartialDeliveryError(caught)) {
+      throw new Error("expected a partial LINE delivery error");
+    }
+    expect(caught.deliveryResult).toMatchObject({
+      messageIds: ["line-provider-final"],
+      receipt: {
+        primaryPlatformMessageId: "line-provider-final",
+        platformMessageIds: ["line-provider-final"],
+        threadId: "U123",
+        parts: [
+          {
+            platformMessageId: "line-provider-final",
+            kind: "text",
+            raw: { chatId: "U123", meta: { messageCount: 1 } },
+          },
+        ],
+      },
+      visibleReplySent: true,
+    });
+  });
+
+  it.each([
+    {
+      label: "push",
+      send: () => sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
+      provider: pushMessageMock,
+    },
+    {
+      label: "reply",
+      send: () =>
+        sendModule.sendMessageLine("U123", "Hello", {
+          cfg: LINE_TEST_CFG,
+          replyToken: "reply-token",
+        }),
+      provider: replyMessageMock,
+    },
+  ])(
+    "preserves accepted delivery when a $label response omits its provider message ids",
+    async ({ send, provider }) => {
+      provider.mockResolvedValueOnce({ sentMessages: [] });
+
+      let caught: unknown;
+      try {
+        await send();
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(isChannelPartialDeliveryError(caught)).toBe(true);
+      if (!isChannelPartialDeliveryError(caught)) {
+        throw new Error("expected an accepted LINE delivery without an identity");
+      }
+      expect(caught.deliveryResult).toEqual({ messageIds: [], visibleReplySent: true });
+      expect(recordChannelActivityMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { operation: "push", body: "{" },
+    { operation: "push", body: "" },
+    { operation: "reply", body: "{" },
+    { operation: "reply", body: "" },
+  ])("does not retry an accepted $operation response with an unreadable receipt", async (input) => {
+    lineFetchMock.mockResolvedValueOnce(
+      new Response(input.body, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const send =
+      input.operation === "push"
+        ? () => sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG })
+        : () =>
+            sendModule.sendMessageLine("U123", "Hello", {
+              cfg: LINE_TEST_CFG,
+              replyToken: "reply-token",
+            });
+
+    let caught: unknown;
+    try {
+      await send();
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    if (!isChannelPartialDeliveryError(caught)) {
+      throw new Error("expected an accepted LINE delivery without a readable identity");
+    }
+    expect(caught.deliveryResult).toEqual({ messageIds: [], visibleReplySent: true });
+    expect(lineFetchMock).toHaveBeenCalledOnce();
+    expect(recordChannelActivityMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps rejected LINE sends distinguishable from accepted delivery", async () => {
+    lineFetchMock.mockResolvedValueOnce(
+      new Response("invalid payload", { status: 400, statusText: "Bad Request" }),
+    );
+
+    let caught: unknown;
+    try {
+      await sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(HTTPFetchError);
+    expect(isChannelPartialDeliveryError(caught)).toBe(false);
+    expect(caught).toMatchObject({
+      status: 400,
+      statusText: "Bad Request",
+      body: "invalid payload",
+    });
+  });
+
+  it("does not misclassify network SyntaxErrors as provider acceptance", async () => {
+    const failure = new SyntaxError("upstream network decoder failed");
+    lineFetchMock.mockRejectedValueOnce(failure);
+
+    await expect(sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG })).rejects.toBe(
+      failure,
+    );
+    expect(isChannelPartialDeliveryError(failure)).toBe(false);
+  });
+
+  it.each([
+    {
+      label: "push",
+      send: () =>
+        sendModule.pushMessagesLine("U123", [{ type: "text", text: "Hello" }], {
+          cfg: LINE_TEST_CFG,
+        }),
+      provider: pushMessageMock,
+    },
+    {
+      label: "reply",
+      send: () =>
+        sendModule.sendMessageLine("U123", "Hello", {
+          cfg: LINE_TEST_CFG,
+          replyToken: "reply-token",
+        }),
+      provider: replyMessageMock,
+    },
+  ])(
+    "retains valid identities from a partially invalid accepted $label response",
+    async ({ send, provider }) => {
+      provider.mockResolvedValueOnce({
+        sentMessages: [{ id: "line-provider-delivered" }, { id: "   " }],
+      });
+
+      let caught: unknown;
+      try {
+        await send();
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(isChannelPartialDeliveryError(caught)).toBe(true);
+      if (!isChannelPartialDeliveryError(caught)) {
+        throw new Error("expected a partially identifiable accepted LINE delivery");
+      }
+      expect(caught.deliveryResult).toEqual({
+        messageIds: ["line-provider-delivered"],
+        visibleReplySent: true,
+      });
+      expect(recordChannelActivityMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { name: "object receipt container", sentMessages: {} },
+    { name: "null receipt entry", sentMessages: [null] },
+    { name: "missing entry identifier", sentMessages: [{}] },
+  ])("preserves accepted delivery for a malformed $name", async ({ sentMessages }) => {
+    pushMessageMock.mockResolvedValueOnce({ sentMessages });
+
+    let caught: unknown;
+    try {
+      await sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    if (!isChannelPartialDeliveryError(caught)) {
+      throw new Error("expected an accepted LINE delivery with a malformed receipt");
+    }
+    expect(caught.deliveryResult).toEqual({ messageIds: [], visibleReplySent: true });
+    expect(pushMessageMock).toHaveBeenCalledOnce();
+    expect(recordChannelActivityMock).not.toHaveBeenCalled();
   });
 
   it("preserves literal internal-looking text in low-level sends", async () => {

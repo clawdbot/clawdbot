@@ -6,12 +6,14 @@ import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
 import {
   evaluateSessionFreshness,
   getSessionEntry,
+  normalizeSessionDeliveryState,
   resolveChannelResetConfig,
   resolveSessionKey,
   resolveSessionResetPolicy,
   resolveSessionResetType,
   resolveStorePath,
   resolveThreadFlag,
+  sessionDeliveryChannel,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
@@ -107,7 +109,7 @@ function getSessionSnapshotForTest(
     resetType,
     resetOverride: resolveChannelResetConfig({
       sessionCfg,
-      channel: entry?.lastChannel ?? entry?.channel,
+      channel: sessionDeliveryChannel(entry),
     }),
   });
   const freshness = entry
@@ -320,7 +322,7 @@ describe("getSessionSnapshot", () => {
           entry: {
             sessionId: "snapshot-session",
             updatedAt: new Date(2026, 0, 18, 3, 30, 0).getTime(),
-            lastChannel: "whatsapp",
+            delivery: normalizeSessionDeliveryState({ context: { channel: "whatsapp" } }),
           },
         });
 

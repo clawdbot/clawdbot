@@ -34,6 +34,10 @@ type DoctorHealthContributionTestApi = {
     run?: (ctx: DoctorHealthFlowContext) => Promise<void>;
   }): DoctorHealthContribution;
   resolveDoctorHealthContributions(): DoctorHealthContribution[];
+  runDoctorHealthContributionList(
+    ctx: DoctorHealthFlowContext,
+    contributions: readonly DoctorHealthContribution[],
+  ): Promise<void>;
 };
 
 function getTestApi(): DoctorHealthContributionTestApi {
@@ -54,4 +58,11 @@ export function createDoctorHealthContribution(
 
 export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   return getTestApi().resolveDoctorHealthContributions();
+}
+
+export async function runDoctorHealthContributionList(
+  ctx: DoctorHealthFlowContext,
+  contributions: readonly DoctorHealthContribution[],
+): Promise<void> {
+  await getTestApi().runDoctorHealthContributionList(ctx, contributions);
 }

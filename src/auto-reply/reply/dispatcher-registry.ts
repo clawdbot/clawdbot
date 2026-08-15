@@ -2,6 +2,7 @@
  * Global registry for tracking active reply dispatchers.
  * Used to ensure gateway restart waits for all replies to complete.
  */
+import { resolveGlobalSet } from "../../shared/global-singleton.js";
 
 type TrackedDispatcher = {
   readonly id: string;
@@ -9,7 +10,10 @@ type TrackedDispatcher = {
   readonly waitForIdle: () => Promise<void>;
 };
 
-const activeDispatchers = new Set<TrackedDispatcher>();
+const activeDispatchers = resolveGlobalSet<TrackedDispatcher>(
+  Symbol.for("openclaw.activeReplyDispatchers"),
+  "close-only",
+);
 let nextId = 0;
 
 /**

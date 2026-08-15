@@ -1,5 +1,4 @@
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
-import { sha256HexPrefix } from "./crypto-digest.js";
+import { sha256HexPrefixCore } from "./crypto-digest.js";
 // Owns durable approval matching and allow-always persistence.
 import { canonicalizeExecApprovalPolicyRules } from "./exec-approval-policy-snapshot.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
@@ -46,11 +45,11 @@ export function hasDurableExecApproval(params: {
 // already hold `=command:` entries in this format; changing the input
 // silently orphans every persisted exact-command grant.
 function buildDurableCommandApprovalPattern(commandText: string): string {
-  return `=command:${sha256HexPrefix(commandText, 16)}`;
+  return `=command:${sha256HexPrefixCore(commandText, 16)}`;
 }
 
 function buildNodeCommandApprovalPattern(commandText: string): string {
-  return `=node-command:${sha256HexPrefix(commandText, 16)}`;
+  return `=node-command:${sha256HexPrefixCore(commandText, 16)}`;
 }
 
 export function hasNodeCommandAllowAlwaysMarker(params: {
@@ -199,7 +198,10 @@ function applyAllowlistEntryUpdate(params: {
     source?: ExecAllowlistEntry["source"];
   };
 }): ExecApprovalsFile | null {
-  const target = params.agentId ?? DEFAULT_AGENT_ID;
+  if (!params.agentId) {
+    throw new Error("Exec allowlist update requires an explicit agent id.");
+  }
+  const target = params.agentId;
   const agents = params.file.agents ?? {};
   const existing = agents[target] ?? {};
   const allowlist = Array.isArray(existing.allowlist) ? existing.allowlist : [];

@@ -1,9 +1,11 @@
 // Policy plugin exec approval evidence.
 import {
+  asNonArrayRecord,
   isRecord,
   asBoolean as readBoolean,
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { execApprovalsPolicyUri } from "./exec-approvals-uri.js";
 import { ocPathSegment } from "./policy-state-helpers.js";
 import type { PolicyExecApprovalEvidence } from "./policy-state-types.js";
 
@@ -20,18 +22,18 @@ export function scanPolicyExecApprovals(raw: string): readonly PolicyExecApprova
     return [];
   }
   const evidence: PolicyExecApprovalEvidence[] = [];
-  const defaults = isRecord(parsed.defaults) ? parsed.defaults : {};
+  const defaults = asNonArrayRecord(parsed.defaults);
   evidence.push(
     execApprovalPostureEvidence(
       "defaults",
       "defaults",
       defaults,
-      "oc://exec-approvals.json/defaults",
+      execApprovalsPolicyUri("defaults"),
     ),
   );
 
   for (const agent of normalizedExecApprovalAgents(parsed.agents)) {
-    const agentSource = `oc://exec-approvals.json/agents/${ocPathSegment(agent.sourceAgentId)}`;
+    const agentSource = execApprovalsPolicyUri(`agents/${ocPathSegment(agent.sourceAgentId)}`);
     evidence.push(
       execApprovalPostureEvidence(
         `agent:${agent.agentId}`,
@@ -42,9 +44,9 @@ export function scanPolicyExecApprovals(raw: string): readonly PolicyExecApprova
       ),
     );
     for (const [index, entry] of agent.allowlistEntries.entries()) {
-      const allowlistSource = `oc://exec-approvals.json/agents/${ocPathSegment(
-        entry.sourceAgentId,
-      )}/allowlist/#${entry.index}`;
+      const allowlistSource = execApprovalsPolicyUri(
+        `agents/${ocPathSegment(entry.sourceAgentId)}/allowlist/#${entry.index}`,
+      );
       evidence.push({
         id: `agent:${agent.agentId}:allowlist:${index}`,
         kind: "allowlist",

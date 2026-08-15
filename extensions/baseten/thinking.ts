@@ -17,7 +17,7 @@ export function resolveBasetenThinkingProfile(
   modelId: string,
 ): ProviderThinkingProfile | undefined {
   const normalized = modelId.trim().toLowerCase();
-  if (normalized === "zai-org/glm-5.2") {
+  if (normalized === "zai-org/glm-5.2" || normalized === "zai-org/glm-5.2-fast") {
     return BASETEN_GLM_52_THINKING_PROFILE;
   }
   return usesBasetenChatTemplateThinking(normalized) ? BASETEN_BINARY_THINKING_PROFILE : undefined;

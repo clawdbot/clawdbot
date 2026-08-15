@@ -11,8 +11,8 @@ import {
 } from "../plugins/official-external-install-trust.js";
 import {
   resolveBundledInstallPlanForCatalogEntry,
-  resolveBundledInstallPlanBeforeNpm,
   resolveBundledInstallPlanForNpmFailure,
+  resolvePluginInstallSourcePlan,
 } from "./plugin-install-plan.js";
 
 function createSourceCheckoutPlugin(pluginId: string): {
@@ -31,102 +31,58 @@ function createSourceCheckoutPlugin(pluginId: string): {
 }
 
 describe("plugin install plan helpers", () => {
-  it("prefers bundled plugin for bare plugin-id specs", () => {
-    const findBundledSource = vi.fn().mockReturnValue({
-      pluginId: "voice-call",
-      localPath: installedPluginRoot("/tmp", "voice-call"),
-      npmSpec: "@openclaw/voice-call",
+  it.each([
+    "clawhub:",
+    "clawhub:demo@",
+    "clawhub:@scope/pkg@",
+    "CLAWHUB:",
+    "ClAwHuB:demo@",
+    " clawhub:demo@ ",
+  ])("rejects the malformed explicit ClawHub selector %s before npm fallback", (raw) => {
+    expect(resolvePluginInstallSourcePlan({ raw, mode: "install" })).toEqual({
+      ok: false,
+      error: `Unsupported ClawHub plugin spec: ${raw}`,
     });
-
-    const result = resolveBundledInstallPlanBeforeNpm({
-      rawSpec: "voice-call",
-      findBundledSource,
-    });
-
-    expect(findBundledSource).toHaveBeenCalledWith({ kind: "pluginId", value: "voice-call" });
-    expect(result?.bundledSource.pluginId).toBe("voice-call");
-    expect(result?.warning).toContain('bare install spec "voice-call"');
   });
 
-  it("prefers bundled plugin for scoped npm package specs", () => {
-    const findBundledSource = vi
-      .fn()
-      .mockImplementation(({ kind, value }: { kind: "pluginId" | "npmSpec"; value: string }) => {
-        if (kind === "npmSpec" && value === "@openclaw/voice-call") {
-          return {
-            pluginId: "voice-call",
-            localPath: installedPluginRoot("/tmp", "voice-call"),
-            npmSpec: "@openclaw/voice-call",
-          };
-        }
-        return undefined;
+  it.each(["clawhub:demo", "CLAWHUB:demo", "clawhub:@scope/pkg@1.2.3"])(
+    "keeps the valid explicit ClawHub selector %s on the ClawHub install path",
+    (raw) => {
+      expect(resolvePluginInstallSourcePlan({ raw, mode: "install" })).toMatchObject({
+        ok: true,
+        request: { source: "clawhub", spec: raw },
       });
-    const result = resolveBundledInstallPlanBeforeNpm({
-      rawSpec: "@openclaw/voice-call@2026.5.20",
-      findBundledSource,
-    });
+    },
+  );
 
-    expect(findBundledSource).toHaveBeenCalledWith({
-      kind: "npmSpec",
-      value: "@openclaw/voice-call@2026.5.20",
-    });
-    expect(findBundledSource).toHaveBeenCalledWith({
-      kind: "npmSpec",
-      value: "@openclaw/voice-call",
-    });
-    expect(result?.bundledSource.pluginId).toBe("voice-call");
-    expect(result?.warning).toContain('npm install spec "@openclaw/voice-call@2026.5.20"');
-    expect(result?.warning).toContain("npm:@openclaw/voice-call@2026.5.20");
-  });
+  it.skipIf(process.platform === "win32")(
+    "keeps an existing ClawHub-prefixed local path on the local install path",
+    () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-plan-clawhub-"));
+      const localPath = path.join(tempRoot, "clawhub:demo@");
+      fs.mkdirSync(localPath);
 
-  it("keeps scoped npm specs on the registry path for source checkout bundles", () => {
-    const { packageRoot, pluginRoot } = createSourceCheckoutPlugin("codex");
-    try {
-      const findBundledSource = vi.fn().mockReturnValue({
-        pluginId: "codex",
-        localPath: pluginRoot,
-        npmSpec: "@openclaw/codex",
-      });
+      try {
+        expect(resolvePluginInstallSourcePlan({ raw: localPath, mode: "install" })).toMatchObject({
+          ok: true,
+          request: {
+            source: "local",
+            path: localPath,
+          },
+        });
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
-      const result = resolveBundledInstallPlanBeforeNpm({
-        rawSpec: "@openclaw/codex@2026.7.2-beta.3",
-        findBundledSource,
-      });
-
-      expect(result).toBeNull();
-    } finally {
-      fs.rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps bare plugin ids on source checkout bundles", () => {
-    const { packageRoot, pluginRoot } = createSourceCheckoutPlugin("codex");
-    try {
-      const findBundledSource = vi.fn().mockReturnValue({
-        pluginId: "codex",
-        localPath: pluginRoot,
-        npmSpec: "@openclaw/codex",
-      });
-
-      const result = resolveBundledInstallPlanBeforeNpm({
-        rawSpec: "codex",
-        findBundledSource,
-      });
-
-      expect(result?.bundledSource.pluginId).toBe("codex");
-    } finally {
-      fs.rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("skips bundled pre-plan for npm specs that do not match bundled packages", () => {
-    const findBundledSource = vi.fn();
-    const result = resolveBundledInstallPlanBeforeNpm({
-      rawSpec: "@openclaw/not-bundled",
-      findBundledSource,
-    });
-
-    expect(result).toBeNull();
+  it("keeps explicit npm specs with local-looking suffixes on the registry path", () => {
+    expect(resolvePluginInstallSourcePlan({ raw: "npm:plugin.js", mode: "install" })).toMatchObject(
+      {
+        ok: true,
+        request: { source: "npm", spec: "plugin.js" },
+      },
+    );
   });
 
   it("resolves exact official external plugin ids before npm fallback", () => {

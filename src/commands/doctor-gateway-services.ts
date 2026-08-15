@@ -8,7 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
-import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
+import { isDefaultInstallIdentity, resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { formatGatewayHeapLimitReport, inspectGatewayHeapLimit } from "../daemon/gateway-heap.js";
 import {
@@ -31,12 +31,16 @@ import { readManagedServiceEnvKeysFromEnvironment } from "../daemon/service-mana
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { resolveGatewayService, type GatewayServiceCommandConfig } from "../daemon/service.js";
 import {
+  findSystemdGatewayInstallation,
+  isSystemUnitActiveAndEnabled,
   isSystemdUnitActive,
   uninstallLegacySystemdUnits,
+  uninstallUserSystemdGatewayUnit,
   type SystemdUnitScope,
 } from "../daemon/systemd.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON } from "../infra/gateway-supervision.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -357,6 +361,9 @@ async function filterInactiveExtraGatewayServices(
 export async function detectExtraGatewayServiceIssues(
   options: Pick<DoctorOptions, "deep"> = {},
 ): Promise<readonly ExtraGatewayService[]> {
+  if (!isDefaultInstallIdentity(process.env)) {
+    return [];
+  }
   const detectedExtraServices = await findExtraGatewayServices(process.env, {
     deep: options.deep,
   });
@@ -538,6 +545,10 @@ export async function maybeRepairGatewayServiceConfig(
   prompter: DoctorPrompter,
   options: GatewayServiceConfigRepairOptions = {},
 ): Promise<OpenClawConfig> {
+  if (!isDefaultInstallIdentity(process.env)) {
+    note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
+    return cfg;
+  }
   if (resolveIsNixMode(process.env)) {
     note("Nix mode detected; skip service updates.", "Gateway");
     return cfg;
@@ -934,6 +945,10 @@ export async function maybeScanExtraGatewayServices(
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
 ) {
+  if (!isDefaultInstallIdentity(process.env)) {
+    note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
+    return;
+  }
   const extraServices = await detectExtraGatewayServiceIssues(options);
   if (extraServices.length === 0) {
     return;
@@ -990,7 +1005,11 @@ export async function maybeScanExtraGatewayServices(
     }
   }
 
-  const cleanupHints = renderGatewayServiceCleanupHints();
+  // Legacy jobs have their own confirmed cleanup flow; generic hints must
+  // only name detected extra services, never the active managed gateway.
+  const cleanupHints = renderGatewayServiceCleanupHints(
+    extraServices.filter((service) => service.legacy !== true),
+  );
   if (cleanupHints.length > 0) {
     note(cleanupHints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");
   }
@@ -1003,5 +1022,118 @@ export async function maybeScanExtraGatewayServices(
     ].join("\n"),
     "Gateway recommendation",
   );
+}
+
+/**
+ * Resolves a `dueling` systemd install (both a user-scope and a system-scope
+ * gateway unit present) by removing the redundant user-scope unit after
+ * confirmation, keeping the root-installed system-scope unit as authoritative.
+ *
+ * This is the fix for issue #79375: on Linux the two units bind the same port
+ * and SIGTERM each other in an endless restart loop. The canonical units are
+ * deliberately excluded from `findExtraGatewayServices`, so this detects the
+ * condition directly via `findSystemdGatewayInstallation`. Removing a unit
+ * under `$HOME` needs no root; the system-scope unit is never auto-removed
+ * (only a `sudo`-flavored hint is offered for that direction).
+ */
+export async function maybeResolveDuelingSystemdGatewayScopes(
+  runtime: RuntimeEnv,
+  prompter: DoctorPrompter,
+) {
+  if (process.platform !== "linux") {
+    return;
+  }
+  const installation = await findSystemdGatewayInstallation(process.env).catch(() => null);
+  if (installation?.kind !== "dueling") {
+    return;
+  }
+  const { user, system } = installation;
+  note(
+    [
+      "Both a user-scope and a system-scope OpenClaw gateway unit are installed:",
+      `- user:   ${user.unitPath}`,
+      `- system: ${system.unitPath}`,
+      "They bind the same port and will SIGTERM each other in a restart loop.",
+    ].join("\n"),
+    "Dueling gateway services detected",
+  );
+
+  // Ownership guard: delete the user unit only when the system unit is the
+  // live or boot-configured supervisor. A staged/disabled/failed/uncheckable
+  // system unit file with a working user gateway must fail closed to hints,
+  // or doctor would take down the operator's only running gateway.
+  const systemOwnsGateway = await isSystemUnitActiveAndEnabled(process.env, system.unitName).catch(
+    () => false,
+  );
+  if (!systemOwnsGateway) {
+    note(
+      [
+        "The system-scope unit is not both running and enabled at boot, so the",
+        "user-scope unit may be your working gateway. Not removing anything",
+        "automatically.",
+        "If the system-scope unit is the one you want, activate it and re-run doctor:",
+        `- sudo systemctl enable --now ${system.unitName}`,
+        "If the user-scope unit is the one you want, remove the system unit:",
+        `- sudo systemctl disable --now ${system.unitName} && sudo rm ${system.unitPath}`,
+      ].join("\n"),
+      "Gateway cleanup needs an owner decision",
+    );
+    return;
+  }
+  note(
+    [
+      "The system-scope unit is the active or boot-enabled supervisor and is",
+      "treated as authoritative; the user-scope unit is the redundant leftover.",
+    ].join("\n"),
+    "System-scope unit owns the gateway",
+  );
+
+  const policy = resolveServiceRepairPolicy();
+  if (isServiceRepairExternallyManaged(policy)) {
+    note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway cleanup skipped");
+    return;
+  }
+
+  const shouldRemove = await confirmDoctorServiceRepair(
+    prompter,
+    {
+      message: "Remove the redundant user-scope gateway unit and keep the system-scope unit?",
+      initialValue: true,
+    },
+    policy,
+  );
+  if (!shouldRemove) {
+    const hints = renderGatewayServiceCleanupHints();
+    if (hints.length > 0) {
+      note(hints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");
+    }
+    return;
+  }
+
+  try {
+    const result = await uninstallUserSystemdGatewayUnit({
+      env: process.env,
+      stdout: process.stdout,
+    });
+    note(
+      result.removed
+        ? `Removed user-scope unit ${result.unitPath}.`
+        : `User-scope unit already absent at ${result.unitPath}.`,
+      "Redundant user gateway removed",
+    );
+    // Only claim the conflict is resolved when systemd actually released the
+    // unit; a file-only removal can leave the loaded unit running.
+    runtime.log(
+      result.disabled
+        ? "Removed the redundant user-scope gateway unit. The system-scope unit is now the sole gateway manager."
+        : `Removed the user-scope unit file, but systemctl was unavailable to stop it. Run: systemctl --user disable --now ${result.unitName} && systemctl --user daemon-reload`,
+    );
+  } catch (err) {
+    runtime.error(`Failed to remove redundant user-scope gateway unit: ${String(err)}`);
+    const hints = renderGatewayServiceCleanupHints();
+    if (hints.length > 0) {
+      note(hints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");
+    }
+  }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

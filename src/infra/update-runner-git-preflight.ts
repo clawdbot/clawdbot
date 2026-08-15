@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { trimLogTail } from "./restart-sentinel.js";
-import { DEV_BRANCH } from "./update-channels.js";
+import { DEV_BRANCH, resolveDevUpstreamRef } from "./update-channels.js";
+import { resolveDevUpdateTargetRevision, type DevUpdateTarget } from "./update-dev-target.js";
 import {
   managerInstallArgs,
   managerInstallIgnoreScriptsArgs,
@@ -138,7 +139,6 @@ async function resolveExplicitTarget(params: {
       const remoteStep = await runStep(
         params.step("git remote", ["git", "-C", params.gitRoot, "remote"], params.gitRoot),
       );
-      params.steps.push(remoteStep);
       const remotes = normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n"));
       let fetchedTag = false;
       for (const remote of remotes) {
@@ -149,7 +149,6 @@ async function resolveExplicitTarget(params: {
             params.gitRoot,
           ),
         );
-        params.steps.push(fetchStep);
         if (fetchStep.exitCode === 0) {
           fetchedTag = true;
           break;
@@ -166,7 +165,6 @@ async function resolveExplicitTarget(params: {
         params.gitRoot,
       ),
     );
-    params.steps.push(shaStep);
     const sha = shaStep.stdoutTail?.trim();
     if (shaStep.exitCode === 0 && sha) {
       return sha;
@@ -200,23 +198,23 @@ async function resolveUpstreamCandidates(params: {
         params.gitRoot,
       ),
     );
-    params.steps.push(localMainStep);
     localDevBranchExists = localMainStep.exitCode === 0;
   }
   if (params.needsCheckoutMain && localDevBranchExists === false) {
     const remoteStep = await runStep(
       params.step("git remote", ["git", "-C", params.gitRoot, "remote"], params.gitRoot),
     );
-    params.steps.push(remoteStep);
     if (remoteStep.exitCode === 0) {
       remoteBranchRefs = normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n")).map(
         (remote) => `refs/remotes/${remote}/${DEV_BRANCH}`,
       );
     }
   }
-  const upstreamRefs = params.needsCheckoutMain
-    ? [`${DEV_BRANCH}@{upstream}`, ...remoteBranchRefs]
-    : ["@{upstream}"];
+  const trackingRevision = resolveDevUpstreamRef(
+    params.needsCheckoutMain ? "HEAD" : DEV_BRANCH,
+    true,
+  );
+  const upstreamRefs = [...(trackingRevision ? [trackingRevision] : []), ...remoteBranchRefs];
   let upstreamSha: string | null = null;
   let selectedDevUpstream: string | null = null;
   let sawResolvableUpstreamRef = false;
@@ -237,7 +235,6 @@ async function resolveUpstreamCandidates(params: {
           params.gitRoot,
         ),
       );
-      params.steps.push(upstreamStep);
       if (upstreamStep.exitCode !== 0) {
         continue;
       }
@@ -250,7 +247,6 @@ async function resolveUpstreamCandidates(params: {
         params.gitRoot,
       ),
     );
-    params.steps.push(shaStep);
     const sha = shaStep.stdoutTail?.trim();
     if (shaStep.exitCode === 0 && sha) {
       upstreamSha = sha;
@@ -280,7 +276,6 @@ async function resolveUpstreamCandidates(params: {
       params.gitRoot,
     ),
   );
-  params.steps.push(revListStep);
   if (revListStep.exitCode !== 0) {
     return { status: "error", reason: "preflight-revlist-failed" };
   }
@@ -323,7 +318,6 @@ async function testPreflightCandidates(params: {
         params.worktreeDir,
       ),
     );
-    params.steps.push(checkoutStep);
     if (checkoutStep.exitCode !== 0) {
       sawOtherFailure = true;
       continue;
@@ -364,7 +358,6 @@ async function testPreflightCandidates(params: {
       let installStep = await runStep(
         params.step(installName, installArgv, params.worktreeDir, installEnv),
       );
-      params.steps.push(installStep);
       if (
         installStep.exitCode !== 0 &&
         !preferIgnoreScripts &&
@@ -380,7 +373,6 @@ async function testPreflightCandidates(params: {
               installEnv,
             ),
           );
-          params.steps.push(installStep);
         }
       }
       if (installStep.exitCode !== 0) {
@@ -392,10 +384,9 @@ async function testPreflightCandidates(params: {
           `preflight build (${shortSha})`,
           managerScriptArgs(manager.manager, "build"),
           params.worktreeDir,
-          resolveBuildEnv(manager.env),
+          resolveBuildEnv(manager.env, path.join(params.gitRoot, ".artifacts", "build-all-cache")),
         ),
       );
-      params.steps.push(buildStep);
       if (buildStep.exitCode !== 0) {
         sawOtherFailure = true;
         continue;
@@ -409,7 +400,6 @@ async function testPreflightCandidates(params: {
             resolveDevPreflightLintEnv(manager.env),
           ),
         );
-        params.steps.push(lintStep);
         if (lintStep.exitCode !== 0) {
           sawOtherFailure = true;
           continue;
@@ -426,7 +416,7 @@ async function testPreflightCandidates(params: {
 
 export async function runGitDevPreflight(params: {
   gitRoot: string;
-  devTargetRef?: string;
+  devTarget?: DevUpdateTarget;
   needsCheckoutMain: boolean;
   runCommand: CommandRunner;
   timeoutMs: number;
@@ -434,7 +424,9 @@ export async function runGitDevPreflight(params: {
   steps: UpdateStepResult[];
   step: StepFactory;
 }): Promise<GitDevPreflightResult> {
-  const devTargetRef = normalizeDevTargetRef(params.devTargetRef);
+  const devTargetRef = params.devTarget
+    ? normalizeDevTargetRef(resolveDevUpdateTargetRevision(params.devTarget))
+    : null;
   let preflightBaseSha: string;
   let candidates: string[];
   let selectedDevUpstream: string | null = null;
@@ -446,6 +438,26 @@ export async function runGitDevPreflight(params: {
     }
     preflightBaseSha = targetSha;
     candidates = [targetSha];
+    if (params.devTarget?.mode === "tracked") {
+      const ancestryStep = await runStep(
+        params.step(
+          "tracked target ancestry",
+          [
+            "git",
+            "-C",
+            params.gitRoot,
+            "merge-base",
+            "--is-ancestor",
+            targetSha,
+            `${params.devTarget.upstreamRef}^{commit}`,
+          ],
+          params.gitRoot,
+        ),
+      );
+      if (ancestryStep.exitCode !== 0) {
+        return { status: "error", reason: "tracked-upstream-invalid" };
+      }
+    }
   } else {
     const upstream = await resolveUpstreamCandidates(params);
     if (upstream.status !== "ok") {
@@ -466,7 +478,6 @@ export async function runGitDevPreflight(params: {
       params.gitRoot,
     ),
   );
-  params.steps.push(worktreeStep);
   if (worktreeStep.exitCode !== 0) {
     await removePathRecursive(preflightRoot);
     return { status: "error", reason: "preflight-worktree-failed" };
@@ -495,7 +506,6 @@ export async function runGitDevPreflight(params: {
         MAX_LOG_CHARS,
       );
     }
-    params.steps.push(removeStep);
     await params
       .runCommand(["git", "-C", params.gitRoot, "worktree", "prune"], {
         cwd: params.gitRoot,

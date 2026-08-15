@@ -5,7 +5,7 @@
  */
 import { Type } from "typebox";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringParam } from "./common.js";
+import { jsonResult, readToolStringParam } from "./common.js";
 
 const SessionsYieldToolSchema = Type.Object({
   message: Type.Optional(Type.String()),
@@ -20,11 +20,14 @@ export function createSessionsYieldTool(opts?: {
   return {
     label: "Yield",
     name: "sessions_yield",
+    // Turn-lifecycle contract: spawn flows instruct the model to yield, so the
+    // tool must stay visible even when tool search compacts the catalog.
+    catalogMode: "direct-only",
     description: "End turn after subagent spawn; results arrive next message.",
     parameters: SessionsYieldToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const message = readStringParam(params, "message") || "Turn yielded.";
+      const message = readToolStringParam(params, "message") || "Turn yielded.";
       if (!opts?.sessionId) {
         return jsonResult({ status: "error", error: "No session context" });
       }

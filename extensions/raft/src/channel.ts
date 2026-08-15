@@ -19,9 +19,9 @@ import { raftChannelConfigSchema } from "./config-schema.js";
 import { startRaftGatewayAccount } from "./gateway.js";
 import { raftSetupPlugin } from "./setup.js";
 
-type RaftProbe = {
-  cliFound: boolean;
-};
+type RaftProbe =
+  | { ok: true; cliFound: true; error: null }
+  | { ok: false; cliFound: false; error: string };
 
 export const raftPlugin: ChannelPlugin<ResolvedRaftAccount, RaftProbe> = createChatChannelPlugin({
   base: {
@@ -38,7 +38,6 @@ export const raftPlugin: ChannelPlugin<ResolvedRaftAccount, RaftProbe> = createC
     capabilities: {
       chatTypes: ["direct"],
     },
-    setup: raftSetupPlugin.setup,
     setupContract: raftSetupPlugin.setupContract,
     setupWizard: raftSetupPlugin.setupWizard,
     reload: { configPrefixes: ["channels.raft"] },
@@ -62,9 +61,16 @@ export const raftPlugin: ChannelPlugin<ResolvedRaftAccount, RaftProbe> = createC
     status: createComputedAccountStatusAdapter<ResolvedRaftAccount, RaftProbe>({
       defaultRuntime: createDefaultChannelRuntimeState("default"),
       buildChannelSummary: ({ snapshot }) => buildBaseChannelStatusSummary(snapshot),
-      probeAccount: async () => ({
-        cliFound: await detectBinary("raft"),
-      }),
+      probeAccount: async () => {
+        const cliFound = await detectBinary("raft");
+        return cliFound
+          ? { ok: true, cliFound: true, error: null }
+          : {
+              ok: false,
+              cliFound: false,
+              error: "Raft CLI not found on the Gateway PATH",
+            };
+      },
       formatCapabilitiesProbe: ({ probe }) => [
         {
           text: `Raft CLI: ${probe.cliFound ? "found" : "missing"}`,

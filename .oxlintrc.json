@@ -8,7 +8,7 @@
   },
   "rules": {
     "curly": "error",
-    "eslint/no-underscore-dangle": "error",
+    "eslint/no-underscore-dangle": ["error", { "allow": ["__typename", "_meta"] }],
     "eslint-plugin-unicorn/prefer-array-find": "error",
     "eslint/no-array-constructor": "error",
     "eslint/no-await-in-loop": "off",
@@ -210,8 +210,10 @@
     "dist/",
     "dist-runtime/",
     "docs/_layouts/",
+    // Intentional negative-test corpora contain parser and lint violations by contract.
+    ".agents/skills/autoreview/tests/fixtures/**",
+    "test/fixtures/oxlint-boundary-guards/**",
     "**/a2ui.bundle.js",
-    "extensions/browser/chrome-extension/modules/copilot-runtime.js",
     "extensions/diffs/assets/viewer-runtime.js",
     "extensions/diffs-language-pack/assets/viewer-runtime.js",
     "node_modules/",
@@ -243,7 +245,6 @@
         "packages/terminal-core/**/*.ts",
         "packages/normalization-core/**/*.ts",
         "packages/model-catalog-core/**/*.ts",
-        "packages/web-content-core/**/*.ts",
         "packages/agent-core/**/*.ts",
         "packages/acp-core/**/*.ts",
         "packages/ai/**/*.ts",
@@ -261,8 +262,8 @@
     },
     {
       "files": [
-        "**/*.test.ts",
-        "**/*.test.tsx",
+        "**/*.{test,suite}.ts",
+        "**/*.{test,suite}.tsx",
         "**/*.e2e.test.ts",
         "**/*.live.test.ts",
         "**/*test-harness.ts",
@@ -281,8 +282,7 @@
         "extensions/**/*.{js,ts,mts,cts}"
       ],
       "excludeFiles": [
-        "**/*.test.*",
-        "**/*.spec.*",
+        "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
         "**/protocol-gen/**",
@@ -303,8 +303,7 @@
         "extensions/**/*.{jsx,tsx}"
       ],
       "excludeFiles": [
-        "**/*.test.*",
-        "**/*.spec.*",
+        "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
         "**/protocol-gen/**",
@@ -325,8 +324,7 @@
         "extensions/**/*.{mjs,cjs}"
       ],
       "excludeFiles": [
-        "**/*.test.*",
-        "**/*.spec.*",
+        "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
         "**/protocol-gen/**",
@@ -341,14 +339,10 @@
     },
     {
       "files": [
-        "src/**/*.test.*",
-        "src/**/*.spec.*",
-        "ui/src/**/*.test.*",
-        "ui/src/**/*.spec.*",
-        "packages/**/*.test.*",
-        "packages/**/*.spec.*",
-        "extensions/**/*.test.*",
-        "extensions/**/*.spec.*"
+        "src/**/*.{test,spec,suite}.*",
+        "ui/src/**/*.{test,spec,suite}.*",
+        "packages/**/*.{test,spec,suite}.*",
+        "extensions/**/*.{test,spec,suite}.*"
       ],
       "excludeFiles": [
         "**/__generated__/**",
@@ -361,6 +355,18 @@
       ],
       "rules": {
         "max-lines": ["error", { "max": 1000, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["extensions/copilot/src/event-bridge.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 950, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
+      "files": ["extensions/copilot/src/attempt-transcript-journal.test.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 1200, "skipBlankLines": true, "skipComments": true }]
       }
     }
   ]

@@ -116,6 +116,92 @@ function readInstallStatus(agentId: string, root: string): string | undefined {
 }
 
 describe("createClawWorkspaceFiles", () => {
+  it("materializes the CLAW.md body as managed SOUL.md content", async () => {
+    const root = tempDirs.make("openclaw-claw-body-workspace-");
+    const workspace = join(root, "workspace-agent");
+    const body = Buffer.from("# Portable soul\n\nBe concise.\n");
+    const manifest = parseClawManifest({ schemaVersion: 1, agent: { id: "workspace-agent" } });
+    if (!manifest.ok) {
+      throw new Error(JSON.stringify(manifest.diagnostics));
+    }
+    const manifestPath = join(root, "CLAW.md");
+    await writeFile(
+      manifestPath,
+      Buffer.concat([
+        Buffer.from("---\nschemaVersion: 1\nagent: { id: workspace-agent }\n---\n"),
+        body,
+      ]),
+    );
+    const plan = await buildClawAddPlan({
+      manifest: manifest.manifest,
+      clawMarkdownBody: body,
+      source: {
+        kind: "package",
+        name: "@acme/workspace-agent",
+        version: "1.0.0",
+        packageRoot: root,
+        manifestPath,
+        integrityKind: "development-snapshot",
+        integrity: "sha256:manifest",
+        byteLength: 0,
+      },
+      context: { workspace },
+    });
+    await mkdir(workspace);
+
+    const records = await createClawWorkspaceFiles(plan, { env: stateEnv(root), nowMs: 10 });
+
+    await expect(readFile(join(workspace, "SOUL.md"), "utf8")).resolves.toBe(body.toString());
+    expect(records).toContainEqual(
+      expect.objectContaining({ path: "SOUL.md", sourcePath: "CLAW.md", status: "complete" }),
+    );
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "materializes the CLAW.md body through a symlinked package root",
+    async () => {
+      const root = tempDirs.make("openclaw-claw-linked-package-");
+      const realPackageRoot = join(root, "real-package");
+      const linkedPackageRoot = join(root, "linked-package");
+      const workspace = join(root, "workspace-agent");
+      const body = Buffer.from("# Portable soul\n\nBe concise.\n");
+      await mkdir(realPackageRoot);
+      await symlink(realPackageRoot, linkedPackageRoot, "dir");
+      const manifestPath = join(linkedPackageRoot, "CLAW.md");
+      await writeFile(
+        manifestPath,
+        Buffer.concat([
+          Buffer.from("---\nschemaVersion: 1\nagent: { id: workspace-agent }\n---\n"),
+          body,
+        ]),
+      );
+      const manifest = parseClawManifest({ schemaVersion: 1, agent: { id: "workspace-agent" } });
+      if (!manifest.ok) {
+        throw new Error(JSON.stringify(manifest.diagnostics));
+      }
+      const plan = await buildClawAddPlan({
+        manifest: manifest.manifest,
+        clawMarkdownBody: body,
+        source: {
+          kind: "package",
+          name: "@acme/workspace-agent",
+          version: "1.0.0",
+          packageRoot: linkedPackageRoot,
+          manifestPath,
+          integrityKind: "development-snapshot",
+          integrity: "sha256:manifest",
+          byteLength: 0,
+        },
+        context: { workspace },
+      });
+      await mkdir(workspace);
+
+      await createClawWorkspaceFiles(plan, { env: stateEnv(root), nowMs: 10 });
+
+      await expect(readFile(join(workspace, "SOUL.md"), "utf8")).resolves.toBe(body.toString());
+    },
+  );
+
   it("creates canonical bootstrap and supporting files and records their hashes", async () => {
     const { root, workspace, plan } = await makePlan();
 
@@ -204,7 +290,8 @@ describe("createClawWorkspaceFiles", () => {
       action.source = join(plan.claw.packageRoot, "content-link", "AGENTS.md");
 
       await expect(createClawWorkspaceFiles(plan, { env: stateEnv(root) })).rejects.toMatchObject({
-        diagnostics: [expect.objectContaining({ code: "workspace_file_path_alias" })],
+        // fs-safe 0.5.2 rejects the symlinked parent before the alias check runs.
+        diagnostics: [expect.objectContaining({ code: "workspace_file_symlink" })],
       });
       await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).rejects.toThrow();
     },

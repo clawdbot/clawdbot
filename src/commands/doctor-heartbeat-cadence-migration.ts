@@ -1,8 +1,8 @@
 /** Doctor-owned materialization of heartbeat cadence config into cron monitor rows. */
 import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   heartbeatMonitorAgentId,
@@ -15,6 +15,7 @@ import {
 } from "../cron/store.js";
 import type { CronJob, CronJobCreate } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { resolveHeartbeatSchedulerSeed } from "../infra/heartbeat-runner.js";
 import { shortenHomePath } from "../utils.js";
@@ -34,10 +35,6 @@ type HeartbeatMonitorPlan = {
   changes: HeartbeatMonitorChange[];
 };
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function createDoctorCronService(storePath: string, cfg: OpenClawConfig): CronService {
   const noop = () => {};
   const log = { debug: noop, info: noop, warn: noop, error: noop };
@@ -45,13 +42,13 @@ function createDoctorCronService(storePath: string, cfg: OpenClawConfig): CronSe
     storePath,
     cronEnabled: false,
     cronConfig: cfg.cron,
-    defaultAgentId: resolveDefaultAgentId(cfg),
+    resolveDefaultAgentId: () => tryResolveLegacyCompatibilityAgentId(cfg),
     log,
     enqueueSystemEvent: () => false,
     requestHeartbeat: noop,
     runIsolatedAgentJob: async () => ({
       status: "skipped",
-      error: "doctor does not execute cron jobs",
+      error: "doctor does not execute automations",
     }),
   });
 }

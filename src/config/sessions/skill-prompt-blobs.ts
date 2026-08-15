@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { writeTextAtomic } from "../../infra/json-files.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { SessionEntry, SessionSkillPromptRef, SessionSkillSnapshot } from "./types.js";
 
 const PROMPT_BLOB_DIR = "skills-prompts";
@@ -69,13 +70,7 @@ function buildPromptRef(prompt: string): SessionSkillPromptRef {
   };
   promptRefCache.set(prompt, ref);
   // Bounded process cache avoids rehashing repeated prompt snapshots without becoming store state.
-  while (promptRefCache.size > PROMPT_REF_CACHE_MAX_ENTRIES) {
-    const oldest = promptRefCache.keys().next().value;
-    if (typeof oldest !== "string") {
-      break;
-    }
-    promptRefCache.delete(oldest);
-  }
+  pruneMapToMaxSize(promptRefCache, PROMPT_REF_CACHE_MAX_ENTRIES);
   return ref;
 }
 
@@ -88,13 +83,7 @@ function shouldStorePromptAsBlob(prompt: string): boolean {
 
 function rememberValidPromptBlob(blobPath: string, stat: fs.Stats, prompt: string): void {
   validPromptBlobCache.set(blobPath, { mtimeMs: stat.mtimeMs, size: stat.size, prompt });
-  while (validPromptBlobCache.size > VALID_PROMPT_BLOB_CACHE_MAX_ENTRIES) {
-    const oldest = validPromptBlobCache.keys().next().value;
-    if (typeof oldest !== "string") {
-      break;
-    }
-    validPromptBlobCache.delete(oldest);
-  }
+  pruneMapToMaxSize(validPromptBlobCache, VALID_PROMPT_BLOB_CACHE_MAX_ENTRIES);
 }
 
 function readValidPromptBlob(storePath: string, ref: SessionSkillPromptRef): string | null {

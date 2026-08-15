@@ -128,14 +128,6 @@ type ChannelIngressQueueResubmitResult<
       record: ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>;
     };
 
-/** Per-channel/account dead-letter count used by health and doctor. */
-type ChannelIngressQueueFailedCount = {
-  channelId: string;
-  accountId: string;
-  count: number;
-  oldestFailedAt: number | null;
-};
-
 /** Retention options for pending, completed, and failed ingress queue rows. */
 export type ChannelIngressQueuePruneOptions = {
   pendingTtlMs?: number;
@@ -204,6 +196,12 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
     scanLimit?: number;
     candidateIds?: Iterable<string>;
     deriveLaneKey?: (record: ChannelIngressQueueRecord<TPayload, TMetadata>) => string | undefined;
+    /** Authorize a changed durable lane before the atomic pending-to-claimed transition. */
+    reconcileStoredLaneKey?: (
+      record: ChannelIngressQueueRecord<TPayload, TMetadata>,
+      storedLaneKey: string,
+      derivedLaneKey: string,
+    ) => boolean;
   }): Promise<ChannelIngressQueueClaim<TPayload, TMetadata> | null>;
   claim(
     id: string,
@@ -277,13 +275,13 @@ function createStateDirEnv(
   return env;
 }
 
-function openStateDatabase(stateDir?: string) {
+export function openChannelIngressDatabase(stateDir?: string) {
   return openOpenClawStateDatabase({
     env: stateDir ? createStateDirEnv(stateDir) : process.env,
   });
 }
 
-function getChannelIngressKysely(db: DatabaseSync) {
+export function getChannelIngressKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<ChannelIngressDatabase>(db);
 }
 
@@ -523,40 +521,6 @@ function queueNameForParts(channelId: string, accountId: string): string {
   return JSON.stringify([channelId, accountId]);
 }
 
-/** Count failed channel ingress events per channel account for operator health surfaces. */
-export function countFailedChannelIngressQueueEntries(
-  stateDir?: string,
-): ChannelIngressQueueFailedCount[] {
-  const database = openStateDatabase(stateDir);
-  const queueDb = getChannelIngressKysely(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    queueDb
-      .selectFrom("channel_ingress_events")
-      .select((eb) => [
-        "channel_id",
-        "account_id",
-        eb.fn.countAll().as("failed_count"),
-        eb.fn.min("failed_at").as("oldest_failed_at"),
-      ])
-      .where("status", "=", "failed")
-      .groupBy(["channel_id", "account_id"])
-      .orderBy("channel_id", "asc")
-      .orderBy("account_id", "asc"),
-  ).rows as Array<{
-    channel_id: string;
-    account_id: string;
-    failed_count: number | bigint;
-    oldest_failed_at: number | bigint | null;
-  }>;
-  return rows.map((row) => ({
-    channelId: row.channel_id,
-    accountId: row.account_id,
-    count: Number(row.failed_count),
-    oldestFailedAt: row.oldest_failed_at == null ? null : Number(row.oldest_failed_at),
-  }));
-}
-
 /** Creates a durable channel/account-scoped ingress queue backed by the OpenClaw state database. */
 export function createChannelIngressQueue<
   TPayload,
@@ -581,7 +545,7 @@ export function createChannelIngressQueue<
     }
     const receivedAt = enqueueOptions?.receivedAt ?? now();
     const updatedAt = now();
-    const database = openStateDatabase(options.stateDir);
+    const database = openChannelIngressDatabase(options.stateDir);
     return runOpenClawStateWriteTransaction(
       (tx) => {
         const kysely = getChannelIngressKysely(tx.db);
@@ -665,7 +629,7 @@ export function createChannelIngressQueue<
     TMetadata,
     TCompletedMetadata
   >["listPending"] = async (listOptions) => {
-    const { db } = openStateDatabase(options.stateDir);
+    const { db } = openChannelIngressDatabase(options.stateDir);
     const kysely = getChannelIngressKysely(db);
     const limit = normalizeLimit(listOptions?.limit);
     const records: Array<ChannelIngressQueueRecord<TPayload, TMetadata>> = [];
@@ -718,7 +682,7 @@ export function createChannelIngressQueue<
     TMetadata,
     TCompletedMetadata
   >["listClaims"] = async () => {
-    const { db } = openStateDatabase(options.stateDir);
+    const { db } = openChannelIngressDatabase(options.stateDir);
     const kysely = getChannelIngressKysely(db);
     const rows = executeSqliteQuerySync(
       db,
@@ -739,7 +703,7 @@ export function createChannelIngressQueue<
   const listFailed: NonNullable<
     ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>["listFailed"]
   > = async (listOptions) => {
-    const { db } = openStateDatabase(options.stateDir);
+    const { db } = openChannelIngressDatabase(options.stateDir);
     const rows = executeSqliteQuerySync(
       db,
       getChannelIngressKysely(db)
@@ -769,7 +733,27 @@ export function createChannelIngressQueue<
     if (candidateIds?.length === 0) {
       return null;
     }
-    const database = openStateDatabase(options.stateDir);
+    const resolveClaimLaneKey = (
+      record: ChannelIngressQueueRecord<TPayload, TMetadata>,
+    ): string | undefined => {
+      const storedLaneKey = record.laneKey;
+      if (storedLaneKey === undefined) {
+        return claimOptions?.deriveLaneKey?.(record);
+      }
+      if (!claimOptions?.deriveLaneKey || !claimOptions.reconcileStoredLaneKey) {
+        return storedLaneKey;
+      }
+      const derivedLaneKey = claimOptions.deriveLaneKey(record);
+      if (!derivedLaneKey || derivedLaneKey === storedLaneKey) {
+        return storedLaneKey;
+      }
+      // Durable identity changes need their channel owner's explicit approval;
+      // unrelated derivations can intentionally be ephemeral claim lanes.
+      return claimOptions.reconcileStoredLaneKey(record, storedLaneKey, derivedLaneKey)
+        ? derivedLaneKey
+        : storedLaneKey;
+    };
+    const database = openChannelIngressDatabase(options.stateDir);
     return runOpenClawStateWriteTransaction(
       (tx) => {
         const kysely = getChannelIngressKysely(tx.db);
@@ -788,14 +772,11 @@ export function createChannelIngressQueue<
           ).rows;
           const claimedCandidateLaneKeys = claimedCandidateRows
             .map((row) => {
-              if (row.lane_key) {
+              if (row.lane_key && !claimOptions?.reconcileStoredLaneKey) {
                 return row.lane_key;
               }
-              if (!claimOptions?.deriveLaneKey) {
-                return undefined;
-              }
               const rec = baseRecord<TPayload, TMetadata>(row);
-              return rec ? claimOptions.deriveLaneKey(rec) : undefined;
+              return rec ? resolveClaimLaneKey(rec) : (row.lane_key ?? undefined);
             })
             .filter((laneKey): laneKey is string => Boolean(laneKey));
           if (claimedCandidateLaneKeys.length > 0) {
@@ -847,9 +828,7 @@ export function createChannelIngressQueue<
               }
               continue;
             }
-            const laneKey =
-              row.lane_key ??
-              (claimOptions?.deriveLaneKey ? claimOptions.deriveLaneKey(rec) : undefined);
+            const laneKey = resolveClaimLaneKey(rec);
             if (!laneKey || !effectiveBlocked.has(laneKey)) {
               selected = { row, record: rec };
               break;
@@ -866,9 +845,7 @@ export function createChannelIngressQueue<
         if (!selected) {
           return null;
         }
-        const derivedLaneKey =
-          selected.row.lane_key ??
-          (claimOptions?.deriveLaneKey ? claimOptions.deriveLaneKey(selected.record) : undefined);
+        const derivedLaneKey = resolveClaimLaneKey(selected.record);
         const token = randomUUID();
         const ownerId = normalizePart(claimOptions?.ownerId, `${process.pid}`);
         const result = executeSqliteQuerySync(
@@ -905,7 +882,7 @@ export function createChannelIngressQueue<
     if (!eventId) {
       throw new Error("Channel ingress event id cannot be empty");
     }
-    const database = openStateDatabase(options.stateDir);
+    const database = openChannelIngressDatabase(options.stateDir);
     return runOpenClawStateWriteTransaction(
       (tx) => {
         const kysely = getChannelIngressKysely(tx.db);
@@ -955,7 +932,7 @@ export function createChannelIngressQueue<
   > = async (claimRef, refreshOptions) => {
     const eventId = idFrom(claimRef);
     const refreshedAt = refreshOptions?.refreshedAt ?? now();
-    const database = openStateDatabase(options.stateDir);
+    const database = openChannelIngressDatabase(options.stateDir);
     return runOpenClawStateWriteTransaction(
       (tx) => {
         const kysely = getChannelIngressKysely(tx.db);
@@ -983,7 +960,7 @@ export function createChannelIngressQueue<
     releaseOptions: { cutoff: number; releasedAt: number },
   ): Promise<boolean> => {
     const eventId = idFrom(claimRef);
-    const database = openStateDatabase(options.stateDir);
+    const database = openChannelIngressDatabase(options.stateDir);
     return runOpenClawStateWriteTransaction(
       (tx) => {
         const kysely = getChannelIngressKysely(tx.db);
@@ -1020,7 +997,7 @@ export function createChannelIngressQueue<
     const current = recoverOptions?.now ?? now();
     const staleMs = Math.max(0, Math.floor(recoverOptions?.staleMs ?? 0));
     const cutoff = current - staleMs;
-    const database = openStateDatabase(options.stateDir);
+    const database = openChannelIngressDatabase(options.stateDir);
     const claimedRows = executeSqliteQuerySync(
       database.db,
       getChannelIngressKysely(database.db)
@@ -1078,7 +1055,7 @@ export function createChannelIngressQueue<
     const eventId = idFrom(idOrClaim);
     const token = claimTokenFrom(idOrClaim);
     const completedAt = completeOptions?.completedAt ?? now();
-    const database = openStateDatabase(options.stateDir);
+    const database = openChannelIngressDatabase(options.stateDir);
     return runOpenClawStateWriteTransaction(
       (tx) => {
         const kysely = getChannelIngressKysely(tx.db);
@@ -1150,7 +1127,7 @@ export function createChannelIngressQueue<
     const eventId = idFrom(idOrClaim);
     const token = claimTokenFrom(idOrClaim);
     const releasedAt = releaseOptions?.releasedAt ?? now();
-    const database = openStateDatabase(options.stateDir);
+    const database = openChannelIngressDatabase(options.stateDir);
     return runOpenClawStateWriteTransaction(
       (tx) => {
         const kysely = getChannelIngressKysely(tx.db);
@@ -1193,7 +1170,7 @@ export function createChannelIngressQueue<
     const eventId = idFrom(idOrClaim);
     const token = claimTokenFrom(idOrClaim);
     const failedAt = failOptions.failedAt ?? now();
-    const database = openStateDatabase(options.stateDir);
+    const database = openChannelIngressDatabase(options.stateDir);
     return runOpenClawStateWriteTransaction(
       (tx) => {
         const kysely = getChannelIngressKysely(tx.db);
@@ -1232,7 +1209,7 @@ export function createChannelIngressQueue<
   > = async (id, resubmitOptions) => {
     const eventId = idFrom(id);
     const resubmittedAt = resubmitOptions?.resubmittedAt ?? now();
-    const database = openStateDatabase(options.stateDir);
+    const database = openChannelIngressDatabase(options.stateDir);
     return runOpenClawStateWriteTransaction(
       (tx) => {
         const row = selectRow(tx.db, queueName, eventId);
@@ -1302,7 +1279,7 @@ export function createChannelIngressQueue<
   >["delete"] = async (idOrRecord) => {
     const eventId = idFrom(idOrRecord);
     const token = claimTokenFrom(idOrRecord);
-    const database = openStateDatabase(options.stateDir);
+    const database = openChannelIngressDatabase(options.stateDir);
     return runOpenClawStateWriteTransaction(
       (tx) => {
         const kysely = getChannelIngressKysely(tx.db);
@@ -1344,7 +1321,7 @@ export function createChannelIngressQueue<
     ) {
       return 0;
     }
-    const database = openStateDatabase(options.stateDir);
+    const database = openChannelIngressDatabase(options.stateDir);
     return runOpenClawStateWriteTransaction(
       (tx) => {
         const kysely = getChannelIngressKysely(tx.db);

@@ -123,11 +123,10 @@ describe("loginOpenAICodexDeviceCode", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const rejected = expect(login).rejects.toThrow(
-      "OpenAI device code user code request timed out after 30000ms",
-    );
-    await vi.advanceTimersByTimeAsync(30_000);
-    await rejected;
+    await Promise.all([
+      expect(login).rejects.toThrow("OpenAI device code user code request timed out after 30000ms"),
+      vi.advanceTimersByTimeAsync(30_000),
+    ]);
   });
 
   it("still honors caller cancellation during an active device-code request", async () => {
@@ -335,6 +334,80 @@ describe("loginOpenAICodexDeviceCode", () => {
     await resolved;
     expect(pollAttempts).toBe(2);
     expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("retries a transient authorization poll network failure after the poll delay", async () => {
+    vi.useFakeTimers();
+    try {
+      const accessToken = createJwt({
+        exp: Math.floor(Date.now() / 1000) + 600,
+      });
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(
+          createJsonResponse({
+            device_auth_id: "device-auth-123",
+            user_code: "CODE-12345",
+            interval: "2",
+          }),
+        )
+        .mockRejectedValueOnce(
+          new TypeError("fetch failed", {
+            cause: Object.assign(new Error("getaddrinfo ENOTFOUND auth.openai.com"), {
+              code: "ENOTFOUND",
+            }),
+          }),
+        )
+        .mockResolvedValueOnce(
+          createJsonResponse({
+            authorization_code: "authorization-code-123",
+            code_verifier: "code-verifier-123",
+          }),
+        )
+        .mockResolvedValueOnce(
+          createJsonResponse({
+            access_token: accessToken,
+            refresh_token: "refresh-token-123",
+            expires_in: 600,
+          }),
+        );
+
+      const login = loginOpenAICodexDeviceCode({
+        fetchFn: fetchMock,
+        onVerification: async () => {},
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+
+      const resolved = expect(login).resolves.toMatchObject({ refresh: "refresh-token-123" });
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      await resolved;
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still surfaces local authorization poll errors that are not transport failures", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        createJsonResponse({
+          device_auth_id: "device-auth-123",
+          user_code: "CODE-12345",
+          interval: "0",
+        }),
+      )
+      .mockRejectedValueOnce(new TypeError("undefined is not a function"));
+
+    await expect(
+      loginOpenAICodexDeviceCode({
+        fetchFn: fetchMock,
+        onVerification: async () => {},
+      }),
+    ).rejects.toThrow("undefined is not a function");
   });
 
   it("aborts device-code polling without another request", async () => {

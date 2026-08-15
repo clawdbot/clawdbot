@@ -2,11 +2,13 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { cliProcessTestFiles } from "./vitest.cli-process-paths.mjs";
 import {
   commandsLightSourceFiles,
   commandsLightTestFiles,
 } from "./vitest.commands-light-paths.mjs";
 import { pluginSdkLightSourceFiles, pluginSdkLightTestFiles } from "./vitest.plugin-sdk-paths.mjs";
+import { isToolingIsolatedTestFile } from "./vitest.tooling-isolated-paths.mjs";
 import { boundaryTestFiles, bundledPluginDependentUnitTestFiles } from "./vitest.unit-paths.mjs";
 
 const normalizeRepoPath = (value) => value.replaceAll("\\", "/");
@@ -25,7 +27,6 @@ const unitFastCandidateGlobs = [
   "src/compat/**/*.test.ts",
   "src/config/**/*.test.ts",
   "src/daemon/**/*.test.ts",
-  "src/i18n/**/*.test.ts",
   "src/hooks/**/*.test.ts",
   "src/image-generation/**/*.test.ts",
   "src/infra/**/*.test.ts",
@@ -66,7 +67,6 @@ export const forcedUnitFastTestFiles = [
   "packages/memory-host-sdk/src/host/embeddings-remote-fetch.test.ts",
   "packages/memory-host-sdk/src/host/internal.test.ts",
   "packages/memory-host-sdk/src/host/post-json.test.ts",
-  "packages/memory-host-sdk/src/host/qmd-process.test.ts",
   "packages/memory-host-sdk/src/host/session-files.test.ts",
   "src/acp/client.test.ts",
   "src/acp/control-plane/manager.failover.test.ts",
@@ -104,13 +104,12 @@ export const forcedUnitFastTestFiles = [
   "src/entry.test.ts",
   "src/flows/doctor-startup-channel-maintenance.test.ts",
   "src/flows/search-setup.test.ts",
-  "src/i18n/registry.test.ts",
   "src/image-generation/openai-compatible-image-provider.test.ts",
-  "src/image-generation/provider-registry.test.ts",
   "src/install-sh-version.test.ts",
   "src/logger.test.ts",
   "src/mcp/channel-server.shutdown-unhandled-rejection.test.ts",
   "src/mcp/openclaw-tools-serve.test.ts",
+  "src/media-generation/registry.test.ts",
   "src/node-host/plugin-node-host.test.ts",
   "src/node-host/invoke-system-run-plan.test.ts",
   "src/node-host/invoke-system-run.test.ts",
@@ -154,7 +153,6 @@ export const forcedUnitFastTestFiles = [
   "src/test-utils/temp-home.test.ts",
   "src/utils.test.ts",
   "src/version.test.ts",
-  "src/video-generation/provider-registry.test.ts",
 ];
 const forcedUnitFastTestFileSet = new Set(forcedUnitFastTestFiles);
 const unitFastCandidateExactFiles = [...pluginSdkLightTestFiles, ...commandsLightTestFiles];
@@ -169,7 +167,11 @@ const broadUnitFastCandidateGlobs = [
   "test/**/*.test.ts",
 ];
 const ownerRoutedUnitTestPatterns = [
+  ...cliProcessTestFiles,
+  "src/agents/embedded-agent-runner/run.incomplete-turn.*.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts",
   "src/agents/openai-transport-stream.*.test.ts",
+  "src/agents/embedded-agent-runner/run.shared-integration.test.ts",
   "src/auto-reply/reply/dispatch-from-config.test.ts",
 ];
 const broadUnitFastCandidateSkipGlobs = [
@@ -253,7 +255,7 @@ const disqualifyingPatterns = [
 ];
 
 const statefulTestHelperImportPattern =
-  /\bfrom\s+["']([^"']*(?:test-support|\.harness)(?:\.js|\.ts)?)["']/gu;
+  /\bfrom\s+["']([^"']*(?:test-support|\.harness|message-action-runner\.test-helpers)(?:\.js|\.ts)?)["']/gu;
 const statefulTestHelperByKey = new Map();
 
 function importsStatefulTestHelper(cwd, file, source) {
@@ -483,27 +485,37 @@ function analyzeUnitFastTestFile(cwd, file) {
   }
 
   let analysis;
-  try {
-    const source = fs.readFileSync(path.join(cwd, file), "utf8");
-    const reasons = classifyUnitFastTestFileContent(source);
-    if (importsStatefulTestHelper(cwd, file, source)) {
-      // The helper executes in the importing file's module scope, so its mocks and
-      // singleton mutations need the same isolation as stateful code in the test itself.
-      reasons.push("stateful-test-helper");
-    }
-    const forced = forcedUnitFastTestFileSet.has(file);
-    analysis = {
-      file,
-      unitFast: forced || reasons.every((reason) => reason === "stateful-test-helper"),
-      forced,
-      reasons,
-    };
-  } catch {
+  if (isToolingIsolatedTestFile(file)) {
+    // Explicit project ownership wins over inferred eligibility so full-suite
+    // configs cannot run the same stateful tooling test in two worker pools.
     analysis = {
       file,
       unitFast: false,
-      reasons: ["missing-file"],
+      reasons: ["tooling-isolated-owner"],
     };
+  } else {
+    try {
+      const source = fs.readFileSync(path.join(cwd, file), "utf8");
+      const reasons = classifyUnitFastTestFileContent(source);
+      if (importsStatefulTestHelper(cwd, file, source)) {
+        // The helper executes in the importing file's module scope, so its mocks and
+        // singleton mutations need the same isolation as stateful code in the test itself.
+        reasons.push("stateful-test-helper");
+      }
+      const forced = forcedUnitFastTestFileSet.has(file);
+      analysis = {
+        file,
+        unitFast: forced || reasons.every((reason) => reason === "stateful-test-helper"),
+        forced,
+        reasons,
+      };
+    } catch {
+      analysis = {
+        file,
+        unitFast: false,
+        reasons: ["missing-file"],
+      };
+    }
   }
 
   // Discovery is a process-start snapshot; default and broad audits overlap heavily.

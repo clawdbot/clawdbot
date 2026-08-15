@@ -5,6 +5,7 @@ import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentModelConfig } from "./types.agents-shared.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 import type { ConfiguredProviderRequest } from "./types.provider-request.js";
+import type { SsrFPolicyConfig } from "./types.ssrf.js";
 export type { MemorySearchConfig } from "./types.memory.js";
 
 export type MediaUnderstandingScopeMatch = {
@@ -179,9 +180,10 @@ export type ToolSearchConfig =
 
 export type CodeModeConfig =
   | boolean
+  | "auto"
   | {
-      /** Enable generic OpenClaw code mode. Default: false. */
-      enabled?: boolean;
+      /** Enable generic OpenClaw code mode. Default: "auto", which engages it only for models whose catalog compat flags `codeMode: "preferred"`. */
+      enabled?: boolean | "auto";
       /** Guest runtime. Only quickjs-wasi is supported. */
       runtime?: "quickjs-wasi";
       /** Model-facing mode. Only "only" is supported: expose exec/wait and hide normal tools. */
@@ -462,17 +464,18 @@ export type ToolsConfig = {
       maxRedirects?: number;
       /** Override User-Agent header for fetch requests. */
       userAgent?: string;
+      /**
+       * Extra request headers sent with direct web_fetch requests. Every value is
+       * treated as sensitive in exposed config. Entries a request cannot carry are
+       * dropped with a warning at request time.
+       */
+      headers?: Record<string, string>;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
       /** Route web_fetch through a trusted HTTP(S) env proxy and let the proxy resolve DNS. Enable only when that proxy enforces outbound policy. */
       useTrustedEnvProxy?: boolean;
       /** SSRF policy configuration for web_fetch. */
-      ssrfPolicy?: {
-        /** Allow RFC 2544 benchmark range IPs (198.18.0.0/15) for fake-IP proxy compatibility (e.g., Clash TUN mode, Surge). */
-        allowRfc2544BenchmarkRange?: boolean;
-        /** Allow IPv6 Unique Local Addresses (fc00::/7) for trusted fake-IP proxy compatibility. */
-        allowIpv6UniqueLocalRange?: boolean;
-      };
+      ssrfPolicy?: SsrFPolicyConfig;
     };
   };
   media?: MediaToolsConfig;
@@ -529,11 +532,8 @@ export type ToolsConfig = {
   sandbox?: {
     tools?: ToolAllowDenyPolicyConfig;
   };
-  /** Experimental tool flags. */
-  experimental?: {
-    /** Structured checklist tool; enabled by default. Set false to opt out. */
-    planTool?: boolean;
-  };
+  /** Structured update_plan checklist tool; enabled by default. Set false to opt out. */
+  updatePlan?: boolean;
 };
 
 export type MessageToolsConfig = {

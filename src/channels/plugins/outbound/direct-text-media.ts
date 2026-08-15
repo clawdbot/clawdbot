@@ -3,6 +3,7 @@
  *
  * Builds lightweight SDK-backed send adapters with chunking, sanitization, and media limits.
  */
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { chunkText } from "../../../auto-reply/chunk.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -30,12 +31,6 @@ type DirectSendFn<TOpts extends Record<string, unknown>, TResult extends DirectS
   text: string,
   opts: TOpts,
 ) => Promise<TResult>;
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value != null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 
 function readNumberField(record: Record<string, unknown> | undefined, key: string) {
   const value = record?.[key];

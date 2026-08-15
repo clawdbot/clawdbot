@@ -170,4 +170,102 @@ describe("AcpSessionManager runtime config validation", () => {
     });
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["Invalid value for config option effort: off", "Unknown config option: effort"])(
+    "continues turns when adapters reject automatic thinking: %s",
+    async (details) => {
+      const runtimeState = createRuntime();
+      runtimeState.getCapabilities.mockResolvedValue({
+        controls: ["session/set_mode", "session/set_config_option", "session/status"],
+        configOptionKeys: ["mode", "model", "effort"],
+      });
+      runtimeState.setConfigOption.mockImplementation(async (input: { key: string }) => {
+        if (input.key === "effort") {
+          throw Object.assign(new Error("Internal error"), {
+            name: "RequestError",
+            code: -32603,
+            data: { details },
+          });
+        }
+      });
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockReturnValue({
+        sessionKey: "agent:claude:acp:session-1",
+        storeSessionKey: "agent:claude:acp:session-1",
+        acp: {
+          ...readySessionMeta({ agent: "claude" }),
+          runtimeOptions: {
+            thinking: "off",
+          },
+        },
+      });
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:claude:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-1",
+      });
+
+      expectMockCallFields(runtimeState.setConfigOption, {
+        key: "effort",
+        value: "off",
+      });
+      expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("fails turns when thinking config writes hit runtime failures", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_mode", "session/set_config_option", "session/status"],
+      configOptionKeys: ["mode", "model", "effort"],
+    });
+    runtimeState.setConfigOption.mockImplementation(async (input: { key: string }) => {
+      if (input.key === "effort") {
+        throw Object.assign(new Error("Internal error"), {
+          name: "RequestError",
+          code: -32603,
+          data: { details: "unsupported transport protocol" },
+        });
+      }
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:claude:acp:session-1",
+      storeSessionKey: "agent:claude:acp:session-1",
+      acp: {
+        ...readySessionMeta({ agent: "claude" }),
+        runtimeOptions: {
+          thinking: "off",
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+    await expectRejectedRecord(
+      manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:claude:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-1",
+      }),
+      {
+        code: "ACP_TURN_FAILED",
+      },
+    );
+
+    expect(runtimeState.runTurn).not.toHaveBeenCalled();
+  });
 });

@@ -82,6 +82,7 @@ export type AgentBinding = AgentRouteBinding | AgentAcpBinding;
 
 export type AgentConfig = {
   id: string;
+  /** @deprecated Raw legacy list compatibility only; canonical agents.entries rejects this key. */
   default?: boolean;
   name?: string;
   /** Optional human-authored agent description. */
@@ -130,8 +131,6 @@ export type AgentConfig = {
   humanDelay?: HumanDelayConfig;
   /** Optional per-agent typing start policy. */
   typingMode?: AgentDefaultsConfig["typingMode"];
-  /** Optional per-agent typing keepalive cadence. */
-  typingIntervalSeconds?: AgentDefaultsConfig["typingIntervalSeconds"];
   /** Optional per-agent TTS overrides, deep-merged over top-level tts. */
   /** Per-agent TTS overrides. prefsPath remains scoped because agents may use distinct preference stores. */
   tts?: TtsConfig & { prefsPath?: string };
@@ -141,7 +140,7 @@ export type AgentConfig = {
   contextLimits?: AgentContextLimitsConfig;
   contextTokens?: number;
   /** Optional per-agent heartbeat overrides. */
-  heartbeat?: AgentDefaultsConfig["heartbeat"];
+  heartbeat?: Omit<NonNullable<AgentDefaultsConfig["heartbeat"]>, "agentId">;
   identity?: IdentityConfig;
   groupChat?: Omit<GroupChatConfig, "visibleReplies">;
   subagents?: {
@@ -173,6 +172,7 @@ export type AgentConfig = {
 export type AgentEntryConfig = Omit<AgentConfig, "id">;
 
 export type AgentsConfig = {
+  ownership?: "explicit";
   defaults?: AgentDefaultsConfig;
   entries?: Record<string, AgentEntryConfig>;
   /** Internal non-serialized projection materialized by validation for ID-based runtime code. */

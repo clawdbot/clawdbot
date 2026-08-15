@@ -89,6 +89,27 @@ function collectMetadataOnlyCompositionBranches(
   return hits;
 }
 
+function collectSchemaConsts(
+  schema: TestJsonSchema | undefined,
+  values = new Set<unknown>(),
+): Set<unknown> {
+  if (!schema) {
+    return values;
+  }
+  if (schema.const !== undefined) {
+    values.add(schema.const);
+  }
+  for (const child of [
+    ...(schema.oneOf ?? []),
+    ...(schema.anyOf ?? []),
+    ...(schema.allOf ?? []),
+    ...Object.values(schema.properties ?? {}),
+  ]) {
+    collectSchemaConsts(child, values);
+  }
+  return values;
+}
+
 describe("base config schema", () => {
   it("is deterministic for a fixed generatedAt timestamp", () => {
     expect(
@@ -96,6 +117,22 @@ describe("base config schema", () => {
         generatedAt: BASE_CONFIG_SCHEMA.generatedAt,
       }),
     ).toEqual(BASE_CONFIG_SCHEMA);
+  });
+
+  it.each([
+    {
+      scope: "global",
+      path: ["tools", "exec", "approvalRunningNoticeMs"],
+    },
+    {
+      scope: "per-agent",
+      path: ["agents", "entries", "*", "tools", "exec", "approvalRunningNoticeMs"],
+    },
+  ])("publishes the $scope exec approval running notice contract", ({ path }) => {
+    expect(schemaAt(BASE_SCHEMA, path), path.join(".")).toMatchObject({
+      type: "integer",
+      minimum: 0,
+    });
   });
 
   it("includes explicit URL-secret tags for sensitive URL fields", () => {
@@ -156,6 +193,13 @@ describe("base config schema", () => {
     expect(uiHints).toHaveProperty("agents.defaults.voiceModel.fallbacks");
   });
 
+  it("publishes all four SecretRef sources in generated JSON schema", () => {
+    const apiKeySchema = schemaAt(BASE_SCHEMA, ["models", "providers", "*", "apiKey"]);
+    expect(
+      [...collectSchemaConsts(apiKeySchema)].filter((value) => typeof value === "string"),
+    ).toEqual(expect.arrayContaining(["env", "file", "exec", "store"]));
+  });
+
   it("publishes accepted input shapes for transform-backed config fields", () => {
     for (const path of [
       ["agents", "defaults", "sandbox", "docker", "setupCommand"],
@@ -187,8 +231,6 @@ describe("base config schema", () => {
     expect(codexUserLocation?.properties?.region?.type).toBe("string");
     expect(codexUserLocation?.properties?.city?.type).toBe("string");
     expect(codexUserLocation?.properties?.timezone?.type).toBe("string");
-
-    expect(schemaAt(BASE_SCHEMA, ["ui", "prefs", "chatMessageMaxWidth"])?.type).toBe("string");
   });
 
   it("does not publish metadata-only composition branches", () => {

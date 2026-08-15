@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { resolveExecToolConfig } from "./lazy-exec-tool.js";
 
 function createExecHostDefaultsConfig(
   agents: Array<{ id: string; execHost?: "auto" | "gateway" | "sandbox" }>,
@@ -66,6 +67,50 @@ describe("Agent-specific exec tool defaults", () => {
 
   afterEach(() => {
     tempDirs.cleanup();
+  });
+
+  it.each([0, 3_000])(
+    "inherits the global exec approval running notice delay %i",
+    (approvalRunningNoticeMs) => {
+      expect(
+        resolveExecToolConfig({
+          cfg: {
+            tools: {
+              exec: {
+                approvalRunningNoticeMs,
+              },
+            },
+          },
+          agentId: "main",
+        }).approvalRunningNoticeMs,
+      ).toBe(approvalRunningNoticeMs);
+    },
+  );
+
+  it("lets a per-agent exec approval running notice disable the inherited global delay", () => {
+    expect(
+      resolveExecToolConfig({
+        cfg: {
+          tools: {
+            exec: {
+              approvalRunningNoticeMs: 3_000,
+            },
+          },
+          agents: {
+            entries: {
+              main: {
+                tools: {
+                  exec: {
+                    approvalRunningNoticeMs: 0,
+                  },
+                },
+              },
+            },
+          },
+        },
+        agentId: "main",
+      }).approvalRunningNoticeMs,
+    ).toBe(0);
   });
 
   it("should run exec synchronously when process is denied", async () => {

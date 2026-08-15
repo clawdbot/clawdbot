@@ -1,6 +1,7 @@
 // Line plugin module implements webhook behavior.
 import type { webhook } from "@line/bot-sdk";
 import type { NextFunction, Request, Response } from "express";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
@@ -73,7 +74,7 @@ export function createLineWebhookMiddleware(
       }
       res.status(200).json({ status: "ok" });
     } catch (err) {
-      runtime?.error?.(danger(`line webhook error: ${String(err)}`));
+      runtime?.error?.(danger(`line webhook error: ${formatErrorMessage(err)}`));
       if (!res.headersSent) {
         res.status(500).json({ error: "Internal server error" });
       }

@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import { formatErrorMessage } from "../infra/errors.js";
 import { cloneEnvWithPlatformSemantics, createConfigRuntimeEnvBase } from "./config-env-vars.js";
+import { resolveManagedUnsetPathsForWrite } from "./config-path-mutation.js";
+import { resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import { createConfigIO } from "./io.factory.js";
 import {
@@ -21,13 +23,8 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
 import { ConfigRuntimeRefreshError, configWritePostCommitRollback } from "./io.types.js";
-import {
-  createMergePatch,
-  resolveManagedUnsetPathsForWrite,
-  resolveWriteEnvSnapshotForPath,
-} from "./io.write-prepare.js";
 import { rollbackConfigFileWriteIfUnchanged } from "./io.write-safety.js";
-import { applyMergePatch } from "./merge-patch.js";
+import { applyMergePatch, createMergePatch } from "./merge-patch.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import {
@@ -154,6 +151,7 @@ export async function readConfigFileSnapshot(
 export async function readConfigFileSnapshotWithPluginMetadata(
   options?: Pick<
     ConfigSnapshotReadOptions,
+    | "allowCurrentPluginMetadata"
     | "allowSuspiciousRecovery"
     | "isolateEnv"
     | "lowerPrecedenceEnv"
@@ -168,6 +166,7 @@ export async function readConfigFileSnapshotWithPluginMetadata(
     ...(options?.isolateEnv ? { env: cloneEnvWithPlatformSemantics(process.env) } : {}),
     ...(options?.lowerPrecedenceEnv ? { lowerPrecedenceEnv: options.lowerPrecedenceEnv } : {}),
   }).readConfigFileSnapshotWithPluginMetadata({
+    allowCurrentPluginMetadata: options?.allowCurrentPluginMetadata,
     recoverSuspicious: options?.recoverSuspicious === true,
     allowSuspiciousRecovery: options?.allowSuspiciousRecovery,
   });
@@ -291,6 +290,8 @@ export async function writeConfigFile(
     explicitSetValueSource: options.explicitSetPaths
       ? (options.explicitSetValueSource ?? cfg)
       : undefined,
+    allowedAgentRosterRemovals: options.allowedAgentRosterRemovals,
+    allowIncludeAncestorExplicitSetPaths: options.allowIncludeAncestorExplicitSetPaths,
     afterWrite: options.afterWrite,
     allowDestructiveWrite: options.allowDestructiveWrite,
     allowConfigSizeDrop: options.allowConfigSizeDrop,
@@ -490,5 +491,5 @@ async function finalizeCommittedConfigWrite(params: {
     }
     throw error;
   }
-  return { ...writeResult, persistedConfig: canonicalSourceConfig };
+  return writeResult;
 }

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { openLocalFileSafely } from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stageIMessageAttachments } from "./media-staging.js";
 
@@ -52,6 +53,42 @@ describe("stageIMessageAttachments", () => {
     );
   });
 
+  it("reads from the pinned attachment when its pathname is replaced", async () => {
+    const sourcePath = await writeTempFile("photo.png", Buffer.from("original"));
+    const displacedPath = `${sourcePath}.displaced`;
+    const saveMediaBuffer = vi.fn(async () => ({
+      id: "saved.png",
+      path: "/state/media/inbound/saved.png",
+      size: 8,
+      contentType: "image/png",
+    }));
+
+    await stageIMessageAttachments(
+      [{ original_path: sourcePath, mime_type: "image/png", missing: false }],
+      {
+        maxBytes: 1024,
+        allowedRoots: [tempDir],
+        deps: {
+          saveMediaBuffer,
+          openLocalFileSafely: async (options) => {
+            const opened = await openLocalFileSafely(options);
+            await fs.rename(sourcePath, displacedPath);
+            await fs.writeFile(sourcePath, "replacement");
+            return opened;
+          },
+        },
+      },
+    );
+
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      Buffer.from("original"),
+      "image/png",
+      "inbound",
+      1024,
+      "photo.png",
+    );
+  });
+
   it("drops attachments whose canonical path escapes the allowed root", async () => {
     const allowedRoot = path.join(tempDir, "allowed");
     const outsideRoot = path.join(tempDir, "outside");
@@ -88,20 +125,39 @@ describe("stageIMessageAttachments", () => {
 
   it("converts HEIC iMessage attachments to JPEG before staging", async () => {
     const sourcePath = await writeTempFile("IMG_0001.HEIC", Buffer.from("heic-bytes"));
+    const displacedPath = `${sourcePath}.displaced`;
     const saveMediaBuffer = vi.fn(async () => ({
       id: "saved.jpg",
       path: "/state/media/inbound/saved.jpg",
       size: 10,
       contentType: "image/jpeg",
     }));
-    const convertHeicToJpeg = vi.fn(async () => Buffer.from("jpeg-bytes"));
+    const convertHeicToJpeg = vi.fn(async (pinnedPath: string) => {
+      await expect(fs.readFile(pinnedPath, "utf8")).resolves.toBe("heic-bytes");
+      return Buffer.from("jpeg-bytes");
+    });
 
     await stageIMessageAttachments(
       [{ original_path: sourcePath, mime_type: "image/heic", missing: false }],
-      { maxBytes: 1024, deps: { saveMediaBuffer, convertHeicToJpeg } },
+      {
+        maxBytes: 1024,
+        deps: {
+          saveMediaBuffer,
+          convertHeicToJpeg,
+          openLocalFileSafely: async (options) => {
+            const opened = await openLocalFileSafely(options);
+            await fs.rename(sourcePath, displacedPath);
+            await fs.writeFile(sourcePath, "replacement");
+            return opened;
+          },
+        },
+      },
     );
 
-    expect(convertHeicToJpeg).toHaveBeenCalledWith(sourcePath, 1024);
+    expect(convertHeicToJpeg).toHaveBeenCalledWith(
+      expect.stringContaining("attachment.heic"),
+      1024,
+    );
     expect(saveMediaBuffer).toHaveBeenCalledWith(
       Buffer.from("jpeg-bytes"),
       "image/jpeg",
@@ -109,6 +165,39 @@ describe("stageIMessageAttachments", () => {
       1024,
       "IMG_0001.jpg",
     );
+  });
+
+  it("bounds pinned HEIC reads when the opened inode grows", async () => {
+    const sourcePath = await writeTempFile("IMG_0002.HEIC", Buffer.from("heic"));
+    const saveMediaBuffer = vi.fn();
+    const convertHeicToJpeg = vi.fn();
+    const logVerbose = vi.fn();
+
+    await expect(
+      stageIMessageAttachments(
+        [{ original_path: sourcePath, mime_type: "image/heic", missing: false }],
+        {
+          maxBytes: 4,
+          deps: {
+            saveMediaBuffer,
+            convertHeicToJpeg,
+            logVerbose,
+            openLocalFileSafely: async (options) => {
+              const opened = await openLocalFileSafely(options);
+              await fs.appendFile(sourcePath, Buffer.alloc(64));
+              return opened;
+            },
+          },
+        },
+      ),
+    ).resolves.toEqual({
+      attachments: [{ contentType: "image/heic", kind: "image" }],
+      unavailableCount: 1,
+    });
+
+    expect(convertHeicToJpeg).not.toHaveBeenCalled();
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(logVerbose).toHaveBeenCalledWith(expect.stringContaining("attachment exceeds"));
   });
 
   it("drops attachments over the inbound media limit", async () => {

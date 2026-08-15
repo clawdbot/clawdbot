@@ -3,18 +3,16 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
-  patchSessionEntry,
-  upsertSessionEntry,
+  patchSessionEntryCore,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import {
   addSessionMember,
   listSessionMembers,
   removeSessionMember,
 } from "../../config/sessions/session-sharing-store.js";
-import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import {
   closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail, listProfiles, setDisplayName } from "../../state/user-profiles.js";
@@ -24,7 +22,7 @@ import {
   authorizeResolvedSessionMutation,
   resolveSessionMutationAuthorization,
   canReceiveSessionEvent,
-  filterDraftSessionsForClient,
+  createSessionListEntryFilter,
   invalidateSessionSharingSnapshot,
 } from "../session-sharing.js";
 import { sessionReadHandlers } from "./sessions-read.js";
@@ -123,10 +121,46 @@ async function call(
 }
 
 describe("session sharing handlers", () => {
+  it("admits bare fixed-store keys only through their persisted owner", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = state.path("shared-sessions.sqlite");
+      await upsertSessionEntryCore(
+        { agentId: "ops", sessionKey: "global", storePath },
+        { sessionId: "session-ops-global", updatedAt: 1, visibility: "shared" },
+      );
+      const ownedConfig = {
+        session: { scope: "global", store: storePath },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+
+      expect(
+        await call("session.members.list", { sessionKey: "global" }, context(vi.fn(), ownedConfig)),
+      ).toMatchObject([[true, { sessionKey: "global", role: "owner" }, undefined]]);
+
+      const ownerlessConfig = {
+        ...ownedConfig,
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+      const rejected = await call(
+        "session.members.list",
+        { sessionKey: "global" },
+        context(vi.fn(), ownerlessConfig),
+      );
+      expect(rejected[0]?.[2]).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("has no explicit owner"),
+      });
+    });
+  });
+
   it("keeps hidden incognito rows from changing non-owner list path metadata", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const incognitoKey = "agent:main:dashboard:incognito-private";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:main" },
         { sessionId: "session-main", updatedAt: 1 },
       );
@@ -150,7 +184,7 @@ describe("session sharing handlers", () => {
       };
 
       const before = await listFor(viewer);
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         {
           agentId: "main",
           sessionKey: incognitoKey,
@@ -180,7 +214,7 @@ describe("session sharing handlers", () => {
   it("rejects a visibility mutation when the queued session instance changed", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:stale-sharing-mutation";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-authorized",
@@ -222,7 +256,7 @@ describe("session sharing handlers", () => {
       const sessionKey = "agent:main:main";
       const owner = { id: "owner@example.com", label: "Owner" };
       const outsider = identifiedClient("outsider");
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-main",
@@ -266,7 +300,7 @@ describe("session sharing handlers", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:shared-member";
       const memberIdentity = { id: "member@example.com", label: "Member" };
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-shared-member",
@@ -305,7 +339,7 @@ describe("session sharing handlers", () => {
   it("drops a session flipped to draft during the list await from a non-owner", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:mid-await-draft";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-mid-await",
@@ -326,7 +360,9 @@ describe("session sharing handlers", () => {
       // The awaited model-catalog step flips the session to draft after the
       // pre-await draft filter ran, exercising the final fresh-target filter.
       const listWith = async (client: GatewayClient) => {
-        await patchSessionEntry({ agentId: "main", sessionKey }, () => ({ visibility: "shared" }));
+        await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
+          visibility: "shared",
+        }));
         invalidateSessionSharingSnapshot(sessionKey);
         const responses: Parameters<RespondFn>[] = [];
         await sessionReadHandlers["sessions.list"]?.({
@@ -334,8 +370,8 @@ describe("session sharing handlers", () => {
           client,
           context: {
             ...context(vi.fn()),
-            loadGatewayModelCatalog: async () => {
-              await patchSessionEntry({ agentId: "main", sessionKey }, () => ({
+            readPreparedGatewayModelCatalog: async () => {
+              await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
                 visibility: "draft",
               }));
               invalidateSessionSharingSnapshot(sessionKey);
@@ -344,23 +380,93 @@ describe("session sharing handlers", () => {
           } as unknown as GatewayRequestContext,
           respond: (...response: Parameters<RespondFn>) => responses.push(response),
         } as never);
-        return (responses[0]?.[1] as { sessions?: Array<{ key: string }> } | undefined)?.sessions;
+        return responses[0]?.[1] as
+          | {
+              count: number;
+              totalCount: number;
+              nextOffset: number | null;
+              hasMore: boolean;
+              creators: Array<{ id: string }>;
+              sessions: Array<{ key: string }>;
+            }
+          | undefined;
       };
 
       // Non-owner must not receive the now-draft row (no preview/metadata leak).
-      expect((await listWith(outsider))?.some((session) => session.key === sessionKey)).toBe(false);
+      const outsiderList = await listWith(outsider);
+      expect(outsiderList?.sessions.some((session) => session.key === sessionKey)).toBe(false);
+      expect(outsiderList).toMatchObject({
+        count: 0,
+        totalCount: 0,
+        nextOffset: null,
+        hasMore: false,
+        creators: [],
+      });
       // A member also loses a draft (owner+admin only).
       expect(
-        (await listWith(identifiedClient("member@example.com")))?.some(
+        (await listWith(identifiedClient("member@example.com")))?.sessions.some(
           (session) => session.key === sessionKey,
         ),
       ).toBe(false);
       // The owner still sees their own draft.
       expect(
-        (await listWith(identifiedClient("owner@example.com")))?.some(
+        (await listWith(identifiedClient("owner@example.com")))?.sessions.some(
           (session) => session.key === sessionKey,
         ),
       ).toBe(true);
+    });
+  });
+
+  it("refills a paged session list after its first row becomes a draft", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const hiddenKey = "agent:main:mid-await-paged-draft";
+      const visibleKey = "agent:main:mid-await-paged-visible";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: hiddenKey },
+        {
+          sessionId: "session-mid-await-paged-draft",
+          updatedAt: 2,
+          createdActor: { type: "human", id: "hidden-owner@example.com" },
+          visibility: "shared",
+        },
+      );
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: visibleKey },
+        {
+          sessionId: "session-mid-await-paged-visible",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "visible-owner@example.com" },
+          visibility: "shared",
+        },
+      );
+      const responses: Parameters<RespondFn>[] = [];
+
+      await sessionReadHandlers["sessions.list"]?.({
+        params: { agentId: "main", limit: 1 },
+        client: identifiedClient("outsider@example.com"),
+        context: {
+          ...context(vi.fn()),
+          readPreparedGatewayModelCatalog: async () => {
+            await patchSessionEntryCore({ agentId: "main", sessionKey: hiddenKey }, () => ({
+              visibility: "draft",
+            }));
+            invalidateSessionSharingSnapshot(hiddenKey);
+            return [];
+          },
+        } as unknown as GatewayRequestContext,
+        respond: (...response: Parameters<RespondFn>) => responses.push(response),
+      } as never);
+
+      expect(responses[0]?.[0]).toBe(true);
+      expect(responses[0]?.[1]).toMatchObject({
+        count: 1,
+        totalCount: 1,
+        limitApplied: 1,
+        nextOffset: null,
+        hasMore: false,
+        creators: [{ id: "visible-owner@example.com" }],
+        sessions: [{ key: visibleKey }],
+      });
     });
   });
 
@@ -374,7 +480,7 @@ describe("session sharing handlers", () => {
       if (!selectable) {
         throw new Error("expected member profile in picker identities");
       }
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-profile-member",
@@ -408,66 +514,13 @@ describe("session sharing handlers", () => {
     });
   });
 
-  it("stores and lists membership against an alias-backed session row", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const canonicalKey = "agent:ops:work";
-      const aliasKey = "agent:ops:main";
-      const cfg = {
-        session: { mainKey: "work" },
-        agents: { list: [{ id: "ops", default: true }] },
-      } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
-      const profile = ensureProfileForEmail("alias-member@example.com");
-      await upsertSessionEntry(
-        { agentId: "ops", sessionKey: canonicalKey },
-        { sessionId: "session-alias-member", updatedAt: 1, visibility: "read-only" },
-      );
-      const database = openOpenClawAgentDatabase({ agentId: "ops", env: state.env });
-      database.db.exec("PRAGMA foreign_keys = OFF;");
-      try {
-        database.db
-          .prepare("UPDATE session_nodes SET session_key = ? WHERE session_key = ?")
-          .run(aliasKey, canonicalKey);
-        database.db
-          .prepare("UPDATE session_windows SET session_key = ? WHERE session_key = ?")
-          .run(aliasKey, canonicalKey);
-      } finally {
-        database.db.exec("PRAGMA foreign_keys = ON;");
-      }
-      expect(
-        database.db
-          .prepare("SELECT session_key FROM session_nodes WHERE session_key = ?")
-          .get(canonicalKey),
-      ).toBeUndefined();
-      clearSessionStoreCacheForTest();
-      const requestContext = context(vi.fn(), cfg);
-
-      expect(
-        await call(
-          "session.members.add",
-          { sessionKey: aliasKey, identityId: profile.id },
-          requestContext,
-        ),
-      ).toEqual([
-        [true, { ok: true, sessionKey: canonicalKey, identityId: profile.id }, undefined],
-      ]);
-      expect(listSessionMembers({ agentId: "ops", sessionKey: aliasKey })).toEqual([
-        expect.objectContaining({ identityId: profile.id }),
-      ]);
-      const listed = await call("session.members.list", { sessionKey: aliasKey }, requestContext);
-      expect(listed[0]?.[1]).toMatchObject({
-        sessionKey: canonicalKey,
-        members: [expect.objectContaining({ identityId: profile.id })],
-      });
-    });
-  });
-
   it("authorizes board tickets against their signed agent-relative session", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "global" },
         { sessionId: "session-main-global", updatedAt: 1, visibility: "shared" },
       );
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "work", sessionKey: "global" },
         {
           sessionId: "session-work-global",
@@ -521,7 +574,7 @@ describe("session sharing handlers", () => {
       const owner = { id: "owner@example.com", label: "Owner" };
       const memberIdentity = { id: "member@example.com", label: "Member" };
       const memberClient = identifiedClient(memberIdentity.id, memberIdentity.label);
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-member-transition",
@@ -569,11 +622,8 @@ describe("session sharing handlers", () => {
         if (!entry) {
           throw new Error("expected member transition session entry");
         }
-        const listed = filterDraftSessionsForClient({
-          client: memberClient,
-          store: { [sessionKey]: entry },
-        });
-        expect(Object.hasOwn(listed, sessionKey)).toBe(allowed);
+        const listed = createSessionListEntryFilter({ client: memberClient })?.(sessionKey, entry);
+        expect(listed ?? true).toBe(allowed);
         expect(
           canReceiveSessionEvent({
             cfg: {},
@@ -585,10 +635,12 @@ describe("session sharing handlers", () => {
       };
 
       expectAccess(true);
-      await patchSessionEntry({ agentId: "main", sessionKey }, () => ({ visibility: "draft" }));
+      await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({ visibility: "draft" }));
       invalidateSessionSharingSnapshot(sessionKey);
       expectAccess(false);
-      await patchSessionEntry({ agentId: "main", sessionKey }, () => ({ visibility: "shared" }));
+      await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
+        visibility: "shared",
+      }));
       invalidateSessionSharingSnapshot(sessionKey);
       expectAccess(true);
     });
@@ -597,7 +649,7 @@ describe("session sharing handlers", () => {
   it("persists visibility and membership changes as transcript system notes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:main";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         { sessionId: "session-main", updatedAt: 1 },
       );
@@ -652,7 +704,7 @@ describe("session sharing handlers", () => {
       );
 
       const restrictedKey = "agent:main:restricted";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: restrictedKey },
         {
           sessionId: "session-restricted",
@@ -683,7 +735,9 @@ describe("session sharing handlers", () => {
         ],
       ]);
 
-      await patchSessionEntry({ agentId: "main", sessionKey }, () => ({ visibility: "shared" }));
+      await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
+        visibility: "shared",
+      }));
       invalidateSessionSharingSnapshot();
       const viewerClient = identifiedClient("viewer") as never;
       expect(
@@ -694,7 +748,7 @@ describe("session sharing handlers", () => {
           agentId: "main",
         }),
       ).toBe(true);
-      await patchSessionEntry({ agentId: "main", sessionKey }, () => ({ visibility: "draft" }));
+      await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({ visibility: "draft" }));
       invalidateSessionSharingSnapshot(sessionKey);
       expect(
         canReceiveSessionEvent({
@@ -705,9 +759,11 @@ describe("session sharing handlers", () => {
         }),
       ).toBe(false);
 
-      await patchSessionEntry({ agentId: "main", sessionKey }, () => ({ visibility: "shared" }));
+      await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
+        visibility: "shared",
+      }));
       const append = vi
-        .spyOn(SessionManager.prototype, "appendMessage")
+        .spyOn(SessionManager, "appendMessageToTranscript")
         .mockImplementationOnce(() => {
           throw new Error("audit unavailable");
         });
@@ -721,7 +777,7 @@ describe("session sharing handlers", () => {
 
       removeSessionMember({ agentId: "main", sessionKey }, "local-operator");
       const memberAppend = vi
-        .spyOn(SessionManager.prototype, "appendMessage")
+        .spyOn(SessionManager, "appendMessageToTranscript")
         .mockImplementationOnce(() => {
           throw new Error("audit unavailable");
         });

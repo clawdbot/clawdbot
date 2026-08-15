@@ -19,18 +19,12 @@ scenario:
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
     - extensions/qa-lab/src/qa-transport.ts
+    - extensions/buzz/src/qa/adapter.runtime.ts
     - extensions/qa-lab/src/live-transports/slack/adapter.runtime.ts
     - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
-    profiles:
-      {
-        "matrix:adapter": 8,
-        "matrix:all": 1,
-        "matrix:fast": 1,
-        "matrix:transport": 0,
-        "slack:adapter": 4,
-      }
     kind: flow
+    channels: [qa-channel, buzz, slack, matrix]
     summary: Send a deterministic follow-up through the shared host and require native thread relation evidence.
     config:
       rootMarker: QA-THREAD-ROOT-OK

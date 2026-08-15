@@ -10,15 +10,15 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFirstGithubTokenMock = vi.hoisted(() => vi.fn());
-const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
+const resolveCopilotRuntimeAuthMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./auth.js", () => ({
   resolveFirstGithubToken: resolveFirstGithubTokenMock,
 }));
 
-vi.mock("./token.js", () => ({
+vi.mock("./runtime-auth.js", () => ({
   DEFAULT_COPILOT_API_BASE_URL: "https://api.githubcopilot.test",
-  resolveCopilotApiToken: resolveCopilotApiTokenMock,
+  resolveCopilotRuntimeAuth: resolveCopilotRuntimeAuthMock,
 }));
 
 // Intentionally NOT mocked: openclaw/plugin-sdk/ssrf-runtime, global fetch, and
@@ -76,9 +76,8 @@ async function startCopilotServer(handle: {
 }
 
 function pointTokenAt(baseUrl: string): void {
-  resolveCopilotApiTokenMock.mockResolvedValue({
-    token: "copilot_test_token_abc",
-    expiresAt: Date.now() + 3_600_000,
+  resolveCopilotRuntimeAuthMock.mockResolvedValue({
+    apiKey: "copilot_test_token_abc",
     source: "test",
     baseUrl,
   });
@@ -123,7 +122,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter real transport", () => {
     const pending = servers.splice(0);
     await Promise.all(pending.map((server) => server.close()));
     resolveFirstGithubTokenMock.mockReset();
-    resolveCopilotApiTokenMock.mockReset();
+    resolveCopilotRuntimeAuthMock.mockReset();
   });
 
   it("redacts credential-shaped text in model discovery errors over real transport", async () => {

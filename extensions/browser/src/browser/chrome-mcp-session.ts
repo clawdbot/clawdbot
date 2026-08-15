@@ -1,16 +1,16 @@
 // Owns Chrome MCP session creation, sharing, leasing, and shutdown.
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { toErrorObject } from "../infra/errors.js";
 import { createChromeMcpSession, waitForChromeMcpReady } from "./chrome-mcp-connect.js";
-import {
-  type ChromeMcpCallOptions,
-  type ChromeMcpOptionsInput,
-  type ChromeMcpProcessCleanupDeps,
-  type ChromeMcpSession,
-  type ChromeMcpSessionFactory,
-  type ChromeMcpSessionLease,
-  type PendingChromeMcpSession,
-  type PendingChromeMcpSessionLease,
-  toChromeMcpError,
+import type {
+  ChromeMcpCallOptions,
+  ChromeMcpOptionsInput,
+  ChromeMcpProcessCleanupDeps,
+  ChromeMcpSession,
+  ChromeMcpSessionFactory,
+  ChromeMcpSessionLease,
+  PendingChromeMcpSession,
+  PendingChromeMcpSessionLease,
 } from "./chrome-mcp-contracts.js";
 import { redactChromeMcpProfileLabelForDiagnostic } from "./chrome-mcp-diagnostics.js";
 import {
@@ -76,14 +76,14 @@ async function closeChromeMcpSessionsForProfile(
       try {
         await drainCancelledChromeMcpPendingSession(pending);
       } catch (err) {
-        firstError ??= toChromeMcpError(err, "Chrome MCP pending-session cleanup failed.");
+        firstError ??= toErrorObject(err, "Chrome MCP pending-session cleanup failed.");
         continue;
       }
     }
     try {
       await drainRetainedChromeMcpCleanup(key);
     } catch (err) {
-      firstError ??= toChromeMcpError(err, "Chrome MCP retained-session cleanup failed.");
+      firstError ??= toErrorObject(err, "Chrome MCP retained-session cleanup failed.");
       continue;
     }
     const session = sessions.get(key);
@@ -92,7 +92,7 @@ async function closeChromeMcpSessionsForProfile(
       try {
         await closeTrackedChromeMcpSession(key, session);
       } catch (err) {
-        firstError ??= toChromeMcpError(err, "Chrome MCP session cleanup failed.");
+        firstError ??= toErrorObject(err, "Chrome MCP session cleanup failed.");
       }
     }
   }
@@ -358,7 +358,7 @@ async function stopAllChromeMcpSessions(): Promise<void> {
     try {
       await closeChromeMcpSession(name);
     } catch (err) {
-      firstError ??= toChromeMcpError(err, "Chrome MCP shutdown failed.");
+      firstError ??= toErrorObject(err, "Chrome MCP shutdown failed.");
     }
   }
   if (firstError) {

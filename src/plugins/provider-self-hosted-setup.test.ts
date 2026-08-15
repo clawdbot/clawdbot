@@ -146,7 +146,158 @@ function cancelTrackedResponse(init?: ResponseInit): {
   };
 }
 
+async function discoverSingleCatalogModel(
+  row: Record<string, unknown>,
+  options?: { contextWindow?: number },
+) {
+  const release = vi.fn(async () => undefined);
+  fetchWithSsrFGuardMock.mockResolvedValueOnce({
+    response: new Response(JSON.stringify({ data: [row] }), { status: 200 }),
+    finalUrl: "https://provider.example/v1/models",
+    release,
+  });
+
+  const models = await discoverOpenAICompatibleLocalModels({
+    baseUrl: "https://provider.example/v1",
+    label: "custom provider",
+    contextWindow: options?.contextWindow,
+    discoverRuntimeContext: false,
+    env: {},
+  });
+
+  expect(release).toHaveBeenCalledOnce();
+  return models[0];
+}
+
 describe("discoverOpenAICompatibleLocalModels", () => {
+  it("retains valid models when a provider catalog contains malformed entries", async () => {
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({
+          data: [
+            { id: "valid-a", meta: { n_ctx_train: 32_768 } },
+            null,
+            7,
+            "invalid",
+            [],
+            { id: "valid-b", meta: { n_ctx_train: 65_536 } },
+          ],
+        }),
+        { status: 200 },
+      ),
+      finalUrl: "http://127.0.0.1:8000/v1/models",
+      release,
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8000/v1",
+      label: "vLLM",
+      discoverRuntimeContext: false,
+      env: {},
+    });
+
+    expect(models).toMatchObject([
+      { id: "valid-a", contextWindow: 32_768 },
+      { id: "valid-b", contextWindow: 65_536 },
+    ]);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it.each([null, {}, "invalid"])("rejects a non-array model catalog: %j", async (data) => {
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ data }), { status: 200 }),
+      finalUrl: "http://127.0.0.1:8000/v1/models",
+      release,
+    });
+
+    await expect(
+      discoverOpenAICompatibleLocalModels({
+        baseUrl: "http://127.0.0.1:8000/v1",
+        label: "vLLM",
+        discoverRuntimeContext: false,
+        env: {},
+      }),
+    ).resolves.toEqual([]);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("vLLM discovery: malformed JSON response"),
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("bounds concurrent llama.cpp runtime probes without truncating its model catalog", async () => {
+    const release = vi.fn(async () => undefined);
+    const data = Array.from({ length: 201 }, (_, index) => ({
+      id: `local/model-${index}`,
+      meta: { n_ctx_train: 32_768 },
+    }));
+    let activePropsRequests = 0;
+    let maximumPropsRequests = 0;
+    fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
+      if (url.endsWith("/models")) {
+        return {
+          response: new Response(JSON.stringify({ data }), { status: 200 }),
+          finalUrl: url,
+          release,
+        };
+      }
+      activePropsRequests += 1;
+      maximumPropsRequests = Math.max(maximumPropsRequests, activePropsRequests);
+      await Promise.resolve();
+      activePropsRequests -= 1;
+      return {
+        response: new Response(JSON.stringify({ default_generation_settings: { n_ctx: 16_384 } }), {
+          status: 200,
+        }),
+        finalUrl: url,
+        release,
+      };
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "llama.cpp",
+      env: {},
+    });
+
+    expect(models).toHaveLength(201);
+    expect(models[0]).toMatchObject({ id: "local/model-0", contextTokens: 16_384 });
+    expect(models[199]).toMatchObject({ id: "local/model-199", contextTokens: 16_384 });
+    expect(models[200]).toMatchObject({ id: "local/model-200", contextWindow: 32_768 });
+    expect(models[200]).not.toHaveProperty("contextTokens");
+    expect(maximumPropsRequests).toBeLessThanOrEqual(8);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(201);
+    expect(release).toHaveBeenCalledTimes(201);
+  });
+
+  it("discovers a large non-llama.cpp catalog without probing per-model llama.cpp props", async () => {
+    const release = vi.fn(async () => undefined);
+    const data = Array.from({ length: 500 }, (_, index) => ({
+      id: `Qwen/model-${index}`,
+      meta: { n_ctx_train: 32_768 },
+    }));
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ data }), { status: 200 }),
+      finalUrl: "http://127.0.0.1:8000/v1/models",
+      release,
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8000/v1",
+      label: "vLLM",
+      discoverRuntimeContext: false,
+      env: {},
+    });
+
+    expect(models).toHaveLength(500);
+    expect(models[0]).toMatchObject({ id: "Qwen/model-0", contextWindow: 32_768 });
+    expect(models[499]).toMatchObject({ id: "Qwen/model-499", contextWindow: 32_768 });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("labels malformed discovery JSON in the warning", async () => {
     const release = vi.fn(async () => undefined);
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
@@ -251,6 +402,57 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     expect(propsRelease).toHaveBeenCalledOnce();
     expect(propsResponse.wasCanceled()).toBe(true);
   });
+
+  it.each([
+    ["context_length", 200_000],
+    ["context_window", 400_000],
+    ["context_size", 1_048_576],
+  ] as const)("reads provider-advertised %s", async (field, contextWindow) => {
+    const model = await discoverSingleCatalogModel({ id: "custom-model", [field]: contextWindow });
+
+    expect(model).toMatchObject({ id: "custom-model", contextWindow });
+  });
+
+  it("keeps explicit and llama.cpp metadata ahead of top-level catalog fields", async () => {
+    const row = {
+      id: "custom-model",
+      meta: { n_ctx_train: 262_144 },
+      context_length: 200_000,
+      context_window: 100_000,
+      context_size: 50_000,
+    };
+
+    await expect(discoverSingleCatalogModel(row)).resolves.toMatchObject({
+      contextWindow: 262_144,
+    });
+
+    await expect(
+      discoverSingleCatalogModel(row, { contextWindow: 524_288 }),
+    ).resolves.toMatchObject({ contextWindow: 524_288 });
+  });
+
+  it("uses a deterministic top-level field priority", async () => {
+    const model = await discoverSingleCatalogModel({
+      id: "custom-model",
+      context_length: 300_000,
+      context_window: 200_000,
+      context_size: 100_000,
+    });
+
+    expect(model).toMatchObject({ contextWindow: 300_000 });
+  });
+
+  it.each([0, -1, "1048576", null])(
+    "ignores malformed top-level context metadata: %j",
+    async (contextSize) => {
+      const model = await discoverSingleCatalogModel({
+        id: "custom-model",
+        context_size: contextSize,
+      });
+
+      expect(model).toMatchObject({ contextWindow: 128_000 });
+    },
+  );
 
   it("cancels model discovery error bodies before falling back", async () => {
     const release = vi.fn(async () => undefined);
@@ -662,6 +864,206 @@ describe("configureOpenAICompatibleSelfHostedProviderNonInteractive", () => {
         key: params.apiKey,
       },
     });
+  });
+
+  it.each([
+    { providerId: "vllm", providerLabel: "vLLM", envVar: "VLLM_API_KEY" },
+    { providerId: "sglang", providerLabel: "SGLang", envVar: "SGLANG_API_KEY" },
+    { providerId: "lmstudio", providerLabel: "LM Studio", envVar: "LM_API_TOKEN" },
+  ])("reuses an existing $providerLabel auth profile in ref mode", async (params) => {
+    const modelId = "Qwen/Qwen3-32B";
+    const profileSecret = "fixture-existing-self-hosted-profile-secret";
+    const selectedProfileId = `${params.providerId}:owner@example.com`;
+    const backupProfileId = `${params.providerId}:backup`;
+    const ctx = createContext({ providerId: params.providerId, modelId });
+    ctx.opts.secretInputMode = "ref";
+    const existingAuth = {
+      profiles: {
+        [selectedProfileId]: {
+          provider: params.providerId,
+          mode: "api_key" as const,
+          email: "owner@example.com",
+          displayName: "Operator Account",
+        },
+        [backupProfileId]: { provider: params.providerId, mode: "api_key" as const },
+      },
+      order: { [params.providerId]: [selectedProfileId, backupProfileId] },
+    };
+    ctx.config = { ...ctx.config, auth: existingAuth };
+    vi.mocked(ctx.resolveApiKey).mockResolvedValueOnce({
+      key: profileSecret,
+      source: "profile",
+    });
+    vi.mocked(ctx.toApiKeyCredential).mockImplementationOnce(() => {
+      ctx.runtime.error("Cannot encode an existing profile as a SecretRef.");
+      ctx.runtime.exit(1);
+      return null;
+    });
+
+    const cfg = await configureSelfHostedTestProvider({ ctx, ...params });
+
+    expect(cfg?.auth).toEqual(existingAuth);
+    expect(cfg?.auth?.profiles?.[`${params.providerId}:default`]).toBeUndefined();
+    expect(readPrimaryModel(cfg)).toBe(`${params.providerId}/${modelId}`);
+    expect(JSON.stringify(cfg)).not.toContain(profileSecret);
+    expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(ctx.runtime.error).not.toHaveBeenCalled();
+    expect(ctx.runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      providerId: "lmstudio",
+      providerLabel: "LM Studio",
+      envVar: "LM_API_TOKEN",
+      marker: "custom-local",
+    },
+    {
+      providerId: "lmstudio",
+      providerLabel: "LM Studio",
+      envVar: "LM_API_TOKEN",
+      marker: "lmstudio-local",
+    },
+  ])("keeps the $providerLabel non-secret marker keyless in ref mode", async (params) => {
+    const modelId = "Qwen/Qwen3-32B";
+    const ctx = createContext({ providerId: params.providerId, modelId });
+    ctx.opts.secretInputMode = "ref";
+    vi.mocked(ctx.resolveApiKey).mockResolvedValueOnce({ key: params.marker, source: "flag" });
+    vi.mocked(ctx.toApiKeyCredential).mockImplementationOnce(() => {
+      ctx.runtime.error("A synthetic non-secret marker must not become an auth credential.");
+      ctx.runtime.exit(1);
+      return null;
+    });
+
+    const cfg = await configureSelfHostedTestProvider({ ctx, ...params });
+
+    expect(readPrimaryModel(cfg)).toBe(`${params.providerId}/${modelId}`);
+    expect(cfg?.auth?.profiles?.[`${params.providerId}:default`]).toBeUndefined();
+    expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(ctx.runtime.error).not.toHaveBeenCalled();
+    expect(ctx.runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { providerId: "vllm", providerLabel: "vLLM", envVar: "VLLM_API_KEY", key: "custom-local" },
+    { providerId: "vllm", providerLabel: "vLLM", envVar: "VLLM_API_KEY", key: "lmstudio-local" },
+    {
+      providerId: "lmstudio",
+      providerLabel: "LM Studio",
+      envVar: "LM_API_TOKEN",
+      key: "ollama-local",
+    },
+    {
+      providerId: "lmstudio",
+      providerLabel: "LM Studio",
+      envVar: "LM_API_TOKEN",
+      key: "oauth:lmstudio",
+    },
+    {
+      providerId: "lmstudio",
+      providerLabel: "LM Studio",
+      envVar: "LM_API_TOKEN",
+      key: "secretref-env:LM_API_TOKEN",
+    },
+    {
+      providerId: "vllm",
+      providerLabel: "vLLM",
+      envVar: "VLLM_API_KEY",
+      key: "fixture-genuine-self-hosted-secret",
+    },
+    { providerId: "vllm", providerLabel: "vLLM", envVar: "VLLM_API_KEY", key: "OPENAI_API_KEY" },
+  ])(
+    "rejects unowned marker or genuine flag value $key for $providerLabel in ref mode",
+    async ({ key, ...params }) => {
+      const ctx = createContext({ providerId: params.providerId, modelId: "Qwen/Qwen3-32B" });
+      ctx.opts.secretInputMode = "ref";
+      vi.mocked(ctx.resolveApiKey).mockResolvedValueOnce({ key, source: "flag" });
+      vi.mocked(ctx.toApiKeyCredential).mockImplementationOnce(() => {
+        ctx.runtime.error("SecretRef mode requires an explicit environment variable.");
+        ctx.runtime.exit(1);
+        return null;
+      });
+
+      const cfg = await configureSelfHostedTestProvider({ ctx, ...params });
+
+      expect(cfg).toBeNull();
+      expect(ctx.toApiKeyCredential).toHaveBeenCalledOnce();
+      expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
+      expect(ctx.runtime.error).toHaveBeenCalledOnce();
+      expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
+
+  it("does not treat another provider's marker as keyless in plaintext mode", async () => {
+    const ctx = createContext({ providerId: "vllm", modelId: "Qwen/Qwen3-32B" });
+    ctx.opts.secretInputMode = "plaintext";
+    vi.mocked(ctx.resolveApiKey).mockResolvedValueOnce({ key: "lmstudio-local", source: "flag" });
+
+    const cfg = await configureSelfHostedTestProvider({
+      ctx,
+      providerId: "vllm",
+      providerLabel: "vLLM",
+      envVar: "VLLM_API_KEY",
+    });
+
+    expect(ctx.toApiKeyCredential).toHaveBeenCalledOnce();
+    expect(upsertAuthProfileWithLock).toHaveBeenCalledWith({
+      profileId: "vllm:default",
+      agentDir: ctx.agentDir,
+      credential: { type: "api_key", provider: "vllm", key: "lmstudio-local" },
+    });
+    expect(cfg?.auth?.profiles?.["vllm:default"]).toEqual({
+      provider: "vllm",
+      mode: "api_key",
+    });
+  });
+
+  it("preserves an environment SecretRef when persisting a new auth profile", async () => {
+    const ctx = createContext({ providerId: "vllm", modelId: "Qwen/Qwen3-32B" });
+    ctx.opts.secretInputMode = "ref";
+    vi.mocked(ctx.resolveApiKey).mockResolvedValueOnce({
+      key: "fixture-existing-environment-secret",
+      source: "env",
+      envVarName: "VLLM_API_KEY",
+    });
+    const credential = {
+      type: "api_key" as const,
+      provider: "vllm",
+      keyRef: { source: "env" as const, provider: "default", id: "VLLM_API_KEY" },
+    };
+    vi.mocked(ctx.toApiKeyCredential).mockReturnValueOnce(credential);
+
+    const cfg = await configureSelfHostedTestProvider({
+      ctx,
+      providerId: "vllm",
+      providerLabel: "vLLM",
+      envVar: "VLLM_API_KEY",
+    });
+
+    expect(upsertAuthProfileWithLock).toHaveBeenCalledWith({
+      profileId: "vllm:default",
+      agentDir: ctx.agentDir,
+      credential,
+    });
+    expect(JSON.stringify(cfg)).not.toContain("fixture-existing-environment-secret");
+  });
+
+  it("does not write an auth profile when no usable credential is available", async () => {
+    const ctx = createContext({ providerId: "vllm", modelId: "Qwen/Qwen3-32B" });
+    vi.mocked(ctx.resolveApiKey).mockResolvedValueOnce(null);
+
+    const cfg = await configureSelfHostedTestProvider({
+      ctx,
+      providerId: "vllm",
+      providerLabel: "vLLM",
+      envVar: "VLLM_API_KEY",
+    });
+
+    expect(cfg).toBeNull();
+    expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
+    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
   });
 
   it("exits without touching auth when custom model id is missing", async () => {

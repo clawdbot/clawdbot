@@ -51,7 +51,22 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
       response,
       path,
     ).catch(() => ({}));
-    throw new Error(payload.error || `${response.status} ${response.statusText}`);
+    throw new QaLabHttpError(
+      payload.error || `${response.status} ${response.statusText}`,
+      response.status,
+      payload,
+    );
   }
   return await readJsonResponse<T>(response, path);
+}
+
+export class QaLabHttpError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly payload: unknown,
+  ) {
+    super(message);
+    this.name = "QaLabHttpError";
+  }
 }

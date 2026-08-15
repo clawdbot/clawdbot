@@ -8,12 +8,13 @@ import {
   type ChannelMessageUnknownSendContext,
   type ChannelMessageUnknownSendReconciliationResult,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import {
   loadOutboundMediaFromUrl,
   type OutboundMediaLoadOptions,
 } from "openclaw/plugin-sdk/outbound-media";
 import {
-  type FormatCapabilityProfile,
+  FormatCapabilityProfile,
   renderMarkdownWithMarkers,
   sanitizeAssistantVisibleText,
 } from "openclaw/plugin-sdk/text-chunking";
@@ -25,29 +26,10 @@ import type { ClickClackMessage, ClickClackMessageProvenance, CoreConfig } from 
 
 const CLICKCLACK_MAX_UPLOAD_BYTES = 64 * 1024 * 1024;
 
-const CLICKCLACK_FORMAT_PROFILE = {
+const CLICKCLACK_FORMAT_PROFILE = FormatCapabilityProfile.define({
   mechanism: "markdown",
-  constructs: {
-    bold: "native",
-    italic: "native",
-    underline: "native",
-    strikethrough: "native",
-    spoiler: "native",
-    codeInline: "native",
-    codeBlock: "native",
-    codeLanguage: "native",
-    linkLabel: "native",
-    heading: "native",
-    bulletList: "native",
-    orderedList: "native",
-    taskList: "native",
-    table: "native",
-    blockquote: "native",
-    image: "native",
-    mention: "native",
-  },
   chunk: { limit: 1024 * 1024, unit: "bytes" },
-} satisfies FormatCapabilityProfile;
+});
 
 function renderClickClackMarkdown(markdown: string): string {
   return renderMarkdownWithMarkers(
@@ -282,9 +264,9 @@ export async function sendClickClackMedia(params: {
         mediaLocalRoots: params.mediaLocalRoots,
         mediaReadFile: params.mediaReadFile,
       }));
-    const filename = media.fileName?.trim() || "attachment";
-    mediaFilename = filename;
     const contentType = media.contentType?.trim() || "application/octet-stream";
+    const filename = media.fileName?.trim() || `attachment${extensionForMime(contentType) ?? ""}`;
+    mediaFilename = filename;
     await dispatch();
     upload = await client.createUpload({
       workspaceId,

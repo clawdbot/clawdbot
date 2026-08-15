@@ -8,7 +8,8 @@ import {
 
 function buildSlackInvalidBlocksTableRow(index: number) {
   const rowId = String(index).padStart(3, "0");
-  return [`row-${rowId}`, `value-${rowId}`] as const;
+  // Keep the fallback large enough to catch accidental truncation.
+  return [`row-${rowId}`, `value-${rowId}-${"x".repeat(96)}`] as const;
 }
 
 export function buildSlackInvalidBlocksTableProbe() {
@@ -32,8 +33,13 @@ export function buildSlackInvalidBlocksTableProbe() {
     SLACK_QA_INVALID_TABLE_HEADERS.join("\t"),
     ...dataRows.map((row) => row.join("\t")),
   ].join("\n");
+  const cellCharacterCount = [...SLACK_QA_INVALID_TABLE_HEADERS, ...dataRows.flat()].reduce(
+    (total, value) => total + Array.from(value).length,
+    0,
+  );
   return {
     block,
+    cellCharacterCount,
     dataRowCount: dataRows.length,
     fallbackText,
     firstRowText: buildSlackInvalidBlocksTableRow(1).join("\t"),

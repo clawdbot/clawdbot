@@ -3,10 +3,12 @@
 import { describe, expect, test } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import {
   createChannelTestPluginBase,
   createDirectOutboundTestAdapter,
 } from "../test-utils/channel-plugins.js";
+import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
@@ -44,19 +46,7 @@ const defaultRegistry = createRegistry([
   },
 ]);
 
-type StoredEntry = {
-  route?: {
-    channel?: string;
-    accountId?: string;
-    target?: { to?: string; rawTo?: string; chatType?: string };
-    thread?: { id?: string | number; kind?: string; source?: string };
-  };
-  deliveryContext?: { channel?: string; to?: string; threadId?: string; accountId?: string };
-  lastChannel?: string;
-  lastTo?: string;
-  lastThreadId?: string | number;
-  lastAccountId?: string;
-};
+type StoredEntry = SessionEntry & ReturnType<typeof projectSessionDeliveryFields>;
 
 type StoreEntries = Parameters<typeof writeSessionStore>[0]["entries"];
 
@@ -80,7 +70,7 @@ async function readStoredSessionEntry(key: string): Promise<StoredEntry> {
   if (!entry) {
     throw new Error(`expected stored entry ${key}`);
   }
-  return entry;
+  return { ...entry, ...projectSessionDeliveryFields(entry.delivery) };
 }
 
 async function sendAgentRequest(params: Record<string, unknown>): Promise<void> {

@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
-import type { DockPanelSide } from "../dock-panel-layout.ts";
+import type { DockPanelPlacement } from "../dock-panel-layout.ts";
 import type { TerminalPanelSessionTab } from "./terminal-panel-session-types.ts";
 import { renderTerminalPanelTabs } from "./terminal-panel-tabs.ts";
 import {
@@ -9,23 +9,7 @@ import {
   type TerminalPanelUploadController,
 } from "./terminal-panel-upload.ts";
 
-type TerminalDock = Exclude<DockPanelSide, "left">;
-
-export function renderTerminalPanelResizer(
-  fullscreen: boolean,
-  dock: TerminalDock,
-  startResize: (event: PointerEvent) => void,
-): TemplateResult | typeof nothing {
-  if (fullscreen) {
-    return nothing;
-  }
-  return html`<div
-    class="tp-resizer tp-resizer--${dock}"
-    @pointerdown=${startResize}
-    role="separator"
-    aria-label=${t("terminal.resize")}
-  ></div>`;
-}
+type TerminalDock = Exclude<DockPanelPlacement, "left">;
 
 export function renderTerminalPanelToolbar(
   fullscreen: boolean,
@@ -33,6 +17,7 @@ export function renderTerminalPanelToolbar(
   uploadController: TerminalPanelUploadController,
   sessionPicker: TemplateResult,
   setDock: (dock: TerminalDock) => void,
+  openFullscreen: () => void,
   hidePanel: () => void,
 ): TemplateResult {
   return renderTerminalPanelActions({
@@ -41,6 +26,7 @@ export function renderTerminalPanelToolbar(
     upload: uploadController,
     sessionPicker,
     onDock: setDock,
+    onOpenFullscreen: openFullscreen,
     onHide: hidePanel,
   });
 }
@@ -51,10 +37,10 @@ export function renderTerminalPanelHeader(
   booting: boolean,
   toolbar: TemplateResult,
   selectTab: (id: string) => void,
-  closeTab: (id: string) => void,
+  closeTab: (id: string) => void | Promise<void>,
   openSession: () => void,
 ): TemplateResult {
-  return html`<header class="tp-header">
+  return html`<header class="rail-header tp-header">
     ${renderTerminalPanelTabs({
       tabs,
       activeId,

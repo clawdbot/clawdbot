@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { toErrorObject } from "../infra/errors.js";
 import {
   CHROME_MCP_SESSION_TARGET_PREFIX,
   CHROME_MCP_SNAPSHOT_REF_PREFIX,
@@ -18,7 +19,6 @@ import {
   type ChromeMcpTargetOperation,
   type ChromeMcpToolResult,
   type NormalizedChromeMcpProfileOptions,
-  toChromeMcpError,
 } from "./chrome-mcp-contracts.js";
 import { redactChromeMcpProfileLabelForDiagnostic } from "./chrome-mcp-diagnostics.js";
 import {
@@ -90,7 +90,7 @@ async function withChromeMcpOperationLock<T>(
         return;
       }
       cancelled = true;
-      cancelReason = toChromeMcpError(reason, "Chrome MCP operation cancelled");
+      cancelReason = toErrorObject(reason, "Chrome MCP operation cancelled");
       reject(cancelReason);
     };
     if (signal) {
@@ -158,7 +158,7 @@ export function wrapChromeMcpSnapshotRefs(
   clearChromeMcpSnapshotRefsForTarget(routing, targetId);
   const wrappedByUid = new Map<string, string>();
 
-  const visit = (node: ChromeMcpSnapshotNode): ChromeMcpSnapshotNode => {
+  const wrapNode = (node: ChromeMcpSnapshotNode): ChromeMcpSnapshotNode => {
     const rawUid = normalizeOptionalString(node.id);
     let id: string | undefined;
     if (rawUid) {
@@ -173,11 +173,46 @@ export function wrapChromeMcpSnapshotRefs(
     return {
       ...node,
       ...(id ? { id } : {}),
-      ...(node.children ? { children: node.children.map(visit) } : {}),
+      ...(node.children ? { children: [] } : {}),
     };
   };
 
-  return visit(root);
+  // Ref rewriting is the first traversal of external MCP output. Keep it
+  // iterative so the renderer can own depth truncation and report that fact.
+  let wrappedRoot: ChromeMcpSnapshotNode | undefined;
+  const stack: Array<{
+    source: ChromeMcpSnapshotNode;
+    parent?: ChromeMcpSnapshotNode[];
+    index?: number;
+  }> = [{ source: root }];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) {
+      break;
+    }
+    const wrapped = wrapNode(current.source);
+    if (current.parent && current.index !== undefined) {
+      current.parent[current.index] = wrapped;
+    } else {
+      wrappedRoot = wrapped;
+    }
+    const sourceChildren = current.source.children;
+    if (!sourceChildren) {
+      continue;
+    }
+    const wrappedChildren: ChromeMcpSnapshotNode[] = [];
+    wrapped.children = wrappedChildren;
+    for (let index = sourceChildren.length - 1; index >= 0; index -= 1) {
+      const child = sourceChildren[index];
+      if (child) {
+        stack.push({ source: child, parent: wrappedChildren, index });
+      }
+    }
+  }
+  if (!wrappedRoot) {
+    throw new Error("Chrome MCP snapshot did not contain a root node");
+  }
+  return wrappedRoot;
 }
 
 export function resolveChromeMcpSnapshotRef(
@@ -230,7 +265,7 @@ export async function callTool(
       }
     }
     if (signal?.aborted) {
-      throw toChromeMcpError(signal.reason ?? err, "Non-Error abort reason");
+      throw toErrorObject(signal.reason ?? err, "Non-Error abort reason");
     }
     if (timeoutMs && err instanceof McpError && err.code === MCP_REQUEST_TIMEOUT_CODE) {
       throw new Error(

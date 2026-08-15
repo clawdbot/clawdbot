@@ -20,6 +20,10 @@ import { escapeMarkdownHtml, isMarkdownBlockArtText } from "./markdown-text.ts";
 
 const blockArtCopyPayloadPrefix = "openclaw:block-art-code:";
 const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
+// Keep typical replies visible; disclosure is reserved for JSON that dominates the transcript.
+const JSON_COLLAPSE_LINE_THRESHOLD = 40;
+const codeBlockCopyAttempts = new WeakMap<HTMLElement, number>();
+const codeBlockCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
 
 for (const [language, definition] of Object.entries({
   bash,
@@ -74,16 +78,33 @@ export function handleMarkdownCodeBlockCopy(event: Event): void {
     return;
   }
   const code = decodeCodeBlockCopyPayload(button.dataset.code ?? "", button.dataset.codeEncoding);
+  const attempt = (codeBlockCopyAttempts.get(button) ?? 0) + 1;
+  codeBlockCopyAttempts.set(button, attempt);
   void copyToClipboard(code).then((copied) => {
-    if (!copied) {
+    // Clipboard writes can finish out of click order; older attempts must not own feedback.
+    if (codeBlockCopyAttempts.get(button) !== attempt) {
       return;
     }
-    button.classList.add("copied");
-    setTimeout(() => button.classList.remove("copied"), 1500);
+    const idleLabel = button.querySelector(".code-block-copy__idle");
+    idleLabel?.replaceChildren(t(copied ? "common.copy" : "common.copyFailed"));
+    button.classList.toggle("copied", copied);
+    button.setAttribute("aria-label", t(copied ? "common.copied" : "common.copyFailed"));
+    clearTimeout(codeBlockCopyResetTimers.get(button));
+    const resetTimer = setTimeout(
+      () => {
+        button.classList.remove("copied");
+        idleLabel?.replaceChildren(t("common.copy"));
+        button.setAttribute("aria-label", t("common.copyCode"));
+        codeBlockCopyResetTimers.delete(button);
+      },
+      copied ? 1500 : 2000,
+    );
+    codeBlockCopyResetTimers.set(button, resetTimer);
   });
 }
 
-function highlightCode(text: string, lang: string): string {
+/** Highlight a snippet; output is escaped hljs markup safe for unsafeHTML in a code block. */
+export function highlightCodeHtml(text: string, lang: string): string {
   const language = lang.trim().toLowerCase();
   try {
     if (language && hljs.getLanguage(language)) {
@@ -103,7 +124,7 @@ function highlightCode(text: string, lang: string): string {
 
 /** Highlight a JSON/JSON5 snippet; output is escaped hljs markup safe for unsafeHTML in a code block. */
 export function highlightJsonHtml(text: string): string {
-  return highlightCode(text, "json");
+  return highlightCodeHtml(text, "json");
 }
 
 function codeClassAttribute(lang: string, highlighted: string): string {
@@ -122,7 +143,7 @@ function renderCodeElement(
   if (options.blockArt || isMarkdownBlockArtText(text)) {
     return `<pre><code class="markdown-block-art">${escapeMarkdownHtml(text)}</code></pre>`;
   }
-  const highlighted = highlightCode(text, lang);
+  const highlighted = highlightCodeHtml(text, lang);
   const classAttr = codeClassAttribute(lang, highlighted);
   return `<pre><code${classAttr}>${highlighted}</code></pre>`;
 }
@@ -156,9 +177,11 @@ export function renderMarkdownCodeBlock(
         (trimmed.startsWith("[") && trimmed.endsWith("]"))));
 
   if (isJson) {
-    const lineCount = text.split("\n").length;
-    const label = lineCount > 1 ? `JSON &middot; ${lineCount} lines` : "JSON";
-    return `<details class="json-collapse"><summary>${label}</summary><div class="code-block-wrapper">${header}${codeBlock}</div></details>`;
+    const lineCount = markdownCodeBlockCopyText(text).split("\n").length;
+    if (lineCount > JSON_COLLAPSE_LINE_THRESHOLD) {
+      const label = escapeMarkdownHtml(t("chat.codeBlock.jsonLines", { count: String(lineCount) }));
+      return `<details class="json-collapse code-block-wrapper"><summary class="code-block-header"><span>${label}</span>${copyButton}</summary>${codeBlock}</details>`;
+    }
   }
 
   return `<div class="code-block-wrapper">${header}${codeBlock}</div>`;

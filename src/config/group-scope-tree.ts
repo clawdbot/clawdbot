@@ -126,14 +126,16 @@ export function resolveScopeToolsPolicy(
     tree: params.tree,
     path: params.path,
     resolveNode: (node) =>
-      resolveToolsBySender({
-        toolsBySender: node.toolsBySender,
-        senderId: params.senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
-        messageProvider: params.messageProvider,
-      }) ?? node.tools,
+      (params.senderPolicyMode === "never"
+        ? undefined
+        : resolveToolsBySender({
+            toolsBySender: node.toolsBySender,
+            senderId: params.senderId,
+            senderName: params.senderName,
+            senderUsername: params.senderUsername,
+            senderE164: params.senderE164,
+            messageProvider: params.messageProvider,
+          })) ?? node.tools,
   });
 }
 

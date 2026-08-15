@@ -3,6 +3,7 @@ import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provid
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { applyKilocodeConfig, KILOCODE_DEFAULT_MODEL_REF } from "./onboard.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildKilocodeProvider, buildKilocodeProviderWithDiscovery } from "./provider-catalog.js";
 import { wrapKilocodeProviderStream } from "./stream.js";
 
@@ -12,22 +13,14 @@ export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Kilo Gateway Provider",
   description: "Bundled Kilo Gateway provider plugin",
+  manifest,
   provider: {
     label: "Kilo Gateway",
     docsPath: "/providers/kilocode",
-    auth: [
-      {
-        methodId: "api-key",
-        label: "Kilo Gateway API key",
-        hint: "API key (OpenRouter-compatible)",
-        optionKey: "kilocodeApiKey",
-        flagName: "--kilocode-api-key",
-        envVar: "KILOCODE_API_KEY",
-        promptMessage: "Enter Kilo Gateway API key",
-        defaultModel: KILOCODE_DEFAULT_MODEL_REF,
-        applyConfig: (cfg) => applyKilocodeConfig(cfg),
-      },
-    ],
+    manifestAuth: {
+      defaultModel: KILOCODE_DEFAULT_MODEL_REF,
+      applyConfig: applyKilocodeConfig,
+    },
     catalog: {
       buildProvider: buildKilocodeProviderWithDiscovery,
       buildStaticProvider: buildKilocodeProvider,

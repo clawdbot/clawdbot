@@ -2,7 +2,6 @@
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateDevicePairApproveParams,
   validateDevicePairListParams,
   validateDevicePairRemoveParams,
@@ -29,6 +28,7 @@ import {
   updatePairedDeviceMetadata,
 } from "../../infra/device-pairing.js";
 import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";
+import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
 import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
 import { invalidateNodeWakeState } from "../node-wake-state.js";
 import {
@@ -41,7 +41,9 @@ import {
 } from "./device-management-authz.js";
 import type { DeviceManagementAuthz } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
+import { scopeUpgradeHandlers } from "./device-scope-upgrade.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const DEVICE_TOKEN_ROTATION_DENIED_MESSAGE = "device token rotation denied";
 const DEVICE_TOKEN_REVOCATION_DENIED_MESSAGE = "device token revocation denied";
@@ -213,18 +215,9 @@ function emitDeviceTokenLifecycleSecurityEvent(params: {
 
 /** Gateway request handlers for device pair approval, removal, token rotation, and revocation. */
 export const deviceHandlers: GatewayRequestHandlers = {
+  ...scopeUpgradeHandlers,
   "device.pair.list": async ({ params, respond, context, client }) => {
-    if (!validateDevicePairListParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid device.pair.list params: ${formatValidationErrors(
-            validateDevicePairListParams.errors,
-          )}`,
-        ),
-      );
+    if (!assertValidParams(params, validateDevicePairListParams, "device.pair.list", respond)) {
       return;
     }
     const list = await listDevicePairing();
@@ -254,17 +247,9 @@ export const deviceHandlers: GatewayRequestHandlers = {
     );
   },
   "device.pair.approve": async ({ params, respond, context, client }) => {
-    if (!validateDevicePairApproveParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid device.pair.approve params: ${formatValidationErrors(
-            validateDevicePairApproveParams.errors,
-          )}`,
-        ),
-      );
+    if (
+      !assertValidParams(params, validateDevicePairApproveParams, "device.pair.approve", respond)
+    ) {
       return;
     }
     const { requestId } = params as { requestId: string };
@@ -374,6 +359,9 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     const normalizedDeviceId = approved.device.deviceId.trim();
+    // Operator reapproval leaves the narrow requester live. Wake its identity-bound waiter only
+    // after durable token rotation, before any node-generation teardown can run.
+    context.scopeUpgradeCoordinator?.notify(requestId, "approved");
     if (approved.nodePairingGenerationChanged) {
       invalidateNodeWakeState(normalizedDeviceId);
       // Mark the retired node generation before publishing success so buffered
@@ -417,17 +405,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     }
   },
   "device.pair.reject": async ({ params, respond, context, client }) => {
-    if (!validateDevicePairRejectParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid device.pair.reject params: ${formatValidationErrors(
-            validateDevicePairRejectParams.errors,
-          )}`,
-        ),
-      );
+    if (!assertValidParams(params, validateDevicePairRejectParams, "device.pair.reject", respond)) {
       return;
     }
     const { requestId } = params as { requestId: string };
@@ -473,6 +451,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
       return;
     }
+    context.scopeUpgradeCoordinator?.notify(requestId, "rejected");
     emitDevicePairingLifecycleSecurityEvent({
       action: "device.pairing.rejected",
       authz,
@@ -493,17 +472,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     respond(true, rejected, undefined);
   },
   "device.pair.remove": async ({ params, respond, context, client }) => {
-    if (!validateDevicePairRemoveParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid device.pair.remove params: ${formatValidationErrors(
-            validateDevicePairRemoveParams.errors,
-          )}`,
-        ),
-      );
+    if (!assertValidParams(params, validateDevicePairRemoveParams, "device.pair.remove", respond)) {
       return;
     }
     const { deviceId } = params as { deviceId: string };
@@ -554,6 +523,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     context.invalidateClientsForDevice?.(removed.deviceId, {
       reason: "device-pair-removed",
     });
+    await reconcileRevokedDeviceWorker(context, removed.deviceId);
     context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
     emitDevicePairingLifecycleSecurityEvent({
       action: "device.pairing.removed",
@@ -568,17 +538,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     });
   },
   "device.pair.rename": async ({ params, respond, context, client }) => {
-    if (!validateDevicePairRenameParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid device.pair.rename params: ${formatValidationErrors(
-            validateDevicePairRenameParams.errors,
-          )}`,
-        ),
-      );
+    if (!assertValidParams(params, validateDevicePairRenameParams, "device.pair.rename", respond)) {
       return;
     }
     const { deviceId, label } = params as {
@@ -644,17 +604,9 @@ export const deviceHandlers: GatewayRequestHandlers = {
     respond(true, { deviceId, label: trimmed }, undefined);
   },
   "device.token.rotate": async ({ params, respond, context, client }) => {
-    if (!validateDeviceTokenRotateParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid device.token.rotate params: ${formatValidationErrors(
-            validateDeviceTokenRotateParams.errors,
-          )}`,
-        ),
-      );
+    if (
+      !assertValidParams(params, validateDeviceTokenRotateParams, "device.token.rotate", respond)
+    ) {
       return;
     }
     const { deviceId, role, scopes } = params as {
@@ -761,14 +713,19 @@ export const deviceHandlers: GatewayRequestHandlers = {
       role: entry.role,
       reason: "device-token-rotated",
     });
+    // Record the delivery decision on the wire: an absent token alone cannot tell a
+    // client whether the rotation withheld the secret by policy or the response
+    // predates this field, and the two need different operator-facing outcomes.
+    const deliversTokenInBand = shouldReturnRotatedDeviceToken(authz);
     respond(
       true,
       {
         deviceId,
         role: entry.role,
-        ...(shouldReturnRotatedDeviceToken(authz) ? { token: entry.token } : {}),
+        ...(deliversTokenInBand ? { token: entry.token } : {}),
         scopes: entry.scopes,
         rotatedAtMs: entry.rotatedAtMs ?? entry.createdAtMs,
+        tokenDelivery: deliversTokenInBand ? "in-band" : "withheld-cross-device",
       },
       undefined,
     );
@@ -777,17 +734,9 @@ export const deviceHandlers: GatewayRequestHandlers = {
     });
   },
   "device.token.revoke": async ({ params, respond, context, client }) => {
-    if (!validateDeviceTokenRevokeParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid device.token.revoke params: ${formatValidationErrors(
-            validateDeviceTokenRevokeParams.errors,
-          )}`,
-        ),
-      );
+    if (
+      !assertValidParams(params, validateDeviceTokenRevokeParams, "device.token.revoke", respond)
+    ) {
       return;
     }
     const { deviceId, role } = params as { deviceId: string; role: string };
@@ -869,7 +818,11 @@ export const deviceHandlers: GatewayRequestHandlers = {
       role: entry.role,
     });
     if (entry.role === "node") {
-      invalidateNodeWakeState(normalizedDeviceId);
+      // Revoking a node token ends its authority like pairing removal does:
+      // run the same teardown owner so pending actions/work, wake state,
+      // surface caps, and worker placements are not stranded on a dead node.
+      clearRemovedNodeRuntimeState({ nodeId: normalizedDeviceId, context });
+      await reconcileRevokedDeviceWorker(context, normalizedDeviceId);
     }
     // Mark affected clients invalid *before* responding so any RPCs already
     // pipelined into their WS socket buffer are rejected at the per-request

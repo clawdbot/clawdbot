@@ -222,6 +222,66 @@ struct ApplicationRelocatorTests {
     }
 
     @Test
+    func `replacement handoff retries back off and stop after three attempts`() {
+        let policy = ApplicationRelocator.replacementHandoffPolicy
+
+        #expect(policy.maximumAttempts == 3)
+        #expect(policy.failureAction(
+            failedAttempt: 1,
+            hasKeepAliveSupervisor: false
+        ) == .retry(after: .seconds(2)))
+        #expect(policy.failureAction(
+            failedAttempt: 2,
+            hasKeepAliveSupervisor: false
+        ) == .retry(after: .seconds(4)))
+        #expect(policy.failureAction(
+            failedAttempt: 3,
+            hasKeepAliveSupervisor: false
+        ) == .stopMonitoring)
+        #expect(policy.failureAction(
+            failedAttempt: 3,
+            hasKeepAliveSupervisor: true
+        ) == .terminateForSupervisor)
+    }
+
+    @Test
+    func `replacement handoff timeout scales with system load`() {
+        let policy = ApplicationRelocator.replacementHandoffPolicy
+
+        #expect(policy.timeoutMilliseconds(loadAverage: nil, activeProcessorCount: 12) == 15000)
+        #expect(policy.timeoutMilliseconds(loadAverage: 12, activeProcessorCount: 12) == 15000)
+        #expect(policy.timeoutMilliseconds(loadAverage: 24, activeProcessorCount: 12) == 30000)
+        #expect(policy.timeoutMilliseconds(loadAverage: 100, activeProcessorCount: 12) == 60000)
+        #expect(policy.timeoutMilliseconds(loadAverage: 100, activeProcessorCount: 0) == 15000)
+    }
+
+    @Test
+    func `replacement arriving during final handoff gets a fresh recovery pass`() {
+        let failedTarget = Data([10])
+
+        #expect(!ApplicationRelocator.shouldContinueReplacementRecovery(
+            afterFailedTarget: failedTarget,
+            latestAction: .relaunch,
+            latestTargetHash: failedTarget
+        ))
+        #expect(ApplicationRelocator.shouldContinueReplacementRecovery(
+            afterFailedTarget: failedTarget,
+            latestAction: .relaunch,
+            latestTargetHash: Data([11])
+        ))
+        #expect(ApplicationRelocator.shouldContinueReplacementRecovery(
+            afterFailedTarget: failedTarget,
+            latestAction: .waitForTrustedReplacement,
+            latestTargetHash: nil
+        ))
+        #expect(ApplicationRelocator.shouldContinueReplacementRecovery(
+            afterFailedTarget: failedTarget,
+            latestAction: .unchanged,
+            latestTargetHash: nil
+        ))
+    }
+
+    @Test
     func `unauthenticated replacement marker cannot bypass duplicate launch rejection`() {
         let forgedHandoff = [
             "OPENCLAW_REPLACEMENT_SOURCE_BUNDLE": "/Applications/OpenClaw.app",

@@ -22,9 +22,10 @@ vi.mock("../cli-credentials.js", () => ({
 }));
 
 vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
+  buildProviderAuthDoctorHintWithPlugin: async () => undefined,
   formatProviderAuthProfileApiKeyWithPlugin: async (params: { context?: { access?: string } }) =>
     params.context?.access,
-  refreshProviderOAuthCredentialWithPlugin: async () => null,
+  resolveProviderOAuthCredentialWithPlugin: async () => ({ status: "unhandled" }),
 }));
 
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;

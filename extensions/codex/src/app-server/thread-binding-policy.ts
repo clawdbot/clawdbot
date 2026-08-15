@@ -1,4 +1,4 @@
-import type { CodexAppServerRuntimeOptions } from "./config.js";
+import type { CodexAppServerConnectionClass } from "./config-contracts.js";
 import { normalizeCodexDynamicToolName } from "./dynamic-tool-profile.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import type {
@@ -7,7 +7,7 @@ import type {
 } from "./thread-lifecycle-types.js";
 
 export function shouldRotateCodexAppServerBindingForRuntime(params: {
-  connectionClass: CodexAppServerRuntimeOptions["connectionClass"];
+  connectionClass: CodexAppServerConnectionClass;
   current?: string;
   binding?: string;
 }): boolean {
@@ -22,7 +22,7 @@ export function shouldRotateCodexAppServerBindingForRuntime(params: {
 
 type CodexGpt56MultiAgentVersion = "v1" | "v2";
 
-function resolveCodexGpt56MultiAgentVersion(
+export function resolveCodexGpt56MultiAgentVersion(
   modelRef: string | undefined,
 ): CodexGpt56MultiAgentVersion | undefined {
   let modelId = modelRef?.trim().toLowerCase();

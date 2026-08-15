@@ -6,7 +6,7 @@ const providerRuntimeMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../plugins/provider-thinking.js", () => ({
-  resolveProviderThinkingProfile: providerRuntimeMocks.resolveProviderThinkingProfile,
+  resolveEffectiveThinkingProfile: providerRuntimeMocks.resolveProviderThinkingProfile,
 }));
 
 const {
@@ -28,6 +28,10 @@ beforeEach(() => {
 });
 
 describe("normalizeThinkLevel", () => {
+  it("normalizes the documented none alias to off", () => {
+    expect(normalizeThinkLevel("none")).toBe("off");
+  });
+
   it("accepts mid as medium", () => {
     expect(normalizeThinkLevel("mid")).toBe("medium");
   });
@@ -599,6 +603,51 @@ describe("listThinkingLevels", () => {
         catalog,
       }),
     ).toBe(true);
+  });
+
+  it("uses advanced catalog efforts and derives OpenClaw Ultra from Max", () => {
+    const catalog = [
+      {
+        provider: "myazure",
+        id: "gpt-5.6-sol",
+        name: "GPT 5.6 Sol via Azure",
+        api: "openai-responses",
+        reasoning: true,
+        compat: {
+          supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+        },
+      },
+    ];
+
+    expect(listThinkingLevels("myazure", "gpt-5.6-sol", catalog, "openclaw")).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
+    expect(
+      isThinkingLevelSupported({
+        provider: "myazure",
+        model: "gpt-5.6-sol",
+        level: "max",
+        catalog,
+        agentRuntime: "openclaw",
+      }),
+    ).toBe(true);
+    expect(
+      isThinkingLevelSupported({
+        provider: "myazure",
+        model: "gpt-5.6-sol",
+        level: "ultra",
+        catalog,
+        agentRuntime: "openclaw",
+      }),
+    ).toBe(true);
+    expect(listThinkingLevels("myazure", "gpt-5.6-sol", catalog, "codex")).not.toContain("ultra");
   });
 
   it("does not let catalog xhigh compat override binary thinking providers", () => {

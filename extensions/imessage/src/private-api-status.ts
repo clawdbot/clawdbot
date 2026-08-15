@@ -11,6 +11,7 @@ export type IMessagePrivateApiStatus = {
   // and callers should treat them as unsupported.
   cliCapabilities?: {
     sendRichSupportsAttachment?: boolean;
+    pollSendSupportsNoComment?: boolean;
   };
   // imsg's own `status --json` `message` field. When advanced features are off
   // it explains why (SIP enabled, library validation, macOS 26 AMFI gate), so

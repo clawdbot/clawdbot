@@ -176,6 +176,105 @@ enum ChatWorkingClawMotion {
         ChatWorkingClawKeyframe(progress: 0.86, value: -10),
         ChatWorkingClawKeyframe(progress: 1, value: -10),
     ]
+    private static let nodOffBodyRotation = [
+        ChatWorkingClawKeyframe(progress: 0, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.10, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.35, value: 10),
+        ChatWorkingClawKeyframe(progress: 0.55, value: 14),
+        ChatWorkingClawKeyframe(progress: 0.60, value: 15),
+        ChatWorkingClawKeyframe(progress: 0.64, value: -3),
+        ChatWorkingClawKeyframe(progress: 0.70, value: 0),
+        ChatWorkingClawKeyframe(progress: 1, value: 0),
+    ]
+    private static let nodOffY = [
+        ChatWorkingClawKeyframe(progress: 0, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.10, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.35, value: 1),
+        ChatWorkingClawKeyframe(progress: 0.60, value: 1.5),
+        ChatWorkingClawKeyframe(progress: 0.64, value: -0.5),
+        ChatWorkingClawKeyframe(progress: 0.70, value: 0),
+        ChatWorkingClawKeyframe(progress: 1, value: 0),
+    ]
+    private static let nodOffJaw = [
+        ChatWorkingClawKeyframe(progress: 0, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.10, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.35, value: -16),
+        ChatWorkingClawKeyframe(progress: 0.60, value: -21),
+        ChatWorkingClawKeyframe(progress: 0.64, value: -6),
+        ChatWorkingClawKeyframe(progress: 0.70, value: -24),
+        ChatWorkingClawKeyframe(progress: 0.74, value: 4),
+        ChatWorkingClawKeyframe(progress: 0.80, value: -22),
+        ChatWorkingClawKeyframe(progress: 0.84, value: 4),
+        ChatWorkingClawKeyframe(progress: 0.90, value: -10),
+        ChatWorkingClawKeyframe(progress: 1, value: -10),
+    ]
+    private static let curiousBodyRotation = [
+        ChatWorkingClawKeyframe(progress: 0, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.30, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.40, value: -14),
+        ChatWorkingClawKeyframe(progress: 0.62, value: -14),
+        ChatWorkingClawKeyframe(progress: 0.70, value: 4),
+        ChatWorkingClawKeyframe(progress: 0.76, value: 0),
+        ChatWorkingClawKeyframe(progress: 1, value: 0),
+    ]
+    private static let curiousJaw = [
+        ChatWorkingClawKeyframe(progress: 0, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.30, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.40, value: -16),
+        ChatWorkingClawKeyframe(progress: 0.62, value: -16),
+        ChatWorkingClawKeyframe(progress: 0.70, value: -6),
+        ChatWorkingClawKeyframe(progress: 0.76, value: -10),
+        ChatWorkingClawKeyframe(progress: 1, value: -10),
+    ]
+    private static let omNomX = [
+        ChatWorkingClawKeyframe(progress: 0, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.30, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.36, value: 2.5),
+        ChatWorkingClawKeyframe(progress: 0.40, value: 1),
+        ChatWorkingClawKeyframe(progress: 0.46, value: 2.5),
+        ChatWorkingClawKeyframe(progress: 0.50, value: 1),
+        ChatWorkingClawKeyframe(progress: 0.56, value: 2.5),
+        ChatWorkingClawKeyframe(progress: 0.64, value: 0),
+        ChatWorkingClawKeyframe(progress: 1, value: 0),
+    ]
+    private static let omNomJaw = [
+        ChatWorkingClawKeyframe(progress: 0, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.26, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.30, value: -30),
+        ChatWorkingClawKeyframe(progress: 0.36, value: 8),
+        ChatWorkingClawKeyframe(progress: 0.42, value: -30),
+        ChatWorkingClawKeyframe(progress: 0.46, value: 8),
+        ChatWorkingClawKeyframe(progress: 0.52, value: -30),
+        ChatWorkingClawKeyframe(progress: 0.56, value: 8),
+        ChatWorkingClawKeyframe(progress: 0.64, value: -10),
+        ChatWorkingClawKeyframe(progress: 1, value: -10),
+    ]
+    private static let fakeOutBodyRotation = [
+        ChatWorkingClawKeyframe(progress: 0, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.06, value: 0),
+        ChatWorkingClawKeyframe(progress: 0.10, value: -4),
+        ChatWorkingClawKeyframe(progress: 0.55, value: -4),
+        ChatWorkingClawKeyframe(progress: 0.58, value: 3),
+        ChatWorkingClawKeyframe(progress: 0.62, value: -4),
+        ChatWorkingClawKeyframe(progress: 0.66, value: 3),
+        ChatWorkingClawKeyframe(progress: 0.70, value: -4),
+        ChatWorkingClawKeyframe(progress: 0.74, value: 3),
+        ChatWorkingClawKeyframe(progress: 0.80, value: 0),
+        ChatWorkingClawKeyframe(progress: 1, value: 0),
+    ]
+    private static let fakeOutJaw = [
+        ChatWorkingClawKeyframe(progress: 0, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.06, value: -10),
+        ChatWorkingClawKeyframe(progress: 0.10, value: -26),
+        ChatWorkingClawKeyframe(progress: 0.55, value: -26),
+        ChatWorkingClawKeyframe(progress: 0.58, value: 4),
+        ChatWorkingClawKeyframe(progress: 0.62, value: -24),
+        ChatWorkingClawKeyframe(progress: 0.66, value: 4),
+        ChatWorkingClawKeyframe(progress: 0.70, value: -22),
+        ChatWorkingClawKeyframe(progress: 0.74, value: 4),
+        ChatWorkingClawKeyframe(progress: 0.80, value: -10),
+        ChatWorkingClawKeyframe(progress: 1, value: -10),
+    ]
 
     static func pose(stance: ChatWorkingClawStance, elapsed: TimeInterval) -> ChatWorkingClawPose {
         let duration: TimeInterval = switch stance {
@@ -183,6 +282,7 @@ enum ChatWorkingClawMotion {
         case .spin: 3.6
         case .zen: 6
         case .drummer: 1.2
+        case .nodOff: 3.6
         default: 2.4
         }
         let progress = max(0, elapsed).truncatingRemainder(dividingBy: duration) / duration
@@ -228,6 +328,19 @@ enum ChatWorkingClawMotion {
             pose.yOffset = self.sample(self.peekabooY, at: progress)
             pose.bodyScale = self.sample(self.peekabooScale, at: progress)
             pose.jawRotation = self.sample(self.peekabooJaw, at: progress)
+        case .nodOff:
+            pose.bodyRotation = self.sample(self.nodOffBodyRotation, at: progress)
+            pose.yOffset = self.sample(self.nodOffY, at: progress)
+            pose.jawRotation = self.sample(self.nodOffJaw, at: progress)
+        case .curious:
+            pose.bodyRotation = self.sample(self.curiousBodyRotation, at: progress)
+            pose.jawRotation = self.sample(self.curiousJaw, at: progress)
+        case .omNom:
+            pose.xOffset = self.sample(self.omNomX, at: progress)
+            pose.jawRotation = self.sample(self.omNomJaw, at: progress)
+        case .fakeOut:
+            pose.bodyRotation = self.sample(self.fakeOutBodyRotation, at: progress)
+            pose.jawRotation = self.sample(self.fakeOutJaw, at: progress)
         }
         return pose
     }
@@ -331,21 +444,21 @@ struct ChatWorkingClawView: View {
 private struct ChatWorkingClawBodyShape: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        path.addEllipse(in: CGRect(x: 4, y: 9.2, width: 11.2, height: 11.2))
-        path.move(to: CGPoint(x: 10, y: 20))
+        path.addEllipse(in: CGRect(x: 3, y: 10, width: 10.4, height: 10.4))
+        path.move(to: CGPoint(x: 10.2, y: 20))
         path.addCurve(
-            to: CGPoint(x: 20.1, y: 16.1),
-            control1: CGPoint(x: 14, y: 20.9),
-            control2: CGPoint(x: 17.9, y: 19.5))
+            to: CGPoint(x: 22.3, y: 13.2),
+            control1: CGPoint(x: 14.5, y: 20.8),
+            control2: CGPoint(x: 19, y: 18.6))
         path.addCurve(
-            to: CGPoint(x: 19.25, y: 14.65),
-            control1: CGPoint(x: 20.6, y: 15.4),
-            control2: CGPoint(x: 20.05, y: 14.5))
-        path.addCurve(
-            to: CGPoint(x: 13.2, y: 13),
-            control1: CGPoint(x: 17.1, y: 15),
-            control2: CGPoint(x: 14.9, y: 14.4))
-        path.addLine(to: CGPoint(x: 10.6, y: 16))
+            to: CGPoint(x: 18.4, y: 12.8),
+            control1: CGPoint(x: 21, y: 12.9),
+            control2: CGPoint(x: 19.7, y: 12.7))
+        path.addLine(to: CGPoint(x: 17.5, y: 14.6))
+        path.addLine(to: CGPoint(x: 16, y: 12.9))
+        path.addLine(to: CGPoint(x: 14.3, y: 14.5))
+        path.addLine(to: CGPoint(x: 13.5, y: 13))
+        path.addLine(to: CGPoint(x: 11.5, y: 14.2))
         path.closeSubpath()
         return path.applying(self.transform(for: rect))
     }
@@ -365,28 +478,26 @@ private struct ChatWorkingClawBodyShape: Shape {
 private struct ChatWorkingClawJawShape: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        path.move(to: CGPoint(x: 6, y: 10.6))
+        path.move(to: CGPoint(x: 5.6, y: 12.2))
         path.addCurve(
-            to: CGPoint(x: 17.6, y: 2.8),
-            control1: CGPoint(x: 6.6, y: 4.4),
-            control2: CGPoint(x: 12.4, y: 0.8))
+            to: CGPoint(x: 15.6, y: 2),
+            control1: CGPoint(x: 5.2, y: 5.6),
+            control2: CGPoint(x: 10.4, y: 1.4))
         path.addCurve(
-            to: CGPoint(x: 23, y: 9.8),
-            control1: CGPoint(x: 20.8, y: 4),
-            control2: CGPoint(x: 22.8, y: 6.8))
+            to: CGPoint(x: 22.6, y: 8.2),
+            control1: CGPoint(x: 19.4, y: 2.6),
+            control2: CGPoint(x: 21.8, y: 5.2))
         path.addCurve(
-            to: CGPoint(x: 21.1, y: 10.7),
-            control1: CGPoint(x: 23.07, y: 10.9),
-            control2: CGPoint(x: 21.9, y: 11.4))
+            to: CGPoint(x: 17.6, y: 7.9),
+            control1: CGPoint(x: 20.9, y: 7.7),
+            control2: CGPoint(x: 19.2, y: 7.6))
+        path.addLine(to: CGPoint(x: 16.9, y: 6.3))
+        path.addLine(to: CGPoint(x: 15.2, y: 8.5))
         path.addCurve(
-            to: CGPoint(x: 14.7, y: 9.5),
-            control1: CGPoint(x: 19.4, y: 9.2),
-            control2: CGPoint(x: 16.9, y: 8.7))
-        path.addCurve(
-            to: CGPoint(x: 11.6, y: 12.1),
-            control1: CGPoint(x: 13.4, y: 10),
-            control2: CGPoint(x: 12.3, y: 10.9))
-        path.addLine(to: CGPoint(x: 7.2, y: 12.4))
+            to: CGPoint(x: 11.6, y: 12.4),
+            control1: CGPoint(x: 13.6, y: 9.4),
+            control2: CGPoint(x: 12.2, y: 10.9))
+        path.addLine(to: CGPoint(x: 6.8, y: 13))
         path.closeSubpath()
         let scale = min(rect.width, rect.height) / 24
         return path.applying(CGAffineTransform(
@@ -404,6 +515,7 @@ struct ChatWorkingStatusText: View {
 
     let startedAt: Date
     let seed: String
+    let outputTokens: Int?
 
     var body: some View {
         Group {
@@ -425,6 +537,14 @@ struct ChatWorkingStatusText: View {
             Text(duration)
                 .font(OpenClawChatTypography.captionSemiBold)
                 .monospacedDigit()
+            if let tokensText = ChatTurnRecapText.tokens(self.outputTokens) {
+                Text("·")
+                    .font(OpenClawChatTypography.caption)
+                    .accessibilityHidden(true)
+                Text(tokensText)
+                    .font(OpenClawChatTypography.caption)
+                    .monospacedDigit()
+            }
             if let index = ChatWorkingPhrase.index(
                 seed: self.seed,
                 elapsedMilliseconds: elapsedMilliseconds)

@@ -10,7 +10,7 @@ export function createBrowserGatewaySocket(
 ): GatewayProtocolSocket {
   const socket = new WebSocket(url);
   let opening = true;
-  let openingTimedOut = false;
+  let openingTimeoutReason: string | undefined;
   let openingTimer: ReturnType<typeof setTimeout> | undefined;
   const finishOpening = () => {
     opening = false;
@@ -27,11 +27,12 @@ export function createBrowserGatewaySocket(
   socket.addEventListener("message", (event) => handlers.message(String(event.data ?? "")));
   socket.addEventListener("close", (event) => {
     finishOpening();
-    handlers.close(event.code, event.reason ?? "");
+    // Browsers erase locally initiated close reasons before the handshake finishes.
+    handlers.close(event.code, event.reason || openingTimeoutReason || "");
   });
   socket.addEventListener("error", () => {
     finishOpening();
-    if (!openingTimedOut) {
+    if (!openingTimeoutReason) {
       handlers.error(new Error("websocket error"));
     }
   });
@@ -44,13 +45,9 @@ export function createBrowserGatewaySocket(
       return;
     }
     opening = false;
-    openingTimedOut = true;
+    openingTimeoutReason = `gateway websocket opening timed out after ${DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS}ms`;
     try {
-      handlers.error(
-        new Error(
-          `gateway websocket opening timed out after ${DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS}ms`,
-        ),
-      );
+      handlers.error(new Error(openingTimeoutReason));
     } finally {
       socket.close();
     }
@@ -61,7 +58,8 @@ export function createBrowserGatewaySocket(
     send: (data) => socket.send(data),
     close: (code, reason) => {
       finishOpening();
-      socket.close(code, reason);
+      // Browser-initiated closes reject the shared protocol's 1008 policy code.
+      socket.close(code === 1008 ? 4008 : code, reason);
     },
   };
 }

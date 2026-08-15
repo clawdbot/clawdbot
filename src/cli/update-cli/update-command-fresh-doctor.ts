@@ -2,6 +2,7 @@
 import {
   UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
+  UPDATE_POST_CORE_CONVERGENCE_ENV,
 } from "../../commands/doctor/shared/update-phase.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
@@ -19,16 +20,22 @@ import {
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service.js";
 
-export function withUpdateFinalizationEnv<T>(run: () => Promise<T>): Promise<T> {
+type UpdateDoctorPhase = "pre-plugin" | "post-plugin";
+
+export async function withPrePluginUpdateDoctorEnv<T>(run: () => Promise<T>): Promise<T> {
   const previousUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
   const previousDeferConfiguredPluginInstallRepair =
     process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV];
   const previousParentSupportsDoctorConfigWrite =
     process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV];
+  const previousPostCoreConvergence = process.env[UPDATE_POST_CORE_CONVERGENCE_ENV];
   process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
   process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV] = "1";
   process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] = "1";
-  return run().finally(() => {
+  delete process.env[UPDATE_POST_CORE_CONVERGENCE_ENV];
+  try {
+    return await run();
+  } finally {
     if (previousUpdateInProgress === undefined) {
       delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
     } else {
@@ -46,7 +53,12 @@ export function withUpdateFinalizationEnv<T>(run: () => Promise<T>): Promise<T> 
       process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] =
         previousParentSupportsDoctorConfigWrite;
     }
-  });
+    if (previousPostCoreConvergence === undefined) {
+      delete process.env[UPDATE_POST_CORE_CONVERGENCE_ENV];
+    } else {
+      process.env[UPDATE_POST_CORE_CONVERGENCE_ENV] = previousPostCoreConvergence;
+    }
+  }
 }
 
 async function withNormalConfigValidation<T>(run: () => Promise<T>): Promise<T> {
@@ -82,7 +94,8 @@ function createPostPluginDoctorExecutionFailure(
   };
 }
 
-async function runPostPluginDoctorInFreshProcess(params: {
+export async function runUpdateFinalizationDoctorInFreshProcess(params: {
+  phase: UpdateDoctorPhase;
   root: string;
   yes: boolean;
   json: boolean;
@@ -102,16 +115,19 @@ async function runPostPluginDoctorInFreshProcess(params: {
     "--no-workspace-suggestions",
     ...(params.yes ? ["--yes"] : []),
   ];
+  const baseEnv = stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env));
+  delete baseEnv[UPDATE_POST_CORE_CONVERGENCE_ENV];
   const result = await runExec(params.nodeRunner ?? resolveNodeRunner(), args, {
     cwd: params.root,
     timeoutMs: params.timeoutMs,
     maxBuffer: 4 * 1024 * 1024,
     logOutput: false,
-    baseEnv: stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
+    baseEnv,
     env: {
       OPENCLAW_UPDATE_IN_PROGRESS: "1",
       [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1",
       [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+      ...(params.phase === "post-plugin" ? { [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1" } : {}),
     },
   });
   if (!params.json) {
@@ -177,7 +193,11 @@ async function applyFreshPostPluginDoctor(params: {
   }
   let pluginUpdate = params.pluginUpdate;
   try {
-    await runPostPluginDoctorInFreshProcess({ ...params, entryPath });
+    await runUpdateFinalizationDoctorInFreshProcess({
+      ...params,
+      entryPath,
+      phase: "post-plugin",
+    });
   } catch (err) {
     pluginUpdate = createPostPluginDoctorExecutionFailure(params.pluginUpdate, String(err));
   }

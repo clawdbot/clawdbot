@@ -1,6 +1,8 @@
 // Audits gateway config for bind, auth, and exposure risks.
 import { isIP } from "node:net";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import {
+  hasNonEmptyString,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
@@ -10,7 +12,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveGatewayAuth } from "../gateway/auth-resolve.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { collectCoreInsecureOrDangerousFlags } from "./core-dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
@@ -21,10 +22,6 @@ type CollectGatewayConfigFindingsOptions = {
   collectDangerousConfigFlags?: CollectDangerousConfigFlags;
   gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
 };
-
-function hasNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
 
 export function collectGatewayConfigFindings(
   cfg: OpenClawConfig,

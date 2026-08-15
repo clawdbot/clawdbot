@@ -156,13 +156,32 @@ describe("openclaw-exec-approval", () => {
     expect(queue.map((entry) => entry.id)).toEqual(["approval-oldest", "approval-newer"]);
   });
 
+  it("compacts queued commands without splitting a surrogate pair", async () => {
+    const queue = [
+      createExecRequest({ id: "approval-active", createdAtMs: 1 }),
+      createExecRequest({
+        id: "approval-queued",
+        createdAtMs: 2,
+        // The emoji straddles code unit 61, so a hard slice(0, 61) would
+        // leave a dangling high surrogate in front of the ellipsis.
+        request: { command: `${"a".repeat(60)}🙂 --with-extra-arguments` },
+      }),
+    ];
+    await renderApproval(queue);
+    await getRenderedModalDialog(container);
+
+    expect(container.querySelector(".exec-approval-list__command")?.textContent).toBe(
+      `${"a".repeat(60)}…`,
+    );
+  });
+
   it("handles modal approval keyboard shortcuts", async () => {
     const { onDecision } = await renderApproval(createExecRequest());
     const { modal } = await getRenderedModalDialog(container);
 
     modal.dispatchEvent(chord("Enter"));
     modal.dispatchEvent(chord("Enter", { shiftKey: true }));
-    modal.dispatchEvent(chord("d", { metaKey: false, ctrlKey: true }));
+    modal.dispatchEvent(chord("в", { code: "KeyD", metaKey: false, ctrlKey: true }));
 
     expect(onDecision.mock.calls).toEqual([
       ["approval-1", "allow-once"],
@@ -268,6 +287,31 @@ describe("openclaw-exec-approval", () => {
     rendered.modal.append(editor);
     editorChild.dispatchEvent(chord("Enter", { composed: true }));
 
+    expect(onDecision).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { reason: "a decision is in flight", busy: true, allowedDecisions: undefined },
+    { reason: "denial is unavailable", busy: false, allowedDecisions: ["allow-once"] as const },
+  ])("keeps the pending approval visible when $reason", async ({ busy, allowedDecisions }) => {
+    const { onDecision } = await renderApproval(
+      createExecRequest({
+        request: {
+          command: "echo hello",
+          ...(allowedDecisions ? { allowedDecisions: [...allowedDecisions] } : {}),
+        },
+      }),
+      { busy },
+    );
+    const { modal } = await getRenderedModalDialog(container);
+    const cancel = new CustomEvent("modal-cancel", {
+      bubbles: true,
+      composed: true,
+      cancelable: true,
+    });
+
+    expect(modal.dispatchEvent(cancel)).toBe(false);
+    expect(cancel.defaultPrevented).toBe(true);
     expect(onDecision).not.toHaveBeenCalled();
   });
 

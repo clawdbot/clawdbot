@@ -40,6 +40,7 @@ type Args = {
   evidenceDir?: string;
   check: boolean;
   strictInputs: boolean;
+  allowFailures: boolean;
 };
 
 type EvidenceSummary = {
@@ -98,6 +99,7 @@ function parseArgs(argv: string[]): Args {
     evidenceDir: undefined,
     check: false,
     strictInputs: false,
+    allowFailures: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -110,6 +112,10 @@ function parseArgs(argv: string[]): Args {
     }
     if (arg === "--strict-inputs") {
       args.strictInputs = true;
+      continue;
+    }
+    if (arg === "--allow-failures") {
+      args.allowFailures = true;
       continue;
     }
     const next = (): string => {
@@ -145,6 +151,7 @@ Options:
   --evidence-dir <path> Optional directory containing qa-evidence.json artifacts
   --check               Fail when output files are stale
   --strict-inputs       Fail on score or evidence input warnings
+  --allow-failures      Render valid incomplete QA evidence; non-passing checks earn no Coverage
   -h, --help            Show this help
 `);
       process.exit(0);
@@ -1224,7 +1231,9 @@ function main(): void {
   }
 
   const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
-  rejectBlockingEvidence(evidenceSummaries);
+  if (!args.allowFailures) {
+    rejectBlockingEvidence(evidenceSummaries);
+  }
   const coverage = deriveCoverageScores(taxonomy, evidenceSummaries);
   const { scores, warnings: scoreWarnings } = readValidatedQaMaturityScoreSources({
     coverageScores: coverage,

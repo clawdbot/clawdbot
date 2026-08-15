@@ -16,6 +16,7 @@ import type {
   TailscaleMode,
 } from "../../commands/onboard-types.js";
 import { resolveProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
@@ -42,6 +43,7 @@ export function resolveTailscaleResetOnExitFlag(command: Command): boolean | und
 const MODERN_ONBOARD_OPTION_KEYS = new Set([
   "modern",
   "workspace",
+  "agentName",
   "acceptRisk",
   "nonInteractive",
   "json",
@@ -179,6 +181,18 @@ export function pickOnboardAuthOptionValues(
   };
 }
 
+export function validateOnboardAuthOptionValues(
+  opts: Record<string, unknown>,
+  runtime: RuntimeEnv,
+): boolean {
+  if (opts.customImageInput === true && opts.customTextInput === true) {
+    runtime.error("Use either --custom-image-input or --custom-text-input, not both.");
+    runtime.exit(1);
+    return false;
+  }
+  return true;
+}
+
 export function registerOnboardCommand(program: Command): void {
   const command = program
     .command("onboard")
@@ -192,6 +206,7 @@ export function registerOnboardCommand(program: Command): void {
       "--workspace <dir>",
       "Workspace proposal for guided setup; persisted by classic/non-interactive setup",
     )
+    .option("--agent-name <name>", "Name for the first agent (default: main)")
     .option(
       "--reset",
       "Reset config + credentials + sessions before running onboard (workspace only with --reset-scope full)",
@@ -322,13 +337,18 @@ export function registerOnboardCommand(program: Command): void {
             interactive: !opts.nonInteractive,
             welcomeVariant: "onboarding",
             ...(opts.workspace ? { setupWorkspace: opts.workspace as string } : {}),
+            ...(opts.agentName ? { setupAgentName: opts.agentName as string } : {}),
           },
           defaultRuntime,
           {
             ...(opts.workspace ? { workspace: opts.workspace as string } : {}),
+            ...(opts.agentName ? { agentName: opts.agentName as string } : {}),
             ...(opts.acceptRisk ? { acceptRisk: true } : {}),
           },
         );
+        return;
+      }
+      if (!validateOnboardAuthOptionValues(opts as Record<string, unknown>, defaultRuntime)) {
         return;
       }
       const installDaemon = resolveInstallDaemonFlag(commandRuntime);
@@ -338,6 +358,7 @@ export function registerOnboardCommand(program: Command): void {
       await setupWizardCommand(
         {
           workspace: opts.workspace as string | undefined,
+          agentName: opts.agentName as string | undefined,
           nonInteractive: Boolean(opts.nonInteractive),
           acceptRisk: Boolean(opts.acceptRisk),
           classic: Boolean(opts.classic),

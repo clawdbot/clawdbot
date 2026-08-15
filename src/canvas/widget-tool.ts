@@ -1,9 +1,9 @@
 /** Agent-facing inline chat widget tool. */
 import { createHash } from "node:crypto";
 import { Type } from "typebox";
-import type { BoardSnapshot } from "../../packages/gateway-protocol/src/index.js";
+import type { BoardWidgetPutResult } from "../../packages/gateway-protocol/src/index.js";
 import { optionalStringEnum } from "../agents/schema/string-enum.js";
-import { type AnyAgentTool, jsonResult, readStringParam } from "../agents/tools/common.js";
+import { type AnyAgentTool, jsonResult, readToolStringParam } from "../agents/tools/common.js";
 import {
   callInProcessGatewayTool,
   type InProcessGatewayCaller,
@@ -85,6 +85,16 @@ function slugWidgetName(title: string): string {
   return `${prefix}-${suffix}`;
 }
 
+function generatedWidgetIdentity(title: string, preferredName: string) {
+  const key = createHash("sha256").update(title.trim().normalize("NFC")).digest("hex");
+  const prefix = preferredName.slice(0, 55).replace(/-+$/gu, "") || "widget";
+  return {
+    source: "show_widget" as const,
+    key,
+    fallbackName: `${prefix}-${key.slice(0, 8)}`,
+  };
+}
+
 function boardWidgetTitle(title: string): string | undefined {
   const normalized = title.trim();
   return normalized ? Array.from(normalized).slice(0, 80).join("") : undefined;
@@ -117,8 +127,8 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
     requiredClientCaps: SHOW_WIDGET_REQUIRED_CLIENT_CAPS,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const title = readStringParam(params, "title", { required: true });
-      const rawWidgetCode = readStringParam(params, "widget_code", {
+      const title = readToolStringParam(params, "title", { required: true });
+      const rawWidgetCode = readToolStringParam(params, "widget_code", {
         required: true,
         trim: false,
       });
@@ -146,19 +156,19 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       let pinnedWidgetName: string | undefined;
       if (pinSessionKey) {
         const sessionKey = pinSessionKey;
-        const name = readStringParam(params, "name") ?? slugWidgetName(title);
-        pinnedWidgetName = name;
-        const tab = readStringParam(params, "tab");
-        const size = readStringParam(params, "size");
-        const presentation = readStringParam(params, "presentation");
-        const after = readStringParam(params, "after");
+        const explicitName = readToolStringParam(params, "name");
+        const name = explicitName ?? slugWidgetName(title);
+        const tab = readToolStringParam(params, "tab");
+        const size = readToolStringParam(params, "size");
+        const presentation = readToolStringParam(params, "presentation");
+        const after = readToolStringParam(params, "after");
         const pinnedTitle = boardWidgetTitle(title);
         assertPinnedWidgetDocumentSize(
           buildWidgetDocument(pinnedTitle ?? name, widgetCode, {
             connectOrigins: capabilities?.netOrigins,
           }),
         );
-        const snapshot = await gatewayCall<BoardSnapshot>("board.widget.put", {
+        const snapshot = await gatewayCall<BoardWidgetPutResult>("board.widget.put", {
           sessionKey,
           name,
           ...(pinnedTitle ? { title: pinnedTitle } : {}),
@@ -167,6 +177,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           content: { kind: "html", html: widgetCode },
           ...(presentation ? { presentation } : {}),
           ...(capabilities ? { declared: capabilities } : {}),
+          ...(!explicitName ? { generatedIdentity: generatedWidgetIdentity(title, name) } : {}),
           ...(tab || size || after
             ? {
                 placement: {
@@ -177,10 +188,13 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
               }
             : {}),
         });
-        const widget = snapshot.widgets.find((candidate) => candidate.name === name);
-        pinnedText = `; pinned to dashboard tab ${widget?.tabId ?? tab ?? "main"} as ${name}${
-          size ? ` (${size})` : ""
-        }`;
+        pinnedWidgetName = snapshot.resolvedWidgetName;
+        const widget = snapshot.widgets.find(
+          (candidate) => candidate.name === snapshot.resolvedWidgetName,
+        );
+        pinnedText = `; pinned to dashboard tab ${widget?.tabId ?? tab ?? "main"} as ${
+          snapshot.resolvedWidgetName
+        }${size ? ` (${size})` : ""}`;
       }
       // Pin first: placement validation can fail, and a rejected board write
       // must not materialize or prune the bounded inline-document store.

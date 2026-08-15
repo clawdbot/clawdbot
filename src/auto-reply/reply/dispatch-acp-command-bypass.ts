@@ -4,7 +4,7 @@ import { hasControlCommand } from "../command-detection.js";
 import { isCommandEnabled } from "../commands-registry-list.js";
 import { maybeResolveTextAlias } from "../commands-registry-normalize.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
-import type { FinalizedMsgContext } from "../templating.js";
+import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { resolveCommandContextText } from "./context-text.js";
 
 function isResetCommandCandidate(text: string): boolean {
@@ -20,7 +20,7 @@ function isLocalCommandCandidate(text: string, cfg: OpenClawConfig): boolean {
 }
 
 export function shouldBypassAcpDispatchForCommand(
-  ctx: FinalizedMsgContext,
+  ctx: FinalizedRuntimeMsgContext,
   cfg: OpenClawConfig,
 ): boolean {
   const candidate = resolveCommandContextText(ctx);

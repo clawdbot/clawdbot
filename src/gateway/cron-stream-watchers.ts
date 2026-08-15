@@ -1,5 +1,6 @@
 import { resolveCronTriggerMinIntervalMs } from "../config/cron-limits.js";
 import type { CronJob, CronJobState } from "../cron/types.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { ProcessSupervisor } from "../process/supervisor/index.js";
 import {
   CronStreamJobOwner,
@@ -140,13 +141,7 @@ export function createCronStreamWatchers(params: {
         snapshot.coalescedBatches,
       ),
     });
-    while (retiredCounterSeeds.size > MAX_RETIRED_COUNTER_SEEDS) {
-      const oldest = retiredCounterSeeds.keys().next().value;
-      if (oldest === undefined) {
-        break;
-      }
-      retiredCounterSeeds.delete(oldest);
-    }
+    pruneMapToMaxSize(retiredCounterSeeds, MAX_RETIRED_COUNTER_SEEDS);
   };
 
   const createOwner = (job: CronStreamJob): CronStreamJobOwner => {

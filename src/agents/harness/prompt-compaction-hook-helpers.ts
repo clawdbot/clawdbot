@@ -19,6 +19,8 @@ const log = createSubsystemLogger("agents/harness");
 type AgentHarnessPromptBuildResult = {
   prompt: string;
   developerInstructions: string;
+  /** Optional per-turn tool restriction requested by before_prompt_build hooks. */
+  toolsAllow?: string[];
   /** Span within prompt containing the original prompt input. */
   promptInputRange?: { start: number; end: number };
 };
@@ -36,8 +38,7 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   // (e.g. the Codex app-server) build the prompt through this helper rather than
   // the embedded runner's resolvePromptBuildHookResult, so the hook must run from
   // here too — otherwise it never fires on those runtimes.
-  const isHeartbeatTurn =
-    params.ctx.trigger === "heartbeat" && params.bootstrapContextRunKind !== "commitment-only";
+  const isHeartbeatTurn = params.ctx.trigger === "heartbeat";
   const hasHeartbeatContribution =
     isHeartbeatTurn && Boolean(hookRunner?.hasHooks("heartbeat_prompt_contribution"));
   if (!hasHeartbeatContribution && !hookRunner?.hasHooks("before_prompt_build")) {
@@ -100,6 +101,9 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
         : 0;
   return {
     prompt,
+    ...(promptBuildResult?.toolsAllow !== undefined
+      ? { toolsAllow: promptBuildResult.toolsAllow }
+      : {}),
     developerInstructions:
       joinPresentTextSegments([
         wrapPluginSystemContextSection(promptBuildResult?.prependSystemContext),

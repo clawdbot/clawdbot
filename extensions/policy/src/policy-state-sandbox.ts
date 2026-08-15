@@ -1,5 +1,6 @@
 // Policy plugin sandbox posture evidence.
 import {
+  asNonArrayRecord,
   isRecord,
   asBoolean as readBoolean,
   normalizeOptionalString as readString,
@@ -13,9 +14,9 @@ const DEFAULT_POLICY_SANDBOX_BROWSER_NETWORK = "openclaw-sandbox-browser";
 export function scanPolicySandboxPosture(
   cfg: Record<string, unknown>,
 ): readonly PolicySandboxPostureEvidence[] {
-  const agents = isRecord(cfg.agents) ? cfg.agents : {};
-  const defaults = isRecord(agents.defaults) ? agents.defaults : {};
-  const defaultSandbox = isRecord(defaults.sandbox) ? defaults.sandbox : {};
+  const agents = asNonArrayRecord(cfg.agents);
+  const defaults = asNonArrayRecord(agents.defaults);
+  const defaultSandbox = asNonArrayRecord(defaults.sandbox);
   const entries: PolicySandboxPostureEvidence[] = [];
   pushSandboxPostureEvidence(entries, {
     id: "agents-defaults",
@@ -33,7 +34,7 @@ export function scanPolicySandboxPosture(
     }
     const agentId =
       typeof agent.id === "string" && agent.id.trim() !== "" ? agent.id.trim() : undefined;
-    const sandbox = isRecord(agent.sandbox) ? agent.sandbox : {};
+    const sandbox = asNonArrayRecord(agent.sandbox);
     pushSandboxPostureEvidence(entries, {
       id: agentId ?? `agent-${index}`,
       scope: "agent",
@@ -87,7 +88,7 @@ function pushSandboxPostureEvidence(
     inherited: localBackend === undefined && inheritedBackend !== undefined,
   });
 
-  if (effectiveBackend === "docker") {
+  if (effectiveBackend === "docker" || effectiveBackend === "podman") {
     pushSandboxDockerPosture(entries, effectiveParams);
   }
   pushSandboxBrowserPosture(entries, effectiveParams);
@@ -97,8 +98,7 @@ function pushSandboxDockerPosture(
   entries: PolicySandboxPostureEvidence[],
   params: SandboxPostureParams,
 ): void {
-  const localDocker =
-    !params.sharedSandboxScope && isRecord(params.sandbox.docker) ? params.sandbox.docker : {};
+  const localDocker = !params.sharedSandboxScope ? asNonArrayRecord(params.sandbox.docker) : {};
   const inheritedDocker = isRecord(params.inheritedSandbox.docker)
     ? params.inheritedSandbox.docker
     : {};
@@ -183,8 +183,7 @@ function pushSandboxBrowserPosture(
   entries: PolicySandboxPostureEvidence[],
   params: SandboxPostureParams,
 ): void {
-  const localBrowser =
-    !params.sharedSandboxScope && isRecord(params.sandbox.browser) ? params.sandbox.browser : {};
+  const localBrowser = !params.sharedSandboxScope ? asNonArrayRecord(params.sandbox.browser) : {};
   const inheritedBrowser = isRecord(params.inheritedSandbox.browser)
     ? params.inheritedSandbox.browser
     : {};
@@ -241,9 +240,8 @@ function pushSandboxBrowserPosture(
       sourceSuffix: "browser/binds",
       surface: "browser",
     });
-  } else if (params.effectiveBackend !== "docker") {
-    const localDocker =
-      !params.sharedSandboxScope && isRecord(params.sandbox.docker) ? params.sandbox.docker : {};
+  } else if (params.effectiveBackend !== "docker" && params.effectiveBackend !== "podman") {
+    const localDocker = !params.sharedSandboxScope ? asNonArrayRecord(params.sandbox.docker) : {};
     const inheritedDocker = isRecord(params.inheritedSandbox.docker)
       ? params.inheritedSandbox.docker
       : {};

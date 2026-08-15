@@ -25,4 +25,16 @@ describe("resolveSessionBoundaryPromptCacheKey", () => {
       }),
     ).toBe("caller-key");
   });
+
+  it("clamps derived keys from long internal session ids to OpenAI's 64-char limit", () => {
+    const longSessionId = `internal-session-effects-session-companion-${"a".repeat(50)}`;
+    const key = resolveSessionBoundaryPromptCacheKey({
+      api: "openai-responses",
+      boundaryCount: 0,
+      sessionId: longSessionId,
+    });
+    expect(key).toBeDefined();
+    expect(Array.from(key ?? "").length).toBeLessThanOrEqual(64);
+    expect(key?.startsWith("internal-session-effects-session-companion-")).toBe(true);
+  });
 });

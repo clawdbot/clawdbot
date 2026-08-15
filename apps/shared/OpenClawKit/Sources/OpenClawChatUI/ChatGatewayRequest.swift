@@ -69,6 +69,7 @@ public struct OpenClawChatSessionTarget: Sendable, Equatable {
 public enum OpenClawChatGatewayRequests {
     private static let defaultTimeoutMs: Double = 15000
     private static let mutationTimeoutMs: Double = 15000
+    private static let archiveMutationTimeoutMs: Double = 10 * 60 * 1000
     private static let shortTimeoutMs: Double = 10000
     private static let compactionTimeoutMs: Double = 0
 
@@ -80,8 +81,55 @@ public enum OpenClawChatGatewayRequests {
         OpenClawChatGatewayRequest(method: "models.list", timeoutMs: self.defaultTimeoutMs)
     }
 
+    public static func artifactDownload(
+        sessionKey: String,
+        agentID: String?,
+        artifactId: String) -> OpenClawChatGatewayRequest
+    {
+        var params: [String: AnyCodable] = [
+            "sessionKey": AnyCodable(sessionKey),
+            "artifactId": AnyCodable(artifactId),
+        ]
+        self.add(agentID, to: &params, key: "agentId")
+        return OpenClawChatGatewayRequest(
+            method: "artifacts.download",
+            params: params,
+            timeoutMs: self.defaultTimeoutMs)
+    }
+
+    public static func chatMetadata(
+        sessionKey: String,
+        fallbackAgentID: String?) -> OpenClawChatGatewayRequest
+    {
+        var params: [String: AnyCodable] = [:]
+        self.add(
+            OpenClawChatSessionKey.agentID(from: sessionKey) ?? fallbackAgentID,
+            to: &params,
+            key: "agentId")
+        return OpenClawChatGatewayRequest(
+            method: "chat.metadata",
+            params: params,
+            timeoutMs: self.defaultTimeoutMs)
+    }
+
     public static func questionList() -> OpenClawChatGatewayRequest {
         OpenClawChatGatewayRequest(method: "question.list", timeoutMs: self.defaultTimeoutMs)
+    }
+
+    public static func tasksList(
+        sessionKey: String,
+        agentID: String?,
+        limit: Int = 200) -> OpenClawChatGatewayRequest
+    {
+        var params: [String: AnyCodable] = [
+            "sessionKey": AnyCodable(sessionKey),
+            "limit": AnyCodable(limit),
+        ]
+        self.add(agentID, to: &params, key: "agentId")
+        return OpenClawChatGatewayRequest(
+            method: "tasks.list",
+            params: params,
+            timeoutMs: self.defaultTimeoutMs)
     }
 
     public static func questionGet(id: String) -> OpenClawChatGatewayRequest {
@@ -122,6 +170,9 @@ public enum OpenClawChatGatewayRequests {
         includeGlobal: Bool = true,
         includeUnknown: Bool = false,
         activeMinutes: Int? = nil,
+        spawnedBy: String? = nil,
+        offset: Int? = nil,
+        configuredAgentsOnly: Bool? = nil,
         timeoutMs: Double = 15000) -> OpenClawChatGatewayRequest
     {
         var params: [String: AnyCodable] = [
@@ -133,6 +184,15 @@ public enum OpenClawChatGatewayRequests {
         }
         if let activeMinutes {
             params["activeMinutes"] = AnyCodable(activeMinutes)
+        }
+        if let spawnedBy = normalized(spawnedBy) {
+            params["spawnedBy"] = AnyCodable(spawnedBy)
+        }
+        if let offset {
+            params["offset"] = AnyCodable(offset)
+        }
+        if let configuredAgentsOnly {
+            params["configuredAgentsOnly"] = AnyCodable(configuredAgentsOnly)
         }
         let normalizedSearch = self.normalized(search)
         if let normalizedSearch {
@@ -272,6 +332,7 @@ public enum OpenClawChatGatewayRequests {
     public static func patchSession(
         sessionKey: String,
         agentID: String?,
+        expectedSessionID: String? = nil,
         label: String??,
         category: String??,
         pinned: Bool?,
@@ -279,6 +340,11 @@ public enum OpenClawChatGatewayRequests {
         unread: Bool?) -> OpenClawChatGatewayRequest
     {
         var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID)
+        if let expectedSessionID = expectedSessionID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !expectedSessionID.isEmpty
+        {
+            params["expectedSessionId"] = AnyCodable(expectedSessionID)
+        }
         if let label {
             params["label"] = label.map(AnyCodable.init) ?? AnyCodable(NSNull())
         }
@@ -297,7 +363,7 @@ public enum OpenClawChatGatewayRequests {
         return OpenClawChatGatewayRequest(
             method: "sessions.patch",
             params: params,
-            timeoutMs: self.mutationTimeoutMs)
+            timeoutMs: archived == true ? self.archiveMutationTimeoutMs : self.mutationTimeoutMs)
     }
 
     public static func deleteSession(
@@ -314,12 +380,16 @@ public enum OpenClawChatGatewayRequests {
 
     public static func forkSession(
         parentSessionKey: String,
-        agentID: String?) -> OpenClawChatGatewayRequest
+        agentID: String?,
+        fromLastCompleted: Bool = false) -> OpenClawChatGatewayRequest
     {
         var params: [String: AnyCodable] = [
             "parentSessionKey": AnyCodable(parentSessionKey),
             "fork": AnyCodable(true),
         ]
+        if fromLastCompleted {
+            params["forkFrom"] = AnyCodable("last-completed")
+        }
         self.add(agentID, to: &params, key: "agentId")
         return OpenClawChatGatewayRequest(
             method: "sessions.create",
@@ -387,6 +457,22 @@ public enum OpenClawChatGatewayRequests {
             method: "sessions.branches.switch",
             params: params,
             timeoutMs: self.mutationTimeoutMs)
+    }
+
+    public static func subscribeSessions(timeoutMs: Double = 10000) -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "sessions.subscribe",
+            timeoutMs: timeoutMs)
+    }
+
+    public static func setSessionObserverVisibility(
+        _ visible: Bool,
+        timeoutMs: Double = 10000) -> OpenClawChatGatewayRequest
+    {
+        OpenClawChatGatewayRequest(
+            method: "sessions.observer.visibility",
+            params: ["visible": AnyCodable(visible)],
+            timeoutMs: timeoutMs)
     }
 
     public static func subscribeSessionMessages(

@@ -16,9 +16,10 @@ import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
+import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 import { supportsBedrockPromptCaching } from "./bedrock-options.js";
 import { loadBedrockControlPlaneSdk, runBedrockControlPlaneRequest } from "./control-plane.js";
@@ -60,7 +61,8 @@ function normalizeBedrockResolvedModel({ modelId, model }: ProviderNormalizeReso
   const reasoning =
     model.reasoning ||
     resolveClaudeFable5ModelIdentity({ id: modelId, params: model.params }) !== undefined ||
-    resolveClaudeMythos5ModelIdentity({ id: modelId, params: model.params }) !== undefined;
+    resolveClaudeMythos5ModelIdentity({ id: modelId, params: model.params }) !== undefined ||
+    resolveClaudeOpus5ModelIdentity({ id: modelId, params: model.params }) !== undefined;
   const current = model.thinkingLevelMap;
   const currentEfforts = current as Record<string, string | null | undefined> | undefined;
   if (
@@ -135,14 +137,13 @@ function createBedrockServiceTierWrapper(
   underlying: StreamFn,
   serviceTier: BedrockServiceTier,
 ): StreamFn {
-  return (model, context, options) => {
-    if (model.api !== "bedrock-converse-stream") {
-      return underlying(model, context, options);
-    }
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      payloadObj.serviceTier ??= { type: serviceTier };
-    });
-  };
+  return createPayloadPatchStreamWrapper(
+    underlying,
+    ({ payload }) => {
+      payload.serviceTier ??= { type: serviceTier };
+    },
+    { shouldPatch: ({ model }) => model.api === "bedrock-converse-stream" },
+  );
 }
 
 function createGuardrailWrapStreamFn(
@@ -162,21 +163,19 @@ function createGuardrailWrapStreamFn(
     if (!inner) {
       return inner;
     }
-    return (model, context, options) => {
-      return streamWithPayloadPatch(inner, model, context, options, (payload) => {
-        const gc: Record<string, unknown> = {
-          guardrailIdentifier: guardrailConfig.guardrailIdentifier,
-          guardrailVersion: guardrailConfig.guardrailVersion,
-        };
-        if (guardrailConfig.streamProcessingMode) {
-          gc.streamProcessingMode = guardrailConfig.streamProcessingMode;
-        }
-        if (guardrailConfig.trace) {
-          gc.trace = guardrailConfig.trace;
-        }
-        payload.guardrailConfig = gc;
-      });
-    };
+    return createPayloadPatchStreamWrapper(inner, ({ payload }) => {
+      const gc: Record<string, unknown> = {
+        guardrailIdentifier: guardrailConfig.guardrailIdentifier,
+        guardrailVersion: guardrailConfig.guardrailVersion,
+      };
+      if (guardrailConfig.streamProcessingMode) {
+        gc.streamProcessingMode = guardrailConfig.streamProcessingMode;
+      }
+      if (guardrailConfig.trace) {
+        gc.trace = guardrailConfig.trace;
+      }
+      payload.guardrailConfig = gc;
+    });
   };
 }
 
@@ -549,6 +548,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       const currentGuardrail = currentPluginConfig?.guardrail;
       const modelRef = { id: modelId, params: model?.params };
       const fable5 = resolveClaudeFable5ModelIdentity(modelRef) !== undefined;
+      const opus5 = resolveClaudeOpus5ModelIdentity(modelRef) !== undefined;
       const sonnet5 = resolveClaudeSonnet5ModelIdentity(modelRef) !== undefined;
       const canonicalModelId = resolveClaudeModelIdentity(modelRef);
       const opus47OrNewer =
@@ -570,8 +570,8 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         api.logger.warn(message),
       );
       if (serviceTier && wrapped) {
-        if ((fable5 || sonnet5) && serviceTier !== "default") {
-          const modelLabel = fable5 ? "Fable 5" : "Sonnet 5";
+        if ((fable5 || opus5 || sonnet5) && serviceTier !== "default") {
+          const modelLabel = fable5 ? "Fable 5" : opus5 ? "Opus 5" : "Sonnet 5";
           api.logger.warn(
             `ignoring unsupported ${modelLabel} Bedrock service tier: ${serviceTier}`,
           );

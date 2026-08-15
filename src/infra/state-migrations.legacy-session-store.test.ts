@@ -2,14 +2,14 @@ import type { MakeDirectoryOptions, Mode, PathLike } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   loadLegacySessionStore,
   saveLegacySessionStore,
 } from "./state-migrations.legacy-session-store.js";
 
 it("stages prompt blobs after a recreated session directory", async () => {
-  await withTempDir({ prefix: "openclaw-legacy-session-store-" }, async (root) => {
+  await withTestDir({ prefix: "openclaw-legacy-session-store-" }, async (root) => {
     const storeDir = path.join(root, "sessions");
     const storePath = path.join(storeDir, "sessions.json");
     const sessionKey = "agent:main:main";
@@ -56,7 +56,7 @@ it("stages prompt blobs after a recreated session directory", async () => {
 });
 
 it("normalizes file-era rows and drops malformed entries", async () => {
-  await withTempDir({ prefix: "openclaw-legacy-session-normalize-" }, async (root) => {
+  await withTestDir({ prefix: "openclaw-legacy-session-normalize-" }, async (root) => {
     const storePath = path.join(root, "sessions.json");
     await fs.writeFile(
       storePath,
@@ -83,16 +83,21 @@ it("normalizes file-era rows and drops malformed entries", async () => {
     expect(store.malformed).toBeUndefined();
     expect(store["agent:main:main"]).toMatchObject({
       sessionId: "session-1",
-      channel: "slack",
-      lastChannel: "telegram",
+      delivery: {
+        kind: "external",
+        context: { channel: "telegram" },
+        origin: { provider: "telegram" },
+      },
       pluginExtensions: { demo: { valid: { ok: true } } },
     });
-    expect(store["agent:main:main"]?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(store["agent:main:main"]).not.toHaveProperty("channel");
+    expect(store["agent:main:main"]).not.toHaveProperty("lastChannel");
+    expect(store["agent:main:main"]).not.toHaveProperty("pendingFinalDeliveryAttemptCount");
   });
 });
 
 it("normalizes compatibility writes before persistence", async () => {
-  await withTempDir({ prefix: "openclaw-legacy-session-write-" }, async (root) => {
+  await withTestDir({ prefix: "openclaw-legacy-session-write-" }, async (root) => {
     const storePath = path.join(root, "sessions.json");
     const store = {
       malformed: null,
@@ -113,8 +118,13 @@ it("normalizes compatibility writes before persistence", async () => {
     expect(persisted.malformed).toBeUndefined();
     expect(persisted["agent:main:main"]).toMatchObject({
       sessionId: "session-1",
-      channel: "slack",
+      delivery: {
+        kind: "external",
+        context: { channel: "slack" },
+        origin: { provider: "slack" },
+      },
     });
-    expect(persisted["agent:main:main"]?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(persisted["agent:main:main"]).not.toHaveProperty("channel");
+    expect(persisted["agent:main:main"]).not.toHaveProperty("pendingFinalDeliveryAttemptCount");
   });
 });

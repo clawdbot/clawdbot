@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateConversationListParams,
   validateConversationSendParams,
   validateConversationTurnCancelParams,
@@ -12,6 +11,7 @@ import {
   type ConversationTurnCancelParams,
   type ConversationTurnParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { cancelPendingConversationTurn } from "../../sessions/conversation-turns.js";
 import {
   ConversationInputError,
@@ -22,6 +22,7 @@ import { runGatewayConversationSend } from "../conversation-send.js";
 import { runGatewayConversationTurn } from "../conversation-turn.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { formatForLog } from "../ws-log.js";
 import {
   cacheGatewayDedupeResult,
@@ -35,6 +36,7 @@ import type {
   GatewayRequestHandlers,
   RespondFn,
 } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 type ConversationHandlerDeps = {
   cancelConversationTurn: typeof cancelPendingConversationTurn;
@@ -47,6 +49,42 @@ function isAuthenticatedOwner(client: GatewayClient | null): boolean {
   // These RPCs require operator.admin. Derive owner status from the admitted
   // socket anyway so no future schema field can self-assert channel authority.
   return client?.connect?.scopes?.includes(ADMIN_SCOPE) === true;
+}
+
+function validateConversationSourceSession(params: {
+  config: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+  agentId: string;
+  sourceSessionKey?: string;
+  respond: RespondFn;
+}): boolean {
+  if (!params.sourceSessionKey) {
+    return true;
+  }
+  const parsed = parseAgentSessionKey(params.sourceSessionKey);
+  if (parsed) {
+    if (normalizeAgentId(parsed.agentId) === normalizeAgentId(params.agentId)) {
+      return true;
+    }
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `agent "${params.agentId}" does not match session key agent "${parsed.agentId}"`,
+      ),
+    );
+    return false;
+  }
+  const owner = resolveRequestedSessionAgentId(
+    params.config,
+    params.sourceSessionKey,
+    params.agentId,
+  );
+  if (owner.ok) {
+    return true;
+  }
+  params.respond(false, undefined, owner.error);
+  return false;
 }
 
 function conversationOperationKey(params: {
@@ -201,15 +239,9 @@ export function createConversationHandlers(
   const deps = { ...defaultConversationHandlerDeps, ...overrides };
   return {
     "conversations.list": async ({ params, respond, context }) => {
-      if (!validateConversationListParams(params)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid conversations.list params: ${formatValidationErrors(validateConversationListParams.errors)}`,
-          ),
-        );
+      if (
+        !assertValidParams(params, validateConversationListParams, "conversations.list", respond)
+      ) {
         return;
       }
       const request = params as ConversationListParams;
@@ -237,18 +269,23 @@ export function createConversationHandlers(
       }
     },
     "conversations.send": async ({ params, respond, context, client }) => {
-      if (!validateConversationSendParams(params)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid conversations.send params: ${formatValidationErrors(validateConversationSendParams.errors)}`,
-          ),
-        );
+      if (
+        !assertValidParams(params, validateConversationSendParams, "conversations.send", respond)
+      ) {
         return;
       }
       const request = params as ConversationSendParams;
+      const config = resolveGatewayPluginConfig({ config: context.getRuntimeConfig() });
+      if (
+        !validateConversationSourceSession({
+          config,
+          agentId: request.agentId,
+          sourceSessionKey: request.sourceSessionKey,
+          respond,
+        })
+      ) {
+        return;
+      }
       const requestIdentity = bindConversationOperationIdentity(context, {
         method: "send",
         operationId: request.operationId,
@@ -280,7 +317,7 @@ export function createConversationHandlers(
         respond,
         execute: async () =>
           await deps.runConversationSend({
-            config: resolveGatewayPluginConfig({ config: context.getRuntimeConfig() }),
+            config,
             agentId: request.agentId,
             senderIsOwner: isAuthenticatedOwner(client),
             ...(request.sourceSessionKey ? { sourceSessionKey: request.sourceSessionKey } : {}),
@@ -291,15 +328,14 @@ export function createConversationHandlers(
       });
     },
     "conversations.turn.cancel": ({ params, respond }) => {
-      if (!validateConversationTurnCancelParams(params)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid conversations.turn.cancel params: ${formatValidationErrors(validateConversationTurnCancelParams.errors)}`,
-          ),
-        );
+      if (
+        !assertValidParams(
+          params,
+          validateConversationTurnCancelParams,
+          "conversations.turn.cancel",
+          respond,
+        )
+      ) {
         return;
       }
       const request = params as ConversationTurnCancelParams;
@@ -315,18 +351,23 @@ export function createConversationHandlers(
       );
     },
     "conversations.turn": async ({ params, respond, context, client }) => {
-      if (!validateConversationTurnParams(params)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid conversations.turn params: ${formatValidationErrors(validateConversationTurnParams.errors)}`,
-          ),
-        );
+      if (
+        !assertValidParams(params, validateConversationTurnParams, "conversations.turn", respond)
+      ) {
         return;
       }
       const request = params as ConversationTurnParams;
+      const config = resolveGatewayPluginConfig({ config: context.getRuntimeConfig() });
+      if (
+        !validateConversationSourceSession({
+          config,
+          agentId: request.agentId,
+          sourceSessionKey: request.sourceSessionKey,
+          respond,
+        })
+      ) {
+        return;
+      }
       const requestIdentity = bindConversationOperationIdentity(context, {
         method: "turn",
         operationId: request.turnId,
@@ -359,7 +400,7 @@ export function createConversationHandlers(
         respond,
         execute: async () =>
           await deps.runConversationTurn({
-            config: resolveGatewayPluginConfig({ config: context.getRuntimeConfig() }),
+            config,
             agentId: request.agentId,
             senderIsOwner: isAuthenticatedOwner(client),
             ...(request.sourceSessionKey ? { sourceSessionKey: request.sourceSessionKey } : {}),

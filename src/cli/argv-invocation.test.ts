@@ -24,4 +24,95 @@ describe("argv-invocation", () => {
       isRootHelpInvocation: false,
     });
   });
+
+  it.each([
+    {
+      name: "version-pinned install",
+      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version", "1.2.3"],
+      commandPath: ["skills", "install"],
+    },
+    {
+      name: "version-pinned verification",
+      argv: ["node", "openclaw", "skills", "verify", "@owner/weather", "--version", "1.2.3"],
+      commandPath: ["skills", "verify"],
+    },
+    {
+      name: "equals-form version-pinned install",
+      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version=1.2.3"],
+      commandPath: ["skills", "install"],
+    },
+    {
+      name: "profiled version-pinned verification",
+      argv: [
+        "node",
+        "openclaw",
+        "--profile",
+        "work",
+        "skills",
+        "verify",
+        "@owner/weather",
+        "--version",
+        "1.2.3",
+      ],
+      commandPath: ["skills", "verify"],
+    },
+  ])("keeps $name in command execution mode", ({ argv, commandPath }) => {
+    expect(resolveCliArgvInvocation(argv)).toEqual({
+      argv,
+      commandPath,
+      primary: "skills",
+      hasHelpOrVersion: false,
+      isRootHelpInvocation: false,
+    });
+  });
+
+  it("consumes agent parent option values before the exec subcommand", () => {
+    expect(
+      resolveCliArgvInvocation([
+        "node",
+        "openclaw",
+        "agent",
+        "--model",
+        "openai/gpt-5.6-sol",
+        "exec",
+        "fix it",
+      ]).commandPath,
+    ).toEqual(["agent", "exec"]);
+  });
+
+  it("does not treat an exec-valued parent option as the subcommand", () => {
+    expect(
+      resolveCliArgvInvocation(["node", "openclaw", "agent", "--message", "exec"]).commandPath,
+    ).toEqual(["agent"]);
+  });
+
+  it("consumes root options between the agent parent and exec", () => {
+    expect(
+      resolveCliArgvInvocation([
+        "node",
+        "openclaw",
+        "agent",
+        "--no-color",
+        "--model",
+        "openai/gpt-5.6-sol",
+        "exec",
+        "fix it",
+      ]).commandPath,
+    ).toEqual(["agent", "exec"]);
+  });
+
+  it.each([
+    ["separate agent value", ["models", "--agent", "main", "--status-json"]],
+    ["inline agent value", ["models", "--agent=main", "--status-json"]],
+    ["status alias before agent", ["models", "--status-json", "--agent", "main"]],
+  ])("keeps models parent status options on the parent path: %s", (_name, args) => {
+    expect(resolveCliArgvInvocation(["node", "openclaw", ...args]).commandPath).toEqual(["models"]);
+  });
+
+  it("still resolves a models child after parent options", () => {
+    expect(
+      resolveCliArgvInvocation(["node", "openclaw", "models", "--agent", "main", "status"])
+        .commandPath,
+    ).toEqual(["models", "status"]);
+  });
 });

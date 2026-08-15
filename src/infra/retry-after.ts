@@ -1,5 +1,9 @@
-import { parseRetryAfterHttpDateMs } from "@openclaw/ai/internal/retry-after";
-import { asFiniteNumberInRange, parseStrictNonNegativeInteger } from "../shared/number-coercion.js";
+// Release harnesses execute source before workspace package dist files exist.
+import { parseRetryAfterHttpDateMs } from "../../packages/ai/src/internal/retry-after.js";
+import {
+  asFiniteNumberInRange,
+  parseStrictNonNegativeInteger,
+} from "../../packages/normalization-core/src/number-coercion.js";
 
 const RETRY_AFTER_HEADER_DELAY_RE = /^\d+$/;
 const MAX_SAFE_RETRY_AFTER_SECONDS = Number.MAX_SAFE_INTEGER / 1000;

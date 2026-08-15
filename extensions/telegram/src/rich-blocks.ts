@@ -1,7 +1,7 @@
 // Markdown → Bot API 10.2 InputRichBlock[] for Telegram rich messages.
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import {
-  type FormatCapabilityProfile,
+  FormatCapabilityProfile,
   isAutoLinkedFileRef,
   markdownToIRWithMeta,
   renderMarkdownWithMarkers,
@@ -13,7 +13,6 @@ import {
   type MarkdownTableMeta,
 } from "openclaw/plugin-sdk/text-chunking";
 import {
-  countInputRichBlocks,
   inputRichBlocksToPlainText,
   maxInputRichBlockNesting,
   normalizeRichText,
@@ -33,29 +32,10 @@ import {
 
 const TELEGRAM_RICH_TEXT_TABLE_COLUMN_LIMIT = 20;
 
-const TELEGRAM_RICH_FORMAT_PROFILE = {
+const TELEGRAM_RICH_FORMAT_PROFILE = FormatCapabilityProfile.define({
   mechanism: "blocks",
-  constructs: {
-    bold: "native",
-    italic: "native",
-    underline: "native",
-    strikethrough: "native",
-    spoiler: "native",
-    codeInline: "native",
-    codeBlock: "native",
-    codeLanguage: "native",
-    linkLabel: "native",
-    heading: "native",
-    bulletList: "native",
-    orderedList: "native",
-    taskList: "native",
-    table: "native",
-    blockquote: "native",
-    image: "native",
-    mention: "native",
-  },
   chunk: { limit: 32_768, unit: "chars" },
-} satisfies FormatCapabilityProfile;
+});
 
 const INLINE_STYLE_RANK: Record<string, number> = {
   spoiler: 0,
@@ -124,11 +104,10 @@ function resolveTelegramLinkAction(
     return null;
   }
   const label = source.slice(link.start, link.end);
-  if (context.origin === "linkify" && isAutoLinkedFileRef(href, label)) {
-    // Bare file refs (README.md, openclaw.json) must render as code, not links:
-    // Telegram's server-side entity detection would otherwise re-linkify them
-    // and show spurious domain previews for TLD-like extensions.
-    return { kind: "code" };
+  if (context.origin === "linkify") {
+    // File refs need code to suppress false links. Other bare links stay plain
+    // because Telegram typed URLs escape query separators (observed 2026-08).
+    return isAutoLinkedFileRef(href, label) ? { kind: "code" } : null;
   }
   if (href.startsWith("#")) {
     // In-message fragments are RichTextAnchorLink, not RichTextUrl.
@@ -666,10 +645,7 @@ export function markdownToTelegramRichBlocks(
   const hasMarkdownLists = segments.some((segment) => segment.kind === "list");
   const flattenedSegments = segments.filter((segment) => segment.kind !== "list");
   let blocks = emitSegments(ir, segments, 0, ir.text.length, degradationReasons);
-  if (
-    hasMarkdownLists &&
-    (countInputRichBlocks(blocks) > 500 || maxInputRichBlockNesting(blocks) > 16)
-  ) {
+  if (hasMarkdownLists && maxInputRichBlockNesting(blocks) > 16) {
     degradationReasons = new Set<TelegramRichBlocksDegradationReason>();
     degradationReasons.add("list-limit");
     blocks = emitSegments(ir, flattenedSegments, 0, ir.text.length, degradationReasons);

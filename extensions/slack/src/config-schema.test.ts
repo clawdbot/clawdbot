@@ -17,11 +17,33 @@ function expectSlackConfigIssue(config: unknown, path: string) {
   }
 }
 
+function expectSlackConfigKeyRejected(config: unknown, key: string) {
+  const res = SlackConfigSchema.safeParse(config);
+  expect(res.success).toBe(false);
+  if (!res.success) {
+    expect(res.error.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "unrecognized_keys",
+          keys: expect.arrayContaining([key]),
+        }),
+      ]),
+    );
+  }
+}
+
 describe("slack config schema", () => {
-  it("accepts explicit Enterprise Grid org-install mode", () => {
-    expectSlackConfigValid({ enterpriseOrgInstall: true });
-    expectSlackConfigValid({ accounts: { org: { enterpriseOrgInstall: true } } });
-    expectSlackConfigIssue({ enterpriseOrgInstall: "true" }, "enterpriseOrgInstall");
+  it("accepts capability arrays and rejects retired interactive reply objects", () => {
+    expectSlackConfigValid({ capabilities: ["presentation"] });
+    expectSlackConfigIssue({ capabilities: { interactiveReplies: true } }, "capabilities");
+  });
+
+  it("rejects the retired Enterprise Grid installation setting", () => {
+    expectSlackConfigKeyRejected({ enterpriseOrgInstall: true }, "enterpriseOrgInstall");
+    expectSlackConfigKeyRejected(
+      { accounts: { org: { enterpriseOrgInstall: true } } },
+      "enterpriseOrgInstall",
+    );
   });
 
   it("keeps workspace-scoped mention pattern policies valid for workspace installs", () => {
@@ -294,6 +316,18 @@ describe("slack config schema", () => {
     );
   });
 
+  it.each(["http", "relay"] as const)(
+    "does not require %s transport credentials when Slack is disabled",
+    (mode) => {
+      expectSlackConfigValid({ enabled: false, mode });
+      expectSlackConfigValid({
+        enabled: false,
+        mode,
+        accounts: { ops: { mode } },
+      });
+    },
+  );
+
   it("accepts per-channel replyToMode", () => {
     expectSlackConfigValid({
       channels: {
@@ -365,6 +399,89 @@ describe("slack config schema", () => {
 
   it("rejects HTTP mode without signing secret", () => {
     expectSlackConfigIssue({ mode: "http" }, "signingSecret");
+  });
+
+  it("rejects implicit account HTTP mode without signing secret", () => {
+    expectSlackConfigIssue({ mode: "http", accounts: {} }, "signingSecret");
+  });
+
+  it("accepts inherited account HTTP mode with an account signing secret", () => {
+    expectSlackConfigValid({
+      mode: "http",
+      accounts: {
+        ops: {
+          botToken: "test-bot-token",
+          signingSecret: "test-ops-signing-secret",
+          webhookPath: "/slack/events/ops",
+        },
+      },
+    });
+  });
+
+  it("accepts inherited account HTTP mode with a signing secret SecretRef", () => {
+    expectSlackConfigValid({
+      mode: "http",
+      accounts: {
+        ops: {
+          botToken: "test-bot-token",
+          signingSecret: {
+            source: "env",
+            provider: "default",
+            id: "SLACK_OPS_SIGNING_SECRET",
+          },
+          webhookPath: "/slack/events/ops",
+        },
+      },
+    });
+  });
+
+  it("accepts independently signed accounts inheriting HTTP mode", () => {
+    expectSlackConfigValid({
+      mode: "http",
+      accounts: {
+        ops: {
+          botToken: "test-ops-bot-token",
+          signingSecret: "test-ops-signing-secret",
+          webhookPath: "/slack/events/ops",
+        },
+        support: {
+          botToken: "test-support-bot-token",
+          signingSecret: "test-support-signing-secret",
+          webhookPath: "/slack/events/support",
+        },
+      },
+    });
+  });
+
+  it("skips disabled accounts inheriting HTTP mode", () => {
+    expectSlackConfigValid({
+      mode: "http",
+      accounts: {
+        disabled: { enabled: false },
+        ops: {
+          botToken: "test-bot-token",
+          signingSecret: "test-ops-signing-secret",
+        },
+      },
+    });
+    expectSlackConfigValid({
+      mode: "http",
+      accounts: { ops: { enabled: false } },
+    });
+  });
+
+  it("reports a missing inherited HTTP signing secret on its account only", () => {
+    const result = SlackConfigSchema.safeParse({
+      mode: "http",
+      accounts: { ops: { botToken: "test-bot-token" } },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((issue) => issue.path.join("."))).toEqual([
+        "accounts.ops.signingSecret",
+      ]);
+    }
   });
 
   it("accepts account HTTP mode when base signing secret is set", () => {

@@ -2,7 +2,7 @@
 
 import { spawnSync } from "node:child_process";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
-import { execPlainGh } from "../lib/plain-gh.mjs";
+import { execGhJson, execGhRead, execPlainGh } from "../lib/plain-gh.mjs";
 
 const SHA_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
 
@@ -41,29 +41,27 @@ function buildCiDispatchArgs(record) {
 }
 
 function listCiRuns(headRefOid) {
-  return JSON.parse(
-    execPlainGh(
-      [
-        "run",
-        "list",
-        "--commit",
-        headRefOid,
-        "--workflow",
-        "ci.yml",
-        "--event",
-        "workflow_dispatch",
-        "--limit",
-        "20",
-        "--json",
-        "databaseId,url,headSha,createdAt,status",
-      ],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    ),
+  return execGhJson(
+    [
+      "run",
+      "list",
+      "--commit",
+      headRefOid,
+      "--workflow",
+      "ci.yml",
+      "--event",
+      "workflow_dispatch",
+      "--limit",
+      "20",
+      "--json",
+      "databaseId,url,headSha,createdAt,status",
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] },
   );
 }
 
 function readCurrentPrHeadOid(pr) {
-  return execPlainGh(["pr", "view", String(pr), "--json", "headRefOid", "--jq", ".headRefOid"], {
+  return execGhRead(["pr", "view", String(pr), "--json", "headRefOid", "--jq", ".headRefOid"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();

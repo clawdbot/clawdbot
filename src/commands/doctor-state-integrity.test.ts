@@ -6,10 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  resolveStorePath,
+  resolveSessionStorePathCore,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
@@ -25,7 +28,7 @@ import {
 } from "./doctor-heartbeat-main-session-repair.test-support.js";
 import {
   detectStateIntegrityHealthIssues,
-  noteStateIntegrity,
+  noteStateIntegrity as noteStateIntegrityRaw,
   stateIntegrityIssueToHealthFinding,
   stateIntegrityIssueToRepairEffect,
 } from "./doctor-state-integrity.js";
@@ -42,10 +45,28 @@ vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
 
 const noteMock = vi.fn();
 
+function withMainAgentRoster(cfg: OpenClawConfig): OpenClawConfig {
+  if (cfg.agents?.entries || cfg.agents?.list) {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    agents: { ...cfg.agents, entries: { main: { default: true } } },
+  };
+}
+
+async function noteStateIntegrity(
+  cfg: OpenClawConfig,
+  prompter: Parameters<typeof noteStateIntegrityRaw>[1],
+  configPath?: string,
+) {
+  return noteStateIntegrityRaw(withMainAgentRoster(cfg), prompter, configPath);
+}
+
 function setupSessionState(cfg: OpenClawConfig, env: NodeJS.ProcessEnv, homeDir: string) {
   const agentId = "main";
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, () => homeDir);
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   fs.mkdirSync(sessionsDir, { recursive: true });
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
 }
@@ -95,9 +116,10 @@ function hasRepairPromptMessage(
 }
 
 async function runStateIntegrity(cfg: OpenClawConfig) {
-  setupSessionState(cfg, process.env, process.env.HOME ?? "");
+  const effectiveConfig = withMainAgentRoster(cfg);
+  setupSessionState(effectiveConfig, process.env, process.env.HOME ?? "");
   const confirmRuntimeRepair = vi.fn(async () => false);
-  await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+  await noteStateIntegrity(effectiveConfig, { confirmRuntimeRepair, note: noteMock });
   return confirmRuntimeRepair;
 }
 
@@ -106,12 +128,15 @@ function writeSessionStore(
   sessions: Record<string, { sessionId: string; updatedAt: number } & Record<string, unknown>>,
 ) {
   setupSessionState(cfg, process.env, process.env.HOME ?? "");
-  const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
   fs.writeFileSync(storePath, JSON.stringify(sessions, null, 2));
 }
 
 async function runStateIntegrityText(cfg: OpenClawConfig): Promise<string> {
-  await noteStateIntegrity(cfg, { confirmRuntimeRepair: vi.fn(async () => false), note: noteMock });
+  await noteStateIntegrity(withMainAgentRoster(cfg), {
+    confirmRuntimeRepair: vi.fn(async () => false),
+    note: noteMock,
+  });
   return stateIntegrityText();
 }
 
@@ -128,6 +153,7 @@ describe("structured state integrity findings", () => {
   });
 
   afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     envSnapshot.restore();
     fs.rmSync(tempHome, { recursive: true, force: true });
@@ -157,6 +183,18 @@ describe("structured state integrity findings", () => {
       target: path.join(tempHome, ".openclaw"),
       dryRunSafe: false,
     });
+  });
+
+  it("skips default-owned session repairs for an ambiguous roster", async () => {
+    fs.mkdirSync(path.join(tempHome, ".openclaw"), { recursive: true });
+    await noteStateIntegrityRaw(
+      { agents: { entries: { alpha: {}, beta: {} } } },
+      { confirmRuntimeRepair: vi.fn(async () => false), note: noteMock },
+    );
+
+    expect(stateIntegrityText()).toContain(
+      "Skipped default-agent session and transcript integrity checks because the agent roster does not have exactly one default.",
+    );
   });
 
   it("reports permissive state and config file permissions as structured findings", () => {
@@ -232,28 +270,6 @@ describe("structured state integrity findings", () => {
     );
   });
 });
-
-async function runOrphanTranscriptCheckWithQmdSessions(enabled: boolean, homeDir: string) {
-  const cfg: OpenClawConfig = {
-    agents: {
-      defaults: {},
-    },
-    memory: {
-      backend: "qmd",
-      qmd: {
-        sessions: { enabled },
-      },
-
-      search: { rememberAcrossConversations: false },
-    },
-  };
-  setupSessionState(cfg, process.env, homeDir);
-  const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => homeDir);
-  fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
-  const confirmRuntimeRepair = vi.fn(async () => false);
-  await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
-  return confirmRuntimeRepair;
-}
 
 describe("doctor state integrity oauth dir checks", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -368,12 +384,26 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(text).not.toContain("Examples:");
   });
 
-  it("reports an unconfigured main agent dir after compatibility removal", async () => {
+  it("protects the shared legacy main auth-store dir for an ops-only roster", async () => {
     createAgentDir("main");
 
     const text = await runStateIntegrityText({
       agents: {
-        list: [{ id: "jeremiah", default: true }],
+        entries: { ops: { default: true } },
+      },
+    });
+
+    expect(text).not.toContain("without a matching agents.list entry");
+    expect(text).not.toContain("Examples: main");
+  });
+
+  it("reports a removed main directory once shared auth ownership is relocated", async () => {
+    createAgentDir("main");
+    writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+
+    const text = await runStateIntegrityText({
+      agents: {
+        entries: { ops: { default: true } },
       },
     });
 
@@ -383,6 +413,7 @@ describe("doctor state integrity oauth dir checks", () => {
 
   it("does not let OPENCLAW_AGENT_DIR hide an unconfigured agent dir", async () => {
     createAgentDir("legacy");
+    writeConfigMachineState("auth.sharedStore", { location: "state-db" });
     const legacyAgentDir = path.join(
       process.env.OPENCLAW_STATE_DIR ?? "",
       "agents",
@@ -453,7 +484,7 @@ describe("doctor state integrity oauth dir checks", () => {
     );
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
     const persisted = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
       string,
       { abortedLastRun?: boolean; updatedAt?: number }
@@ -548,6 +579,55 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(archivedOrphanTranscripts.length).toBeGreaterThan(0);
   });
 
+  it("uses SQLite session rows for transcript integrity without orphan false positives", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    const transcriptPath = path.join(sessionsDir, "sqlite-live-session.jsonl");
+    fs.writeFileSync(transcriptPath, '{"type":"session"}\n');
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: "agent:main:main", storePath },
+      {
+        sessionFile: transcriptPath,
+        sessionId: "sqlite-live-session",
+        updatedAt: Date.now(),
+      },
+    );
+    const confirmRuntimeRepair = vi.fn(async () => false);
+
+    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
+
+    expect(stateIntegrityText()).not.toContain("orphan transcript file");
+    expect(stateIntegrityText()).not.toContain("recent sessions are missing transcripts");
+    expect(fs.existsSync(transcriptPath)).toBe(true);
+    expect(confirmRuntimeRepair).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("Archive 1 orphan") }),
+    );
+  });
+
+  it("does not require JSONL files for canonical SQLite session rows", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: "agent:main:main", storePath },
+      { sessionId: "sqlite-main-session", updatedAt: Date.now() },
+    );
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: "agent:main:sqlite-only", storePath },
+      { sessionId: "sqlite-only-session", updatedAt: Date.now() },
+    );
+
+    await noteStateIntegrity(cfg, {
+      confirmRuntimeRepair: vi.fn(async () => false),
+      note: noteMock,
+    });
+
+    expect(stateIntegrityText()).not.toContain("recent sessions are missing transcripts");
+    expect(stateIntegrityText()).not.toContain("Main session transcript missing");
+  });
+
   it("does not auto-archive orphan transcripts from non-interactive repair mode", async () => {
     const cfg: OpenClawConfig = {};
     setupSessionState(cfg, process.env, process.env.HOME ?? "");
@@ -618,24 +698,6 @@ describe("doctor state integrity oauth dir checks", () => {
     },
   );
 
-  it("suppresses orphan transcript warnings when QMD sessions are enabled", async () => {
-    const confirmRuntimeRepair = await runOrphanTranscriptCheckWithQmdSessions(true, tempHome);
-
-    expect(stateIntegrityText()).not.toContain(
-      "These .jsonl files are no longer referenced by sessions.json",
-    );
-    expect(confirmRuntimeRepair).not.toHaveBeenCalled();
-  });
-
-  it("still detects orphan transcripts when QMD sessions are disabled", async () => {
-    const confirmRuntimeRepair = await runOrphanTranscriptCheckWithQmdSessions(false, tempHome);
-
-    expect(stateIntegrityText()).toContain(
-      "These .jsonl files are no longer referenced by sessions.json",
-    );
-    expect(confirmRuntimeRepair).toHaveBeenCalled();
-  });
-
   it("prints openclaw-only verification hints when recent sessions are missing transcripts", async () => {
     const cfg: OpenClawConfig = {};
     writeSessionStore(cfg, {
@@ -695,7 +757,7 @@ describe("doctor state integrity oauth dir checks", () => {
     );
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
     const store = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
     const recoveredKey = Object.keys(store).find((key) =>
       key.startsWith("agent:main:heartbeat-recovered-"),
@@ -737,7 +799,7 @@ describe("doctor state integrity oauth dir checks", () => {
     const confirmRuntimeRepair = vi.fn(async () => true);
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
     const store = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
     expect(store["agent:main:main"]?.sessionId).toBe("mixed-session");
     expect(Object.keys(store).filter((key) => key.includes("heartbeat-recovered"))).toEqual([]);
@@ -786,7 +848,7 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(summary?.nonHeartbeatUserMessages).toBe(0);
     expect(summary?.userMessages).toBe(repeats);
 
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
     const store = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
     expect(store["agent:main:main"]).toBeUndefined();
     const recoveredKey = Object.keys(store).find((key) =>
@@ -838,7 +900,7 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(hasRepairPromptMessage(confirmRuntimeRepair, "Move heartbeat-owned main session")).toBe(
       false,
     );
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
     const store = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
     expect(store["agent:main:main"]?.sessionId).toBe("oversized-record-session");
     expect(Object.keys(store).filter((key) => key.includes("heartbeat-recovered"))).toEqual([]);
@@ -848,8 +910,7 @@ describe("doctor state integrity oauth dir checks", () => {
     const entry: SessionEntry = {
       sessionId: "session",
       updatedAt: 1,
-      lastTo: "heartbeat",
-      origin: { label: "heartbeat" },
+      delivery: { kind: "internal" },
     };
     expect(resolveHeartbeatMainSessionRepairCandidate({ entry })).toBeNull();
   });

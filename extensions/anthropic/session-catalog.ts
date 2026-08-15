@@ -1,7 +1,9 @@
+import type { Dirent, Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { parseDateFirstTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
@@ -11,7 +13,12 @@ import type {
   SessionCatalogPullRequestSummary,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createSessionCatalogAdoptionCoordinator } from "openclaw/plugin-sdk/session-catalog";
+import {
+  asPositiveSafeInteger as pullRequestNumber,
+  isRecord,
+  normalizeBoundedOptionalString as readBoundedString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readClaudeDesktopCustomGroups } from "./claude-desktop-groups.js";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_MODEL_REF } from "./cli-constants.js";
 import {
@@ -25,7 +32,7 @@ import { createNodeListFailedError, resolveNodeLabel } from "./session-catalog-n
 import {
   currentClaudeSessionCatalogConfig,
   listBoundClaudeSessions,
-  resolveClaudeCatalogCreateSession,
+  resolveClaudeCliRoutedModelId,
 } from "./session-catalog-runtime.js";
 import {
   CLAUDE_CLI_NODE_RUN_COMMAND,
@@ -61,6 +68,12 @@ const MAX_SEARCH_LENGTH = 500;
 const MAX_SESSION_PULL_REQUESTS = 20;
 const MAX_CATALOG_DISCOVERY_FILES = 10_000;
 const MAX_CATALOG_DISCOVERY_CACHE_ENTRIES = 20_000;
+const MAX_CATALOG_JSON_CACHE_ENTRIES = 4_000;
+const MAX_CLAUDE_SESSION_SCAN_CACHE_ENTRIES = 8;
+const CLAUDE_SESSION_SCAN_HARD_TTL_MS = 5 * 60_000;
+const CLAUDE_PARTIAL_SCAN_TTL_MS = 15_000;
+const CLAUDE_DESKTOP_SCAN_TTL_MS = 60_000;
+const CLAUDE_CATALOG_IO_CONCURRENCY = 32;
 const CLAUDE_METADATA_PREFIX_BYTES = 1024 * 1024;
 const CLAUDE_METADATA_READ_CHUNK_BYTES = 16 * 1024;
 const MAX_CATALOG_METADATA_SCAN_BYTES = 64 * 1024 * 1024;
@@ -75,6 +88,8 @@ const NODE_INVOKE_TIMEOUT_MS = 30_000;
 const NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS = 8_000;
 const CLAUDE_HISTORY_IMPORT_MAX_ITEMS = 200;
 const CLAUDE_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
+const continueClaudeAdoption =
+  createSessionCatalogAdoptionCoordinator<Awaited<ReturnType<typeof upstream.linkContinued>>>();
 
 type SessionIndexEntry = {
   sessionId?: unknown;
@@ -136,26 +151,83 @@ type CatalogDiscoveryCacheEntry = {
   sidechain: boolean;
 };
 
-const catalogDiscoveryCache = new Map<string, CatalogDiscoveryCacheEntry>();
+type CatalogJsonCacheEntry = {
+  mtimeMs: number;
+  size: number;
+  value: unknown;
+};
 
-function cacheCatalogDiscovery(filePath: string, entry: CatalogDiscoveryCacheEntry): void {
-  catalogDiscoveryCache.delete(filePath);
-  catalogDiscoveryCache.set(filePath, entry);
-  while (catalogDiscoveryCache.size > MAX_CATALOG_DISCOVERY_CACHE_ENTRIES) {
-    const oldestPath = catalogDiscoveryCache.keys().next().value;
-    if (oldestPath === undefined) {
+type ClaudeSessionScanCacheEntry = {
+  treeStamp: string;
+  hardExpiresAt: number;
+  desktopStoreAvailable: boolean;
+  desktopExpiresAt: number;
+  records: Promise<CatalogRecord[]>;
+};
+
+type SafeSessionFile = { filePath: string; stat: Stats } | undefined;
+
+type ClaudeProjectDirectorySnapshot = {
+  directory: string;
+  childNames: string[];
+};
+
+type ClaudeChildFileSignature = readonly [name: string, mtimeMs: number, size: number, ino: number];
+
+type ClaudeProjectsTreeSnapshot = {
+  root: string;
+  resolvedRoot?: string;
+  projectDirectories: ClaudeProjectDirectorySnapshot[];
+  treeStamp: string;
+};
+
+type ClaudeSessionScanContext = ClaudeProjectsTreeSnapshot & {
+  complete: boolean;
+  safeFiles: Map<string, Promise<SafeSessionFile>>;
+};
+
+// Transcript discoveries stay valid only for the same root/id/inode/mtime/size and are LRU-bounded;
+// a false hit would corrupt pagination, so warm scans re-charge the original deterministic byte cost.
+const catalogDiscoveryCache = new Map<string, CatalogDiscoveryCacheEntry>();
+// Parsed index/Desktop JSON stays valid for one path+mtime+size and is LRU-bounded; read failures are
+// never cached, so transient metadata I/O cannot hide a later successful read.
+const catalogJsonCache = new Map<string, CatalogJsonCacheEntry>();
+// Whole scans are root-scoped and bounded; tree/Desktop/hard expiries below own invalidation, avoiding
+// an unbounded home map while preserving the exact resolved records promise for concurrent callers.
+const claudeSessionScanCache = new Map<string, ClaudeSessionScanCacheEntry>();
+
+async function mapConcurrent<T, R>(
+  values: T[],
+  limit: number,
+  mapper: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  results.length = values.length;
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(limit, values.length) }, async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex++;
+      results[index] = await mapper(values[index]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+function setBoundedCache<K, V>(cache: Map<K, V>, key: K, value: V, maxEntries: number): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > maxEntries) {
+    const oldest = cache.keys().next();
+    if (oldest.done) {
       break;
     }
-    catalogDiscoveryCache.delete(oldestPath);
+    cache.delete(oldest.value);
   }
 }
 
-function optionalString(value: unknown, maxLength = MAX_STRING_LENGTH): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
+function cacheCatalogDiscovery(filePath: string, entry: CatalogDiscoveryCacheEntry): void {
+  setBoundedCache(catalogDiscoveryCache, filePath, entry, MAX_CATALOG_DISCOVERY_CACHE_ENTRIES);
 }
 
 function pullRequestState(value: unknown): SessionCatalogPullRequestSummary["state"] | undefined {
@@ -171,10 +243,6 @@ function pullRequestState(value: unknown): SessionCatalogPullRequestSummary["sta
     default:
       return undefined;
   }
-}
-
-function pullRequestNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
 // Desktop retains historical PRs in order and marks hidden ones as dismissed;
@@ -251,15 +319,10 @@ function isCliEntrypoint(value: unknown): value is string {
   return typeof value === "string" && CLI_ENTRYPOINTS.has(value);
 }
 
-function timestampMs(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
+// Claude's persisted string timestamps are date expressions, including numeric-looking years.
+// Numeric fields are already millisecond values, so preserve that distinct mixed-input contract.
+function parseClaudeCatalogTimestampMs(value: unknown): number | undefined {
+  return parseDateFirstTimestampMs(value);
 }
 
 function isWithin(root: string, candidate: string): boolean {
@@ -272,7 +335,7 @@ async function safeSessionFile(
   resolvedRoot: string,
   candidate: string,
   sessionId: string,
-): Promise<string | undefined> {
+): Promise<SafeSessionFile> {
   if (!isWithin(root, candidate) || path.basename(candidate) !== `${sessionId}.jsonl`) {
     return undefined;
   }
@@ -282,15 +345,75 @@ async function safeSessionFile(
       return undefined;
     }
     const stat = await fs.stat(resolvedCandidate);
-    return stat.isFile() ? resolvedCandidate : undefined;
-  } catch {
-    return undefined;
+    return stat.isFile() ? { filePath: resolvedCandidate, stat } : undefined;
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return undefined;
+    }
+    throw new Error("Claude session file validation failed", { cause: error });
   }
 }
 
-async function readJsonFile(filePath: string): Promise<unknown> {
+function safeSessionFileForScan(
+  context: ClaudeSessionScanContext,
+  candidate: string,
+  sessionId: string,
+): Promise<SafeSessionFile> {
+  if (!context.resolvedRoot) {
+    return Promise.resolve(undefined);
+  }
+  const key = `${sessionId}\0${path.resolve(candidate)}`;
+  let pending = context.safeFiles.get(key);
+  if (!pending) {
+    // Canonical path + stat are valid only for this assembled scan. Sharing the promise prevents
+    // index fallback and discovery from serially resolving the same file twice.
+    const request = safeSessionFile(context.root, context.resolvedRoot, candidate, sessionId);
+    pending = request.catch(() => {
+      context.complete = false;
+      if (context.safeFiles.get(key) === pending) {
+        context.safeFiles.delete(key);
+      }
+      return undefined;
+    });
+    context.safeFiles.set(key, pending);
+  }
+  return pending;
+}
+
+async function readJsonFile(
+  filePath: string,
+  options: { onIoFailure?: () => void } = {},
+): Promise<unknown> {
+  const stat = await fs.stat(filePath).catch(() => {
+    options.onIoFailure?.();
+    return undefined;
+  });
+  if (!stat?.isFile()) {
+    catalogJsonCache.delete(filePath);
+    return undefined;
+  }
+  const cached = catalogJsonCache.get(filePath);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    setBoundedCache(catalogJsonCache, filePath, cached, MAX_CATALOG_JSON_CACHE_ENTRIES);
+    return cached.value;
+  }
+  let content: string;
   try {
-    return JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
+    content = await fs.readFile(filePath, "utf8");
+  } catch {
+    options.onIoFailure?.();
+    return undefined;
+  }
+  try {
+    const value = JSON.parse(content) as unknown;
+    setBoundedCache(
+      catalogJsonCache,
+      filePath,
+      { mtimeMs: stat.mtimeMs, size: stat.size, value },
+      MAX_CATALOG_JSON_CACHE_ENTRIES,
+    );
+    return value;
   } catch {
     return undefined;
   }
@@ -306,8 +429,84 @@ async function childDirectories(root: string): Promise<string[]> {
   }
 }
 
-function projectsDir(homeDir: string): string {
-  return path.join(homeDir, ".claude", "projects");
+function projectsDir(homeDir: string, configDir?: string): string {
+  return path.join(configDir ?? path.join(homeDir, ".claude"), "projects");
+}
+
+async function readProjectsTreeSnapshot(root: string): Promise<ClaudeProjectsTreeSnapshot> {
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true });
+  } catch {
+    return { root, projectDirectories: [], treeStamp: "unavailable" };
+  }
+  const directoryEntries = entries.filter((entry) => entry.isDirectory());
+  const [resolvedRoot, directories] = await Promise.all([
+    fs.realpath(root).catch(() => undefined),
+    mapConcurrent(directoryEntries, CLAUDE_CATALOG_IO_CONCURRENCY, async (entry) => {
+      const directory = path.join(root, entry.name);
+      const [stat, children] = await Promise.all([
+        fs.stat(directory).catch(() => undefined),
+        fs.readdir(directory, { withFileTypes: true }).catch(() => undefined),
+      ]);
+      return { entry, directory, stat, children };
+    }),
+  ]);
+  const childTargets = directories.flatMap(({ directory, children }, directoryIndex) =>
+    (children ?? []).map((child) => ({ directoryIndex, directory, child })),
+  );
+  const childSignatures = await mapConcurrent(
+    childTargets,
+    CLAUDE_CATALOG_IO_CONCURRENCY,
+    async ({ directoryIndex, directory, child }) => {
+      const childStat = await fs.stat(path.join(directory, child.name)).catch(() => undefined);
+      const signature = childStat?.isFile()
+        ? ([child.name, childStat.mtimeMs, childStat.size, childStat.ino] as const)
+        : undefined;
+      return { directoryIndex, signature };
+    },
+  );
+  const signaturesByDirectory = Array.from(
+    { length: directories.length },
+    (): ClaudeChildFileSignature[] => [],
+  );
+  for (const { directoryIndex, signature } of childSignatures) {
+    if (signature) {
+      signaturesByDirectory[directoryIndex]?.push(signature);
+    }
+  }
+  const directorySnapshots = directories.map(({ entry, directory, stat, children }, index) => {
+    const fileSignatures = signaturesByDirectory[index] ?? [];
+    const maxChildMtime = fileSignatures.reduce<number | null>(
+      (maximum, [, mtime]) => Math.max(maximum ?? mtime, mtime),
+      null,
+    );
+    return {
+      directory,
+      childNames: children?.map((child) => child.name) ?? [],
+      stamp: [
+        entry.name,
+        stat?.isDirectory() === true ? stat.mtimeMs : null,
+        children?.map((child) => child.name) ?? null,
+        maxChildMtime ?? null,
+        fileSignatures,
+      ] as const,
+    };
+  });
+  return {
+    root,
+    ...(resolvedRoot ? { resolvedRoot } : {}),
+    projectDirectories: directorySnapshots.map(({ directory, childNames }) => ({
+      directory,
+      childNames,
+    })),
+    treeStamp: JSON.stringify([resolvedRoot ?? null, directorySnapshots.map(({ stamp }) => stamp)]),
+  };
+}
+
+async function desktopSessionStoreAvailable(homeDir: string): Promise<boolean> {
+  const stat = await fs.stat(desktopSessionsDir(homeDir)).catch(() => undefined);
+  return stat?.isDirectory() === true;
 }
 
 function desktopSessionsDir(homeDir: string): string {
@@ -316,6 +515,24 @@ function desktopSessionsDir(homeDir: string): string {
 
 function currentHomeDir(env: NodeJS.ProcessEnv = process.env): string {
   return env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
+}
+
+function configuredClaudeConfigDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const configured = env.CLAUDE_CONFIG_DIR?.trim();
+  return configured ? path.resolve(configured) : undefined;
+}
+
+function gatewayClaudeScanOptions(allowProcessHomeFallback?: boolean): {
+  configDir?: string;
+  includeDesktop: boolean;
+} {
+  const configDir = configuredClaudeConfigDir();
+  // Upstream Claude Code's "Respect CLAUDE_CONFIG_DIR everywhere" convention replaces ~/.claude.
+  // Claude Desktop stays HOME/Library-scoped, so isolated scans exclude its metadata.
+  return {
+    ...(configDir ? { configDir } : {}),
+    includeDesktop: allowProcessHomeFallback !== false,
+  };
 }
 
 async function readDesktopMetadata(homeDir: string): Promise<{
@@ -342,7 +559,7 @@ async function readDesktopMetadata(homeDir: string): Promise<{
           continue;
         }
         const metadata = raw as DesktopSessionMetadata;
-        const cliSessionId = optionalString(metadata.cliSessionId, 256);
+        const cliSessionId = readBoundedString(metadata.cliSessionId, 256);
         if (!cliSessionId) {
           continue;
         }
@@ -352,7 +569,7 @@ async function readDesktopMetadata(homeDir: string): Promise<{
           continue;
         }
         if (!archived.has(cliSessionId)) {
-          const localSessionId = optionalString(metadata.sessionId, 256);
+          const localSessionId = readBoundedString(metadata.sessionId, 256);
           const customGroup = localSessionId ? customGroups.get(localSessionId) : undefined;
           active.set(cliSessionId, customGroup ? { ...metadata, customGroup } : metadata);
         }
@@ -362,19 +579,35 @@ async function readDesktopMetadata(homeDir: string): Promise<{
   return { active, archived };
 }
 
-async function readIndexRecords(homeDir: string): Promise<{
+async function readIndexRecords(context: ClaudeSessionScanContext): Promise<{
   records: Map<string, CatalogRecord>;
   sidechainIds: Set<string>;
 }> {
-  const root = projectsDir(homeDir);
   const records = new Map<string, CatalogRecord>();
   const sidechainIds = new Set<string>();
-  const resolvedRoot = await fs.realpath(root).catch(() => undefined);
-  if (!resolvedRoot) {
+  if (!context.resolvedRoot) {
     return { records, sidechainIds };
   }
-  for (const projectDir of await childDirectories(root)) {
-    const raw = await readJsonFile(path.join(projectDir, "sessions-index.json"));
+  const indexes = await mapConcurrent(
+    context.projectDirectories,
+    CLAUDE_CATALOG_IO_CONCURRENCY,
+    async ({ directory, childNames }) => ({
+      directory,
+      raw: childNames.includes("sessions-index.json")
+        ? await readJsonFile(path.join(directory, "sessions-index.json"), {
+            onIoFailure: () => {
+              context.complete = false;
+            },
+          })
+        : undefined,
+    }),
+  );
+  const candidates: Array<{
+    directory: string;
+    entry: SessionIndexEntry;
+    sessionId: string;
+  }> = [];
+  for (const { directory, raw } of indexes) {
     if (!isRecord(raw) || !Array.isArray(raw.entries)) {
       continue;
     }
@@ -383,73 +616,89 @@ async function readIndexRecords(homeDir: string): Promise<{
         continue;
       }
       const entry = candidate as SessionIndexEntry;
-      const sessionId = optionalString(entry.sessionId, 256);
+      const sessionId = readBoundedString(entry.sessionId, 256);
       if (!sessionId) {
         continue;
       }
+      candidates.push({ directory, entry, sessionId });
+    }
+  }
+  const safeFiles = await mapConcurrent(
+    candidates,
+    CLAUDE_CATALOG_IO_CONCURRENCY,
+    async ({ directory, entry, sessionId }) => {
       if (entry.isSidechain === true) {
-        sidechainIds.add(sessionId);
-        records.delete(sessionId);
-        continue;
+        return undefined;
       }
-      const indexedPath = optionalString(entry.fullPath, MAX_STRING_LENGTH);
-      const filePath = await safeSessionFile(
-        root,
-        resolvedRoot,
-        indexedPath ?? path.join(projectDir, `${sessionId}.jsonl`),
+      const indexedPath = readBoundedString(entry.fullPath, MAX_STRING_LENGTH);
+      return await safeSessionFileForScan(
+        context,
+        indexedPath ?? path.join(directory, `${sessionId}.jsonl`),
         sessionId,
       );
-      if (!filePath) {
-        continue;
-      }
-      const createdAt = timestampMs(entry.created);
-      const updatedAt = timestampMs(entry.modified) ?? timestampMs(entry.fileMtime);
-      const summary = optionalString(entry.summary, 500);
-      const firstPrompt = optionalString(entry.firstPrompt, 500);
-      records.set(sessionId, {
-        threadId: sessionId,
-        name: summary ?? firstPrompt ?? null,
-        cwd: optionalString(entry.projectPath),
-        status: "stored",
-        ...(createdAt !== undefined ? { createdAt } : {}),
-        ...(updatedAt !== undefined ? { updatedAt, recencyAt: updatedAt } : {}),
-        source: "claude-cli",
-        modelProvider: "anthropic",
-        ...(optionalString(entry.gitBranch, 500)
-          ? { gitBranch: optionalString(entry.gitBranch, 500) }
-          : {}),
-        archived: false,
-        filePath,
-      });
+    },
+  );
+  for (const [index, candidate] of candidates.entries()) {
+    const { entry, sessionId } = candidate;
+    if (entry.isSidechain === true) {
+      sidechainIds.add(sessionId);
+      records.delete(sessionId);
+      continue;
     }
+    const safeFile = safeFiles[index];
+    if (!safeFile) {
+      continue;
+    }
+    const createdAt = parseClaudeCatalogTimestampMs(entry.created);
+    const updatedAt =
+      parseClaudeCatalogTimestampMs(entry.modified) ??
+      parseClaudeCatalogTimestampMs(entry.fileMtime);
+    const summary = readBoundedString(entry.summary, 500);
+    const firstPrompt = readBoundedString(entry.firstPrompt, 500);
+    records.set(sessionId, {
+      threadId: sessionId,
+      name: summary ?? firstPrompt ?? null,
+      cwd: readBoundedString(entry.projectPath, MAX_STRING_LENGTH),
+      status: "stored",
+      ...(createdAt !== undefined ? { createdAt } : {}),
+      ...(updatedAt !== undefined ? { updatedAt, recencyAt: updatedAt } : {}),
+      source: "claude-cli",
+      modelProvider: "anthropic",
+      ...(readBoundedString(entry.gitBranch, 500)
+        ? { gitBranch: readBoundedString(entry.gitBranch, 500) }
+        : {}),
+      archived: false,
+      filePath: safeFile.filePath,
+    });
   }
   return { records, sidechainIds };
 }
 
-async function locateSessionFile(homeDir: string, sessionId: string): Promise<string | undefined> {
-  const root = projectsDir(homeDir);
-  const resolvedRoot = await fs.realpath(root).catch(() => undefined);
-  if (!resolvedRoot) {
-    return undefined;
-  }
-  for (const projectDir of await childDirectories(root)) {
-    const candidate = path.join(projectDir, `${sessionId}.jsonl`);
-    const filePath = await safeSessionFile(root, resolvedRoot, candidate, sessionId);
-    if (filePath) {
-      return filePath;
+async function locateSessionFile(
+  context: ClaudeSessionScanContext,
+  sessionId: string,
+): Promise<string | undefined> {
+  const fileName = `${sessionId}.jsonl`;
+  for (const { directory, childNames } of context.projectDirectories) {
+    if (!childNames.includes(fileName)) {
+      continue;
+    }
+    const candidate = path.join(directory, fileName);
+    const safeFile = await safeSessionFileForScan(context, candidate, sessionId);
+    if (safeFile) {
+      return safeFile.filePath;
     }
   }
   return undefined;
 }
 
 async function discoverCliRecords(
-  homeDir: string,
+  context: ClaudeSessionScanContext,
   records: Map<string, CatalogRecord>,
   sidechainIds: Set<string>,
 ): Promise<void> {
-  const root = projectsDir(homeDir);
-  const resolvedRoot = await fs.realpath(root).catch(() => undefined);
-  if (!resolvedRoot) {
+  const { root } = context;
+  if (!context.resolvedRoot) {
     // The root (or a parent) is gone. Entries are tagged with the logical root, so evict by that
     // rather than a lexical containment test the canonical cache keys would never satisfy.
     for (const [cachedPath, entry] of catalogDiscoveryCache) {
@@ -463,201 +712,207 @@ async function discoverCliRecords(
   let scannedBytes = 0;
   let truncated = false;
   const seenFilePaths = new Set<string>();
-  scan: for (const projectDir of await childDirectories(root)) {
-    let names: string[];
-    try {
-      names = await fs.readdir(projectDir);
-    } catch {
-      continue;
-    }
-    for (const name of names) {
+  const candidates: Array<{ directory: string; name: string; sessionId: string }> = [];
+  collect: for (const { directory, childNames } of context.projectDirectories) {
+    for (const name of childNames) {
       if (!name.endsWith(".jsonl")) {
         continue;
       }
       if (discoveredFiles >= MAX_CATALOG_DISCOVERY_FILES) {
         truncated = true;
-        break scan;
+        break collect;
       }
       discoveredFiles += 1;
       const sessionId = name.slice(0, -".jsonl".length);
-      if (!sessionId || records.has(sessionId) || sidechainIds.has(sessionId)) {
-        continue;
+      if (sessionId) {
+        candidates.push({ directory, name, sessionId });
       }
-      const filePath = await safeSessionFile(
-        root,
-        resolvedRoot,
-        path.join(projectDir, name),
-        sessionId,
-      );
-      if (!filePath) {
-        continue;
+    }
+  }
+  const safeFiles = await mapConcurrent(
+    candidates,
+    CLAUDE_CATALOG_IO_CONCURRENCY,
+    async ({ directory, name, sessionId }) =>
+      records.has(sessionId) || sidechainIds.has(sessionId)
+        ? undefined
+        : await safeSessionFileForScan(context, path.join(directory, name), sessionId),
+  );
+  for (const [candidateIndex, candidate] of candidates.entries()) {
+    const { sessionId } = candidate;
+    // Resolve metadata concurrently, but make every semantic decision in the original directory
+    // order. In particular, duplicates and the global byte frontier must match a serial cold scan.
+    if (records.has(sessionId) || sidechainIds.has(sessionId)) {
+      continue;
+    }
+    const safeFile = safeFiles[candidateIndex];
+    if (!safeFile) {
+      continue;
+    }
+    const { filePath, stat: fileStat } = safeFile;
+    seenFilePaths.add(filePath);
+    const cached = catalogDiscoveryCache.get(filePath);
+    // Claude transcripts only append while active, then stay static, so mtime+size+ino identify
+    // the parsed content (ino also rejects an atomic replacement that reused the same mtime/size),
+    // and sessionId ensures the record is served only under the filename-derived id it was built
+    // for. These files are owner-owned and append-only; a mid-scan read-permission revocation is
+    // not a state the Claude CLI produces, so a hit intentionally skips the open() re-check.
+    if (
+      cached &&
+      cached.root === root &&
+      cached.mtimeMs === fileStat.mtimeMs &&
+      cached.size === fileStat.size &&
+      cached.ino === fileStat.ino &&
+      cached.sessionId === sessionId &&
+      // Only replay the cached record if a cold scan would also reach its metadata under the
+      // current remaining byte budget. Once earlier files grow, replaying a record whose original
+      // scan cost now crosses the frontier would surface a record a cold scan stops before; fall
+      // through to a bounded rescan instead so warm and cold discovery (and pagination) match.
+      scannedBytes + cached.scannedBytes <= MAX_CATALOG_METADATA_SCAN_BYTES
+    ) {
+      if (cached.sidechain) {
+        sidechainIds.add(sessionId);
       }
-      seenFilePaths.add(filePath);
-      const fileStat = await fs.stat(filePath).catch(() => undefined);
-      if (!fileStat?.isFile()) {
-        continue;
+      if (cached.record) {
+        records.set(sessionId, cached.record);
       }
-      const cached = catalogDiscoveryCache.get(filePath);
-      // Claude transcripts only append while active, then stay static, so mtime+size+ino identify
-      // the parsed content (ino also rejects an atomic replacement that reused the same mtime/size),
-      // and sessionId ensures the record is served only under the filename-derived id it was built
-      // for. These files are owner-owned and append-only; a mid-scan read-permission revocation is
-      // not a state the Claude CLI produces, so a hit intentionally skips the open() re-check.
-      if (
-        cached &&
-        cached.root === root &&
-        cached.mtimeMs === fileStat.mtimeMs &&
-        cached.size === fileStat.size &&
-        cached.ino === fileStat.ino &&
-        cached.sessionId === sessionId &&
-        // Only replay the cached record if a cold scan would also reach its metadata under the
-        // current remaining byte budget. Once earlier files grow, replaying a record whose original
-        // scan cost now crosses the frontier would surface a record a cold scan stops before; fall
-        // through to a bounded rescan instead so warm and cold discovery (and pagination) match.
-        scannedBytes + cached.scannedBytes <= MAX_CATALOG_METADATA_SCAN_BYTES
-      ) {
-        if (cached.sidechain) {
-          sidechainIds.add(sessionId);
-        }
-        if (cached.record) {
-          records.set(sessionId, cached.record);
-        }
-        // Cache hits read no transcript bytes, but they still charge the file's original scan cost
-        // so the byte-budget cutoff matches a cold scan; otherwise repeated calls would free budget
-        // and progressively discover more files.
-        scannedBytes += cached.scannedBytes;
-        if (scannedBytes >= MAX_CATALOG_METADATA_SCAN_BYTES) {
-          truncated = true;
-          break scan;
-        }
-        continue;
-      }
-      const handle = await fs.open(filePath, "r").catch(() => undefined);
-      if (!handle) {
-        continue;
-      }
-      let cacheable = false;
-      let fileScannedBytes = 0;
-      try {
-        const stat = await handle.stat();
-        let aiTitle: string | undefined;
-        let pending = Buffer.alloc(0);
-        let fileOffset = 0;
-        let stopFile = false;
-        const inspectLine = (line: Buffer): boolean => {
-          let raw: unknown;
-          try {
-            raw = JSON.parse(line.toString("utf8")) as unknown;
-          } catch {
-            return false;
-          }
-          if (!isRecord(raw) || raw.sessionId !== sessionId) {
-            return false;
-          }
-          if (raw.type === "ai-title") {
-            aiTitle = optionalString(raw.aiTitle, 500) ?? aiTitle;
-            return false;
-          }
-          if (typeof raw.entrypoint === "string" && !isCliEntrypoint(raw.entrypoint)) {
-            return true;
-          }
-          if (isCliEntrypoint(raw.entrypoint) && raw.isSidechain === true) {
-            sidechainIds.add(sessionId);
-            return true;
-          }
-          if (
-            !isCliEntrypoint(raw.entrypoint) ||
-            raw.type !== "user" ||
-            !isRecord(raw.message) ||
-            raw.message.role !== "user"
-          ) {
-            return false;
-          }
-          const fragments: string[] = [];
-          collectTranscriptText(raw.message.content, fragments);
-          const firstPrompt = optionalString(fragments[0], 500);
-          const createdAt = timestampMs(raw.timestamp);
-          records.set(sessionId, {
-            threadId: sessionId,
-            name: aiTitle ?? firstPrompt ?? null,
-            cwd: optionalString(raw.cwd),
-            status: "stored",
-            ...(createdAt !== undefined ? { createdAt } : {}),
-            updatedAt: stat.mtimeMs,
-            recencyAt: stat.mtimeMs,
-            source: "claude-cli",
-            modelProvider: "anthropic",
-            ...(optionalString(raw.version, 256)
-              ? { cliVersion: optionalString(raw.version, 256) }
-              : {}),
-            ...(optionalString(raw.gitBranch, 500)
-              ? { gitBranch: optionalString(raw.gitBranch, 500) }
-              : {}),
-            archived: false,
-            filePath,
-          });
-          return true;
-        };
-        while (
-          !stopFile &&
-          fileOffset < stat.size &&
-          fileOffset < CLAUDE_METADATA_PREFIX_BYTES &&
-          scannedBytes < MAX_CATALOG_METADATA_SCAN_BYTES
-        ) {
-          const size = Math.min(
-            CLAUDE_METADATA_READ_CHUNK_BYTES,
-            stat.size - fileOffset,
-            CLAUDE_METADATA_PREFIX_BYTES - fileOffset,
-            MAX_CATALOG_METADATA_SCAN_BYTES - scannedBytes,
-          );
-          const chunk = Buffer.allocUnsafe(size);
-          const { bytesRead } = await handle.read(chunk, 0, size, fileOffset);
-          if (bytesRead === 0) {
-            break;
-          }
-          fileOffset += bytesRead;
-          scannedBytes += bytesRead;
-          pending = pending.length
-            ? Buffer.concat([pending, chunk.subarray(0, bytesRead)])
-            : chunk.subarray(0, bytesRead);
-          let newline: number;
-          while (!stopFile && (newline = pending.indexOf(0x0a)) >= 0) {
-            stopFile = inspectLine(pending.subarray(0, newline));
-            pending = pending.subarray(newline + 1);
-          }
-        }
-        if (!stopFile && fileOffset >= stat.size && pending.length > 0) {
-          inspectLine(pending);
-        }
-        // A read whose chunk was capped by the remaining global budget stops on a smaller boundary
-        // than a cold scan would, so its fileOffset undercounts the true unconstrained scan cost.
-        // Don't cache such an entry: replaying its low cost later (with more budget free) would let
-        // the warm scan cross the frontier and surface sessions a cold scan omits.
-        const budgetConstrained = scannedBytes >= MAX_CATALOG_METADATA_SCAN_BYTES;
-        cacheable =
-          !budgetConstrained &&
-          (stopFile || fileOffset >= stat.size || fileOffset >= CLAUDE_METADATA_PREFIX_BYTES);
-        fileScannedBytes = fileOffset;
-      } finally {
-        await handle.close();
-      }
-      // Negative and sidechain-only results are cached too; unchanged files should not be reparsed.
-      if (cacheable) {
-        cacheCatalogDiscovery(filePath, {
-          root,
-          mtimeMs: fileStat.mtimeMs,
-          size: fileStat.size,
-          ino: fileStat.ino,
-          sessionId,
-          scannedBytes: fileScannedBytes,
-          record: records.get(sessionId) ?? null,
-          sidechain: sidechainIds.has(sessionId),
-        });
-      }
+      // Cache hits read no transcript bytes, but they still charge the file's original scan cost
+      // so the byte-budget cutoff matches a cold scan; otherwise repeated calls would free budget
+      // and progressively discover more files.
+      scannedBytes += cached.scannedBytes;
       if (scannedBytes >= MAX_CATALOG_METADATA_SCAN_BYTES) {
         truncated = true;
-        break scan;
+        break;
       }
+      continue;
+    }
+    const handle = await fs.open(filePath, "r").catch(() => {
+      context.complete = false;
+      return undefined;
+    });
+    if (!handle) {
+      continue;
+    }
+    let cacheable = false;
+    let fileScannedBytes = 0;
+    try {
+      const stat = await handle.stat();
+      let aiTitle: string | undefined;
+      let pending = Buffer.alloc(0);
+      let fileOffset = 0;
+      let stopFile = false;
+      const inspectLine = (line: Buffer): boolean => {
+        let raw: unknown;
+        try {
+          raw = JSON.parse(line.toString("utf8")) as unknown;
+        } catch {
+          return false;
+        }
+        if (!isRecord(raw) || raw.sessionId !== sessionId) {
+          return false;
+        }
+        if (raw.type === "ai-title") {
+          aiTitle = readBoundedString(raw.aiTitle, 500) ?? aiTitle;
+          return false;
+        }
+        if (typeof raw.entrypoint === "string" && !isCliEntrypoint(raw.entrypoint)) {
+          return true;
+        }
+        if (isCliEntrypoint(raw.entrypoint) && raw.isSidechain === true) {
+          sidechainIds.add(sessionId);
+          return true;
+        }
+        if (
+          !isCliEntrypoint(raw.entrypoint) ||
+          raw.type !== "user" ||
+          !isRecord(raw.message) ||
+          raw.message.role !== "user"
+        ) {
+          return false;
+        }
+        const fragments: string[] = [];
+        collectTranscriptText(raw.message.content, fragments);
+        const firstPrompt = readBoundedString(fragments[0], 500);
+        const createdAt = parseClaudeCatalogTimestampMs(raw.timestamp);
+        records.set(sessionId, {
+          threadId: sessionId,
+          name: aiTitle ?? firstPrompt ?? null,
+          cwd: readBoundedString(raw.cwd, MAX_STRING_LENGTH),
+          status: "stored",
+          ...(createdAt !== undefined ? { createdAt } : {}),
+          updatedAt: stat.mtimeMs,
+          recencyAt: stat.mtimeMs,
+          source: "claude-cli",
+          modelProvider: "anthropic",
+          ...(readBoundedString(raw.version, 256)
+            ? { cliVersion: readBoundedString(raw.version, 256) }
+            : {}),
+          ...(readBoundedString(raw.gitBranch, 500)
+            ? { gitBranch: readBoundedString(raw.gitBranch, 500) }
+            : {}),
+          archived: false,
+          filePath,
+        });
+        return true;
+      };
+      while (
+        !stopFile &&
+        fileOffset < stat.size &&
+        fileOffset < CLAUDE_METADATA_PREFIX_BYTES &&
+        scannedBytes < MAX_CATALOG_METADATA_SCAN_BYTES
+      ) {
+        const size = Math.min(
+          CLAUDE_METADATA_READ_CHUNK_BYTES,
+          stat.size - fileOffset,
+          CLAUDE_METADATA_PREFIX_BYTES - fileOffset,
+          MAX_CATALOG_METADATA_SCAN_BYTES - scannedBytes,
+        );
+        const chunk = Buffer.allocUnsafe(size);
+        const { bytesRead } = await handle.read(chunk, 0, size, fileOffset);
+        if (bytesRead === 0) {
+          break;
+        }
+        fileOffset += bytesRead;
+        scannedBytes += bytesRead;
+        pending = pending.length
+          ? Buffer.concat([pending, chunk.subarray(0, bytesRead)])
+          : chunk.subarray(0, bytesRead);
+        let newline: number;
+        while (!stopFile && (newline = pending.indexOf(0x0a)) >= 0) {
+          stopFile = inspectLine(pending.subarray(0, newline));
+          pending = pending.subarray(newline + 1);
+        }
+      }
+      if (!stopFile && fileOffset >= stat.size && pending.length > 0) {
+        inspectLine(pending);
+      }
+      // A read whose chunk was capped by the remaining global budget stops on a smaller boundary
+      // than a cold scan would, so its fileOffset undercounts the true unconstrained scan cost.
+      // Don't cache such an entry: replaying its low cost later (with more budget free) would let
+      // the warm scan cross the frontier and surface sessions a cold scan omits.
+      const budgetConstrained = scannedBytes >= MAX_CATALOG_METADATA_SCAN_BYTES;
+      cacheable =
+        !budgetConstrained &&
+        (stopFile || fileOffset >= stat.size || fileOffset >= CLAUDE_METADATA_PREFIX_BYTES);
+      fileScannedBytes = fileOffset;
+    } finally {
+      await handle.close();
+    }
+    // Negative and sidechain-only results are cached too; unchanged files should not be reparsed.
+    if (cacheable) {
+      cacheCatalogDiscovery(filePath, {
+        root,
+        mtimeMs: fileStat.mtimeMs,
+        size: fileStat.size,
+        ino: fileStat.ino,
+        sessionId,
+        scannedBytes: fileScannedBytes,
+        record: records.get(sessionId) ?? null,
+        sidechain: sidechainIds.has(sessionId),
+      });
+    }
+    if (scannedBytes >= MAX_CATALOG_METADATA_SCAN_BYTES) {
+      truncated = true;
+      break;
     }
   }
   if (!truncated) {
@@ -670,13 +925,20 @@ async function discoverCliRecords(
   }
 }
 
-async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRecord[]> {
+async function scanClaudeSessions(
+  homeDir: string,
+  snapshot: ClaudeProjectsTreeSnapshot,
+  includeDesktop: boolean,
+): Promise<{ records: CatalogRecord[]; complete: boolean }> {
+  const context: ClaudeSessionScanContext = { ...snapshot, complete: true, safeFiles: new Map() };
   const [indexed, desktop] = await Promise.all([
-    readIndexRecords(homeDir),
-    readDesktopMetadata(homeDir),
+    readIndexRecords(context),
+    includeDesktop
+      ? readDesktopMetadata(homeDir)
+      : Promise.resolve({ active: new Map(), archived: new Set<string>() }),
   ]);
   const records = indexed.records;
-  await discoverCliRecords(homeDir, records, indexed.sidechainIds);
+  await discoverCliRecords(context, records, indexed.sidechainIds);
   for (const sessionId of desktop.archived) {
     records.delete(sessionId);
   }
@@ -685,13 +947,13 @@ async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRe
       continue;
     }
     const existing = records.get(sessionId);
-    const filePath = existing?.filePath ?? (await locateSessionFile(homeDir, sessionId));
+    const filePath = existing?.filePath ?? (await locateSessionFile(context, sessionId));
     if (!filePath) {
       continue;
     }
-    const createdAt = timestampMs(metadata.createdAt) ?? existing?.createdAt;
-    const updatedAt = timestampMs(metadata.lastActivityAt) ?? existing?.updatedAt;
-    const customGroup = optionalString(metadata.customGroup, 500);
+    const createdAt = parseClaudeCatalogTimestampMs(metadata.createdAt) ?? existing?.createdAt;
+    const updatedAt = parseClaudeCatalogTimestampMs(metadata.lastActivityAt) ?? existing?.updatedAt;
+    const customGroup = readBoundedString(metadata.customGroup, 500);
     const pullRequest = desktopPullRequestSummary(metadata);
     records.set(sessionId, {
       ...(existing ?? {
@@ -700,8 +962,11 @@ async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRe
         modelProvider: "anthropic" as const,
         archived: false as const,
       }),
-      name: optionalString(metadata.title, 500) ?? existing?.name ?? null,
-      cwd: optionalString(metadata.cwd) ?? optionalString(metadata.originCwd) ?? existing?.cwd,
+      name: readBoundedString(metadata.title, 500) ?? existing?.name ?? null,
+      cwd:
+        readBoundedString(metadata.cwd, MAX_STRING_LENGTH) ??
+        readBoundedString(metadata.originCwd, MAX_STRING_LENGTH) ??
+        existing?.cwd,
       ...(createdAt !== undefined ? { createdAt } : {}),
       ...(updatedAt !== undefined ? { updatedAt, recencyAt: updatedAt } : {}),
       ...(customGroup ? { customGroup } : {}),
@@ -710,11 +975,76 @@ async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRe
       filePath,
     });
   }
-  return [...records.values()].toSorted((left, right) => {
-    const recency =
-      (right.recencyAt ?? right.updatedAt ?? 0) - (left.recencyAt ?? left.updatedAt ?? 0);
-    return recency || left.threadId.localeCompare(right.threadId);
+  return {
+    records: [...records.values()].toSorted((left, right) => {
+      const recency =
+        (right.recencyAt ?? right.updatedAt ?? 0) - (left.recencyAt ?? left.updatedAt ?? 0);
+      return recency || left.threadId.localeCompare(right.threadId);
+    }),
+    complete: context.complete,
+  };
+}
+
+async function listClaudeSessions(
+  homeDir = currentHomeDir(),
+  options: { forceRefresh?: boolean; configDir?: string; includeDesktop?: boolean } = {},
+): Promise<CatalogRecord[]> {
+  const root = projectsDir(homeDir, options.configDir);
+  const includeDesktop = options.includeDesktop !== false;
+  const cacheKey = `${root}\0${includeDesktop ? "desktop" : "cli"}`;
+  const [treeSnapshot, desktopStoreAvailable] = await Promise.all([
+    readProjectsTreeSnapshot(root),
+    includeDesktop ? desktopSessionStoreAvailable(homeDir) : Promise.resolve(false),
+  ]);
+  const now = Date.now();
+  const cached = claudeSessionScanCache.get(cacheKey);
+  // Child membership + file mtime/size signatures invalidate CLI rows on the next poll; five minutes
+  // backstops metadata anomalies. Desktop has a 60s bound when its macOS store exists; Linux skips it.
+  // Specific-thread force refresh bypasses both, or a stale page could hide a just-created session.
+  if (
+    options.forceRefresh !== true &&
+    cached &&
+    cached.treeStamp === treeSnapshot.treeStamp &&
+    cached.hardExpiresAt > now &&
+    cached.desktopStoreAvailable === desktopStoreAvailable &&
+    (!desktopStoreAvailable || cached.desktopExpiresAt > now)
+  ) {
+    setBoundedCache(
+      claudeSessionScanCache,
+      cacheKey,
+      cached,
+      MAX_CLAUDE_SESSION_SCAN_CACHE_ENTRIES,
+    );
+    return await cached.records;
+  }
+  const scan = scanClaudeSessions(homeDir, treeSnapshot, includeDesktop);
+  let scanComplete = true;
+  const records = scan.then((result) => {
+    scanComplete = result.complete;
+    return result.records;
   });
+  const entry = {
+    treeStamp: treeSnapshot.treeStamp,
+    hardExpiresAt: now + CLAUDE_SESSION_SCAN_HARD_TTL_MS,
+    desktopStoreAvailable,
+    desktopExpiresAt: now + CLAUDE_DESKTOP_SCAN_TTL_MS,
+    records,
+  };
+  setBoundedCache(claudeSessionScanCache, cacheKey, entry, MAX_CLAUDE_SESSION_SCAN_CACHE_ENTRIES);
+  try {
+    const result = await records;
+    if (!scanComplete && claudeSessionScanCache.get(cacheKey) === entry) {
+      // Partial results still serve this caller, but retry within 15s so transient per-file I/O
+      // cannot hide recovered sessions behind the five-minute unchanged-tree backstop.
+      entry.hardExpiresAt = Date.now() + CLAUDE_PARTIAL_SCAN_TTL_MS;
+    }
+    return result;
+  } catch (error) {
+    if (claudeSessionScanCache.get(cacheKey) === entry) {
+      claudeSessionScanCache.delete(cacheKey);
+    }
+    throw error;
+  }
 }
 
 function encodeOffset(offset: number): string {
@@ -784,7 +1114,7 @@ function readListParams(value: unknown): {
     throw new ClaudeCatalogParamsError(`unknown Claude session catalog parameter: ${unknown}`);
   }
   const cursor = readOptionalCursor(value.cursor, "catalog");
-  const searchTerm = optionalString(value.searchTerm, MAX_SEARCH_LENGTH);
+  const searchTerm = readBoundedString(value.searchTerm, MAX_SEARCH_LENGTH);
   return {
     limit: readLimit(value.limit, DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT),
     ...(cursor ? { cursor } : {}),
@@ -794,12 +1124,16 @@ function readListParams(value: unknown): {
 
 export async function listLocalClaudeSessionPage(
   value: unknown,
-  homeDir = currentHomeDir(),
+  homeDir?: string,
+  scanOptions?: { configDir?: string; includeDesktop?: boolean },
 ): Promise<ClaudeSessionCatalogPage> {
+  const resolvedHome = homeDir ?? currentHomeDir();
+  const resolvedScanOptions =
+    scanOptions ?? (homeDir === undefined ? gatewayClaudeScanOptions(true) : {});
   const params = readListParams(value);
   const offset = decodeOffset(params.cursor, "catalog");
   const search = params.searchTerm?.toLocaleLowerCase();
-  const records = (await listClaudeSessions(homeDir)).filter((record) => {
+  const records = (await listClaudeSessions(resolvedHome, resolvedScanOptions)).filter((record) => {
     if (!search) {
       return true;
     }
@@ -834,7 +1168,7 @@ function readTranscriptParams(
   if (unknown) {
     throw new ClaudeCatalogParamsError(`unknown Claude session read parameter: ${unknown}`);
   }
-  const threadId = optionalString(value.threadId, 256);
+  const threadId = readBoundedString(value.threadId, 256);
   if (!threadId || !/^[A-Za-z0-9._:-]+$/.test(threadId)) {
     throw new ClaudeCatalogParamsError("threadId is invalid");
   }
@@ -848,12 +1182,23 @@ function readTranscriptParams(
 
 export async function readLocalClaudeTranscriptPage(
   value: unknown,
-  homeDir = currentHomeDir(),
+  homeDir?: string,
+  scanOptions?: { configDir?: string; includeDesktop?: boolean },
 ): Promise<Omit<ClaudeSessionTranscriptPage, "hostId" | "label">> {
+  const resolvedHome = homeDir ?? currentHomeDir();
+  const resolvedScanOptions =
+    scanOptions ?? (homeDir === undefined ? gatewayClaudeScanOptions(true) : {});
   const params = readTranscriptParams(value);
-  const filePath = (await listClaudeSessions(homeDir)).find(
+  let filePath = (await listClaudeSessions(resolvedHome, resolvedScanOptions)).find(
     (record) => record.threadId === params.threadId,
   )?.filePath;
+  if (!filePath) {
+    // A just-created session can race the stamp snapshot. Specific reads must retry against disk so
+    // opening a new thread never fails only because the assembled catalog is still warm.
+    filePath = (
+      await listClaudeSessions(resolvedHome, { ...resolvedScanOptions, forceRefresh: true })
+    ).find((record) => record.threadId === params.threadId)?.filePath;
+  }
   if (!filePath) {
     throw new ClaudeCatalogParamsError("Claude session is unavailable");
   }
@@ -895,7 +1240,7 @@ export async function readLocalClaudeTranscriptPage(
         const segment = chunk.subarray(index + 1, right);
         if (segment.length > 0 || fragments.length > 0) {
           const line = Buffer.concat([segment, ...fragments.toReversed()]);
-          const item = parseTranscriptLine(line, optionalString);
+          const item = parseTranscriptLine(line, readBoundedString);
           fragments = [];
           if (item) {
             found.push({ item, start: position + index + 1 });
@@ -913,7 +1258,7 @@ export async function readLocalClaudeTranscriptPage(
       if (position === 0) {
         if (prefix.length > 0 || fragments.length > 0) {
           const line = Buffer.concat([prefix, ...fragments.toReversed()]);
-          const item = parseTranscriptLine(line, optionalString);
+          const item = parseTranscriptLine(line, readBoundedString);
           if (item) {
             found.push({ item, start: 0 });
           }
@@ -981,7 +1326,7 @@ function parseCatalogPage(value: unknown): ClaudeSessionCatalogPage {
     if (!isRecord(candidate)) {
       throw new Error("Claude node returned an invalid session");
     }
-    const threadId = optionalString(candidate.threadId, 256);
+    const threadId = readBoundedString(candidate.threadId, 256);
     const source = candidate.source;
     if (
       !threadId ||
@@ -996,7 +1341,7 @@ function parseCatalogPage(value: unknown): ClaudeSessionCatalogPage {
       if (!(key in candidate)) {
         return undefined;
       }
-      const parsed = optionalString(candidate[key], maxLength);
+      const parsed = readBoundedString(candidate[key], maxLength);
       if (!parsed) {
         throw new Error("Claude node returned an invalid session");
       }
@@ -1072,7 +1417,7 @@ function parseGatewayQuery(value: unknown): {
   if (unknown) {
     throw new ClaudeCatalogParamsError(`unknown Claude session catalog parameter: ${unknown}`);
   }
-  const search = optionalString(value.search, MAX_SEARCH_LENGTH);
+  const search = readBoundedString(value.search, MAX_SEARCH_LENGTH);
   let hostIds: string[] | undefined;
   if (value.hostIds !== undefined) {
     if (!Array.isArray(value.hostIds) || value.hostIds.length > MAX_HOSTS) {
@@ -1081,7 +1426,7 @@ function parseGatewayQuery(value: unknown): {
     hostIds = [
       ...new Set(
         value.hostIds.map((hostId) => {
-          const normalized = optionalString(hostId, 256);
+          const normalized = readBoundedString(hostId, 256);
           if (
             !normalized ||
             (normalized !== CLAUDE_LOCAL_SESSION_HOST_ID && !normalized.startsWith("node:"))
@@ -1115,12 +1460,16 @@ function parseGatewayQuery(value: unknown): {
 async function listClaudeSessionCatalog(params: {
   runtime: PluginRuntime;
   query?: unknown;
+  allowProcessHomeFallback?: boolean;
+  listNodes?: Parameters<SessionCatalogProvider["list"]>[0]["listNodes"];
   onHost?: (host: ClaudeSessionCatalogHost) => void;
 }): Promise<ClaudeSessionCatalogResult> {
   const query = parseGatewayQuery(params.query);
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
+  const scanOptions = gatewayClaudeScanOptions(params.allowProcessHomeFallback);
   const localHosts: Promise<ClaudeSessionCatalogHost>[] =
-    !requested || requested.has(CLAUDE_LOCAL_SESSION_HOST_ID)
+    (params.allowProcessHomeFallback !== false || scanOptions.configDir !== undefined) &&
+    (!requested || requested.has(CLAUDE_LOCAL_SESSION_HOST_ID))
       ? [
           (async () => {
             try {
@@ -1129,13 +1478,17 @@ async function listClaudeSessionCatalog(params: {
                 label: "Local Claude",
                 kind: "gateway",
                 connected: true,
-                ...(await listLocalClaudeSessionPage({
-                  limit: query.limitPerHost,
-                  ...(query.search ? { searchTerm: query.search } : {}),
-                  ...(query.cursors?.[CLAUDE_LOCAL_SESSION_HOST_ID] !== undefined
-                    ? { cursor: query.cursors[CLAUDE_LOCAL_SESSION_HOST_ID] }
-                    : {}),
-                })),
+                ...(await listLocalClaudeSessionPage(
+                  {
+                    limit: query.limitPerHost,
+                    ...(query.search ? { searchTerm: query.search } : {}),
+                    ...(query.cursors?.[CLAUDE_LOCAL_SESSION_HOST_ID] !== undefined
+                      ? { cursor: query.cursors[CLAUDE_LOCAL_SESSION_HOST_ID] }
+                      : {}),
+                  },
+                  currentHomeDir(),
+                  scanOptions,
+                )),
               };
             } catch {
               return {
@@ -1164,7 +1517,7 @@ async function listClaudeSessionCatalog(params: {
   }
   let nodes: Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"];
   try {
-    nodes = (await params.runtime.nodes.list()).nodes;
+    nodes = (await (params.listNodes?.() ?? params.runtime.nodes.list())).nodes;
   } catch (error) {
     const registryHost: ClaudeSessionCatalogHost = {
       hostId: "node:registry",
@@ -1182,6 +1535,7 @@ async function listClaudeSessionCatalog(params: {
   const eligible = nodes
     .filter(
       (node) =>
+        node.gatewayLocal !== true &&
         node.commands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) &&
         (!requested || requested.has(`node:${node.nodeId}`)),
     )
@@ -1266,17 +1620,23 @@ async function readClaudeSessionTranscript(params: {
   threadId: string;
   cursor?: string;
   limit: number;
+  allowProcessHomeFallback?: boolean;
 }): Promise<ClaudeSessionTranscriptPage> {
   const cursor = readOptionalCursor(params.cursor, "transcript");
   if (params.hostId === CLAUDE_LOCAL_SESSION_HOST_ID) {
+    assertClaudeLocalAccess(params.hostId, params.allowProcessHomeFallback);
     return {
       hostId: params.hostId,
       label: "Local Claude",
-      ...(await readLocalClaudeTranscriptPage({
-        threadId: params.threadId,
-        limit: params.limit,
-        ...(cursor !== undefined ? { cursor } : {}),
-      })),
+      ...(await readLocalClaudeTranscriptPage(
+        {
+          threadId: params.threadId,
+          limit: params.limit,
+          ...(cursor !== undefined ? { cursor } : {}),
+        },
+        currentHomeDir(),
+        gatewayClaudeScanOptions(params.allowProcessHomeFallback),
+      )),
     };
   }
   if (!params.hostId.startsWith("node:")) {
@@ -1324,10 +1684,21 @@ async function readClaudeSessionTranscript(params: {
   };
 }
 
+function assertClaudeLocalAccess(hostId: string, allowProcessHomeFallback?: boolean): void {
+  if (
+    hostId === CLAUDE_LOCAL_SESSION_HOST_ID &&
+    allowProcessHomeFallback === false &&
+    configuredClaudeConfigDir() === undefined
+  ) {
+    throw new ClaudeCatalogParamsError("local Claude sessions are unavailable in isolated state");
+  }
+}
+
 async function readBoundedClaudeHistory(params: {
   runtime: PluginRuntime;
   hostId: string;
   threadId: string;
+  allowProcessHomeFallback?: boolean;
 }): Promise<ClaudeTranscriptItem[]> {
   const items: ClaudeTranscriptItem[] = [];
   let cursor: string | undefined;
@@ -1338,6 +1709,7 @@ async function readBoundedClaudeHistory(params: {
       hostId: params.hostId,
       threadId: params.threadId,
       limit: Math.min(MAX_TRANSCRIPT_LIMIT, CLAUDE_HISTORY_IMPORT_MAX_ITEMS - items.length),
+      allowProcessHomeFallback: params.allowProcessHomeFallback,
       ...(cursor ? { cursor } : {}),
     });
     for (const item of page.items) {
@@ -1389,82 +1761,107 @@ async function resolveNodeClaudeRecord(params: {
 
 async function continueClaudeSession(
   api: OpenClawPluginApi,
+  agentId: string,
   hostId: string,
   threadId: string,
+  allowProcessHomeFallback?: boolean,
 ): Promise<{ sessionKey: string }> {
+  const scanOptions = gatewayClaudeScanOptions(allowProcessHomeFallback);
   const sourceKey = adoptedSourceKey(hostId, threadId);
+  const operationKey = `${agentId}\0${sourceKey}`;
   const linkSession = async (sessionKey: string, history?: ClaudeTranscriptItem[]) =>
     await upstream.linkContinued({
       sessionKey,
       hostId,
       threadId,
       ...(history ? { history } : {}),
-      listLocalSessions: listClaudeSessions,
+      listLocalSessions: () => listClaudeSessions(currentHomeDir(), scanOptions),
       readRemote: async () =>
-        (await readClaudeSessionTranscript({ runtime: api.runtime, hostId, threadId, limit: 1 }))
-          .items,
+        (
+          await readClaudeSessionTranscript({
+            runtime: api.runtime,
+            hostId,
+            threadId,
+            limit: 1,
+            allowProcessHomeFallback,
+          })
+        ).items,
     });
-  const existing = listBoundClaudeSessions(api).get(sourceKey);
+  const existing = listBoundClaudeSessions(api, agentId).get(sourceKey);
   if (existing) {
     return await linkSession(existing);
   }
-  const pending = upstream.continueOperations.get(sourceKey);
-  if (pending) {
-    return await pending;
-  }
-  const operation = (async () => {
-    let nodeId: string | undefined;
-    let record: ClaudeSessionCatalogSession | undefined;
-    if (hostId === CLAUDE_LOCAL_SESSION_HOST_ID) {
-      record = (await listClaudeSessions()).find((candidate) => candidate.threadId === threadId);
-      if (!record || !isResumableClaudeSource(record.source)) {
-        throw new ClaudeCatalogParamsError("only local Claude Code sessions can be continued");
-      }
-    } else if (hostId.startsWith("node:")) {
-      nodeId = hostId.slice("node:".length);
-      const node = (await api.runtime.nodes.list()).nodes.find(
-        (candidate) =>
-          candidate.nodeId === nodeId &&
-          candidate.connected === true &&
-          candidate.commands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) &&
-          candidate.commands.includes(CLAUDE_SESSION_READ_COMMAND) &&
-          candidate.commands.includes(CLAUDE_CLI_NODE_RUN_COMMAND) &&
-          candidate.invocableCommands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) === true &&
-          candidate.invocableCommands.includes(CLAUDE_SESSION_READ_COMMAND) &&
-          candidate.invocableCommands.includes(CLAUDE_CLI_NODE_RUN_COMMAND),
-      );
-      if (!node) {
-        throw new ClaudeCatalogParamsError(
-          "paired node does not permit Claude CLI session continuation",
+  let history: ClaudeTranscriptItem[] | undefined;
+  return await continueClaudeAdoption({
+    sourceKey: operationKey,
+    findExisting: () => listBoundClaudeSessions(api, agentId).get(sourceKey),
+    create: async () => {
+      let nodeId: string | undefined;
+      let record: ClaudeSessionCatalogSession | undefined;
+      if (hostId === CLAUDE_LOCAL_SESSION_HOST_ID) {
+        record = (await listClaudeSessions(currentHomeDir(), scanOptions)).find(
+          (candidate) => candidate.threadId === threadId,
         );
+        if (!record || !isResumableClaudeSource(record.source)) {
+          throw new ClaudeCatalogParamsError("only local Claude Code sessions can be continued");
+        }
+      } else if (hostId.startsWith("node:")) {
+        nodeId = hostId.slice("node:".length);
+        const node = (await api.runtime.nodes.list()).nodes.find(
+          (candidate) =>
+            candidate.nodeId === nodeId &&
+            candidate.connected === true &&
+            candidate.commands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) &&
+            candidate.commands.includes(CLAUDE_SESSION_READ_COMMAND) &&
+            candidate.commands.includes(CLAUDE_CLI_NODE_RUN_COMMAND) &&
+            candidate.invocableCommands?.includes(CLAUDE_SESSIONS_LIST_COMMAND) === true &&
+            candidate.invocableCommands.includes(CLAUDE_SESSION_READ_COMMAND) &&
+            candidate.invocableCommands.includes(CLAUDE_CLI_NODE_RUN_COMMAND),
+        );
+        if (!node) {
+          throw new ClaudeCatalogParamsError(
+            "paired node does not permit Claude CLI session continuation",
+          );
+        }
+        // Node rows stay CLI-only: desktop transcripts on nodes have no
+        // node-side run command and remain view-only.
+        record = await resolveNodeClaudeRecord({ runtime: api.runtime, nodeId, threadId });
+        if (!record || record.source !== "claude-cli") {
+          throw new ClaudeCatalogParamsError("only Claude CLI sessions can be continued");
+        }
+      } else {
+        throw new ClaudeCatalogParamsError("hostId is invalid");
       }
-      // Node rows stay CLI-only: desktop transcripts on nodes have no
-      // node-side run command and remain view-only.
-      record = await resolveNodeClaudeRecord({ runtime: api.runtime, nodeId, threadId });
-      if (!record || record.source !== "claude-cli") {
-        throw new ClaudeCatalogParamsError("only Claude CLI sessions can be continued");
+      if (hostId === CLAUDE_LOCAL_SESSION_HOST_ID) {
+        const source = await fs.stat((record as CatalogRecord).filePath).catch(() => undefined);
+        if (!source?.isFile()) {
+          throw new ClaudeCatalogParamsError("Claude session transcript is unavailable");
+        }
       }
-    } else {
-      throw new ClaudeCatalogParamsError("hostId is invalid");
-    }
-    if (hostId === CLAUDE_LOCAL_SESSION_HOST_ID) {
-      const source = await fs.stat((record as CatalogRecord).filePath).catch(() => undefined);
-      if (!source?.isFile()) {
-        throw new ClaudeCatalogParamsError("Claude session transcript is unavailable");
-      }
-    }
-    const history = await readBoundedClaudeHistory({ runtime: api.runtime, hostId, threadId });
-    const config = currentClaudeSessionCatalogConfig(api);
-    const model = CLAUDE_CLI_DEFAULT_MODEL_REF.slice(`${CLAUDE_CLI_BACKEND_ID}/`.length);
-    const marker = {
-      sourceThreadId: threadId,
-      ...(hostId !== CLAUDE_LOCAL_SESSION_HOST_ID ? { sourceHostId: hostId } : {}),
-    };
-    try {
+      // Narrowed local: afterCreate below needs a definite array, while the outer
+      // `history` stays optional so complete() can link without a reread on races.
+      const loadedHistory = await readBoundedClaudeHistory({
+        runtime: api.runtime,
+        hostId,
+        threadId,
+        allowProcessHomeFallback,
+      });
+      history = loadedHistory;
+      const config = currentClaudeSessionCatalogConfig(api);
+      const adoptingAgentId = agentId;
+      // Adopt onto the model this agent actually routes to the CLI backend; the
+      // packaged default may not be routed or allowed in an existing config.
+      const model =
+        resolveClaudeCliRoutedModelId(config, adoptingAgentId) ??
+        CLAUDE_CLI_DEFAULT_MODEL_REF.slice(`${CLAUDE_CLI_BACKEND_ID}/`.length);
+      const marker = {
+        sourceThreadId: threadId,
+        ...(hostId !== CLAUDE_LOCAL_SESSION_HOST_ID ? { sourceHostId: hostId } : {}),
+      };
       const created = await api.runtime.agent.session.createSessionEntry({
         cfg: config,
         key: adoptedSessionKey(hostId, threadId),
-        agentId: resolveDefaultAgentId(config),
+        agentId: adoptingAgentId,
         recoverMatchingInitialEntry: true,
         ...(record.name ? { label: record.name } : {}),
         ...(record.cwd ? { spawnedCwd: record.cwd } : {}),
@@ -1478,39 +1875,25 @@ async function continueClaudeSession(
           pluginExtensions: { anthropic: { sessionCatalog: marker } },
         },
         afterCreate: async (entry) => {
-          if (!entry.entry.sessionFile) {
-            throw new Error("Claude session creation did not produce a transcript file");
-          }
           await importClaudeHistory({
-            items: history,
+            items: loadedHistory,
             threadId,
-            sessionFile: entry.entry.sessionFile,
             sessionId: entry.sessionId,
             sessionKey: entry.key,
             agentId: entry.agentId,
+            storePath: api.runtime.agent.session.resolveStorePath(config.session?.store, {
+              agentId: entry.agentId,
+            }),
             ...(record.cwd ? { cwd: record.cwd } : {}),
             config,
           });
           return { pluginExtensions: { anthropic: { sessionCatalog: marker } } };
         },
       });
-      return await linkSession(created.key, history);
-    } catch (error) {
-      const raced = listBoundClaudeSessions(api).get(sourceKey);
-      if (raced) {
-        return await linkSession(raced, history);
-      }
-      throw error;
-    }
-  })();
-  upstream.continueOperations.set(sourceKey, operation);
-  try {
-    return await operation;
-  } finally {
-    if (upstream.continueOperations.get(sourceKey) === operation) {
-      upstream.continueOperations.delete(sourceKey);
-    }
-  }
+      return { sessionKey: created.key };
+    },
+    complete: async (continued) => await linkSession(continued.sessionKey, history),
+  });
 }
 
 function toGenericClaudeItem(item: ClaudeTranscriptItem): SessionCatalogTranscriptItem {
@@ -1584,55 +1967,109 @@ function toGenericClaudeHost(
   };
 }
 
-export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
-  const provider: SessionCatalogProvider = {
-    id: "claude",
-    label: "Claude Code",
-    resolveCreateSession: ({ agentId }) => resolveClaudeCatalogCreateSession(api, agentId),
+type ClaudeSessionCatalogRuntime = Required<
+  Pick<
+    SessionCatalogProvider,
+    | "list"
+    | "read"
+    | "continueSession"
+    | "startTerminalSession"
+    | "openTerminal"
+    | "checkUpstreamActivity"
+  >
+>;
+
+export function createClaudeSessionCatalogRuntime(
+  api: OpenClawPluginApi,
+): ClaudeSessionCatalogRuntime {
+  return {
     list: async (query) => {
-      const adopted = listBoundClaudeSessions(api);
+      const adopted = listBoundClaudeSessions(api, query.agentId, query.sessionEntries);
       const localCliAvailable = catalogTerminal.isClaudeCliAvailable();
-      const { onHost, ...gatewayQuery } = query;
+      const {
+        allowProcessHomeFallback,
+        agentId: _agentId,
+        listNodes,
+        onHost,
+        sessionEntries: _sessionEntries,
+        ...gatewayQuery
+      } = query;
       const mapHost = (host: ClaudeSessionCatalogHost) =>
         toGenericClaudeHost(host, adopted, localCliAvailable);
       const result = await listClaudeSessionCatalog({
         runtime: api.runtime,
         query: gatewayQuery,
+        allowProcessHomeFallback,
+        listNodes,
         ...(onHost ? { onHost: (host) => onHost(mapHost(host)) } : {}),
       });
       return result.hosts.map(mapHost);
     },
     read: async (request) => {
+      const { agentId: _agentId, allowProcessHomeFallback, ...catalogRequest } = request;
       const page = await readClaudeSessionTranscript({
         runtime: api.runtime,
-        hostId: request.hostId,
-        threadId: request.threadId,
-        cursor: request.cursor,
-        limit: request.limit ?? DEFAULT_TRANSCRIPT_LIMIT,
+        hostId: catalogRequest.hostId,
+        threadId: catalogRequest.threadId,
+        cursor: catalogRequest.cursor,
+        limit: catalogRequest.limit ?? DEFAULT_TRANSCRIPT_LIMIT,
+        allowProcessHomeFallback,
       });
       return { ...page, items: page.items.map(toGenericClaudeItem) };
     },
-    continueSession: async (request) =>
-      await continueClaudeSession(api, request.hostId, request.threadId),
-    openTerminal: (request) =>
-      catalogTerminal.openClaudeCatalogTerminal({
+    continueSession: async (request) => {
+      assertClaudeLocalAccess(request.hostId, request.allowProcessHomeFallback);
+      const agentId = resolveSessionAgentIds({
+        config: api.config,
+        agentId: request.agentId,
+      }).sessionAgentId;
+      return await continueClaudeSession(
+        api,
+        agentId,
+        request.hostId,
+        request.threadId,
+        request.allowProcessHomeFallback,
+      );
+    },
+    startTerminalSession: async (request) => {
+      // Node launches run in the paired node's environment, not gateway HOME;
+      // only local starts fall under the process-HOME isolation guard.
+      if (!request.nodeId) {
+        assertClaudeLocalAccess(CLAUDE_LOCAL_SESSION_HOST_ID, request.allowProcessHomeFallback);
+      }
+      return await catalogTerminal.startClaudeCatalogTerminal(request);
+    },
+    openTerminal: async (request) => {
+      assertClaudeLocalAccess(request.hostId, request.allowProcessHomeFallback);
+      return await catalogTerminal.openClaudeCatalogTerminal({
         api,
         ...request,
-        listClaudeSessions,
+        listClaudeSessions: () =>
+          listClaudeSessions(
+            currentHomeDir(),
+            gatewayClaudeScanOptions(request.allowProcessHomeFallback),
+          ),
         resolveNodeClaudeRecord,
-      }),
-    checkUpstreamActivity: async (probes) =>
-      await upstream.checkClaudeUpstreamActivity(probes, async (probe) => {
+      });
+    },
+    checkUpstreamActivity: async (probes, policy) => {
+      const localAllowed =
+        policy?.allowProcessHomeFallback !== false || configuredClaudeConfigDir() !== undefined;
+      const eligible = probes.filter(
+        (probe) => probe.hostId !== CLAUDE_LOCAL_SESSION_HOST_ID || localAllowed,
+      );
+      return await upstream.checkClaudeUpstreamActivity(eligible, async (probe) => {
         return (
           await readClaudeSessionTranscript({
             runtime: api.runtime,
             hostId: probe.hostId,
             threadId: probe.threadId,
             limit: MAX_TRANSCRIPT_LIMIT,
+            allowProcessHomeFallback: policy?.allowProcessHomeFallback,
           })
         ).items;
-      }),
+      });
+    },
   };
-  api.registerSessionCatalog(provider);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

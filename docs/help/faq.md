@@ -142,27 +142,27 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     - **Cron jobs**: isolated jobs can set a `model` override per job.
     - **Agents**: route tasks to separate agents with different default models, thinking levels, and stream params.
-    - **On-demand switch**: `/model` switches the current session model at any time.
+    - **Configured default + current session**: A direct owner/admin `/model <model>` changes the session and requests a best-effort configured-default update. If the agent has no explicit primary model, the target is the shared `agents.defaults.model` fallback.
+    - **Current session only**: `/model <model> -s` (or `--session`) changes only this session and leaves configured defaults unchanged.
 
     Example - same model, different per-agent settings:
 
     ```json5
     {
       agents: {
-        list: [
-          {
-            id: "coder",
+        ownership: "explicit",
+        entries: {
+          coder: {
             model: "xiaomi/mimo-v2.5-pro",
             thinkingDefault: "high",
             params: { temperature: 0.1 },
           },
-          {
-            id: "chat",
+          chat: {
             model: "xiaomi/mimo-v2.5-pro",
             thinkingDefault: "off",
             params: { temperature: 0.8 },
           },
-        ],
+        },
       },
     }
     ```
@@ -387,15 +387,14 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     - Persist `/home/node` with `OPENCLAW_HOME_VOLUME` so caches survive.
     - Bake system deps into the image with `OPENCLAW_IMAGE_APT_PACKAGES`.
-    - Install Playwright browsers via the bundled CLI: `node /app/node_modules/playwright-core/cli.js install chromium`.
-    - Set `PLAYWRIGHT_BROWSERS_PATH` and persist that path.
+    - Bake Playwright Chromium and its system dependencies into the image with `OPENCLAW_INSTALL_BROWSER=1`.
 
     Docs: [Docker](/install/docker), [Browser](/tools/browser).
 
   </Accordion>
 
   <Accordion title="Can I keep DMs personal but make groups public/sandboxed with one agent?">
-    Yes, if private traffic is **DMs** and public traffic is **groups**. Set `agents.defaults.sandbox.mode: "non-main"` so group/channel sessions (non-main keys) run in the configured sandbox backend while the main DM session stays on-host. Docker is the default backend once sandboxing is enabled. Restrict tools available in sandboxed sessions via `tools.sandbox.tools`.
+    Yes, if private traffic is **DMs** and public traffic is **groups**. Set `agents.defaults.sandbox.mode: "non-main"` so group/channel sessions (non-main keys) run in the configured sandbox backend while the main DM session stays on-host. Select `backend: "docker"` for Docker or `backend: "podman"` for Podman. Restrict tools available in sandboxed sessions via `tools.sandbox.tools`.
 
     Setup walkthrough: [Groups: personal DMs + public groups](/channels/groups#pattern-personal-dms-public-groups-single-agent). Key reference: [Gateway configuration](/gateway/config-agents#agentsdefaultssandbox).
 
@@ -406,7 +405,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     OpenClaw validates bind sources against both the normalized path and the canonical path resolved through the deepest existing ancestor, so symlink-parent escapes fail closed even when the final path segment does not exist yet.
 
-    See [Sandboxing](/gateway/sandboxing#custom-bind-mounts) and [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated#bind-mounts-security-quick-check).
+    See [Sandboxing](/gateway/sandboxing#multiple-folders-for-one-agent) and [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated#bind-mounts-security-quick-check).
 
   </Accordion>
 
@@ -477,7 +476,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   <Accordion title="Where should AGENTS.md / SOUL.md / USER.md / MEMORY.md live?">
     These live in the **agent workspace**, not `~/.openclaw`.
 
-    - **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`. Lowercase root `memory.md` is legacy repair input only; `openclaw doctor --fix` can merge it into `MEMORY.md` when both exist.
+    - **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, `memory/YYYY-MM-DD.md`. Lowercase root `memory.md` is legacy repair input only; `openclaw doctor --fix` can merge it into `MEMORY.md` when both exist.
     - **State dir (`~/.openclaw`)**: config, channel/provider state, auth profiles, sessions, logs, shared skills (`~/.openclaw/skills`).
 
     Default workspace is `~/.openclaw/workspace`, configurable:
@@ -586,12 +585,14 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   <Accordion title="Why do I need a token on localhost now?">
     OpenClaw enforces gateway auth by default, including loopback. If no explicit auth path is configured, startup resolves to token mode and generates a runtime-only token for that startup, so local WS clients must authenticate. This blocks other local processes from calling the Gateway.
 
+    On a fresh loopback start, the Gateway prepares the canonical same-user CLI device credential before `/readyz`, so normal `openclaw` CLI calls can authenticate without persisting the generated token. Other clients still need an explicit shared secret or an approved device pairing.
+
     Configure `gateway.auth.token`, `gateway.auth.password`, `OPENCLAW_GATEWAY_TOKEN`, or `OPENCLAW_GATEWAY_PASSWORD` explicitly when clients need a stable secret across restarts. You can also choose password mode, or `trusted-proxy` for identity-aware reverse proxies. For open loopback, set `gateway.auth.mode: "none"` explicitly. `openclaw doctor --generate-gateway-token` generates a token any time.
 
   </Accordion>
 
   <Accordion title="Do I have to restart after changing config?">
-    The Gateway watches the config and supports hot-reload: `gateway.reload.mode: "hybrid"` (default) hot-applies safe changes and restarts for critical ones. `hot`, `restart`, and `off` are also supported. Most `tools.*`, `agents.*` policy, `session.*`, and `messages.*` changes apply immediately with no reload action at all; `gateway.*` binding/port changes require a restart.
+    The Gateway watches the config and supports hot-reload: `gateway.reload.mode: "hybrid"` (default) hot-applies safe changes and restarts for critical ones. `off` disables config reload; the earlier `hot` and `restart` modes are retired. Most `tools.*`, `agents.*` policy, `session.*`, and `messages.*` changes apply immediately with no reload action at all; `gateway.*` binding/port changes require a restart.
   </Accordion>
 
   <Accordion title="How do I enable web search (and web fetch)?">
@@ -882,15 +883,17 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     - `.env` from the current working directory.
     - a global fallback `.env` from `~/.openclaw/.env` (`$OPENCLAW_STATE_DIR/.env`).
 
-    Neither `.env` file overrides existing env vars. Provider credential and endpoint-routing keys are an exception for workspace `.env`: keys such as `GEMINI_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, or any key ending in `_ENDPOINT` (and other bundled-provider auth or endpoint env vars) are ignored from workspace `.env` and should live in the process environment, `~/.openclaw/.env`, or config `env`.
+    Normally, neither `.env` file overrides existing env vars. For an OpenClaw-installed systemd service, the global `.env` may replace only service values that OpenClaw recorded as managed; operator-owned service values still take precedence. Provider credential and endpoint-routing keys are an exception for workspace `.env`: keys such as `GEMINI_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, or any key ending in `_ENDPOINT` (and other bundled-provider auth or endpoint env vars) are ignored from workspace `.env` and should live in the process environment, `~/.openclaw/.env`, or config `env.vars`.
 
     Inline env vars in config apply only if missing from the process env:
 
     ```json5
     {
       env: {
-        OPENROUTER_API_KEY: "sk-or-...",
-        vars: { GROQ_API_KEY: "gsk-..." },
+        vars: {
+          OPENROUTER_API_KEY: "sk-or-...",
+          GROQ_API_KEY: "gsk-...",
+        },
       },
     }
     ```
@@ -1036,7 +1039,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     }
     ```
 
-    If `HEARTBEAT.md` exists but is effectively empty (only blank lines, Markdown/HTML comments, ATX headings, fence markers, or empty list-item stubs), OpenClaw skips the heartbeat run to save API calls. If the file is missing, the heartbeat still runs and the model decides what to do.
+    Heartbeat instructions live in the monitor's cron scratch. Effectively empty scratch skips the heartbeat run to save API calls; without scratch, the heartbeat still runs and the model decides what to do.
 
     Per-agent overrides use `agents.entries.*.heartbeat`. Docs: [Heartbeat](/gateway/heartbeat).
 
@@ -1442,7 +1445,7 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
   </Accordion>
 
   <Accordion title="Are ClawHub skills and third-party plugins safe to install?">
-    Treat third-party skills and plugins as code you are choosing to trust. ClawHub skill pages expose scan state before install, but scans are not a complete security boundary. OpenClaw does not run built-in local dangerous-code blocking during plugin/skill install or update; use operator-owned `security.installPolicy` for local allow/block decisions.
+    Treat third-party skills and plugins as code you are choosing to trust. ClawHub skill pages expose scan state before install, but scans are not a complete security boundary. OpenClaw does not run built-in local dangerous-code blocking during plugin/skill install or update; use operator-owned `security.installPolicy` for local allow/warn/block decisions.
 
     Safer pattern: prefer trusted authors and pinned versions, read the skill/plugin before enabling it, keep plugin/skill allowlists narrow, run untrusted-input workflows in a sandbox with minimal tools, and avoid giving third-party code broad filesystem, exec, browser, or secret access.
 
@@ -1570,7 +1573,7 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
 ---
 
-Still stuck? Ask in [Discord](https://discord.com/invite/clawd) or open a [GitHub discussion](https://github.com/openclaw/openclaw/discussions).
+Still stuck? Ask in [Discord](https://discord.com/invite/clawd) or use the [GitHub issue chooser](https://github.com/openclaw/openclaw/issues/new/choose).
 
 ## Related
 

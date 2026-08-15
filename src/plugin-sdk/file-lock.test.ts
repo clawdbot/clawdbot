@@ -86,6 +86,59 @@ describe("acquireFileLock", () => {
     await lock.release();
   });
 
+  it.runIf(process.platform !== "win32")(
+    "shares canonical aliases for one logical owner until the final release",
+    async () => {
+      const realDir = path.join(tempDir, "real");
+      const linkDir = path.join(tempDir, "link");
+      await fs.mkdir(realDir);
+      await fs.symlink(realDir, linkDir, "dir");
+      const realPath = path.join(realDir, "state.json");
+      const linkPath = path.join(linkDir, "state.json");
+      const options = {
+        retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+        stale: 60_000,
+        reentrantOwner: "test-operation:alias",
+      } as const;
+
+      const first = await acquireFileLock(realPath, options);
+      const second = await acquireFileLock(linkPath, options);
+      try {
+        expect(second.lockPath).toBe(first.lockPath);
+        await first.release();
+        await expect(fs.access(first.lockPath)).resolves.toBeUndefined();
+        await second.release();
+        await expect(fs.access(first.lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        await first.release();
+        await second.release();
+      }
+    },
+  );
+
+  it.each([
+    ["different", "test-operation:second"],
+    ["absent", undefined],
+  ] as const)("makes a %s logical owner contend normally", async (_label, reentrantOwner) => {
+    const filePath = path.join(tempDir, "owner-isolation.json");
+    const first = await acquireFileLock(filePath, {
+      retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+      stale: 60_000,
+      reentrantOwner: "test-operation:first",
+    });
+    try {
+      await expect(
+        acquireFileLock(filePath, {
+          retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+          stale: 60_000,
+          reentrantOwner,
+        }),
+      ).rejects.toMatchObject({ code: FILE_LOCK_TIMEOUT_ERROR_CODE });
+    } finally {
+      await first.release();
+    }
+  });
+
   it("fails closed for a security-sensitive stale lock", async () => {
     const filePath = path.join(tempDir, "exec-approvals.json");
     const lockPath = `${filePath}.lock`;

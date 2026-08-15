@@ -28,7 +28,27 @@ describe("OpenClaw tools MCP server", () => {
     );
 
     const listed = await handlers.listTools();
-    expect(listed.tools.map((tool) => tool.name)).toContain("cron");
+    expect(listed.tools.map((tool) => tool.name)).toContain("automations");
+  });
+
+  it("gates cron trigger surfaces by the host config", () => {
+    const jobKeys = (config: unknown) => {
+      const [tool] = resolveOpenClawToolsForMcp({
+        agentSessionKey: "agent:worker:main",
+        config: config as never,
+      });
+      if (!tool) {
+        throw new Error("expected the automations tool to be resolved");
+      }
+      const parameters = tool.parameters as unknown as {
+        properties: { job: { properties: Record<string, unknown> } };
+      };
+      return Object.keys(parameters.properties.job.properties);
+    };
+
+    expect(jobKeys({ cron: { triggers: { enabled: false } } })).not.toContain("trigger");
+    expect(jobKeys({ cron: {} })).not.toContain("trigger");
+    expect(jobKeys({ cron: { triggers: { enabled: true } } })).toContain("trigger");
   });
 
   it("requires the managed bridge to pass a real agent session key", () => {

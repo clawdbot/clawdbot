@@ -8,6 +8,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 const hoisted = vi.hoisted(() => ({
   info: vi.fn(),
   promptPressureKeys: new Set<string>(),
+  reconcileToolResultPromptProjectionState: vi.fn(),
   resolveLiveToolResultAggregateMaxChars: vi.fn(() => 200),
   resolveLiveToolResultMaxChars: vi.fn(() => 100),
   truncateOversizedToolResultsInMessages: vi.fn(),
@@ -20,6 +21,7 @@ vi.mock("../logger.js", () => ({
 vi.mock("../tool-result-truncation.js", () => ({
   resolveLiveToolResultAggregateMaxChars: hoisted.resolveLiveToolResultAggregateMaxChars,
   resolveLiveToolResultMaxChars: hoisted.resolveLiveToolResultMaxChars,
+  reconcileToolResultPromptProjectionState: hoisted.reconcileToolResultPromptProjectionState,
   toolResultWarningDedupe: {
     promptPressure: {
       check: (key: string) => {
@@ -34,7 +36,7 @@ vi.mock("../tool-result-truncation.js", () => ({
   truncateOversizedToolResultsInMessages: hoisted.truncateOversizedToolResultsInMessages,
 }));
 
-import { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-context.js";
+import { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-build.js";
 
 const messages = [
   {
@@ -56,7 +58,7 @@ function createAttempt(overrides?: Partial<EmbeddedRunAttemptParams>) {
     config: {},
     contextTokenBudget: 32_000,
     currentInboundContext: {
-      text: "Conversation info (untrusted metadata): channel=telegram",
+      text: "Conversation info: channel=telegram",
     },
     currentInboundEventKind: "user_request",
     sessionId: "session-1",
@@ -115,6 +117,7 @@ function createInput(options?: {
 beforeEach(() => {
   vi.clearAllMocks();
   hoisted.promptPressureKeys.clear();
+  hoisted.reconcileToolResultPromptProjectionState.mockReset();
   hoisted.truncateOversizedToolResultsInMessages.mockImplementation((inputMessages) => ({
     messages: inputMessages,
     truncatedCount: 0,
@@ -136,9 +139,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       timestamp: 123,
       text: "Visible request",
     });
-    expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(
-      "Conversation info (untrusted metadata)",
-    );
+    expect(result.runtimeContextMessageForCurrentTurn?.content).toContain("Conversation info:");
     expect(result.hookMessagesForCurrentPrompt.some((message) => message.role === "custom")).toBe(
       true,
     );
@@ -149,11 +150,15 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(fixture.report.currentTurn).toEqual({
       kind: "user_request",
       promptChars: "Visible request".length,
-      runtimeContextChars: "Conversation info (untrusted metadata): channel=telegram".length,
+      runtimeContextChars: "Conversation info: channel=telegram".length,
       modelOnlyPromptChars: 0,
     });
     expect(fixture.replaceSessionMessages).not.toHaveBeenCalled();
     expect(fixture.setActiveSessionSystemPrompt).not.toHaveBeenCalled();
+    expect(hoisted.reconcileToolResultPromptProjectionState).toHaveBeenCalledWith(
+      messages,
+      projectionState,
+    );
     const clonedProjectionState = hoisted.truncateOversizedToolResultsInMessages.mock.calls[0]?.[4];
     expect(clonedProjectionState).not.toBe(projectionState);
   });
@@ -170,8 +175,16 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
 
     const result = prepareEmbeddedAttemptPromptContext(fixture.input);
 
-    expect(result.llmBoundaryPromptForPrecheck).toContain('"name": "Alice"');
+    expect(result.llmBoundaryPromptForPrecheck).toContain('"name":"Alice"');
     expect(result.llmBoundaryPromptForPrecheck).toContain("Visible request");
+  });
+
+  it("does not reconcile session projection state for raw probes", () => {
+    const fixture = createInput();
+
+    prepareEmbeddedAttemptPromptContext({ ...fixture.input, isRawModelRun: true });
+
+    expect(hoisted.reconcileToolResultPromptProjectionState).not.toHaveBeenCalled();
   });
 
   it("injects the latest heartbeat outcome only as hidden runtime context", () => {

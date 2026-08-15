@@ -1,16 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
+import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
 import type { TemplateContext } from "../templating.js";
 import {
   setupAgentRunnerExecutionTestState,
-  getRunAgentTurnWithFallback,
+  getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
 } from "./agent-runner-execution.test-support.js";
-import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
 
 const state = setupAgentRunnerExecutionTestState();
 
-describe("runAgentTurnWithFallback: conversation failures", () => {
+describe("executeAgentTurn: conversation failures", () => {
   it("returns a session reset hint for Bedrock tool mismatch errors on external chat channels", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error(
@@ -18,8 +18,8 @@ describe("runAgentTurnWithFallback: conversation failures", () => {
       ),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -53,8 +53,8 @@ describe("runAgentTurnWithFallback: conversation failures", () => {
       new Error("Custom tool call output is missing for call id: call_live_123."),
     );
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -87,8 +87,8 @@ describe("runAgentTurnWithFallback: conversation failures", () => {
     const resetSessionAfterRoleOrderingConflict = vi.fn(async () => true);
     state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("400 Incorrect role information"));
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {
@@ -123,8 +123,8 @@ describe("runAgentTurnWithFallback: conversation failures", () => {
     const providerError = "provider failed with actionable details";
     state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error(providerError));
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       commandBody: "hello",
       followupRun: createFollowupRun(),
       sessionCtx: {

@@ -9,7 +9,7 @@ export type TerminalExitReason = "process_exit" | "closed" | "disconnected" | "d
 
 export type TerminalOwner =
   | { kind: "conn"; connId: string }
-  | { kind: "agent"; agentSessionKey: string };
+  | { kind: "agent"; agentSessionKey: string; agentId?: string };
 
 export type TerminalSession = {
   id: string;
@@ -29,6 +29,10 @@ export type TerminalSession = {
   /** Kills the session when a detach outlives the grace period. */
   reaper: ReturnType<typeof setTimeout> | null;
   detachedAtMs: number | null;
+  /** Last PTY input/output timestamp; drives idle eviction under pool pressure. */
+  lastActivityAtMs: number;
+  /** Claimed by an in-flight open; killed only after its replacement spawns. */
+  evictionClaimed?: boolean;
 };
 
 export type TerminalSessionManagerOptions = {

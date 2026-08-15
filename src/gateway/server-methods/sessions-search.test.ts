@@ -13,7 +13,7 @@ vi.mock("../../config/sessions/session-transcript-search.js", () => ({
 }));
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
-  listSessionEntries: (...args: unknown[]) => listSessionEntriesMock(...args),
+  listSessionEntriesCore: (...args: unknown[]) => listSessionEntriesMock(...args),
   listSessionEntriesReadOnly: (...args: unknown[]) => listSessionEntriesMock(...args),
 }));
 vi.mock("../../config/sessions.js", async (importOriginal) => ({
@@ -22,7 +22,7 @@ vi.mock("../../config/sessions.js", async (importOriginal) => ({
     resolveExistingAgentSessionStoreTargetsSyncMock(...args),
 }));
 
-import { sessionsHandlers } from "./sessions.js";
+import { sessionReadHandlers } from "./sessions-read.js";
 
 let cfg: Record<string, unknown> = {
   agents: { list: [{ id: "main", default: true }, { id: "work" }] },
@@ -35,8 +35,8 @@ async function callSearch(
 ): Promise<ReturnType<typeof vi.fn>> {
   const respond = vi.fn();
   await expectDefined(
-    sessionsHandlers["sessions.search"],
-    'sessionsHandlers["sessions.search"] test invariant',
+    sessionReadHandlers["sessions.search"],
+    'sessionReadHandlers["sessions.search"] test invariant',
   )({
     req: { id: "req-search" } as never,
     params,
@@ -127,6 +127,53 @@ describe("sessions.search gateway method", () => {
         results: [expect.objectContaining({ score: 1 })],
       }),
     );
+  });
+
+  it("rejects a bare fixed-store key scoped to a non-owner before transcript lookup", async () => {
+    cfg = {
+      session: { store: "/stores/shared/sessions.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    };
+
+    const respond = await callSearch({
+      agentId: "research",
+      query: "needle",
+      sessionKeys: ["global"],
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: 'agent "research" does not match session key agent "ops"',
+      }),
+    );
+    expect(searchSessionTranscriptsMock).not.toHaveBeenCalled();
+  });
+
+  it("retains the inferred fixed-store owner for a bare key search", async () => {
+    cfg = {
+      session: { store: "/stores/shared/sessions.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    };
+
+    await callSearch({ query: "needle", sessionKeys: ["global"] });
+
+    expect(searchSessionTranscriptsMock).toHaveBeenCalledWith({
+      agentId: "ops",
+      query: "needle",
+      limit: undefined,
+      sessionKeys: ["global"],
+    });
   });
 
   it("filters incognito candidates before applying a non-admin result limit", async () => {

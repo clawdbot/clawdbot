@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Selectable } from "kysely";
 import type {
   BoardMcpAppDescriptor,
+  BoardSnapshot,
   BoardTab,
   BoardWidget,
   BoardWidgetDeclared,
@@ -13,10 +14,37 @@ import type {
 } from "../state/openclaw-agent-db.generated.js";
 import { normalizeBoardWidgetDeclared } from "./board-capabilities.js";
 import { BoardValidationError } from "./board-layout.js";
-import { createBoardDeclaredSummary } from "./board-store.js";
+import {
+  createBoardDeclaredSummary,
+  resolveBoardWidgetPutParams,
+  type BoardWidgetHtmlViewMetadata,
+  type BoardWidgetNameIdentityMarker,
+} from "./board-store.js";
 
 export type SelectedBoardTabRow = Selectable<BoardTabRow>;
 export type SelectedBoardWidgetRow = Selectable<BoardWidgetRow>;
+export type SelectedBoardWidgetSnapshotRow = Omit<SelectedBoardWidgetRow, "html">;
+
+export const BOARD_WIDGET_SNAPSHOT_COLUMNS = [
+  "session_key",
+  "name",
+  "tab_id",
+  "title",
+  "content_kind",
+  "descriptor_json",
+  "sha256",
+  "view_generation",
+  "revision",
+  "size_w",
+  "size_h",
+  "position",
+  "manifest",
+  "grant_state",
+  "granted_sha",
+  "created_by",
+  "created_at",
+  "updated_at",
+] as const;
 
 const BOARD_GRANT_SEMANTICS_VERSION = 2;
 
@@ -26,6 +54,8 @@ type ParsedBoardManifest = {
   grantSemanticsVersion?: number;
   presentation?: BoardWidget["presentation"];
   heightMode?: BoardWidget["heightMode"];
+  nameIdentity?: BoardWidgetNameIdentityMarker;
+  nameIdentityInvalid?: true;
   mcpAppInteractive?: boolean;
   mcpAppInstanceId?: string;
 };
@@ -42,6 +72,7 @@ export function parseManifest(value: string): ParsedBoardManifest {
     grantSemanticsVersion?: unknown;
     presentation?: unknown;
     heightMode?: unknown;
+    nameIdentity?: unknown;
     mcpAppInteractive?: unknown;
     mcpAppInstanceId?: unknown;
   };
@@ -65,6 +96,33 @@ export function parseManifest(value: string): ParsedBoardManifest {
       : undefined;
   const heightMode =
     parsed.heightMode === "auto" || parsed.heightMode === "fixed" ? parsed.heightMode : undefined;
+  const nameIdentityPresent = Object.hasOwn(parsed, "nameIdentity");
+  const nameIdentity = (() => {
+    if (
+      !parsed.nameIdentity ||
+      typeof parsed.nameIdentity !== "object" ||
+      Array.isArray(parsed.nameIdentity)
+    ) {
+      return undefined;
+    }
+    const identity = parsed.nameIdentity as {
+      kind?: unknown;
+      source?: unknown;
+      key?: unknown;
+    };
+    if (identity.kind === "explicit") {
+      return { kind: "explicit" as const };
+    }
+    if (
+      identity.kind === "generated" &&
+      identity.source === "show_widget" &&
+      typeof identity.key === "string" &&
+      /^[a-f0-9]{64}$/u.test(identity.key)
+    ) {
+      return { kind: "generated" as const, source: "show_widget" as const, key: identity.key };
+    }
+    return undefined;
+  })();
   try {
     const declared = normalizeBoardWidgetDeclared({
       ...(netOrigins?.length ? { netOrigins } : {}),
@@ -77,6 +135,8 @@ export function parseManifest(value: string): ParsedBoardManifest {
         : {}),
       ...(presentation ? { presentation } : {}),
       ...(heightMode ? { heightMode } : {}),
+      ...(nameIdentity ? { nameIdentity } : {}),
+      ...(!nameIdentity && nameIdentityPresent ? { nameIdentityInvalid: true as const } : {}),
       ...(mcpAppInteractive !== undefined ? { mcpAppInteractive } : {}),
       ...(mcpAppInstanceId ? { mcpAppInstanceId } : {}),
     };
@@ -95,11 +155,13 @@ export function serializeManifest(
   grantState: BoardWidget["grantState"],
   mcpAppAuthority?: { interactive: boolean; instanceId: string },
   widgetOptions?: Pick<BoardWidget, "presentation" | "heightMode">,
+  nameIdentity?: BoardWidgetNameIdentityMarker,
 ): string {
   return JSON.stringify({
     ...declared,
     ...(widgetOptions?.presentation ? { presentation: widgetOptions.presentation } : {}),
     ...(widgetOptions?.heightMode ? { heightMode: widgetOptions.heightMode } : {}),
+    ...(nameIdentity ? { nameIdentity } : {}),
     ...(grantState === "granted" ? { grantSemanticsVersion: BOARD_GRANT_SEMANTICS_VERSION } : {}),
     ...(mcpAppAuthority
       ? {
@@ -127,6 +189,13 @@ export function createBoardWidgetContentFields(
       ? { interactive: params.content.interactive, instanceId: viewGeneration }
       : undefined,
     frame,
+    params.generatedIdentity
+      ? {
+          kind: "generated",
+          source: params.generatedIdentity.source,
+          key: params.generatedIdentity.key,
+        }
+      : { kind: "explicit" },
   );
   if (params.content.kind === "html") {
     const sha256 = createHash("sha256").update(params.content.html).digest("hex");
@@ -177,6 +246,24 @@ export function createBoardWidgetContentFields(
   };
 }
 
+export function resolveSqliteBoardWidgetPutParams(
+  snapshot: BoardSnapshot,
+  params: BoardWidgetMaterializedPutParams,
+  rows: readonly SelectedBoardWidgetSnapshotRow[],
+): BoardWidgetMaterializedPutParams {
+  const identities = new Map<string, BoardWidgetNameIdentityMarker>();
+  for (const row of rows) {
+    const manifest = parseManifest(row.manifest);
+    const nameIdentity =
+      manifest.nameIdentity ??
+      (manifest.nameIdentityInvalid ? { kind: "invalid" as const } : undefined);
+    if (nameIdentity) {
+      identities.set(row.name, nameIdentity);
+    }
+  }
+  return resolveBoardWidgetPutParams(snapshot, params, identities);
+}
+
 export function updateManifestHeightMode(
   value: string,
   heightMode: NonNullable<BoardWidget["heightMode"]>,
@@ -222,8 +309,10 @@ export function rowToTab(row: SelectedBoardTabRow): BoardTab {
   };
 }
 
-export function rowToWidget(row: SelectedBoardWidgetRow): BoardWidget {
-  const manifest = parseManifest(row.manifest);
+export function rowToWidget(
+  row: SelectedBoardWidgetSnapshotRow,
+  manifest: ReturnType<typeof parseManifest> = parseManifest(row.manifest),
+): BoardWidget {
   const declared = manifest.declared;
   const declaredSummary = createBoardDeclaredSummary(declared);
   const pluginContent =
@@ -252,6 +341,26 @@ export function rowToWidget(row: SelectedBoardWidgetRow): BoardWidget {
     revision: row.revision,
     ...(instanceId ? { instanceId } : {}),
     ...(declaredSummary ? { declaredSummary } : {}),
+    ...(declared ? { declared } : {}),
+  };
+}
+
+export function rowToHtmlViewMetadata(
+  row: Pick<
+    SelectedBoardWidgetSnapshotRow,
+    "content_kind" | "revision" | "sha256" | "view_generation" | "grant_state"
+  >,
+  manifest: ReturnType<typeof parseManifest>,
+): BoardWidgetHtmlViewMetadata | undefined {
+  if (row.content_kind !== "html" || row.view_generation === null) {
+    return undefined;
+  }
+  const declared = manifest.declared;
+  return {
+    revision: row.revision,
+    sha256: row.sha256,
+    viewGeneration: row.view_generation,
+    grantState: effectiveGrantState(row.grant_state as BoardWidget["grantState"], manifest),
     ...(declared ? { declared } : {}),
   };
 }

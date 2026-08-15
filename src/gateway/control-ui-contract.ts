@@ -3,14 +3,29 @@
 /** HTTP path for the Control UI bootstrap config payload. */
 export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/control-ui-config.json";
 
+/** Fragment marker selecting the host-authorized browser-owner bootstrap profile. */
+export const CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM = "bootstrapProfile";
+export const CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT = "owner";
+export type ControlUiBootstrapProfileHint = typeof CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT;
+
 /** Authenticated same-origin prefix for plugin manifest/catalog icon bytes. */
 export const CONTROL_UI_PLUGIN_ICON_PATH_PREFIX = "/__openclaw__/plugin-icon";
 
 /** Authenticated same-origin prefix for allowlisted catalog icon bytes. */
 export const CONTROL_UI_CATALOG_ICON_PATH_PREFIX = "/__openclaw__/catalog-icon";
 
+/** Authenticated same-origin prefix for a session workspace's own project icon. */
+export const CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX = "/__openclaw__/workspace-icon";
+
 /** Lifetime shared by server-minted plugin-tab grants and parent-side renewal. */
 export const CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS = 5 * 60 * 1000;
+
+/** Targeted pushed PR snapshot event for subscribed Control UI connections. */
+export const CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT =
+  "controlUi.sessionPullRequests.changed";
+
+/** Maximum session keys retained by one Control UI PR subscription. */
+export const CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS = 200;
 
 /** Reserved query key for the sandbox cookie capability probe. */
 export const CONTROL_UI_PLUGIN_AUTH_PROBE_QUERY = "__openclaw_plugin_frame_auth_probe";
@@ -129,6 +144,16 @@ export type ControlUiSessionPullRequests = {
   rateLimited: boolean;
 };
 
+/** Per-session pushed state; unavailable snapshots preserve prior UI state. */
+export type ControlUiSessionPullRequestSnapshot = ControlUiSessionPullRequests & {
+  status: "ready" | "rate-limited" | "unavailable";
+};
+
+/** Targeted delta event for sessions watched by one Control UI connection. */
+export type ControlUiSessionPullRequestsChanged = {
+  sessions: Record<string, ControlUiSessionPullRequestSnapshot>;
+};
+
 /** Runtime config consumed by the browser Control UI during bootstrap. */
 export type ControlUiBootstrapConfig = {
   basePath: string;
@@ -137,8 +162,10 @@ export type ControlUiBootstrapConfig = {
   assistantAvatarSource?: string | null;
   assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   assistantAvatarReason?: string | null;
-  assistantAgentId: string;
+  assistantAgentId?: string;
   serverVersion?: string;
+  /** Exact immutable build serving this Control UI when available. */
+  serverBuildId?: string;
   /**
    * Git branch of a source-checkout (non-release) gateway install. Omitted for
    * package installs and mainline (main/master) checkouts so the UI only flags
@@ -148,15 +175,14 @@ export type ControlUiBootstrapConfig = {
   localMediaPreviewRoots?: string[];
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
-  chatMessageMaxWidth?: string;
   seamColor?: string;
-  /** Resolved `agents.defaults.timeFormat`; "auto" keeps the browser locale default. */
-  timeFormat?: "auto" | "12" | "24";
   /**
    * Whether the operator terminal surface is enabled (`gateway.terminal.enabled`).
    * The Control UI hides the terminal entirely when false so a disabled kill
    * switch removes the surface rather than showing a button that errors on open.
    */
   terminalEnabled?: boolean;
+  /** Whether the Labs-gated CLI agents model-picker group is enabled. */
+  cliAgentsEnabled?: boolean;
   pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
 };

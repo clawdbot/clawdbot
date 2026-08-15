@@ -59,6 +59,59 @@ enum ApplicationRelocator {
         case relaunch
     }
 
+    enum ReplacementHandoffFailureAction: Equatable, Sendable {
+        case retry(after: Duration)
+        case stopMonitoring
+        case terminateForSupervisor
+
+        var isTerminal: Bool {
+            switch self {
+            case .retry:
+                false
+            case .stopMonitoring, .terminateForSupervisor:
+                true
+            }
+        }
+    }
+
+    struct ReplacementHandoffPolicy: Equatable, Sendable {
+        let maximumAttempts: Int
+        let initialBackoffSeconds: Int
+        let maximumBackoffSeconds: Int
+        let baseTimeoutMilliseconds: Int32
+        let maximumTimeoutMilliseconds: Int32
+
+        func failureAction(
+            failedAttempt: Int,
+            hasKeepAliveSupervisor: Bool) -> ReplacementHandoffFailureAction
+        {
+            guard failedAttempt < self.maximumAttempts else {
+                return hasKeepAliveSupervisor ? .terminateForSupervisor : .stopMonitoring
+            }
+            let exponent = max(0, failedAttempt - 1)
+            let backoff = min(
+                self.maximumBackoffSeconds,
+                self.initialBackoffSeconds * (1 << exponent))
+            return .retry(after: .seconds(backoff))
+        }
+
+        func timeoutMilliseconds(
+            loadAverage: Double?,
+            activeProcessorCount: Int) -> Int32
+        {
+            guard let loadAverage,
+                  loadAverage.isFinite,
+                  loadAverage > 0,
+                  activeProcessorCount > 0
+            else { return self.baseTimeoutMilliseconds }
+            let loadPerProcessor = loadAverage / Double(activeProcessorCount)
+            let multiplier = min(4, max(1, loadPerProcessor))
+            let scaled = Double(self.baseTimeoutMilliseconds) * multiplier
+            let rounded = ceil(scaled / 5000) * 5000
+            return min(self.maximumTimeoutMilliseconds, Int32(rounded))
+        }
+    }
+
     enum RelaunchStrategy: Equatable, Sendable {
         case openAfterTermination
         case externalSupervisor
@@ -99,15 +152,28 @@ enum ApplicationRelocator {
         let launchCodeDirectoryHash: Data?
     }
 
+    private enum ReplacementScheduleResult {
+        case scheduled
+        case failed(supervisor: KeepAliveSupervisor?)
+    }
+
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app-relocation")
     private static var bundleReplacementSnapshot: BundleReplacementSnapshot?
     private static var bundleReplacementSource: DispatchSourceFileSystemObject?
     private static var bundleReplacementRecoveryTask: Task<Void, Never>?
     private static var bundleReplacementCheckPending = false
     private static var bundleReplacementHandoffInProgress = false
+    private static var bundleReplacementHandoffAttempt = 0
+    private static var bundleReplacementHandoffTargetHash: Data?
     private static var inheritedReplacementSupervisor: KeepAliveSupervisor?
     private static var supervisorRestorationWatcher: Process?
     private static var authenticatedReplacementSourceBundleURL: URL?
+    nonisolated static let replacementHandoffPolicy = ReplacementHandoffPolicy(
+        maximumAttempts: 3,
+        initialBackoffSeconds: 2,
+        maximumBackoffSeconds: 8,
+        baseTimeoutMilliseconds: 15000,
+        maximumTimeoutMilliseconds: 60000)
     private nonisolated static let replacementSourceBundleEnvironmentKey = "OPENCLAW_REPLACEMENT_SOURCE_BUNDLE"
     private nonisolated static let replacementParentPIDEnvironmentKey = "OPENCLAW_REPLACEMENT_PARENT_PID"
     private nonisolated static let replacementCodeHashEnvironmentKey = "OPENCLAW_REPLACEMENT_CODE_HASH"
@@ -543,6 +609,8 @@ extension ApplicationRelocator {
         self.bundleReplacementSnapshot = nil
         self.bundleReplacementCheckPending = false
         self.bundleReplacementHandoffInProgress = false
+        self.bundleReplacementHandoffAttempt = 0
+        self.bundleReplacementHandoffTargetHash = nil
 
         let bundleURL = monitoredBundleURL.standardizedFileURL
         guard bundleURL.pathExtension == "app",
@@ -614,6 +682,8 @@ extension ApplicationRelocator {
                 }.value
                 switch evaluation.action {
                 case .unchanged:
+                    self.bundleReplacementHandoffAttempt = 0
+                    self.bundleReplacementHandoffTargetHash = nil
                     if self.bundleReplacementCheckPending {
                         continue
                     }
@@ -634,18 +704,31 @@ extension ApplicationRelocator {
                         try? await Task.sleep(for: .milliseconds(250))
                         continue
                     }
+                    if self.bundleReplacementHandoffTargetHash != launchCodeDirectoryHash {
+                        self.bundleReplacementHandoffTargetHash = launchCodeDirectoryHash
+                        self.bundleReplacementHandoffAttempt = 0
+                    }
+                    self.bundleReplacementHandoffAttempt += 1
+                    let handoffAttempt = self.bundleReplacementHandoffAttempt
+                    let maximumAttempts = self.replacementHandoffPolicy.maximumAttempts
                     self.bundleReplacementCheckPending = false
-                    self.logger.notice("Installed app changed; relaunching trusted replacement")
+                    self.logger.notice(
+                        "Relaunching trusted replacement (attempt \(handoffAttempt)/\(maximumAttempts))")
                     self.bundleReplacementHandoffInProgress = true
-                    let scheduled = self.scheduleReplacementRelaunch(
+                    let scheduleResult = self.scheduleReplacementRelaunch(
                         at: snapshot.bundleURL,
                         launchReference: launchReference,
-                        codeDirectoryHash: launchCodeDirectoryHash)
-                    if !scheduled {
-                        self.bundleReplacementHandoffInProgress = false
-                        try? await Task.sleep(for: .seconds(1))
-                        continue
+                        codeDirectoryHash: launchCodeDirectoryHash,
+                        attempt: handoffAttempt)
+                    if case let .failed(supervisor) = scheduleResult {
+                        await self.handleReplacementHandoffFailure(
+                            attempt: handoffAttempt,
+                            targetCodeDirectoryHash: launchCodeDirectoryHash,
+                            supervisor: supervisor,
+                            reason: "Could not spawn the trusted replacement")
                     }
+                    // The task defer clears recovery ownership before draining the
+                    // retry check queued by the failure handler.
                     return
                 }
             }
@@ -979,7 +1062,8 @@ extension ApplicationRelocator {
     private static func scheduleReplacementRelaunch(
         at destination: URL,
         launchReference: BundleFileReference,
-        codeDirectoryHash: Data) -> Bool
+        codeDirectoryHash: Data,
+        attempt: Int) -> ReplacementScheduleResult
     {
         let processInfo = ProcessInfo.processInfo
         let activeSupervisor = self.verifiedKeepAliveSupervisor(
@@ -1000,13 +1084,17 @@ extension ApplicationRelocator {
             bootoutTarget: bootoutTarget,
             forwardedArguments: forwardedArguments)
         else {
-            self.logger.error("Could not spawn the trusted replacement")
-            return false
+            return .failed(supervisor: supervisor)
         }
 
+        let timeoutMilliseconds = self.replacementHandoffPolicy.timeoutMilliseconds(
+            loadAverage: self.currentSystemLoadAverage(),
+            activeProcessorCount: processInfo.activeProcessorCount)
         Task { @MainActor in
             let handoffStatus = await Task.detached(priority: .utility) {
-                self.awaitReplacementHandoff(on: spawned.readyDescriptor)
+                self.awaitReplacementHandoff(
+                    on: spawned.readyDescriptor,
+                    timeoutMilliseconds: timeoutMilliseconds)
             }.value
             Darwin.close(spawned.readyDescriptor)
             guard handoffStatus == "READY" else {
@@ -1014,18 +1102,115 @@ extension ApplicationRelocator {
                 await Task.detached(priority: .utility) {
                     self.reapProcess(spawned.processIdentifier)
                 }.value
-                self.logger.error("Trusted replacement did not complete its authenticated handoff")
-                self.bundleReplacementHandoffInProgress = false
-                self.bundleReplacementCheckPending = true
-                try? await Task.sleep(for: .seconds(1))
-                self.bundleDirectoryDidChange()
+                await self.handleReplacementHandoffFailure(
+                    attempt: attempt,
+                    targetCodeDirectoryHash: codeDirectoryHash,
+                    supervisor: supervisor,
+                    reason: "Trusted replacement handoff timed out after \(timeoutMilliseconds) ms")
                 return
             }
             self.cancelSupervisorRestorationWatcher()
             TerminationSignalWatcher.scheduleExitFailsafe()
             NSApp.terminate(nil)
         }
-        return true
+        return .scheduled
+    }
+
+    private static func handleReplacementHandoffFailure(
+        attempt: Int,
+        targetCodeDirectoryHash: Data,
+        supervisor: KeepAliveSupervisor?,
+        reason: String) async
+    {
+        let action = self.replacementHandoffPolicy.failureAction(
+            failedAttempt: attempt,
+            hasKeepAliveSupervisor: supervisor != nil)
+        if action.isTerminal,
+           await self.shouldContinueReplacementRecovery(afterFailedTarget: targetCodeDirectoryHash)
+        {
+            self.bundleReplacementHandoffInProgress = false
+            self.bundleReplacementCheckPending = true
+            self.bundleDirectoryDidChange()
+            return
+        }
+        switch action {
+        case let .retry(delay):
+            self.bundleReplacementCheckPending = true
+            let maximumAttempts = self.replacementHandoffPolicy.maximumAttempts
+            self.logger.error(
+                "Replacement handoff failed: \(reason, privacy: .public); attempt \(attempt)/\(maximumAttempts)")
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                return
+            }
+            guard self.bundleReplacementSnapshot != nil else { return }
+            self.bundleReplacementHandoffInProgress = false
+            self.bundleDirectoryDidChange()
+        case .stopMonitoring:
+            self.disableBundleReplacementMonitoring()
+            self.logger.critical(
+                """
+                \(reason, privacy: .public); stopped app replacement monitoring after \(attempt) attempts. \
+                Quit and reopen OpenClaw to load the installed replacement.
+                """)
+        case .terminateForSupervisor:
+            guard let supervisor, self.startSupervisorRestorationWatcher(supervisor) else {
+                self.disableBundleReplacementMonitoring()
+                self.logger.critical(
+                    """
+                    \(reason, privacy: .public); could not schedule verified KeepAlive recovery. \
+                    Stopped app replacement monitoring after \(attempt) attempts.
+                    """)
+                return
+            }
+            self.disableBundleReplacementMonitoring()
+            self.logger.critical(
+                """
+                \(reason, privacy: .public); exiting after \(attempt) attempts so verified KeepAlive supervisor \
+                \(supervisor.label, privacy: .public) can restart the installed app.
+                """)
+            TerminationSignalWatcher.scheduleExitFailsafe()
+            NSApp.terminate(nil)
+        }
+    }
+
+    private static func shouldContinueReplacementRecovery(afterFailedTarget failedTargetHash: Data) async -> Bool {
+        guard let snapshot = self.bundleReplacementSnapshot else { return false }
+        // The coalescing bit can be cleared after an event arrives during the
+        // earlier async evaluation. Terminal actions always revalidate the disk.
+        self.bundleReplacementCheckPending = false
+        let evaluation = await Task.detached(priority: .utility) {
+            self.replacementEvaluationOnDisk(for: snapshot)
+        }.value
+        if self.bundleReplacementCheckPending { return true }
+        return self.shouldContinueReplacementRecovery(
+            afterFailedTarget: failedTargetHash,
+            latestAction: evaluation.action,
+            latestTargetHash: evaluation.launchCodeDirectoryHash)
+    }
+
+    nonisolated static func shouldContinueReplacementRecovery(
+        afterFailedTarget failedTargetHash: Data,
+        latestAction: ReplacementAction,
+        latestTargetHash: Data?) -> Bool
+    {
+        switch latestAction {
+        case .unchanged, .waitForTrustedReplacement:
+            true
+        case .relaunch:
+            latestTargetHash != failedTargetHash
+        }
+    }
+
+    private static func disableBundleReplacementMonitoring() {
+        self.bundleReplacementSource?.cancel()
+        self.bundleReplacementSource = nil
+        self.bundleReplacementSnapshot = nil
+        self.bundleReplacementCheckPending = false
+        self.bundleReplacementHandoffInProgress = false
+        self.bundleReplacementHandoffAttempt = 0
+        self.bundleReplacementHandoffTargetHash = nil
     }
 
     private static func spawnReplacement(
@@ -1137,9 +1322,17 @@ extension ApplicationRelocator {
         return (processIdentifier, readDescriptor)
     }
 
-    private nonisolated static func awaitReplacementHandoff(on descriptor: Int32) -> String? {
+    private nonisolated static func currentSystemLoadAverage() -> Double? {
+        var loadAverage = 0.0
+        return getloadavg(&loadAverage, 1) == 1 ? loadAverage : nil
+    }
+
+    private nonisolated static func awaitReplacementHandoff(
+        on descriptor: Int32,
+        timeoutMilliseconds: Int32) -> String?
+    {
         var event = pollfd(fd: descriptor, events: Int16(POLLIN | POLLHUP), revents: 0)
-        guard poll(&event, 1, 10000) > 0 else { return nil }
+        guard poll(&event, 1, timeoutMilliseconds) > 0 else { return nil }
         var bytes = [UInt8](repeating: 0, count: 16)
         let count = bytes.withUnsafeMutableBytes { buffer in
             Darwin.read(descriptor, buffer.baseAddress, buffer.count)

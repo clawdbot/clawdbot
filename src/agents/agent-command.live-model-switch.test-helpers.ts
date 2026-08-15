@@ -1,15 +1,25 @@
 import type { SessionEntry } from "../config/sessions.js";
+import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
-export function createCommandSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return {
+export type CommandSessionEntryFixture = Partial<SessionEntry> & {
+  channel?: string;
+  deliveryContext?: DeliveryContext;
+  lastThreadId?: string | number;
+};
+
+export function createCommandSessionEntry(
+  overrides: CommandSessionEntryFixture = {},
+): SessionEntry {
+  return normalizeLegacySessionEntryDelivery({
     sessionId: "session-1",
     updatedAt: 1,
     ...overrides,
-  };
+  } as SessionEntry);
 }
 
 export function createCommandSessionFixture(
-  overrides: Partial<SessionEntry> = {},
+  overrides: CommandSessionEntryFixture = {},
   sessionKey = "agent:main:main",
 ): { entry: SessionEntry; store: Record<string, SessionEntry> } {
   const entry = createCommandSessionEntry({
@@ -149,7 +159,7 @@ export function buildTestAllowedModelSet({
   return {
     allowedKeys,
     allowedCatalog: allowedCatalog.filter((entry) =>
-      allowedKeys.has(`${entry.provider}/${entry.id}`),
+      isTestModelKeyAllowed(allowedKeys, `${entry.provider}/${entry.id}`),
     ),
     allowAny: false,
   };
@@ -225,6 +235,33 @@ export function resolveTestModelRefFromString({
         ? { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }
         : { provider: defaultProvider, model: raw },
   };
+}
+
+export function resolveTestModelAliasFromPair(params: {
+  provider: string;
+  model: string;
+  defaultProvider: string;
+  aliasIndex?: ReturnType<typeof buildTestModelAliasIndex>;
+}) {
+  const bareAlias = resolveTestModelRefFromString({
+    raw: params.model,
+    defaultProvider: params.provider,
+    aliasIndex: params.aliasIndex,
+  });
+  const providerAlias = resolveTestModelRefFromString({
+    raw: `${params.provider}/${params.model}`,
+    defaultProvider: params.defaultProvider,
+    aliasIndex: params.aliasIndex,
+  });
+  if (providerAlias.alias) {
+    return providerAlias.ref;
+  }
+  const provider = normalizeTestProviderId(params.provider);
+  return bareAlias.alias &&
+    (normalizeTestProviderId(bareAlias.ref.provider) === provider ||
+      provider === normalizeTestProviderId(params.defaultProvider))
+    ? bareAlias.ref
+    : null;
 }
 
 function configuredPrimary(cfg?: unknown): string {

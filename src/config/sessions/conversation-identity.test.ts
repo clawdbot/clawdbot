@@ -1,9 +1,26 @@
 import { describe, expect, it } from "vitest";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   buildConversationIdentity,
   conversationIdentityFromMsgContext,
-  conversationIdentityFromSessionEntry,
+  conversationIdentityFromSessionEntry as conversationIdentityFromCanonicalSessionEntry,
 } from "./conversation-identity.js";
+import type { SessionEntry, SessionOrigin } from "./types.js";
+
+type LegacyDeliveryFixture = SessionEntry & {
+  route?: ChannelRouteRef;
+  deliveryContext?: DeliveryContext;
+  origin?: SessionOrigin;
+  channel?: string;
+  lastAccountId?: string;
+  lastChannel?: string;
+};
+
+function conversationIdentityFromSessionEntry(entry: LegacyDeliveryFixture) {
+  return conversationIdentityFromCanonicalSessionEntry(normalizeLegacySessionEntryDelivery(entry));
+}
 
 function directEntry(peer: string) {
   return {
@@ -210,7 +227,7 @@ describe("conversation identity", () => {
 
   it.each([
     { fallback: { origin: { provider: "reef", accountId: "work" } }, label: "origin" },
-    { fallback: { lastAccountId: "work" }, label: "last route" },
+    { fallback: { lastChannel: "reef", lastAccountId: "work" }, label: "last route" },
   ])("fills an omitted delivery account from the persisted $label", ({ fallback }) => {
     const identity = conversationIdentityFromSessionEntry({
       sessionId: "session-main",

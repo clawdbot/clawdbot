@@ -1,9 +1,9 @@
 import type { SessionCatalogSession } from "../../../../packages/gateway-protocol/src/index.ts";
 
-export type CatalogProjectGrouping = "project" | "none";
+export type CatalogProjectGrouping = "project" | "person" | "none";
 
 export function normalizeCatalogProjectGrouping(raw: unknown): CatalogProjectGrouping {
-  return raw === "none" ? "none" : "project";
+  return raw === "none" || raw === "person" ? raw : "project";
 }
 
 type CatalogProjectGroup = {
@@ -73,4 +73,35 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
   }
 
   return { groups: [...customGroups, ...projectGroups], ungrouped };
+}
+
+/** Groups adopted sessions by their creator identity. Native threads only carry
+    `createdActor` once adopted (the gateway strips provider-supplied actors), so
+    unattributed sessions intentionally fall to the flat ungrouped tail. */
+export function groupCatalogSessionsByPerson(sessions: readonly SessionCatalogSession[]): {
+  groups: CatalogProjectGroup[];
+  ungrouped: SessionCatalogSession[];
+} {
+  const groupsById = new Map<string, CatalogProjectGroup>();
+  const ungrouped: SessionCatalogSession[] = [];
+
+  for (const session of sessions) {
+    const actor = session.createdActor;
+    if (!actor?.id) {
+      ungrouped.push(session);
+      continue;
+    }
+    const key = `person:${actor.id}`;
+    let group = groupsById.get(key);
+    if (!group) {
+      const label = actor.label?.trim() || actor.id;
+      group = { key, label, title: `Created by ${label}`, sessions: [] };
+      groupsById.set(key, group);
+    }
+    group.sessions.push(session);
+  }
+
+  // Label order keeps the section stable regardless of roster sort.
+  const groups = [...groupsById.values()].toSorted((a, b) => a.label.localeCompare(b.label));
+  return { groups, ungrouped };
 }

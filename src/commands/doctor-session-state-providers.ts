@@ -1,10 +1,11 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /** Doctor repair for stale plugin-owned routing state persisted in session entries. */
 import { normalizeOptionalString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntriesLower } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
   resolveAgentModelFallbacksOverride,
-  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/selection.js";
 import {
@@ -56,8 +57,8 @@ function repairExample(repair: DoctorSessionRouteStateRepair): string {
   return `${repair.key} (${repair.reasons.join(", ")})`;
 }
 
-function resolveSessionAgentId(cfg: OpenClawConfig, sessionKey: string): string {
-  return parseAgentSessionKey(sessionKey)?.agentId ?? resolveDefaultAgentId(cfg);
+function resolveSessionAgentId(cfg: OpenClawConfig, sessionKey: string): string | undefined {
+  return parseAgentSessionKey(sessionKey)?.agentId ?? tryResolveDefaultAgentId(cfg);
 }
 
 /** Resolves the currently configured provider/model/runtime route for a session key. */
@@ -65,8 +66,11 @@ function resolveConfiguredDoctorSessionStateRoute(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   env?: NodeJS.ProcessEnv;
-}): DoctorSessionRouteState {
+}): DoctorSessionRouteState | undefined {
   const agentId = resolveSessionAgentId(params.cfg, params.sessionKey);
+  if (!agentId) {
+    return undefined;
+  }
   const primary = resolveDefaultModelForAgent({ cfg: params.cfg, agentId });
   const configuredModelRefs = new Set<string>();
   const addRef = (provider: string, model: string) => {
@@ -110,7 +114,10 @@ function entryMayContainPluginSessionRouteState(sessionKey: string, entry: Sessi
   if (isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
     return false;
   }
-  const record = entry as unknown as Record<string, unknown>;
+  if (!isRecord(entry)) {
+    return false;
+  }
+  const record = entry;
   return (
     normalizeString(record.providerOverride) !== undefined ||
     normalizeString(record.modelOverride) !== undefined ||
@@ -413,6 +420,7 @@ function applySessionRouteStateRepair(params: {
     clear("providerOverride");
     clear("modelOverride");
     clear("modelOverrideSource");
+    clear("modelOverrideRouteResolution");
     clear("liveModelSwitchPending");
   }
   if (params.repair.reasons.includes("runtime model state")) {
@@ -420,9 +428,7 @@ function applySessionRouteStateRepair(params: {
     clear("modelProvider");
     clear("contextTokens");
     clear("systemPromptReport");
-    clear("fallbackNoticeSelectedModel");
-    clear("fallbackNoticeActiveModel");
-    clear("fallbackNoticeReason");
+    clear("fallbackNotice");
   }
   if (params.repair.reasons.includes("pinned runtime")) {
     for (const key of params.repair.pinnedRuntimeKeys) {
@@ -493,8 +499,10 @@ export async function runPluginSessionStateDoctorRepairs(params: {
     if (!entryMayContainPluginSessionRouteState(sessionKey, entry)) {
       continue;
     }
-    scanStore[sessionKey] = entry as unknown as Record<string, unknown>;
     const agentId = resolveSessionAgentId(params.cfg, sessionKey);
+    if (!agentId) {
+      continue;
+    }
     let route = routeByAgentId.get(agentId);
     if (!route) {
       route = resolveConfiguredDoctorSessionStateRoute({
@@ -502,7 +510,13 @@ export async function runPluginSessionStateDoctorRepairs(params: {
         sessionKey,
         env: params.env,
       });
+      if (!route) {
+        continue;
+      }
       routeByAgentId.set(agentId, route);
+    }
+    if (isRecord(entry)) {
+      scanStore[sessionKey] = entry;
     }
     routes[sessionKey] = route;
   }
@@ -529,14 +543,10 @@ export async function runPluginSessionStateDoctorRepairs(params: {
         const repairedAt = Date.now();
         const repairsByKey = new Map(repairs.map((repair) => [repair.key, repair]));
         await updateLegacySessionStore(params.absoluteStorePath, (currentStore) => {
-          const currentMutableStore = currentStore as unknown as Record<
-            string,
-            Record<string, unknown>
-          >;
           for (const [key, repair] of repairsByKey) {
-            const current = currentMutableStore[key];
+            const current = currentStore[key];
             if (
-              current &&
+              isRecord(current) &&
               applySessionRouteStateRepair({
                 sessionKey: key,
                 entry: current,

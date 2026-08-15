@@ -45,6 +45,10 @@ export type ConfigWriteOptions = {
   explicitSetPaths?: readonly (readonly string[])[];
   /** Source-shaped values paired with explicitSetPaths. */
   explicitSetValueSource?: OpenClawConfig;
+  /** Agent ids that this write intentionally removes from the canonical roster. */
+  allowedAgentRosterRemovals?: readonly string[];
+  /** Permit explicit local overrides below an ancestor $include without flattening it. */
+  allowIncludeAncestorExplicitSetPaths?: boolean;
   /** Fresh snapshot fast path for an immediate write. */
   baseSnapshot?: ConfigFileSnapshot;
   /** Plugin metadata paired with baseSnapshot. */
@@ -116,6 +120,7 @@ export type ConfigSnapshotReadOptions = {
   observe?: boolean;
   isolateEnv?: boolean;
   lowerPrecedenceEnv?: Readonly<Record<string, string>>;
+  allowCurrentPluginMetadata?: boolean;
   recoverSuspicious?: boolean;
   allowSuspiciousRecovery?: (
     candidate: OpenClawConfig,
@@ -143,3 +148,17 @@ export type BestEffortConfigSnapshot = {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
 };
+
+export type ConfigRecoveryCandidate = {
+  raw: string;
+  parsed: unknown;
+  config?: OpenClawConfig;
+};
+
+export type ConfigRecoveryCandidatePreparation =
+  | { ok: true; candidate: ConfigRecoveryCandidate }
+  | { ok: false; reason: string };
+
+export type PrepareConfigRecoveryCandidate = (
+  candidate: ConfigRecoveryCandidate,
+) => ConfigRecoveryCandidatePreparation;

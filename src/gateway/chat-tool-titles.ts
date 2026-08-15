@@ -220,7 +220,6 @@ async function generateMissingTitles(params: {
       // Profile-isolated sessions must not leak their tool args through the
       // agent/default credential; the session's auth profile wins.
       preferredProfile: params.sessionAuthProfile,
-      useAsyncModelResolution: true,
       allowMissingApiKeyModes: ["aws-sdk"],
     });
   } catch (err) {

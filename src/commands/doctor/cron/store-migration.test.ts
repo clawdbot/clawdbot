@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveAgentHarnessPolicy } from "../../../agents/harness/policy.js";
 import { legacyCodexProviderIdentityKey } from "../shared/codex-route-model-ref.js";
+import { LEGACY_TASK_SUGGESTION_TOOL_NAME } from "../shared/legacy-tool-name-migration.js";
 import {
   planCronCodexRefRewriteAgainstPersistedConfig,
   repairCronCodexRuntimePolicies,
@@ -114,6 +115,24 @@ describe("normalizeStoredCronJobs", () => {
     expect(delivery?.channel).toBe("slack");
   });
 
+  it("rewrites the legacy task-suggestion tool in persisted tool allowlists", () => {
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          kind: "agentTurn",
+          message: "ping",
+          toolsAllow: ["read", LEGACY_TASK_SUGGESTION_TOOL_NAME],
+        },
+      }),
+    );
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.legacyTaskSuggestionToolName).toBe(1);
+    const payload = expectDefined(job, "job test invariant").payload as Record<string, unknown>;
+    expect(payload.toolsAllow).toEqual(["read", "suggest_task"]);
+  });
+
   it("rewrites legacy OpenAI Codex model refs in cron payloads", () => {
     const { job, result } = normalizeOneJob(
       makeLegacyJob({
@@ -159,11 +178,11 @@ describe("normalizeStoredCronJobs", () => {
     expect(payload.model).toBe("openai/gpt-5.6-sol");
     expect(payload.fallbacks).toEqual(["openai/gpt-5.4-mini"]);
     const runtimeRepair = repairCronCodexRuntimePolicies({
-      cfg: {},
+      cfg: { agents: { entries: { main: { default: true } } } },
       targets: result.codexRuntimePolicyTargets,
     });
     expect(runtimeRepair.warnings).toStrictEqual([]);
-    expect(runtimeRepair.config.agents?.defaults?.models).toMatchObject({
+    expect(runtimeRepair.config.agents?.entries?.main?.models).toMatchObject({
       "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
       "openai/gpt-5.4-mini": { agentRuntime: { id: "codex" } },
     });
@@ -228,8 +247,14 @@ describe("normalizeStoredCronJobs", () => {
       cfg: {
         agents: {
           defaults: {
-            models: {
-              "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+            model: { primary: "openai/gpt-5.6-sol" },
+          },
+          entries: {
+            main: {
+              default: true,
+              models: {
+                "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+              },
             },
           },
         },
@@ -388,7 +413,7 @@ describe("normalizeStoredCronJobs", () => {
     expect((job.payload as Record<string, unknown>).model).toBe("openai/gpt-5.6-sol");
   });
 
-  it("writes an implicit default agent policy to defaults when no list entry exists", () => {
+  it("writes the configured default agent policy to its canonical keyed entry", () => {
     const jobs = [
       makeLegacyJob({
         id: "implicit-default-codex-model",
@@ -401,13 +426,14 @@ describe("normalizeStoredCronJobs", () => {
       }),
     ];
     const policyRepair = repairCronCodexRuntimePolicies({
-      cfg: {},
+      cfg: { agents: { entries: { main: { default: true } } } },
       targets: collectStoredCronCodexRuntimePolicyTargets(jobs),
     });
 
-    expect(policyRepair.config.agents?.defaults?.models).toMatchObject({
+    expect(policyRepair.config.agents?.entries?.main?.models).toMatchObject({
       "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
     });
+    expect(policyRepair.config.agents?.defaults?.models).toBeUndefined();
   });
 
   it("retains a post-snapshot Codex ref until its runtime policy is persisted", () => {
@@ -423,7 +449,7 @@ describe("normalizeStoredCronJobs", () => {
       }),
     ];
     const rewritePlan = planCronCodexRefRewriteAgainstPersistedConfig({
-      cfg: {},
+      cfg: { agents: { entries: { main: { default: true } } } },
       targets: collectStoredCronCodexRuntimePolicyTargets(jobs),
     });
     const blocked = new Set(rewritePlan.blockedTargets.map(cronCodexRuntimePolicyTargetKey));

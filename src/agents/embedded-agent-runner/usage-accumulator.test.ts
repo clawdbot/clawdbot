@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createUsageAccumulator,
+  mergeAttemptRunStatsIntoAccumulator,
   mergeUsageIntoAccumulator,
   toNormalizedUsage,
 } from "./usage-accumulator.js";
@@ -76,6 +77,34 @@ describe("usage-accumulator", () => {
       });
 
       expect(acc).toEqual(createUsageAccumulator());
+    });
+  });
+
+  describe("mergeAttemptRunStatsIntoAccumulator", () => {
+    it("accumulates turns and bridge calls across retry/fallback attempts", () => {
+      const acc = createUsageAccumulator();
+
+      // First attempt makes bridge calls, then a retry/fallback attempt runs.
+      mergeAttemptRunStatsIntoAccumulator(acc, {
+        assistantTurns: 2,
+        bridgeCalls: { search: 1, describe: 2, call: 3 },
+      });
+      mergeAttemptRunStatsIntoAccumulator(acc, {
+        assistantTurns: 1,
+        bridgeCalls: { search: 0, describe: 1, call: 4 },
+      });
+
+      expect(acc.assistantTurns).toBe(3);
+      expect(acc.bridgeCalls).toEqual({ search: 1, describe: 3, call: 7 });
+    });
+
+    it("keeps bridgeCalls absent for catalog-less attempts", () => {
+      const acc = createUsageAccumulator();
+
+      mergeAttemptRunStatsIntoAccumulator(acc, { assistantTurns: 1 });
+
+      expect(acc.assistantTurns).toBe(1);
+      expect(acc.bridgeCalls).toBeUndefined();
     });
   });
 

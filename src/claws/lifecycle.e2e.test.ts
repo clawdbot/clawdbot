@@ -80,6 +80,13 @@ describe("claws lifecycle cli e2e", () => {
         agent: { id: "incident-response" },
         packages: expect.any(Array),
       },
+      openClawProfile: {
+        schemaVersion: 1,
+        agent: {
+          tools: { allow: ["read", "write", "web_fetch"], deny: ["exec", "browser"] },
+          heartbeat: { every: "30m", isolatedSession: true, timeoutSeconds: 120 },
+        },
+      },
     });
   });
 
@@ -150,6 +157,8 @@ describe("claws lifecycle cli e2e", () => {
       main: { default: true },
       "internal-triage": expect.objectContaining({
         name: "Internal Triage",
+        tools: { deny: ["exec", "browser"] },
+        humanDelay: { mode: "natural" },
         workspace: join(canonicalStateDir, ".openclaw", "workspace-internal-triage"),
       }),
     });
@@ -292,7 +301,6 @@ describe("claws lifecycle cli e2e", () => {
         agent: { id: "workspace-agent" },
         workspace: {
           bootstrapFiles: {
-            "SOUL.md": { source: "workspace/SOUL.md" },
             "HEARTBEAT.md": { source: "workspace/HEARTBEAT.md" },
           },
           files: [
@@ -310,6 +318,9 @@ describe("claws lifecycle cli e2e", () => {
         version: expect.stringMatching(/^0\.0\.0-export\.[0-9a-f]{64}$/),
         type: "module",
       },
+    );
+    await expect(readFile(join(outputDirectory, "CLAW.md"), "utf8")).resolves.toContain(
+      "Incident Response",
     );
     const inspected = await runOpenClaw(["claws", "inspect", outputDirectory, "--json"]);
     expect(parseJson(inspected.stdout)).toMatchObject({

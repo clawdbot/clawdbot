@@ -1,23 +1,27 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseStrictPositiveInteger,
+  resolveIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import {
-  asOptionalRecord as asRecord,
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW,
   DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
+  DEFAULT_ACTIVE_MEMORY_MODE,
   DEFAULT_CACHE_TTL_MS,
   DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS,
   DEFAULT_CLI_RUNTIME_RECALL_TIMEOUT_MS,
   DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS,
   DEFAULT_MAX_SUMMARY_CHARS,
   DEFAULT_MIN_TIMEOUT_MS,
-  DEFAULT_QMD_SEARCH_MODE,
   DEFAULT_QUERY_MODE,
   DEFAULT_RECENT_ASSISTANT_CHARS,
   DEFAULT_RECENT_ASSISTANT_TURNS,
@@ -33,7 +37,6 @@ import {
   type ActiveMemoryChatType,
   type ActiveMemoryFastMode,
   type ActiveMemoryPromptStyle,
-  type ActiveMemoryQmdSearchMode,
   type ActiveMemoryThinkingLevel,
   type ActiveRecallPluginConfig,
   type ResolvedActiveRecallPluginConfig,
@@ -53,10 +56,7 @@ function parseOptionalPositiveInt(value: unknown, fallback: number): number {
 }
 
 function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(min, Math.min(max, Math.floor(value as number)));
+  return resolveIntegerOption(value, fallback, { min, max });
 }
 
 function normalizeTranscriptDir(value: unknown): string {
@@ -133,20 +133,8 @@ function resolveToolsAllow(params: { pluginToolsAllow: unknown; cfg?: OpenClawCo
   );
 }
 
-function normalizePromptConfigText(value: unknown): string | undefined {
-  const text = typeof value === "string" ? value.trim() : "";
-  return text ? text : undefined;
-}
-
-function resolveQmdSearchMode(value: unknown): ActiveMemoryQmdSearchMode {
-  if (value === "inherit" || value === "search" || value === "vsearch" || value === "query") {
-    return value;
-  }
-  return DEFAULT_QMD_SEARCH_MODE;
-}
-
 function hasDeprecatedModelFallbackPolicy(pluginConfig: unknown): boolean {
-  const raw = asRecord(pluginConfig);
+  const raw = asOptionalRecord(pluginConfig);
   return raw ? Object.hasOwn(raw, "modelFallbackPolicy") : false;
 }
 
@@ -220,7 +208,6 @@ function normalizePluginConfig(
   const raw = (
     pluginConfig && typeof pluginConfig === "object" ? pluginConfig : {}
   ) as ActiveRecallPluginConfig;
-  const qmd = asRecord(raw.qmd);
   const allowedChatTypes = Array.isArray(raw.allowedChatTypes)
     ? raw.allowedChatTypes.filter(
         (value): value is ActiveMemoryChatType =>
@@ -229,6 +216,10 @@ function normalizePluginConfig(
     : [];
   return {
     enabled: raw.enabled !== false,
+    mode:
+      raw.mode === "always" || raw.mode === "off" || raw.mode === "escalate"
+        ? raw.mode
+        : DEFAULT_ACTIVE_MEMORY_MODE,
     agents: Array.isArray(raw.agents) ? normalizeStringEntries(raw.agents) : [],
     model: typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : undefined,
     modelFallback:
@@ -244,8 +235,8 @@ function normalizePluginConfig(
     fastMode: normalizeActiveMemoryFastMode(raw.fastMode),
     promptStyle: resolvePromptStyle(raw.promptStyle, raw.queryMode),
     toolsAllow: resolveToolsAllow({ pluginToolsAllow: raw.toolsAllow, cfg }),
-    promptOverride: normalizePromptConfigText(raw.promptOverride),
-    promptAppend: normalizePromptConfigText(raw.promptAppend),
+    promptOverride: normalizeOptionalString(raw.promptOverride),
+    promptAppend: normalizeOptionalString(raw.promptAppend),
     timeoutMs: clampInt(
       parseOptionalPositiveInt(raw.timeoutMs, DEFAULT_TIMEOUT_MS),
       DEFAULT_TIMEOUT_MS,
@@ -289,36 +280,6 @@ function normalizePluginConfig(
     ),
     persistTranscripts: raw.persistTranscripts === true,
     transcriptDir: normalizeTranscriptDir(raw.transcriptDir),
-    qmd: {
-      searchMode: resolveQmdSearchMode(qmd?.searchMode),
-    },
-  };
-}
-
-function applyActiveMemoryRuntimeConfigSnapshot(
-  cfg: OpenClawConfig,
-  pluginConfig: ResolvedActiveRecallPluginConfig,
-): OpenClawConfig {
-  const existingEntry = asRecord(cfg.plugins?.entries?.["active-memory"]);
-  const existingPluginConfig = asRecord(existingEntry?.config);
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      entries: {
-        ...cfg.plugins?.entries,
-        "active-memory": {
-          ...existingEntry,
-          config: {
-            ...existingPluginConfig,
-            qmd: {
-              ...asRecord(existingPluginConfig?.qmd),
-              searchMode: pluginConfig.qmd.searchMode,
-            },
-          },
-        },
-      },
-    },
   };
 }
 
@@ -409,7 +370,6 @@ function applyCliRuntimeRecallTimeoutDefault(
 }
 
 export {
-  applyActiveMemoryRuntimeConfigSnapshot,
   applyCliRuntimeRecallTimeoutDefault,
   clampInt,
   hasDeprecatedModelFallbackPolicy,

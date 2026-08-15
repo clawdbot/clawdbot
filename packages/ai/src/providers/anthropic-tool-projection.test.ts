@@ -2,6 +2,28 @@ import { describe, expect, it } from "vitest";
 import { projectAnthropicTools } from "./anthropic-tool-projection.js";
 
 describe("projectAnthropicTools", () => {
+  it("keeps projected wire tools identical across discovery orders", () => {
+    const tools = [
+      {
+        name: "ZuluLookup",
+        description: "Look up the last value",
+        parameters: { type: "object", properties: { value: { type: "string" } } },
+      },
+      {
+        name: "AlphaLookup",
+        description: "Look up the first value",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+    ];
+    const toWireName = (name: string) => name.toLowerCase();
+
+    const first = projectAnthropicTools(tools, toWireName);
+    const reversed = projectAnthropicTools(tools.toReversed(), toWireName);
+
+    expect(first.tools.map((tool) => tool.wireName)).toEqual(["alphalookup", "zululookup"]);
+    expect(reversed.tools).toEqual(first.tools);
+  });
+
   it("converts draft-07 tuple items to draft 2020-12 prefixItems for Anthropic", () => {
     const projection = projectAnthropicTools(
       [

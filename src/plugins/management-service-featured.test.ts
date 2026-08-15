@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
+import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 
 const mocks = vi.hoisted(() => ({
   metadata: vi.fn(),
@@ -7,6 +9,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
+  resolvePluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
 }));
 
 vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
@@ -31,33 +34,45 @@ function metadataSnapshot(params: {
   const id = params.id ?? "workboard";
   const packageName =
     params.packageName === null ? undefined : (params.packageName ?? `@openclaw/${id}`);
-  const manifest = {
-    id,
-    name: params.name ?? "Workboard",
-    description: params.description ?? "Coordinate agent work in a shared board.",
-    catalog: { featured: params.featured ?? true, order: 10 },
-    ...(params.icon ? { icon: params.icon } : {}),
-    channels: [],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    origin: params.origin ?? "bundled",
-    rootDir: `/tmp/${id}`,
-    source: `/tmp/${id}/index.ts`,
-    manifestPath: `/tmp/${id}/openclaw.plugin.json`,
-  };
+  const rootDir = `/tmp/${id}`;
+  const installOwner = params.installRecord ? id : undefined;
+  const manifest = recordPluginManifestInstallOwner(
+    {
+      id,
+      name: params.name ?? "Workboard",
+      description: params.description ?? "Coordinate agent work in a shared board.",
+      catalog: { featured: params.featured ?? true, order: 10 },
+      ...(params.icon ? { icon: params.icon } : {}),
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      origin: params.origin ?? "bundled",
+      rootDir,
+      source: `${rootDir}/index.ts`,
+      manifestPath: `${rootDir}/openclaw.plugin.json`,
+    },
+    installOwner,
+  );
+  const installRecord = params.installRecord
+    ? { ...params.installRecord, installPath: rootDir }
+    : undefined;
   return {
     index: {
       plugins: [
-        {
-          pluginId: id,
-          ...(packageName ? { packageName } : {}),
-          origin: params.origin ?? "bundled",
-          enabled: true,
-        },
+        recordInstalledPluginIndexInstallOwner(
+          {
+            pluginId: id,
+            ...(packageName ? { packageName } : {}),
+            origin: params.origin ?? "bundled",
+            rootDir,
+            enabled: true,
+          },
+          installOwner,
+        ),
       ],
-      installRecords: params.installRecord ? { [id]: params.installRecord } : {},
+      installRecords: installRecord ? { [id]: installRecord } : {},
     },
     byPluginId: new Map([[id, manifest]]),
     plugins: [manifest],

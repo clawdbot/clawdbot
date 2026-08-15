@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
   listKnownProviderAuthEnvVarNames: () => [
@@ -80,12 +80,7 @@ function makePermissionRequest(
   };
 }
 
-const tempDirs = createTrackedTempDirs();
-const createTempDir = () => tempDirs.make("openclaw-acp-client-test-");
-
-afterEach(async () => {
-  await tempDirs.cleanup();
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("resolveAcpClientSpawnEnv", () => {
   it("sets OPENCLAW_SHELL marker and preserves existing env values", () => {
@@ -291,7 +286,7 @@ describe("resolveAcpClientSpawnInvocation", () => {
   });
 
   it("unwraps .cmd shim entrypoint on windows", async () => {
-    const dir = await createTempDir();
+    const dir = tempDirs.make("openclaw-acp-client-test-");
     const scriptPath = path.join(dir, "openclaw", "dist", "entry.js");
     const shimPath = path.join(dir, "openclaw.cmd");
     await mkdir(path.dirname(scriptPath), { recursive: true });
@@ -313,7 +308,7 @@ describe("resolveAcpClientSpawnInvocation", () => {
   });
 
   it("fails closed for unresolved wrappers on windows", async () => {
-    const dir = await createTempDir();
+    const dir = tempDirs.make("openclaw-acp-client-test-");
     const shimPath = path.join(dir, "openclaw.cmd");
     await writeFile(shimPath, "@ECHO off\r\necho wrapper\r\n", "utf8");
 

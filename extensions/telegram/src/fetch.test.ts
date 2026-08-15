@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { isSafeToRetrySendError, TelegramRequestNotStartedError } from "./network-errors.js";
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const getDefaultResultOrder = vi.hoisted(() => vi.fn(() => "ipv4first"));
@@ -317,7 +318,7 @@ function expectPinnedIpv4ConnectDispatcher(args: {
   }
 }
 
-function expectPinnedFallbackIpDispatcher(callIndex: number) {
+async function expectPinnedFallbackIpDispatcher(callIndex: number) {
   const dispatcher = getDispatcherFromUndiciCall(callIndex);
   expect(dispatcher?.options?.connect?.family).toBe(4);
   expect(dispatcher?.options?.connect?.autoSelectFamily).toBe(false);
@@ -328,6 +329,9 @@ function expectPinnedFallbackIpDispatcher(callIndex: number) {
       | ((hostname: string, callback: (err: null, address: string, family: number) => void) => void)
       | undefined
   )?.("api.telegram.org", callback);
+  await new Promise<void>((resolve) => {
+    process.nextTick(resolve);
+  });
   expect(callback).toHaveBeenCalledWith(null, "149.154.167.220", 4);
 }
 
@@ -961,7 +965,7 @@ describe("resolveTelegramFetch", () => {
     expect(thirdDispatcher).toBe(seventhDispatcher);
     expect(eighthDispatcher).toBe(firstDispatcher);
     expect(ninthDispatcher).toBe(firstDispatcher);
-    expectPinnedFallbackIpDispatcher(3);
+    await expectPinnedFallbackIpDispatcher(3);
     expectLoggerMessageContaining(loggerWarn, "fetch fallback: primary connection path failed");
     expectLoggerMessageContaining(
       loggerDebug,
@@ -1027,7 +1031,7 @@ describe("resolveTelegramFetch", () => {
     await resolved("https://api.telegram.org/botx/getMe");
 
     expect(undiciFetch).toHaveBeenCalledTimes(4);
-    expectPinnedFallbackIpDispatcher(3);
+    await expectPinnedFallbackIpDispatcher(3);
     expect(getDispatcherFromUndiciCall(4)).toBe(getDispatcherFromUndiciCall(3));
   });
 
@@ -1050,12 +1054,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("cools down a repeatedly failing sticky fallback and probes earlier attempts", async () => {
-    for (let i = 0; i < 7; i += 1) {
-      undiciFetch.mockRejectedValueOnce(buildFetchFallbackError("ENETUNREACH"));
-    }
-    undiciFetch
-      .mockRejectedValueOnce(buildFetchFallbackError("ENETUNREACH"))
-      .mockRejectedValueOnce(buildFetchFallbackError("ENETUNREACH"));
+    undiciFetch.mockRejectedValue(buildFetchFallbackError("ENETUNREACH"));
 
     const resolved = resolveTelegramFetchOrThrow(undefined, {
       network: {
@@ -1072,10 +1071,15 @@ describe("resolveTelegramFetch", () => {
         "fetch failed",
       );
     }
-    await expect(resolved("https://api.telegram.org/botx/getUpdates")).rejects.toThrow(
-      "temporarily unhealthy",
-    );
+    let terminalError: unknown;
+    try {
+      await resolved("https://api.telegram.org/botx/getUpdates");
+    } catch (error) {
+      terminalError = error;
+    }
 
+    expect(terminalError).toBeInstanceOf(TelegramRequestNotStartedError);
+    expect(isSafeToRetrySendError(terminalError)).toBe(true);
     expect(undiciFetch).toHaveBeenCalledTimes(9);
     expect(getDispatcherFromUndiciCall(7)).toBe(getDispatcherFromUndiciCall(3));
     expect(getDispatcherFromUndiciCall(8)).toBe(getDispatcherFromUndiciCall(1));

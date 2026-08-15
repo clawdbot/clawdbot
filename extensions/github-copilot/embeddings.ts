@@ -16,8 +16,9 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
 import { resolveGithubCopilotDomain } from "./domain.js";
-import { CopilotTokenExchangeError } from "./token-exchange-error.js";
-import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
+import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
+import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotRuntimeAuth } from "./runtime-auth.js";
+import { COPILOT_RUNTIME_INTEGRATION_ID } from "./runtime-identity.js";
 
 const COPILOT_EMBEDDING_PROVIDER_ID = "github-copilot";
 
@@ -33,6 +34,7 @@ const PREFERRED_MODELS = [
 const COPILOT_HEADERS_STATIC: Record<string, string> = {
   "Content-Type": "application/json",
   ...buildCopilotIdeHeaders(),
+  "Copilot-Integration-Id": COPILOT_RUNTIME_INTEGRATION_ID,
 };
 const COPILOT_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const COPILOT_EMBEDDINGS_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
@@ -57,6 +59,7 @@ type CopilotModelEntry = {
 type GitHubCopilotEmbeddingClient = {
   githubToken: string;
   model: string;
+  runtimeAuth?: { apiKey: string; baseUrl: string };
   baseUrl?: string;
   headers?: Record<string, string>;
   env?: NodeJS.ProcessEnv;
@@ -65,7 +68,7 @@ type GitHubCopilotEmbeddingClient = {
 };
 
 function isCopilotSetupError(err: unknown): boolean {
-  if (err instanceof CopilotTokenExchangeError) {
+  if (err instanceof CopilotRuntimeAuthError) {
     return true;
   }
   if (!(err instanceof Error)) {
@@ -73,16 +76,16 @@ function isCopilotSetupError(err: unknown): boolean {
   }
   // All Copilot-specific setup failures should allow auto-selection to
   // fall through to the next provider (e.g. OpenAI). This covers: missing
-  // GitHub token, token exchange failures, no embedding models on the plan,
+  // GitHub token, authentication failures, no embedding models on the plan,
   // model discovery errors, and user-pinned model not available on Copilot.
   return (
     err.message.includes("No GitHub token available") ||
-    err.message.includes("Copilot token response") ||
+    err.message.includes("Copilot user response") ||
     err.message.includes("No embedding models available") ||
     err.message.includes("GitHub Copilot model discovery") ||
     err.message.includes("github-copilot.model-discovery") ||
     err.message.includes("GitHub Copilot embedding model") ||
-    err.message.includes("Unexpected response from GitHub Copilot token endpoint")
+    err.message.includes("Unexpected response from GitHub Copilot user endpoint")
   );
 }
 
@@ -213,19 +216,21 @@ async function resolveGitHubCopilotEmbeddingSession(client: GitHubCopilotEmbeddi
   baseUrl: string;
   headers: Record<string, string>;
 }> {
-  const token = await resolveCopilotApiToken({
-    githubToken: client.githubToken,
-    env: client.env,
-    fetchImpl: client.fetchImpl,
-    githubDomain: client.githubDomain,
-  });
-  const baseUrl = client.baseUrl?.trim() || token.baseUrl || DEFAULT_COPILOT_API_BASE_URL;
+  const auth =
+    client.runtimeAuth ??
+    (await resolveCopilotRuntimeAuth({
+      githubToken: client.githubToken,
+      env: client.env,
+      fetchImpl: client.fetchImpl,
+      githubDomain: client.githubDomain,
+    }));
+  const baseUrl = client.baseUrl?.trim() || auth.baseUrl || DEFAULT_COPILOT_API_BASE_URL;
   return {
     baseUrl,
     headers: {
       ...COPILOT_HEADERS_STATIC,
       ...client.headers,
-      Authorization: `Bearer ${token.token}`,
+      Authorization: `Bearer ${auth.apiKey}`,
     },
   };
 }
@@ -240,16 +245,15 @@ async function createGitHubCopilotEmbeddingProvider(
       return [];
     }
 
-    const session = await resolveGitHubCopilotEmbeddingSession(client);
-    const url = `${session.baseUrl.replace(/\/$/, "")}/embeddings`;
+    const url = `${initialSession.baseUrl.replace(/\/$/, "")}/embeddings`;
     return await withRemoteHttpResponse({
       url,
       fetchImpl: client.fetchImpl,
-      ssrfPolicy: buildRemoteBaseUrlPolicy(session.baseUrl),
+      ssrfPolicy: buildRemoteBaseUrlPolicy(initialSession.baseUrl),
       signal,
       init: {
         method: "POST",
-        headers: session.headers,
+        headers: initialSession.headers,
         body: JSON.stringify({ model: client.model, input }),
       },
       onResponse: async (response) => {
@@ -297,6 +301,17 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
       value: options.remote?.apiKey,
       path: "memory.search.remote.apiKey",
     });
+    const customBaseUrl = options.remote?.baseUrl?.trim();
+    const customRuntimeAuth = customBaseUrl
+      ? (() => {
+          if (!explicitValue) {
+            throw new Error(
+              "GitHub Copilot memory custom baseUrl requires an explicit memory.search.remote.apiKey",
+            );
+          }
+          return { apiKey: explicitValue, baseUrl: customBaseUrl };
+        })()
+      : undefined;
     const value = explicitValue
       ? explicitValue
       : (
@@ -314,13 +329,16 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
       env: process.env,
       config: options.config,
     });
-    const { token: copilotToken, baseUrl: resolvedBaseUrl } = await resolveCopilotApiToken({
-      githubToken: value,
-      env: process.env,
-      githubDomain,
-    });
-    const baseUrl =
-      options.remote?.baseUrl?.trim() || resolvedBaseUrl || DEFAULT_COPILOT_API_BASE_URL;
+    // A custom endpoint owns its own explicit credential. Never resolve a
+    // durable GitHub token and then forward it to an operator-supplied host.
+    const runtimeAuth =
+      customRuntimeAuth ??
+      (await resolveCopilotRuntimeAuth({
+        githubToken: value,
+        env: process.env,
+        githubDomain,
+      }));
+    const baseUrl = runtimeAuth.baseUrl || DEFAULT_COPILOT_API_BASE_URL;
     const ssrfPolicy = buildSsrfPolicy(baseUrl);
 
     // Always discover models even when the user pins one: this validates
@@ -328,7 +346,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
     // we attempt any embedding requests.
     const availableModels = await discoverEmbeddingModels({
       baseUrl,
-      copilotToken,
+      copilotToken: runtimeAuth.apiKey,
       headers: options.remote?.headers,
       ssrfPolicy,
     });
@@ -341,6 +359,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
       env: process.env,
       fetchImpl: fetch,
       githubToken: value,
+      runtimeAuth,
       githubDomain,
       headers: options.remote?.headers,
       model,

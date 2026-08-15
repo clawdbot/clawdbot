@@ -30,7 +30,7 @@ const EXPECTED_FEATURED_MODELS = [
     id: "moonshotai/kimi-k2.6",
     name: "Kimi K2.6",
     contextWindow: 262_144,
-    maxTokens: 8_192,
+    maxTokens: 65_536,
   },
   {
     id: "minimaxai/minimax-m3",
@@ -44,20 +44,20 @@ const EXPECTED_FEATURED_MODELS = [
     contextWindow: 262_144,
     maxTokens: 16_384,
   },
-  {
-    id: "qwen/qwen3.5-397b-a17b",
-    name: "Qwen3.5 397B A17B",
-    contextWindow: 262_144,
-    maxTokens: 16_384,
-  },
 ] as const;
 
 const EXPECTED_DEPRECATED_MODELS = [
   {
+    id: "qwen/qwen3.5-397b-a17b",
+    name: "Qwen3.5 397B A17B",
+    contextWindow: 262_144,
+    maxTokens: 32_768,
+  },
+  {
     id: "moonshotai/kimi-k2.5",
     name: "Kimi K2.5",
     contextWindow: 262_144,
-    maxTokens: 8_192,
+    maxTokens: 32_768,
   },
   {
     id: "z-ai/glm-5.1",
@@ -65,18 +65,12 @@ const EXPECTED_DEPRECATED_MODELS = [
     contextWindow: 202_752,
     maxTokens: 8_192,
   },
-  {
-    id: "minimaxai/minimax-m2.5",
-    name: "MiniMax M2.5",
-    contextWindow: 196_608,
-    maxTokens: 8_192,
-  },
   { id: "z-ai/glm5", name: "GLM-5", contextWindow: 202_752, maxTokens: 8_192 },
   {
     id: "minimaxai/minimax-m2.7",
     name: "Minimax M2.7",
-    contextWindow: 196_608,
-    maxTokens: 8_192,
+    contextWindow: 204_800,
+    maxTokens: 16_384,
   },
 ] as const;
 
@@ -129,6 +123,36 @@ describe("nvidia provider catalog", () => {
     expect(provider.models.filter((model) => model.compat?.requiresStringContent !== true)).toEqual(
       [],
     );
+    expect(
+      provider.models.slice(0, EXPECTED_FEATURED_MODELS.length).map(({ id, input, reasoning }) => ({
+        id,
+        input,
+        reasoning,
+      })),
+    ).toEqual([
+      {
+        id: "nvidia/nemotron-3-ultra-550b-a55b",
+        input: ["text"],
+        reasoning: true,
+      },
+      {
+        id: "nvidia/nemotron-3-super-120b-a12b",
+        input: ["text"],
+        reasoning: true,
+      },
+      { id: "z-ai/glm-5.2", input: ["text"], reasoning: true },
+      {
+        id: "moonshotai/kimi-k2.6",
+        input: ["text", "image"],
+        reasoning: true,
+      },
+      {
+        id: "minimaxai/minimax-m3",
+        input: ["text", "image"],
+        reasoning: true,
+      },
+      { id: "deepseek-ai/deepseek-v4-pro", input: ["text"], reasoning: true },
+    ]);
     expect(provider.models[0]).toMatchObject({
       contextWindow: 1_048_576,
       maxTokens: 8_192,
@@ -146,14 +170,28 @@ describe("nvidia provider catalog", () => {
     expect(
       manifest.modelCatalog.providers.nvidia.models
         .filter((model) => "status" in model && model.status === "deprecated")
-        .map((model) => ({ id: model.id, replacedBy: model.replacedBy })),
+        .map((model) =>
+          "replacedBy" in model ? { id: model.id, replacedBy: model.replacedBy } : { id: model.id },
+        ),
     ).toEqual([
+      { id: "qwen/qwen3.5-397b-a17b" },
       { id: "moonshotai/kimi-k2.5", replacedBy: "moonshotai/kimi-k2.6" },
       { id: "z-ai/glm-5.1", replacedBy: "z-ai/glm-5.2" },
-      { id: "minimaxai/minimax-m2.5", replacedBy: "minimaxai/minimax-m3" },
       { id: "z-ai/glm5", replacedBy: "z-ai/glm-5.2" },
       { id: "minimaxai/minimax-m2.7", replacedBy: "minimaxai/minimax-m3" },
     ]);
+    expect(provider.models.find((model) => model.id === "moonshotai/kimi-k2.5")).toMatchObject({
+      input: ["text", "image"],
+      reasoning: true,
+      contextWindow: 262_144,
+      maxTokens: 32_768,
+    });
+    expect(provider.models.find((model) => model.id === "minimaxai/minimax-m2.7")).toMatchObject({
+      input: ["text"],
+      reasoning: true,
+      contextWindow: 204_800,
+      maxTokens: 16_384,
+    });
   });
 
   it("keeps deprecated exact-reference rows out of the selectable catalog", () => {
@@ -243,7 +281,7 @@ describe("nvidia provider catalog", () => {
     ]);
   });
 
-  it("keeps every deprecated exact-reference row out of live catalogs", async () => {
+  it("restores bundled legacy models when NVIDIA republishes them in its featured catalog", async () => {
     mockFeaturedCatalogResponse({
       "featured-models": [
         {
@@ -263,12 +301,16 @@ describe("nvidia provider catalog", () => {
 
     const live = await buildLiveNvidiaProvider();
     const selectableLive = await buildSelectableLiveNvidiaProvider();
+    const republishedIds = [
+      "minimaxai/minimax-m3",
+      ...EXPECTED_DEPRECATED_MODELS.map((model) => model.id),
+    ];
 
-    expect(live.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m3"]);
-    expect(selectableLive.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m3"]);
+    expect(live.models.map((model) => model.id)).toEqual(republishedIds);
+    expect(selectableLive.models.map((model) => model.id)).toEqual(republishedIds);
   });
 
-  it("maps current featured feed metadata for MiniMax, DeepSeek, and Qwen", async () => {
+  it("maps a republished Qwen model from NVIDIA's current featured catalog", async () => {
     mockFeaturedCatalogResponse({
       "featured-models": [
         {
@@ -445,7 +487,10 @@ describe("nvidia provider catalog", () => {
 
     const provider = await buildLiveNvidiaProvider();
 
-    expect(provider.models.map((model) => model.id)).toEqual(["nvidia/nemotron-3-ultra-550b-a55b"]);
+    expect(provider.models.map((model) => model.id)).toEqual([
+      "nvidia/nemotron-3-ultra-550b-a55b",
+      "minimaxai/minimax-m2.7",
+    ]);
     expect(provider.models[0]).toMatchObject({
       name: "Nemotron 3 Ultra 550B",
       contextWindow: 1_048_576,

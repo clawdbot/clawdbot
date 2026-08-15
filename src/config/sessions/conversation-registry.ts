@@ -1,14 +1,16 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import type { ConversationIdentity, ConversationKind } from "./conversation-identity.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import { upsertConversationIdentity } from "./session-accessor.sqlite-conversation.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { parseSqliteSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 
 const CONVERSATION_REF_PATTERN = /^conv_[a-f0-9]{32}$/u;
 
@@ -35,6 +37,19 @@ export type ConversationRegistryScope = {
   env?: NodeJS.ProcessEnv;
   storePath?: string;
 };
+
+export function resolveConversationRegistryScope(params: {
+  agentId: string;
+  config: OpenClawConfig;
+}): ConversationRegistryScope {
+  const configuredStore = params.config.session?.store;
+  return {
+    agentId: params.agentId,
+    ...(configuredStore
+      ? { storePath: resolveSessionStorePathCore(configuredStore, { agentId: params.agentId }) }
+      : {}),
+  };
+}
 
 function normalizeConversationRef(value: string): string {
   const normalized = value.trim().toLowerCase();
@@ -73,7 +88,7 @@ function mapConversationRow(row: {
       ? row.role
       : undefined;
   const currentEntry = row.current_entry_json
-    ? parseSqliteSessionEntryJson({ entry_json: row.current_entry_json })
+    ? parseSessionEntryJson({ entry_json: row.current_entry_json })
     : null;
   const hasCurrentBinding = currentEntry?.sessionId === row.current_session_id;
   return {

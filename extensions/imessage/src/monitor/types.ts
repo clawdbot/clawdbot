@@ -1,5 +1,8 @@
 // Imessage type declarations define plugin contracts.
-import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import type {
+  ChannelAccountSnapshot,
+  ChannelRuntimeSurface,
+} from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
@@ -84,4 +87,5 @@ export type MonitorIMessageOpts = {
    * runtime). Threaded through from the gateway via ChannelGatewayAccountContext.
    */
   channelRuntime?: ChannelRuntimeSurface;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 };

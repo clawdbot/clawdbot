@@ -1,9 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { reconcileTerminalSourceReplyDelivery } from "./source-reply-mirror.js";
+import {
+  isDeliveredCurrentSourceReply,
+  reconcileTerminalSourceReplyDelivery,
+} from "./source-reply-mirror.js";
 
 const receiptMocks = vi.hoisted(() => ({
   cancel: vi.fn(),
   complete: vi.fn(),
+}));
+const channelPluginMocks = vi.hoisted(() => ({
+  getChannelPlugin: vi.fn(),
+  getLoadedChannelPlugin: vi.fn(),
 }));
 
 vi.mock("../../config/sessions/restart-recovery-receipt.js", () => ({
@@ -11,6 +18,7 @@ vi.mock("../../config/sessions/restart-recovery-receipt.js", () => ({
   cancelRestartRecoveryTerminalDelivery: receiptMocks.cancel,
   completeRestartRecoveryTerminalDelivery: receiptMocks.complete,
 }));
+vi.mock("../../channels/plugins/index.js", () => channelPluginMocks);
 
 describe("reconcileTerminalSourceReplyDelivery", () => {
   const receipt = {
@@ -30,6 +38,8 @@ describe("reconcileTerminalSourceReplyDelivery", () => {
   beforeEach(() => {
     receiptMocks.cancel.mockReset();
     receiptMocks.complete.mockReset();
+    channelPluginMocks.getChannelPlugin.mockReset();
+    channelPluginMocks.getLoadedChannelPlugin.mockReset();
   });
 
   it("cancels a receipt after an unambiguous explicit failure", async () => {
@@ -57,5 +67,37 @@ describe("reconcileTerminalSourceReplyDelivery", () => {
 
     expect(receiptMocks.cancel).not.toHaveBeenCalled();
     expect(receiptMocks.complete).not.toHaveBeenCalled();
+  });
+});
+
+describe("isDeliveredCurrentSourceReply", () => {
+  it("matches a canonical Google Chat thread receipt to its inbound source thread", () => {
+    const params = {
+      action: "send",
+      channel: "googlechat",
+      actionParams: { target: "spaces/AAA", message: "answer" },
+      cfg: {},
+      sessionKey: "agent:main:googlechat:channel:spaces/AAA",
+      toolContext: {
+        currentChannelProvider: "googlechat",
+        currentChannelId: "spaces/AAA",
+        currentThreadTs: "spaces/AAA/threads/canonical",
+      },
+    };
+
+    expect(
+      isDeliveredCurrentSourceReply({
+        ...params,
+        deliveredPayload: {
+          receipt: { threadId: "spaces/AAA/threads/canonical" },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isDeliveredCurrentSourceReply({
+        ...params,
+        deliveredPayload: { receipt: { threadId: "spaces/AAA" } },
+      }),
+    ).toBe(false);
   });
 });

@@ -3,37 +3,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { probeSlack } from "./probe.js";
 
 const authTestMock = vi.hoisted(() => vi.fn());
-const createSlackWebClientMock = vi.hoisted(() => vi.fn());
-const withTimeoutMock = vi.hoisted(() => vi.fn());
+const createSlackReadClientMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./client.js", () => ({
-  createSlackWebClient: createSlackWebClientMock,
+  createSlackReadClient: createSlackReadClientMock,
 }));
-
-vi.mock("openclaw/plugin-sdk/text-utility-runtime", () => ({
-  withTimeout: withTimeoutMock,
-}));
-
-function requireFirstTimeoutCall() {
-  const [call] = withTimeoutMock.mock.calls;
-  if (!call) {
-    throw new Error("expected withTimeout call");
-  }
-  return call;
-}
 
 describe("probeSlack", () => {
   beforeEach(() => {
     authTestMock.mockReset();
-    createSlackWebClientMock.mockReset();
-    withTimeoutMock.mockReset();
+    createSlackReadClientMock.mockReset();
 
-    createSlackWebClientMock.mockReturnValue({
+    createSlackReadClientMock.mockReturnValue({
       auth: {
         test: authTestMock,
       },
     });
-    withTimeoutMock.mockImplementation(async (promise: Promise<unknown>) => await promise);
   });
 
   it("maps Slack auth metadata on success", async () => {
@@ -54,11 +39,11 @@ describe("probeSlack", () => {
       bot: { id: "U123", name: "openclaw-bot" },
       team: { id: "T123", name: "OpenClaw" },
     });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("xoxb-test");
-    expect(withTimeoutMock).toHaveBeenCalledTimes(1);
-    const [promise, timeoutMs] = requireFirstTimeoutCall();
-    expect(promise).toBeInstanceOf(Promise);
-    expect(timeoutMs).toBe(2500);
+    expect(createSlackReadClientMock).toHaveBeenCalledWith("xoxb-test", {
+      rejectRateLimitedCalls: true,
+      retryConfig: { retries: 0 },
+      timeout: 2500,
+    });
   });
 
   it("warns when auth.test looks like a user token in the bot token slot", async () => {
@@ -130,5 +115,36 @@ describe("probeSlack", () => {
     expect(result.elapsedMs).toBe(35);
     expect(result.bot).toStrictEqual({ id: undefined, name: undefined });
     expect(result.team).toStrictEqual({ id: undefined, name: undefined });
+    expect(createSlackReadClientMock).toHaveBeenCalledWith("xoxb-test", {
+      rejectRateLimitedCalls: true,
+      retryConfig: { retries: 0 },
+      timeout: 2500,
+    });
+  });
+
+  it("passes a custom probe deadline to Slack's abortable read transport", async () => {
+    authTestMock.mockResolvedValue({ ok: true });
+
+    await expect(probeSlack("xoxb-test", 175)).resolves.toMatchObject({ ok: true });
+
+    expect(createSlackReadClientMock).toHaveBeenCalledWith("xoxb-test", {
+      rejectRateLimitedCalls: true,
+      retryConfig: { retries: 0 },
+      timeout: 175,
+    });
+  });
+
+  it("keeps the normal health result when the Slack read transport aborts", async () => {
+    authTestMock.mockRejectedValue(
+      Object.assign(new Error("The operation was aborted due to timeout"), {
+        name: "TimeoutError",
+      }),
+    );
+
+    await expect(probeSlack("xoxb-test", 175)).resolves.toMatchObject({
+      ok: false,
+      status: null,
+      error: expect.any(String),
+    });
   });
 });

@@ -2,15 +2,23 @@ import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import {
+  normalizeTrimmedStringList,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
+import { CUSTOM_LOCAL_AUTH_MARKER, isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
-import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
+import {
+  readProviderJsonArrayFieldResponse,
+  readProviderJsonResponse,
+} from "../agents/provider-http-errors.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
@@ -19,11 +27,13 @@ import {
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 // Builds setup metadata for self-hosted provider plugins.
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import type {
   ProviderCatalogContext,
@@ -45,15 +55,8 @@ const log = createSubsystemLogger("plugins/self-hosted-provider-setup");
 // unbounded JSON stream). Cap discovery response bodies before parsing so a
 // hostile or buggy endpoint cannot drive the setup wizard into OOM.
 const SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES = 16 * 1024 * 1024;
-
-type OpenAICompatModelsResponse = {
-  data?: Array<{
-    id?: string;
-    meta?: {
-      n_ctx_train?: unknown;
-    };
-  }>;
-};
+const SELF_HOSTED_RUNTIME_CONTEXT_MAX_MODELS = 200;
+const SELF_HOSTED_RUNTIME_CONTEXT_CONCURRENCY = 8;
 
 type LlamaCppPropsResponse = {
   default_generation_settings?: {
@@ -93,16 +96,28 @@ function readPositiveInteger(value: unknown): number | undefined {
   return Math.trunc(value);
 }
 
+const OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS = [
+  "context_length",
+  "context_window",
+  "context_size",
+] as const;
+
+function readOpenAICompatibleContextWindow(
+  model: Record<string, unknown> | undefined,
+): number | undefined {
+  for (const field of OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS) {
+    const contextWindow = readPositiveInteger(model?.[field]);
+    if (contextWindow !== undefined) {
+      return contextWindow;
+    }
+  }
+  return undefined;
+}
+
 async function readSelfHostedDiscoveryJson<T>(response: Response, label: string): Promise<T> {
   return await readProviderJsonResponse<T>(response, `${label} discovery`, {
     maxBytes: SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES,
   });
-}
-
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
 }
 
 function resolveLlamaCppPropsUrl(baseUrl: string, modelId?: string): string {
@@ -167,6 +182,7 @@ export async function discoverOpenAICompatibleLocalModels(params: {
   apiKey?: string;
   label: string;
   contextWindow?: number;
+  discoverRuntimeContext?: boolean;
   maxTokens?: number;
   env?: NodeJS.ProcessEnv;
 }): Promise<ModelDefinitionConfig[]> {
@@ -194,42 +210,59 @@ export async function discoverOpenAICompatibleLocalModels(params: {
         log.warn(`Failed to discover ${params.label} models: ${response.status}`);
         return [];
       }
-      const data = await readSelfHostedDiscoveryJson<OpenAICompatModelsResponse>(
+      const models = await readProviderJsonArrayFieldResponse(
         response,
-        params.label,
+        `${params.label} discovery`,
+        "data",
+        { maxBytes: SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES },
       );
-      const models = data.data ?? [];
       if (models.length === 0) {
         log.warn(`No ${params.label} models found on local instance`);
         return [];
       }
 
-      const discoveredModels = models.flatMap((model) => {
-        const modelId = normalizeOptionalString(model.id);
+      const discoveredModels = models.flatMap((rawModel) => {
+        const model = asOptionalRecord(rawModel);
+        const modelId = normalizeOptionalString(model?.id);
         if (!modelId) {
           return [];
         }
-        return [{ id: modelId, meta: model.meta }];
+        return [
+          {
+            id: modelId,
+            meta: asOptionalRecord(model?.meta),
+            advertisedContextWindow: readOpenAICompatibleContextWindow(model),
+          },
+        ];
       });
       const runtimeContextTokensByModelId = new Map<string, number>();
-      if (params.contextWindow === undefined) {
+      if (params.contextWindow === undefined && params.discoverRuntimeContext !== false) {
         const uniqueModelIds = uniqueStrings(discoveredModels.map((model) => model.id));
-        const runtimeContextTokenResults = await Promise.all(
-          uniqueModelIds.map(
-            async (modelId) =>
-              [
-                modelId,
-                await discoverLlamaCppRuntimeContextTokens({
-                  baseUrl: trimmedBaseUrl,
-                  apiKey: params.apiKey,
-                  modelId: uniqueModelIds.length > 1 ? modelId : undefined,
-                }),
-              ] as const,
-          ),
-        );
-        for (const [modelId, runtimeContextTokens] of runtimeContextTokenResults) {
-          if (runtimeContextTokens) {
-            runtimeContextTokensByModelId.set(modelId, runtimeContextTokens);
+        const probeModelIds = uniqueModelIds.slice(0, SELF_HOSTED_RUNTIME_CONTEXT_MAX_MODELS);
+        // A valid large router catalog must not start hundreds of guarded
+        // fetches at once; unprobed models retain their advertised metadata.
+        for (
+          let offset = 0;
+          offset < probeModelIds.length;
+          offset += SELF_HOSTED_RUNTIME_CONTEXT_CONCURRENCY
+        ) {
+          const runtimeContextTokenResults = await Promise.all(
+            probeModelIds.slice(offset, offset + SELF_HOSTED_RUNTIME_CONTEXT_CONCURRENCY).map(
+              async (modelId) =>
+                [
+                  modelId,
+                  await discoverLlamaCppRuntimeContextTokens({
+                    baseUrl: trimmedBaseUrl,
+                    apiKey: params.apiKey,
+                    modelId: uniqueModelIds.length > 1 ? modelId : undefined,
+                  }),
+                ] as const,
+            ),
+          );
+          for (const [modelId, runtimeContextTokens] of runtimeContextTokenResults) {
+            if (runtimeContextTokens) {
+              runtimeContextTokensByModelId.set(modelId, runtimeContextTokens);
+            }
           }
         }
       }
@@ -244,6 +277,7 @@ export async function discoverOpenAICompatibleLocalModels(params: {
           contextWindow:
             params.contextWindow ??
             readPositiveInteger(model.meta?.n_ctx_train) ??
+            model.advertisedContextWindow ??
             SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
           maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
         };
@@ -470,15 +504,29 @@ function buildMissingNonInteractiveModelIdMessage(params: {
   ].join("\n");
 }
 
-function buildSelfHostedProviderCredential(params: {
-  ctx: ProviderAuthMethodNonInteractiveContext;
-  providerId: string;
-  resolved: ProviderNonInteractiveApiKeyResult;
-}): ApiKeyCredential | null {
-  return params.ctx.toApiKeyCredential({
-    provider: params.providerId,
-    resolved: params.resolved,
-  });
+function isProviderOwnedSyntheticAuthMarker(
+  providerId: string,
+  resolved: ProviderNonInteractiveApiKeyResult,
+): boolean {
+  if (
+    resolved.source !== "flag" ||
+    !isNonSecretApiKeyMarker(resolved.key, { includeEnvVarName: false })
+  ) {
+    return false;
+  }
+  const normalizedProvider = normalizeProviderId(providerId);
+  const matchesProvider = (provider: string) =>
+    normalizeProviderId(provider) === normalizedProvider;
+  const normalizedValue = resolved.key.trim();
+  // A marker is only a keyless capability when its provider's own plugin declares it.
+  return listOpenClawPluginManifestMetadata().some(
+    ({ origin, manifest }) =>
+      origin === "bundled" &&
+      normalizeTrimmedStringList(manifest.providers).some(matchesProvider) &&
+      normalizeTrimmedStringList(manifest.syntheticAuthRefs).some(matchesProvider) &&
+      (normalizedValue === CUSTOM_LOCAL_AUTH_MARKER ||
+        normalizeTrimmedStringList(manifest.nonSecretAuthMarkers).includes(normalizedValue)),
+  );
 }
 
 export async function configureOpenAICompatibleSelfHostedProviderNonInteractive(params: {
@@ -520,15 +568,8 @@ export async function configureOpenAICompatibleSelfHostedProviderNonInteractive(
     return null;
   }
 
-  const credential = buildSelfHostedProviderCredential({
-    ctx: params.ctx,
-    providerId: params.providerId,
-    resolved,
-  });
-  if (!credential) {
-    return null;
-  }
-
+  const usesSyntheticAuthMarker = isProviderOwnedSyntheticAuthMarker(params.providerId, resolved);
+  const storesCredential = !usesSyntheticAuthMarker && resolved.source !== "profile";
   const configured = buildOpenAICompatibleSelfHostedProviderConfig({
     cfg: params.ctx.config,
     providerId: params.providerId,
@@ -540,17 +581,30 @@ export async function configureOpenAICompatibleSelfHostedProviderNonInteractive(
     contextWindow: params.contextWindow,
     maxTokens: params.maxTokens,
   });
-  await upsertAuthProfileWithLock({
-    profileId: configured.profileId,
-    credential,
-    agentDir: params.ctx.agentDir,
-  });
+  // Existing profiles own their credentials; recognized synthetic markers are
+  // keyless capabilities. Neither should be serialized into a new auth profile.
+  if (storesCredential) {
+    const credential = params.ctx.toApiKeyCredential({
+      provider: params.providerId,
+      resolved,
+    });
+    if (!credential) {
+      return null;
+    }
+    await upsertAuthProfileWithLock({
+      profileId: configured.profileId,
+      credential,
+      agentDir: params.ctx.agentDir,
+    });
+  }
 
-  const withProfile = applyAuthProfileConfig(configured.config, {
-    profileId: configured.profileId,
-    provider: params.providerId,
-    mode: "api_key",
-  });
+  const withProfile = storesCredential
+    ? applyAuthProfileConfig(configured.config, {
+        profileId: configured.profileId,
+        provider: params.providerId,
+        mode: "api_key",
+      })
+    : configured.config;
   params.ctx.runtime.log(`Default ${params.providerLabel} model: ${modelId}`);
   return applyProviderDefaultModel(withProfile, configured.modelRef);
 }

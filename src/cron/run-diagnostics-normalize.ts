@@ -1,4 +1,5 @@
 /** Dependency-light normalization helpers for stored cron run diagnostics. */
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
@@ -68,11 +69,7 @@ export function formatUnknownError(error: unknown): string {
   return String(error);
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object";
-}
-
-export function normalizeToolName(value: unknown): string | undefined {
+export function normalizeDiagnosticToolName(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -80,10 +77,7 @@ export function normalizeToolName(value: unknown): string | undefined {
 }
 
 export function normalizeExitCode(value: unknown): number | null | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  return value === null ? null : undefined;
+  return asFiniteNumber(value) ?? (value === null ? null : undefined);
 }
 
 export function tailText(value: string, maxChars: number): string {
@@ -113,7 +107,7 @@ function normalizeDiagnosticMessage(
   return { message: `${truncateUtf16Safe(redacted, MAX_ENTRY_CHARS - 1)}…`, truncated: true };
 }
 
-function trimSummary(value: string | undefined): string | undefined {
+export function normalizeCronRunDiagnosticSummary(value: string | undefined): string | undefined {
   const normalized = normalizeOptionalString(value);
   if (!normalized) {
     return undefined;
@@ -125,7 +119,7 @@ function trimSummary(value: string | undefined): string | undefined {
 }
 
 /** Normalizes stored cron diagnostic payloads into bounded entries. */
-export function normalizeCronRunDiagnostics(
+export function normalizeCronRunDiagnosticsCore(
   value: unknown,
   opts?: CronRunDiagnosticsNormalizeOptions,
 ): NormalizedCronRunDiagnostics | undefined {
@@ -167,7 +161,7 @@ export function normalizeCronRunDiagnostics(
       entries.shift();
     }
   }
-  const summary = trimSummary(
+  const summary = normalizeCronRunDiagnosticSummary(
     typeof record.summary === "string" ? redactText(record.summary) : undefined,
   );
   if (entries.length === 0 && !summary) {

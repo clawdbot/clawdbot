@@ -37,18 +37,6 @@ struct RemotePortTunnelTests {
         #expect(drained.isEmpty)
     }
 
-    @Test func `termination waits for the original child to exit`() throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/sleep")
-        process.arguments = ["30"]
-        try process.run()
-
-        RemotePortTunnel._testTerminateAndWait(process)
-        #expect(!process.isRunning)
-        #expect(process.terminationReason == .uncaughtSignal)
-        #expect(process.terminationStatus == SIGTERM)
-    }
-
     @Test func `port is free detects I pv4 listener`() {
         var fd = socket(AF_INET, SOCK_STREAM, 0)
         #expect(fd >= 0)
@@ -140,4 +128,5 @@ struct RemotePortTunnelTests {
         }
     }
 }
+
 #endif

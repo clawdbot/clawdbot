@@ -1,4 +1,5 @@
 // Builds the canonical reviewer-safe projection for durable approvals.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
@@ -19,10 +20,6 @@ import {
   type PluginApprovalRequestPayload,
 } from "./plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "./system-agent-approvals.js";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function normalizeDecisionList(decisions: readonly ApprovalDecision[]): ApprovalDecision[] {
   const result: ApprovalDecision[] = [];

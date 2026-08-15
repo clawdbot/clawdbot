@@ -1,21 +1,20 @@
 import AppKit
+import OpenClawKit
 
 @MainActor
 enum AppNavigationActions {
     static func openDashboard() {
-        NSApp.activate(ignoringOtherApps: true)
-        if DashboardManager.shared.showConfiguredWindowIfPossible() {
-            return
-        }
+        DashboardManager.shared.presentDashboard()
+    }
+
+    /// Post-AI-setup handoff: land in the dashboard's custodian onboarding,
+    /// which owns everything after working inference (memory import, channels,
+    /// app recommendations, hatch).
+    static func openDashboardOnboarding() {
         Task { @MainActor in
-            if DashboardManager.shared.showConfiguredWindowIfPossible() {
-                return
-            }
-            do {
-                try await DashboardManager.shared.show()
-            } catch {
-                DashboardManager.shared.showFailure(error)
-            }
+            await DashboardManager.shared.show(
+                atPath: DashboardRouteMap.custodianPagePath,
+                search: DashboardRouteMap.custodianOnboardingSearch)
         }
     }
 

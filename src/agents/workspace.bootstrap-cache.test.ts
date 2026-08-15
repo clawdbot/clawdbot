@@ -138,6 +138,34 @@ describe("workspace bootstrap file caching", () => {
     expectAgentsContent(agentsFile2, content2);
   });
 
+  it("replaces a session snapshot when inode changes with identical bytes", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const content = "# stable-content";
+    const filePath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
+    const tempPath = path.join(workspaceDir, ".AGENTS.replacement");
+    const sessionKey = "agent:main:identity-refresh";
+
+    await writeWorkspaceFile({
+      dir: workspaceDir,
+      name: DEFAULT_AGENTS_FILENAME,
+      content,
+    });
+    const originalStat = await fs.stat(filePath);
+    const agentsFile1 = await loadSessionAgentsFile(workspaceDir, sessionKey);
+    expectAgentsContent(agentsFile1, content);
+
+    await fs.writeFile(tempPath, content, "utf-8");
+    await fs.utimes(tempPath, originalStat.atime, originalStat.mtime);
+    await fs.rename(tempPath, filePath);
+    await fs.utimes(filePath, originalStat.atime, originalStat.mtime);
+
+    const agentsFile2 = await loadSessionAgentsFile(workspaceDir, sessionKey);
+    expectAgentsContent(agentsFile2, content);
+    expect(agentsFile2).not.toBe(agentsFile1);
+  });
+
   it("handles file deletion gracefully", async () => {
     const content = "# Some content";
     const filePath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);

@@ -181,11 +181,11 @@ What this does:
 2. **Dev bootstrap** (`gateway --dev`)
    - Writes a minimal config if missing (`gateway.mode=local`, bind loopback).
    - Sets `agents.defaults.workspace` to the dev workspace and `agents.defaults.skipBootstrap=true`.
-   - Seeds the workspace files if missing: `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`.
+   - Seeds the workspace files if missing: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`.
    - Default identity: **C3-PO** (protocol droid).
    - `pnpm gateway:dev` also sets `OPENCLAW_SKIP_CHANNELS=1` to skip channel providers.
 
-Dev Gateways ignore ambient channel environment triggers by default, so credentials inherited from your shell do not connect the development instance to real channel services. Explicit `channels.<id>` configuration still works. Pass `--dev-ambient-channels` with `--dev` to restore ambient channel auto-configuration for that run.
+All Gateways ignore ambient channel environment triggers by default, so credentials inherited from the launching shell do not connect to channel services without explicit intent. A `channels.<id>` configuration block still enables that channel and can use environment variables for its credentials. Pass `--ambient-channels` to restore ambient channel auto-configuration for that run; `--dev-ambient-channels` remains as a deprecated alias.
 
 Reset flow (fresh start):
 

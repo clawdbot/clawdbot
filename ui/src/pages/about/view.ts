@@ -6,6 +6,7 @@ import { icons } from "../../components/icons.ts";
 import {
   canonicalLobsterLook,
   LOBSTER_PET_PALETTES,
+  lobsterLookStyle,
   renderLobsterSvg,
 } from "../../components/lobster-pet.ts";
 import {
@@ -146,9 +147,7 @@ function renderCommit(props: AboutProps) {
           <span aria-hidden="true">${props.copyState === "copied" ? icons.check : icons.copy}</span>
         </button>
       </openclaw-tooltip>
-      <span class="about-sr-only" role="status" aria-live="polite"
-        >${copyStatus(props.copyState)}</span
-      >
+      <span class="sr-only" role="status" aria-live="polite">${copyStatus(props.copyState)}</span>
     </span>
   `;
 }
@@ -165,7 +164,7 @@ function renderHero(props: AboutProps) {
       <button
         type="button"
         class="about-hero__clawd ${props.clawdWaving ? "about-hero__clawd--wave" : ""}"
-        style=${`--lob-shell:${look.palette.shell};--lob-claw:${look.palette.claw}`}
+        style=${lobsterLookStyle(look)}
         aria-label=${t("aboutPage.waveHello")}
         @click=${props.onPokeClawd}
       >

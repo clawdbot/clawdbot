@@ -6,7 +6,7 @@ import type {
 } from "../channels/message/runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
-type ChannelInboundKernelModule = typeof import("../channels/turn/kernel.js");
+type ChannelDurableDeliveryModule = typeof import("../channels/turn/durable-delivery.js");
 // Share one lazy import across SDK helper calls so plugin barrels do not eagerly pull
 // message runtime internals into registration/discovery-only paths.
 const loadChannelMessageRuntimeModule = createLazyRuntimeModule(
@@ -21,6 +21,8 @@ export {
 export type { OutboundMessageIdentity } from "../channels/message/outbound-echo.js";
 export {
   bindIngressLifecycleToReplyOptions,
+  CHANNEL_INGRESS_RETENTION_DEFAULTS,
+  createChannelIngressError,
   createChannelIngressDrain,
   createChannelIngressMonitor,
   createReplyPrefixContext,
@@ -94,7 +96,6 @@ export {
   resolveChannelProgressDraftConfig,
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftMaxLines,
-  resolveChannelProgressDraftRender,
   resolveChannelStreamingBlockCoalesce,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingChunkMode,
@@ -122,6 +123,30 @@ export {
   createChannelProgressDraftCompositor,
   createChannelProgressReceiptTracker,
 } from "../channels/progress-draft-compositor.js";
+import {
+  resolveChannelProgressDraftConfig as readProgressDraftConfig,
+  type StreamingCompatEntry as ProgressDraftCompatEntry,
+} from "../channels/streaming.js";
+
+/** @deprecated The streaming.progress.render key was retired (#122927). */
+export type ChannelProgressDraftRenderMode = "rich" | "text";
+
+/**
+ * @deprecated Load-only bridge: the published Slack channel package
+ * (2026.7.2-beta.7 and earlier) imports this at module top level, so removing
+ * it makes the installed plugin fail to load after a core upgrade. The config
+ * key it read is retired and doctor strips it, so this resolves the same
+ * "text"/"rich" answer pre-doctor configs produced and the default otherwise.
+ * Remove once managed releases have replaced the old npm latest/extended-stable
+ * packages and their upgrade window has closed.
+ */
+export function resolveChannelProgressDraftRender(
+  entry: ProgressDraftCompatEntry | null | undefined,
+  defaultValue: ChannelProgressDraftRenderMode = "text",
+): ChannelProgressDraftRenderMode {
+  const configured = (readProgressDraftConfig(entry) as { render?: unknown }).render;
+  return configured === "rich" || configured === "text" ? configured : defaultValue;
+}
 export type {
   ChannelProgressDraftCompositorLine,
   ChannelProgressDraftCompositorSnapshot,
@@ -169,11 +194,11 @@ export type {
   MessageReceiptSourceResult,
 } from "../channels/message/index.js";
 
-/** Lazily forwards inbound reply delivery through the channel turn kernel. */
-export const deliverInboundReplyWithMessageSendContext: ChannelInboundKernelModule["deliverInboundReplyWithMessageSendContext"] =
+/** Lazily forwards inbound reply delivery through the channel turn durable-delivery module. */
+export const deliverInboundReplyWithMessageSendContext: ChannelDurableDeliveryModule["deliverInboundReplyWithMessageSendContextCore"] =
   async (...args) => {
-    const mod = await import("../channels/turn/kernel.js");
-    return await mod.deliverInboundReplyWithMessageSendContext(...args);
+    const mod = await import("../channels/turn/durable-delivery.js");
+    return await mod.deliverInboundReplyWithMessageSendContextCore(...args);
   };
 
 /** Sends a durable message batch without eager-loading channel message runtime internals. */
@@ -184,7 +209,7 @@ export async function sendDurableMessageBatch(
   params: DurableMessageSendContextParams,
 ): Promise<DurableMessageBatchSendResult> {
   const mod = await loadChannelMessageRuntimeModule();
-  return await mod.sendDurableMessageBatch(params);
+  return await mod.sendDurableMessageBatchCore(params);
 }
 
 /** Runs work inside a durable message send context loaded through the SDK lazy boundary. */
@@ -199,5 +224,5 @@ export async function withDurableMessageSendContext<T>(
   run: (ctx: DurableMessageSendContext) => Promise<T>,
 ): Promise<T> {
   const mod = await loadChannelMessageRuntimeModule();
-  return await mod.withDurableMessageSendContext(params, run);
+  return await mod.withDurableMessageSendContextCore(params, run);
 }

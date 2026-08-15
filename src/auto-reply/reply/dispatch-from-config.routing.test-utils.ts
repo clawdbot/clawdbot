@@ -1,6 +1,7 @@
 // Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
@@ -25,6 +26,7 @@ import {
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -38,14 +40,9 @@ describe("dispatchReplyFromConfig", () => {
     mocks.routeReply.mockClear();
     installThreadingTestPlugin({ id: "telegram" });
     sessionStoreMocks.currentEntry = {
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:999",
-        accountId: "acc-1",
-      },
-      lastChannel: "telegram",
-      lastTo: "telegram:999",
-      lastAccountId: "acc-1",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "telegram:999", accountId: "acc-1" },
+      }),
     };
     const cfg = {
       session: {
@@ -429,6 +426,135 @@ describe("dispatchReplyFromConfig", () => {
         .mocked(dispatcher.waitForIdle)
         .mock.invocationCallOrder.some((order) => order > toolDeliveryOrder),
     ).toBe(true);
+  });
+
+  it.each([
+    ["cancelled", "cancelled", true],
+    ["failed before transport", "failed-before-deliver", true],
+    ["delivered", "delivered", false],
+    ["failed during transport", "failed-deliver", false],
+  ] as const)(
+    "settles ask_user delivery when the prompt is %s",
+    async (_name, outcome, rejects) => {
+      hookMocks.runner.hasHooks.mockReturnValue(false);
+      const deliver = vi.fn(async (_payload: ReplyPayload, info: { kind: string }) => {
+        if (outcome === "failed-deliver" && info.kind === "tool") {
+          throw new Error("transport failure");
+        }
+      });
+      const dispatcher = createReplyDispatcher({
+        deliver,
+        beforeDeliver: async (candidate, info) => {
+          if (info.kind !== "tool") {
+            return candidate;
+          }
+          if (outcome === "cancelled") {
+            return null;
+          }
+          if (outcome === "failed-before-deliver") {
+            throw new Error("before-delivery failure");
+          }
+          return candidate;
+        },
+      });
+      const payload = {
+        text: "Question for you: Where should this deploy?",
+        channelData: { askUser: { questionId: "question-not-delivered" } },
+      } satisfies ReplyPayload;
+
+      const dispatch = dispatchReplyFromConfig({
+        ctx: buildTestCtx({ Provider: "telegram", ChatType: "direct" }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver: async (_ctx, opts) => {
+          await requireToolResultHandler(opts?.onToolResult)(payload);
+          return { text: "done" };
+        },
+      });
+
+      if (rejects) {
+        await expect(dispatch).rejects.toThrow();
+      } else {
+        await expect(dispatch).resolves.toMatchObject({ queuedFinal: true });
+      }
+    },
+  );
+
+  it("rejects ask_user prompts not delivered to the originating channel", async () => {
+    setNoAbort();
+    installThreadingTestPlugin({ id: "telegram" });
+    mocks.routeReply.mockResolvedValue({ ok: false, delivered: false, error: "not delivered" });
+    const payload = {
+      text: "Question for you: Where should this deploy?",
+      channelData: { askUser: { questionId: "question-not-routed" } },
+    } satisfies ReplyPayload;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await requireToolResultHandler(opts?.onToolResult)(payload);
+      return undefined;
+    };
+
+    await expect(
+      dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver }),
+    ).rejects.toThrow();
+  });
+
+  it("rejects ask_user prompts declined by the dispatcher", async () => {
+    setNoAbort();
+    const payload = {
+      text: "Question for you: Where should this deploy?",
+      channelData: { askUser: { questionId: "question-not-admitted" } },
+    } satisfies ReplyPayload;
+    const dispatcher = createDispatcher();
+    vi.mocked(dispatcher.sendToolResult).mockReturnValue(false);
+    const ctx = buildTestCtx({ Provider: "telegram", ChatType: "direct" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await requireToolResultHandler(opts?.onToolResult)(payload);
+      return undefined;
+    };
+
+    await expect(
+      dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver }),
+    ).rejects.toThrow();
+  });
+
+  it("delivers approval-unavailable notices when verbose tool progress is disabled", async () => {
+    setNoAbort();
+    const payload = {
+      text: "Exec approval is unavailable.",
+      channelData: {
+        execApprovalUnavailable: { reason: "no-approval-route" },
+      },
+    } satisfies ReplyPayload;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", ChatType: "direct" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await requireToolResultHandler(opts?.onToolResult)(payload);
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("drops ask_user prompts that terminalize before dispatcher delivery", async () => {
@@ -1123,6 +1249,49 @@ describe("dispatchReplyFromConfig", () => {
     expect(sendToolResult).toHaveBeenCalledTimes(1);
     expect((sendToolResult.mock.calls[0]?.[0] as ReplyPayload | undefined)?.text).toBe(
       "💬 drafting a refined plan",
+    );
+  });
+
+  it("deduplicates identical commentary when producer item ids change", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "on",
+    };
+    const cfg = automaticGroupReplyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "direct",
+      From: "discord:user:123",
+      SessionKey: "agent:main:main",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onItemEvent?.({
+        itemId: "commentary-stream",
+        kind: "preamble",
+        progressText: "Checking the current state.",
+      });
+      await opts?.onItemEvent?.({
+        itemId: "commentary-snapshot",
+        kind: "preamble",
+        progressText: "Checking the current state.",
+      });
+      await opts?.onToolStart?.({ name: "exec", phase: "start" });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    const sendToolResult = dispatcher.sendToolResult as ReturnType<typeof vi.fn>;
+    expect(sendToolResult).toHaveBeenCalledTimes(1);
+    expect((sendToolResult.mock.calls[0]?.[0] as ReplyPayload | undefined)?.text).toBe(
+      "💬 Checking the current state.",
     );
   });
 

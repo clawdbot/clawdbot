@@ -55,6 +55,7 @@ describe("ManagedWorktreeService removal against a live run lease", () => {
     const created = await service.create({
       repoRoot: repo,
       name: "removal-session",
+      baseRef: "HEAD",
       ownerKind: "session",
       ownerId: "agent:main:removal",
     });

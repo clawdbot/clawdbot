@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
-import { GitHubLinkHovercardProvider } from "./github-link-hovercard.ts";
+import { GitHubLinkHovercardProvider } from "./github-link-hovercard.runtime.ts";
 
 const GITHUB_LINK_HOVERCARD_ELEMENT_NAME = `test-openclaw-github-link-hovercard-provider-${crypto.randomUUID()}`;
 
@@ -95,12 +95,16 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(card?.textContent).toContain("5m ago");
     expect(anchor.href).toBe(href);
     expect(anchor.getAttribute("aria-describedby")).toBe(card?.id);
-    expect(request).toHaveBeenCalledWith("controlUi.githubPreview", {
-      kind: "pull",
-      number: 99816,
-      owner: "openclaw",
-      repo: "openclaw",
-    });
+    expect(request).toHaveBeenCalledWith(
+      "controlUi.githubPreview",
+      {
+        kind: "pull",
+        number: 99816,
+        owner: "openclaw",
+        repo: "openclaw",
+      },
+      { signal: expect.any(AbortSignal) },
+    );
 
     leave(anchor);
     expect(document.querySelector(".github-link-hovercard")).toBeNull();

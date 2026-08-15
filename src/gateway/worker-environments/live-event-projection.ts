@@ -3,9 +3,8 @@ import {
   capLiveExecResult,
   sanitizeToolArgs,
   sanitizeToolResult,
-} from "../../agents/embedded-agent-subscribe.tools.js";
-import { normalizeToolName } from "../../agents/tool-policy.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
+} from "../../agents/embedded-agent-tool-results.js";
+import { normalizeToolPolicyName } from "../../agents/tool-policy.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 
 export type WorkerLiveTrajectoryTarget = {
@@ -24,7 +23,7 @@ export function prepareWorkerLiveEventData(
   if (event.kind !== "tool") {
     return payload;
   }
-  const toolName = normalizeToolName(event.payload.name);
+  const toolName = normalizeToolPolicyName(event.payload.name);
   payload.name = toolName;
   if (event.payload.phase === "start") {
     payload.args = sanitizeToolArgs(event.payload.args);
@@ -51,16 +50,16 @@ export function createWorkerLiveTrajectoryRecorder(params: {
   runId: string;
   target: WorkerLiveTrajectoryTarget;
 }): WorkerLiveTrajectoryRecorder {
-  const agentId = params.target.agentId ?? "main";
   return createTrajectoryRuntimeRecorder({
     runId: params.runId,
     sessionId: params.target.sessionId,
     sessionKey: params.target.sessionKey,
-    sessionFile: formatSqliteSessionFileMarker({
-      agentId,
+    sessionTarget: {
+      agentId: params.target.agentId ?? "main",
       sessionId: params.target.sessionId,
+      sessionKey: params.target.sessionKey,
       storePath: params.target.storePath,
-    }),
+    },
   });
 }
 

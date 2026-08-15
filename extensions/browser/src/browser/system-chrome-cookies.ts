@@ -1,11 +1,11 @@
 /** macOS Chrome-family cookie database decryption and Playwright mapping. */
 import crypto from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 
 export type SystemBrowser = "chrome" | "brave" | "edge" | "chromium";
 
-type PlaywrightCookie = {
+export type PlaywrightCookie = {
   name: string;
   value: string;
   domain: string;
@@ -30,7 +30,7 @@ type ChromeCookieRow = {
   samesite: number | bigint;
 };
 
-type CookieImportCounts = {
+export type CookieImportCounts = {
   total: number;
   imported: number;
   failed: number;
@@ -108,6 +108,23 @@ async function readKeychainSecret(entry: KeychainEntry, signal?: AbortSignal): P
     throw new Error(`macOS Keychain returned an empty ${entry.service} secret`);
   }
   return secret;
+}
+
+/** Read and retain one Safe Storage secret for a long-running cookie sync session. */
+export async function cacheKeychainSecret(
+  browser: SystemBrowser,
+  signal?: AbortSignal,
+): Promise<KeychainSecretReader> {
+  const entry = KEYCHAIN_ENTRIES[browser];
+  const secret = await readKeychainSecret(entry, signal);
+  return async (requestedEntry, requestedSignal) => {
+    requestedSignal?.throwIfAborted();
+    if (requestedEntry.service !== entry.service || requestedEntry.account !== entry.account) {
+      throw new Error("cached Keychain secret does not match the selected system browser");
+    }
+    // The decryptor zeroes caller-owned secret buffers, so retain only this private copy.
+    return Buffer.from(secret);
+  };
 }
 
 /** Convert Chromium's Windows-epoch microseconds to Unix seconds. */
@@ -265,7 +282,7 @@ export async function readChromeCookiesDatabase(params: {
   readSecret?: KeychainSecretReader;
   signal?: AbortSignal;
 }) {
-  const database = new DatabaseSync(params.databasePath, { readOnly: true });
+  const database = openNodeSqliteDatabase(params.databasePath, { readOnly: true });
   try {
     const statement = database.prepare(COOKIE_QUERY);
     statement.setReadBigInts(true);

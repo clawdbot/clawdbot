@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="app_name">OpenClaw</string>
     <string name="chat">Chat</string>
     <string name="session">Session</string>
@@ -12,10 +12,13 @@
     <string name="dictate">Dictate</string>
     <string name="live">Live</string>
     <string name="thread">Thread</string>
+    <!-- The serialized native-locale refresh owns translations for source-only changes. -->
+    <string name="open_thread" tools:ignore="MissingTranslation">Open thread</string>
     <string name="swipe_between_voice_modes">← Swipe →</string>
     <string name="hold">Hold</string>
     <string name="tap">Tap</string>
     <string name="double_tap">Double tap</string>
+    <string name="show_new_messages" tools:ignore="MissingTranslation">Show new messages</string>
     <string name="no_live_conversation">Start Live to see the conversation here.</string>
     <string name="new_messages">New</string>
     <string name="type">Type</string>
@@ -85,4 +88,30 @@
     <string name="tile_description">Open sessions and reply through your paired phone</string>
     <string name="tile_open">OPEN</string>
     <string name="tile_phone_proxy">PHONE PROXY</string>
+    <string name="pulse" tools:ignore="MissingTranslation">Pulse</string>
+    <string name="pulse_tasks" tools:ignore="MissingTranslation">Background tasks</string>
+    <string name="pulse_swarm" tools:ignore="MissingTranslation">Session swarm</string>
+    <string name="pulse_attention" tools:ignore="MissingTranslation">Attention</string>
+    <string name="pulse_status" tools:ignore="MissingTranslation">Status: %1$s</string>
+    <string name="pulse_ready" tools:ignore="MissingTranslation">Ready</string>
+    <string name="pulse_refreshing" tools:ignore="MissingTranslation">Refreshing</string>
+    <string name="pulse_unavailable" tools:ignore="MissingTranslation">Unavailable</string>
+    <string name="pulse_loading" tools:ignore="MissingTranslation">Loading Pulse</string>
+    <string name="pulse_loading_detail" tools:ignore="MissingTranslation">Reading bounded aggregates from the paired phone.</string>
+    <string name="pulse_queued" tools:ignore="MissingTranslation">Queued</string>
+    <string name="pulse_running" tools:ignore="MissingTranslation">Running</string>
+    <string name="pulse_completed" tools:ignore="MissingTranslation">Completed</string>
+    <string name="pulse_done" tools:ignore="MissingTranslation">Done</string>
+    <string name="pulse_failed" tools:ignore="MissingTranslation">Failed</string>
+    <string name="pulse_groups" tools:ignore="MissingTranslation">Groups</string>
+    <string name="pulse_pending_requests" tools:ignore="MissingTranslation">Pending requests</string>
+    <string name="pulse_task_snapshot_bounded" tools:ignore="MissingTranslation">Bounded active and recent snapshot</string>
+    <string name="pulse_active_at_limit" tools:ignore="MissingTranslation">Active task list is at its limit</string>
+    <string name="pulse_recent_at_limit" tools:ignore="MissingTranslation">Recent task list is at its limit</string>
+    <string name="pulse_swarm_active" tools:ignore="MissingTranslation">Active</string>
+    <string name="pulse_swarm_idle" tools:ignore="MissingTranslation">Idle</string>
+    <string name="pulse_phase" tools:ignore="MissingTranslation">Phase %1$d</string>
+    <string name="pulse_phase_counts" tools:ignore="MissingTranslation">Queued %1$d, Running %2$d, Done %3$d, Failed %4$d, Hidden %5$d</string>
+    <string name="pulse_more_phases" tools:ignore="MissingTranslation">More phases not shown</string>
+    <string name="pulse_unknown" tools:ignore="MissingTranslation">Unknown</string>
 </resources>

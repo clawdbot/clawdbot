@@ -52,6 +52,7 @@ export async function listCronPageForCallerScope({
             job,
             callerScope,
             defaultAgentId: context.cron.getDefaultAgentId(),
+            allowCurrentJob: true,
           }),
         ),
       );

@@ -23,12 +23,12 @@ Pruning is especially valuable for **Anthropic prompt caching**. After the cache
 Pruning runs in `cache-ttl` mode, gated on both a time check and a context-size check:
 
 1. Wait for the cache TTL to expire (default 5 minutes when set manually; see [Smart defaults](#smart-defaults) for the Anthropic auto-default). Before the TTL elapses, pruning is skipped entirely to preserve prompt-cache reuse for nearby turns.
-2. Once the TTL has elapsed, estimate total context size against the model's context window. If the ratio is below `softTrimRatio` (default 0.3), skip pruning and keep the TTL clock running.
-3. **Soft-trim** oversized tool results above the ratio: keep the head and tail (default 1500 chars each, capped at 4000 chars combined), insert `...` in between.
-4. If the ratio is still at or above `hardClearRatio` (default 0.5) and at least `minPrunableToolChars` (default 50,000) of prunable tool content remains, **hard-clear** those results: replace their content with a placeholder (default `[Old tool result content cleared]`).
+2. Once the TTL has elapsed, estimate total context size against the model's context window. Below roughly 30% usage, pruning is skipped and the TTL clock keeps running.
+3. **Soft-trim** oversized tool results: results over 4,000 characters keep their first and last 1,500 characters with `...` in between.
+4. If context usage is still at or above roughly 50% and at least 50,000 characters of prunable tool content remain, **hard-clear** those results: replace their content with a placeholder (default `[Old tool result content cleared]`, configurable via `agents.defaults.contextPruning.hardClear.placeholder`; set `hardClear.enabled: false` to skip this step).
 5. Reset the TTL clock only when pruning actually changed the context, so follow-up requests reuse the fresh cache.
 
-Two safety rules apply regardless of thresholds: the most recent `keepLastAssistants` assistant turns (default 3) are never pruned, and nothing before the session's first user message is ever pruned (protects bootstrap reads like `SOUL.md`/`USER.md`).
+Two safety rules apply regardless of thresholds: the last three assistant turns are never pruned, and nothing before the session's first user message is ever pruned (protects bootstrap reads like `SOUL.md`/`USER.md`). The size thresholds and trim windows above are built-in behavior, not config keys; the configurable surface is `agents.defaults.contextPruning` (`mode`, `ttl`, `tools`, `hardClear`).
 
 Only `toolResult` messages are eligible; normal conversation text is left alone. Use `agents.defaults.contextPruning.tools.{allow,deny}` to scope which tool names are prunable.
 

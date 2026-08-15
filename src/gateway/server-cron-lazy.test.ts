@@ -99,6 +99,61 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["run"]).toHaveBeenCalledWith("demo", "force", { payload });
   });
 
+  it("forwards update authority options through lazy cron loading", async () => {
+    const cron = createCronService();
+    hoisted.setState(createCronState(cron));
+
+    const lazy = createLazyGatewayCronState(createParams());
+    const opts = {
+      commitGuard: vi.fn(),
+      captureRuntimeAuthority: vi.fn(() => undefined),
+    };
+    const precondition = vi.fn();
+    await lazy.cron.update("demo", { description: "updated" }, opts);
+    await lazy.cron.updateWithPrecondition(
+      "demo",
+      { description: "updated again" },
+      precondition,
+      opts,
+    );
+
+    expect(cron["update"]).toHaveBeenCalledExactlyOnceWith(
+      "demo",
+      { description: "updated" },
+      opts,
+    );
+    expect(cron["updateWithPrecondition"]).toHaveBeenCalledExactlyOnceWith(
+      "demo",
+      { description: "updated again" },
+      precondition,
+      opts,
+    );
+  });
+
+  it("preserves system-owned removal authority across lazy cron loading", async () => {
+    const cron = createCronService();
+    hoisted.setState(createCronState(cron));
+
+    const lazy = createLazyGatewayCronState(createParams());
+    await lazy.cron.remove("heartbeat-monitor", { systemOwned: true });
+
+    expect(cron["remove"]).toHaveBeenCalledExactlyOnceWith("heartbeat-monitor", {
+      systemOwned: true,
+    });
+  });
+
+  it("prepares a lazy scheduler before an operator wake without starting it", async () => {
+    const cron = createCronService();
+    hoisted.setState(createCronState(cron));
+
+    const lazy = createLazyGatewayCronState(createParams());
+    await lazy.cron.prepareWake?.();
+
+    expect(lazy.cron.wake({ mode: "now", text: "ping" })).toEqual({ ok: true });
+    expect(cron["start"]).not.toHaveBeenCalled();
+    expect(cron["wake"]).toHaveBeenCalledExactlyOnceWith({ mode: "now", text: "ping" });
+  });
+
   it("starts the loaded cron service once", async () => {
     const cron = createCronService();
     hoisted.setState(createCronState(cron));
@@ -330,6 +385,7 @@ function createCronService(): GatewayCronServiceContract {
     update: vi.fn(async () => ({ ok: true }) as never),
     updateWithPrecondition: vi.fn(async () => ({ ok: true }) as never),
     remove: vi.fn(async () => ({ ok: true }) as never),
+    removeStaleJobFamily: vi.fn(async () => 0),
     removeAgentJobsTransactional: vi.fn(async (_agentId, commit) => await commit()),
     run: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     enqueueRun: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),

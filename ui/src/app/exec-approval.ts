@@ -1,5 +1,6 @@
 // Application-owned approval parsing and queue state.
-import { normalizeOptionalString } from "../lib/string-coerce.ts";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export type ExecApprovalRequestPayload = {
   command: string;
@@ -56,10 +57,6 @@ export type ExecApprovalPromptState = {
 
 const APPROVAL_ALREADY_RESOLVED = "APPROVAL_ALREADY_RESOLVED";
 const APPROVAL_NOT_FOUND = "APPROVAL_NOT_FOUND";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 
 function parseCommandSpans(
   value: unknown,

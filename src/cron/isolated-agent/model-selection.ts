@@ -1,22 +1,30 @@
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
+import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
+import {
+  hasResolvedThinkingCatalogEntry,
+  normalizeThinkingCatalogProviders,
+} from "../../agents/thinking-runtime.js";
+import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
 /** Resolves provider/model precedence for isolated cron runs. */
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import type { CronJob } from "../types.js";
-import { buildCronAgentDefaultsConfig } from "./run-config.js";
+import { resolveCronAgentConfig } from "./run-config.js";
 import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
   getModelRefStatus,
-  loadPreparedModelCatalogOwnerSnapshot,
+  loadResolvedPublishedModelCatalogOwner,
+  loadProviderScopedThinkingCatalog,
   normalizeModelSelection,
+  publishedModelCatalogOwnerMatchesAgent,
   resolveAgentConfig,
-  resolveAgentWorkspaceDir,
-  resolveAllowedModelRef,
+  resolveAllowedModelRefCore,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
   resolveSubagentModelConfigSelectionResult,
+  type ResolvedPublishedModelCatalogOwner,
 } from "./run-model-selection.runtime.js";
 
 type CronSessionModelOverrides = {
@@ -26,20 +34,9 @@ type CronSessionModelOverrides = {
 
 type CronModelSelectionSource = "default" | "subagent" | "agent" | "hook" | "payload" | "session";
 
-/** Inputs used to resolve the model for one isolated cron run. */
-type CronModelSelectionOwner = {
-  config: OpenClawConfig;
-  agentId: string;
-  agentDir: string;
-  workspaceDir: string;
-  catalog: Awaited<
-    ReturnType<typeof loadPreparedModelCatalogOwnerSnapshot>
-  >["modelCatalog"]["entries"];
-};
-
 type ResolveCronModelSelectionParams = {
   cfg: OpenClawConfig;
-  owner?: CronModelSelectionOwner;
+  owner?: ResolvedPublishedModelCatalogOwner;
   agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
   sessionEntry: CronSessionModelOverrides;
   payload: CronJob["payload"];
@@ -57,7 +54,7 @@ type ResolveCronModelSelectionResult =
       model: string;
       modelSource: CronModelSelectionSource;
       cfgWithAgentDefaults: OpenClawConfig;
-      owner: CronModelSelectionOwner;
+      owner: ResolvedPublishedModelCatalogOwner;
     }
   | {
       ok: false;
@@ -83,9 +80,9 @@ function formatCronPayloadModelRejection(params: {
     const modelRef = error.slice("model not allowed:".length).trim();
     const policy = resolveConfiguredModelPolicyAllow(params);
     const policyPath = policy.configPath ?? "agents.defaults.modelPolicy.allow";
-    return `cron payload.model '${modelOverride}' rejected by ${policyPath}: ${modelRef} is not in [${formatAllowedModelRefs(params)}]`;
+    return `automation model override '${modelOverride}' rejected by ${policyPath}: ${modelRef} is not in [${formatAllowedModelRefs(params)}]`;
   }
-  return `cron payload.model '${modelOverride}' rejected: ${error}`;
+  return `automation model override '${modelOverride}' rejected: ${error}`;
 }
 
 export async function resolveCronModelSelectionOwner(params: {
@@ -94,31 +91,89 @@ export async function resolveCronModelSelectionOwner(params: {
   requiredAgentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-}): Promise<CronModelSelectionOwner> {
-  const owner = await loadPreparedModelCatalogOwnerSnapshot({
+}): Promise<ResolvedPublishedModelCatalogOwner> {
+  const owner = await loadResolvedPublishedModelCatalogOwner({
     config: params.cfg,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     readOnly: true,
+    allowGatewaySubagentBinding: true,
   });
-  if (!owner.agentId) {
-    throw new Error(`cron model catalog owner did not identify an agent (${owner.agentDir})`);
-  }
   if (
     params.requiredAgentId &&
-    normalizeAgentId(owner.agentId) !== normalizeAgentId(params.requiredAgentId)
+    !publishedModelCatalogOwnerMatchesAgent(owner, params.requiredAgentId)
   ) {
     throw new Error(
-      `cron model catalog owner changed from ${normalizeAgentId(params.requiredAgentId)} to ${normalizeAgentId(owner.agentId)}`,
+      `cron model catalog owner changed from ${params.requiredAgentId} to ${owner.agentId}`,
     );
   }
+  return owner;
+}
+
+async function resolveCronThinkingCatalog(params: {
+  owner: ResolvedPublishedModelCatalogOwner;
+  provider: string;
+  model: string;
+}): Promise<ModelCatalogEntry[]> {
+  const catalog = normalizeThinkingCatalogProviders(params.owner.modelCatalog.entries);
+  if (
+    hasResolvedThinkingCatalogEntry({
+      catalog,
+      provider: params.provider,
+      model: params.model,
+    })
+  ) {
+    return catalog;
+  }
+  // Thinking capability is a per-model fact; never materialize the full live catalog on cron turns.
+  return normalizeThinkingCatalogProviders(
+    await loadProviderScopedThinkingCatalog({
+      config: params.owner.config,
+      provider: params.provider,
+      model: params.model,
+      agentId: params.owner.agentId,
+      agentDir: params.owner.agentDir,
+      workspaceDir: params.owner.workspaceDir,
+    }),
+  );
+}
+
+export async function resolveCronThinkingSelection(params: {
+  cfg: OpenClawConfig;
+  owner: ResolvedPublishedModelCatalogOwner;
+  provider: string;
+  model: string;
+  jobThinking?: string;
+  hookThinking?: string;
+  sessionThinking?: string;
+}): Promise<{
+  catalog: ModelCatalogEntry[];
+  immutableThinkLevel: ThinkLevel | undefined;
+  loadThinkingCatalog: (provider: string, model: string) => Promise<ModelCatalogEntry[]>;
+  requestedThinkLevel: ThinkLevel | undefined;
+}> {
+  const immutableThinkLevel =
+    normalizeThinkLevel(params.jobThinking) ??
+    normalizeThinkLevel(params.hookThinking) ??
+    normalizeThinkLevel(params.sessionThinking);
+  const requestedThinkLevel =
+    immutableThinkLevel ??
+    resolveConfiguredThinkingDefault({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+    });
+  const catalog =
+    requestedThinkLevel === "off"
+      ? params.owner.modelCatalog.entries
+      : await resolveCronThinkingCatalog(params);
   return {
-    config: owner.config,
-    agentId: owner.agentId,
-    agentDir: owner.agentDir,
-    workspaceDir: owner.workspaceDir ?? resolveAgentWorkspaceDir(owner.config, owner.agentId),
-    catalog: owner.modelCatalog.entries,
+    catalog,
+    immutableThinkLevel,
+    loadThinkingCatalog: async (provider, model) =>
+      await resolveCronThinkingCatalog({ owner: params.owner, provider, model }),
+    requestedThinkLevel,
   };
 }
 
@@ -145,15 +200,11 @@ export async function resolveCronModelSelection(
       ? params.agentConfigOverride
       : resolveAgentConfig(owner.config, ownerAgentId)
     : undefined;
-  const ownerAgentDefaults = buildCronAgentDefaultsConfig({
-    defaults: owner.config.agents?.defaults,
+  const { cfgWithAgentDefaults } = resolveCronAgentConfig({
+    config: owner.config,
     agentConfigOverride: ownerAgentConfigOverride,
   });
-  const cfgWithAgentDefaults: OpenClawConfig = {
-    ...owner.config,
-    agents: Object.assign({}, owner.config.agents, { defaults: ownerAgentDefaults }),
-  };
-  const catalog = owner.catalog;
+  const catalog = owner.modelCatalog.entries;
   const resolvedDefault = resolveConfiguredModelRef({
     cfg: cfgWithAgentDefaults,
     defaultProvider: DEFAULT_PROVIDER,
@@ -174,7 +225,7 @@ export async function resolveCronModelSelection(
   if (subagentModelRaw) {
     // Subagent/agent model config is advisory here: invalid refs fall back to
     // defaults so an agent config typo does not prevent unrelated cron runs.
-    const resolvedSubagent = resolveAllowedModelRef({
+    const resolvedSubagent = resolveAllowedModelRefCore({
       cfg: owner.config,
       catalog,
       raw: subagentModelRaw,
@@ -220,7 +271,7 @@ export async function resolveCronModelSelection(
   if (modelOverride !== undefined && modelOverride.length > 0) {
     // Payload model overrides are explicit cron config, so reject disallowed
     // refs instead of silently falling back to defaults.
-    const resolvedOverride = resolveAllowedModelRef({
+    const resolvedOverride = resolveAllowedModelRefCore({
       cfg: owner.config,
       catalog,
       raw: modelOverride,
@@ -251,7 +302,7 @@ export async function resolveCronModelSelection(
       // and hook-specific models can intentionally move a run away from history.
       const sessionProviderOverride =
         params.sessionEntry.providerOverride?.trim() || resolvedDefault.provider;
-      const resolvedSessionOverride = resolveAllowedModelRef({
+      const resolvedSessionOverride = resolveAllowedModelRefCore({
         cfg: owner.config,
         catalog,
         raw: `${sessionProviderOverride}/${sessionModelOverride}`,

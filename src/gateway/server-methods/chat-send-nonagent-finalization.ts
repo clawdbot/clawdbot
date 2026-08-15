@@ -5,11 +5,12 @@ import {
   getAgentScopedMediaLocalRoots,
 } from "../../media/local-roots.js";
 import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
-import { attachManagedOutgoingImagesToMessage } from "../managed-image-attachments.js";
+import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
   buildAssistantDisplayContentFromReplyPayloads,
+  combineNonStreamingReplyParts,
   extractAssistantDisplayText,
   extractAssistantDisplayTextFromContent,
   hasAssistantDisplayMediaContent,
@@ -117,11 +118,7 @@ function resolveTranscriptMirrorOwner(
 
 function buildChatSendBtwSideResult(deliveredReplies: readonly DeliveredReply[]) {
   const replies = deliveredReplies.map((entry) => entry.payload).filter(isBtwReplyPayload);
-  const text = replies
-    .map((payload) => payload.text.trim())
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
+  const text = combineNonStreamingReplyParts(replies.map((payload) => payload.text));
   if (replies.length === 0 || !text) {
     return undefined;
   }
@@ -165,7 +162,7 @@ export async function finalizeChatSendNonAgentReplies(params: {
         kind: "btw",
         runId: clientRunId,
         sessionKey,
-        ...(sessionKey === "global" && agentId ? { agentId } : {}),
+        ...(agentId ? { agentId } : {}),
         ...btwResult,
         ts: Date.now(),
       },
@@ -245,18 +242,17 @@ export async function finalizeChatSendNonAgentReplies(params: {
     getAgentScopedMediaLocalRoots(cfg, transcriptAgentId),
     latestStorePath ? [latestStorePath] : undefined,
   );
+  let managedMediaPrepareFailed = false;
   const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
-    sessionKey,
-    agentId,
+    sessionKey: transcriptSessionKey,
+    agentId: transcriptAgentId,
     payloads: finalPayloads,
-    managedImageLocalRoots: mediaLocalRoots,
+    managedMediaLocalRoots: mediaLocalRoots,
     includeSensitiveMedia: false,
     includeSensitiveDisplay: true,
-    onLocalAudioAccessDenied: (message) => {
-      context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
-    },
-    onManagedImagePrepareError: (message) => {
-      context.logGateway.warn(`webchat image embedding skipped attachment: ${message}`);
+    onManagedMediaPrepareError: (message) => {
+      managedMediaPrepareFailed = true;
+      context.logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
     },
     onSensitiveDisplayPrepareError: (message) => {
       context.logGateway.warn(`webchat sensitive display skipped attachment: ${message}`);
@@ -275,16 +271,14 @@ export async function finalizeChatSendNonAgentReplies(params: {
   const persistedAssistantContent = replaceAssistantContentTextBlocks(
     hasSensitiveMedia
       ? await buildAssistantDisplayContentFromReplyPayloads({
-          sessionKey,
-          agentId,
+          sessionKey: transcriptSessionKey,
+          agentId: transcriptAgentId,
           payloads: finalPayloads,
-          managedImageLocalRoots: mediaLocalRoots,
+          managedMediaLocalRoots: mediaLocalRoots,
           includeSensitiveMedia: false,
-          onLocalAudioAccessDenied: (message) => {
-            context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
-          },
-          onManagedImagePrepareError: (message) => {
-            context.logGateway.warn(`webchat image embedding skipped attachment: ${message}`);
+          onManagedMediaPrepareError: (message) => {
+            managedMediaPrepareFailed = true;
+            context.logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
           },
         })
       : assistantContent,
@@ -306,7 +300,9 @@ export async function finalizeChatSendNonAgentReplies(params: {
     : "";
   const transcriptReply =
     mediaMessage?.transcriptText ||
-    buildTranscriptReplyText(finalPayloads) ||
+    (managedMediaPrepareFailed
+      ? transcriptDisplayReply
+      : buildTranscriptReplyText(finalPayloads)) ||
     transcriptDisplayReply;
   let message: Record<string, unknown> | undefined;
   const shouldAppendAssistantTranscript = Boolean(
@@ -320,7 +316,6 @@ export async function finalizeChatSendNonAgentReplies(params: {
       ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
       sessionId,
       storePath: latestStorePath,
-      sessionFile: latestEntry?.sessionFile,
       agentId: transcriptAgentId,
       createIfMissing: true,
       idempotencyKey: clientRunId,
@@ -329,7 +324,7 @@ export async function finalizeChatSendNonAgentReplies(params: {
     });
     if (appended.ok) {
       if (appended.messageId && assistantContent?.length) {
-        await attachManagedOutgoingImagesToMessage({
+        await attachManagedOutgoingMediaToMessage({
           messageId: appended.messageId,
           blocks: assistantContent,
         });

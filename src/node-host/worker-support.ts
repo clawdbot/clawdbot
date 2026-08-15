@@ -1,4 +1,7 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayClientRequestOptions } from "../gateway/client.js";
+import { createPendingRequestRegistry } from "../shared/pending-request-registry.js";
 import type { NodeHostClient } from "./client.js";
 import type { NodeInvokeRequestPayload } from "./invoke.js";
 
@@ -12,12 +15,6 @@ type NodeHostWorkerInput =
   | { type: "invoke-cancel"; invokeId: string }
   | NodeHostWorkerGatewayResponse
   | { type: "stop" };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 export function parseNodeHostWorkerInput(line: string): NodeHostWorkerInput | null {
   try {
@@ -67,15 +64,9 @@ export function parseNodeHostWorkerInput(line: string): NodeHostWorkerInput | nu
   }
 }
 
-type PendingGatewayRequest = {
-  resolve: (value: unknown) => void;
-  reject: (error: Error) => void;
-  timer: NodeJS.Timeout;
-};
-
 export class NodeHostWorkerBridgeClient implements NodeHostClient {
   private nextRequestId = 1;
-  private readonly pending = new Map<string, PendingGatewayRequest>();
+  private readonly pending = createPendingRequestRegistry<string, unknown, undefined>();
 
   constructor(private readonly writeMessage: (message: unknown) => void) {}
 
@@ -94,25 +85,24 @@ export class NodeHostWorkerBridgeClient implements NodeHostClient {
     }
 
     const id = `gateway-${this.nextRequestId++}`;
-    const timeoutMs = Math.max(1, opts?.timeoutMs ?? 15_000);
-    const response = new Promise<unknown>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`Gateway request timed out: ${method}`));
-      }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+    const timeoutMs = resolveTimerTimeoutMs(opts?.timeoutMs, 15_000);
+    const pending = this.pending.add(id, {
+      value: undefined,
+      timeoutMs,
+      timeoutError: () => new Error(`Gateway request timed out: ${method}`),
     });
+    if (!pending) {
+      throw new Error(`Gateway request id collision: ${id}`);
+    }
     this.writeMessage({ type: "gateway-request", id, method, params: params ?? {}, timeoutMs });
-    return (await response) as T;
+    return (await pending.promise) as T;
   }
 
   handleResponse(message: NodeHostWorkerGatewayResponse): boolean {
-    const pending = this.pending.get(message.id);
+    const pending = this.pending.take(message.id);
     if (!pending) {
       return false;
     }
-    this.pending.delete(message.id);
-    clearTimeout(pending.timer);
     if (message.ok) {
       pending.resolve(message.result);
     } else {
@@ -122,11 +112,7 @@ export class NodeHostWorkerBridgeClient implements NodeHostClient {
   }
 
   close(): void {
-    for (const pending of this.pending.values()) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error("node-host worker stopped"));
-    }
-    this.pending.clear();
+    this.pending.rejectAll(new Error("node-host worker stopped"));
   }
 }
 

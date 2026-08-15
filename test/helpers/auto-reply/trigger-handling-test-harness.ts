@@ -145,6 +145,8 @@ vi.doMock("../../../src/agents/model-catalog.runtime.js", () => ({
     const entries = await modelCatalogMocks.loadPreparedModelCatalog(...args);
     return { entries, routeVariants: entries, authoritative: true };
   },
+  loadProviderScopedThinkingCatalog: async (...args: unknown[]) =>
+    await modelCatalogMocks.loadPreparedModelCatalog(...args),
 }));
 
 vi.doMock("../../../src/plugins/provider-runtime.runtime.js", () => ({
@@ -173,7 +175,7 @@ const modelFallbackMocks = getSharedMocks("openclaw.trigger-handling.model-fallb
 }));
 
 const installModelFallbackMock = () =>
-  vi.doMock("../../../src/agents/model-fallback.js", () => modelFallbackMocks);
+  vi.doMock("../../../src/agents/model-fallback-runner.js", () => modelFallbackMocks);
 
 installModelFallbackMock();
 
@@ -305,12 +307,19 @@ export function makeCfg(home: string): OpenClawConfig {
     agents: {
       defaults: {
         model: { primary: "anthropic/claude-opus-4-7" },
+        models: {
+          "anthropic/claude-haiku-4-5-20251001": {},
+          "anthropic/claude-opus-4-7": {},
+          "openai/gpt-4.1-mini": {},
+          "openai/gpt-5.4": {},
+        },
         workspace: join(home, "openclaw"),
         // Test harness: avoid 1s coalescer idle sleeps that dominate trigger suites.
         blockStreamingCoalesce: { idleMs: 1 },
         // Trigger tests assert routing/authorization behavior, not delivery pacing.
         humanDelay: { mode: "off" },
       },
+      list: [{ id: "main", default: true }],
     },
     channels: {
       whatsapp: {

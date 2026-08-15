@@ -1,4 +1,5 @@
 /** Main reply dispatch pipeline from finalized config/context to delivery payloads. */
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abort.js";
 import { createInboundMessageAuditTerminal } from "./dispatch-from-config.audit.js";
 import { chooseDispatchRoute } from "./dispatch-from-config.choose-route.js";
@@ -14,6 +15,7 @@ import type {
   DispatchFromConfigResult,
 } from "./dispatch-from-config.types.js";
 import { commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
+import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
 import "./dispatch-from-config.events.js";
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
@@ -22,14 +24,26 @@ export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
+  const ticket = reserveReplyAdmissionTicket([
+    params.ctx.SessionKey,
+    params.ctx.CommandTargetSessionKey,
+  ]);
+  const ticketedParams = ticket
+    ? {
+        ...params,
+        replyOptions: { ...params.replyOptions, [REPLY_ADMISSION_TICKET]: ticket },
+      }
+    : params;
   const messageAuditTerminal = createInboundMessageAuditTerminal(params);
   try {
-    const result = await dispatchReplyFromConfigInner(params, messageAuditTerminal);
+    const result = await dispatchReplyFromConfigInner(ticketedParams, messageAuditTerminal);
     messageAuditTerminal?.finishSuccess(result);
     return result;
   } catch (error) {
     messageAuditTerminal?.finishError();
     throw error;
+  } finally {
+    ticket?.release();
   }
 }
 
@@ -42,57 +56,59 @@ async function dispatchReplyFromConfigInner(
     return gathered.result;
   }
 
-  const delivery = await prepareDispatchDelivery(gathered.state);
+  return await withPluginRuntimeRegistryScope(gathered.state.pluginRegistry, async () => {
+    const delivery = await prepareDispatchDelivery(gathered.state);
 
-  const context = await prepareDispatchOperationContext(delivery.state);
-  if (context.status === "complete") {
-    return context.result;
-  }
-
-  const errorState = context.state;
-  try {
-    const operation = await prepareDispatchOperation(context.state);
-    if (operation.status === "complete") {
-      return operation.result;
+    const context = await prepareDispatchOperationContext(delivery.state);
+    if (context.status === "complete") {
+      return context.result;
     }
 
-    const route = await chooseDispatchRoute(operation.state);
-    if (route.status === "complete") {
-      return route.result;
-    }
-
-    const execution = await prepareDispatchExecution(route.state);
-
-    const executed = await executeDispatch(execution.state);
-    if (executed.status === "complete") {
-      return executed.result;
-    }
-
-    const finalized = await finalizeDispatchAndAudit(executed.state);
-    return finalized.result;
-  } catch (err) {
-    const {
-      failDispatchReplyOperation,
-      finishReplyOperationAbortedDispatch,
-      inboundDedupeClaim,
-      markIdle,
-      recordAgentDispatchCompleted,
-      recordProcessed,
-    } = errorState;
-    if (isDispatchReplyOperationAbortedError(err)) {
-      return finishReplyOperationAbortedDispatch();
-    }
-    if (inboundDedupeClaim.status === "claimed") {
-      if (errorState.inboundDedupeReplayUnsafe) {
-        commitInboundDedupe(inboundDedupeClaim.key);
-      } else {
-        releaseInboundDedupe(inboundDedupeClaim.key);
+    const errorState = context.state;
+    try {
+      const operation = await prepareDispatchOperation(context.state);
+      if (operation.status === "complete") {
+        return operation.result;
       }
+
+      const route = await chooseDispatchRoute(operation.state);
+      if (route.status === "complete") {
+        return route.result;
+      }
+
+      const execution = await prepareDispatchExecution(route.state);
+
+      const executed = await executeDispatch(execution.state);
+      if (executed.status === "complete") {
+        return executed.result;
+      }
+
+      const finalized = await finalizeDispatchAndAudit(executed.state);
+      return finalized.result;
+    } catch (err) {
+      const {
+        failDispatchReplyOperation,
+        finishReplyOperationAbortedDispatch,
+        inboundDedupeClaim,
+        markIdle,
+        recordAgentDispatchCompleted,
+        recordProcessed,
+      } = errorState;
+      if (isDispatchReplyOperationAbortedError(err)) {
+        return finishReplyOperationAbortedDispatch();
+      }
+      if (inboundDedupeClaim.status === "claimed") {
+        if (errorState.inboundDedupeReplayUnsafe) {
+          commitInboundDedupe(inboundDedupeClaim.key);
+        } else {
+          releaseInboundDedupe(inboundDedupeClaim.key);
+        }
+      }
+      recordAgentDispatchCompleted("error", { error: String(err) });
+      recordProcessed("error", { error: String(err) });
+      markIdle("message_error");
+      failDispatchReplyOperation(err);
+      throw err;
     }
-    recordAgentDispatchCompleted("error", { error: String(err) });
-    recordProcessed("error", { error: String(err) });
-    markIdle("message_error");
-    failDispatchReplyOperation(err);
-    throw err;
-  }
+  });
 }

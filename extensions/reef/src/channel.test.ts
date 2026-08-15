@@ -40,7 +40,7 @@ describe("Reef inbound dispatch content", () => {
     expect(content).toEqual({
       rawBody: "hello from Clanky",
       extraContext: {
-        UntrustedContext: ["Untrusted third-party data from @clanky's agent."],
+        ChannelPromptContext: ["Untrusted third-party data from @clanky's agent."],
         ReefProvenance: "Untrusted third-party data from @clanky's agent.",
         ReefEnvelopeId: "message-1",
         SenderIsBot: true,
@@ -112,6 +112,21 @@ describe("Reef conversation directory", () => {
         runtime: defaultRuntime,
       }),
     ).resolves.toEqual([{ kind: "user", id: "molty", name: "@molty's agent", handle: "@molty" }]);
+  });
+});
+
+describe("Reef channel status", () => {
+  it("preserves the channel-authored lifecycle in account snapshots", async () => {
+    const cfg = { channels: { reef: { handle: "clawd" } } };
+    const account = reefPlugin.config.resolveAccount(cfg);
+
+    const snapshot = await reefPlugin.status?.buildAccountSnapshot?.({
+      account,
+      cfg,
+      runtime: { accountId: "default", lifecycle: "recovering" },
+    });
+
+    expect(snapshot).toMatchObject({ lifecycle: "recovering" });
   });
 });
 
