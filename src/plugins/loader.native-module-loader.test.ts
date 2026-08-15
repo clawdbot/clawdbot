@@ -74,6 +74,55 @@ function writePackagedPluginFixture(id: string) {
   return pluginRoot;
 }
 
+function writePreManagedLlamaCppProviderFixture() {
+  const pluginRoot = tempDirs.make("openclaw-plugin-loader-");
+  fs.mkdirSync(path.join(pluginRoot, "dist"));
+  fs.writeFileSync(
+    path.join(pluginRoot, "package.json"),
+    JSON.stringify(
+      {
+        name: "@openclaw/llama-cpp-provider",
+        version: "2026.7.2-beta.7",
+        type: "module",
+        openclaw: {
+          extensions: ["./dist/index.js"],
+          runtimeExtensions: ["./dist/index.js"],
+        },
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  fs.writeFileSync(
+    path.join(pluginRoot, "openclaw.plugin.json"),
+    JSON.stringify(
+      {
+        id: "llama-cpp",
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {},
+        },
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  fs.writeFileSync(
+    path.join(pluginRoot, "dist", "index.js"),
+    [
+      'import { createLocalEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";',
+      'export default { id: "llama-cpp", register() {',
+      '  if (typeof createLocalEmbeddingProvider !== "function") throw new Error("missing bridge");',
+      "} };",
+    ].join("\n"),
+    "utf-8",
+  );
+  return pluginRoot;
+}
+
 afterEach(() => {
   vi.resetModules();
   vi.doUnmock("./plugin-module-loader-cache.js");
@@ -168,5 +217,29 @@ describe("createPluginModuleLoader", () => {
 
     expect(registry.plugins.find((plugin) => plugin.id === "npm-demo")?.status).toBe("loaded");
     expect(sourceLoaderCalls).toStrictEqual([]);
+  });
+
+  it("loads the released pre-managed llama.cpp provider import through the SDK alias", async () => {
+    const { loadOpenClawPlugins } = await importFreshModule<typeof import("./loader.js")>(
+      import.meta.url,
+      "./loader.js?scope=llama-cpp-upgrade-compat",
+    );
+    const pluginRoot = writePreManagedLlamaCppProviderFixture();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tempDirs.make("openclaw-plugin-loader-");
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      onlyPluginIds: ["llama-cpp"],
+      config: {
+        plugins: {
+          enabled: true,
+          load: { paths: [pluginRoot] },
+          allow: ["llama-cpp"],
+          entries: { "llama-cpp": { enabled: true } },
+        },
+      },
+    });
+
+    expect(registry.plugins.find((plugin) => plugin.id === "llama-cpp")?.status).toBe("loaded");
   });
 });

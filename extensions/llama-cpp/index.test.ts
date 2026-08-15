@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { createLocalEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createPluginRegistryFixture,
@@ -130,6 +131,14 @@ function configuredOptions() {
 }
 
 describe("llama.cpp provider plugin", () => {
+  it("keeps pre-managed installed provider imports loadable without reviving the old runtime", async () => {
+    await expect(createLocalEmbeddingProvider({}, {})).rejects.toThrow(
+      "The legacy in-process llama.cpp embedding runtime is retired",
+    );
+    expect(mocks.ensureModel).not.toHaveBeenCalled();
+    expect(mocks.prepareServer).not.toHaveBeenCalled();
+  });
+
   it("uses the normal OpenAI-compatible text transport", () => {
     expect(registerTextProvider()).toEqual(
       expect.objectContaining({
