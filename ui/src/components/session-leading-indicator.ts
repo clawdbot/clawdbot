@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
@@ -107,7 +107,12 @@ export function renderSessionLeadingState(
   ownerActor: SessionCreatedActor | null | undefined,
   attribution: "created" | "archived",
   ownerViewing?: boolean,
-) {
+): {
+  running: boolean;
+  leadingIndicator: TemplateResult | typeof nothing;
+  trailingIndicator: TemplateResult | typeof nothing;
+  renderedOwnerId?: string;
+} {
   const running = session.hasActiveRun;
   const trailingIndicator = session.isChild
     ? nothing
@@ -165,6 +170,9 @@ export function renderSessionLeadingState(
         circular: true,
       }),
       trailingIndicator,
+      // Single source for facepile dedup: only the identity actually shown in
+      // the lead may be excluded, else attention/archived rows hide a viewer.
+      renderedOwnerId: ownerActor.id,
     };
   }
   return {

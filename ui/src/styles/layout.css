@@ -3146,6 +3146,14 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   opacity: 1;
 }
 
+/* Touch has no hover: keep the Pages editor discoverable, matching the
+   child-session-toggle touch override above. */
+@media (hover: none), (pointer: coarse) {
+  .sidebar-nav__head-action {
+    opacity: 1;
+  }
+}
+
 .sidebar-nav__head-action:hover,
 .sidebar-nav__head-action:focus-visible {
   color: var(--text);

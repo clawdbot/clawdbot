@@ -181,21 +181,22 @@ export function renderRecentSession(params: {
       ? session.archivedBy
       : session.createdActor
     : undefined;
-  const creatorId = ownerAttribution === "created" ? ownerActor?.id?.trim() : undefined;
-  const creatorViewing = creatorId
+  const ownerId = ownerActor?.id?.trim();
+  const ownerViewing = ownerId
     ? projectPresencePayload(
         host.sessionData.presencePayload,
         host.sessionDataContext?.gateway.snapshot.selfUser?.id,
         host.sessionData.presenceInstanceId,
-      ).users.some((user) => user.id === creatorId && user.watchedSessions.includes(session.key))
+      ).users.some((user) => user.id === ownerId && user.watchedSessions.includes(session.key))
     : undefined;
-  const { running, leadingIndicator, trailingIndicator } = renderSessionLeadingState(
-    session,
-    pullRequestState,
-    ownerActor,
-    ownerAttribution,
-    creatorViewing,
-  );
+  const { running, leadingIndicator, trailingIndicator, renderedOwnerId } =
+    renderSessionLeadingState(
+      session,
+      pullRequestState,
+      ownerActor,
+      ownerAttribution,
+      ownerViewing,
+    );
   const trailingDescription = session.isChild
     ? ""
     : describeSessionTrailingState(session, pullRequestState);
@@ -322,7 +323,7 @@ export function renderRecentSession(params: {
           .selfUserId=${host.sessionDataContext?.gateway.snapshot.selfUser?.id}
           .selfInstanceId=${host.sessionData.presenceInstanceId}
           .sessionKey=${session.key}
-          .excludeUserId=${session.createdActor?.id}
+          .excludeUserId=${renderedOwnerId}
           .maxVisible=${3}
           variant="session"
         ></openclaw-viewer-facepile>

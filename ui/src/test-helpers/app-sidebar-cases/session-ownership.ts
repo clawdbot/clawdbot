@@ -387,6 +387,12 @@ describe("AppSidebar session ownership", () => {
       sidebar.querySelector('openclaw-session-owner-chip span[title="Archived by Bob"]'),
     ).not.toBeNull();
     expect(sidebar.querySelector('span[title="Created by Ada"]')).toBeNull();
+    // Facepile dedup follows the rendered lead: the archivist chip is shown,
+    // so Bob is excluded while creator Ada must stay visible as a viewer.
+    const archivedFacepile = sidebar.querySelector(
+      '[data-session-key="agent:main:archived"] openclaw-viewer-facepile',
+    ) as (HTMLElement & { excludeUserId?: string }) | null;
+    expect(archivedFacepile?.excludeUserId).toBe("profile-bob");
 
     collaborator.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
     result.creators = [{ id: "profile-ada", label: "Ada" }];
@@ -394,6 +400,10 @@ describe("AppSidebar session ownership", () => {
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector("openclaw-session-owner-chip")).toBeNull();
+    const soloFacepile = sidebar.querySelector(
+      '[data-session-key="agent:main:archived"] openclaw-viewer-facepile',
+    ) as (HTMLElement & { excludeUserId?: string }) | null;
+    expect(soloFacepile?.excludeUserId).toBeUndefined();
   });
 
   it("filters by creator and hides custom groups without matching sessions", async () => {
