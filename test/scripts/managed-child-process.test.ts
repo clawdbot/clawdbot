@@ -10,7 +10,7 @@ import {
   runManagedCommand,
   signalExitCode,
   terminateManagedChild,
-} from "../../scripts/lib/managed-child-process.mjs";
+} from "../../scripts/lib/managed-child-process.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -146,7 +146,9 @@ describe("managed-child-process", () => {
         runTaskkill,
       });
       expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
+        killSignal: "SIGKILL",
         stdio: "ignore",
+        timeout: 10_000,
       });
 
       terminateManagedChild(child, "SIGKILL", {
@@ -154,7 +156,9 @@ describe("managed-child-process", () => {
         runTaskkill,
       });
       expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
+        killSignal: "SIGKILL",
         stdio: "ignore",
+        timeout: 10_000,
       });
       expect(child.kill).not.toHaveBeenCalled();
     });
@@ -177,10 +181,14 @@ describe("managed-child-process", () => {
       });
 
       expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
+        killSignal: "SIGKILL",
         stdio: "ignore",
+        timeout: 10_000,
       });
       expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
+        killSignal: "SIGKILL",
         stdio: "ignore",
+        timeout: 10_000,
       });
       expect(child.kill).not.toHaveBeenCalled();
     });
@@ -221,6 +229,305 @@ describe("managed-child-process", () => {
     }
   });
 
+  it("times out and kills managed command descendants", async () => {
+    const dir = createTempDir("openclaw-managed-timeout-");
+    const childPath = path.join(dir, "child.mjs");
+    const childPidPath = path.join(dir, "child.pid");
+    const descendantPidPath = path.join(dir, "descendant.pid");
+    fs.writeFileSync(
+      childPath,
+      `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const descendant = spawn(process.execPath, [
+  "-e",
+  "process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 5_000); setInterval(() => {}, 1000);",
+], { stdio: "ignore" });
+fs.writeFileSync(process.argv[2], String(process.pid));
+fs.writeFileSync(process.argv[3], String(descendant.pid));
+process.on("SIGTERM", () => {});
+setInterval(() => {}, 1_000);
+`,
+      "utf8",
+    );
+
+    let childPid = 0;
+    let descendantPid = 0;
+    try {
+      await expect(
+        runManagedCommand({
+          bin: process.execPath,
+          args: [childPath, childPidPath, descendantPidPath],
+          shell: false,
+          stdio: "ignore",
+          timeoutMs: 500,
+        }),
+      ).rejects.toMatchObject({ code: "ETIMEDOUT" });
+
+      childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+      expect(isProcessAlive(childPid)).toBe(false);
+      expect(isProcessAlive(descendantPid)).toBe(false);
+    } finally {
+      if (childPid && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+      if (descendantPid && isProcessAlive(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
+      }
+    }
+  });
+
+  it("uses a wall timeout even while the child emits progress", async () => {
+    const startedAt = Date.now();
+    await expect(
+      runManagedCommand({
+        bin: process.execPath,
+        args: ["-e", "setInterval(() => process.stderr.write('retrying\\n'), 20)"],
+        shell: false,
+        stdio: "ignore",
+        timeoutMs: 200,
+      }),
+    ).rejects.toMatchObject({ code: "ETIMEDOUT" });
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+  });
+
+  it("refuses strict Windows commands before spawning an unverifiable tree", async () => {
+    const onReady = vi.fn();
+    const runTaskkill = vi.fn();
+    await expect(
+      runManagedCommand({
+        bin: process.execPath,
+        args: ["-e", "process.exit(0)"],
+        onReady,
+        platform: "win32",
+        requireProcessTreeExit: true,
+        runTaskkill,
+        shell: false,
+        stdio: "ignore",
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toMatchObject({
+      code: "EPROCESS_TREE_VERIFICATION_UNSUPPORTED",
+    });
+    expect(onReady).not.toHaveBeenCalled();
+    expect(runTaskkill).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when Windows taskkill cannot verify timeout cleanup", async () => {
+    const originalSystemRoot = process.env.SystemRoot;
+    const originalWindir = process.env.WINDIR;
+    let childPid = 0;
+    const runTaskkill = vi.fn(() => ({
+      error: Object.assign(new Error("taskkill timed out"), { code: "ETIMEDOUT" }),
+      status: null,
+    }));
+    try {
+      process.env.SystemRoot = "C:\\Windows";
+      delete process.env.WINDIR;
+      await expect(
+        runManagedCommand({
+          bin: process.execPath,
+          args: ["-e", "setInterval(() => {}, 1_000)"],
+          onReady: (child) => {
+            childPid = expectProcessPid(child.pid);
+          },
+          platform: "win32",
+          runTaskkill,
+          shell: false,
+          stdio: "ignore",
+          timeoutMs: 200,
+        }),
+      ).rejects.toMatchObject({
+        code: "EPROCESSGROUP_CLEANUP_FAILED",
+        manualRecoveryRequired: true,
+        processTreeState: "indeterminate",
+      });
+
+      expect(runTaskkill).toHaveBeenCalledWith(
+        taskkillPath,
+        ["/PID", String(childPid), "/T", "/F"],
+        {
+          killSignal: "SIGKILL",
+          stdio: "ignore",
+          timeout: 10_000,
+        },
+      );
+      await waitFor(() => !isProcessAlive(childPid));
+    } finally {
+      restoreEnvValue("SystemRoot", originalSystemRoot);
+      restoreEnvValue("WINDIR", originalWindir);
+      if (childPid && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+    }
+  });
+
+  posixIt("does not wait indefinitely when a timed-out child omits close", async () => {
+    const startedAt = Date.now();
+    let childPid = 0;
+    await expect(
+      runManagedCommand({
+        bin: process.execPath,
+        args: ["-e", "setInterval(() => {}, 1_000)"],
+        onReady: (child) => {
+          childPid = expectProcessPid(child.pid);
+          child.removeAllListeners("close");
+        },
+        shell: false,
+        stdio: "ignore",
+        timeoutMs: 200,
+      }),
+    ).rejects.toMatchObject({ code: "ETIMEDOUT" });
+
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
+    expect(isProcessAlive(childPid)).toBe(false);
+  });
+
+  posixIt("waits through transient indeterminate process-group state", async () => {
+    const originalKill = process.kill.bind(process);
+    let childPid = 0;
+    let injectedIndeterminate = false;
+    process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+      if (pid === -childPid && signal === 0 && !injectedIndeterminate) {
+        injectedIndeterminate = true;
+        throw Object.assign(new Error("transient process-group state"), { code: "EPERM" });
+      }
+      return originalKill(pid, signal);
+    }) as typeof process.kill;
+
+    try {
+      await expect(
+        runManagedCommand({
+          bin: process.execPath,
+          args: ["-e", "setInterval(() => {}, 1_000)"],
+          onReady: (child) => {
+            childPid = expectProcessPid(child.pid);
+          },
+          shell: false,
+          stdio: "ignore",
+          timeoutMs: 200,
+        }),
+      ).rejects.toMatchObject({ code: "ETIMEDOUT" });
+    } finally {
+      process.kill = originalKill;
+    }
+
+    expect(injectedIndeterminate).toBe(true);
+    expect(isProcessAlive(childPid)).toBe(false);
+  });
+
+  posixIt("accepts a process group that vanishes before its cleanup signal", async () => {
+    const originalKill = process.kill.bind(process);
+    let childPid = 0;
+    let injectedLiveGroup = false;
+    process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+      if (pid === -childPid && signal === 0 && !injectedLiveGroup) {
+        injectedLiveGroup = true;
+        return true;
+      }
+      return originalKill(pid, signal);
+    }) as typeof process.kill;
+
+    try {
+      await expect(
+        runManagedCommand({
+          bin: process.execPath,
+          args: ["-e", "process.exit(0)"],
+          onReady: (child) => {
+            childPid = expectProcessPid(child.pid);
+          },
+          requireProcessTreeExit: true,
+          shell: false,
+          stdio: "ignore",
+          timeoutMs: 1_000,
+        }),
+      ).resolves.toBe(0);
+    } finally {
+      process.kill = originalKill;
+    }
+
+    expect(injectedLiveGroup).toBe(true);
+    expect(isProcessAlive(childPid)).toBe(false);
+  });
+
+  it("allows bounded retry output and normal long-running work to complete", async () => {
+    await expect(
+      runManagedCommand({
+        bin: process.execPath,
+        args: [
+          "-e",
+          "process.stderr.write('network retry 1\\n'); setTimeout(() => process.exit(0), 100)",
+        ],
+        shell: false,
+        stdio: "ignore",
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toBe(0);
+    await expect(
+      runManagedCommand({
+        bin: process.execPath,
+        args: ["-e", "setTimeout(() => process.exit(0), 200)"],
+        requireProcessTreeExit: true,
+        shell: false,
+        stdio: "ignore",
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toBe(0);
+  });
+
+  it("cleans up the child when onReady throws", async () => {
+    let childPid = 0;
+    await expect(
+      runManagedCommand({
+        bin: process.execPath,
+        args: ["-e", "setInterval(() => {}, 1_000)"],
+        onReady: (child) => {
+          childPid = expectProcessPid(child.pid);
+          throw new Error("setup failed");
+        },
+        shell: false,
+        stdio: "ignore",
+      }),
+    ).rejects.toThrow("setup failed");
+    expect(isProcessAlive(childPid)).toBe(false);
+  });
+
+  posixIt("rejects and drains descendants left after a successful leader exit", async () => {
+    const dir = createTempDir("openclaw-managed-lingering-");
+    const descendantPidPath = path.join(dir, "descendant.pid");
+    let descendantPid = 0;
+    try {
+      await expect(
+        runManagedCommand({
+          bin: process.execPath,
+          args: [
+            "-e",
+            `
+const { spawn } = require("node:child_process");
+const fs = require("node:fs");
+const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+child.unref();
+fs.writeFileSync(process.argv[1], String(child.pid));
+`,
+            descendantPidPath,
+          ],
+          requireProcessTreeExit: true,
+          shell: false,
+          stdio: "ignore",
+          timeoutMs: 1_000,
+        }),
+      ).rejects.toMatchObject({ code: "EPROCESSGROUP_CLEANUP_FAILED" });
+      descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+      expect(isProcessAlive(descendantPid)).toBe(false);
+    } finally {
+      if (descendantPid && isProcessAlive(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
+      }
+    }
+  });
+
   posixIt(
     "kills managed child process group descendants when the runner is terminated",
     async () => {
@@ -230,7 +537,7 @@ describe("managed-child-process", () => {
       const childPidPath = path.join(dir, "child.pid");
       const descendantPidPath = path.join(dir, "descendant.pid");
       const runnerReadyPath = path.join(dir, "runner.ready");
-      const helperUrl = pathToFileURL(path.resolve("scripts/lib/managed-child-process.mjs")).href;
+      const helperUrl = pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href;
 
       fs.writeFileSync(
         childPath,
@@ -325,7 +632,16 @@ async function waitForClose(child: ReturnType<typeof spawn>) {
 function isProcessAlive(pid: number) {
   try {
     process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  if (process.platform !== "linux") {
     return true;
+  }
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    // kill(pid, 0) also succeeds for a terminated process awaiting reaping.
+    return stat.charAt(stat.lastIndexOf(")") + 2) !== "Z";
   } catch {
     return false;
   }

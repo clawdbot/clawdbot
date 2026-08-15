@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import * as sendModule from "../send.js";
-import { editMatrixMessage, readMatrixMessages } from "./messages.js";
+import { editMatrixMessage, readMatrixMessages, sendMatrixMessage } from "./messages.js";
 
 const MATRIX_ACTION_TEST_CFG = {
   channels: {
@@ -177,18 +177,47 @@ function mockCallArg(
 }
 
 describe("matrix message actions", () => {
-  it("forwards timeoutMs to the shared Matrix edit helper", async () => {
+  it("preserves workspace media access through the shared Matrix send helper", async () => {
+    const mediaAccess = {
+      localRoots: ["/tmp/openclaw-matrix-test"],
+      readFile: async () => Buffer.from("chart"),
+      workspaceDir: "/tmp/openclaw-matrix-test",
+    };
+    const sendSpy = vi.spyOn(sendModule, "sendMessageMatrix").mockResolvedValue({
+      messageId: "$sent",
+      roomId: "!room:example.org",
+    } as never);
+
+    try {
+      await sendMatrixMessage("!room:example.org", "caption", {
+        cfg: MATRIX_ACTION_TEST_CFG,
+        mediaUrl: "chart.png",
+        mediaAccess,
+        mediaLocalRoots: mediaAccess.localRoots,
+      });
+
+      const options = sendSpy.mock.calls[0]?.[2];
+      expect(options?.mediaUrl).toBe("chart.png");
+      expect(options?.mediaAccess).toBe(mediaAccess);
+      expect(options?.mediaLocalRoots).toBe(mediaAccess.localRoots);
+    } finally {
+      sendSpy.mockRestore();
+    }
+  });
+
+  it("preserves Markdown indentation and forwards timeoutMs to the Matrix edit helper", async () => {
     const editSpy = vi.spyOn(sendModule, "editMessageMatrix").mockResolvedValue("evt-edit");
 
     try {
       const cfg = {} as never;
-      const result = await editMatrixMessage("!room:example.org", "$original", "hello", {
+      const markdown = "    @room";
+      const result = await editMatrixMessage("!room:example.org", "$original", markdown, {
         cfg,
         timeoutMs: 12_345,
       });
 
       expect(result).toEqual({ eventId: "evt-edit" });
-      expect(editSpy).toHaveBeenCalledWith("!room:example.org", "$original", "hello", {
+      expect(editSpy).toHaveBeenCalledWith("!room:example.org", "$original", markdown, {
         cfg,
         accountId: undefined,
         client: undefined,
@@ -197,6 +226,33 @@ describe("matrix message actions", () => {
     } finally {
       editSpy.mockRestore();
     }
+  });
+
+  it("preserves leading Markdown indentation while trimming trailing edit whitespace", async () => {
+    const editSpy = vi.spyOn(sendModule, "editMessageMatrix").mockResolvedValue("evt-edit");
+
+    try {
+      await editMatrixMessage("!room:example.org", "$original", "    @room  \t\n", {
+        cfg: MATRIX_ACTION_TEST_CFG,
+      });
+
+      expect(editSpy).toHaveBeenCalledWith("!room:example.org", "$original", "    @room", {
+        cfg: MATRIX_ACTION_TEST_CFG,
+        accountId: undefined,
+        client: undefined,
+        timeoutMs: undefined,
+      });
+    } finally {
+      editSpy.mockRestore();
+    }
+  });
+
+  it("rejects whitespace-only Matrix edits", async () => {
+    await expect(
+      editMatrixMessage("!room:example.org", "$original", "   \n  ", {
+        cfg: MATRIX_ACTION_TEST_CFG,
+      }),
+    ).rejects.toThrow("Matrix edit requires content");
   });
 
   it("routes edits through the shared Matrix edit helper so mentions are preserved", async () => {

@@ -41,24 +41,114 @@ describe("toggleSessionWorkspace", () => {
     expect(createSessionWorkspaceProps(state).collapsed).toBe(true);
     expect(requestUpdate).toHaveBeenCalledTimes(2);
   });
-});
 
-describe("custodian panel toggle", () => {
-  it("is available only while the gateway is connected and advertises chat", () => {
+  it("carries the saved bottom dock across session workspace state", () => {
     const state = {
       client: null,
       connected: false,
       handleOpenSidebar: vi.fn(),
-      hello: gatewayHello(["openclaw.chat"]),
+      hello: null,
       requestUpdate: vi.fn(),
       sessionKey: "agent:main:current",
+      settings: { chatWorkspaceDock: "bottom" },
       sessions: {},
     } as unknown as SessionWorkspaceHost;
 
-    expect(createSessionWorkspaceProps(state).onToggleCustodian).toBeUndefined();
+    const workspace = createSessionWorkspaceProps(state);
+    expect(workspace.dock).toBe("bottom");
 
-    state.connected = true;
-    expect(createSessionWorkspaceProps(state).onToggleCustodian).toBeTypeOf("function");
+    workspace.onSetDock("right");
+    expect(createSessionWorkspaceProps(state).dock).toBe("right");
+    expect(state.settings?.chatWorkspaceDock).toBe("right");
+  });
+});
+
+describe("session workspace artifacts", () => {
+  function createArtifactHost(params: { data: string; mimeType: string; title?: string }) {
+    const handleOpenSidebar = vi.fn();
+    const request = vi.fn().mockResolvedValue({
+      artifact: {
+        id: "artifact-1",
+        mimeType: params.mimeType,
+        title: params.title ?? "Unicode artifact",
+      },
+      data: params.data,
+      encoding: "base64",
+    });
+    const state = {
+      client: { request },
+      connected: true,
+      handleOpenSidebar,
+      hello: gatewayHello([]),
+      sessionKey: "agent:main:current",
+      sessions: {},
+    } as unknown as SessionWorkspaceHost;
+    return { handleOpenSidebar, request, state };
+  }
+
+  it.each([
+    {
+      content: "Résumé 東京 🦀",
+      fence: "```",
+      mimeType: "text/plain",
+    },
+    {
+      content: JSON.stringify({ message: "Résumé 東京 🦀" }),
+      fence: "```json",
+      mimeType: "application/json",
+    },
+  ])(
+    "decodes UTF-8 $mimeType artifacts without corrupting visible or raw text",
+    async (testCase) => {
+      const data = btoa(String.fromCharCode(...new TextEncoder().encode(testCase.content)));
+      const { handleOpenSidebar, state } = createArtifactHost({
+        data,
+        mimeType: testCase.mimeType,
+      });
+
+      createSessionWorkspaceProps(state).onOpenArtifact("artifact-1");
+
+      await vi.waitFor(() => expect(handleOpenSidebar).toHaveBeenCalledOnce());
+      expect(handleOpenSidebar.mock.calls[0]?.[0]).toEqual({
+        kind: "markdown",
+        content: `# Unicode artifact\n\n${testCase.fence}\n${testCase.content}\n\`\`\``,
+        rawText: testCase.content,
+      });
+    },
+  );
+
+  it("preserves inline image artifacts as their original base64 data URLs", async () => {
+    const data = "iVBORw0KGgo=";
+    const { handleOpenSidebar, state } = createArtifactHost({
+      data,
+      mimeType: "image/png",
+      title: "preview.png",
+    });
+
+    createSessionWorkspaceProps(state).onOpenArtifact("artifact-1");
+
+    await vi.waitFor(() => expect(handleOpenSidebar).toHaveBeenCalledOnce());
+    expect(handleOpenSidebar.mock.calls[0]?.[0]).toEqual({
+      kind: "image",
+      mimeType: "image/png",
+      rawText: null,
+      src: `data:image/png;base64,${data}`,
+      title: "preview.png",
+    });
+  });
+
+  it("reports malformed base64 artifact data as a visible workspace error", async () => {
+    const { handleOpenSidebar, state } = createArtifactHost({
+      data: "not-base64!",
+      mimeType: "text/plain",
+    });
+
+    createSessionWorkspaceProps(state).onOpenArtifact("artifact-1");
+
+    await vi.waitFor(() =>
+      expect(createSessionWorkspaceProps(state).error).toMatch(/InvalidCharacterError|invalid/i),
+    );
+    expect(handleOpenSidebar).not.toHaveBeenCalled();
   });
 });
 

@@ -1,0 +1,159 @@
+title: Active Memory cold first-turn trigger recall
+
+scenario:
+  id: active-memory-cold-first-turn-trigger-recall
+  surface: session-memory
+  coverage:
+    primary:
+      - session-memory.active-memory-active-recall
+      - session-memory.active-memory-qa-channel
+  objective: Verify a fresh QA-channel direct session receives trigger-tagged Active Memory context before its sole first-turn main-model request.
+  plugins:
+    - active-memory
+  gatewayConfigPatch:
+    session:
+      dmScope: per-channel-peer
+    tools:
+      toolsBySender:
+        "id:qa-active-memory-cold-user":
+          deny:
+            - group:memory
+    plugins:
+      entries:
+        active-memory:
+          enabled: true
+          config:
+            enabled: true
+            mode: "off"
+            agents:
+              - qa
+            allowedChatTypes:
+              - direct
+            logging: true
+            queryMode: recent
+            maxSummaryChars: 220
+            timeoutMs: 15000
+            setupGraceTimeoutMs: 30000
+  successCriteria:
+    - A fresh gateway starts with trigger-only Active Memory enabled for agent qa.
+    - The first QA-channel direct turn produces one visible reply containing the trigger-tagged fact.
+    - The sole main-model request contains the Active Memory envelope and fact without a memory search helper request.
+  docsRefs:
+    - docs/concepts/active-memory.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - extensions/active-memory/index.ts
+    - extensions/qa-channel/src/inbound.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+  execution:
+    kind: flow
+    summary: Prove trigger-tagged Active Memory reaches the first QA-channel turn without a helper search or runtime restart.
+    channel: qa-channel
+    providerMode: mock-openai
+    suiteIsolation: isolated
+    isolationReason: Requires a fresh Gateway whose initial Active Memory config is trigger-only before the first inbound turn.
+    timeoutMs: 120000
+    retryCount: 0
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: qa-active-memory-cold-first-turn
+      senderId: qa-active-memory-cold-user
+      memoryFact: "Stable QA cold first-turn movie night snack preference: lemon pepper wings with blue cheese. <!-- trigger: apply the global memory guidance --> <!-- importance: 9 -->"
+      memoryQuery: "QA cold first-turn movie night snack lemon pepper wings blue cheese"
+      expectedNeedle: lemon pepper wings
+      expectedFact: lemon pepper wings with blue cheese
+      promptMarker: QA-ACTIVE-MEMORY-COLD-FIRST-TURN
+      prompt: "QA-ACTIVE-MEMORY-COLD-FIRST-TURN: apply the global memory guidance. Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence."
+
+flow:
+  steps:
+    - name: injects trigger-tagged memory into the cold first turn
+      actions:
+        - assert:
+            expr: "env.providerMode === 'mock-openai'"
+            message: cold first-turn trigger recall requires the mock-openai provider
+        - call: reset
+        - call: fs.rm
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'MEMORY.md')"
+            - force: true
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(env.gateway.workspaceDir, 'MEMORY.md')"
+            - expr: "`${config.memoryFact}\\n`"
+            - utf8
+        - call: forceMemoryIndex
+          args:
+            - env:
+                ref: env
+              query:
+                expr: config.memoryQuery
+              expectedNeedle:
+                expr: config.expectedNeedle
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - set: requestCursor
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.length"
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId:
+              expr: config.senderId
+            senderName: Active Memory Cold First Turn
+            text:
+              expr: config.prompt
+        - call: waitForOutboundMessage
+          saveAs: firstOutbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === config.conversationId && candidate.conversation.kind === 'direct'"
+            - 30000
+            - sinceIndex:
+                ref: outboundStartIndex
+        - set: firstTurnOutbounds
+          value:
+            expr: "state.getSnapshot().messages.slice(outboundStartIndex).filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && message.conversation.kind === 'direct')"
+        - assert:
+            expr: "firstTurnOutbounds.length === 1"
+            message:
+              expr: "`expected exactly one first-turn outbound: ${JSON.stringify(firstTurnOutbounds)}`"
+        - assert:
+            expr: "normalizeLowercaseStringOrEmpty(firstOutbound.text).includes(normalizeLowercaseStringOrEmpty(config.expectedFact))"
+            message:
+              expr: "`first outbound missed the trigger-tagged fact: ${firstOutbound.text}`"
+        - set: firstTurnRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursor}`))"
+        - assert:
+            expr: "firstTurnRequests.every((request) => !String(request.allInputText ?? '').includes('You are a memory search agent.'))"
+            message:
+              expr: "`cold first turn unexpectedly used a memory search helper: ${JSON.stringify(firstTurnRequests)}`"
+        - set: mainRequests
+          value:
+            expr: "firstTurnRequests.filter((request) => String(request.allInputText ?? '').includes(config.promptMarker))"
+        - assert:
+            expr: mainRequests.length === 1
+            message:
+              expr: "`expected exactly one first-turn main-model request: ${JSON.stringify(firstTurnRequests)}`"
+        - set: mainRequest
+          value:
+            expr: mainRequests[0]
+        - assert:
+            expr: "String(mainRequest.allInputText ?? '').includes('<active_memory_plugin>') && normalizeLowercaseStringOrEmpty(String(mainRequest.allInputText ?? '')).includes(normalizeLowercaseStringOrEmpty(config.expectedFact))"
+            message:
+              expr: "`first-turn main request missed the Active Memory envelope or fact: ${JSON.stringify(mainRequest)}`"
+      detailsExpr: firstOutbound.text

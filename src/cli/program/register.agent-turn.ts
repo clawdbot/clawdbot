@@ -4,7 +4,9 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
+import { measureCliCommandStartup } from "../command-startup-timing.js";
 import { formatHelpExamples } from "../help-format.js";
+import { requestExitAfterOneShotOutput } from "../one-shot-exit.js";
 
 type AgentViaGatewayModule = typeof import("../../commands/agent-via-gateway.js");
 type AgentExecModule = typeof import("../../commands/agent-exec.js");
@@ -108,12 +110,14 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
       const verboseLevel =
         typeof opts.verbose === "string" ? normalizeLowercaseStringOrEmpty(opts.verbose) : "";
       const [defaultRuntime, runCommandWithRuntime, setVerbose, agentCliCommand] =
-        await Promise.all([
-          loadDefaultRuntime(),
-          loadRunCommandWithRuntime(),
-          loadSetVerbose(),
-          loadAgentCliCommand(),
-        ]);
+        await measureCliCommandStartup("agent-action-imports", () =>
+          Promise.all([
+            loadDefaultRuntime(),
+            loadRunCommandWithRuntime(),
+            loadSetVerbose(),
+            loadAgentCliCommand(),
+          ]),
+        );
       await runCommandWithRuntime(defaultRuntime, async () => {
         setVerbose(verboseLevel === "on");
         await agentCliCommand(opts, defaultRuntime);
@@ -126,6 +130,11 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .option("--message-file <path>", "Read the UTF-8 prompt from a file; use - for stdin")
     .option("--cwd <dir>", "Set both the agent workspace and tool working directory")
     .option("--state-dir <dir>", "Use an existing state directory without deleting it")
+    .option(
+      "--config <path>",
+      "Run against this config file instead of the ambient config (pins a reproducible run)",
+    )
+    .option("--isolated", "Ignore the ambient config and run against exec defaults only", false)
     .option("--model <provider/model>", "Use an explicit primary model for this run")
     .option("--code-mode <mode>", "Tool mode: direct | auto | code")
     .option("--local-model-lean", "Use the reduced local-model tool surface")
@@ -139,7 +148,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
       collectFallback,
       [],
     )
-    .option("--auth-env-only", "Use provider credentials from environment variables only", true)
+    .option("--auth-env-only", "Use provider credentials from environment variables only", false)
     .option("--no-auth-env-only", "Allow stored and external CLI credential discovery")
     .option("--timeout <seconds>", "Agent deadline in seconds", "600")
     .option("--json", "Emit the stable agent-exec JSON envelope", false)
@@ -189,7 +198,9 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
         const result = await agentExecCommand(message, execOpts, defaultRuntime);
         if (result.exitCode !== 0) {
           defaultRuntime.exit(result.exitCode, { resetStream: process.stderr });
+          return;
         }
+        requestExitAfterOneShotOutput(defaultRuntime, result.exitCode);
       });
     });
 }

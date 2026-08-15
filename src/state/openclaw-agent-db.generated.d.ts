@@ -71,6 +71,18 @@ export interface CacheEntries {
   value_json: string | null;
 }
 
+export interface ContextEngineTurnOutbox {
+  advancement_key: string;
+  attempt_count: Generated<number>;
+  created_at: number;
+  engine_id: string;
+  last_attempt_at: number | null;
+  last_error: string | null;
+  owner_plugin_id: string | null;
+  payload_json: string;
+  session_id: string;
+}
+
 export interface ConversationDeliveries {
   conversation_id: string;
   created_at: number;
@@ -143,19 +155,23 @@ export interface MemoryIndexChunkProvenance {
   supersedes_key: string | null;
 }
 
+export interface MemoryIndexChunkRecallMetadata {
+  chunk_id: string;
+  importance: number | null;
+  project_key: string | null;
+  triggers: string | null;
+}
+
 export interface MemoryIndexChunks {
   embedding: string;
   end_line: number;
   hash: string;
   id: string;
-  importance: number | null;
   model: string;
   path: string;
-  project_key: string | null;
   source: Generated<string>;
   start_line: number;
   text: string;
-  triggers: string | null;
   updated_at: number;
 }
 
@@ -196,6 +212,12 @@ export interface SessionConversations {
   session_id: string;
 }
 
+export interface SessionKeyContract {
+  id: Generated<number>;
+  main_key: string;
+  updated_at: number;
+}
+
 export interface SessionMembers {
   added_at: number;
   added_by: string;
@@ -213,6 +235,7 @@ export interface SessionNodes {
   current_session_id: string;
   display_name: string | null;
   entry_json: string;
+  entry_valid: Generated<number>;
   fork_source_entry_id: string | null;
   fork_source_session_id: string | null;
   fork_source_session_key: string | null;
@@ -223,6 +246,7 @@ export interface SessionNodes {
   last_read_at: number | null;
   parent_session_key: string | null;
   pinned_at: number | null;
+  project_id: string | null;
   session_key: string;
   spawned_by: string | null;
   status: string | null;
@@ -370,17 +394,6 @@ export interface StandingIntentsFtsIdx {
   term: string;
 }
 
-export interface StateLeases {
-  created_at: number;
-  expires_at: number | null;
-  heartbeat_at: number | null;
-  lease_key: string;
-  owner: string;
-  payload_json: string | null;
-  scope: string;
-  updated_at: number;
-}
-
 export interface TrajectoryRuntimeEvents {
   created_at: number;
   event_json: string;
@@ -419,17 +432,20 @@ export interface DB {
   board_tabs: BoardTabs;
   board_widgets: BoardWidgets;
   cache_entries: CacheEntries;
+  context_engine_turn_outbox: ContextEngineTurnOutbox;
   conversation_deliveries: ConversationDeliveries;
   conversations: Conversations;
   heartbeat_outcomes: HeartbeatOutcomes;
   memory_embedding_cache: MemoryEmbeddingCache;
   memory_index_chunk_provenance: MemoryIndexChunkProvenance;
+  memory_index_chunk_recall_metadata: MemoryIndexChunkRecallMetadata;
   memory_index_chunks: MemoryIndexChunks;
   memory_index_meta: MemoryIndexMeta;
   memory_index_sources: MemoryIndexSources;
   memory_index_state: MemoryIndexState;
   schema_meta: SchemaMeta;
   session_conversations: SessionConversations;
+  session_key_contract: SessionKeyContract;
   session_members: SessionMembers;
   session_nodes: SessionNodes;
   session_suggestions: SessionSuggestions;
@@ -448,7 +464,6 @@ export interface DB {
   standing_intents_fts_data: StandingIntentsFtsData;
   standing_intents_fts_docsize: StandingIntentsFtsDocsize;
   standing_intents_fts_idx: StandingIntentsFtsIdx;
-  state_leases: StateLeases;
   trajectory_runtime_events: TrajectoryRuntimeEvents;
   transcript_event_identities: TranscriptEventIdentities;
   transcript_events: TranscriptEvents;

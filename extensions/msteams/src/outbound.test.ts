@@ -169,6 +169,54 @@ describe("msteamsOutbound cfg threading", () => {
     });
   });
 
+  it.each([
+    {
+      title: "forwards resolved channel thread ids through the Teams target",
+      target: "conversation:19:channel@thread.tacv2",
+      peerKind: "threaded",
+      threadId: "thread-root-2",
+      expectedTarget: "conversation:19:channel@thread.tacv2;messageid=thread-root-2",
+      expectedPeerKind: "threaded",
+    },
+    {
+      title: "preserves explicit Teams thread targets",
+      target: "conversation:19:channel@thread.tacv2;messageid=explicit-root",
+      peerKind: "threaded",
+      threadId: "ambient-root",
+      expectedTarget: "conversation:19:channel@thread.tacv2;messageid=explicit-root",
+      expectedPeerKind: "threaded",
+    },
+    {
+      title: "forwards thread ids through Graph team/channel targets",
+      target: "graph-team/19:channel@thread.tacv2",
+      peerKind: "threaded",
+      threadId: "thread-root-3",
+      expectedTarget: "graph-team/19:channel@thread.tacv2;messageid=thread-root-3",
+      expectedPeerKind: "threaded",
+    },
+    {
+      title: "does not append channel thread ids to direct-message targets",
+      target: "user:aad-user-1",
+      peerKind: "direct",
+      threadId: "quoted-parent",
+      expectedTarget: "user:aad-user-1",
+      expectedPeerKind: "direct",
+    },
+  ])("$title", async ({ target, peerKind, threadId, expectedTarget, expectedPeerKind }) => {
+    await requireSendText()({
+      cfg,
+      to: target,
+      text: peerKind,
+      threadId,
+    });
+
+    expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
+      cfg,
+      to: expectedTarget,
+      text: expectedPeerKind,
+    });
+  });
+
   it("passes resolved cfg and media roots for media sends", async () => {
     const cfgValue = {
       channels: {
@@ -193,6 +241,37 @@ describe("msteamsOutbound cfg threading", () => {
       mediaUrl: "file:///tmp/photo.png",
       mediaLocalRoots: ["/tmp"],
     });
+  });
+
+  it("preserves host-owned workspace media access for direct attachments", async () => {
+    const readFile = vi.fn(async () => Buffer.from("approved attachment"));
+    const mediaAccess = {
+      localRoots: ["/approved/workspace"],
+      readFile,
+      workspaceDir: "/approved/workspace",
+    };
+    const conflictingReader = vi.fn(async () => Buffer.from("unapproved attachment"));
+
+    await requireSendMedia()({
+      cfg,
+      to: "conversation:abc",
+      text: "photo",
+      mediaUrl: "reports/photo.png",
+      mediaAccess,
+      mediaLocalRoots: ["/unapproved/workspace"],
+      mediaReadFile: conflictingReader,
+    });
+
+    expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
+      cfg,
+      to: "conversation:abc",
+      text: "photo",
+      mediaUrl: "reports/photo.png",
+      mediaAccess,
+      mediaLocalRoots: ["/unapproved/workspace"],
+      mediaReadFile: conflictingReader,
+    });
+    expect(mocks.sendMessageMSTeams.mock.calls[0]?.[0]?.mediaAccess).toBe(mediaAccess);
   });
 
   it("renders and sends presentation payloads as Adaptive Cards", async () => {
@@ -237,14 +316,15 @@ describe("msteamsOutbound cfg threading", () => {
 
     const result = await requireSendPayload()({
       cfg,
-      to: "conversation:abc",
+      to: "conversation:19:channel@thread.tacv2",
+      threadId: "presentation-thread-root",
       text: "Deploy finished",
       payload: rendered!,
     });
 
     expect(mocks.sendAdaptiveCardMSTeams).toHaveBeenCalledWith({
       cfg,
-      to: "conversation:abc",
+      to: "conversation:19:channel@thread.tacv2;messageid=presentation-thread-root",
       card: (rendered!.channelData!.msteams as { presentationCard: unknown }).presentationCard,
     });
     expect(result).toEqual({
@@ -452,6 +532,39 @@ describe("msteamsOutbound cfg threading", () => {
     });
   });
 
+  it("preserves host media authority for every workspace-relative payload attachment", async () => {
+    const mediaAccess = {
+      localRoots: ["/approved/workspace"],
+      workspaceDir: "/approved/workspace",
+    };
+    mocks.sendMessageMSTeams
+      .mockResolvedValueOnce({ messageId: "msg-media-1", conversationId: "conv-media" })
+      .mockResolvedValueOnce({ messageId: "msg-media-2", conversationId: "conv-media" });
+
+    await requireSendPayload()({
+      cfg,
+      to: "conversation:abc",
+      text: "album",
+      payload: { text: "album", mediaUrls: ["one.png", "reports/two.png"] },
+      mediaAccess,
+      mediaLocalRoots: ["/unapproved/workspace"],
+    });
+
+    expect(mocks.sendMessageMSTeams).toHaveBeenCalledTimes(2);
+    for (const [index, mediaUrl] of ["one.png", "reports/two.png"].entries()) {
+      expect(mocks.sendMessageMSTeams).toHaveBeenNthCalledWith(index + 1, {
+        cfg,
+        to: "conversation:abc",
+        text: index === 0 ? "album" : "",
+        mediaUrl,
+        mediaAccess,
+        mediaLocalRoots: ["/unapproved/workspace"],
+        mediaReadFile: undefined,
+      });
+      expect(mocks.sendMessageMSTeams.mock.calls[index]?.[0]?.mediaAccess).toBe(mediaAccess);
+    }
+  });
+
   it("lets media payloads use text fallback instead of card rendering", async () => {
     const payload = {
       text: "photo",
@@ -512,6 +625,26 @@ describe("msteamsOutbound cfg threading", () => {
       votes: {},
     });
     expect(Number.isNaN(Date.parse(pollRecord?.createdAt))).toBe(false);
+  });
+
+  it("forwards resolved channel thread ids to poll sends", async () => {
+    await requireSendPoll()({
+      cfg,
+      to: "conversation:19:channel@thread.tacv2",
+      threadId: "poll-thread-root",
+      poll: {
+        question: "Ship it?",
+        options: ["Yes", "No"],
+      },
+    });
+
+    expect(mocks.sendPollMSTeams).toHaveBeenCalledWith({
+      cfg,
+      to: "conversation:19:channel@thread.tacv2;messageid=poll-thread-root",
+      question: "Ship it?",
+      options: ["Yes", "No"],
+      maxSelections: 1,
+    });
   });
 
   it("chunks outbound text without requiring MSTeams runtime initialization", () => {

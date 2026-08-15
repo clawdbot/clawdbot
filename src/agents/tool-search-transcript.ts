@@ -4,14 +4,16 @@ import { toToolSearchJsonSafe } from "./tool-search-json.js";
 import type { ToolSearchTargetTranscriptProjection } from "./tool-search-types.js";
 
 function readMessageToolResultId(message: AgentMessage): string | undefined {
-  const record = message as unknown as Record<string, unknown>;
-  const role = typeof record.role === "string" ? record.role : "";
+  const role: unknown = message.role;
   const canUseDirectId = role === "toolResult" || role === "tool";
-  const direct = record.toolCallId ?? record.toolUseId ?? record.tool_use_id;
+  const direct =
+    Reflect.get(message, "toolCallId") ??
+    Reflect.get(message, "toolUseId") ??
+    Reflect.get(message, "tool_use_id");
   if (canUseDirectId && typeof direct === "string" && direct.trim()) {
     return direct;
   }
-  const content = record.content;
+  const content = Reflect.get(message, "content");
   if (!Array.isArray(content)) {
     return undefined;
   }
@@ -68,10 +70,7 @@ function buildToolSearchTargetTranscriptMessages(
       : [
           {
             type: "text",
-            text: textFromToolSearchProjectionResult(
-              projection.result,
-              projection.isError === true,
-            ),
+            text: textFromToolSearchProjectionResult(projection.result, projection.isError),
           },
         ];
   return [
@@ -93,7 +92,7 @@ function buildToolSearchTargetTranscriptMessages(
       role: "toolResult",
       toolCallId: projection.toolCallId,
       toolName: projection.toolName,
-      isError: projection.isError === true,
+      isError: projection.isError,
       content: resultContent,
       timestamp,
     } as unknown as AgentMessage,

@@ -1,7 +1,16 @@
-export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
+export type {
+  UpdateAvailable,
+  UpdateHoldResult,
+  UpdateScheduleState,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { AgentsListResult as ProtocolAgentsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
+import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { SessionRow } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
+import type { PresenceEntry as ProtocolPresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
+import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
 import type { CronPayload as CoreCronPayload } from "../../../src/cron/types.js";
@@ -10,7 +19,6 @@ import type { FastModeSource } from "../../../src/shared/fast-mode.js";
 import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
-  SessionBoardFace,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
@@ -27,67 +35,12 @@ export type ChannelsPairingRequest =
   import("../../../packages/gateway-protocol/src/index.js").ChannelsPairingRequest;
 export type SessionVisibility =
   import("../../../packages/gateway-protocol/src/index.js").SessionVisibility;
-type SessionSharingRole =
-  import("../../../packages/gateway-protocol/src/index.js").SessionSharingRole;
 export type SessionMembersListResult =
   import("../../../packages/gateway-protocol/src/index.js").SessionMembersListResult;
-export type ChannelsStatusSnapshot = {
-  ts: number;
-  channelOrder: string[];
-  channelLabels: Record<string, string>;
-  channelDetailLabels?: Record<string, string>;
-  channelSystemImages?: Record<string, string>;
-  channelMeta?: ChannelUiMetaEntry[];
-  channels: Record<string, unknown>;
-  channelAccounts: Record<string, ChannelAccountSnapshot[]>;
-  channelDefaultAccountId: Record<string, string>;
-  partial?: boolean;
-  warnings?: string[];
-};
-
-export type ChannelUiMetaEntry = {
-  id: string;
-  label: string;
-  detailLabel: string;
-  systemImage?: string;
-};
-
-export type ChannelAccountSnapshot = {
-  accountId: string;
-  name?: string | null;
-  enabled?: boolean | null;
-  configured?: boolean | null;
-  linked?: boolean | null;
-  running?: boolean | null;
-  connected?: boolean | null;
-  reconnectAttempts?: number | null;
-  lastConnectedAt?: number | null;
-  lastError?: string | null;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastInboundAt?: number | null;
-  lastOutboundAt?: number | null;
-  lastProbeAt?: number | null;
-  mode?: string | null;
-  dmPolicy?: string | null;
-  allowFrom?: string[] | null;
-  tokenSource?: string | null;
-  botTokenSource?: string | null;
-  appTokenSource?: string | null;
-  credentialSource?: string | null;
-  audienceType?: string | null;
-  audience?: string | null;
-  webhookPath?: string | null;
-  webhookUrl?: string | null;
-  baseUrl?: string | null;
-  allowUnmentionedGroups?: boolean | null;
-  cliPath?: string | null;
-  dbPath?: string | null;
-  port?: number | null;
-  probe?: unknown;
-  audit?: unknown;
-  application?: unknown;
-};
+export type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+export type ChannelsStatusSnapshot = ChannelsStatusResult;
+export type ChannelUiMetaEntry = NonNullable<ChannelsStatusResult["channelMeta"]>[number];
+export type ChannelAccountSnapshot = ChannelsStatusResult["channelAccounts"][string][number];
 
 type WhatsAppSelf = {
   e164?: string | null;
@@ -306,30 +259,7 @@ export type ConfigSchemaResponse = {
   generatedAt: string;
 };
 
-export type PresenceEntry = {
-  deviceId?: string | null;
-  instanceId?: string | null;
-  host?: string | null;
-  ip?: string | null;
-  version?: string | null;
-  platform?: string | null;
-  deviceFamily?: string | null;
-  modelIdentifier?: string | null;
-  roles?: string[] | null;
-  scopes?: string[] | null;
-  mode?: string | null;
-  lastInputSeconds?: number | null;
-  reason?: string | null;
-  text?: string | null;
-  ts?: number | null;
-  user?: {
-    id: string;
-    email?: string | null;
-    name?: string | null;
-    avatarUrl?: string | null;
-  } | null;
-  watchedSessions?: string[] | null;
-};
+export type PresenceEntry = ProtocolPresenceEntry;
 
 export type GatewaySessionsDefaults = {
   modelProvider: string | null;
@@ -348,16 +278,12 @@ export type GatewayThinkingLevelOption = {
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
 
-export type AgentsListResult = {
-  defaultId: string;
-  mainKey: string;
-  scope: string;
-  agents: GatewayAgentRow[];
-};
+export type AgentsListResult = ProtocolAgentsListResult;
 
 export type AgentIdentityResult = {
   agentId: string;
   name: string;
+  nameSource?: "config" | "agent" | "workspace" | "default";
   avatar: string;
   avatarSource?: string | null;
   avatarStatus?: "none" | "local" | "remote" | "data" | null;
@@ -470,7 +396,6 @@ export type ArtifactDownloadResult = {
   expiresAt?: string;
 };
 
-export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 type SubagentRunState = "active" | "interrupted" | "historical";
 
 type SessionCompactionCheckpointReason =
@@ -505,62 +430,20 @@ type SessionCompactionCheckpointPreview = Pick<
   "checkpointId" | "createdAt" | "reason"
 >;
 
-export type GatewaySessionRow = {
-  key: string;
-  visibility?: SessionVisibility;
-  sharingRole?: SessionSharingRole;
-  incognito?: true;
-  spawnedBy?: string;
-  controlOwnerSessionKey?: string;
-  /** Collector swarm group that owns this child session, when applicable. */
-  swarmGroupId?: string;
-  parentSessionKey?: string;
-  /** Managed worktree bound to this session (repo checkout + branch). */
-  worktree?: { id: string; branch: string; repoRoot: string };
-  /** Session-scoped exec node binding (exec host=node routing). */
-  execNode?: string;
-  spawnedWorkspaceDir?: string;
-  spawnedCwd?: string;
-  execCwd?: string;
-  forkedFromParent?: boolean;
-  spawnDepth?: number;
-  subagentRole?: "orchestrator" | "leaf";
-  subagentControlScope?: "children" | "none";
-  createdVia?: "operator" | "spawn" | "channel" | "cron" | "talk" | "run" | "plugin" | "internal";
-  createdActor?: import("../../../packages/gateway-protocol/src/schema/sessions.js").SessionCreatedActor;
-  createdAt?: number;
-  forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
-  previousSessionId?: string;
+export type GatewaySessionRow = SessionRow & {
   placement?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacement;
-  kind: "direct" | "group" | "global" | "unknown";
-  label?: string;
+  icon?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
-  /** Preferred Control UI face for generic session navigation. */
-  boardFace?: SessionBoardFace;
-  displayName?: string;
-  derivedTitle?: string;
-  channel?: string;
   surface?: string;
   subject?: string;
   room?: string;
   space?: string;
-  updatedAt: number | null;
-  unread?: boolean;
-  lastReadAt?: number;
   agentStatus?: SessionAgentStatus;
   observerDigest?: Pick<
     SessionObserverDigest,
     "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   >;
-  lastActivityAt?: number;
-  archived?: boolean;
-  archivedAt?: number;
-  archivedBy?: import("../../../packages/gateway-protocol/src/schema/sessions.js").SessionCreatedActor;
-  pinned?: boolean;
-  pinnedAt?: number;
-  icon?: string;
-  sessionId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
@@ -568,25 +451,14 @@ export type GatewaySessionRow = {
   thinkingOptions?: string[];
   thinkingDefault?: string;
   fastMode?: FastMode;
-  toolOverrides?: import("../lib/sessions/patch.js").SessionToolOverrides;
   effectiveFastMode?: FastMode;
   effectiveFastModeSource?: FastModeSource;
   fastAutoOnSeconds?: number;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  totalTokens?: number;
-  totalTokensFresh?: boolean;
-  estimatedCostUsd?: number;
-  status?: SessionRunStatus;
-  /** Compact user-facing reason for the latest failed or timed-out run. */
-  lastRunError?: string;
   hasActiveRun?: boolean;
   activeRunIds?: string[];
-  /** Active transcript-branch leaf returned with chat history. */
-  activeLeafEntryId?: string | null;
   /** An enabled cron job is bound to this session (runs in it or delivers to it). */
   hasAutomation?: boolean;
   subagentRunState?: SubagentRunState;
@@ -596,15 +468,11 @@ export type GatewaySessionRow = {
   runtimeMs?: number;
   /** UI-local timestamp for the runtimeMs sample; absent on raw Gateway rows. */
   runtimeSampledAt?: number;
-  childSessions?: string[];
-  model?: string;
-  modelProvider?: string;
   modelSelectionLocked?: boolean;
   effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
-  queueMode?: "steer" | "followup" | "collect" | "interrupt";
-  effectiveQueueMode?: "steer" | "followup" | "collect" | "interrupt";
+  queueMode?: QueueMode;
+  effectiveQueueMode?: QueueMode;
   agentRuntime?: GatewayAgentRuntime;
-  contextTokens?: number;
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
   goal?: SessionGoal;
@@ -654,6 +522,7 @@ export type SessionsBranchesSwitchResult =
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
   updatedAt?: number;
+  archivedAt?: number;
   thinkingLevel?: string;
   fastMode?: FastMode;
   verboseLevel?: string;
@@ -704,12 +573,19 @@ type CronWakeMode = "next-heartbeat" | "now";
 
 export type CronPayload = CoreCronPayload;
 
+type CronCompletionDestination = {
+  mode: "webhook";
+  to: string;
+};
+
 type CronDelivery = {
   mode: "none" | "announce" | "webhook";
   channel?: string;
   to?: string;
+  threadId?: string | number;
   accountId?: string;
   bestEffort?: boolean;
+  completionDestination?: CronCompletionDestination;
   failureDestination?: CronFailureDestination;
 };
 
@@ -739,6 +615,11 @@ type CronJobState = {
   lastErrorReason?: string;
   lastDurationMs?: number;
   consecutiveErrors?: number;
+  autoDisabled?: {
+    reason: "consecutive-failures" | "schedule-errors";
+    atMs: number;
+    consecutiveErrors: number;
+  };
   lastDelivered?: boolean;
   lastDeliveryStatus?: CronDeliveryStatus;
   lastDeliveryError?: string;
@@ -818,11 +699,12 @@ export type CronRunLogEntry = {
 
 export type CronJobsListResult = {
   jobs: CronJob[];
-  total?: number;
-  limit?: number;
-  offset?: number;
-  nextOffset?: number | null;
-  hasMore?: boolean;
+  snapshotRevision: string;
+  total: number;
+  limit: number;
+  offset: number;
+  nextOffset: number | null;
+  hasMore: boolean;
 };
 
 export type CronRunsResult = {
@@ -852,6 +734,7 @@ export type SkillClawHubLink =
       valid: true;
       registry: string;
       slug: string;
+      ownerHandle?: string;
       installedVersion: string;
       installedAt: number;
       originPath?: string;
@@ -935,10 +818,16 @@ export type ModelCatalogEntry = {
   available?: boolean;
   contextWindow?: number;
   reasoning?: boolean;
+  thinkingLevels?: GatewayThinkingLevelOption[];
+  thinkingDefault?: string;
+  supportsTools?: boolean;
   agentRuntime?: import("../../../packages/gateway-protocol/src/schema.js").GatewayAgentRuntime;
   input?: Array<"text" | "image" | "document">;
   apiKeySupported?: boolean;
 };
+
+export type ModelCatalogProviderOutcome =
+  import("../../../packages/gateway-protocol/src/schema/agents-models-skills.js").ModelCatalogProviderOutcome;
 
 export type ToolCatalogProfile =
   import("../../../packages/gateway-protocol/src/schema.js").ToolCatalogProfile;

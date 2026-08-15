@@ -34,7 +34,6 @@ describe("remote model catalog bundle", () => {
   it("accepts schema v1 and deeply strips endpoint and header fields", () => {
     const parsed = validateAndSanitizeRemoteModelCatalogBundle(validBundle);
     const anthropic = parsed.providers.anthropic;
-    expect(anthropic).toBeDefined();
     if (!anthropic) {
       throw new Error("expected anthropic provider");
     }

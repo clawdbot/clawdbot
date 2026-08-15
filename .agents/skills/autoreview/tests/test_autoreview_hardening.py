@@ -65,6 +65,22 @@ def realistic_secret_value() -> str:
     return "A7f9K2m4Q8v6" + "N3x5R1p0T9z8"
 
 
+def installed_java() -> str | None:
+    java = shutil.which("java")
+    if java is None:
+        return None
+    try:
+        probe = subprocess.run(
+            [java, "-version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return None
+    return java if probe.returncode == 0 else None
+
+
 def add_fake_trufflehog(
     helper: dict[str, object],
     root: Path,
@@ -294,6 +310,178 @@ class AutoreviewHardeningTests(unittest.TestCase):
                         stderr=subprocess.PIPE,
                         text=True,
                     )
+
+    def test_trufflehog_history_still_scans_deletions_from_modified_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            source = repo / "modified.txt"
+            source.write_text("removed baseline content\nretained\n", encoding="utf-8")
+            git(repo, "add", source.name)
+            git(repo, "commit", "-q", "-m", "base")
+            base = git(repo, "rev-parse", "HEAD").strip()
+            source.write_text("retained\n", encoding="utf-8")
+            git(repo, "add", source.name)
+            git(repo, "commit", "-q", "-m", "remove line")
+
+            with tempfile.TemporaryDirectory() as scan_dir:
+                scan_repo = Path(scan_dir)
+                self.helper["prepare_trufflehog_history"](
+                    repo,
+                    "branch",
+                    base,
+                    "HEAD",
+                    scan_repo,
+                )
+                commits = git(
+                    scan_repo,
+                    "log",
+                    "--reverse",
+                    "--format=%H",
+                ).splitlines()
+
+                self.assertEqual(len(commits), 3)
+                self.assertEqual(
+                    git(scan_repo, "show", f"{commits[2]}:modified.txt"),
+                    "removed baseline content\nretained\n",
+                )
+
+    def test_trufflehog_local_mixed_layers_are_not_deletion_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            source = repo / "mixed.txt"
+            source.write_text("removed line\nretained\n", encoding="utf-8")
+            git(repo, "add", source.name)
+            git(repo, "commit", "-q", "-m", "base")
+            source.write_text("retained\n", encoding="utf-8")
+            git(repo, "add", source.name)
+            source.unlink()
+
+            deletion_only_paths = self.helper["review_deletion_only_paths"](
+                repo,
+                "local",
+                None,
+                "HEAD",
+            )
+            self.assertEqual(deletion_only_paths, set())
+
+            with tempfile.TemporaryDirectory() as scan_dir:
+                scan_repo = Path(scan_dir)
+                self.helper["prepare_trufflehog_history"](
+                    repo,
+                    "local",
+                    None,
+                    "HEAD",
+                    scan_repo,
+                )
+                commits = git(
+                    scan_repo,
+                    "log",
+                    "--reverse",
+                    "--format=%H",
+                ).splitlines()
+
+                self.assertEqual(
+                    git(scan_repo, "show", f"{commits[4]}:mixed.txt"),
+                    "removed line\nretained\n",
+                )
+
+    def test_local_bundle_refuses_secret_in_mixed_deletion_layers(self) -> None:
+        value = realistic_secret_value()
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            source = repo / "mixed.ts"
+            source.write_text(
+                f'const apiKey = "{value}";\nretained();\n',
+                encoding="utf-8",
+            )
+            git(repo, "add", source.name)
+            git(repo, "commit", "-q", "-m", "base")
+            source.write_text("retained();\n", encoding="utf-8")
+            git(repo, "add", source.name)
+            source.unlink()
+
+            with self.assertRaisesRegex(SystemExit, "known secret-like value"):
+                self.helper["local_bundle"](repo)
+
+    def test_local_bundle_refuses_deleted_secret_repeated_in_other_layers(self) -> None:
+        for other_layer in ("unstaged", "untracked"):
+            with self.subTest(other_layer=other_layer), tempfile.TemporaryDirectory() as tempdir:
+                value = realistic_secret_value()
+                repo = init_repo(Path(tempdir))
+                removed = repo / "removed.ts"
+                runtime = repo / "runtime.ts"
+                removed.write_text(
+                    f'const apiKey = "{value}";\n',
+                    encoding="utf-8",
+                )
+                runtime.write_text("before();\n", encoding="utf-8")
+                git(repo, "add", removed.name, runtime.name)
+                git(repo, "commit", "-q", "-m", "base")
+                removed.unlink()
+                git(repo, "add", removed.name)
+                if other_layer == "unstaged":
+                    runtime.write_text(f'log("{value}");\n', encoding="utf-8")
+                else:
+                    (repo / "untracked.ts").write_text(
+                        f'log("{value}");\n',
+                        encoding="utf-8",
+                    )
+
+                with self.assertRaisesRegex(SystemExit, "known secret-like value"):
+                    self.helper["local_bundle"](repo)
+
+    def test_local_bundle_redacts_secret_in_entirely_deleted_file(self) -> None:
+        value = realistic_secret_value()
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            removed = repo / "removed.ts"
+            removed.write_text(
+                f'const apiKey = "{value}";\nrunFixture();\n',
+                encoding="utf-8",
+            )
+            git(repo, "add", removed.name)
+            git(repo, "commit", "-q", "-m", "base")
+            removed.unlink()
+
+            bundle, truncated = self.helper["local_bundle"](repo)
+
+            self.assertNotIn(value, bundle)
+            self.assertIn('-const apiKey = "redacted";', bundle)
+            self.assertIn("-runFixture();", bundle)
+            self.assertFalse(truncated)
+
+    def test_local_bundle_preserves_boundary_when_sensitive_diff_is_omitted(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            path = repo / ".env"
+            path.write_text("TOKEN=placeholder\n", encoding="utf-8")
+            git(repo, "add", path.name)
+            git(repo, "commit", "-q", "-m", "base")
+            path.write_text("TOKEN=changed-placeholder\n", encoding="utf-8")
+            git(repo, "add", path.name)
+
+            bundle, truncated = self.helper["local_bundle"](repo)
+
+            self.assertIn(self.helper["REVIEW_SECURITY_REDACTION"], bundle)
+            self.assertFalse(truncated)
+
+    def test_commit_bundle_refuses_deleted_secret_repeated_in_message(self) -> None:
+        value = realistic_secret_value()
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            removed = repo / "removed.ts"
+            removed.write_text(
+                f'const apiKey = "{value}";\n',
+                encoding="utf-8",
+            )
+            git(repo, "add", removed.name)
+            git(repo, "commit", "-q", "-m", "base")
+            removed.unlink()
+            git(repo, "add", removed.name)
+            git(repo, "commit", "-q", "-m", value)
+
+            with self.assertRaisesRegex(SystemExit, "known secret-like value"):
+                self.helper["commit_bundle"](repo, "HEAD")
 
     def test_trufflehog_snapshot_supports_directory_to_file_transition(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -3116,6 +3304,51 @@ class AutoreviewHardeningTests(unittest.TestCase):
 
         self.assertEqual(len(spans), regex_count)
 
+    def test_review_secret_fragments_handles_large_regex_heavy_diff(self) -> None:
+        value = realistic_secret_value()
+        hunk_count = 5_000
+        segment = (
+            "if (ready) /fixture-token/.test(value);\n"
+            f'const apiKey = "{value}";'
+        )
+        source = self.helper["DIFF_HUNK_CONTENT_BOUNDARY"].join(
+            segment for _ in range(hunk_count)
+        )
+
+        fragments = self.helper["review_secret_fragments"](
+            source,
+            javascript_dialect="typescript",
+        )
+
+        self.assertEqual(fragments, {value})
+
+    def test_review_secret_fragments_fails_closed_on_lexer_recursion(self) -> None:
+        def recursive_lexer(
+            text: str,
+            *,
+            javascript_dialect: str | None = None,
+        ) -> list[tuple[int, int]]:
+            return recursive_lexer(
+                text,
+                javascript_dialect=javascript_dialect,
+            )
+
+        scanner_globals = self.helper["review_secret_fragments"].__globals__
+        with (
+            mock.patch.dict(
+                scanner_globals,
+                {"review_repeatable_secret_spans": recursive_lexer},
+            ),
+            self.assertRaisesRegex(
+                SystemExit,
+                "secret scanning exceeded its safe recursion limit",
+            ),
+        ):
+            self.helper["review_secret_fragments"](
+                "if (ready) /fixture-token/.test(value);",
+                javascript_dialect="typescript",
+            )
+
     def test_lifecycle_reference_scan_is_bounded_for_non_matching_identifier(self) -> None:
         source = "const value = resolved" + "A" * 100_000 + "X;"
 
@@ -3885,6 +4118,215 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 for content in self.helper["unified_diff_contents"](patch)
             )
         )
+
+    def test_review_patch_redacts_secret_only_in_entirely_deleted_file(self) -> None:
+        value = realistic_secret_value()
+        known_fragments: set[str] = set()
+        patch = (
+            "diff --git a/removed.ts b/removed.ts\n"
+            "deleted file mode 100644\n"
+            "index 1234567..0000000\n"
+            "--- a/removed.ts\n"
+            "+++ /dev/null\n"
+            "@@ -1,2 +0,0 @@\n"
+            f'-const api{"Key"} = "{value}";\n'
+            "-runFixture();\n"
+        )
+
+        redacted = self.helper["validate_review_patch"](
+            "branch diff",
+            ["removed.ts"],
+            patch,
+            deletion_only_paths={"removed.ts"},
+            known_secret_fragments_out=known_fragments,
+        )
+
+        self.assertNotIn(value, redacted)
+        self.assertIn('-const api' + 'Key = "redacted";', redacted)
+        self.assertIn("-runFixture();", redacted)
+        self.assertEqual(redacted.count("\n"), patch.count("\n"))
+        self.assertIn(value, known_fragments)
+        with self.assertRaisesRegex(SystemExit, "known secret-like value"):
+            self.helper["require_no_known_secret_fragments"](
+                "prompt or dataset input",
+                f'log("{value}")',
+                known_fragments,
+            )
+
+    def test_review_patch_keeps_typescript_annotations_in_deleted_file(self) -> None:
+        removed_source = (
+            "export function modelRuntime("
+            "env: NodeJS.ProcessEnv = process.env): ModelRuntime {\n"
+            "  return env.MODEL_RUNTIME;\n"
+            "}\n"
+            "const credentials: NodeJS.ProcessEnv = {};\n"
+        )
+        patch = (
+            "diff --git a/removed.ts b/removed.ts\n"
+            "deleted file mode 100644\n"
+            "--- a/removed.ts\n"
+            "+++ /dev/null\n"
+            "@@ -1,4 +0,0 @@\n"
+            + "".join(f"-{line}\n" for line in removed_source.splitlines())
+            + "diff --git a/runtime.ts b/runtime.ts\n"
+            "new file mode 100644\n"
+            "--- /dev/null\n"
+            "+++ b/runtime.ts\n"
+            "@@ -0,0 +1 @@\n"
+            "+export type RuntimeEnv = NodeJS.ProcessEnv;\n"
+        )
+        known_fragments: set[str] = set()
+
+        validated = self.helper["validate_review_patch"](
+            "branch diff",
+            ["removed.ts", "runtime.ts"],
+            patch,
+            deletion_only_paths={"removed.ts"},
+            known_secret_fragments_out=known_fragments,
+        )
+
+        self.assertEqual(validated, patch)
+        self.assertEqual(known_fragments, set())
+
+    def test_review_patch_bounds_deletion_secret_fragment_scan(self) -> None:
+        values = [f"{realistic_secret_value()}{index:03d}" for index in range(257)]
+        patch = (
+            "diff --git a/removed.ts b/removed.ts\n"
+            "deleted file mode 100644\n"
+            "--- a/removed.ts\n"
+            "+++ /dev/null\n"
+            f"@@ -1,{len(values)} +0,0 @@\n"
+            + "".join(
+                f'-const api{"Key"} = "{value}";\n'
+                for value in values
+            )
+        )
+        started = time.monotonic()
+
+        with self.assertRaisesRegex(SystemExit, "too many deletion-only"):
+            self.helper["validate_review_patch"](
+                "branch diff",
+                ["removed.ts"],
+                patch,
+                deletion_only_paths={"removed.ts"},
+            )
+
+        self.assertLess(time.monotonic() - started, 5.0)
+
+    def test_trufflehog_preflight_refuses_secret_on_added_line(self) -> None:
+        value = "ghp_" + "A" * 24
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir))
+            git(repo, "commit", "--allow-empty", "-q", "-m", "base")
+            (repo / "runtime.ts").write_text(
+                f'const apiKey = "{value}";\n',
+                encoding="utf-8",
+            )
+            original_find_command = self.helper["find_command"]
+            original_run = self.helper["run"]
+
+            def find_command(name: str, checkout: Path) -> str | None:
+                if name == "trufflehog":
+                    return "/trusted/trufflehog"
+                return original_find_command(name, checkout)
+
+            def run_scanner(
+                command: list[str],
+                cwd: Path,
+                **_kwargs: object,
+            ) -> subprocess.CompletedProcess[str]:
+                if command[0] != "/trusted/trufflehog":
+                    return original_run(command, cwd, **_kwargs)
+                scan_path = command[2].removeprefix("file://")
+                if os.name == "nt":
+                    scan_path = scan_path.lstrip("/")
+                scan_repo = Path(scan_path)
+                commits = git(
+                    scan_repo,
+                    "log",
+                    "--reverse",
+                    "--format=%H",
+                ).splitlines()
+                added = git(scan_repo, "show", f"{commits[2]}:runtime.ts")
+                return subprocess.CompletedProcess(
+                    command,
+                    self.helper["TRUFFLEHOG_FINDINGS_EXIT_CODE"]
+                    if value in added
+                    else 0,
+                    "",
+                    "",
+                )
+
+            with (
+                mock.patch.dict(
+                    self.helper["run_trufflehog_preflight"].__globals__,
+                    {
+                        "find_command": find_command,
+                        "run": run_scanner,
+                    },
+                ),
+                self.assertRaisesRegex(
+                    SystemExit,
+                    "found verified or unknown credentials",
+                ),
+            ):
+                self.helper["run_trufflehog_preflight"](
+                    repo,
+                    "local",
+                    None,
+                    "HEAD",
+                )
+
+    def test_review_patch_refuses_secret_repeated_on_added_and_deleted_lines(self) -> None:
+        value = realistic_secret_value()
+        patch = (
+            "diff --git a/removed.ts b/removed.ts\n"
+            "deleted file mode 100644\n"
+            "--- a/removed.ts\n"
+            "+++ /dev/null\n"
+            "@@ -1 +0,0 @@\n"
+            f'-const api{"Key"} = "{value}";\n'
+            "diff --git a/runtime.ts b/runtime.ts\n"
+            "new file mode 100644\n"
+            "--- /dev/null\n"
+            "+++ b/runtime.ts\n"
+            "@@ -0,0 +1 @@\n"
+            f'+log("{value}");\n'
+        )
+
+        with self.assertRaisesRegex(SystemExit, "known secret-like value"):
+            self.helper["validate_review_patch"](
+                "branch diff",
+                ["removed.ts", "runtime.ts"],
+                patch,
+                deletion_only_paths={"removed.ts"},
+            )
+
+    def test_review_patch_refuses_secret_repeated_in_context(self) -> None:
+        value = realistic_secret_value()
+        patch = (
+            "diff --git a/removed.ts b/removed.ts\n"
+            "deleted file mode 100644\n"
+            "--- a/removed.ts\n"
+            "+++ /dev/null\n"
+            "@@ -1 +0,0 @@\n"
+            f'-const api{"Key"} = "{value}";\n'
+            "diff --git a/runtime.ts b/runtime.ts\n"
+            "--- a/runtime.ts\n"
+            "+++ b/runtime.ts\n"
+            "@@ -1,2 +1,2 @@\n"
+            f' log("{value}");\n'
+            "-before();\n"
+            "+after();\n"
+        )
+
+        with self.assertRaisesRegex(SystemExit, "known secret-like value"):
+            self.helper["validate_review_patch"](
+                "branch diff",
+                ["removed.ts", "runtime.ts"],
+                patch,
+                deletion_only_paths={"removed.ts"},
+            )
 
     def test_secret_detector_handles_compound_json_keys(self) -> None:
         for key in ("client_secret", "refresh_token"):
@@ -5088,10 +5530,19 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 os.environ.clear()
                 os.environ.update(old)
 
+    def test_installed_java_rejects_launcher_without_runtime(self) -> None:
+        launcher = "/usr/bin/java"
+        unavailable = subprocess.CompletedProcess([launcher, "-version"], 1)
+        with (
+            mock.patch("shutil.which", return_value=launcher),
+            mock.patch("subprocess.run", return_value=unavailable),
+        ):
+            self.assertIsNone(installed_java())
+
     def test_parallel_test_environment_isolates_jvm_user_home(self) -> None:
-        java = shutil.which("java")
+        java = installed_java()
         if java is None:
-            self.skipTest("java is not installed")
+            self.skipTest("a usable Java runtime is not installed")
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
             repo = init_repo(root)
@@ -5141,9 +5592,9 @@ class AutoreviewHardeningTests(unittest.TestCase):
         )
 
     def test_java_tool_option_quote_round_trips_special_paths(self) -> None:
-        java = shutil.which("java")
+        java = installed_java()
         if java is None:
-            self.skipTest("java is not installed")
+            self.skipTest("a usable Java runtime is not installed")
         names = ["space home", "apostrophe's home"]
         if os.name != "nt":
             names.append('double"quote home')

@@ -227,6 +227,7 @@ describe("qa-bus client", () => {
         baseUrl: server.baseUrl,
         accountId: "acct-a",
         cursor: 0,
+        acknowledgedCursor: 0,
         timeoutMs: 0,
       }),
     ).rejects.toThrow("qa-bus /v1/poll: malformed JSON response");
@@ -247,6 +248,7 @@ describe("qa-bus client", () => {
         baseUrl: `http://127.0.0.1:${port}`,
         accountId: "acct-a",
         cursor: 0,
+        acknowledgedCursor: 0,
         timeoutMs: 0,
       }),
     ).rejects.toThrow("qa-bus /v1/poll: JSON response exceeds 16777216 bytes");
@@ -281,6 +283,7 @@ describe("qa-bus client", () => {
       baseUrl: `http://127.0.0.1:${address.port}`,
       accountId: "acct-a",
       cursor: 0,
+      acknowledgedCursor: 0,
       timeoutMs: 30_000,
       signal: abort.signal,
     });
@@ -321,7 +324,7 @@ describe("qa-bus client", () => {
       }),
     ).rejects.toMatchObject({ name: "AbortError", cause: { name: "TimeoutError" } });
     expect(timeoutSpy).toHaveBeenCalledTimes(1);
-    expect(timeoutSpy).toHaveBeenCalledWith(10_000);
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
   });
 
   it("bounds message responses that stall after headers", async () => {
@@ -360,7 +363,7 @@ describe("qa-bus client", () => {
     timeout.abort(new DOMException("qa-bus request timed out", "TimeoutError"));
     await rejection;
     expect(timeoutSpy).toHaveBeenCalledTimes(1);
-    expect(timeoutSpy).toHaveBeenCalledWith(10_000);
+    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
   });
 
   it("keeps long polls within the server wait window plus response grace", async () => {
@@ -375,6 +378,7 @@ describe("qa-bus client", () => {
         baseUrl: server.baseUrl,
         accountId: "acct-a",
         cursor: 0,
+        acknowledgedCursor: 0,
         timeoutMs: 30_000,
       }),
     ).resolves.toEqual({ cursor: 1, events: [] });

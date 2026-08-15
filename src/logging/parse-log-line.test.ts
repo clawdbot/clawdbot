@@ -23,6 +23,39 @@ describe("parseLogLine", () => {
     expect(parsed?.raw).toBe(line);
   });
 
+  it("prefers the complete persisted message while preserving numeric joining as fallback", () => {
+    const persisted = parseLogLine(
+      JSON.stringify({
+        0: '{"subsystem":"gateway"}',
+        1: "request failed",
+        2: "retry later",
+        message: "request failed retry later",
+      }),
+    );
+    const positional = parseLogLine(
+      JSON.stringify({ 0: "worker", 1: "request failed", 2: { retry: true } }),
+    );
+
+    expect(persisted?.message).toBe("request failed retry later");
+    expect(positional?.message).toBe('worker request failed {"retry":true}');
+  });
+
+  it("uses structured metadata context before a structured positional fallback", () => {
+    expect(
+      parseLogLine(
+        JSON.stringify({
+          0: '{"subsystem":"legacy"}',
+          1: "ready",
+          _meta: { name: '{"module":"queue"}' },
+        }),
+      )?.module,
+    ).toBe("queue");
+    expect(
+      parseLogLine(JSON.stringify({ 0: '{"subsystem":"legacy"}', 1: "ready" }))?.subsystem,
+    ).toBe("legacy");
+    expect(parseLogLine(JSON.stringify({ 0: "worker", 1: "ready" }))?.subsystem).toBeUndefined();
+  });
+
   it("falls back to meta timestamp when top-level time is missing", () => {
     const line = JSON.stringify({
       0: "hello",
@@ -41,5 +74,6 @@ describe("parseLogLine", () => {
 
   it("returns null for invalid JSON", () => {
     expect(parseLogLine("not-json")).toBeNull();
+    expect(parseLogLine("null")).toBeNull();
   });
 });

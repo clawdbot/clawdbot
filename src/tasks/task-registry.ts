@@ -14,7 +14,7 @@ export { assertTaskCancellationReadyById, cancelTaskById } from "./task-registry
 export { maybeDeliverTaskTerminalUpdate } from "./task-registry-delivery.js";
 export {
   createTaskRecord,
-  finalizeTaskRunByRunId,
+  finalizeTaskRecordByRunId,
   linkTaskToFlowById,
   markTaskLostById,
   markTaskRunningByRunId,
@@ -40,6 +40,7 @@ export {
   listTasksForSessionKey,
   resolveTaskForLookupToken,
 } from "./task-registry-query.js";
+export { publishTaskRecordAfterAtomicStore } from "./task-registry-mutation.js";
 export { ensureTaskRegistryReady, reloadTaskRegistryFromStore } from "./task-registry-state.js";
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

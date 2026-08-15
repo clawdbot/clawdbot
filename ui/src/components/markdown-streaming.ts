@@ -8,6 +8,8 @@ import {
 
 const FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
 const FENCE_CONTAINER_PREFIX_RE = /^[ \t]{0,3}(?:(?:>\s?)|(?:(?:[-+*]|\d{1,9}[.)])[ \t]+))/;
+const LIST_ITEM_OPEN_RE = /^[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+/u;
+const LINK_REFERENCE_CANDIDATE_RE = /^[ \t]*\[/u;
 
 type DetailsFrame = { hasSummary: boolean };
 type FenceMarker = { length: number; marker: "`" | "~" };
@@ -111,6 +113,8 @@ export function splitStableStreamingMarkdown(markdownLocal: string): StreamingMa
   const detailsStack: DetailsFrame[] = [];
   const codeSpans = findMarkdownCodeSpans(markdownLocal);
   let lastFenceOffset = 0;
+  let firstListOffset: number | null = null;
+  let hasLinkReferenceDefinition = false;
 
   while (index < markdownLocal.length) {
     const nextLineBreak = markdownLocal.indexOf("\n", index);
@@ -129,6 +133,10 @@ export function splitStableStreamingMarkdown(markdownLocal: string): StreamingMa
       continue;
     }
 
+    if (firstListOffset === null && LIST_ITEM_OPEN_RE.test(line)) {
+      firstListOffset = index;
+    }
+
     const openingFence = getFenceMarker(line);
     if (openingFence) {
       openFence = openingFence;
@@ -138,10 +146,25 @@ export function splitStableStreamingMarkdown(markdownLocal: string): StreamingMa
     }
 
     updateDetailsStack(line, detailsStack, false, codeSpans, index);
-    if (line.trim() === "" && detailsStack.length === 0) {
-      boundary = lineEnd;
+    if (detailsStack.length === 0) {
+      if (LINK_REFERENCE_CANDIDATE_RE.test(stripMarkdownContainerPrefixes(line).content)) {
+        hasLinkReferenceDefinition = true;
+      }
+      if (line.trim() === "") {
+        boundary = lineEnd;
+      }
     }
     index = lineEnd;
+  }
+
+  // A bracket-leading line can start a multiline or escaped reference label.
+  // Keep its complete document together rather than guessing label boundaries.
+  if (hasLinkReferenceDefinition) {
+    boundary = 0;
+  } else if (firstListOffset !== null) {
+    // Blank lines cannot prove a list has ended: loose items, continuation
+    // indentation, and nested blocks all share the original list container.
+    boundary = Math.min(boundary, firstListOffset);
   }
 
   return {

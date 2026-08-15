@@ -1,5 +1,6 @@
 // Helpers for extracting agent turn output from E2E protocol events.
 import fs from "node:fs";
+import { isRecord } from "../../lib/record-shared.mjs";
 import { readTextFileTail, tailText } from "./text-file-utils.mjs";
 
 const ERROR_DETAIL_TAIL_BYTES = 64 * 1024;
@@ -148,10 +149,6 @@ function parseJsonPayloads(text) {
 
 function textValues(values) {
   return values.filter((value) => typeof value === "string" && value.length > 0);
-}
-
-function isRecord(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function isFailureStatus(value) {

@@ -1,4 +1,5 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveGlobalSet } from "../shared/global-singleton.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 
 const log = createSubsystemLogger("plugins");
@@ -16,7 +17,10 @@ export type OpenClawPluginSessionsChangedEvent = {
 
 type SessionsChangedHandler = (event: OpenClawPluginSessionsChangedEvent) => unknown;
 
-const sessionsChangedHandlers = new Set<SessionsChangedHandler>();
+const sessionsChangedHandlers = resolveGlobalSet<SessionsChangedHandler>(
+  Symbol.for("openclaw.pluginSessionsChangedHandlers"),
+  "plugin-registry",
+);
 
 export type OpenClawPluginGatewayEvents = {
   emit: (

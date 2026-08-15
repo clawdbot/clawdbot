@@ -323,6 +323,9 @@ NODE
       ui_success() { :; }
       ui_error() { printf 'error:%s\\n' "$*"; }
       git() {
+        if [[ "$1" == "--git-dir=$repo/.git" && "$2" == "--work-tree=$repo" && "$3" == "rev-parse" && "$6" == "HEAD^{commit}" ]]; then
+          return 0
+        fi
         if [[ "$1" == "-C" && "$3" == "status" ]]; then
           return 0
         fi
@@ -342,6 +345,40 @@ NODE
     expect(result.stdout).toContain("/node-bin/node");
     expect(result.stdout).toContain("fake-node:");
     expect(result.stdout).toContain("/repo/dist/entry.js --version");
+  });
+
+  it("rejects a git checkout without a commit without modifying it", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      tmp="$(mktemp -d)"
+      parent="$tmp/parent"
+      repo="$parent/repo"
+      git -C "$tmp" init -q parent
+      git -C "$parent" config user.email test@example.invalid
+      git -C "$parent" config user.name test
+      touch "$parent/seed"
+      git -C "$parent" add seed
+      git -C "$parent" commit -qm seed
+      mkdir -p "$repo"
+      git -C "$repo" init -q
+      printf 'ref: refs/heads/main\\n' > "$repo/.git/HEAD"
+      mkdir -p "$repo/.git/refs/heads"
+      printf '1111111111111111111111111111111111111111\\n' > "$repo/.git/refs/heads/main"
+      printf 'keep\\n' > "$repo/local.txt"
+      ui_info() { :; }
+      ui_error() { :; }
+
+      set +e
+      validate_git_checkout_head "$repo"
+      status="$?"
+      set -e
+      [[ "$status" -eq 1 ]]
+      [[ -f "$repo/local.txt" ]]
+      [[ -d "$repo/.git" ]]
+    `);
+
+    expect(result.status).toBe(0);
   });
 
   it("accepts GNU and musl Linux shells in OS detection", () => {
@@ -369,6 +406,33 @@ NODE
     const nodeSourceIndex = script.indexOf('ui_info "Installing Node.js via NodeSource"');
     expect(apkIndex).toBeGreaterThan(-1);
     expect(nodeSourceIndex).toBeGreaterThan(apkIndex);
+  });
+
+  it("propagates package manager failure out of install_build_tools_linux", () => {
+    // PATH="" hides real package managers so only the stubbed function below is
+    // discoverable, keeping the selected branch identical on macOS and Linux.
+    for (const packageManager of ["apt-get", "dnf", "yum", "apk", "pacman"]) {
+      const result = runInstallShell(`
+        set -uo pipefail
+        source "${SCRIPT_PATH}"
+        PATH=""
+        require_sudo() { :; }
+        is_root() { return 0; }
+        is_arch_linux() { [[ "${packageManager}" == "pacman" ]]; }
+        is_alpine_linux() { [[ "${packageManager}" == "apk" ]]; }
+        ui_warn() { printf 'warn:%s\\n' "$*"; }
+        ${packageManager}() { :; }
+        run_quiet_step() { return 1; }
+        if install_build_tools_linux; then
+          printf 'result:success\\n'
+        else
+          printf 'result:failure\\n'
+        fi
+      `);
+
+      expect(result.stdout, packageManager).toContain("result:failure");
+      expect(result.stdout, packageManager).not.toContain("result:success");
+    }
   });
 
   it("uses the apk Node.js installer path on Alpine", () => {
@@ -953,12 +1017,45 @@ NODE
     const output = result?.stdout ?? "";
     expect(output).toContain(`git=${join(openclawHome, "openclaw")}`);
     const mkdirParentIndex = script.indexOf('mkdir -p "$(dirname "$repo_dir")"');
-    const cloneIndex = script.indexOf(
-      'run_quiet_step "Cloning OpenClaw" git clone "$repo_url" "$repo_dir"',
-    );
+    // Ordering only. The clone flags are asserted behaviorally below, so this
+    // needle stays short enough to survive future changes to them.
+    const cloneIndex = script.indexOf('run_quiet_step "Cloning OpenClaw" git clone');
     expect(mkdirParentIndex).toBeGreaterThan(-1);
     expect(cloneIndex).toBeGreaterThan(-1);
     expect(mkdirParentIndex).toBeLessThan(cloneIndex);
+  });
+
+  it("uses a blobless partial clone for new git installs", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      repo="$HOME/openclaw"
+      check_git() { return 0; }
+      ensure_pnpm() { :; }
+      ensure_pnpm_binary_for_scripts() { :; }
+      resolve_git_openclaw_ref() { printf 'main\\n'; }
+      checkout_git_openclaw_ref() { :; }
+      cleanup_legacy_submodules() { :; }
+      activate_repo_pnpm_version() { :; }
+      git_install_lockfile_flag() { printf '%s\\n' '--frozen-lockfile'; }
+      run_quiet_step() {
+        printf 'step:%s|%s\\n' "$1" "\${*:2}"
+        [[ "$1" == "Cloning OpenClaw" ]] && mkdir -p "$repo"
+        return 0
+      }
+      ensure_user_local_bin_on_path() { mkdir -p "$HOME/.local/bin"; }
+      ui_info() { :; }
+      ui_success() { :; }
+      ui_error() { printf 'error:%s\\n' "$*"; }
+      git() { return 0; }
+
+      install_openclaw_from_git "$repo"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "step:Cloning OpenClaw|git clone --filter=blob:none https://github.com/openclaw/openclaw.git",
+    );
   });
 
   it("does not treat OS HOME config as active when OPENCLAW_HOME is set", () => {

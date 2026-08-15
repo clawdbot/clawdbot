@@ -37,13 +37,13 @@ Design principles (decided, do not relitigate casually):
 - **The hatch is a ceremony**: same thread, avatar swap, the agent names itself
   and picks its own face. The custodian teaches the hierarchy once: "ask me
   about the system, or just ask your agent — it relays."
-- **Trust is tiered by source**: official catalog entries may be pre-selected;
-  third-party ClawHub skills are never pre-selected regardless of model
+- **Trust is tiered by source**: official catalog entries may be preselected;
+  third-party ClawHub skills are never preselected regardless of model
   ranking, and their labels say they install the publisher's code.
 - **Configured installs are sacred**: re-running onboarding is a verification
   pass. It never re-applies setup and never restarts the Gateway service.
 - **The terminal is the fallback, not a question**: prefer the browser
-  dashboard when a gateway is reachable; never ask "terminal or browser?".
+  dashboard when the Gateway can serve it; never ask "terminal or browser?".
 - **Weak models get a trimmed surface** (auto `localModelLean`), explained in
   plain words — never in terms of tools, code mode, or context windows.
 
@@ -62,21 +62,22 @@ Design principles (decided, do not relitigate casually):
    options"). The first working route is announced as a default with a
    one-keystroke path to the full picker; exploring and skipping keeps the
    working route.
-4. Memory-import offer (Claude Code / Codex / Hermes), skipped when discovery
-   was declined.
-5. Fresh installs only: the standard setup plan applies automatically
+4. Fresh installs only: the standard setup plan applies automatically
    (workspace, Gateway service, sessions — the same plan the conversational
    "yes" runs). Configured installs print "already set up" and never touch the
    service.
+5. Memory-import offer (Claude Code / Codex / Hermes), skipped when discovery
+   was declined. Imports use the final workspace persisted by setup.
 6. **App recommendations**: installed apps matched by the verified model
    against official catalogs + ClawHub; official channel plugins arrive
    pre-checked, third-party skills opt-in with a warning label. Skippable;
    kill switch `wizard.appRecommendations`.
-7. **Hatch**: when a gateway is reachable, the browser handoff opens (GUI) or
-   prints (headless/SSH) the dashboard URL and waits for the Control UI to
-   connect — "Dashboard connected — continuing in your browser." Otherwise, or
-   with `--tui`, the terminal TUI opens seeded with the bootstrap hatch
-   message and the agent introduces itself.
+7. **Hatch**: the Gateway builds missing Control UI assets in the background.
+   Once it serves the dashboard, the browser handoff opens it (GUI) or prints
+   a URL without authentication secrets (headless/SSH) and waits for the
+   Control UI to connect — "Dashboard connected — continuing in your browser."
+   Otherwise, or with `--tui`, the terminal TUI opens seeded with the bootstrap
+   hatch message and the agent introduces itself.
 
 Remote-gateway onboarding keeps its legacy conversational handoff
 (`handoffMode: "chat"`); setup must apply on the remote gateway.
@@ -112,7 +113,7 @@ Remote-gateway onboarding keeps its legacy conversational handoff
   explicit cap is passed).
 - **Supply-chain guard**: ClawHub listing text is publisher-controlled and
   reaches the matcher prompt, so a listing can promote itself to
-  "recommended". Only official catalog entries may be pre-selected; ClawHub
+  "recommended". Only official catalog entries may be preselected; ClawHub
   skills always require an explicit tick and are labeled "third-party ClawHub
   skill; installs its publisher's code".
 - Node command `device.apps` (TS node-host, Android envelope parity), sharing
@@ -140,31 +141,36 @@ Remote-gateway onboarding keeps its legacy conversational handoff
   counts in the quip are deferred (qualitative only) until a cheap
   session-count seam exists.
 - Fresh installs: `applySystemAgentSetup` (the deterministic conversational
-  "yes"), then hatch via `launchTuiCli` seeded with the bootstrap message.
+  "yes") persists the workspace and starts the Gateway before memory import;
+  the terminal hatch uses `launchTuiCli` seeded with the bootstrap message.
   Configured installs (pre-existing model or gateway config — wizard
   timestamps prove nothing, they are shared with configure/doctor):
-  verification only — no apply, no Gateway service restart. Apply failure
-  falls back to the conversational chat.
+  verification only — no apply, no Gateway service restart. Only a pending
+  onboarding receipt allows an interrupted fresh setup to resume. Apply
+  failure falls back to the conversational chat.
 
 ### Phase 3 — browser-first handoff (PR #110054, merged)
 
 - `src/commands/onboard-browser-handoff.ts` owns pure graphical-session
   detection (`SSH_CONNECTION`/`SSH_TTY`; `DISPLAY`/`WAYLAND_DISPLAY` on Linux)
-  and the 60-second GUI / 300-second SSH wait. Guided onboarding currently
-  enables the handoff only on macOS; `--tui` and other platforms keep the
-  terminal hatch. Linux/Windows enablement is a follow-up.
-- Dashboard links use the same `resolveAdvertisedControlUiLinks`,
-  `resolveLocalControlUiProbeLinks`, and `buildOnboardingControlUiUrl` helpers
-  as classic finalize. Browser launch uses the shared `openUrl` helper.
-- Readiness polls the existing `system-presence` RPC as a **CLI-mode loopback
-  client presenting the configured shared secret** — the trusted path every
-  `openclaw` command uses. A raw shared-auth Control UI client is rejected
-  with "device identity required" on SecretRef gateways. The reachability
-  preflight resolves the same target (and secret) as the wait loop, so the
-  gate and the wait can never disagree on auth. The handoff completes only
-  when a connected `openclaw-control-ui`/`webchat` presence row is new
-  relative to the pre-launch baseline (an already-open dashboard cannot
-  complete it).
+  and the 60-second GUI / 300-second SSH wait. Guided onboarding supports
+  graphical desktop sessions on macOS, Linux, and Windows; headless/SSH
+  sessions print the dashboard URL, and `--tui` forces the terminal hatch.
+- `src/commands/control-ui-handoff.ts` owns dashboard targets, served-document
+  readiness, and one-time browser pairing for onboarding and
+  `openclaw dashboard`. GUI launches receive a one-time bootstrap link; headless/SSH
+  output prints a clean URL with manual authentication guidance. Browser
+  launch uses the shared `openUrl` helper.
+- One resolved target confirms that the Gateway serves the dashboard document,
+  captures the pre-launch presence baseline, and waits for a new connection.
+  Missing Control UI assets build asynchronously without blocking Gateway
+  startup. Connection tracking polls the existing `system-presence` RPC as a
+  **CLI-mode loopback client presenting the configured shared secret** — the
+  trusted path every `openclaw` command uses. A raw shared-auth Control UI
+  client is rejected with "device identity required" on SecretRef gateways.
+  The handoff completes only when a connected `openclaw-control-ui`/`webchat`
+  presence row is new relative to the baseline (an already-open dashboard
+  cannot complete it).
 - `gateway.controlUi.enabled: false` short-circuits before any URL is shown.
 - Proven end-to-end against an isolated same-config gateway: URL print → real
   browser connect → "Dashboard connected — continuing in your browser" → no
@@ -260,6 +266,12 @@ extraction); event-reactive commentary and channel summon/agent-down recovery
 (phase 6 PR2); automatic `localModelLean` for weak models; whether existing
 users' saved sidebar pins should adopt the OpenClaw entry.
 
+The macOS app now follows the same browser-first principle: native onboarding
+ends once inference verifies (install + AI setup pages), and Finish opens the
+dashboard at `/custodian?onboarding=1`. The native memory-import and
+permissions pages left the first-run flow (Settings → Permissions remains);
+deleting the now-unreachable native memory-import module is a follow-up.
+
 ## Testing and landing playbook (hard-won; read before phases 4-6)
 
 - **`OPENCLAW_STATE_DIR` does not isolate the Gateway service.** The
@@ -300,8 +312,8 @@ restart` from the real environment and verify the plist. Product follow-up:
   `CI release gate <sha>`, which `scripts/verify-pr-hosted-gates.mjs`
   accepts. Then `scripts/pr` prepare/merge as usual.
 
-- **Gates that CI enforces beyond focused tests**: docs map
-  (`pnpm docs:map:gen` after adding any docs page), oxlint (`no-map-spread`,
+- **Gates that CI enforces beyond focused tests**: docs consistency
+  (`pnpm check:docs` after changing docs), oxlint (`no-map-spread`,
   `max-lines` — split files, never suppress), `check:test-types`, knip
   deadcode (export only what prod consumes; route tests through public APIs),
   and the live-test shard classifier
@@ -312,7 +324,7 @@ restart` from the real environment and verify the plist. Product follow-up:
 - Magical scan with kill switch, not consent-first (phase 1; persistent output
   discloses model and ClawHub use before scanning, and the results note repeats it).
 - Full vertical including the node `device.apps` command (phase 1).
-- Third-party ClawHub skills are never pre-selected and are labeled as
+- Third-party ClawHub skills are never preselected and are labeled as
   installing the publisher's code; official entries may be pre-checked
   (phase 1, shipped security posture).
 - Two access cards, not three; consent front-loaded into the choice (phase 2).
@@ -339,7 +351,6 @@ restart` from the real environment and verify the plist. Product follow-up:
   real multi-instance product gap).
 - Recommendations once-semantics and the stored scan (phase 5); reruns
   currently re-offer.
-- Browser handoff is macOS-only; Linux/Windows enablement pending.
 - Session-count quip is qualitative; counts need a cheap session-count seam.
 - Browser handoff lands on the normal dashboard; onboarding-mode custodian
   deep-link arrives with phase 4.

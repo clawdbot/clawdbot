@@ -13,6 +13,7 @@ describe("QA Docker E2E lane fixture", () => {
     expect(listQaDockerE2eLaneNames()).toEqual(
       expect.arrayContaining([
         "agent-bundle-mcp-tools",
+        "cli-installer-distribution",
         "codex-on-demand",
         "system-agent-first-run",
         "gateway-network",
@@ -21,7 +22,7 @@ describe("QA Docker E2E lane fixture", () => {
         "update-restart-auth",
       ]),
     );
-    expect(listQaDockerE2eLaneNames()).toEqual([...listQaDockerE2eLaneNames()].sort());
+    expect(listQaDockerE2eLaneNames()).toEqual([...listQaDockerE2eLaneNames()].toSorted());
   });
 
   it("parses help, list, and lane arguments", () => {
@@ -48,6 +49,9 @@ describe("QA Docker E2E lane fixture", () => {
     expect(resolveQaDockerE2eLane("codex-on-demand", {}).script).toBe(
       "scripts/e2e/codex-on-demand-docker.sh",
     );
+    expect(resolveQaDockerE2eLane("cli-installer-distribution", {}).script).toBe(
+      "scripts/e2e/cli-installer-distribution-docker.sh",
+    );
 
     const updateMigration = resolveQaDockerE2eLane("update-migration", {
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@custom",
@@ -60,8 +64,16 @@ describe("QA Docker E2E lane fixture", () => {
     expect(updateMigration.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO).toBe("custom-scenario");
 
     const updateRestartAuth = resolveQaDockerE2eLane("update-restart-auth", {});
+    expect(updateRestartAuth.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC).toBe("openclaw@latest");
+    expect(updateRestartAuth.env.OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE).toBe("1");
     expect(updateRestartAuth.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE).toBe("auto-auth");
     expect(updateRestartAuth.env.OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT).toBe("1500s");
+
+    expect(
+      resolveQaDockerE2eLane("update-restart-auth", {
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "openclaw@custom",
+      }).env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC,
+    ).toBe("openclaw@custom");
   });
 
   it("dispatches through bash without running Docker in fixture tests", () => {

@@ -76,7 +76,20 @@ describe("createBrowserGatewaySocket", () => {
     socket?.emit("error");
     socket?.emit("close", { code: 1006, reason: "" });
     expect(handlers.error).toHaveBeenCalledOnce();
-    expect(handlers.close).toHaveBeenCalledWith(1006, "");
+    expect(handlers.close).toHaveBeenCalledWith(
+      1006,
+      `gateway websocket opening timed out after ${DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS}ms`,
+    );
+  });
+
+  it("preserves a real close reason when an opening timeout also occurred", async () => {
+    const handlers = createHandlers();
+    createBrowserGatewaySocket("wss://gateway.example", handlers);
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
+    sockets[0]?.emit("close", { code: 1006, reason: "gateway supplied a close reason" });
+
+    expect(handlers.close).toHaveBeenCalledWith(1006, "gateway supplied a close reason");
   });
 
   it("clears the opening deadline after the socket opens", async () => {

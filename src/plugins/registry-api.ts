@@ -108,7 +108,8 @@ export function createPluginApiFactory(
     registerCli,
     registerChannel,
   } = registrars;
-  const { resolvePluginRuntime, setPluginRuntimeRecord } = runtimeResolver;
+  const { resolvePluginRuntime, resolveRegisteredChannelRuntime, setPluginRuntimeRecord } =
+    runtimeResolver;
 
   const createPluginSideEffectGuard = (pluginId: string): PluginSideEffectGuard => {
     const guard = { active: true };
@@ -286,7 +287,11 @@ export function createPluginApiFactory(
                 shouldCommitWorkflowSideEffect()
                   ? setPluginRunContext({ pluginId: record.id, patch })
                   : false,
-              getRunContext: (get) => getPluginRunContext({ pluginId: record.id, get }),
+              getRunContext: (get) =>
+                registryParams.activateGlobalSideEffects !== false &&
+                shouldCommitWorkflowSideEffect()
+                  ? getPluginRunContext({ pluginId: record.id, get })
+                  : undefined,
               clearRunContext: (paramsLocal) => {
                 if (
                   registryParams.activateGlobalSideEffects === false ||
@@ -380,7 +385,15 @@ export function createPluginApiFactory(
         // Allow setup-only/setup-runtime paths to surface parse-time CLI metadata
         // without opting into the wider full-registration surface.
         registerCli: (registrar, opts) => registerCli(record, registrar, opts),
-        registerChannel: (registration) => registerChannel(record, registration, registrationMode),
+        registerChannel: (registration) =>
+          registerChannel(
+            record,
+            registration,
+            registrationMode,
+            registrationCapabilities.runtimeChannel
+              ? () => resolveRegisteredChannelRuntime(record)
+              : undefined,
+          ),
       },
     });
   };

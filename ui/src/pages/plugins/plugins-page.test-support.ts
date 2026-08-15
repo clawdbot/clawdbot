@@ -9,6 +9,7 @@ import type {
 import { t } from "../../i18n/index.ts";
 import type {
   PluginCatalogItem,
+  PluginInstallRequest,
   PluginListResult,
   PluginMutationResult,
   PluginSearchResult,
@@ -18,6 +19,7 @@ import {
   type ApplicationContextProvider,
 } from "../../test-helpers/application-context.ts";
 import type { PluginsRouteData } from "./plugins-page.ts";
+import type { PluginRowMessage } from "./view.ts";
 import "./plugins-page.ts";
 
 type RequestHandler = (method: string, params: unknown) => Promise<unknown>;
@@ -33,9 +35,14 @@ type TestPluginsPage = HTMLElement & {
   result: PluginListResult | null;
   loading: boolean;
   busy: Record<string, boolean>;
+  messages: Record<string, PluginRowMessage>;
   activeTab: "installed" | "discover";
   searchResults: PluginSearchResult[] | null;
   applyMutationResult: (result: PluginMutationResult) => void;
+  install: (request: PluginInstallRequest, installIdentity: string) => Promise<void>;
+  refreshCatalog: () => Promise<void>;
+  updateEnabled: (pluginId: string, enabled: boolean, key?: string) => Promise<void>;
+  uninstall: (pluginId: string, rowKey: string) => Promise<void>;
 };
 
 export type RuntimeConfigTestState = {
@@ -150,6 +157,7 @@ type RuntimeConfigTestHarness = {
       typeof vi.fn<(options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>>
     >;
     patchFromSnapshot: ApplicationContext["runtimeConfig"]["patchFromSnapshot"];
+    runExternalMutation: ApplicationContext["runtimeConfig"]["runExternalMutation"];
     subscribe: (listener: (state: RuntimeConfigTestState) => void) => () => void;
   };
   notify: () => void;
@@ -158,6 +166,7 @@ type RuntimeConfigTestHarness = {
 export function createRuntimeConfigHarness(
   refreshConfig: ApplicationContext["runtimeConfig"]["refresh"],
   runtimeConfigState: RuntimeConfigTestState,
+  getClient?: () => GatewayBrowserClient | null,
 ): RuntimeConfigTestHarness {
   const listeners = new Set<(state: RuntimeConfigTestState) => void>();
   const patch = vi.fn<
@@ -176,6 +185,38 @@ export function createRuntimeConfigHarness(
         return false;
       }
       return patch(built.options);
+    }),
+    runExternalMutation: vi.fn(async (task) => {
+      const client = getClient?.() ?? null;
+      if (!client) {
+        return {
+          ok: false as const,
+          reason: "unavailable" as const,
+          error: "Configuration is unavailable; reconnect and try again.",
+        };
+      }
+      try {
+        const value = await task(client);
+        try {
+          await refreshConfig();
+          return { ok: true as const, value, refresh: { ok: true as const } };
+        } catch (error) {
+          return {
+            ok: true as const,
+            value,
+            refresh: {
+              ok: false as const,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          };
+        }
+      } catch (error) {
+        return {
+          ok: false as const,
+          reason: "error" as const,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
     }),
     subscribe(listener: (state: RuntimeConfigTestState) => void) {
       listeners.add(listener);
@@ -199,7 +240,11 @@ export function createContext(
     configFormDirty: false,
     lastError: null,
   },
-  harness = createRuntimeConfigHarness(refreshConfig, runtimeConfigState),
+  harness = createRuntimeConfigHarness(
+    refreshConfig,
+    runtimeConfigState,
+    () => gateway.snapshot.client,
+  ),
 ): ApplicationContext {
   return {
     gateway,
@@ -225,10 +270,12 @@ export async function mountPage(
 
 export function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
     resolve = nextResolve;
+    reject = nextReject;
   });
-  return { promise, resolve };
+  return { promise, reject, resolve };
 }
 
 export async function clickRowAction(page: TestPluginsPage, pluginSelector: string, label: string) {

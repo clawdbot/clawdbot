@@ -2,9 +2,9 @@
 // detecting stale channel runtime state against live gateway snapshots.
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import { listContextEngineQuarantines } from "../../context-engine/registry.js";
 import { getStatusSummary } from "../../status/summary.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
+import { buildContextEngineHealthSummary } from "../health/context-engine.js";
 import { buildDeliveryQueueHealthSummary } from "../health/delivery-queue.js";
 import type { ChannelHealthSummary, HealthSummary } from "../health/types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
@@ -33,27 +33,13 @@ function shouldScheduleRequestRefresh(
   return true;
 }
 
-function cachedAccountForRuntimeSnapshot(params: {
-  cachedChannel: ChannelHealthSummary | undefined;
-  accountId: string | undefined;
-}): ChannelHealthSummary | undefined {
-  const accountId = params.accountId;
-  if (accountId && params.cachedChannel?.accounts?.[accountId]) {
-    return params.cachedChannel.accounts[accountId];
-  }
-  return undefined;
-}
-
 function cachedLifecycleDiffersFromRuntime(params: {
   cachedAccount: ChannelHealthSummary | undefined;
   runtimeSnapshot: ChannelAccountSnapshot;
 }): boolean {
-  for (const key of ["running", "connected"] as const) {
+  for (const key of ["running", "connected", "lifecycle"] as const) {
     const runtimeValue = params.runtimeSnapshot[key];
-    if (typeof runtimeValue !== "boolean") {
-      continue;
-    }
-    if (params.cachedAccount?.[key] !== runtimeValue) {
+    if (runtimeValue !== undefined && params.cachedAccount?.[key] !== runtimeValue) {
       return true;
     }
   }
@@ -85,16 +71,19 @@ function cachedHealthDiffersFromRuntime(
       continue;
     }
     const cachedChannel = cached.channels[channelId];
+    const cachedAccounts = cachedChannel?.accounts;
+    if (
+      Object.keys(cachedAccounts ?? {}).some((accountId) => !Object.hasOwn(accounts, accountId))
+    ) {
+      return true;
+    }
     for (const [accountId, runtimeSnapshot] of Object.entries(accounts)) {
       if (!runtimeSnapshot) {
         continue;
       }
       if (
         cachedLifecycleDiffersFromRuntime({
-          cachedAccount: cachedAccountForRuntimeSnapshot({
-            cachedChannel,
-            accountId,
-          }),
+          cachedAccount: cachedAccounts?.[accountId],
           runtimeSnapshot,
         })
       ) {
@@ -117,29 +106,16 @@ function mergeCachedHealthRuntimeState(params: {
     deliveryQueues: _cachedDeliveryQueues,
     ...cached
   } = params.cached;
-  // Dead-letter counts are cheap SQLite reads; recompute them like context
-  // engines so a delivery that failed after the cache was filled is not hidden
-  // for a refresh interval.
-  const deliveryQueues = buildDeliveryQueueHealthSummary();
-  const quarantinedContextEngines: NonNullable<HealthSummary["contextEngines"]>["quarantined"] = [];
-  for (const entry of listContextEngineQuarantines()) {
-    const summary: NonNullable<HealthSummary["contextEngines"]>["quarantined"][number] = {
-      engineId: entry.engineId,
-      operation: entry.operation,
-      reason: entry.reason,
-      failedAt: entry.failedAt.getTime(),
-    };
-    if (entry.owner) {
-      summary.owner = entry.owner;
-    }
-    quarantinedContextEngines.push(summary);
-  }
+  // Dead-letter counts are cheap live reads. Preserve the grouped pressure
+  // aggregate for the cache interval so routine health RPCs do not amplify it.
+  const deliveryQueues = buildDeliveryQueueHealthSummary(
+    _cachedDeliveryQueues?.ingressPressure ?? [],
+  );
+  const contextEngines = buildContextEngineHealthSummary();
   return {
     ...cached,
     ...(params.eventLoop ? { eventLoop: params.eventLoop } : {}),
-    ...(quarantinedContextEngines.length > 0
-      ? { contextEngines: { quarantined: quarantinedContextEngines } }
-      : {}),
+    ...(contextEngines ? { contextEngines } : {}),
     ...(deliveryQueues ? { deliveryQueues } : {}),
     ...(params.configReloadHotReloadStatus
       ? { configReload: { hotReloadStatus: params.configReloadHotReloadStatus } }
@@ -199,9 +175,11 @@ export const healthHandlers: GatewayRequestHandlers = {
   },
   status: async ({ respond, client, params, context }) => {
     const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    const hostDesktopStatus = await context.hostDesktopService?.status();
     const status = await getStatusSummary({
       includeSensitive: scopes.includes(ADMIN_SCOPE),
       includeChannelSummary: params.includeChannelSummary !== false,
+      ...(hostDesktopStatus ? { hostDesktopStatus } : {}),
     });
     if (context.getEventLoopHealth) {
       status.eventLoop = context.getEventLoopHealth();

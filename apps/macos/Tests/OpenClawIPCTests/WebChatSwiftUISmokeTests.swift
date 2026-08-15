@@ -125,29 +125,11 @@ struct WebChatSwiftUISmokeTests {
     }
 
     @Test func `window controller merges titlebar and keeps toolbar controls`() throws {
-        let traceKeys = [
-            OpenClawChatWindowShell.assistantTraceDefaultsKey,
-            OpenClawChatWindowShell.assistantReasoningDefaultsKey,
-            OpenClawChatWindowShell.assistantToolActivityDefaultsKey,
-        ]
-        let previousTraceValues = traceKeys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
-        traceKeys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
-        defer {
-            for (key, value) in previousTraceValues {
-                if let value {
-                    UserDefaults.standard.set(value, forKey: key)
-                } else {
-                    UserDefaults.standard.removeObject(forKey: key)
-                }
-            }
-        }
         let controller = WebChatSwiftUIWindowController(
             sessionKey: "main",
-            presentation: .window,
             transport: TestTransport(),
             windowTitle: "Studio — OpenClaw")
         let window = try #require(controller._testWindow)
-        let capabilities = try #require(controller._testChatCapabilities)
 
         #expect(window.styleMask.contains(.fullSizeContentView))
         #expect(window.titleVisibility == .hidden)
@@ -155,15 +137,12 @@ struct WebChatSwiftUISmokeTests {
         #expect(window.toolbarStyle == .unified)
         #expect(window.titlebarSeparatorStyle == .none)
         #expect(window.isMovableByWindowBackground)
+        #expect(window.isRestorable == false)
         #expect(window.title == "Studio — OpenClaw")
         window.title = "main"
         #expect(window.title == "Studio — OpenClaw")
         #expect(controller._testSceneBridgingOptions?.contains(.toolbars) == true)
         #expect(controller._testSceneBridgingOptions?.contains(.title) == false)
-        #expect(capabilities.hasTalkControl)
-        #expect(capabilities.hasSpeech)
-        #expect(capabilities.hasVoiceNoteControl)
-        #expect(capabilities.displayOptions == .assistantTrace)
 
         controller.show()
         #expect(window.titleVisibility == .hidden)
@@ -171,20 +150,9 @@ struct WebChatSwiftUISmokeTests {
         controller.close()
     }
 
-    @Test func `panel controller present and close`() {
-        let anchor = { NSRect(x: 200, y: 400, width: 40, height: 40) }
-        let controller = WebChatSwiftUIWindowController(
-            sessionKey: "main",
-            presentation: .panel(anchorProvider: anchor),
-            transport: TestTransport())
-        controller.presentAnchored(anchorProvider: anchor)
-        controller.close()
-    }
-
     @Test func `closing a full window releases it and notifies its owner once`() {
         let controller = WebChatSwiftUIWindowController(
             sessionKey: "main",
-            presentation: .window,
             transport: TestTransport())
         var closeCount = 0
         var visibilityChanges: [Bool] = []
@@ -221,7 +189,6 @@ struct WebChatSwiftUISmokeTests {
         let controller = WebChatSwiftUIWindowController(
             sessionKey: "main",
             initialDraft: "Wake up, my friend!",
-            presentation: .window,
             transport: TestTransport())
 
         #expect(controller._testDraft == "Wake up, my friend!")
@@ -238,13 +205,11 @@ struct WebChatSwiftUISmokeTests {
         let explicit = WebChatSwiftUIWindowController(
             sessionKey: "global",
             agentID: " Work ",
-            presentation: .window,
             cachedRoutingIdentity: cachedIdentity,
             store: nil)
         let fallback = WebChatSwiftUIWindowController(
             sessionKey: "global",
             agentID: nil,
-            presentation: .window,
             cachedRoutingIdentity: cachedIdentity,
             store: nil)
 

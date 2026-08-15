@@ -1,8 +1,9 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isRenderableAvatarImageDataUrl } from "../../../src/shared/avatar-limits.js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { DEFAULT_ASSISTANT_AVATAR } from "./assistant-identity.ts";
-import { normalizeOptionalString } from "./string-coerce.ts";
+import { takeGraphemes } from "./graphemes.ts";
 
 const CONTROL_UI_SAME_ORIGIN_AVATAR_URL_RE = /^\/(?!\/)/;
 const UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u;
@@ -46,6 +47,15 @@ export function resolveChatAvatarRenderUrl(
     return trimmed;
   }
   return resolveAgentAvatarUrl(agent, agentIdentity);
+}
+
+export function deriveAvatarInitial(value: string | null | undefined): string {
+  const source = value ?? "";
+  if (!source) {
+    return "";
+  }
+  // Keep the whole leading grapheme so emoji names never expose a broken surrogate.
+  return takeGraphemes(source, 1).toUpperCase();
 }
 
 export function resolveAssistantTextAvatar(value: string | null | undefined): string | null {

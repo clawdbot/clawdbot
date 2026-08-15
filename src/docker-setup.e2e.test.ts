@@ -155,6 +155,10 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.stdout).toContain("Access from tailnet devices via the host's tailnet IP.");
     expect(result.stdout).toContain("Commands:");
     expect(result.stdout).toContain("logs -f openclaw-gateway");
+    expect(result.stdout).toContain(
+      `exec openclaw-gateway sh -lc 'node dist/index.js gateway health --token "$OPENCLAW_GATEWAY_TOKEN"'`,
+    );
+    expect(result.stdout).not.toContain("node dist/index.js health --token");
     expect(result.stdout).not.toContain("test-token");
     expect(result.stdout).not.toContain("#token=");
     expect(log).toContain(
@@ -208,6 +212,25 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.status).toBe(0);
     const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
     expect(envFile).toContain("OPENCLAW_DISABLE_BONJOUR=0");
+  });
+
+  it("persists and forwards signal-specific OTLP protocol overrides", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    const protocolEnv = {
+      OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: "http/protobuf",
+      OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: "http/protobuf",
+      OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: "http/protobuf",
+    };
+
+    const result = runDockerSetup(activeSandbox, protocolEnv);
+
+    expect(result.status).toBe(0);
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
+    for (const [key, value] of Object.entries(protocolEnv)) {
+      expect(envFile).toContain(`${key}=${value}`);
+      expect(compose).toContain(`${key}: \${${key}:-}`);
+    }
   });
 
   it("normalizes legacy OPENCLAW_DOCKER_APT_PACKAGES into OPENCLAW_IMAGE_APT_PACKAGES", async () => {
@@ -807,7 +830,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.stderr).toContain("OPENCLAW_HOME_VOLUME must match");
   });
 
-  it("rejects OPENCLAW_TZ values that are not present in zoneinfo", () => {
+  it("rejects OPENCLAW_TZ values that are unsupported by the runtime image", () => {
     const activeSandbox = requireSandbox(sandbox);
 
     const result = runDockerSetup(activeSandbox, {
@@ -815,7 +838,7 @@ describe("scripts/docker/setup.sh", () => {
     });
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("OPENCLAW_TZ must match a timezone in /usr/share/zoneinfo");
+    expect(result.stderr).toContain("OPENCLAW_TZ must be supported by openclaw:local");
   });
 
   it("skips onboarding when OPENCLAW_SKIP_ONBOARDING is set", async () => {

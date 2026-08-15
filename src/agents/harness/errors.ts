@@ -30,10 +30,28 @@ export class AgentHarnessSessionSupersededError extends Error {
 
 /** A model-independent harness preflight failed before an attempt could start. */
 export class AgentHarnessPreflightError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
+  /** Opts fallback into skipping only candidates owned by the selected harness. */
+  readonly scope?: "harness";
+
+  constructor(message: string, options?: ErrorOptions & { scope?: "harness" }) {
     super(message, options);
     this.name = "AgentHarnessPreflightError";
+    this.scope = options?.scope;
   }
+}
+
+// The host records the selected harness where the attempt runs. Plugins can opt
+// into harness-local fallback, but cannot suppress candidates by naming an owner.
+const agentHarnessPreflightOwners = new WeakMap<AgentHarnessPreflightError, string>();
+
+export function recordAgentHarnessPreflightOwner(error: unknown, harnessId: string): void {
+  if (isAgentHarnessPreflightError(error) && error.scope === "harness") {
+    agentHarnessPreflightOwners.set(error, harnessId);
+  }
+}
+
+export function resolveAgentHarnessPreflightOwner(error: unknown): string | undefined {
+  return isAgentHarnessPreflightError(error) ? agentHarnessPreflightOwners.get(error) : undefined;
 }
 
 /** Returns whether fallback would only repeat the same harness preflight failure. */

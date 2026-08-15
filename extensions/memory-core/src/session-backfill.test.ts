@@ -10,7 +10,6 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeBackfillDiaryEntries } from "./dreaming-narrative.js";
-import { writeSessionIngestionState } from "./dreaming-phases.js";
 import {
   clearMemoryCoreWorkspaceNamespace,
   SESSION_BACKFILL_REWIND_NAMESPACE,
@@ -25,6 +24,7 @@ import {
   executeSessionBackfillBatch,
   runSessionBackfill,
 } from "./session-backfill.js";
+import { writeSessionIngestionState } from "./session-ingestion.js";
 import { readShortTermRecallEntries } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness, dreamingTestState } from "./test-helpers.js";
 

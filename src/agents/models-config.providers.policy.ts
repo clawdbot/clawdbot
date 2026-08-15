@@ -5,6 +5,7 @@ import {
   applyProviderNativeStreamingUsagePolicy,
   normalizeProviderConfigPolicy,
   resolveProviderConfigApiKeyPolicy,
+  type ProviderPolicyManifestRegistry,
 } from "./models-config.providers.policy.runtime.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
@@ -34,8 +35,9 @@ export function applyNativeStreamingUsageCompat(
 export function normalizeProviderSpecificConfig(
   providerKey: string,
   provider: ProviderConfig,
+  manifestRegistry?: ProviderPolicyManifestRegistry,
 ): ProviderConfig {
-  const normalized = normalizeProviderConfigPolicy(providerKey, provider);
+  const normalized = normalizeProviderConfigPolicy(providerKey, provider, manifestRegistry);
   if (normalized && normalized !== provider) {
     return normalized;
   }
@@ -46,6 +48,7 @@ export function normalizeProviderSpecificConfig(
 export function resolveProviderConfigApiKeyResolver(
   providerKey: string,
   provider?: ProviderConfig,
+  manifestRegistry?: ProviderPolicyManifestRegistry,
 ): ((env: NodeJS.ProcessEnv) => string | undefined) | undefined {
-  return resolveProviderConfigApiKeyPolicy(providerKey, provider);
+  return resolveProviderConfigApiKeyPolicy(providerKey, provider, manifestRegistry);
 }

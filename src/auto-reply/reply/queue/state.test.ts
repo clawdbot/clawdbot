@@ -1,7 +1,12 @@
 // Tests queue state storage, dedupe, and cleanup primitives.
 import { afterEach, describe, expect, it } from "vitest";
 import { enqueueFollowupRun } from "./enqueue.js";
-import { clearFollowupQueue, getFollowupQueue, refreshQueuedFollowupSession } from "./state.js";
+import {
+  clearFollowupQueue,
+  getFollowupQueue,
+  hasPendingFollowupQueueWork,
+  refreshQueuedFollowupSession,
+} from "./state.js";
 import type { FollowupRun } from "./types.js";
 
 const QUEUE_KEY = "agent:main:dm:test";
@@ -56,6 +61,7 @@ describe("refreshQueuedFollowupSession", () => {
           run: makeRun(),
         },
       ],
+      summaryLines: ["elided summary"],
       sourceRefs: new WeakMap(),
     });
 
@@ -124,6 +130,32 @@ describe("refreshQueuedFollowupSession", () => {
     });
   });
 
+  it("clears queued model override strictness when retargeting to the configured default", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    queue.items.push({
+      prompt: "queued message",
+      enqueuedAt: Date.now(),
+      run: {
+        ...makeRun(),
+        hasSessionModelOverride: true,
+        modelOverrideSource: "user",
+      },
+    });
+
+    refreshQueuedFollowupSession({
+      key: QUEUE_KEY,
+      nextProvider: "anthropic",
+      nextModel: "claude-opus-4-6",
+      nextRouteResolution: "resolved",
+      nextModelOverrideSource: undefined,
+    });
+
+    expect(queue.items[0]?.run).toMatchObject({
+      hasSessionModelOverride: false,
+      modelOverrideSource: undefined,
+    });
+  });
+
   it("clamps queued Sol Ultra work to Codex Luna Max", () => {
     const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     queue.items.push({
@@ -142,13 +174,18 @@ describe("refreshQueuedFollowupSession", () => {
       nextProvider: "openai",
       nextModel: "gpt-5.6-luna",
       nextRouteResolution: "resolved",
-      nextThinking: { level: "ultra", agentRuntime: "codex" },
+      nextThinking: {
+        level: "ultra",
+        catalog: [{ provider: "openai", id: "gpt-5.6-luna", reasoning: true }],
+        agentRuntime: "codex",
+      },
     });
 
     expect(queue.items[0]?.run).toMatchObject({
       provider: "openai",
       model: "gpt-5.6-luna",
       thinkLevel: "max",
+      thinkingCatalog: [{ provider: "openai", id: "gpt-5.6-luna", reasoning: true }],
     });
   });
 
@@ -222,6 +259,7 @@ describe("getFollowupQueue", () => {
           enqueuedAt: Date.now(),
           run: makeRun(),
         })),
+        summaryLines: Array.from({ length: count }, () => contextKey),
         sourceRefs: new WeakMap(),
       });
     }
@@ -231,6 +269,45 @@ describe("getFollowupQueue", () => {
 
     expect(updated.summaryElisions.map((entry) => entry.contextKey)).toEqual(["newest"]);
     expect(updated.summaryElisions[0]?.sources).toHaveLength(1);
+    expect(updated.summaryElisions[0]?.summaryLines).toEqual(["newest"]);
     expect(updated.evictedSummaryCount).toBe(13);
+  });
+});
+
+describe("hasPendingFollowupQueueWork", () => {
+  it("detects each actionable queued-work representation", () => {
+    const cases = [
+      (queue: ReturnType<typeof getFollowupQueue>) => {
+        queue.items.push({
+          prompt: "queued message",
+          enqueuedAt: Date.now(),
+          run: makeRun(),
+        });
+      },
+      (queue: ReturnType<typeof getFollowupQueue>) => {
+        queue.inFlight.add({
+          prompt: "in-flight collected message",
+          enqueuedAt: Date.now(),
+          run: makeRun(),
+        });
+      },
+      (queue: ReturnType<typeof getFollowupQueue>) => {
+        queue.droppedCount = 1;
+      },
+    ];
+
+    for (const populate of cases) {
+      const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+      populate(queue);
+      expect(hasPendingFollowupQueueWork(["", ` ${QUEUE_KEY} `, QUEUE_KEY])).toBe(true);
+      clearFollowupQueue(QUEUE_KEY);
+    }
+  });
+
+  it("ignores empty queues and historical eviction accounting", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    queue.evictedSummaryCount = 3;
+
+    expect(hasPendingFollowupQueueWork([undefined, "", QUEUE_KEY])).toBe(false);
   });
 });

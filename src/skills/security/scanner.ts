@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../infra/errors.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isPathInside } from "../../security/scan-paths.js";
 import { formatScanEvidence, LITERAL_SECRET_SKILL_CONTENT_RULE } from "./scan-evidence.js";
 
@@ -59,6 +60,7 @@ const SCANNABLE_EXTENSIONS = new Set([
 
 const DEFAULT_MAX_SCAN_FILES = 500;
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
+const MAX_LINE_RULE_FINDINGS_PER_RULE = 32;
 const FILE_SCAN_CACHE_MAX = 5000;
 const DIR_ENTRY_CACHE_MAX = 5000;
 const TEST_DIRECTORY_NAMES = new Set(["__fixtures__", "__mocks__", "__tests__", "test", "tests"]);
@@ -113,22 +115,12 @@ function getCachedFileScanResult(params: {
 }
 
 function setCachedFileScanResult(filePath: string, entry: FileScanCacheEntry): void {
-  if (FILE_SCAN_CACHE.size >= FILE_SCAN_CACHE_MAX) {
-    const oldest = FILE_SCAN_CACHE.keys().next();
-    if (!oldest.done) {
-      FILE_SCAN_CACHE.delete(oldest.value);
-    }
-  }
+  pruneMapToMaxSize(FILE_SCAN_CACHE, FILE_SCAN_CACHE_MAX - 1);
   FILE_SCAN_CACHE.set(filePath, entry);
 }
 
 function setCachedDirEntries(dirPath: string, entry: DirEntryCacheEntry): void {
-  if (DIR_ENTRY_CACHE.size >= DIR_ENTRY_CACHE_MAX) {
-    const oldest = DIR_ENTRY_CACHE.keys().next();
-    if (!oldest.done) {
-      DIR_ENTRY_CACHE.delete(oldest.value);
-    }
-  }
+  pruneMapToMaxSize(DIR_ENTRY_CACHE, DIR_ENTRY_CACHE_MAX - 1);
   DIR_ENTRY_CACHE.set(dirPath, entry);
 }
 
@@ -167,7 +159,13 @@ const LINE_RULES: LineRule[] = [
     ruleId: "dangerous-exec",
     severity: "critical",
     message: "Shell command execution detected (child_process)",
-    pattern: /\b(exec|execSync|spawn|spawnSync|execFile|execFileSync)\s*\(/,
+    // Two call shapes both expose the bare command name in a capture group
+    // (group 1 for direct, group 2 for computed) so the downstream benign-member
+    // filter can normalize via `match[1] ?? match[2]`:
+    //   - direct:    exec(  |  cp.exec(  |  cp.spawn(
+    //   - computed:  cp["spawn"](  |  proc["exec"](
+    pattern:
+      /\b(exec|execSync|spawn|spawnSync|execFile|execFileSync)\s*\(|["'](exec|execSync|spawn|spawnSync|execFile|execFileSync)["']\s*\]\s*\(/,
     requiresContext: /child_process/,
   },
   {
@@ -230,20 +228,20 @@ const SKILL_CONTENT_RULES: SourceRule[] = [
     ruleId: "prompt-injection-ignore-instructions",
     severity: "critical",
     message: "Prompt-injection wording attempts to override higher-priority instructions",
-    pattern: /ignore (all|any|previous|above|prior) instructions/i,
+    pattern: /\bignore\s+(?:(?:all|any)\s+)?(?:previous|above|prior|all|any)\s+instructions\b/i,
   },
   {
     ruleId: "prompt-injection-system",
     severity: "critical",
     message: "Skill text references hidden prompt layers",
-    pattern: /\b(system prompt|developer message|hidden instructions)\b/i,
+    pattern: /\b(?:system\s+prompt|developer\s+message|hidden\s+instructions)\b/i,
   },
   {
     ruleId: "prompt-injection-tool",
     severity: "critical",
     message: "Skill text encourages bypassing tool approval",
     pattern:
-      /\b(run|execute|invoke|call)\b.{0,50}\btool\b.{0,50}\bwithout\b.{0,30}\b(permission|approval)/i,
+      /\b(run|execute|invoke|call)\b[\s\S]{0,50}\btool\b[\s\S]{0,50}\bwithout\b[\s\S]{0,30}\b(permission|approval)/i,
   },
   {
     ruleId: "shell-pipe-to-shell",
@@ -275,18 +273,179 @@ const SKILL_CONTENT_RULES: SourceRule[] = [
 // Core scanner
 // ---------------------------------------------------------------------------
 
-function isBenignMemberExecMatch(line: string, match: RegExpExecArray): boolean {
-  const command = match[1];
-  if (command !== "exec") {
+// Methods exported by node:child_process that the dangerous-exec rule watches.
+const CHILD_PROCESS_EXEC_METHODS = new Set([
+  "exec",
+  "execSync",
+  "spawn",
+  "spawnSync",
+  "execFile",
+  "execFileSync",
+]);
+
+/**
+ * Provenance-aware child_process binding collection.
+ *
+ * The scanner is intentionally regex-based (no AST). This helper derives call
+ * bindings ONLY from actual `child_process` imports/requires so that an
+ * unrelated alias bound from another module (e.g. `import { spawn as launch }
+ * from "./other"`) does not become a false positive — this is the issue's
+ * "avoid source-wide token correlation false positives" constraint.
+ *
+ * Returns two views of the same provenance:
+ * - `methodAliases`: renamed method bindings (`spawn -> launch`, `exec -> run`)
+ * - `namespaceAliases`: whole-namespace bindings (`cp`, `proc`, …) used for
+ *   both dot calls (`cp.exec()`) and computed calls (`proc["exec"]()`).
+ */
+type ChildProcessBindings = {
+  methodAliases: Map<string, string>;
+  namespaceAliases: Set<string>;
+};
+
+function collectChildProcessBindings(source: string): ChildProcessBindings {
+  const methodAliases = new Map<string, string>();
+  const namespaceAliases = new Set<string>();
+
+  // ESM named imports: import { spawn as launch, execFile } from "child_process"
+  const esmNamed = /\bimport\s*\{([^}]*)\}\s*from\s*["'](?:node:)?child_process["']/g;
+  // ESM default namespace: import cp from "child_process"
+  const esmDefault = /\bimport\s+(\w+)\s+from\s*["'](?:node:)?child_process["']/g;
+  // ESM namespace import: import * as proc from "child_process"
+  const esmNamespace = /\bimport\s*\*\s*as\s+(\w+)\s+from\s*["'](?:node:)?child_process["']/g;
+  // CJS destructured: const { exec: run, spawn } = require("child_process")
+  const cjsDestructured =
+    /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
+  // CJS namespace: const proc = require("child_process")
+  const cjsNamespace =
+    /\b(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
+
+  const collectSpecifiers = (specText: string): void => {
+    for (const rawSpec of specText.split(",")) {
+      const spec = rawSpec.trim();
+      if (!spec) {
+        continue;
+      }
+      // Renamed binding: `spawn as launch` (ESM) or `exec: run` (CJS)
+      const asMatch = spec.match(/^(\w+)\s+(?:as)\s+(\w+)$/) ?? spec.match(/^(\w+)\s*:\s*(\w+)$/);
+      if (asMatch?.[1] && asMatch[2]) {
+        const original = asMatch[1];
+        const alias = asMatch[2];
+        if (CHILD_PROCESS_EXEC_METHODS.has(original)) {
+          methodAliases.set(alias, original);
+        }
+      }
+      // Bare imported method name (`execFile`) is already matched by the
+      // literal pattern, so no alias entry is needed for it.
+    }
+  };
+
+  let match: RegExpExecArray | null;
+  while ((match = esmNamed.exec(source))) {
+    collectSpecifiers(expectDefined(match[1], "child_process esm named import specifiers"));
+  }
+  while ((match = cjsDestructured.exec(source))) {
+    collectSpecifiers(expectDefined(match[1], "child_process cjs destructured specifiers"));
+  }
+  while ((match = esmDefault.exec(source))) {
+    namespaceAliases.add(expectDefined(match[1], "child_process esm default namespace"));
+  }
+  while ((match = esmNamespace.exec(source))) {
+    namespaceAliases.add(expectDefined(match[1], "child_process esm namespace import"));
+  }
+  while ((match = cjsNamespace.exec(source))) {
+    namespaceAliases.add(expectDefined(match[1], "child_process cjs namespace"));
+  }
+
+  return { methodAliases, namespaceAliases };
+}
+
+/**
+ * Detects every call to a renamed child_process method alias on a single line
+ * (e.g. `launch("node", [...])` for `spawn as launch`, `run("...")` for
+ * `exec: run`). Only matches stand-alone calls (not member calls like
+ * `obj.launch(`) so an unrelated `.launch()` on another object is not flagged.
+ * The alias name is already provenance-scoped to child_process by the caller.
+ * Returns one entry per proven alias call occurrence, ordered by position, so
+ * a line with several calls (e.g. `run("a"); run("b")`) reports each of them
+ * instead of only the first (ClawSweeper P1: report every aliased execution
+ * call on a line).
+ */
+function matchAliasedChildProcessCalls(
+  line: string,
+  methodAliases: Map<string, string>,
+): Array<{ alias: string; index: number }> {
+  const calls: Array<{ alias: string; index: number }> = [];
+  for (const alias of methodAliases.keys()) {
+    const pattern = new RegExp(`(?<![\\w.])${escapeRegExp(alias)}\\s*\\(`, "g");
+    for (const callMatch of line.matchAll(pattern)) {
+      calls.push({ alias, index: callMatch.index ?? -1 });
+    }
+  }
+  return calls.toSorted((a, b) => a.index - b.index);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// The receiver names that, by long-standing convention, denote a direct
+// child_process namespace. Namespace aliases collected at scan time extend
+// this set so computed/exec calls through any proven binding are recognized.
+const LITERAL_NAMESPACE_RECEIVERS = new Set(["cp", "childProcess", "child_process"]);
+
+function isBenignMemberExecMatch(
+  line: string,
+  match: RegExpExecArray,
+  namespaceAliases: Set<string>,
+): boolean {
+  // group 1 = direct call command, group 2 = computed-member command.
+  const command = match[1] ?? match[2];
+  if (!command) {
     return false;
   }
 
-  const matchIndex = match.index;
-  if (matchIndex <= 0 || line[matchIndex - 1] !== ".") {
+  const matchIndex = match.index ?? -1;
+  if (matchIndex < 0) {
     return false;
   }
 
-  return !/\b(?:cp|childProcess|child_process)\s*\.\s*exec\s*\(/.test(line);
+  const charAtMatch = line[matchIndex];
+  // Computed-member call: `obj["spawn"](` / `obj["exec"](` — the match starts
+  // at the opening quote, so `line.slice(0, matchIndex)` ends at the `[`.
+  // Provenance is required for EVERY watched execution method, not only
+  // `exec`: an unrelated `worker["spawn"]()` or `bus["execSync"]()` must stay
+  // benign when the receiver is not a proven child_process namespace alias,
+  // even if `child_process` appears elsewhere in the file. Only once the
+  // receiver is a proven alias does the computed call get attributed to
+  // child_process. (This also preserves the `RegExp.exec` exclusion: a regex's
+  // `re["exec"](value)` receiver is not child_process-derived.)
+  if (charAtMatch === '"' || charAtMatch === "'") {
+    const receiverMatch = line.slice(0, matchIndex).match(/(\w+)\s*\[\s*$/);
+    const receiver = receiverMatch?.[1];
+    if (receiver && (namespaceAliases.has(receiver) || LITERAL_NAMESPACE_RECEIVERS.has(receiver))) {
+      return false;
+    }
+    return true;
+  }
+
+  // Direct dot-member call: `obj.exec(` — the match starts at `exec`. This
+  // branch only applies the long-standing `RegExp.exec` exclusion (a regex's
+  // `.exec()` is not child_process-derived) and the provenance-aware receiver
+  // check: a dot call through a collected namespace alias (e.g.
+  // `proc.exec(` for `const proc = require("child_process")` or
+  // `import * as proc from "node:child_process"`) is child_process-derived and
+  // must be reported. Other dot-member execution calls fall through and are
+  // reported as before.
+  if (command === "exec" && matchIndex > 0 && line[matchIndex - 1] === ".") {
+    const receiverMatch = line.slice(0, matchIndex - 1).match(/(\w+)\s*$/);
+    const receiver = receiverMatch?.[1];
+    if (receiver && (namespaceAliases.has(receiver) || LITERAL_NAMESPACE_RECEIVERS.has(receiver))) {
+      return false;
+    }
+    return true;
+  }
+
+  return false;
 }
 
 function stripCommentsForHeuristics(source: string): string {
@@ -356,7 +515,8 @@ function findSourceRuleMatch(params: {
   source: string;
   lines: string[];
 }): { line: number; evidence: string } | null {
-  if (!params.rule.pattern.test(params.source)) {
+  const sourceMatch = params.rule.pattern.exec(params.source);
+  if (!sourceMatch) {
     return null;
   }
   if (params.rule.requiresContext && !params.rule.requiresContext.test(params.source)) {
@@ -384,7 +544,15 @@ function findSourceRuleMatch(params: {
     return null;
   }
 
-  return { line: 1, evidence: truncateUtf16Safe(params.source, 120) };
+  // Multiline rules cannot match any one line. Preserve the actual match start
+  // so stored findings point at the dangerous text instead of file metadata.
+  let line = 1;
+  for (let i = 0; i < sourceMatch.index; i++) {
+    if (params.source.charCodeAt(i) === 10) {
+      line += 1;
+    }
+  }
+  return { line, evidence: params.lines[line - 1] ?? truncateUtf16Safe(params.source, 120) };
 }
 
 export function scanSource(source: string, filePath: string): SkillScanFinding[] {
@@ -392,47 +560,106 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   const lines = source.split("\n");
   const heuristicSource = stripCommentsForHeuristics(source);
   const heuristicLines = heuristicSource.split("\n");
-  const matchedLineRules = new Set<string>();
+
+  // Provenance-aware child_process bindings, collected once per source from
+  // the comment-stripped text. Used to attribute aliased execution calls and
+  // computed namespace calls back to their child_process origin. Cheap when
+  // the source has no child_process reference at all (all regexes no-op).
+  const { methodAliases, namespaceAliases } = collectChildProcessBindings(heuristicSource);
 
   // --- Line rules ---
   for (const rule of LINE_RULES) {
-    if (matchedLineRules.has(rule.ruleId)) {
-      continue;
-    }
-
     // Skip rule entirely if context requirement not met
     if (rule.requiresContext && !rule.requiresContext.test(source)) {
       continue;
     }
 
+    let acceptedMatches = 0;
+    let omittedMatches = 0;
+    let lastOmittedLine: number | undefined;
     for (const [i, line] of lines.entries()) {
-      const match = rule.pattern.exec(line);
-      if (!match) {
-        continue;
-      }
-
-      if (rule.ruleId === "dangerous-exec" && isBenignMemberExecMatch(line, match)) {
-        continue;
-      }
-
-      // Special handling for suspicious-network: check port
-      if (rule.ruleId === "suspicious-network") {
-        const port = Number.parseInt(expectDefined(match[1], "scanner regex capture 1"), 10);
-        if (STANDARD_PORTS.has(port)) {
+      const matches = line.matchAll(
+        new RegExp(
+          rule.pattern.source,
+          rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`,
+        ),
+      );
+      const literalDangerousExecIndexes = new Set<number>();
+      for (const match of matches) {
+        if (
+          rule.ruleId === "dangerous-exec" &&
+          isBenignMemberExecMatch(line, match, namespaceAliases)
+        ) {
           continue;
+        }
+
+        // Special handling for suspicious-network: check port
+        if (rule.ruleId === "suspicious-network") {
+          const port = Number.parseInt(expectDefined(match[1], "scanner regex capture 1"), 10);
+          if (STANDARD_PORTS.has(port)) {
+            continue;
+          }
+        }
+
+        if (acceptedMatches >= MAX_LINE_RULE_FINDINGS_PER_RULE) {
+          omittedMatches += 1;
+          lastOmittedLine = i + 1;
+          continue;
+        }
+
+        // Retain distinct calls up to the cap, then aggregate every remaining match.
+        // This keeps hostile output bounded without hiding that later sites exist.
+        findings.push({
+          ruleId: rule.ruleId,
+          severity: rule.severity,
+          file: filePath,
+          line: i + 1,
+          message: rule.message,
+          evidence: formatScanEvidence(line),
+        });
+        acceptedMatches += 1;
+        if (rule.ruleId === "dangerous-exec") {
+          literalDangerousExecIndexes.add(match.index ?? -1);
         }
       }
 
+      // Attribute aliased child_process calls (`launch(...)`, `run(...)`) that
+      // the literal pattern cannot match. Only fires when the alias name was
+      // bound from an actual child_process import/require (provenance-scoped),
+      // so unrelated functions such as a locally-defined `launch()` do not.
+      // Every proven alias call on the line is reported (per-occurrence
+      // semantics), skipping any position the literal pattern already reported.
+      if (rule.ruleId === "dangerous-exec" && methodAliases.size > 0) {
+        for (const aliasMatch of matchAliasedChildProcessCalls(line, methodAliases)) {
+          if (literalDangerousExecIndexes.has(aliasMatch.index)) {
+            continue;
+          }
+          if (acceptedMatches >= MAX_LINE_RULE_FINDINGS_PER_RULE) {
+            omittedMatches += 1;
+            lastOmittedLine = i + 1;
+            continue;
+          }
+          findings.push({
+            ruleId: rule.ruleId,
+            severity: rule.severity,
+            file: filePath,
+            line: i + 1,
+            message: rule.message,
+            evidence: formatScanEvidence(line),
+          });
+          acceptedMatches += 1;
+        }
+      }
+    }
+    if (lastOmittedLine !== undefined) {
       findings.push({
-        ruleId: rule.ruleId,
+        ruleId: `${rule.ruleId}-truncated`,
         severity: rule.severity,
         file: filePath,
-        line: i + 1,
-        message: rule.message,
-        evidence: formatScanEvidence(line),
+        line: lastOmittedLine,
+        message: `${omittedMatches} additional ${rule.ruleId} matches omitted after ${MAX_LINE_RULE_FINDINGS_PER_RULE} findings`,
+        evidence: `[${omittedMatches} additional matches omitted after ${MAX_LINE_RULE_FINDINGS_PER_RULE} findings]`,
       });
-      matchedLineRules.add(rule.ruleId);
-      break; // one finding per line-rule per file
     }
   }
 

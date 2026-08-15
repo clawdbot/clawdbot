@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../cron/types.js";
@@ -202,15 +203,18 @@ describe("createCronExitWatchers", () => {
     expect(w.activeJobIds()).toEqual(["job-a"]);
   });
 
-  it("releases the slot without firing when run.wait() rejects (fail closed on unknown outcome)", async () => {
+  it("retries with backoff without firing when run.wait() rejects (fail closed on unknown outcome)", async () => {
     const { supervisor, runs } = makeFakeSupervisor();
     const persistCompletion = vi.fn(async () => {});
     const fireOnExit = vi.fn(async () => {});
+    const updateWatcherState = vi.fn(async () => {});
     const w = createCronExitWatchers({
       getProcessSupervisor: () => supervisor as never,
       persistCompletion,
       fireOnExit,
+      updateWatcherState,
       logger: noopLogger,
+      retryBackoffMs: [0],
     });
 
     w.reconcile([onExitJob("job-a")]);
@@ -227,12 +231,56 @@ describe("createCronExitWatchers", () => {
     // Fail closed: no fire, no persisted terminal state on an unknown outcome.
     expect(fireOnExit).not.toHaveBeenCalled();
     expect(persistCompletion).not.toHaveBeenCalled();
-    // Slot released so a subsequent reconcile can re-arm the job.
-    expect(w.activeJobIds()).toEqual([]);
-    w.reconcile([onExitJob("job-a")]);
+    // The failure is recorded on job state, and the slot stays reserved as the
+    // retry placeholder instead of silently dropping the watch.
+    expect(updateWatcherState).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "job-a" }),
+      expect.objectContaining({ consecutiveErrors: 1 }),
+    );
+    expect(w.activeJobIds()).toEqual(["job-a"]);
+    // The backoff timer re-arms without an external reconcile.
+    await delay(5);
     await flush();
     expect(supervisor.spawn).toHaveBeenCalledTimes(2);
     expect(w.activeJobIds()).toEqual(["job-a"]);
+  });
+
+  it("retries with backoff when spawn fails and stops retrying once cancelled", async () => {
+    const { supervisor, runs } = makeFakeSupervisor();
+    supervisor.spawn.mockRejectedValueOnce(new Error("spawn blew up"));
+    const updateWatcherState = vi.fn(async () => {});
+    const w = createCronExitWatchers({
+      getProcessSupervisor: () => supervisor as never,
+      persistCompletion: vi.fn(async () => {}),
+      fireOnExit: vi.fn(async () => {}),
+      updateWatcherState,
+      logger: noopLogger,
+      retryBackoffMs: [0],
+    });
+
+    w.reconcile([onExitJob("job-a")]);
+    await flush();
+    expect(updateWatcherState).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "job-a" }),
+      expect.objectContaining({ consecutiveErrors: 1 }),
+    );
+    // Backoff re-arm succeeds on the second spawn.
+    await delay(5);
+    await flush();
+    expect(supervisor.spawn).toHaveBeenCalledTimes(2);
+    expect(w.activeJobIds()).toEqual(["job-a"]);
+
+    // Cancelling clears any pending retry timer; once the cancelled child
+    // settles, the slot is released and no further spawns happen.
+    w.cancel("job-a");
+    expectDefined(runs[0], "runs[0] test invariant").deferred.resolve({
+      exitCode: null,
+      reason: "cancelled",
+    });
+    await delay(5);
+    await flush();
+    expect(supervisor.spawn).toHaveBeenCalledTimes(2);
+    expect(w.activeJobIds()).toEqual([]);
   });
 
   it("replaces the watcher when the watched command changes", async () => {

@@ -7,18 +7,26 @@ import type { ConfigPageId } from "./config-sections.ts";
 import { configRouteData, configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
 import { SETTINGS_SEARCH_TARGETS } from "./settings-targets.ts";
 
-function loadConfigRoute(context: ApplicationContext, location: RouteLocation) {
+function loadConfigRoute(
+  context: ApplicationContext,
+  location: RouteLocation,
+  pageId: ConfigPageId,
+) {
   const primaryLoad = context.runtimeConfig.ensureLoaded();
-  void primaryLoad.then(() => context.runtimeConfig.ensureSchemaLoaded()).catch(() => undefined);
+  if (pageId !== "updates") {
+    void primaryLoad.then(() => context.runtimeConfig.ensureSchemaLoaded()).catch(() => undefined);
+  }
   return configRouteData(location);
 }
 
 function configPage(id: ConfigPageId) {
   return definePage({
     ...routePageSpec(id),
-    loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
-      `${location.pathname}\u0000${location.search}\u0000${location.hash}`,
-    loader: (context: ApplicationContext, { location }) => loadConfigRoute(context, location),
+    loaderDeps: (_context: ApplicationContext, location: RouteLocation) => {
+      const route = configRouteData(location);
+      return `${route.pathname}\u0000${route.search}\u0000${route.hash}`;
+    },
+    loader: (context: ApplicationContext, { location }) => loadConfigRoute(context, location, id),
     component: () =>
       import("./config-page.ts").then(() => ({
         header: true,
@@ -59,6 +67,7 @@ export const pages = [
   configPage("memory"),
   configPage("talk"),
   configPage("infrastructure"),
+  configPage("updates"),
   configPage("ai-agents"),
   configPage("advanced"),
 ] as const;

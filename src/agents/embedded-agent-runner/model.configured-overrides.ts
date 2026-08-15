@@ -1,14 +1,20 @@
+import { asOptionalRecord as readModelParams } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Api, Model } from "../../llm/types.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveCatalogOwnedModelCompat } from "../model-compat-catalog.js";
 import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
-import { shouldSuppressBuiltInModel, shouldUnconditionallySuppress } from "../model-suppression.js";
+import {
+  shouldSuppressBuiltInModelCore,
+  shouldUnconditionallySuppress,
+} from "../model-suppression.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
+  attachModelProviderMetadataOwners,
   attachModelProviderRequestTransport,
   resolveProviderRequestConfig,
   sanitizeConfiguredModelProviderRequest,
@@ -67,7 +73,7 @@ export function shouldSuppressConfiguredModel(params: {
   ) {
     return false;
   }
-  return shouldSuppressBuiltInModel({
+  return shouldSuppressBuiltInModelCore({
     provider: params.provider,
     id: params.modelId,
     ...(params.cfg ? { config: params.cfg } : {}),
@@ -226,13 +232,6 @@ export function hasConfiguredFallbackSurface(params: {
   return Boolean(params.providerConfig?.baseUrl?.trim());
 }
 
-function readModelParams(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
-}
-
 function mergeModelParams(
   ...entries: Array<Record<string, unknown> | undefined>
 ): Record<string, unknown> | undefined {
@@ -328,6 +327,7 @@ export function applyConfiguredProviderOverrides(params: {
   modelId: string;
   cfg?: OpenClawConfig;
   manifestAlias: ManifestModelCatalogProviderAliasMetadata;
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
   runtimeHooks?: ProviderRuntimeHooks;
   preferDiscoveredModelMetadata?: boolean;
   preferDiscoveredTransport?: boolean;
@@ -335,7 +335,10 @@ export function applyConfiguredProviderOverrides(params: {
   workspaceDir?: string;
 }): ProviderRuntimeModel {
   const { providerConfig, modelId } = params;
-  const discoveredModel = markDiscoveredMaxTokensSource(params.discoveredModel);
+  const discoveredModel = attachModelProviderMetadataOwners(
+    markDiscoveredMaxTokensSource(params.discoveredModel),
+    params.providerMetadataOwners,
+  );
   const manifestAliasTransport = params.manifestAlias.transport;
   const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
   const defaultModelParams = findConfiguredAgentModelParams({
@@ -367,6 +370,9 @@ export function applyConfiguredProviderOverrides(params: {
       provider: params.provider,
       api: aliasTransport?.api ?? discoveredModel.api,
       baseUrl: aliasTransport?.baseUrl ?? discoveredModel.baseUrl,
+      ...(params.providerMetadataOwners
+        ? { providerMetadataOwners: params.providerMetadataOwners }
+        : {}),
       discoveredHeaders,
       capability: "llm",
       transport: "stream",
@@ -419,6 +425,9 @@ export function applyConfiguredProviderOverrides(params: {
     provider: params.provider,
     api: discoveredModel.api,
     baseUrl: discoveredModel.baseUrl,
+    ...(params.providerMetadataOwners
+      ? { providerMetadataOwners: params.providerMetadataOwners }
+      : {}),
     discoveredHeaders,
     providerHeaders,
     modelHeaders: configuredHeaders,
@@ -562,6 +571,9 @@ export function applyConfiguredProviderOverrides(params: {
       "openai-responses",
     baseUrl:
       resolvedTransport.baseUrl ?? configuredStaticCatalogModel?.baseUrl ?? discoveredModel.baseUrl,
+    ...(params.providerMetadataOwners
+      ? { providerMetadataOwners: params.providerMetadataOwners }
+      : {}),
     discoveredHeaders,
     providerHeaders,
     modelHeaders: configuredHeaders,
@@ -570,47 +582,50 @@ export function applyConfiguredProviderOverrides(params: {
     capability: "llm",
     transport: "stream",
   });
-  return attachModelProviderLocalService(
-    attachModelProviderRequestTransport(
-      {
-        ...discoveredModel,
-        provider: params.provider,
-        api: requestConfig.api ?? "openai-responses",
-        baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
-        reasoning: resolvedReasoning,
-        input: normalizedInput,
-        cost: metadataOverrideModel?.cost ?? discoveredModel.cost,
-        contextWindow: resolvedContextWindow ?? discoveredModel.contextWindow,
-        contextTokens:
-          metadataOverrideModel?.contextTokens ??
-          providerConfig.contextTokens ??
-          discoveredModel.contextTokens,
-        ...(normalizedResolvedMaxTokens !== undefined
-          ? {
-              maxTokens: normalizedResolvedMaxTokens,
-              maxTokensSource:
-                configuredMaxTokens !== undefined
-                  ? "configured"
-                  : (discoveredModel.maxTokensSource ?? "discovered"),
-            }
-          : {}),
-        ...(resolvedParams ? { params: resolvedParams } : {}),
-        ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
-        headers: requestConfig.headers,
-        ...(providerConfig.authHeader !== undefined
-          ? { authHeader: providerConfig.authHeader }
-          : {}),
-        compat: resolvedCompat,
-        mediaInput: mergeModelMediaInput(
-          mergeModelMediaInput(
-            configuredStaticCatalogModel?.mediaInput,
-            discoveredModel.mediaInput,
+  return attachModelProviderMetadataOwners(
+    attachModelProviderLocalService(
+      attachModelProviderRequestTransport(
+        {
+          ...discoveredModel,
+          provider: params.provider,
+          api: requestConfig.api ?? "openai-responses",
+          baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
+          reasoning: resolvedReasoning,
+          input: normalizedInput,
+          cost: metadataOverrideModel?.cost ?? discoveredModel.cost,
+          contextWindow: resolvedContextWindow ?? discoveredModel.contextWindow,
+          contextTokens:
+            metadataOverrideModel?.contextTokens ??
+            providerConfig.contextTokens ??
+            discoveredModel.contextTokens,
+          ...(normalizedResolvedMaxTokens !== undefined
+            ? {
+                maxTokens: normalizedResolvedMaxTokens,
+                maxTokensSource:
+                  configuredMaxTokens !== undefined
+                    ? "configured"
+                    : (discoveredModel.maxTokensSource ?? "discovered"),
+              }
+            : {}),
+          ...(resolvedParams ? { params: resolvedParams } : {}),
+          ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
+          headers: requestConfig.headers,
+          ...(providerConfig.authHeader !== undefined
+            ? { authHeader: providerConfig.authHeader }
+            : {}),
+          compat: resolvedCompat,
+          mediaInput: mergeModelMediaInput(
+            mergeModelMediaInput(
+              configuredStaticCatalogModel?.mediaInput,
+              discoveredModel.mediaInput,
+            ),
+            metadataOverrideModel?.mediaInput,
           ),
-          metadataOverrideModel?.mediaInput,
-        ),
-      },
-      providerRequest,
+        },
+        providerRequest,
+      ),
+      providerConfig.localService,
     ),
-    providerConfig.localService,
+    params.providerMetadataOwners,
   );
 }

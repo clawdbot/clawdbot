@@ -3,10 +3,10 @@ import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { VOICE_TRANSCRIPT_MAX_UNRESOLVED } from "./voice-transcript.js";
 
 export const VOICE_SESSION_CACHE_SCOPE = "talk-client-voice-sessions";
 export const VOICE_SESSION_RECORD_VERSION = 1;
-export const VOICE_SESSION_MAX_TRANSCRIPT_CHARS = 8_000;
 export const VOICE_SESSION_STALE_AFTER_MS = 6 * 60 * 60_000;
 
 export type ClientVoiceToolEffect = {
@@ -32,6 +32,8 @@ export type ClientVoiceSessionRecord = {
   consultRunIds: string[];
   effects: ClientVoiceToolEffect[];
   digestDeliveredAt?: number;
+  /** Bounded hashes of transcript entries that must succeed before close can commit. */
+  transcriptFailureKeys: string[];
   /** Declared at create when the client speaks the transcript protocol (sent sessionKey). */
   transcriptCapable?: boolean;
   /** Set once a finalized user utterance persisted; gates spoken confirmation capability. */
@@ -43,6 +45,8 @@ export type ClientVoiceRunBinding = {
   voiceSessionId: string;
   sessionKey: string;
 };
+
+const TRANSCRIPT_FAILURE_KEY_PATTERN = /^[0-9a-f]{64}$/;
 
 function parseVoiceSessionRecord(value: unknown): ClientVoiceSessionRecord | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -84,12 +88,24 @@ function parseVoiceSessionRecord(value: unknown): ClientVoiceSessionRecord | und
         );
       })
     : [];
+  const transcriptFailureKeys = record.transcriptFailureKeys ?? [];
+  if (
+    !Array.isArray(transcriptFailureKeys) ||
+    transcriptFailureKeys.length > VOICE_TRANSCRIPT_MAX_UNRESOLVED ||
+    transcriptFailureKeys.some(
+      (entry) => typeof entry !== "string" || !TRANSCRIPT_FAILURE_KEY_PATTERN.test(entry),
+    ) ||
+    new Set(transcriptFailureKeys).size !== transcriptFailureKeys.length
+  ) {
+    return undefined;
+  }
   const provider = record.provider?.trim();
   return {
     ...record,
     ...(provider ? { provider } : {}),
     consultRunIds,
     effects,
+    transcriptFailureKeys,
   } as ClientVoiceSessionRecord;
 }
 

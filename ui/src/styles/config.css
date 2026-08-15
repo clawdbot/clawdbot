@@ -332,6 +332,8 @@
   background: var(--theme-chip-accent-2);
 }
 
+/* Preview swatches are theme-invariant and must not inherit the active theme. */
+/* stylelint-disable color-no-hex */
 .settings-theme-card--claw {
   --theme-chip-bg: #0e1015;
   --theme-chip-accent: #ff5c5c;
@@ -367,6 +369,7 @@
   --theme-chip-accent: #6e4828;
   --theme-chip-accent-2: #6a4e30;
 }
+/* stylelint-enable color-no-hex */
 
 .settings-theme-card--custom {
   --theme-chip-bg: var(--bg);
@@ -614,6 +617,53 @@
   color: var(--danger);
 }
 
+.cfg-structured-draft {
+  display: contents;
+}
+
+.cfg-structured-draft__error .settings-row__control {
+  width: 100%;
+}
+
+.cfg-json-editor {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+
+.cfg-json-editor > .settings-input,
+.cfg-json-editor > .settings-secret {
+  width: 100%;
+}
+
+.cfg-array .settings-row--stacked .settings-row__control {
+  width: 100%;
+}
+
+.cfg-array .settings-row--stacked .settings-row__control > input[type="number"] {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+.cfg-collection-draft__controls {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.cfg-collection-draft__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.config-content :is(input, textarea, select)[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
 /* Redacted click-to-reveal inputs/textareas. */
 .cfg-redacted {
   opacity: 0.7;
@@ -631,7 +681,7 @@
 
 /* Collapsible nested-object summary behaves like a nav row. */
 .cfg-object__summary {
-  cursor: pointer;
+  cursor: var(--cursor-action);
   list-style: none;
   transition: background var(--duration-fast) ease;
 }
@@ -888,7 +938,7 @@
   height: 14px;
 }
 
-@media (max-width: 820px) {
+@media (max-width: 900px) {
   .mcp-command-card__grid {
     grid-template-columns: 1fr;
   }

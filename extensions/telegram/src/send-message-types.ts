@@ -1,5 +1,6 @@
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
+import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { createTelegramPromptContextProjectionCursor } from "./prompt-context-projection.js";
@@ -12,6 +13,7 @@ export type TelegramSendOpts = {
   accountId?: string;
   verbose?: boolean;
   mediaUrl?: string;
+  mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   gatewayClientScopes?: readonly string[];
@@ -47,7 +49,19 @@ export type TelegramSendOpts = {
   forceDocument?: boolean;
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: TelegramSendResult) => Promise<void> | void;
+  /** @internal Refresh durable custody immediately before Telegram Bot API I/O. */
+  onPlatformSendDispatch?: () => Promise<void>;
 };
+
+export type TelegramApiCallOpts = Pick<
+  TelegramSendOpts,
+  "cfg" | "token" | "accountId" | "verbose" | "api" | "retry" | "gatewayClientScopes"
+>;
+
+export type TelegramThreadedSendOpts = TelegramApiCallOpts &
+  Pick<TelegramSendOpts, "replyToMessageId" | "messageThreadId">;
+
+export type TelegramMessageActionOpts = TelegramApiCallOpts & { notify?: boolean };
 
 export type TelegramSendMessageParams = Parameters<TelegramApi["sendMessage"]>[2];
 
@@ -61,20 +75,13 @@ export type TelegramSendResult = {
   };
 };
 
-export type TelegramLocationSendOpts = Pick<
-  TelegramSendOpts,
-  | "cfg"
-  | "token"
-  | "accountId"
-  | "verbose"
-  | "api"
-  | "retry"
-  | "gatewayClientScopes"
-  | "replyToMessageId"
-  | "messageThreadId"
-  | "buttons"
-  | "quoteText"
-  | "promptContextProjectionPlan"
-  | "silent"
-  | "onDeliveryResult"
->;
+export type TelegramLocationSendOpts = TelegramThreadedSendOpts &
+  Pick<
+    TelegramSendOpts,
+    | "buttons"
+    | "quoteText"
+    | "promptContextProjectionPlan"
+    | "silent"
+    | "onDeliveryResult"
+    | "onPlatformSendDispatch"
+  >;

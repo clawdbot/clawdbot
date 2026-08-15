@@ -102,6 +102,7 @@ describe("doctor WhatsApp responsiveness", () => {
       status: {
         eventLoop: {
           degraded: true,
+          degradedSinceMs: 61_000,
           reasons: ["event_loop_delay"],
           intervalMs: 30_000,
           delayP99Ms: 42,
@@ -138,6 +139,7 @@ describe("doctor WhatsApp responsiveness", () => {
       status: {
         eventLoop: {
           degraded: true,
+          degradedSinceMs: 61_000,
           reasons: ["event_loop_delay"],
           intervalMs: 30_000,
           delayP99Ms: 42,
@@ -170,6 +172,7 @@ describe("doctor WhatsApp responsiveness", () => {
         status: {
           eventLoop: {
             degraded: false,
+            degradedSinceMs: null,
             reasons: [],
             intervalMs: 1,
             delayP99Ms: 0,
@@ -187,6 +190,7 @@ describe("doctor WhatsApp responsiveness", () => {
         status: {
           eventLoop: {
             degraded: true,
+            degradedSinceMs: 61_000,
             reasons: ["event_loop_delay"],
             intervalMs: 30_000,
             delayP99Ms: 42,
@@ -204,6 +208,7 @@ describe("doctor WhatsApp responsiveness", () => {
         status: {
           eventLoop: {
             degraded: true,
+            degradedSinceMs: 61_000,
             reasons: ["event_loop_delay"],
             intervalMs: 30_000,
             delayP99Ms: 42,
@@ -228,6 +233,7 @@ describe("doctor WhatsApp responsiveness", () => {
       status: {
         eventLoop: {
           degraded: false,
+          degradedSinceMs: null,
           reasons: [],
           intervalMs: 1,
           delayP99Ms: 0,

@@ -133,16 +133,29 @@ actor GatewayConnection {
     private let clientShutdown: @Sendable (GatewayChannelActor) async -> Void
     private let decoder = JSONDecoder()
 
-    private var client: GatewayChannelActor?
-    private var configuredURL: URL?
-    private var configuredToken: String?
-    private var configuredPassword: String?
-    private var configuredTLS: GatewayTLSRoute?
-    private var configuredTLSMetadataProvider: (any GatewayTLSRouteMetadataProviding)?
-    private var configuredDeviceAuthGatewayID: String?
-    private var configuredRouteAuthority: UInt64?
-    private var configuredShutdownGeneration: UInt64?
-    private var configuredActivationBindingKey: SymmetricKey?
+    private struct ConfiguredConnection {
+        let client: GatewayChannelActor
+        let endpoint: EndpointSnapshot
+        let tlsMetadataProvider: (any GatewayTLSRouteMetadataProviding)?
+        let shutdownGeneration: UInt64
+        let activationBindingKey: SymmetricKey?
+
+        func matches(endpoint: EndpointSnapshot, shutdownGeneration: UInt64? = nil) -> Bool {
+            self.endpoint.config.url == endpoint.config.url &&
+                self.endpoint.config.token == endpoint.config.token &&
+                self.endpoint.config.password == endpoint.config.password &&
+                GatewayTLSRoute.hasSameConnectionIdentity(self.endpoint.tls, endpoint.tls) &&
+                self.endpoint.deviceAuthGatewayID == endpoint.deviceAuthGatewayID &&
+                self.endpoint.routeAuthority == endpoint.routeAuthority &&
+                shutdownGeneration.map { self.shutdownGeneration == $0 } ?? true
+        }
+
+        func matches(route: Route) -> Bool {
+            route.matches(self.endpoint)
+        }
+    }
+
+    private var configuredConnection: ConfiguredConnection?
     private var highestEndpointRevision: UInt64?
     private var routeGeneration: UInt64 = 0
     /// Unbound operations capture this before their first suspension. Shutdown
@@ -212,6 +225,22 @@ actor GatewayConnection {
             sessionProvider: sessionProvider)
         self.clientShutdown = clientShutdown
     }
+
+    init(
+        testEndpointProvider: @escaping EndpointProvider,
+        sessionBox: WebSocketSessionBox? = nil)
+    {
+        self.endpointProvider = testEndpointProvider
+        self.supportsSharedEndpointRecovery = false
+        self.activationBindingKeyProvider = { GatewayConnection.testingActivationBindingKey }
+        // Mock WebSocket routes do not exercise device authentication and must not
+        // depend on the process-global persisted identity store.
+        self.includeDeviceIdentity = false
+        self.sessionProvider = Self.resolveSessionProvider(
+            sessionBox: sessionBox,
+            sessionProvider: nil)
+        self.clientShutdown = { client in await client.shutdown() }
+    }
     #endif
 
     private static func resolveSessionProvider(
@@ -256,12 +285,7 @@ actor GatewayConnection {
         let endpoint = try await currentEndpoint()
         let cfg = endpoint.config
         let client = try await configure(
-            url: cfg.url,
-            token: cfg.token,
-            password: cfg.password,
-            tls: endpoint.tls,
-            deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
-            routeAuthority: endpoint.routeAuthority,
+            endpoint: endpoint,
             shutdownGeneration: shutdownGeneration)
 
         do {
@@ -298,49 +322,36 @@ actor GatewayConnection {
                 await MainActor.run { GatewayProcessManager.shared.setActive(true) }
                 try requireCurrentShutdownGeneration(shutdownGeneration)
 
-                var lastError: Error = error
-                for delayMs in [150, 400, 900] {
-                    try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
-                    try requireCurrentShutdownGeneration(shutdownGeneration)
-                    do {
-                        return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
-                    } catch {
-                        try requireCurrentShutdownGeneration(shutdownGeneration)
-                        lastError = error
-                    }
+                let lastError: Error
+                do {
+                    return try await self.retryRequest(
+                        client: client,
+                        method: method,
+                        params: params,
+                        timeoutMs: timeoutMs,
+                        after: error,
+                        shutdownGeneration: shutdownGeneration)
+                } catch {
+                    lastError = error
                 }
 
                 let nsError = lastError as NSError
-                try requireCurrentShutdownGeneration(shutdownGeneration)
                 if nsError.domain == URLError.errorDomain,
                    let fallback = await GatewayEndpointStore.shared.maybeFallbackToTailnet(from: cfg.url)
                 {
                     try acceptEndpointRevision(fallback)
-                    let fallbackConfig = fallback.config
                     let fallbackClient = try await configure(
-                        url: fallbackConfig.url,
-                        token: fallbackConfig.token,
-                        password: fallbackConfig.password,
-                        tls: fallback.tls,
-                        deviceAuthGatewayID: fallback.deviceAuthGatewayID,
-                        routeAuthority: fallback.routeAuthority,
+                        endpoint: fallback,
                         shutdownGeneration: shutdownGeneration)
-                    for delayMs in [150, 400, 900] {
-                        try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
-                        try requireCurrentShutdownGeneration(shutdownGeneration)
-                        do {
-                            return try await fallbackClient.request(
-                                method: method,
-                                params: params,
-                                timeoutMs: timeoutMs)
-                        } catch {
-                            try requireCurrentShutdownGeneration(shutdownGeneration)
-                            lastError = error
-                        }
-                    }
+                    return try await self.retryRequest(
+                        client: fallbackClient,
+                        method: method,
+                        params: params,
+                        timeoutMs: timeoutMs,
+                        after: lastError,
+                        shutdownGeneration: shutdownGeneration)
                 }
 
-                try requireCurrentShutdownGeneration(shutdownGeneration)
                 throw lastError
             case .remote:
                 let nsError = error as NSError
@@ -362,14 +373,8 @@ actor GatewayConnection {
                     try requireCurrentShutdownGeneration(shutdownGeneration)
                     do {
                         let endpoint = try await currentEndpoint()
-                        let cfg = endpoint.config
                         let client = try await configure(
-                            url: cfg.url,
-                            token: cfg.token,
-                            password: cfg.password,
-                            tls: endpoint.tls,
-                            deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
-                            routeAuthority: endpoint.routeAuthority,
+                            endpoint: endpoint,
                             shutdownGeneration: shutdownGeneration)
                         return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
                     } catch {
@@ -386,6 +391,28 @@ actor GatewayConnection {
         }
     }
 
+    private func retryRequest(
+        client: GatewayChannelActor,
+        method: String,
+        params: [String: AnyCodable]?,
+        timeoutMs: Double?,
+        after initialError: Error,
+        shutdownGeneration: UInt64) async throws -> Data
+    {
+        var lastError = initialError
+        for delayMs in [150, 400, 900] {
+            try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+            try requireCurrentShutdownGeneration(shutdownGeneration)
+            do {
+                return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
+            } catch {
+                try requireCurrentShutdownGeneration(shutdownGeneration)
+                lastError = error
+            }
+        }
+        throw lastError
+    }
+
     /// Route-bound requests never reconfigure or retry on another endpoint.
     /// Durable outbox rows must remain owned by the gateway that created them.
     func request(
@@ -396,15 +423,8 @@ actor GatewayConnection {
         distinguishPreDispatchRouteChange: Bool = false) async throws -> Data
     {
         let endpoint = try await currentEndpoint()
-        guard route.generation == self.routeGeneration,
-              route.matches(endpoint),
-              self.configuredURL == route.url,
-              self.configuredToken == route.token,
-              self.configuredPassword == route.password,
-              GatewayTLSRoute.hasSameConnectionIdentity(self.configuredTLS, route.tls),
-              self.configuredDeviceAuthGatewayID == route.deviceAuthGatewayID,
-              self.configuredRouteAuthority == route.authority,
-              let client
+        guard self.routeMatchesCurrentState(route, endpoint: endpoint),
+              let client = self.configuredConnection?.client
         else {
             if distinguishPreDispatchRouteChange {
                 throw OpenClawChatTransportSendError.notDispatched
@@ -412,7 +432,7 @@ actor GatewayConnection {
             throw CancellationError()
         }
         let data = try await client.request(method: method, params: params, timeoutMs: timeoutMs)
-        guard await self.isCurrentRoute(route), self.client === client else {
+        guard await self.isCurrentRoute(route), self.configuredConnection?.client === client else {
             throw CancellationError()
         }
         return data
@@ -593,44 +613,33 @@ extension GatewayConnection {
     func refresh() async throws {
         let shutdownGeneration = shutdownGeneration
         let endpoint = try await currentEndpoint()
+        _ = try await self.configure(
+            endpoint: endpoint,
+            shutdownGeneration: shutdownGeneration)
+    }
+
+    func captureRoute() async -> Route? {
+        try? await self.captureRequiredRoute()
+    }
+
+    func captureRequiredRoute() async throws -> Route {
+        let shutdownGeneration = shutdownGeneration
+        let endpoint = try await currentEndpoint()
         let cfg = endpoint.config
         _ = try await self.configure(
+            endpoint: endpoint,
+            shutdownGeneration: shutdownGeneration)
+        return Route(
+            generation: self.routeGeneration,
+            authority: endpoint.routeAuthority,
             url: cfg.url,
             token: cfg.token,
             password: cfg.password,
             tls: endpoint.tls,
             deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
-            routeAuthority: endpoint.routeAuthority,
-            shutdownGeneration: shutdownGeneration)
-    }
-
-    func captureRoute() async -> Route? {
-        let shutdownGeneration = shutdownGeneration
-        do {
-            let endpoint = try await currentEndpoint()
-            let cfg = endpoint.config
-            _ = try await self.configure(
-                url: cfg.url,
-                token: cfg.token,
-                password: cfg.password,
-                tls: endpoint.tls,
-                deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
-                routeAuthority: endpoint.routeAuthority,
-                shutdownGeneration: shutdownGeneration)
-            return Route(
-                generation: self.routeGeneration,
-                authority: endpoint.routeAuthority,
-                url: cfg.url,
-                token: cfg.token,
-                password: cfg.password,
-                tls: endpoint.tls,
-                deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
-                activationOwnershipFingerprint: Self.activationOwnershipFingerprint(
-                    config: cfg,
-                    key: self.configuredActivationBindingKey))
-        } catch {
-            return nil
-        }
+            activationOwnershipFingerprint: Self.activationOwnershipFingerprint(
+                config: cfg,
+                key: self.configuredConnection?.activationBindingKey))
     }
 
     /// Connect and bind subsequent work to the hello snapshot's physical
@@ -645,7 +654,7 @@ extension GatewayConnection {
     /// reconnecting. Queued mutations use this so waiting cannot retarget them.
     func captureServerLease() async -> ServerLease? {
         guard let route = await self.captureRoute(),
-              let client = self.client,
+              let client = self.configuredConnection?.client,
               let socketGeneration = self.activeSocketGeneration
         else { return nil }
         let lease = ServerLease(route: route, socketGeneration: socketGeneration, client: client)
@@ -667,12 +676,7 @@ extension GatewayConnection {
         let endpoint = try await currentEndpoint()
         let cfg = endpoint.config
         guard let client = configuredClient(
-            url: cfg.url,
-            token: cfg.token,
-            password: cfg.password,
-            tls: endpoint.tls,
-            deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
-            routeAuthority: endpoint.routeAuthority,
+            endpoint: endpoint,
             shutdownGeneration: shutdownGeneration)
         else {
             throw OpenClawChatTransportSendError.notDispatched
@@ -697,7 +701,7 @@ extension GatewayConnection {
                 activationOwnershipFingerprint: Self.activationOwnershipFingerprint(
                     config: cfg,
                     authBinding: authBinding,
-                    key: self.configuredActivationBindingKey)),
+                    key: self.configuredConnection?.activationBindingKey)),
             socketGeneration: socketGeneration,
             client: client)
         guard await self.isCurrentServerLease(lease) else {
@@ -734,14 +738,7 @@ extension GatewayConnection {
 
     func isCurrentRoute(_ route: Route) async -> Bool {
         guard let endpoint = try? await currentEndpoint() else { return false }
-        return route.generation == self.routeGeneration &&
-            route.matches(endpoint) &&
-            self.configuredURL == route.url &&
-            self.configuredToken == route.token &&
-            self.configuredPassword == route.password &&
-            GatewayTLSRoute.hasSameConnectionIdentity(self.configuredTLS, route.tls) &&
-            self.configuredDeviceAuthGatewayID == route.deviceAuthGatewayID &&
-            self.configuredRouteAuthority == route.authority
+        return self.routeMatchesCurrentState(route, endpoint: endpoint)
     }
 
     func supportsServerCapability(
@@ -749,16 +746,8 @@ extension GatewayConnection {
         ifCurrentRoute route: Route) async -> Bool?
     {
         guard let endpoint = try? await currentEndpoint() else { return nil }
-        guard
-            route.generation == self.routeGeneration,
-            route.matches(endpoint),
-            self.configuredURL == route.url,
-            self.configuredToken == route.token,
-            self.configuredPassword == route.password,
-            GatewayTLSRoute.hasSameConnectionIdentity(self.configuredTLS, route.tls),
-            self.configuredDeviceAuthGatewayID == route.deviceAuthGatewayID,
-            self.configuredRouteAuthority == route.authority,
-            let snapshot = lastSnapshot
+        guard self.routeMatchesCurrentState(route, endpoint: endpoint),
+              let snapshot = lastSnapshot
         else { return nil }
         return snapshot.supportsServerCapability(capability)
     }
@@ -804,16 +793,19 @@ extension GatewayConnection {
     }
 
     private func serverLeaseMatchesCurrentState(_ lease: ServerLease) -> Bool {
-        lease.route.generation == self.routeGeneration &&
-            lease.route.url == self.configuredURL &&
-            lease.route.token == self.configuredToken &&
-            lease.route.password == self.configuredPassword &&
-            GatewayTLSRoute.hasSameConnectionIdentity(lease.route.tls, self.configuredTLS) &&
-            lease.route.deviceAuthGatewayID == self.configuredDeviceAuthGatewayID &&
-            lease.route.authority == self.configuredRouteAuthority &&
-            self.client === lease.client &&
+        self.routeMatchesConfiguredConnection(lease.route) &&
+            self.configuredConnection?.client === lease.client &&
             self.activeSocketGeneration == lease.socketGeneration &&
             self.lastSnapshot != nil
+    }
+
+    private func routeMatchesCurrentState(_ route: Route, endpoint: EndpointSnapshot) -> Bool {
+        route.matches(endpoint) && self.routeMatchesConfiguredConnection(route)
+    }
+
+    private func routeMatchesConfiguredConnection(_ route: Route) -> Bool {
+        route.generation == self.routeGeneration &&
+            self.configuredConnection?.matches(route: route) == true
     }
 
     func sessionRoutingIdentity(
@@ -826,91 +818,47 @@ extension GatewayConnection {
     }
 
     func configuredGatewayURL() -> URL? {
-        self.configuredURL
+        self.configuredConnection?.endpoint.config.url
     }
 
     func configuredTLSFingerprintSHA256() -> String? {
-        self.configuredTLSMetadataProvider?.effectiveTLSFingerprintSHA256
+        self.configuredConnection?.tlsMetadataProvider?.effectiveTLSFingerprintSHA256
     }
 
     func authSource() async -> GatewayAuthSource? {
-        guard let client else { return nil }
-        return await client.authSource()
+        guard let connection = self.configuredConnection else { return nil }
+        return await connection.client.authSource()
     }
 
     func shutdown() async {
         self.shutdownGeneration &+= 1
-        self.routeGeneration &+= 1
-        resetSocketGeneration()
-        self.lastSnapshot = nil
-        self.resetCanvasPluginSurfaceState()
-        let client = client
-        self.client = nil
-        self.configuredURL = nil
-        self.configuredToken = nil
-        self.configuredPassword = nil
-        self.configuredTLS = nil
-        self.configuredTLSMetadataProvider = nil
-        self.configuredDeviceAuthGatewayID = nil
-        self.configuredRouteAuthority = nil
-        self.configuredShutdownGeneration = nil
-        self.configuredActivationBindingKey = nil
+        let client = self.retireConfiguredConnection()
         if let client {
             await self.clientShutdown(client)
         }
     }
 
     private func configure(
-        url: URL,
-        token: String?,
-        password: String?,
-        tls: GatewayTLSRoute?,
-        deviceAuthGatewayID: String?,
-        routeAuthority: UInt64?,
+        endpoint: EndpointSnapshot,
         shutdownGeneration: UInt64) async throws -> GatewayChannelActor
     {
         try self.requireCurrentShutdownGeneration(shutdownGeneration)
+        let config = endpoint.config
         if let client = configuredClient(
-            url: url,
-            token: token,
-            password: password,
-            tls: tls,
-            deviceAuthGatewayID: deviceAuthGatewayID,
-            routeAuthority: routeAuthority,
+            endpoint: endpoint,
             shutdownGeneration: shutdownGeneration)
         {
             return client
         }
-        // Invalidate captured routes before suspension so no reentrant caller
-        // can continue an old-gateway outbox flush during replacement.
-        self.routeGeneration &+= 1
-        resetSocketGeneration()
-        self.lastSnapshot = nil
-        self.resetCanvasPluginSurfaceState()
+        let previousClient = self.retireConfiguredConnection()
         let configuredRouteGeneration = self.routeGeneration
-        let previousClient = client
-        client = nil
-        self.configuredURL = nil
-        self.configuredToken = nil
-        self.configuredPassword = nil
-        self.configuredTLS = nil
-        self.configuredTLSMetadataProvider = nil
-        self.configuredDeviceAuthGatewayID = nil
-        self.configuredRouteAuthority = nil
-        self.configuredShutdownGeneration = nil
-        self.configuredActivationBindingKey = nil
         if let previousClient {
             await self.clientShutdown(previousClient)
         }
         try self.requireCurrentShutdownGeneration(shutdownGeneration)
         if self.routeGeneration != configuredRouteGeneration {
             if let client = configuredClient(
-                url: url,
-                token: token,
-                password: password,
-                tls: tls,
-                deviceAuthGatewayID: deviceAuthGatewayID,
-                routeAuthority: routeAuthority,
+                endpoint: endpoint,
                 shutdownGeneration: shutdownGeneration)
             {
                 return client
@@ -918,11 +866,11 @@ extension GatewayConnection {
             throw CancellationError()
         }
         let activationBindingKey = self.activationBindingKeyProvider()
-        let sessionBox = self.sessionProvider(tls)
+        let sessionBox = self.sessionProvider(endpoint.tls)
         let client = GatewayChannelActor(
-            url: url,
-            token: token,
-            password: password,
+            url: config.url,
+            token: config.token,
+            password: config.password,
             authBindingKey: activationBindingKey,
             session: sessionBox,
             connectSnapshotAdmissionHandler: { [weak self] snapshot, socketGeneration in
@@ -947,44 +895,44 @@ extension GatewayConnection {
                 clientMode: "ui",
                 clientDisplayName: InstanceIdentity.displayName,
                 includeDeviceIdentity: self.includeDeviceIdentity,
-                allowStoredDeviceAuth: deviceAuthGatewayID != nil,
-                deviceAuthGatewayID: deviceAuthGatewayID),
+                allowStoredDeviceAuth: endpoint.deviceAuthGatewayID != nil,
+                deviceAuthGatewayID: endpoint.deviceAuthGatewayID),
             disconnectHandler: { [weak self] _, socketGeneration in
                 await self?.handleDisconnect(
                     routeGeneration: configuredRouteGeneration,
                     socketGeneration: socketGeneration)
             })
-        self.client = client
-        self.configuredURL = url
-        self.configuredToken = token
-        self.configuredPassword = password
-        self.configuredTLS = tls
-        self.configuredTLSMetadataProvider = sessionBox?.session as? GatewayTLSRouteMetadataProviding
-        self.configuredDeviceAuthGatewayID = deviceAuthGatewayID
-        self.configuredRouteAuthority = routeAuthority
-        self.configuredShutdownGeneration = shutdownGeneration
-        self.configuredActivationBindingKey = activationBindingKey
+        self.configuredConnection = ConfiguredConnection(
+            client: client,
+            endpoint: endpoint,
+            tlsMetadataProvider: sessionBox?.session as? GatewayTLSRouteMetadataProviding,
+            shutdownGeneration: shutdownGeneration,
+            activationBindingKey: activationBindingKey)
         return client
     }
 
     private func configuredClient(
-        url: URL,
-        token: String?,
-        password: String?,
-        tls: GatewayTLSRoute?,
-        deviceAuthGatewayID: String?,
-        routeAuthority: UInt64?,
+        endpoint: EndpointSnapshot,
         shutdownGeneration: UInt64) -> GatewayChannelActor?
     {
-        guard self.configuredShutdownGeneration == shutdownGeneration,
-              self.configuredURL == url,
-              self.configuredToken == token,
-              self.configuredPassword == password,
-              GatewayTLSRoute.hasSameConnectionIdentity(self.configuredTLS, tls),
-              self.configuredDeviceAuthGatewayID == deviceAuthGatewayID,
-              self.configuredRouteAuthority == routeAuthority
+        guard let connection = self.configuredConnection,
+              connection.matches(
+                  endpoint: endpoint,
+                  shutdownGeneration: shutdownGeneration)
         else { return nil }
-        return self.client
+        return connection.client
+    }
+
+    /// Invalidate every route-owned fact before shutdown can suspend; otherwise
+    /// reentrant work could continue on a client whose replacement is in flight.
+    private func retireConfiguredConnection() -> GatewayChannelActor? {
+        self.routeGeneration &+= 1
+        self.resetSocketGeneration()
+        self.lastSnapshot = nil
+        self.resetCanvasPluginSurfaceState()
+        let client = self.configuredConnection?.client
+        self.configuredConnection = nil
+        return client
     }
 
     private func requireCurrentShutdownGeneration(_ shutdownGeneration: UInt64) throws {
@@ -1068,7 +1016,7 @@ extension GatewayConnection {
     }
 
     func _test_configuredURL() -> URL? {
-        self.configuredURL
+        self.configuredConnection?.endpoint.config.url
     }
 
     func _test_handlePush(
@@ -1113,7 +1061,17 @@ extension GatewayConnection {
     }
 
     static func defaultActivationBindingKey() -> SymmetricKey? {
-        GatewayActivationBindingKeyStore.loadOrCreate()
+        self.activationBindingKey(
+            launchPolicy: .current,
+            loadOrCreate: GatewayActivationBindingKeyStore.loadOrCreate)
+    }
+
+    static func activationBindingKey(
+        launchPolicy: AppLaunchRuntimePlan,
+        loadOrCreate: () -> SymmetricKey?) -> SymmetricKey?
+    {
+        guard launchPolicy.allowsGatewayUIKeychainAccess else { return nil }
+        return loadOrCreate()
     }
 
     private static func activationOwnershipFingerprint(
@@ -1143,30 +1101,21 @@ extension GatewayConnection {
               endpoint.config.url == config.url,
               endpoint.config.token == config.token,
               endpoint.config.password == config.password,
-              let client,
+              let client = self.configuredConnection?.client,
               let socketGeneration = activeSocketGeneration,
               controlUiRouteIsLive(
-                  config: config,
-                  tls: endpoint.tls,
-                  routeAuthority: endpoint.routeAuthority,
-                  deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
+                  endpoint: endpoint,
                   client: client,
                   socketGeneration: socketGeneration),
               await client.currentConnectionGeneration() == socketGeneration,
               controlUiRouteIsLive(
-                  config: config,
-                  tls: endpoint.tls,
-                  routeAuthority: endpoint.routeAuthority,
-                  deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
+                  endpoint: endpoint,
                   client: client,
                   socketGeneration: socketGeneration),
               let authBinding = await client.authBinding(
                   ifCurrentConnectionGeneration: socketGeneration),
               controlUiRouteIsLive(
-                  config: config,
-                  tls: endpoint.tls,
-                  routeAuthority: endpoint.routeAuthority,
-                  deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
+                  endpoint: endpoint,
                   client: client,
                   socketGeneration: socketGeneration)
         else { return nil }
@@ -1175,7 +1124,7 @@ extension GatewayConnection {
         case .sharedToken:
             return config.token?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
         case .deviceToken:
-            guard let gatewayID = configuredDeviceAuthGatewayID?
+            guard let gatewayID = configuredConnection?.endpoint.deviceAuthGatewayID?
                 .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
             else { return nil }
             if let deviceToken = lastSnapshot?.auth["deviceToken"]?.value as? String,
@@ -1195,21 +1144,14 @@ extension GatewayConnection {
     }
 
     private func controlUiRouteIsLive(
-        config: Config,
-        tls: GatewayTLSRoute?,
-        routeAuthority: UInt64?,
-        deviceAuthGatewayID: String?,
+        endpoint: EndpointSnapshot,
         client: GatewayChannelActor,
         socketGeneration: UInt64) -> Bool
     {
-        self.configuredURL == config.url &&
-            self.configuredToken == config.token &&
-            self.configuredPassword == config.password &&
-            GatewayTLSRoute.hasSameConnectionIdentity(self.configuredTLS, tls) &&
-            self.configuredRouteAuthority == routeAuthority &&
-            self.configuredDeviceAuthGatewayID == deviceAuthGatewayID &&
-            self.configuredShutdownGeneration == self.shutdownGeneration &&
-            self.client === client &&
+        self.configuredConnection?.matches(
+            endpoint: endpoint,
+            shutdownGeneration: self.shutdownGeneration) == true &&
+            self.configuredConnection?.client === client &&
             self.activeSocketGeneration == socketGeneration &&
             self.lastSnapshot != nil
     }
@@ -1395,36 +1337,7 @@ extension GatewayConnection {
         }
     }
 
-    func sendAgent(
-        message: String,
-        thinking: String?,
-        sessionKey: String,
-        deliver: Bool,
-        to: String?,
-        channel: GatewayAgentChannel = .last,
-        timeoutSeconds: Int? = nil,
-        idempotencyKey: String = UUID().uuidString) async -> (ok: Bool, error: String?)
-    {
-        await self.sendAgent(GatewayAgentInvocation(
-            message: message,
-            sessionKey: sessionKey,
-            thinking: thinking,
-            deliver: deliver,
-            to: to,
-            channel: channel,
-            timeoutSeconds: timeoutSeconds,
-            idempotencyKey: idempotencyKey))
-    }
-
     // MARK: - Health
-
-    func healthSnapshot(timeoutMs: Double? = nil) async throws -> HealthSnapshot {
-        let data = try await requestRaw(method: .health, timeoutMs: timeoutMs)
-        if let snap = decodeHealthSnapshot(from: data) {
-            return snap
-        }
-        throw GatewayDecodingError(method: Method.health.rawValue, message: "failed to decode health snapshot")
-    }
 
     func healthOK(timeoutMs: Int = 8000) async throws -> Bool {
         let data = try await requestRaw(method: .health, timeoutMs: Double(timeoutMs))

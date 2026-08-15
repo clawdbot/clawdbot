@@ -62,7 +62,7 @@ describe("Raft account resolution", () => {
   });
 
   it("keeps named account setup scoped to that account", () => {
-    const next = raftSetupPlugin.setup!.applyAccountConfig({
+    const next = raftSetupPlugin.setupContract!.applyAccountConfig({
       cfg: {} as OpenClawConfig,
       accountId: "support",
       input: {

@@ -1,6 +1,7 @@
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { syncDirectoryIfSupported } from "../infra/directory-durability.js";
+import { isMissingPathError } from "../infra/errors.js";
 import { sameFileIdentity, type FileIdentityStat } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as createFsSafeRoot } from "../infra/fs-safe.js";
 
@@ -14,15 +15,6 @@ export type MemoryHostEventExportOwner = {
 };
 
 type MemoryHostWorkspaceRoot = Awaited<ReturnType<typeof createFsSafeRoot>>;
-
-export function isMissingPathError(error: unknown): boolean {
-  const code = (error as { code?: unknown }).code;
-  return (
-    code === "ENOENT" ||
-    code === "ENOTDIR" ||
-    (error instanceof FsSafeError && code === "not-found")
-  );
-}
 
 export function isRejectedWorkspaceArtifactPath(error: unknown): boolean {
   if (!(error instanceof FsSafeError)) {

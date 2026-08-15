@@ -2,6 +2,8 @@
  * Static identity for names that select core agent factory families before assembly.
  */
 
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
+
 export type CoreToolFactoryFamily = "base-coding" | "shell" | "openclaw";
 
 type CoreToolFactoryDescriptor = {
@@ -25,7 +27,7 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "conversations_list", family: "openclaw" },
   { name: "conversations_send", family: "openclaw" },
   { name: "conversations_turn", family: "openclaw" },
-  { name: "cron", family: "openclaw" },
+  { name: AUTOMATIONS_TOOL_NAME, family: "openclaw" },
   { name: "dashboard", family: "openclaw" },
   { name: "gateway", family: "openclaw" },
   { name: "get_goal", family: "openclaw" },
@@ -48,10 +50,11 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "sessions_yield", family: "openclaw" },
   { name: "structured_output", family: "openclaw" },
   { name: "skill_workshop", family: "openclaw" },
-  { name: "spawn_task", family: "openclaw" },
+  { name: "suggest_task", family: "openclaw" },
   { name: "create_goal", family: "openclaw" },
   { name: "subagents", family: "openclaw" },
   { name: "terminal", family: "openclaw" },
+  { name: "portal", family: "openclaw" },
   { name: "transcripts", family: "openclaw" },
   { name: "tts", family: "openclaw" },
   { name: "update_goal", family: "openclaw" },

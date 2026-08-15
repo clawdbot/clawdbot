@@ -8,10 +8,11 @@ import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 vi.mock("./workspace.js", () => ({
   loadWorkspaceBootstrapFiles: vi.fn(),
+  workspaceFileSourceIdentitiesMatch: vi.fn(() => true),
 }));
 
 import { clearBootstrapSnapshot, getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
-import { loadWorkspaceBootstrapFiles } from "./workspace.js";
+import { loadWorkspaceBootstrapFiles, workspaceFileSourceIdentitiesMatch } from "./workspace.js";
 
 let workspaceDir = "";
 
@@ -34,6 +35,7 @@ describe("getOrLoadBootstrapFiles", () => {
 
   beforeEach(() => {
     mockLoad().mockResolvedValue(files);
+    vi.mocked(workspaceFileSourceIdentitiesMatch).mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -73,6 +75,18 @@ describe("getOrLoadBootstrapFiles", () => {
     expect(first).toBe(files);
     expect(result).toBe(updatedFiles);
     expect(mockLoad()).toHaveBeenCalledTimes(2);
+  });
+
+  it("replaces cached result when loader source identity changes", async () => {
+    const refreshedFiles = [makeFile("AGENTS.md", "# Agent"), makeFile("SOUL.md", "# Soul")];
+    mockLoad().mockResolvedValueOnce(files).mockResolvedValueOnce(refreshedFiles);
+    vi.mocked(workspaceFileSourceIdentitiesMatch).mockReturnValue(false);
+
+    const first = await getOrLoadBootstrapFiles({ workspaceDir, sessionKey: "session-1" });
+    const result = await getOrLoadBootstrapFiles({ workspaceDir, sessionKey: "session-1" });
+
+    expect(first).toBe(files);
+    expect(result).toBe(refreshedFiles);
   });
 
   it("different session keys get independent caches", async () => {

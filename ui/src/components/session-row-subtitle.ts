@@ -27,7 +27,7 @@ export function resolveSidebarSessionSubtitle(params: {
   // Agent-declared status (sessions tool) outranks live narration: it is an
   // explicit message to the user, not ambient activity.
   const agentStatus = session.agentStatusNote || undefined;
-  const running = session.hasActiveRun || session.status === "running";
+  const running = session.hasActiveRun;
   const activeRunIds = session.activeRunIds ?? [];
   const digestMatchesActiveRun = (
     digest: typeof params.observerDigest,
@@ -57,7 +57,12 @@ export function resolveSidebarSessionSubtitle(params: {
     : session.subtitle && session.workSession && session.subtitle !== session.label
       ? session.subtitle
       : undefined;
-  return { subtitle: attention ?? agentStatus ?? observer ?? narration ?? workSubtitle, narration };
+  const finalReply =
+    !running && !params.hasDisplay ? session.lastMessagePreview?.trim() || undefined : undefined;
+  const subtitle = running
+    ? (attention ?? agentStatus ?? observer ?? narration ?? workSubtitle)
+    : (attention ?? agentStatus ?? finalReply ?? observer ?? workSubtitle);
+  return { subtitle, narration };
 }
 
 export function renderSidebarSessionSubtitle(value: SidebarSessionSubtitle) {

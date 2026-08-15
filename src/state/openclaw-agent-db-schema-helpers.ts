@@ -1,10 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
+import { MEMORY_INDEX_CHUNK_PROVENANCE_TABLE } from "../../packages/memory-host-sdk/src/host/memory-schema-provenance.js";
+import { MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE } from "../../packages/memory-host-sdk/src/host/memory-schema-recall.js";
 import {
-  MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
-  MEMORY_INDEX_CHUNK_PROVENANCE_TRIGGER_DEFINITIONS,
-} from "../../packages/memory-host-sdk/src/host/memory-schema-provenance.js";
-import {
-  MEMORY_INDEX_CHUNKS_TABLE,
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
@@ -24,9 +21,11 @@ import {
   AGENT_V14_BOARD_SCHEMA_SQL,
   ensureOpenClawAgentBoardSchemaInTransaction,
 } from "./openclaw-agent-board-schema.js";
+import { CONTEXT_ENGINE_TURN_OUTBOX_TABLE } from "./openclaw-agent-context-engine-turn-outbox-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
+import { ensureSessionEntryValidityProjection } from "./openclaw-agent-db-session-migrations.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   AGENT_V14_ADDITIVE_SCHEMA_SQL,
   AGENT_V14_CORE_SCHEMA_SQL,
@@ -45,36 +44,32 @@ type ExistingAgentSchemaMeta = {
 };
 
 const AGENT_SCHEMA_COMPATIBILITY = {
+  allowCompatibleAdditiveColumns: true,
   allowedMissingTables: [
     MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
+    MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
+    CONTEXT_ENGINE_TURN_OUTBOX_TABLE,
     STANDING_INTENTS_TABLE,
     STANDING_INTENTS_FTS_TABLE,
     ...STANDING_INTENTS_FTS_SHADOW_TABLES,
   ],
-  // Older agent DBs lack the additive recall metadata columns; memory-core's
-  // lazy ensure ALTERs them in on first memory use, so accept their absence here
-  // or every existing deployment fails doctor and rolls back its update.
-  allowedMissingColumns: [
-    "standing_intents.creator_sender",
-    "memory_index_chunks.importance",
-    "memory_index_chunks.triggers",
-    "memory_index_chunks.project_key",
-  ],
+  allowedMissingColumns: ["standing_intents.creator_sender"],
   allowedColumnDefinitions: {
     "conversations.delivery_target": ["delivery_target TEXT NOT NULL DEFAULT ''"],
   },
   optionalCanonicalTriggerGroups: [
-    {
-      optionalWhenTableMissing: MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
-      tableName: MEMORY_INDEX_CHUNKS_TABLE,
-      triggers: MEMORY_INDEX_CHUNK_PROVENANCE_TRIGGER_DEFINITIONS,
-    },
     {
       tableName: MEMORY_INDEX_SOURCES_TABLE,
       triggers: MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
     },
   ],
 } satisfies SqliteSchemaCompatibility;
+
+function hasRetiredAgentStateLeaseSchema(database: DatabaseSync): boolean {
+  return Boolean(
+    database.prepare("SELECT 1 FROM main.sqlite_schema WHERE name = 'state_leases'").get(),
+  );
+}
 
 export function assertOpenClawAgentSchemaContains(
   database: DatabaseSync,
@@ -99,6 +94,11 @@ export function assertOpenClawAgentCurrentRuntimeSchema(
   if (metadata.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION) {
     throw new Error(
       `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before using it.`,
+    );
+  }
+  if (hasRetiredAgentStateLeaseSchema(database)) {
+    throw new Error(
+      `OpenClaw agent database ${options.pathname} retains retired state_leases storage; run openclaw doctor --fix before using it.`,
     );
   }
   assertOpenClawAgentSchemaContains(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL);
@@ -129,6 +129,19 @@ function repairAndAssertAgentSchemaGroup(
   assertOpenClawAgentSchemaContains(database, pathname, schemaSql);
 }
 
+const SESSION_KEY_CONTRACT_SCHEMA_START = "CREATE TABLE IF NOT EXISTS session_key_contract (";
+const SESSION_KEY_CONTRACT_SCHEMA_END = "CREATE TABLE IF NOT EXISTS session_windows (";
+
+/** Ensure the additive session-key contract table inside the caller's transaction. */
+export function ensureSessionKeyContractSchemaInTransaction(db: DatabaseSync): void {
+  const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SESSION_KEY_CONTRACT_SCHEMA_START);
+  const end = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(SESSION_KEY_CONTRACT_SCHEMA_END, start);
+  if (start === -1 || end === -1) {
+    throw new Error("OpenClaw agent session-key contract schema markers are missing.");
+  }
+  db.exec(OPENCLAW_AGENT_SCHEMA_SQL.slice(start, end)); // sqlite-allow-raw -- Idempotent additive lazy ensure.
+}
+
 export function repairAndAssertOpenClawAgentV14SchemaForMigration(
   database: DatabaseSync,
   options: { agentId: string; pathname: string },
@@ -153,8 +166,13 @@ export function repairAndAssertOpenClawAgentV14SchemaForMigration(
     );
   }
 
+  ensureSessionEntryValidityProjection(database);
+  ensureSessionKeyContractSchemaInTransaction(database);
+
   // v14 always owned the core schema. Board and collaboration groups were
   // lazy, but a partially present group still has to be complete and canonical.
+  // Keep this preflight before full CREATE IF NOT EXISTS convergence: otherwise
+  // a missing stable v14 table could be recreated empty and hide data loss.
   repairAndAssertAgentSchemaGroup(database, options.pathname, AGENT_V14_CORE_SCHEMA_SQL);
   if (hasAnyCanonicalTable(database, AGENT_V14_SESSION_SHARING_SCHEMA_SQL)) {
     repairAndAssertAgentSchemaGroup(

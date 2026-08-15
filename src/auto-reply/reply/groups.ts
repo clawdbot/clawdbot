@@ -206,32 +206,13 @@ export function buildDirectChatContext(params: {
   return lines.join(" ");
 }
 
-/** Resolves silent-reply behavior text for group prompt instructions. */
-export function resolveGroupSilentReplyBehavior(params: {
-  sessionEntry?: SessionEntry;
-  defaultActivation: "always" | "mention";
-  silentReplyPolicy?: SilentReplyPolicy;
-}): {
-  activation: "always" | "mention";
-  canUseSilentReply: boolean;
-  allowEmptyAssistantReplyAsSilent: boolean;
-} {
-  const activation =
-    normalizeGroupActivation(params.sessionEntry?.groupActivation) ?? params.defaultActivation;
-  const canUseSilentReply = params.silentReplyPolicy !== "disallow";
-  return {
-    activation,
-    canUseSilentReply,
-    allowEmptyAssistantReplyAsSilent: params.silentReplyPolicy === "allow",
-  };
-}
-
 /** Builds the channel-specific group intro injected into the system prompt. */
 export function buildGroupIntro(params: {
   sessionEntry?: SessionEntry;
   defaultActivation: "always" | "mention";
 }): string {
-  const { activation } = resolveGroupSilentReplyBehavior(params);
+  const activation =
+    normalizeGroupActivation(params.sessionEntry?.groupActivation) ?? params.defaultActivation;
   if (activation === "always") {
     return "Activation: always-on (you receive every group message). You see every message; most need no response. When you do reply, address the specific sender noted in the message context.";
   }

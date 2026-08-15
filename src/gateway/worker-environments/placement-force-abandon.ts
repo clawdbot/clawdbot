@@ -101,15 +101,38 @@ export async function forceAbandonWorkerEnvironment(params: {
         (placement?.state === "active" || placement?.state === "draining") &&
         placement.environmentId === pending.environmentId &&
         placement.activeOwnerEpoch === pending.ownerEpoch &&
-        placement.generation === pending.placementGeneration
+        placement.generation ===
+          (placement.state === "active"
+            ? pending.placementGeneration
+            : pending.placementGeneration + 1)
       ) {
         const finalRef = pending.stagedResultRef ?? workerWorkspaceResultRef(pending.claimId);
         stagedResultCleanups.push({
           placement,
           refs: [finalRef, preparedWorkerWorkspaceResultRef(finalRef)],
         });
+        const claim = placement.turnClaim;
+        if (
+          claim?.owner === "worker" &&
+          claim.claimId === pending.claimId &&
+          claim.runId === pending.runId
+        ) {
+          await placements.closeWorkerTurnToolState({
+            sessionId: placement.sessionId,
+            claimId: claim.claimId,
+            runId: claim.runId,
+            placementGeneration: claim.generation,
+            owner: {
+              kind: "worker",
+              environmentId: placement.environmentId,
+              ownerEpoch: claim.ownerEpoch,
+            },
+          });
+        }
+        placements.failWorkspaceResultAndReleaseTurn(pending, recoveryError);
+      } else {
+        placements.abandonWorkspaceResult(pending);
       }
-      placements.abandonWorkspaceResult(pending);
     }
   }
   for (const placement of placements.listForReconcile()) {
@@ -126,6 +149,26 @@ export async function forceAbandonWorkerEnvironment(params: {
       });
     }
     if (current?.state === "draining") {
+      if (current.turnClaim) {
+        await placements.closeWorkerTurnToolState({
+          sessionId: current.sessionId,
+          claimId: current.turnClaim.claimId,
+          runId: current.turnClaim.runId,
+          placementGeneration: current.turnClaim.generation,
+          owner:
+            current.turnClaim.owner === "worker"
+              ? {
+                  kind: "worker",
+                  environmentId: current.environmentId,
+                  ownerEpoch: current.turnClaim.ownerEpoch,
+                }
+              : {
+                  kind: "local",
+                  environmentId: current.environmentId,
+                  ownerEpoch: current.activeOwnerEpoch,
+                },
+        });
+      }
       current = placements.startReconcile({
         sessionId: current.sessionId,
         environmentId: current.environmentId,

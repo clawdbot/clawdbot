@@ -24,6 +24,6 @@ export default defineSingleProviderPluginEntry({
       ].join("\n"),
       noteTitle: "Cerebras",
     },
-    catalog: { liveModelDiscovery: true },
+    catalog: {},
   },
 });

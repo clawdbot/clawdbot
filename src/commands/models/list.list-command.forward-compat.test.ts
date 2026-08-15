@@ -1,5 +1,6 @@
 // Model list forward-compat tests cover list command behavior with future catalog shapes.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 
 const OPENAI_CODEX_MODEL = {
   provider: "openai",
@@ -88,10 +89,14 @@ const mocks = vi.hoisted(() => {
     ensureOpenClawModelsJson: vi.fn(),
     ensureAuthProfileStore: vi.fn(),
     resolveDefaultAgentDir: vi.fn(),
+    resolveModelsTargetAgent: vi.fn(),
     loadModelRegistry: vi.fn(),
     loadModelCatalog: vi.fn(),
     resolveConfiguredEntries: vi.fn(),
     printModelTable: vi.fn(),
+    applyPromotionClaimTags: vi.fn(),
+    startPromotionsFeedRefresh: vi.fn(),
+    printAvailablePromotionsSection: vi.fn(),
     resolveModelWithRegistry: vi.fn(),
     readPersistedInstalledPluginIndexSync: vi.fn(),
     loadManifestMetadataSnapshot: vi.fn(),
@@ -108,6 +113,10 @@ function resetMocks() {
   mocks.ensureOpenClawModelsJson.mockResolvedValue({ wrote: false });
   mocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {}, order: {} });
   mocks.resolveDefaultAgentDir.mockReturnValue("/tmp/openclaw-agent");
+  mocks.resolveModelsTargetAgent.mockReturnValue({
+    agentId: "main",
+    agentDir: "/tmp/openclaw-agent",
+  });
   mocks.loadModelRegistry.mockResolvedValue({
     models: [],
     availableKeys: new Set(),
@@ -127,6 +136,9 @@ function resetMocks() {
     ],
   });
   mocks.printModelTable.mockReset();
+  mocks.applyPromotionClaimTags.mockReset();
+  mocks.startPromotionsFeedRefresh.mockReset();
+  mocks.printAvailablePromotionsSection.mockReset();
   mocks.resolveModelWithRegistry.mockReturnValue({ ...OPENAI_CODEX_MODEL });
   mocks.readPersistedInstalledPluginIndexSync.mockReturnValue(null);
   mocks.loadManifestMetadataSnapshot.mockReturnValue(mocks.emptyPluginMetadataSnapshot);
@@ -139,6 +151,18 @@ function resetMocks() {
 
 function createRuntime() {
   return { log: vi.fn(), error: vi.fn() };
+}
+
+function primeModelRegistry(
+  models: unknown[],
+  availableKeys?: Set<string>,
+  registryModels: unknown[] = models,
+) {
+  return mocks.loadModelRegistry.mockResolvedValueOnce({
+    models,
+    availableKeys,
+    registry: { getAll: () => registryModels },
+  });
 }
 
 function lastPrintedRows<T>() {
@@ -198,7 +222,7 @@ function installModelsListCommandForwardCompatMocks() {
     id === "gpt-5.3-codex-spark";
 
   vi.doMock("../../agents/model-suppression.js", () => ({
-    shouldSuppressBuiltInModel: suppressOpenAiSpark,
+    shouldSuppressBuiltInModelCore: suppressOpenAiSpark,
     shouldSuppressBuiltInModelFromManifest: suppressOpenAiSpark,
     createManifestBuiltInModelSuppressor: vi.fn(
       () => (model: { provider?: string | null; id?: string | null }) => suppressOpenAiSpark(model),
@@ -213,8 +237,19 @@ function installModelsListCommandForwardCompatMocks() {
     resolveConfiguredEntries: mocks.resolveConfiguredEntries,
   }));
 
+  vi.doMock("./shared.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("./shared.js")>()),
+    resolveModelsTargetAgent: mocks.resolveModelsTargetAgent,
+  }));
+
   vi.doMock("./list.table.js", () => ({
     printModelTable: mocks.printModelTable,
+  }));
+
+  vi.doMock("./list.promotions.js", () => ({
+    applyPromotionClaimTags: mocks.applyPromotionClaimTags,
+    startPromotionsFeedRefresh: mocks.startPromotionsFeedRefresh,
+    printAvailablePromotionsSection: mocks.printAvailablePromotionsSection,
   }));
 
   vi.doMock("./list.registry-load.js", () => ({
@@ -272,6 +307,21 @@ function installModelsListCommandForwardCompatMocks() {
     loadPreparedModelCatalog: mocks.loadModelCatalog,
     loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
       const entries = await mocks.loadModelCatalog(...args);
+      return { entries, routeVariants: entries };
+    },
+  }));
+
+  vi.doMock("./list.scoped-catalog.js", () => ({
+    loadScopedListModelCatalogSnapshot: async (params: {
+      providerIds: readonly string[];
+      runtimeProviderIds?: readonly string[];
+      manifestFallbackProviderIds?: readonly string[];
+    }) => {
+      const entries = await mocks.loadModelCatalog({
+        providerDiscoveryProviderIds: params.providerIds,
+        providerRuntimeDiscoveryProviderIds: params.runtimeProviderIds,
+        providerManifestFallbackProviderIds: params.manifestFallbackProviderIds,
+      });
       return { entries, routeVariants: entries };
     },
   }));
@@ -354,6 +404,18 @@ beforeEach(() => {
 });
 
 describe("modelsListCommand forward-compat", () => {
+  it("uses the explicitly selected agent for auth and catalog discovery", async () => {
+    mocks.resolveModelsTargetAgent.mockReturnValueOnce({
+      agentId: "research",
+      agentDir: "/tmp/openclaw-agent-research",
+    });
+
+    await modelsListCommand({ agent: "research", json: true }, createRuntime() as never);
+
+    expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(mocks.resolvedConfig, "research");
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-agent-research");
+  });
+
   describe("empty model lists", () => {
     it.each([
       { name: "JSON", options: { json: true } },
@@ -366,17 +428,126 @@ describe("modelsListCommand forward-compat", () => {
       await modelsListCommand(opts, runtime as never);
 
       expect(mocks.printModelTable).toHaveBeenCalledWith([], runtime, opts);
+      expect(mocks.startPromotionsFeedRefresh).not.toHaveBeenCalled();
       expect(runtime.log).not.toHaveBeenCalledWith("No models found.");
     });
 
     it("preserves the human-readable message for an empty model list", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      const refreshToken = { nowMs: 1, statePromise: Promise.resolve() };
+      mocks.startPromotionsFeedRefresh.mockReturnValueOnce(refreshToken);
       const runtime = createRuntime();
 
       await modelsListCommand({ provider: "autoqa-no-such-provider" }, runtime as never);
 
       expect(runtime.log).toHaveBeenCalledWith("No models found.");
       expect(mocks.printModelTable).not.toHaveBeenCalled();
+      expect(mocks.startPromotionsFeedRefresh).toHaveBeenCalledOnce();
+      expect(mocks.printAvailablePromotionsSection).toHaveBeenCalledWith(
+        expect.objectContaining({ refresh: refreshToken }),
+      );
+    });
+  });
+
+  describe("promotion refresh scheduling", () => {
+    it("does not start refresh when config resolution fails", async () => {
+      mocks.loadModelsConfigWithSource.mockRejectedValueOnce(new Error("config failed"));
+
+      await expect(modelsListCommand({}, createRuntime() as never)).rejects.toThrow(
+        "config failed",
+      );
+
+      expect(mocks.startPromotionsFeedRefresh).not.toHaveBeenCalled();
+    });
+
+    it("does not start refresh when registry loading fails", async () => {
+      mocks.loadModelRegistry.mockRejectedValueOnce(new Error("registry failed"));
+      const runtime = createRuntime();
+
+      await modelsListCommand({ all: true }, runtime as never);
+
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("registry failed"));
+      expect(mocks.startPromotionsFeedRefresh).not.toHaveBeenCalled();
+      expect(mocks.printAvailablePromotionsSection).not.toHaveBeenCalled();
+    });
+
+    it.each([{ json: true }, { plain: true }])(
+      "does not start refresh for machine output",
+      async (options) => {
+        await modelsListCommand(options, createRuntime() as never);
+
+        expect(mocks.startPromotionsFeedRefresh).not.toHaveBeenCalled();
+        expect(mocks.printAvailablePromotionsSection).not.toHaveBeenCalled();
+      },
+    );
+
+    it("starts refresh before row construction finishes and appends output after the table", async () => {
+      const refresh = createDeferred();
+      const rowConstructionStarted = createDeferred();
+      const releaseRowConstruction = createDeferred();
+      const tablePrinted = createDeferred();
+      const refreshToken = {
+        nowMs: 1,
+        statePromise: refresh.promise,
+      };
+      mocks.loadModelCatalog.mockImplementationOnce(async () => {
+        rowConstructionStarted.resolve();
+        await releaseRowConstruction.promise;
+        return [];
+      });
+      mocks.startPromotionsFeedRefresh.mockReturnValueOnce(refreshToken);
+      mocks.printModelTable.mockImplementationOnce((_rows, runtime) => {
+        runtime.log("model table");
+        tablePrinted.resolve();
+      });
+      mocks.printAvailablePromotionsSection.mockImplementationOnce(
+        async ({ refresh: pendingRefresh, runtime }) => {
+          await pendingRefresh.statePromise;
+          runtime.log("promotion section");
+        },
+      );
+      const runtime = createRuntime();
+
+      const commandPromise = modelsListCommand({}, runtime as never);
+      await rowConstructionStarted.promise;
+
+      expect(mocks.startPromotionsFeedRefresh).toHaveBeenCalledOnce();
+      expect(mocks.printModelTable).not.toHaveBeenCalled();
+
+      releaseRowConstruction.resolve();
+      await tablePrinted.promise;
+
+      expectRowKeys(lastPrintedRows<{ key: string }>(), ["openai/gpt-5.4"]);
+      expect(runtime.log.mock.calls).toEqual([["model table"]]);
+
+      refresh.resolve();
+      await commandPromise;
+
+      expect(runtime.log.mock.calls).toEqual([["model table"], ["promotion section"]]);
+      expect(mocks.printAvailablePromotionsSection).toHaveBeenCalledWith(
+        expect.objectContaining({ refresh: refreshToken }),
+      );
+    });
+
+    it("keeps a rejected refresh fail-silent", async () => {
+      const refresh = createDeferred();
+      const sectionStarted = createDeferred();
+      mocks.startPromotionsFeedRefresh.mockReturnValueOnce({
+        nowMs: 1,
+        statePromise: refresh.promise,
+      });
+      mocks.printAvailablePromotionsSection.mockImplementationOnce(
+        async ({ refresh: pendingRefresh }) => {
+          sectionStarted.resolve();
+          await pendingRefresh.statePromise;
+        },
+      );
+
+      const commandPromise = modelsListCommand({}, createRuntime() as never);
+      await sectionStarted.promise;
+      refresh.reject(new Error("refresh failed"));
+
+      await expect(commandPromise).resolves.toBeUndefined();
     });
   });
 
@@ -488,37 +659,19 @@ describe("modelsListCommand forward-compat", () => {
 
     it("falls back to registry rows for unknown provider filters without --all", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
-      mocks.loadModelRegistry.mockResolvedValueOnce({
-        models: [
-          {
-            provider: "google",
-            id: "gemini-2.5-pro",
-            name: "Gemini 2.5 Pro",
-            api: "google-gemini",
-            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-            input: ["text", "image"],
-            contextWindow: 1_048_576,
-            maxTokens: 65_536,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          },
-        ],
-        availableKeys: undefined,
-        registry: {
-          getAll: () => [
-            {
-              provider: "google",
-              id: "gemini-2.5-pro",
-              name: "Gemini 2.5 Pro",
-              api: "google-gemini",
-              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-              input: ["text", "image"],
-              contextWindow: 1_048_576,
-              maxTokens: 65_536,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            },
-          ],
+      primeModelRegistry([
+        {
+          provider: "google",
+          id: "gemini-2.5-pro",
+          name: "Gemini 2.5 Pro",
+          api: "google-gemini",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          input: ["text", "image"],
+          contextWindow: 1_048_576,
+          maxTokens: 65_536,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         },
-      });
+      ]);
       const runtime = createRuntime();
 
       await modelsListCommand({ json: true, provider: "google" }, runtime as never);
@@ -546,13 +699,7 @@ describe("modelsListCommand forward-compat", () => {
         id: "gpt-5.3-codex-spark",
         name: "GPT-5.3 Codex Spark",
       };
-      mocks.loadModelRegistry.mockResolvedValueOnce({
-        models: [currentModel],
-        availableKeys: undefined,
-        registry: {
-          getAll: () => [currentModel, suppressedModel],
-        },
-      });
+      primeModelRegistry([currentModel], undefined, [currentModel, suppressedModel]);
       const runtime = createRuntime();
 
       await modelsListCommand({ json: true, provider: "openai" }, runtime as never);
@@ -644,13 +791,23 @@ describe("modelsListCommand forward-compat", () => {
       });
     });
 
-    it("includes configured provider and auth-backed catalog rows in configured-mode lists", async () => {
+    it.each([
+      {
+        mode: "merge" as const,
+        expectedKeys: ["xiaomi/mimo-v2.5-pro", "xiaomi/mimo-v2.5", "google/gemini-3.1-flash-lite"],
+      },
+      {
+        mode: "replace" as const,
+        expectedKeys: ["xiaomi/mimo-v2.5-pro", "xiaomi/mimo-v2.5"],
+      },
+    ])("honors $mode mode in configured lists", async ({ mode, expectedKeys }) => {
       const config = {
         agents: { defaults: { model: { primary: "xiaomi/mimo-v2.5-pro" } } },
         models: {
+          mode,
           providers: {
             xiaomi: {
-              api: "openai-completions",
+              ...(mode === "merge" ? { api: "openai-completions" as const } : {}),
               apiKey: "tp-fixture",
               baseUrl: "https://api.xiaomi.example/v1",
               models: [
@@ -674,8 +831,97 @@ describe("modelsListCommand forward-compat", () => {
             provider: "google",
             key: "google-fixture",
           },
+          "openai:platform": {
+            type: "api_key",
+            provider: "openai",
+            key: "openai-fixture",
+          },
         },
         order: {},
+      });
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({
+        entries: [
+          {
+            key: "xiaomi/mimo-v2.5-pro",
+            ref: { provider: "xiaomi", model: "mimo-v2.5-pro" },
+            tags: new Set(["default"]),
+            aliases: [],
+          },
+          ...(mode === "replace"
+            ? [
+                {
+                  key: "google/gemini-stale",
+                  ref: { provider: "google", model: "gemini-stale" },
+                  tags: new Set(["fallback#1"]),
+                  aliases: [],
+                },
+                {
+                  key: "openai/gpt-stale",
+                  ref: { provider: "openai", model: "gpt-stale" },
+                  tags: new Set(["configured"]),
+                  aliases: [],
+                },
+              ]
+            : []),
+        ],
+      });
+      mocks.loadModelCatalog.mockResolvedValueOnce([
+        {
+          provider: "google",
+          id: "gemini-3.1-flash-lite",
+          name: "Gemini 3.1 Flash Lite",
+          input: ["text"],
+          contextWindow: 1_000_000,
+        },
+      ]);
+      const runtime = createRuntime();
+
+      await modelsListCommand({ json: true }, runtime as never);
+
+      expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
+      if (mode === "merge") {
+        expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
+          expect.objectContaining({
+            providerDiscoveryProviderIds: ["google", "openai", "xiaomi"],
+            providerRuntimeDiscoveryProviderIds: [],
+            providerManifestFallbackProviderIds: ["google", "openai"],
+          }),
+        );
+      } else {
+        expect(mocks.loadModelCatalog).not.toHaveBeenCalled();
+      }
+      const rows = lastPrintedRows<{ key: string; name: string; available: boolean }>();
+      expectRowKeys(rows, expectedKeys);
+      expectRowFields(rows, "xiaomi/mimo-v2.5-pro", { name: "MiMo V2.5 Pro" });
+      expectRowFields(rows, "xiaomi/mimo-v2.5", { name: "MiMo V2.5" });
+      if (mode === "merge") {
+        expectRowFields(rows, "google/gemini-3.1-flash-lite", {
+          name: "Gemini 3.1 Flash Lite",
+          available: true,
+        });
+      }
+    });
+
+    it.each([
+      { name: "--all", options: { all: true } },
+      { name: "--provider", options: { provider: "google" } },
+    ])("keeps explicit $name browsing in replace mode", async ({ options }) => {
+      const config = {
+        agents: { defaults: { model: { primary: "xiaomi/mimo-v2.5-pro" } } },
+        models: {
+          mode: "replace" as const,
+          providers: {
+            xiaomi: {
+              baseUrl: "https://api.xiaomi.example/v1",
+              models: [{ id: "mimo-v2.5-pro", name: "MiMo V2.5 Pro", input: ["text"] }],
+            },
+          },
+        },
+      };
+      mocks.loadModelsConfigWithSource.mockResolvedValueOnce({
+        sourceConfig: config,
+        resolvedConfig: config,
+        diagnostics: [],
       });
       mocks.resolveConfiguredEntries.mockReturnValueOnce({
         entries: [
@@ -698,21 +944,11 @@ describe("modelsListCommand forward-compat", () => {
       ]);
       const runtime = createRuntime();
 
-      await modelsListCommand({ json: true }, runtime as never);
+      await modelsListCommand({ ...options, json: true }, runtime as never);
 
-      expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
-      const rows = lastPrintedRows<{ key: string; name: string; available: boolean }>();
-      expectRowKeys(rows, [
-        "xiaomi/mimo-v2.5-pro",
-        "xiaomi/mimo-v2.5",
+      expect(lastPrintedRows<{ key: string }>().map((row) => row.key)).toContain(
         "google/gemini-3.1-flash-lite",
-      ]);
-      expectRowFields(rows, "xiaomi/mimo-v2.5-pro", { name: "MiMo V2.5 Pro" });
-      expectRowFields(rows, "xiaomi/mimo-v2.5", { name: "MiMo V2.5" });
-      expectRowFields(rows, "google/gemini-3.1-flash-lite", {
-        name: "Gemini 3.1 Flash Lite",
-        available: true,
-      });
+      );
     });
 
     it("does not mark configured codex model as missing when forward-compat can build a fallback", async () => {
@@ -1043,8 +1279,8 @@ describe("modelsListCommand forward-compat", () => {
           contextWindow: 1_000_000,
         },
       ]);
-      mocks.loadModelRegistry.mockResolvedValueOnce({
-        models: [
+      primeModelRegistry(
+        [
           {
             provider: "openai",
             id: "gpt-5.4",
@@ -1057,11 +1293,9 @@ describe("modelsListCommand forward-compat", () => {
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           },
         ],
-        availableKeys: new Set(),
-        registry: {
-          getAll: () => [],
-        },
-      });
+        new Set(),
+        [],
+      );
       mocks.resolveModelWithRegistry.mockImplementation(
         ({ provider, modelId }: { provider: string; modelId: string }) =>
           provider === "openai" && modelId === "gpt-5.4"
@@ -1101,25 +1335,16 @@ describe("modelsListCommand forward-compat", () => {
 
     it("does not load broad provider runtime catalogs for unfiltered all-model lists", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
-      mocks.loadModelRegistry.mockResolvedValueOnce({
-        models: [
+      primeModelRegistry(
+        [
           {
             ...OPENAI_CODEX_MODEL,
             api: "openai-responses",
             baseUrl: "https://api.openai.com/v1",
           },
         ],
-        availableKeys: new Set(["openai/gpt-5.4"]),
-        registry: {
-          getAll: () => [
-            {
-              ...OPENAI_CODEX_MODEL,
-              api: "openai-responses",
-              baseUrl: "https://api.openai.com/v1",
-            },
-          ],
-        },
-      });
+        new Set(["openai/gpt-5.4"]),
+      );
       mocks.loadModelCatalog.mockResolvedValueOnce([
         {
           provider: "moonshot",
@@ -1144,18 +1369,17 @@ describe("modelsListCommand forward-compat", () => {
       expect(modelRegistryOptions().normalizeModels).toBe(false);
       expect(mocks.resolveModelWithRegistry).not.toHaveBeenCalled();
       expect(mocks.loadModelCatalog).toHaveBeenCalledOnce();
+      expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
+        expect.not.objectContaining({
+          providerDiscoveryProviderIds: expect.anything(),
+        }),
+      );
       expectRowKeys(lastPrintedRows<{ key: string }>(), ["openai/gpt-5.4", "moonshot/kimi-k2.6"]);
     });
 
     it("falls back to registry-backed rows when the fast-path catalog is empty", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
-      mocks.loadModelRegistry.mockResolvedValueOnce({
-        models: [{ ...OPENAI_CODEX_MODEL }],
-        availableKeys: new Set(["openai/gpt-5.4"]),
-        registry: {
-          getAll: () => [{ ...OPENAI_CODEX_MODEL }],
-        },
-      });
+      primeModelRegistry([{ ...OPENAI_CODEX_MODEL }], new Set(["openai/gpt-5.4"]));
       const runtime = createRuntime();
 
       await modelsListCommand({ all: true, provider: "openai", json: true }, runtime as never);
@@ -1164,6 +1388,11 @@ describe("modelsListCommand forward-compat", () => {
       expect(modelRegistryOptions().providerFilter).toBe("openai");
       expect(modelRegistryOptions().normalizeModels).toBe(true);
       expect(mocks.loadModelCatalog).toHaveBeenCalledOnce();
+      expect(mocks.loadModelCatalog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerDiscoveryProviderIds: ["openai"],
+        }),
+      );
       const rows = lastPrintedRows<{ key: string; available: boolean }>();
       expectRowKeys(rows, ["openai/gpt-5.4"]);
       expectRowFields(rows, "openai/gpt-5.4", { available: true });
@@ -1171,37 +1400,19 @@ describe("modelsListCommand forward-compat", () => {
 
     it("falls back to registry rows for provider filters without catalog coverage", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
-      mocks.loadModelRegistry.mockResolvedValueOnce({
-        models: [
-          {
-            provider: "anthropic",
-            id: "claude-opus-4-7",
-            name: "Claude Opus 4.7",
-            api: "anthropic-messages",
-            baseUrl: "https://api.anthropic.com/v1",
-            input: ["text", "image"],
-            contextWindow: 1_000_000,
-            maxTokens: 64_000,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          },
-        ],
-        availableKeys: undefined,
-        registry: {
-          getAll: () => [
-            {
-              provider: "anthropic",
-              id: "claude-opus-4-7",
-              name: "Claude Opus 4.7",
-              api: "anthropic-messages",
-              baseUrl: "https://api.anthropic.com/v1",
-              input: ["text", "image"],
-              contextWindow: 1_000_000,
-              maxTokens: 64_000,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            },
-          ],
+      primeModelRegistry([
+        {
+          provider: "anthropic",
+          id: "claude-opus-4-7",
+          name: "Claude Opus 4.7",
+          api: "anthropic-messages",
+          baseUrl: "https://api.anthropic.com/v1",
+          input: ["text", "image"],
+          contextWindow: 1_000_000,
+          maxTokens: 64_000,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         },
-      });
+      ]);
       const runtime = createRuntime();
 
       await modelsListCommand({ all: true, provider: "anthropic", json: true }, runtime as never);
@@ -1215,13 +1426,7 @@ describe("modelsListCommand forward-compat", () => {
 
     it("includes provider-owned supplemental catalog rows with provider filters", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
-      mocks.loadModelRegistry.mockResolvedValueOnce({
-        models: [],
-        availableKeys: new Set(["opencode-go/deepseek-v4-pro"]),
-        registry: {
-          getAll: () => [],
-        },
-      });
+      primeModelRegistry([], new Set(["opencode-go/deepseek-v4-pro"]));
       mocks.loadModelCatalog.mockResolvedValueOnce([
         {
           provider: "opencode-go",
@@ -1256,13 +1461,7 @@ describe("modelsListCommand forward-compat", () => {
 
     it("includes synthetic codex gpt-5.4 in --all output when catalog supports it", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
-      mocks.loadModelRegistry.mockResolvedValueOnce({
-        models: [],
-        availableKeys: new Set(["openai/gpt-5.4"]),
-        registry: {
-          getAll: () => [],
-        },
-      });
+      primeModelRegistry([], new Set(["openai/gpt-5.4"]));
       mocks.loadModelCatalog.mockResolvedValueOnce([
         {
           provider: "openai",
@@ -1303,8 +1502,8 @@ describe("modelsListCommand forward-compat", () => {
         },
         order: {},
       });
-      mocks.loadModelRegistry.mockResolvedValueOnce({
-        models: [
+      primeModelRegistry(
+        [
           {
             provider: "openai",
             id: "gpt-5.5",
@@ -1317,23 +1516,8 @@ describe("modelsListCommand forward-compat", () => {
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           },
         ],
-        availableKeys: new Set(["openai/gpt-5.5"]),
-        registry: {
-          getAll: () => [
-            {
-              provider: "openai",
-              id: "gpt-5.5",
-              name: "GPT-5.5",
-              api: "openai-chatgpt-responses",
-              baseUrl: "https://chatgpt.com/backend-api",
-              input: ["text", "image"],
-              contextWindow: 272000,
-              maxTokens: 128000,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            },
-          ],
-        },
-      });
+        new Set(["openai/gpt-5.5"]),
+      );
       mocks.resolveModelWithRegistry.mockImplementation(
         ({ provider, modelId }: { provider: string; modelId: string }) =>
           provider === "openai" && modelId === "gpt-5.5"
@@ -1416,8 +1600,8 @@ describe("modelsListCommand forward-compat", () => {
   describe("provider filter matching", () => {
     it("matches discovered providers against exact provider filters", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
-      mocks.loadModelRegistry.mockResolvedValueOnce({
-        models: [
+      primeModelRegistry(
+        [
           {
             provider: "z.ai",
             id: "glm-4.5",
@@ -1430,23 +1614,8 @@ describe("modelsListCommand forward-compat", () => {
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           },
         ],
-        availableKeys: new Set(["z.ai/glm-4.5"]),
-        registry: {
-          getAll: () => [
-            {
-              provider: "z.ai",
-              id: "glm-4.5",
-              name: "GLM-4.5",
-              api: "openai-responses",
-              baseUrl: "https://api.z.ai/v1",
-              input: ["text"],
-              contextWindow: 128_000,
-              maxTokens: 16_384,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            },
-          ],
-        },
-      });
+        new Set(["z.ai/glm-4.5"]),
+      );
 
       const runtime = createRuntime();
 

@@ -13,7 +13,7 @@ import {
 } from "../agents/workspace-state-store.js";
 import {
   listSessionEntryKeysReadOnly,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -41,7 +41,9 @@ describe("sandbox workspace Doctor migration", () => {
   });
 
   function setup() {
-    const homeDir = tempDirs.make("openclaw-sandbox-workspace-migration-home-");
+    // macOS os.tmpdir() is a /var -> /private/var symlink; prod resolvers return
+    // canonical paths, so expectations must build from the realpathed root.
+    const homeDir = fs.realpathSync(tempDirs.make("openclaw-sandbox-workspace-migration-home-"));
     const stateDir = path.join(homeDir, ".openclaw");
     const workspaceDir = path.join(homeDir, "workspace");
     fs.mkdirSync(workspaceDir, { recursive: true });
@@ -59,7 +61,7 @@ describe("sandbox workspace Doctor migration", () => {
   async function registerSandboxSession(sessionKey: string) {
     const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? "main";
     const sessionHash = createHash("sha256").update(sessionKey).digest("hex").slice(0, 12);
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId, env: process.env, sessionKey },
       { sessionId: `workspace-migration-proof-${sessionHash}`, updatedAt: 1 },
     );
@@ -238,68 +240,69 @@ describe("sandbox workspace Doctor migration", () => {
     },
   );
 
-  it.each(["main", "session-doctor-proof", "agent:main:telegram:direct:doctor-proof"])(
-    "repairs durable session %s after its sandbox runtime has been pruned",
-    async (sessionKey) => {
-      const context = setup();
-      const sandboxRoot = path.join(context.homeDir, "sandboxes");
-      const cfg = {
-        agents: {
-          defaults: {
-            workspace: context.workspaceDir,
-            sandbox: {
-              mode: "all",
-              scope: "session",
-              workspaceAccess: "ro",
-              workspaceRoot: "~/sandboxes",
-            },
+  it.each([
+    "agent:main:main",
+    "agent:main:session-doctor-proof",
+    "agent:main:telegram:direct:doctor-proof",
+  ])("repairs durable session %s after its sandbox runtime has been pruned", async (sessionKey) => {
+    const context = setup();
+    const sandboxRoot = path.join(context.homeDir, "sandboxes");
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: context.workspaceDir,
+          sandbox: {
+            mode: "all",
+            scope: "session",
+            workspaceAccess: "ro",
+            workspaceRoot: "~/sandboxes",
           },
-          entries: { main: { default: true } },
         },
-      } satisfies OpenClawConfig;
-      const layout = resolveSandboxWorkspaceLayoutPaths({
-        cfg: { scope: "session", workspaceAccess: "ro", workspaceRoot: sandboxRoot },
-        rawSessionKey: sessionKey,
-        workspaceDir: context.workspaceDir,
-      });
-      const setupPath = path.join(layout.sandboxWorkspaceDir, "openclaw-workspace-state.json");
-      await fsp.mkdir(layout.sandboxWorkspaceDir, { recursive: true });
-      await fsp.writeFile(
-        setupPath,
-        JSON.stringify({ version: 1, bootstrapSeededAt: "2026-07-20T00:00:00.000Z" }),
-        "utf8",
-      );
-      await registerSandboxSession(sessionKey);
-      await registerSandboxRuntimeScope(sessionKey);
-      const sessionHash = createHash("sha256").update(sessionKey).digest("hex").slice(0, 12);
-      await removeRegistryEntry(`workspace-migration-proof-${sessionHash}`);
+        entries: { main: { default: true } },
+      },
+    } satisfies OpenClawConfig;
+    const layout = resolveSandboxWorkspaceLayoutPaths({
+      cfg: { scope: "session", workspaceAccess: "ro", workspaceRoot: sandboxRoot },
+      rawSessionKey: sessionKey,
+      workspaceDir: context.workspaceDir,
+    });
+    const setupPath = path.join(layout.sandboxWorkspaceDir, "openclaw-workspace-state.json");
+    await fsp.mkdir(layout.sandboxWorkspaceDir, { recursive: true });
+    await fsp.writeFile(
+      setupPath,
+      JSON.stringify({ version: 1, bootstrapSeededAt: "2026-07-20T00:00:00.000Z" }),
+      "utf8",
+    );
+    await registerSandboxSession(sessionKey);
+    await registerSandboxRuntimeScope(sessionKey);
+    const sessionHash = createHash("sha256").update(sessionKey).digest("hex").slice(0, 12);
+    await removeRegistryEntry(`workspace-migration-proof-${sessionHash}`);
 
-      const detected = detectLegacyWorkspaceState({
-        cfg,
-        stateDir: context.stateDir,
-        env: context.env,
-        homedir: () => context.homeDir,
-        doctorOnlyStateMigrations: true,
-      });
+    const detected = detectLegacyWorkspaceState({
+      cfg,
+      stateDir: context.stateDir,
+      env: context.env,
+      homedir: () => context.homeDir,
+      doctorOnlyStateMigrations: true,
+    });
 
-      expect(detected.sources).toContainEqual(
-        expect.objectContaining({ kind: "setup", sourcePath: setupPath }),
-      );
+    expect(detected.sources).toContainEqual(
+      expect.objectContaining({ kind: "setup", sourcePath: setupPath }),
+    );
 
-      const result = await migrateLegacyWorkspaceState({
-        detected,
-        env: context.env,
-        stateDir: context.stateDir,
-      });
+    const result = await migrateLegacyWorkspaceState({
+      detected,
+      env: context.env,
+      stateDir: context.stateDir,
+    });
 
-      expect(result.warnings).toEqual([]);
-      expect(fs.existsSync(setupPath)).toBe(false);
-      expect(readWorkspaceStateSnapshot(layout.sandboxWorkspaceDir)).toMatchObject({
-        setup: { bootstrapSeededAt: "2026-07-20T00:00:00.000Z" },
-        setupExists: true,
-      });
-    },
-  );
+    expect(result.warnings).toEqual([]);
+    expect(fs.existsSync(setupPath)).toBe(false);
+    expect(readWorkspaceStateSnapshot(layout.sandboxWorkspaceDir)).toMatchObject({
+      setup: { bootstrapSeededAt: "2026-07-20T00:00:00.000Z" },
+      setupExists: true,
+    });
+  });
 
   it.each([
     { label: "disabled sandbox", mode: "off", workspaceAccess: "ro" },

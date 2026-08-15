@@ -7,10 +7,12 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "../utils.js";
@@ -94,6 +96,8 @@ type WorkspaceStateDatabase = Pick<
   | "migration_runs"
   | "migration_sources"
 >;
+
+type WorkspaceStateDatabaseHandle = Pick<ReturnType<typeof openOpenClawStateDatabase>, "db">;
 
 const MAX_WORKSPACE_IDENTITY_SYMLINKS = 40;
 
@@ -181,7 +185,7 @@ export function resolveWorkspaceStateIdentity(workspaceDir: string): WorkspaceSt
 
 function resolveWorkspaceIdentityFromDatabase(params: {
   workspaceDir: string;
-  database: ReturnType<typeof openOpenClawStateDatabase>;
+  database: WorkspaceStateDatabaseHandle;
 }): WorkspaceIdentityResolution {
   const aliases = resolveWorkspaceStateAliases(params.workspaceDir);
   const canonicalIdentity = aliases.at(-1)!;
@@ -231,7 +235,7 @@ function resolveWorkspaceIdentityFromDatabase(params: {
 }
 
 function registerWorkspacePathAliases(params: {
-  database: ReturnType<typeof openOpenClawStateDatabase>;
+  database: WorkspaceStateDatabaseHandle;
   identity: WorkspaceStateIdentity;
   aliases: readonly WorkspaceStateIdentity[];
   updatedAtMs: number;
@@ -270,7 +274,7 @@ function registerWorkspacePathAliases(params: {
 }
 
 export function registerWorkspaceStateAliasesInTransaction(params: {
-  database: ReturnType<typeof openOpenClawStateDatabase>;
+  database: WorkspaceStateDatabaseHandle;
   workspaceDirs: readonly string[];
   identity: WorkspaceStateIdentity;
   updatedAtMs: number;
@@ -291,7 +295,7 @@ export function registerWorkspaceStateAliasesInTransaction(params: {
 
 function readSnapshotFromDatabase(params: {
   identity: WorkspaceStateIdentity;
-  database: ReturnType<typeof openOpenClawStateDatabase>;
+  database: WorkspaceStateDatabaseHandle;
 }): WorkspaceStateSnapshot {
   const identity = params.identity;
   const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(params.database.db);
@@ -363,8 +367,28 @@ function readSnapshotFromDatabase(params: {
   };
 }
 
-export function readWorkspaceStateSnapshot(workspaceDir: string): WorkspaceStateSnapshot {
-  const database = openOpenClawStateDatabase();
+export function readWorkspaceStateSnapshot(
+  workspaceDir: string,
+  options: OpenClawStateDatabaseOptions = {},
+): WorkspaceStateSnapshot {
+  if (options.readOnly) {
+    const snapshot = withExistingOpenClawStateDatabaseReadOnly(
+      (database) =>
+        runSqliteDeferredTransactionSync(database.db, () => {
+          const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
+          return readSnapshotFromDatabase({ identity: resolution.identity, database });
+        }),
+      options,
+    );
+    return (
+      snapshot ?? {
+        identity: resolveWorkspaceStateIdentity(workspaceDir),
+        setupExists: false,
+        setup: { version: WORKSPACE_SETUP_STATE_VERSION },
+      }
+    );
+  }
+  const database = openOpenClawStateDatabase(options);
   const initial = runSqliteDeferredTransactionSync(database.db, () => {
     const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
     return {
@@ -374,6 +398,7 @@ export function readWorkspaceStateSnapshot(workspaceDir: string): WorkspaceState
   });
   if (
     initial.resolution.missingAliasKeys.length === 0 ||
+    options.readOnly ||
     (!initial.snapshot.setupExists && !initial.snapshot.attestation)
   ) {
     return initial.snapshot;
@@ -408,13 +433,14 @@ export function readWorkspaceStateSnapshot(workspaceDir: string): WorkspaceState
       });
     }
     return snapshot;
-  });
+  }, options);
 }
 
 export function mergeWorkspaceSetupState(
   workspaceDir: string,
   next: Partial<Omit<WorkspaceSetupState, "version">>,
   nowMs = Date.now(),
+  options: OpenClawStateDatabaseOptions = {},
 ): WorkspaceSetupState {
   assertCanonicalIntegerTimestamp(nowMs, "setup update");
   if (next.bootstrapSeededAt) {
@@ -464,7 +490,7 @@ export function mergeWorkspaceSetupState(
       updatedAtMs: nowMs,
     });
     return merged;
-  });
+  }, options);
 }
 
 export function replaceWorkspaceAttestation(params: {

@@ -343,6 +343,7 @@ export async function streamSignalEvents(params: {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
   onEvent: (event: SignalSseEvent) => unknown;
+  onStreamOpen?: () => void;
 }): Promise<void> {
   const url = resolveSignalEndpointUrl(params.baseUrl, "/api/v1/events");
   if (params.account) {
@@ -354,6 +355,7 @@ export async function streamSignalEvents(params: {
     params.abortSignal,
     params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
   );
+  params.onStreamOpen?.();
   const decoder = new TextDecoder();
   let buffer = "";
   let bufferedBytes = 0;

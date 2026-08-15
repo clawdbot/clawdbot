@@ -52,11 +52,13 @@ describe("probeTlonAccount", () => {
     const cancelBody = vi.fn(() => {
       events.push("cancel");
     });
+    const response = responseWithCancelableBody(status, cancelBody);
     const release = vi.fn(async () => {
+      void response.body?.cancel().catch(() => undefined);
       events.push("release");
     });
     vi.mocked(urbitFetch).mockResolvedValue({
-      response: responseWithCancelableBody(status, cancelBody),
+      response,
       finalUrl: "https://example.com/~/name",
       release,
       refreshTimeout: vi.fn(),
@@ -80,6 +82,7 @@ describe("probeTlonAccount", () => {
       throw new Error("cancel failed");
     });
     const release = vi.fn(async () => {
+      void response.body?.cancel().catch(() => undefined);
       events.push("release");
     });
     vi.mocked(urbitFetch).mockResolvedValue({

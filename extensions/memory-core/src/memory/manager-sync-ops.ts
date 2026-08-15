@@ -174,10 +174,15 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     // the vector extension before text and FTS indexing can proceed.
     const vectorReady = syncProvider ? await this.ensureVectorReady() : false;
     const meta = this.readMeta();
-    const targetArchiveFiles = await this.combineTargetArchiveFiles({
-      sessions: params?.sessions,
-      archiveFiles: params?.archiveFiles,
-    });
+    // Resolve and index a targeted session against one corpus snapshot. A reset
+    // between separate enumerations could otherwise replace the chosen identity.
+    const targetSessionSync = this.hasRequestedTargetSessionSync(params)
+      ? await this.resolveTargetSessionSyncPlan({
+          sessions: params?.sessions,
+          archiveFiles: params?.archiveFiles,
+        })
+      : null;
+    const targetArchiveFiles = targetSessionSync?.targetArchiveFiles ?? null;
     const hasTargetArchiveFiles = targetArchiveFiles !== null;
     if (this.hasRequestedTargetSessionSync(params) && !hasTargetArchiveFiles) {
       return;
@@ -270,9 +275,13 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         reason: params?.reason,
         progress: progress ?? undefined,
         sessionsFullRetryDirty: this.sessionsFullRetryDirty,
+        sessionsReconcileDirty: this.sessionsReconcileDirty,
         sessionsDirtyFiles: this.sessionsDirtyFiles,
         syncArchiveFiles: async (targetedParams) => {
-          await this.syncArchiveFiles(targetedParams);
+          await this.syncArchiveFiles({
+            ...targetedParams,
+            corpusEntries: targetSessionSync?.corpusEntries,
+          });
         },
         shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
         activateFallbackProvider: async (reason) => {

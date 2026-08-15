@@ -295,17 +295,17 @@ plugin's catalog; core only reads the generic compat field.
 
 Bundled provider catalogs currently flag these models as `"preferred"`:
 
-| Provider  | Models                                                                                                                                       |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| anthropic | `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-mythos-5`, `claude-opus-4-8`, `claude-haiku-4-5`                               |
-| deepseek  | `deepseek-v4-pro`, `deepseek-v4-flash`                                                                                                       |
-| google    | `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash` |
-| kimi      | `k3`, `k3-256k`                                                                                                                              |
-| minimax   | `MiniMax-M3`                                                                                                                                 |
-| moonshot  | `kimi-k3`                                                                                                                                    |
-| openai    | `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.5-pro`                                                          |
-| xiaomi    | `mimo-v2.5`                                                                                                                                  |
-| zai       | `glm-5.2`, `glm-5.1`                                                                                                                         |
+| Provider  | Models                                                                                                                                                           |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| anthropic | `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-mythos-5`, `claude-opus-4-8`, `claude-haiku-4-5`                                                   |
+| deepseek  | `deepseek-v4-pro`, `deepseek-v4-flash`                                                                                                                           |
+| google    | `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.7-flash` |
+| kimi      | `k3`, `k3-256k`                                                                                                                                                  |
+| minimax   | `MiniMax-M3`                                                                                                                                                     |
+| moonshot  | `kimi-k3`                                                                                                                                                        |
+| openai    | `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.5-pro`                                                                              |
+| xiaomi    | `mimo-v2.5`                                                                                                                                                      |
+| zai       | `glm-5.3`, `glm-5.2`, `glm-5.1`                                                                                                                                  |
 
 Everything else, including all Ollama-served local models, stays unflagged and
 keeps normal tool exposure under `"auto"`.
@@ -664,7 +664,7 @@ Current built-in contracts include `agents_list`, `apply_patch`,
 `conversations_list`, `conversations_send`, `conversations_turn`, `edit`,
 `openclaw`, `read`, `screen`,
 `sessions_history`, `sessions_list`, `sessions_search`, `sessions_send`,
-`session_status`, `spawn_task`, `terminal`, `web_fetch`, and `web_search`.
+`session_status`, `suggest_task`, `terminal`, `web_fetch`, and `web_search`.
 Exact passthroughs can reuse their owning protocol schema instead of
 duplicating a model-only contract. For example, the conversation tools expose
 the same Gateway result schemas used by `conversations.list`,
@@ -796,10 +796,15 @@ the bridge as JSON-compatible values with explicit size caps.
 type CodeModeOutput = { type: "text"; text: string } | { type: "json"; value: unknown };
 ```
 
-Rules: output order matches guest calls; output is capped by
-`maxOutputBytes`; non-serializable values are converted to plain strings or
-errors; binary values are not supported. Images and files travel through
-ordinary OpenClaw tools, not through the code-mode bridge.
+Rules: output order matches guest calls. Nested tool results, cumulative guest
+output, and the final value share the `maxOutputBytes` serialized UTF-8 budget.
+When a successful result exceeds the budget, OpenClaw returns a bounded value
+with `truncated: true`, a UTF-8-safe `prefix`, `omittedBytes`, and guidance to
+rerun with narrower arguments. Treat that marker as a successful partial result:
+reduce the search scope, paginate, select fewer files, or return a smaller
+projection. Non-serializable values are converted to plain strings or errors;
+binary values are not supported. Images and files travel through ordinary
+OpenClaw tools, not through the code-mode bridge.
 
 ## Tool catalog
 
@@ -905,8 +910,10 @@ session.`.
   `completed` or `failed`, or is dropped on Gateway shutdown (nothing
   survives a restart: this is transient runtime state).
 - For read-only work, `exec` can set `restartSafe: true`. OpenClaw then rejects
-  side-effecting catalog and namespace tool calls before execution and
-  marks suspended results as replay-safe. If a restart interrupts `wait`,
+  catalog and namespace tool surfaces that are not proven replay-safe before
+  execution and marks suspended results as replay-safe. A generic exec surface
+  is not replay-safe merely because one command appears read-only; recovery
+  runs should use the audited read, grep, or find tools. If a restart interrupts `wait`,
   [restart recovery](/gateway/restart-recovery) reconstructs the turn from the
   transcript instead of restoring the process-local snapshot. The recovery
   turn itself remains limited to audited read-only core tools and explicitly
@@ -981,6 +988,9 @@ type CodeModeErrorCode =
 rejected module access, TypeScript transform failures, unknown/expired/
 wrong-scope `runId` values, and too many suspended runs. `runtime_unavailable`
 covers a QuickJS worker that fails to start or exits non-zero.
+`output_limit_exceeded` is reserved for a result that cannot be serialized into
+the bounded projection; ordinary oversized successful results are truncated and
+remain successful.
 
 Errors returned to the guest are plain data; host `Error` instances, stack
 objects, prototypes, and host functions do not cross into QuickJS.
@@ -991,17 +1001,23 @@ Each result's `telemetry` field reports: hidden catalog size and a source
 breakdown (`openclaw`/`mcp`/`client` counts), cumulative search/describe/call
 counts for the run's catalog, and the model-visible tool names (`exec`,
 `wait`, and retained direct-only tools).
+The `counterScope` identifies one counter lifetime, changing when a catalog is
+replaced or restored but remaining stable when tools are appended or prompt
+policy narrows that catalog.
 
 The run metadata (`meta.agentMeta` in `openclaw agent --json`, mirrored on the
 `agent exec --json` envelope) adds per-run stats:
 
 - `codeModeEngaged`: `true` only when code mode actually owned the model tool
   surface. This is the reliable engagement signal — do not infer engagement
-  from config or tool names: the shell tool is also named `exec`, the
-  `"auto"` tier engages per model capability, and a model routed through a
-  native harness surface (for example OpenAI-family models on their harness)
-  reports `codeModeEngaged: false` even with `tools.codeMode.enabled=true`,
-  making the silent no-op observable.
+  from config or tool names: the shell tool is also named `exec`, and the
+  `"auto"` tier engages per model capability. Harnesses that bridge OpenClaw's
+  tool surface (Copilot) report their resolved gate, so
+  `codeModeEngaged: false` with `tools.codeMode.enabled=true` makes a silent
+  no-op observable. Harnesses that run their own native tool surface (Codex)
+  never engage OpenClaw code mode, so they always read `false`; an attempt that
+  reports nothing is normalized to `false` for the same reason. Codex's own
+  `codeModeOnly` is a separate native feature that this field does not track.
 - `assistantTurns`: completed assistant/provider round trips across the run.
 - `bridgeCalls`: the run's cumulative inner bridge counts
   (`{ search, describe, call }`). These calls never reach the provider;

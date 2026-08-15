@@ -15,7 +15,7 @@ import {
   loadDeliveryQueueEntry,
   type DeliveryQueueCompletionRetention,
 } from "../../infra/delivery-queue-sqlite.js";
-import { isProvenDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
+import * as deliveryRecovery from "../../infra/delivery-recovery.shared.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queue-media-staging.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
@@ -24,10 +24,9 @@ import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { createCronExecutionId } from "../run-id.js";
-import { hasScheduledNextRunAtMs } from "../service/jobs.js";
+import { hasScheduledNextRunAtMs } from "../service/jobs-scheduling.js";
 import type { CronJob } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
-import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 
 type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
 
@@ -36,27 +35,6 @@ export const DIRECT_CRON_DELIVERY_COMPLETION_RETENTION = {
   maxAgeMs: 24 * 60 * 60_000,
   maxEntries: 2_000,
 } as const satisfies DeliveryQueueCompletionRetention;
-
-/** Deletes or retires ephemeral direct-delivery cron sessions for delete-after-run jobs. */
-export async function cleanupDirectCronSession(params: {
-  job: CronJob;
-  agentSessionKey: string;
-  sessionId: string;
-  lifecycleRevision: string;
-  sessionUpdatedAt: number;
-  beforeSessionDelete?: () => void;
-  retireReason: string;
-}): Promise<void> {
-  await cleanupCronRunSessionAfterRun({
-    job: params.job,
-    agentSessionKey: params.agentSessionKey,
-    sessionId: params.sessionId,
-    lifecycleRevision: params.lifecycleRevision,
-    sessionUpdatedAt: params.sessionUpdatedAt,
-    beforeDelete: params.beforeSessionDelete,
-    reason: params.retireReason,
-  });
-}
 
 export function normalizeDeliveryTarget(channel: string, to: string): string {
   const toTrimmed = to.trim();
@@ -124,14 +102,6 @@ const deliverySubagentRegistryRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-subagent-registry.runtime.js"),
 );
 
-async function loadDeliveryLoggerRuntime(): Promise<typeof import("./delivery-logger.runtime.js")> {
-  return await deliveryLoggerRuntimeLoader.load();
-}
-
-async function loadTtsRuntime(): Promise<typeof import("../../tts/tts.runtime.js")> {
-  return await ttsRuntimeLoader.load();
-}
-
 export async function loadDeliverySubagentRegistryRuntime(): Promise<
   typeof import("./delivery-subagent-registry.runtime.js")
 > {
@@ -139,17 +109,17 @@ export async function loadDeliverySubagentRegistryRuntime(): Promise<
 }
 
 export async function logCronDeliveryWarn(message: string): Promise<void> {
-  const { logWarn } = await loadDeliveryLoggerRuntime();
+  const { logWarn } = await deliveryLoggerRuntimeLoader.load();
   logWarn(message);
 }
 
 export async function logCronDeliveryError(message: string): Promise<void> {
-  const { logError } = await loadDeliveryLoggerRuntime();
+  const { logError } = await deliveryLoggerRuntimeLoader.load();
   logError(message);
 }
 
 export function logCronDeliveryErrorDeferred(message: string): void {
-  void loadDeliveryLoggerRuntime().then(({ logError }) => {
+  void deliveryLoggerRuntimeLoader.load().then(({ logError }) => {
     logError(message);
   });
 }
@@ -191,7 +161,7 @@ export async function maybeApplyTtsToCronPayloads(params: {
   ) {
     return params.payloads;
   }
-  const { maybeApplyTtsToPayload } = await loadTtsRuntime();
+  const { maybeApplyTtsToPayload } = await ttsRuntimeLoader.load();
   return await Promise.all(
     params.payloads.map((payload) =>
       maybeApplyTtsToPayload({
@@ -284,6 +254,9 @@ function summarizeDirectCronDeliveryError(error: unknown): string {
 }
 
 function isTransientDirectCronDeliveryError(error: unknown): boolean {
+  if (deliveryRecovery.findPlatformMessageRejectedError(error)) {
+    return false;
+  }
   const message = summarizeDirectCronDeliveryError(error);
   if (!message) {
     return false;
@@ -291,7 +264,7 @@ function isTransientDirectCronDeliveryError(error: unknown): boolean {
   if (PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))) {
     return false;
   }
-  return isProvenDeliveryNotSentError(error);
+  return deliveryRecovery.isProvenDeliveryNotSentError(error);
 }
 function resolveDirectCronRetryDelaysMs(): readonly number[] {
   return isFastTestRuntimeEnv() ? [0, 0, 0] : [5_000, 10_000, 20_000];
@@ -299,37 +272,52 @@ function resolveDirectCronRetryDelaysMs(): readonly number[] {
 
 export async function retryTransientDirectCronDelivery<T>(params: {
   jobId: string;
+  label?: string;
   signal?: AbortSignal;
+  deadlineAtMs?: number;
   run: () => Promise<T>;
   shouldRetryError?: (err: unknown) => boolean;
 }): Promise<T> {
   const retryDelaysMs = resolveDirectCronRetryDelaysMs();
-  if (params.signal?.aborted) {
-    throw new Error("cron delivery aborted");
-  }
-  const runWithAbortCheck = async () => {
+  const assertActive = () => {
     if (params.signal?.aborted) {
       throw new Error("cron delivery aborted");
     }
+    if (params.deadlineAtMs !== undefined && Date.now() >= params.deadlineAtMs) {
+      const error = new Error("cron delivery deadline exceeded");
+      error.name = "TimeoutError";
+      throw error;
+    }
+  };
+  assertActive();
+  const runWithAbortCheck = async () => {
+    assertActive();
     return await params.run();
   };
-  return await retryAsync(runWithAbortCheck, {
+  const result = await retryAsync(runWithAbortCheck, {
     attempts: retryDelaysMs.length + 1,
     minDelayMs: 0,
     maxDelayMs: Math.max(...retryDelaysMs),
     delayMs: ({ attempt }) => retryDelaysMs[attempt - 1] ?? 0,
     shouldRetry: (err) =>
       params.signal?.aborted !== true &&
+      (params.deadlineAtMs === undefined || Date.now() < params.deadlineAtMs) &&
       isTransientDirectCronDeliveryError(err) &&
       (params.shouldRetryError?.(err) ?? true),
     onRetry: async ({ attempt, maxAttempts, delayMs, err }) => {
       await logCronDeliveryWarn(
-        `[cron:${params.jobId}] transient direct announce delivery failure, retrying ${attempt + 1}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDirectCronDeliveryError(err)}`,
+        `[cron:${params.jobId}] transient ${params.label ?? "direct announce"} delivery failure, retrying ${attempt + 1}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDirectCronDeliveryError(err)}`,
       );
       if (delayMs === 0) {
         await sleepWithAbort(0, params.signal);
       }
     },
-    sleep: async (delayMs) => await sleepWithAbort(delayMs, params.signal),
+    sleep: async (delayMs) => {
+      const remainingMs =
+        params.deadlineAtMs === undefined ? delayMs : Math.max(0, params.deadlineAtMs - Date.now());
+      await sleepWithAbort(Math.min(delayMs, remainingMs), params.signal);
+      assertActive();
+    },
   });
+  return result;
 }

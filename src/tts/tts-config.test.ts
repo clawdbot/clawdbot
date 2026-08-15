@@ -10,6 +10,7 @@ import {
   resolveEffectiveTtsConfig,
   shouldAttemptTtsPayload,
 } from "./tts-config.js";
+import { resolveTtsSettingsSnapshot } from "./tts-settings.js";
 
 describe("shouldAttemptTtsPayload", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -74,6 +75,34 @@ describe("shouldAttemptTtsPayload", () => {
     expect(shouldAttemptTtsPayload({ cfg: { tts: { enabled: true } } as OpenClawConfig })).toBe(
       false,
     );
+  });
+
+  it("records the selected provider preference source", () => {
+    const cfg = {
+      tts: {
+        provider: "openai",
+        persona: "reader",
+        personas: {
+          reader: { provider: "google" },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveTtsSettingsSnapshot({ cfg }).providerPreference).toEqual({
+      provider: "google",
+      source: "persona",
+    });
+
+    writeFileSync(prefsPath, JSON.stringify({ tts: { provider: "edge" } }));
+    expect(resolveTtsSettingsSnapshot({ cfg }).providerPreference).toEqual({
+      provider: "microsoft",
+      source: "prefs",
+    });
+
+    writeFileSync(prefsPath, "{}");
+    expect(
+      resolveTtsSettingsSnapshot({ cfg: { tts: { provider: "openai" } } }).providerPreference,
+    ).toEqual({ provider: "openai", source: "config" });
   });
 
   it("uses per-agent TTS auto and mode overrides", () => {

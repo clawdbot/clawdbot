@@ -2,12 +2,16 @@
 import {
   claimPendingAgentQuestionAnswer,
   type AgentHarnessQuestionGatewayCall,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 
 type GatewayCallRecord = { method: string; opts: unknown; params: unknown };
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function createParams(signal?: AbortSignal): EmbeddedRunAttemptParams {
   return {
@@ -73,6 +77,22 @@ function requestParams(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function secretRequestParams(overrides: Record<string, unknown> = {}) {
+  return requestParams({
+    questions: [
+      {
+        id: "token",
+        header: "Secret",
+        question: "Enter token",
+        isOther: true,
+        isSecret: true,
+        options: null,
+      },
+    ],
+    ...overrides,
+  });
+}
+
 describe("Codex app-server user input bridge", () => {
   it("registers, presents, claims, and returns gateway answers", async () => {
     const params = createParams();
@@ -99,7 +119,10 @@ describe("Codex app-server user input bridge", () => {
     });
     const payload = vi.mocked(params.onBlockReply!).mock.calls[0]![0];
     expect(payload.channelData).toEqual({
-      askUser: { questionId: (request.params as { id: string }).id },
+      askUser: {
+        questionId: (request.params as { id: string }).id,
+        optionValues: ["Fast", "Deep"],
+      },
     });
     expect(payload.presentationTextMode).toBe("fallback");
     expect(payload.text).toContain("Reply with the number or option text.");
@@ -171,18 +194,7 @@ describe("Codex app-server user input bridge", () => {
     });
     const response = bridge.handleRequest({
       id: "input-secret",
-      params: requestParams({
-        questions: [
-          {
-            id: "token",
-            header: "Secret",
-            question: "Enter token",
-            isOther: true,
-            isSecret: true,
-            options: null,
-          },
-        ],
-      }),
+      params: secretRequestParams(),
     });
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
 
@@ -192,6 +204,55 @@ describe("Codex app-server user input bridge", () => {
     expect(gateway.calls).toHaveLength(0);
     expect(bridge.claimPendingRequest()?.answer("private")).toBe(true);
     await expect(response).resolves.toEqual({ answers: { token: { answers: ["private"] } } });
+  });
+
+  it("clears an unanswered secret request when prompt delivery fails", async () => {
+    const params = createParams();
+    params.onBlockReply = vi.fn().mockRejectedValue(new Error("channel unavailable"));
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    await expect(
+      bridge.handleRequest({ id: "input-secret-undelivered", params: secretRequestParams() }),
+    ).resolves.toEqual({ answers: {} });
+    expect(bridge.claimPendingRequest()).toBeUndefined();
+  });
+
+  it("keeps a replacement secret request when an earlier prompt later fails", async () => {
+    let rejectFirstDelivery!: (error: Error) => void;
+    const firstDelivery = new Promise<void>((_resolve, reject) => {
+      rejectFirstDelivery = reject;
+    });
+    const params = createParams();
+    params.onBlockReply = vi.fn().mockReturnValueOnce(firstDelivery).mockResolvedValue(undefined);
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const first = bridge.handleRequest({
+      id: "input-secret-replaced",
+      params: secretRequestParams(),
+    });
+    const replacement = bridge.handleRequest({
+      id: "input-secret-current",
+      params: secretRequestParams(),
+    });
+    await expect(first).resolves.toEqual({ answers: {} });
+
+    rejectFirstDelivery(new Error("previous prompt delivery failed"));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(bridge.claimPendingRequest()?.answer("replacement secret")).toBe(true);
+    await expect(replacement).resolves.toEqual({
+      answers: { token: { answers: ["replacement secret"] } },
+    });
   });
 
   it("cancels the matching gateway record on serverRequest/resolved", async () => {
@@ -219,7 +280,7 @@ describe("Codex app-server user input bridge", () => {
     );
   });
 
-  it("passes Codex autoResolutionMs and option-less free text through", async () => {
+  it("keeps legacy requests blocking and ignores deprecated autoResolutionMs", async () => {
     const params = createParams();
     const gateway = createGatewayStub();
     const bridge = createCodexUserInputBridge({
@@ -246,12 +307,88 @@ describe("Codex app-server user input bridge", () => {
     });
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
     expect(gateway.calls[0]?.params).toMatchObject({
-      timeoutMs: 60_000,
+      timeoutMs: 90_000,
       questions: [expect.objectContaining({ questionId: "notes", options: [] })],
     });
     await claimPendingAgentQuestionAnswer({ sessionKey: params.sessionKey, text: "Refactor it" });
     await expect(response).resolves.toEqual({
       answers: { notes: { answers: ["Refactor it"] } },
     });
+  });
+
+  it("auto-resolves nonblocking gateway questions after exactly 120 seconds", async () => {
+    vi.useFakeTimers();
+    const params = createParams();
+    const calls: GatewayCallRecord[] = [];
+    const gatewayCall: AgentHarnessQuestionGatewayCall = async (method, opts, rawParams) => {
+      calls.push({ method, opts, params: rawParams });
+      if (method === "question.request") {
+        return { id: (rawParams as { id: string }).id };
+      }
+      if (method === "question.waitAnswer") {
+        return await new Promise((resolve) => {
+          setTimeout(() => resolve({ status: "pending" }), 120_000);
+        });
+      }
+      if (method === "question.resolve") {
+        return { status: "cancelled" };
+      }
+      throw new Error(`unexpected gateway method: ${method}`);
+    };
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      gatewayCall,
+    });
+
+    const response = bridge.handleRequest({
+      id: "input-nonblocking",
+      params: requestParams({ isBlocking: false, autoResolutionMs: 60_000 }),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls.find((entry) => entry.method === "question.request")?.params).toMatchObject({
+      timeoutMs: 120_000,
+    });
+
+    await vi.advanceTimersByTimeAsync(119_999);
+    let settled = false;
+    void response.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(response).resolves.toEqual({ answers: {} });
+  });
+
+  it("auto-resolves nonblocking secret prompts after exactly 120 seconds", async () => {
+    vi.useFakeTimers();
+    const params = createParams();
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    const response = bridge.handleRequest({
+      id: "input-secret-nonblocking",
+      params: secretRequestParams({
+        isBlocking: false,
+        autoResolutionMs: 60_000,
+      }),
+    });
+
+    await vi.advanceTimersByTimeAsync(119_999);
+    let settled = false;
+    void response.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(response).resolves.toEqual({ answers: {} });
+    expect(bridge.claimPendingRequest()).toBeUndefined();
   });
 });

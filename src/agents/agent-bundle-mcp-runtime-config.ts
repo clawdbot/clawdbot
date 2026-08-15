@@ -265,6 +265,11 @@ export function loadSessionMcpConfig(params: {
     includeServerNames: params.includeServerNames,
     excludeServerNames: params.excludeServerNames,
   });
+  const prepareDataDirsByServer = Object.fromEntries(
+    Object.entries(discovery.loaded.prepareDataDirsByServer ?? {}).filter(([serverName]) =>
+      Object.hasOwn(mcpServers, serverName),
+    ),
+  );
   const fingerprintServers = params.redactConnectionServerNames?.size
     ? redactMcpServersForFingerprint(mcpServers, params.redactConnectionServerNames)
     : mcpServers;
@@ -272,6 +277,9 @@ export function loadSessionMcpConfig(params: {
     loaded: {
       ...discovery.loaded,
       mcpServers,
+      // Launch ownership is not serialized or fingerprinted; the injected env path already
+      // participates in the server fingerprint and this sidecar only authorizes mkdir.
+      prepareDataDirsByServer,
     },
     fingerprint: createCatalogFingerprint({
       servers: fingerprintServers,
@@ -292,12 +300,14 @@ export function resolveSessionMcpConfigSummary(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
 }): { fingerprint: string; serverNames: string[] } {
   const { loaded, fingerprint } = loadSessionMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
     logDiagnostics: false,
     manifestRegistry: params.manifestRegistry,
+    toolOverrides: params.toolOverrides,
   });
   const serverNames = Object.keys(loaded.mcpServers).toSorted((a, b) => a.localeCompare(b));
   if (serverNames.length === 0) {
@@ -313,10 +323,26 @@ export function resolveSessionMcpConfigSummary(params: {
     cfg: params.cfg,
     logDiagnostics: false,
     manifestRegistry: params.manifestRegistry,
+    toolOverrides: params.toolOverrides,
     ...(requesterScopedServerNames.length > 0
       ? { excludeServerNames: new Set(requesterScopedServerNames) }
       : {}),
     safeServerNamesByServer,
   });
   return { fingerprint: bareRuntimeFingerprint, serverNames };
+}
+
+/** Reads the enabled static MCP server set without opening transports or listing tools. */
+export function resolveStaticSessionMcpServerNames(params: {
+  workspaceDir: string;
+  cfg?: OpenClawConfig;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
+}): string[] {
+  const { loaded } = loadSessionMcpConfig({
+    ...params,
+    logDiagnostics: false,
+  });
+  const { staticServers } = partitionMcpServersByConnectionScope(loaded.mcpServers);
+  return Object.keys(staticServers).toSorted((left, right) => left.localeCompare(right));
 }

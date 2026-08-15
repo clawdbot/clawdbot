@@ -27,6 +27,10 @@ export function isDirectiveOnly(params: {
   ) {
     return false;
   }
+  // Native arguments belong to their command even when the inline parser leaves invalid prose.
+  if (directives.nativeCommand) {
+    return true;
+  }
   const stripped = stripStructuralPrefixes(cleanedBody ?? "");
   // Group mentions are routing syntax, not meaningful agent body text.
   const noMentions = isGroup ? stripMentions(stripped, ctx, cfg, agentId) : stripped;

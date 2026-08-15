@@ -83,6 +83,7 @@ describe("usage.status provider usage cache", () => {
   beforeEach(() => {
     now = 1_000;
     store = createStore();
+    vi.stubEnv("OPENAI_API_KEY", "");
     vi.spyOn(Date, "now").mockImplementation(() => now);
     vi.clearAllMocks();
     clearModelAuthStatusUsageCache();
@@ -109,7 +110,30 @@ describe("usage.status provider usage cache", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
+  });
+
+  it("loads the cached provider snapshot from the exact runtime config", async () => {
+    mocks.loadProviderUsageSummary.mockImplementation(async (options) => ({
+      updatedAt: now,
+      providers:
+        options.config === config
+          ? [
+              {
+                provider: "openai",
+                displayName: "OpenAI",
+                windows: [{ label: "5h", usedPercent: 25 }],
+                accountEmail: "configured@example.com",
+              },
+            ]
+          : [],
+    }));
+
+    const result = (await runUsageStatus()) as {
+      providers: Array<{ accountEmail?: string }>;
+    };
+    expect(result.providers[0]?.accountEmail).toBe("configured@example.com");
   });
 
   it("reuses byte-identical results within 60s and refreshes stale data in the background", async () => {

@@ -6,12 +6,14 @@ import {
   type TerminalUploadFile,
   type TerminalUploadResult,
 } from "../../infra/terminal-file-upload.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   createLocalTerminalBackend,
   type LocalTerminalBackendSpawner,
   type TerminalBackend,
 } from "./backend.js";
 import { TERMINAL_EVENT_DATA, TERMINAL_EVENT_EXIT } from "./gateway-transport.js";
+import { composeTerminalIntroBanner } from "./intro-banner.js";
 import { TerminalOutputController } from "./output-flow-control.js";
 import { TerminalOutputRing } from "./output-ring.js";
 import {
@@ -32,6 +34,30 @@ import type {
   TerminalOwner,
 } from "./session-manager.types.js";
 
+const log = createSubsystemLogger("gateway/terminal");
+
+// Task binding is manager-private metadata: public terminal ownership stays
+// conversation-scoped while lifecycle cleanup can target the exact producer.
+type TaskBoundAgentOwner = Extract<TerminalOwner, { kind: "agent" }> & { taskId?: string };
+
+function terminalOwnerMatches(
+  owner: TerminalOwner | null,
+  ownerKey: string,
+  agentId?: string,
+): boolean {
+  if (owner?.kind !== "agent") {
+    return false;
+  }
+  return owner.agentSessionKey === ownerKey && owner.agentId === agentId;
+}
+
+function terminalLifecycleOwnerMatches(owner: TerminalOwner | null, ownerKey: string): boolean {
+  return (
+    owner?.kind === "agent" &&
+    (owner.agentSessionKey === ownerKey || (owner as TaskBoundAgentOwner).taskId === ownerKey)
+  );
+}
+
 /**
  * Tracks live PTY sessions keyed by session id, with a reverse index for
  * connection owners and viewers so disconnect cleanup stays bounded.
@@ -39,7 +65,7 @@ import type {
 export class TerminalSessionManager {
   private readonly sessions = new Map<string, TerminalSession>();
   private readonly byConn = new Map<string, Set<string>>();
-  private readonly pendingOpens = new Set<TerminalPendingOpen>();
+  private readonly pendingOpens = new Map<TerminalPendingOpen, TerminalOwner>();
   // Connection-owned opens still awaiting spawn. A disconnect flips their
   // abort flag so the resumed open kills the PTY instead of registering an
   // orphan for a dead connection.
@@ -87,13 +113,28 @@ export class TerminalSessionManager {
         message: `terminal spawn limit reached (${this.maxSessions * 2})`,
       };
     }
+    // Agent-opened shells outlive their commands and have no automatic reaper,
+    // so a busy agent would otherwise exhaust the pool for the whole gateway
+    // until restart. Under pressure, claim the longest-idle viewer-free agent
+    // session as an eviction candidate; it is killed only after the replacement
+    // backend spawns, so a failed spawn never destroys a live session.
+    let evictionCandidate: TerminalSession | undefined;
     if (this.sessions.size + this.opening >= this.maxSessions) {
-      return {
-        ok: false,
-        code: "limit",
-        message: `terminal session limit reached (${this.maxSessions})`,
-      };
+      evictionCandidate = this.claimLongestIdleAgentSession();
+      if (!evictionCandidate) {
+        return {
+          ok: false,
+          code: "limit",
+          message: `terminal session limit reached (${this.maxSessions})`,
+        };
+      }
     }
+    const releaseEvictionClaim = () => {
+      if (evictionCandidate) {
+        evictionCandidate.evictionClaimed = false;
+        evictionCandidate = undefined;
+      }
+    };
     // Reserve the slot before the async spawn so it is visible to concurrent opens.
     this.opening += 1;
     this.spawning += 1;
@@ -112,7 +153,10 @@ export class TerminalSessionManager {
         pending.abortMessage ??= message;
         // A hung spawn must not consume capacity after its owner is gone.
         // Its eventual backend is still killed by the abortMessage check below.
+        // The eviction claim must also drop now: a cancelled open whose spawn
+        // never settles would otherwise keep its victim unclaimable forever.
         releaseReservation();
+        releaseEvictionClaim();
       },
     };
     const abortPending = () => {
@@ -138,6 +182,7 @@ export class TerminalSessionManager {
     } catch (err) {
       this.spawning -= 1;
       releaseReservation();
+      releaseEvictionClaim();
       request.signal?.removeEventListener("abort", abortPending);
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, code: "spawn_failed", message };
@@ -150,12 +195,50 @@ export class TerminalSessionManager {
     if (pending.abortMessage) {
       // The request was cancelled while the shell was spawning; kill it now
       // rather than register an unreachable orphan.
+      releaseEvictionClaim();
       try {
         backend.kill();
       } catch {
         // Best-effort; the process may already be gone.
       }
       return { ok: false, code: "closed", message: pending.abortMessage };
+    }
+    if (evictionCandidate) {
+      // The replacement backend exists; retire a victim now, still inside the
+      // synchronous window, so registration stays within the cap. Revalidate
+      // first: the claimed candidate may have gained a viewer or exited during
+      // the spawn await, and viewer-attached sessions are never evicted.
+      const claimed = evictionCandidate;
+      evictionCandidate = undefined;
+      claimed.evictionClaimed = false;
+      // Count other opens' outstanding reservations (our own was released
+      // above): skipping eviction against sessions.size alone lets concurrent
+      // spawns that finish out of order register past the hard cap. Evicting
+      // for a reservation whose spawn later fails is the safer direction.
+      if (this.sessions.size + this.opening >= this.maxSessions) {
+        // Reselect fresh: the idle ranking goes stale across the spawn await —
+        // the claimed session may now be viewer-attached or active while an
+        // idler alternative exists. The released claim rejoins the pool, so a
+        // still-idlest claimed session is simply selected again.
+        const victim = this.claimLongestIdleAgentSession();
+        if (!victim) {
+          try {
+            backend.kill();
+          } catch {
+            // Best-effort; the process may already be gone.
+          }
+          return {
+            ok: false,
+            code: "limit",
+            message: `terminal session limit reached (${this.maxSessions})`,
+          };
+        }
+        victim.evictionClaimed = false;
+        log.info(
+          `evicted idle agent terminal session under pool pressure: id=${victim.id} agent=${victim.agentId} idleMs=${Date.now() - victim.lastActivityAtMs}`,
+        );
+        this.finalize(victim, "closed", {});
+      }
     }
 
     const sessionId = randomUUID();
@@ -192,14 +275,17 @@ export class TerminalSessionManager {
       output,
       reaper: null,
       detachedAtMs: null,
+      lastActivityAtMs: Date.now(),
     };
     this.sessions.set(session.id, session);
     if (request.owner.kind === "conn") {
       this.indexByConn(request.owner.connId, session.id);
+      session.output.push(composeTerminalIntroBanner());
     }
 
     backend.onData((chunk) => {
       if (!session.closed) {
+        session.lastActivityAtMs = Date.now();
         session.output.push(chunk);
       }
     });
@@ -231,13 +317,14 @@ export class TerminalSessionManager {
   }
 
   /** Writes agent input after proving session-key ownership. */
-  writeAgent(agentSessionKey: string, sessionId: string, data: string): boolean {
-    const session = this.agentOwnedSession(agentSessionKey, sessionId);
+  writeAgent(agentSessionKey: string, sessionId: string, data: string, agentId?: string): boolean {
+    const session = this.agentOwnedSession(agentSessionKey, sessionId, agentId);
     return session ? this.writeSession(session, data) : false;
   }
 
   private writeSession(session: TerminalSession, data: string): boolean {
     try {
+      session.lastActivityAtMs = Date.now();
       session.output.noteInput();
       session.backend.write(data);
       return true;
@@ -257,8 +344,14 @@ export class TerminalSessionManager {
   }
 
   /** Resizes an agent-owned PTY after proving session-key ownership. */
-  resizeAgent(agentSessionKey: string, sessionId: string, cols: number, rows: number): boolean {
-    const session = this.agentOwnedSession(agentSessionKey, sessionId);
+  resizeAgent(
+    agentSessionKey: string,
+    sessionId: string,
+    cols: number,
+    rows: number,
+    agentId?: string,
+  ): boolean {
+    const session = this.agentOwnedSession(agentSessionKey, sessionId, agentId);
     return session ? this.resizeSession(session, cols, rows) : false;
   }
 
@@ -309,13 +402,37 @@ export class TerminalSessionManager {
   }
 
   /** Closes an agent-owned PTY after proving session-key ownership. */
-  closeAgent(agentSessionKey: string, sessionId: string): boolean {
-    const session = this.agentOwnedSession(agentSessionKey, sessionId);
+  closeAgent(agentSessionKey: string, sessionId: string, agentId?: string): boolean {
+    const session = this.agentOwnedSession(agentSessionKey, sessionId, agentId);
     if (!session) {
       return false;
     }
     this.finalize(session, "closed", {});
     return true;
+  }
+
+  /** Closes every live or spawning PTY owned by one exact agent session or task. */
+  closeAgentSessions(agentSessionKey: string, agentId?: string): number {
+    for (const [pending, owner] of this.pendingOpens) {
+      if (
+        agentId
+          ? terminalOwnerMatches(owner, agentSessionKey, agentId)
+          : terminalLifecycleOwnerMatches(owner, agentSessionKey)
+      ) {
+        pending.abort("terminal closed because its task ended");
+      }
+    }
+    const owned = [...this.sessions.values()].filter(
+      (session) =>
+        !session.closed &&
+        (agentId
+          ? terminalOwnerMatches(session.owner, agentSessionKey, agentId)
+          : terminalLifecycleOwnerMatches(session.owner, agentSessionKey)),
+    );
+    for (const session of owned) {
+      this.finalize(session, "closed", {});
+    }
+    return owned.length;
   }
 
   /**
@@ -400,17 +517,25 @@ export class TerminalSessionManager {
   }
 
   /** Raw buffer for an agent-owned session, guarded by the caller session key. */
-  snapshotAgent(agentSessionKey: string, sessionId: string): string | undefined {
-    return this.agentOwnedSession(agentSessionKey, sessionId)?.buffer.snapshot();
+  snapshotAgent(agentSessionKey: string, sessionId: string, agentId?: string): string | undefined {
+    return this.agentOwnedSession(agentSessionKey, sessionId, agentId)?.buffer.snapshot();
   }
 
   /** Live sessions owned by one agent tool caller. */
-  listAgent(agentSessionKey: string): TerminalSessionSummary[] {
-    return this.list().filter((summary) => summary.owner === `agent:${agentSessionKey}`);
+  listAgent(agentSessionKey: string, agentId?: string): TerminalSessionSummary[] {
+    const sessionIds = new Set(
+      [...this.sessions.values()]
+        .filter(
+          (session) =>
+            !session.closed && terminalOwnerMatches(session.owner, agentSessionKey, agentId),
+        )
+        .map((session) => session.id),
+    );
+    return this.list().filter((summary) => sessionIds.has(summary.sessionId));
   }
 
   private trackPendingOpen(owner: TerminalOwner, pending: TerminalPendingOpen): void {
-    this.pendingOpens.add(pending);
+    this.pendingOpens.set(pending, owner);
     if (owner.kind !== "conn") {
       return;
     }
@@ -485,7 +610,7 @@ export class TerminalSessionManager {
   closeDisallowedAgents(isAllowed: (agentId: string) => boolean): void {
     // Config can change while spawn is awaiting the native PTY import. Mark the
     // pending open so it kills the process instead of registering stale access.
-    for (const pending of this.pendingOpens) {
+    for (const pending of this.pendingOpens.keys()) {
       if (!isAllowed(pending.agentId)) {
         pending.abort("terminal closed because the agent policy changed");
       }
@@ -536,7 +661,7 @@ export class TerminalSessionManager {
    */
   disposeAll(): void {
     // Abort any opens still spawning so they don't register after shutdown.
-    for (const pending of this.pendingOpens) {
+    for (const pending of this.pendingOpens.keys()) {
       pending.abort("gateway closed during terminal open");
     }
     // Snapshot first: finalize() deletes from this.sessions during iteration.
@@ -562,6 +687,34 @@ export class TerminalSessionManager {
     }
   }
 
+  /**
+   * Claims the longest-idle agent-owned session as an eviction candidate when
+   * the pool is exhausted. Viewer-attached and connection-owned sessions are
+   * never evicted; an idle viewer-free background job losing its PTY under
+   * pressure is the accepted tradeoff for keeping the pool available. Claimed
+   * sessions are skipped so concurrent opens select distinct victims.
+   */
+  private claimLongestIdleAgentSession(): TerminalSession | undefined {
+    let candidate: TerminalSession | undefined;
+    for (const session of this.sessions.values()) {
+      if (
+        session.closed ||
+        session.evictionClaimed ||
+        session.owner?.kind !== "agent" ||
+        session.viewers.size > 0
+      ) {
+        continue;
+      }
+      if (!candidate || session.lastActivityAtMs < candidate.lastActivityAtMs) {
+        candidate = session;
+      }
+    }
+    if (candidate) {
+      candidate.evictionClaimed = true;
+    }
+    return candidate;
+  }
+
   private removeViewer(session: TerminalSession, connId: string): boolean {
     if (!session.viewers.delete(connId)) {
       return false;
@@ -571,6 +724,9 @@ export class TerminalSessionManager {
       // With no socket pressure left, resume immediately. Buffered bytes stay
       // in the replay ring and the next viewer starts at its high-water mark.
       session.output.resetOwnership();
+    } else {
+      // A departed slow viewer must not leave healthy co-viewers stalled.
+      session.output.reconcileRecipients();
     }
     return true;
   }
@@ -590,13 +746,14 @@ export class TerminalSessionManager {
   private agentOwnedSession(
     agentSessionKey: string,
     sessionId: string,
+    agentId?: string,
   ): TerminalSession | undefined {
     const session = this.sessions.get(sessionId);
     if (
       !session ||
       session.closed ||
       session.owner?.kind !== "agent" ||
-      session.owner.agentSessionKey !== agentSessionKey
+      !terminalOwnerMatches(session.owner, agentSessionKey, agentId)
     ) {
       return undefined;
     }

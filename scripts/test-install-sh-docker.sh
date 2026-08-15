@@ -11,6 +11,25 @@ source "$HARNESS_ROOT/scripts/lib/docker-e2e-package.sh"
 DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_INSTALL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"
 INSTALL_SMOKE_DOCKER_RUN_TIMEOUT="${OPENCLAW_INSTALL_SMOKE_DOCKER_RUN_TIMEOUT:-2700s}"
 
+normalize_npm_pack_json_file() {
+  local pack_json_file="$1"
+  (
+    cd "$HARNESS_ROOT"
+    node --import tsx --input-type=module - "$pack_json_file" <<'NODE'
+import fs from "node:fs";
+import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mts";
+
+const packJsonFile = process.argv[2];
+const parsed = JSON.parse(fs.readFileSync(packJsonFile, "utf8"));
+const entries = resolveNpmJsonEntries(parsed);
+if (entries.length === 0) {
+  throw new Error("npm pack output did not contain a package result");
+}
+fs.writeFileSync(packJsonFile, `${JSON.stringify(entries, null, 2)}\n`, "utf8");
+NODE
+  )
+}
+
 run_install_smoke_container() {
   DOCKER_COMMAND_TIMEOUT="$INSTALL_SMOKE_DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run "$@"
 }
@@ -80,9 +99,9 @@ assert_pack_unpacked_size_budget() {
   local pack_json_file="$2"
   (
     cd "$HARNESS_ROOT"
-    node --input-type=module - "$label" "$pack_json_file" <<'NODE'
+    node --import tsx --input-type=module - "$label" "$pack_json_file" <<'NODE'
 import { readFileSync } from "node:fs";
-import { collectPackUnpackedSizeErrors } from "./scripts/lib/npm-pack-budget.mjs";
+import { collectPackUnpackedSizeErrors } from "./scripts/lib/npm-pack-budget.mts";
 
 const label = process.argv[2];
 const packJsonFile = process.argv[3];
@@ -311,6 +330,7 @@ prepare_update_tarball() {
   if [[ -n "$UPDATE_PACKAGE_SPEC" ]]; then
     echo "==> Pack update tgz from spec: $UPDATE_PACKAGE_SPEC"
     quiet_npm pack "$UPDATE_PACKAGE_SPEC" --json --pack-destination "$UPDATE_DIR" >"$pack_json_file"
+    normalize_npm_pack_json_file "$pack_json_file"
   else
     echo "==> Build local release artifacts for update smoke"
     if [[ -n "$UPDATE_DIST_IMAGE" ]]; then
@@ -366,6 +386,7 @@ process.stdout.write(last.version);
 
   echo "==> Pack baseline tgz: ${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"
   quiet_npm pack "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" --json --pack-destination "$UPDATE_DIR" >"$baseline_pack_json_file"
+  normalize_npm_pack_json_file "$baseline_pack_json_file"
   BASELINE_TGZ_FILE="$(read_pack_tarball_filename "$baseline_pack_json_file")"
   UPDATE_BASELINE_VERSION="$(
     node -e '

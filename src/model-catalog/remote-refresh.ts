@@ -167,7 +167,7 @@ export async function refreshRemoteModelCatalog(params: {
         chunkTimeoutMs: REMOTE_MODEL_CATALOG_TIMEOUT_MS,
       });
       const bundle = validateAndSanitizeRemoteModelCatalogBundle(
-        JSON.parse(new TextDecoder().decode(body)),
+        JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body)),
       );
       assertCompatibleMinVersion(bundle);
       const bundleJson = JSON.stringify(bundle);

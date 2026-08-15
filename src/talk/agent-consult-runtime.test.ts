@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
@@ -17,7 +18,10 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { consultRealtimeVoiceAgent } from "./agent-consult-runtime.js";
+import {
+  consultRealtimeVoiceAgent,
+  REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION,
+} from "./agent-consult-runtime.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "./agent-consult-tool.js";
 import {
   resolveRealtimeVoiceAgentConsultTools,
@@ -172,14 +176,6 @@ function expectNonEmptyString(value: unknown) {
   expect((value as string).trim()).not.toBe("");
 }
 
-function createDeferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
 describe("realtime voice agent consult runtime", () => {
   beforeEach(async () => {
     // macOS aliases its temp directory through /var; canonical paths keep the
@@ -212,6 +208,7 @@ describe("realtime voice agent consult runtime", () => {
   });
 
   it("exposes the shared consult tool based on policy", () => {
+    expect(REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION).toBe(1);
     expect(resolveRealtimeVoiceAgentConsultTools("safe-read-only")).toStrictEqual([
       REALTIME_VOICE_AGENT_CONSULT_TOOL,
     ]);
@@ -343,6 +340,8 @@ describe("realtime voice agent consult runtime", () => {
       surface: "a live phone call",
       userLabel: "Caller",
       questionSourceLabel: "caller",
+      senderId: "+15550001234",
+      senderIsOwner: true,
       toolsAllow: ["read"],
       provider: "openai",
       model: "gpt-5.4",
@@ -371,6 +370,8 @@ describe("realtime voice agent consult runtime", () => {
     expect(call.sessionKey).toBe("voice:15550001234");
     expect(call.sandboxSessionKey).toBe("agent:operator:voice:15550001234");
     expect(call.agentId).toBe("operator");
+    expect(call.senderId).toBe("+15550001234");
+    expect(call.senderIsOwner).toBe(true);
     expect(call.messageProvider).toBe("voice");
     expect(call.lane).toBe("voice");
     expect(call.toolsAllow).toStrictEqual(["read"]);

@@ -13,7 +13,10 @@ import { normalizeProviderId } from "../../../agents/model-selection.js";
 import type { AgentModelConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolvePluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
+import { collectConfiguredProviderSelectionIds } from "./configured-provider-selection-ids.js";
 
 type StaleAgentModelRefRepair = {
   config: OpenClawConfig;
@@ -23,6 +26,7 @@ type StaleAgentModelRefRepair = {
 
 type RepairOptions = {
   env?: NodeJS.ProcessEnv;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
   /** Test seam for the provider ids supplied by bundled or installed plugins. */
   pluginProviderIds?: ReadonlySet<string>;
   /** Test seam for provider ids already present in each agent's models.json. */
@@ -45,37 +49,54 @@ function collectPluginProviderIds(
   cfg: OpenClawConfig,
   options: RepairOptions,
 ): { providerIds?: Set<string>; warnings: string[] } {
+  let providerIds: Set<string>;
   if (options.pluginProviderIds) {
-    return {
-      providerIds: new Set([...options.pluginProviderIds].map(normalizeProviderId).filter(Boolean)),
-      warnings: [],
-    };
-  }
+    providerIds = new Set([...options.pluginProviderIds].map(normalizeProviderId).filter(Boolean));
+  } else {
+    const defaultAgentId = tryResolveDefaultAgentId(cfg);
+    const workspaceDir = defaultAgentId ? resolveAgentWorkspaceDir(cfg, defaultAgentId) : undefined;
+    const snapshot =
+      options.pluginMetadataSnapshot ??
+      resolvePluginMetadataSnapshot({
+        config: cfg,
+        workspaceDir: workspaceDir ?? undefined,
+        env: options.env ?? process.env,
+        allowWorkspaceScopedCurrent: true,
+      });
+    if (snapshot.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
+      return {
+        warnings: [
+          "Skipped stale agent model reference repair because plugin discovery reported errors.",
+        ],
+      };
+    }
 
-  const defaultAgentId = tryResolveDefaultAgentId(cfg);
-  const workspaceDir = defaultAgentId ? resolveAgentWorkspaceDir(cfg, defaultAgentId) : undefined;
-  const snapshot = resolvePluginMetadataSnapshot({
+    providerIds = new Set<string>();
+    for (const owners of [
+      snapshot.owners.providers,
+      snapshot.owners.modelCatalogProviders,
+      snapshot.owners.setupProviders,
+      snapshot.owners.cliBackends,
+    ]) {
+      for (const providerId of owners.keys()) {
+        const normalized = normalizeProviderId(providerId);
+        if (normalized) {
+          providerIds.add(normalized);
+        }
+      }
+    }
+  }
+  const selectedProviderIds = collectConfiguredProviderSelectionIds(cfg);
+  for (const entry of resolveProviderInstallCatalogEntries({
     config: cfg,
-    workspaceDir: workspaceDir ?? undefined,
     env: options.env ?? process.env,
-    allowWorkspaceScopedCurrent: true,
-  });
-  if (snapshot.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
-    return {
-      warnings: [
-        "Skipped stale agent model reference repair because plugin discovery reported errors.",
-      ],
-    };
-  }
-
-  const providerIds = new Set<string>();
-  for (const owners of [
-    snapshot.owners.providers,
-    snapshot.owners.modelCatalogProviders,
-    snapshot.owners.setupProviders,
-    snapshot.owners.cliBackends,
-  ]) {
-    for (const providerId of owners.keys()) {
+    includeUntrustedWorkspacePlugins: false,
+  })) {
+    const entryProviderIds = [entry.providerId, ...(entry.providerAliases ?? [])];
+    if (!entryProviderIds.some((providerId) => selectedProviderIds.has(providerId.toLowerCase()))) {
+      continue;
+    }
+    for (const providerId of entryProviderIds) {
       const normalized = normalizeProviderId(providerId);
       if (normalized) {
         providerIds.add(normalized);

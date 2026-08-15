@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getFreeGatewayPort,
+  getGatewayE2ePortBlock,
 } from "../src/gateway/test-helpers.e2e.js";
 import {
   createOpenClawTestInstance,
@@ -321,7 +321,7 @@ describe("plugin cron registry ownership e2e", () => {
           providers: {
             "cron-owner": {
               baseUrl: `${modelServer.baseUrl}/v1`,
-              ["api" + "Key"]: TEST_API_KEY,
+              apiKey: TEST_API_KEY,
               api: "openai-responses",
               request: { allowPrivateNetwork: true },
               models: [
@@ -340,7 +340,7 @@ describe("plugin cron registry ownership e2e", () => {
           },
         },
       } satisfies OpenClawConfig;
-      const customPort = await getFreeGatewayPort();
+      const customPort = await getGatewayE2ePortBlock();
       const instance = await createOpenClawTestInstance({
         name: "plugin-cron-registry-owner",
         port: customPort,
@@ -360,7 +360,7 @@ describe("plugin cron registry ownership e2e", () => {
 
       const client = await connectGatewayClient({
         url: instance.url,
-        ["to" + "ken"]: instance.gatewayToken,
+        token: instance.gatewayToken,
         role: "operator",
         scopes: ["operator.admin", "operator.read", "operator.write"],
         requestTimeoutMs: 30_000,

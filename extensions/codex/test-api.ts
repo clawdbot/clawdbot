@@ -4,7 +4,7 @@
  */
 import type {
   AnyAgentTool,
-  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   type CodexAppServerRuntimeOptions,
@@ -20,6 +20,8 @@ import {
   buildThreadStartParams,
   buildTurnStartParams,
 } from "./src/app-server/thread-lifecycle.js";
+
+export { CODEX_APP_SERVER_VERSION } from "./src/app-server/version.js";
 
 type CodexHarnessPromptSnapshot = {
   developerInstructions: string;

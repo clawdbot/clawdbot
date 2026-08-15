@@ -13,12 +13,23 @@ import {
   type RequestFn,
 } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
-import { UPDATE_HANDOFF_STARTED_REASON } from "./update-overlay-helpers.ts";
 
 vi.mock("../build-info.ts", () => ({
-  controlUiVersionDiffersFrom: (gatewayVersion: string | undefined) =>
-    Boolean(gatewayVersion?.trim() && gatewayVersion.trim() !== "1.0.0"),
+  controlUiBuildDiffersFrom: (identity: {
+    version?: string | null;
+    buildId?: string | null;
+    controlUiBuildSource?: "bundled" | "configured";
+  }) =>
+    identity.controlUiBuildSource === "configured"
+      ? false
+      : Boolean(
+          identity.buildId?.trim()
+            ? identity.buildId.trim() !== "test"
+            : identity.version?.trim() && identity.version.trim() !== "1.0.0",
+        ),
+  reloadControlUiIfStale: vi.fn(),
 }));
+vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
 const { peekStoredDeviceIdentityIdMock } = vi.hoisted(() => ({
   peekStoredDeviceIdentityIdMock: vi.fn((): string | null => "browser-1"),
 }));
@@ -26,7 +37,9 @@ vi.mock("../lib/nodes/index.ts", () => ({
   peekStoredDeviceIdentityId: peekStoredDeviceIdentityIdMock,
 }));
 
-const VERIFICATION_POLL_MS = 250;
+const HANDOFF_POLL_MS = 1_000;
+const RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
+const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 
 function installUpdateTranslations() {
   const translations: Record<string, string> = {
@@ -37,6 +50,11 @@ function installUpdateTranslations() {
       "Another managed update is already running. Wait for it to complete, then refresh update status.",
     "updates.verificationFailedWithVersions":
       "Update installed but running version did not change — restart may have been blocked. Expected v{expectedVersion}, running v{actualVersion}.",
+    "updates.verificationFailedWithIdentity":
+      "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}.",
+    "common.unknown": "Unknown",
+    "updates.outcomeUnknown":
+      "The update request may have been accepted, but the Gateway did not report a final result after reconnect. Run `openclaw update status` before retrying.",
   };
   return vi.spyOn(i18n, "t").mockImplementation((key, params) => {
     const template = translations[key] ?? key;
@@ -58,6 +76,14 @@ describe("device-auth upgrade migration", () => {
     const request = vi.fn<RequestFn>(() => Promise.resolve({}));
     const harness = createGatewayHarness(null, false);
     const overlays = createApplicationOverlays(harness.gateway);
+    const migrationError = new Promise<string>((resolve) => {
+      const unsubscribe = overlays.subscribe((snapshot) => {
+        if (snapshot.deviceAuthMigration.error) {
+          unsubscribe();
+          resolve(snapshot.deviceAuthMigration.error);
+        }
+      });
+    });
     harness.update({
       client: client(request),
       phase: "connected",
@@ -67,9 +93,7 @@ describe("device-auth upgrade migration", () => {
       } as ApplicationGatewaySnapshot["hello"],
     });
 
-    await vi.waitFor(() => {
-      expect(overlays.snapshot.deviceAuthMigration.error).toContain("HTTPS or localhost");
-    });
+    await expect(migrationError).resolves.toContain("HTTPS or localhost");
     expect(overlays.snapshot.deviceAuthMigration.requestId).toBeNull();
     expect(request).not.toHaveBeenCalledWith("device.pair.list", expect.anything());
     overlays.dispose();
@@ -227,6 +251,30 @@ describe("device-auth upgrade migration", () => {
 });
 
 describe("Control UI refresh nudge", () => {
+  it("does not flag an independently built configured UI root", () => {
+    const gatewayClient = client(async () => []);
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    harness.update({
+      client: gatewayClient,
+      phase: "connected",
+      hello: {
+        server: { version: "2.0.0", controlUiBuildSource: "configured" },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    harness.update({ phase: "stopped", hello: null });
+    harness.update({
+      phase: "connected",
+      hello: {
+        server: { version: "2.0.0", controlUiBuildSource: "configured" },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
+    overlays.dispose();
+  });
+
   it("waits for a reconnect before flagging a version mismatch", () => {
     const gatewayClient = client(async () => []);
     const harness = createGatewayHarness(null, false);
@@ -924,7 +972,7 @@ describe("application update overlays", () => {
     overlays.dispose();
   });
 
-  it("verifies on reconnect and survives updates within the connected epoch", async () => {
+  it("promotes restart health polling to the managed handoff budget", async () => {
     vi.useFakeTimers();
     let statusRequests = 0;
     const request = vi.fn<RequestFn>((method) => {
@@ -940,7 +988,7 @@ describe("application update overlays", () => {
       if (method === "update.status") {
         statusRequests += 1;
         return Promise.resolve(
-          statusRequests === 1
+          statusRequests <= 11
             ? {
                 sentinel: {
                   kind: "update",
@@ -971,10 +1019,16 @@ describe("application update overlays", () => {
       expect(statusRequests).toBe(1);
 
       harness.update({ sessionKey: "agent:main:next" });
-      await vi.advanceTimersByTimeAsync(VERIFICATION_POLL_MS);
+      await vi.advanceTimersByTimeAsync(RESTART_VERIFICATION_TIMEOUT_MS);
       await flushMicrotasks();
 
-      expect(statusRequests).toBe(2);
+      expect(statusRequests).toBe(11);
+      expect(overlays.snapshot.updateReconciliationPending).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(HANDOFF_POLL_MS);
+      await flushMicrotasks();
+
+      expect(statusRequests).toBe(12);
       expect(overlays.snapshot.updateStatusBanner).toBeNull();
       expect(overlays.snapshot.updateReconciliationPending).toBe(false);
     } finally {

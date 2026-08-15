@@ -11,6 +11,7 @@ import android.content.ContentResolver
 import android.database.Cursor
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
@@ -24,6 +25,8 @@ private const val CHAT_ATTACHMENT_MAX_WIDTH = 1600
 private const val CHAT_ATTACHMENT_START_QUALITY = 85
 private const val CHAT_DECODE_MAX_DIMENSION = 1600
 private const val CHAT_IMAGE_CACHE_BYTES = 16 * 1024 * 1024
+private const val VIDEO_THUMBNAIL_MAX_DIMENSION = 192
+private const val VIDEO_THUMBNAIL_QUALITY = 72
 
 private val decodedBitmapCache =
   object : LruCache<String, Bitmap>(CHAT_IMAGE_CACHE_BYTES) {
@@ -33,7 +36,7 @@ private val decodedBitmapCache =
     ): Int = value.byteCount.coerceAtLeast(1)
   }
 
-internal fun loadPickedAudioOrDocumentAttachment(
+internal fun loadPickedMediaOrDocumentAttachment(
   resolver: ContentResolver,
   uri: Uri,
 ): PendingAttachment {
@@ -65,8 +68,54 @@ internal fun loadSharedAttachment(
     fileName = sharedAttachmentFileName(resolver, attachment.uri),
     mimeType = mimeType,
     base64 = Base64.encodeToString(bytes, Base64.NO_WRAP),
+    videoThumbnailBase64 =
+      if (kind == SharedAttachmentKind.Video) loadVideoThumbnailBase64(resolver, attachment.uri) else null,
   )
 }
+
+/** Thumbnail extraction is presentation-only; an unsupported container still stages as a video. */
+private fun loadVideoThumbnailBase64(
+  resolver: ContentResolver,
+  uri: Uri,
+): String? =
+  runCatching {
+    val retriever = MediaMetadataRetriever()
+    try {
+      resolver.openAssetFileDescriptor(uri, "r")?.use { descriptor ->
+        if (descriptor.declaredLength >= 0L) {
+          retriever.setDataSource(descriptor.fileDescriptor, descriptor.startOffset, descriptor.declaredLength)
+        } else {
+          retriever.setDataSource(descriptor.fileDescriptor)
+        }
+      } ?: return@runCatching null
+      val frame = retriever.getFrameAtTime(-1L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: return@runCatching null
+      try {
+        val longestEdge = max(frame.width, frame.height)
+        val preview =
+          if (longestEdge <= VIDEO_THUMBNAIL_MAX_DIMENSION) {
+            frame
+          } else {
+            val scale = VIDEO_THUMBNAIL_MAX_DIMENSION.toDouble() / longestEdge.toDouble()
+            frame.scale(
+              max(1, (frame.width * scale).roundToInt()),
+              max(1, (frame.height * scale).roundToInt()),
+              true,
+            )
+          }
+        try {
+          val output = ByteArrayOutputStream()
+          if (!preview.compress(Bitmap.CompressFormat.JPEG, VIDEO_THUMBNAIL_QUALITY, output)) return@runCatching null
+          Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
+        } finally {
+          if (preview !== frame) preview.recycle()
+        }
+      } finally {
+        frame.recycle()
+      }
+    } finally {
+      retriever.release()
+    }
+  }.getOrNull()
 
 private fun readBoundedAttachmentBytes(
   resolver: ContentResolver,

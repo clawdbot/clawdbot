@@ -7,7 +7,7 @@ import {
   MEMORY_INDEX_META_TABLE,
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+} from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   CREATE_LEGACY_MEMORY_FTS_MATCH_TABLE_SQL,
   LEGACY_MEMORY_FTS_MATCH_TABLE,

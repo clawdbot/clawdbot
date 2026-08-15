@@ -1,33 +1,19 @@
 // Openrouter setup module handles plugin onboarding behavior.
 import {
-  applyAgentDefaultModelPrimary,
+  createAliasOnlyPresetAppliers,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 
 export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
+const openrouterPresetAppliers = createAliasOnlyPresetAppliers({
+  modelRef: OPENROUTER_DEFAULT_MODEL_REF,
+  alias: "OpenRouter",
+});
 
 export function applyOpenrouterProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  models[OPENROUTER_DEFAULT_MODEL_REF] = {
-    ...models[OPENROUTER_DEFAULT_MODEL_REF],
-    alias: models[OPENROUTER_DEFAULT_MODEL_REF]?.alias ?? "OpenRouter",
-  };
-
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-  };
+  return openrouterPresetAppliers.applyProviderConfig(cfg);
 }
 
 export function applyOpenrouterConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return applyAgentDefaultModelPrimary(
-    applyOpenrouterProviderConfig(cfg),
-    OPENROUTER_DEFAULT_MODEL_REF,
-  );
+  return openrouterPresetAppliers.applyConfig(cfg);
 }

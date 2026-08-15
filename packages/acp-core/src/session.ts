@@ -19,7 +19,11 @@ export type AcpSessionStore = {
   clearActiveRun: (sessionId: string) => void;
   cancelActiveRun: (sessionId: string) => boolean;
   deleteSession: (sessionId: string) => boolean;
-  clearAllSessionsForTest: () => void;
+};
+
+type InMemoryAcpSessionStore = AcpSessionStore & {
+  /** Releases every record when the registry's lifecycle owner shuts down. */
+  dispose: () => void;
 };
 
 type AcpSessionStoreOptions = {
@@ -32,7 +36,9 @@ const DEFAULT_MAX_SESSIONS = 5_000;
 const DEFAULT_IDLE_TTL_MS = 24 * 60 * 60 * 1_000;
 
 /** Creates the bounded in-memory ACP session registry used by local ACP runtime clients. */
-export function createInMemorySessionStore(options: AcpSessionStoreOptions = {}): AcpSessionStore {
+export function createInMemorySessionStore(
+  options: AcpSessionStoreOptions = {},
+): InMemoryAcpSessionStore {
   const maxSessions = resolveIntegerOption(options.maxSessions, DEFAULT_MAX_SESSIONS, { min: 1 });
   const idleTtlMs = resolveIntegerOption(options.idleTtlMs, DEFAULT_IDLE_TTL_MS, { min: 1_000 });
   const now = options.now ?? Date.now;
@@ -189,7 +195,7 @@ export function createInMemorySessionStore(options: AcpSessionStoreOptions = {})
 
   const deleteSession: AcpSessionStore["deleteSession"] = (sessionId) => removeSession(sessionId);
 
-  const clearAllSessionsForTest: AcpSessionStore["clearAllSessionsForTest"] = () => {
+  const dispose: InMemoryAcpSessionStore["dispose"] = () => {
     for (const session of sessions.values()) {
       session.abortController?.abort();
     }
@@ -206,8 +212,6 @@ export function createInMemorySessionStore(options: AcpSessionStoreOptions = {})
     clearActiveRun,
     cancelActiveRun,
     deleteSession,
-    clearAllSessionsForTest,
+    dispose,
   };
 }
-
-export const defaultAcpSessionStore = createInMemorySessionStore();

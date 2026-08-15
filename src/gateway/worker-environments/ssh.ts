@@ -16,9 +16,11 @@ export type PreparedWorkerSsh = {
   sshTarget: string;
   scpTarget: string;
   host: string;
-  port: number;
+  readonly advertisedPorts: readonly number[];
+  readonly port: number;
   identityPath: string;
   knownHostsPath: string;
+  selectPort(port: number): void;
   dispose(): Promise<void>;
 };
 
@@ -89,6 +91,41 @@ function pinnedKnownHostsLine(params: {
   return `${hostLabel} ${algorithm} ${encodedKey}\n`;
 }
 
+/** Adapts a provisioned, pinned worker endpoint to the SSH sandbox transport contract. */
+export function resolveWorkerSshSandboxSettings(params: {
+  ssh: WorkerSshEndpoint;
+  identity: WorkerSshIdentity;
+}): {
+  target: string;
+  command: string;
+  strictHostKeyChecking: true;
+  updateHostKeys: false;
+  identityFile?: string;
+  identityData?: string;
+  knownHostsData: string;
+} {
+  const endpoint = normalizeEndpoint(params.ssh);
+  const knownHostsData = [endpoint.port, ...(params.ssh.fallbackPorts ?? [])]
+    .map((port) =>
+      pinnedKnownHostsLine({
+        host: endpoint.host,
+        port,
+        pinnedHostKey: params.ssh.hostKey,
+      }),
+    )
+    .join("");
+  return {
+    target: `${endpoint.sshTarget}:${endpoint.port}`,
+    command: "ssh",
+    strictHostKeyChecking: true,
+    updateHostKeys: false,
+    ...(params.identity.kind === "path"
+      ? { identityFile: params.identity.path }
+      : { identityData: params.identity.contents }),
+    knownHostsData,
+  };
+}
+
 /** Materializes one pinned identity/known-hosts context for a complete SSH ownership lifetime. */
 export async function prepareWorkerSsh(params: {
   ssh: WorkerSshEndpoint;
@@ -101,12 +138,18 @@ export async function prepareWorkerSsh(params: {
       "Worker SSH setup is missing pinnedHostKey; WorkerProvider.provision() must return ssh.hostKey",
     );
   }
+  const pinnedHostKey = params.pinnedHostKey;
   const endpoint = normalizeEndpoint(params.ssh);
-  const knownHosts = pinnedKnownHostsLine({
-    host: endpoint.host,
-    port: endpoint.port,
-    pinnedHostKey: params.pinnedHostKey,
-  });
+  const advertisedPorts = [endpoint.port, ...(params.ssh.fallbackPorts ?? [])];
+  const knownHosts = advertisedPorts
+    .map((port) =>
+      pinnedKnownHostsLine({
+        host: endpoint.host,
+        port,
+        pinnedHostKey,
+      }),
+    )
+    .join("");
   const temporaryDir = await fs.mkdtemp(
     path.join(os.tmpdir(), params.temporaryDirectoryPrefix ?? "openclaw-worker-ssh-"),
   );
@@ -137,10 +180,23 @@ export async function prepareWorkerSsh(params: {
     // The isolated file contains only trusted provisioning output; SSH never learns the first key.
     await fs.writeFile(knownHostsPath, knownHosts, { mode: 0o600 });
     let disposed = false;
+    let selectedPort = endpoint.port;
     return {
-      ...endpoint,
+      sshTarget: endpoint.sshTarget,
+      scpTarget: endpoint.scpTarget,
+      host: endpoint.host,
+      advertisedPorts,
+      get port() {
+        return selectedPort;
+      },
       identityPath,
       knownHostsPath,
+      selectPort(port) {
+        if (!advertisedPorts.includes(port)) {
+          throw new Error("Worker SSH selected an unadvertised port");
+        }
+        selectedPort = port;
+      },
       async dispose() {
         if (disposed) {
           return;
@@ -153,6 +209,70 @@ export async function prepareWorkerSsh(params: {
     await fs.rm(temporaryDir, { recursive: true, force: true });
     throw error;
   }
+}
+
+/** Returns advertised candidates in stable circular order from the lifecycle selection. */
+function workerSshCandidatePorts(prepared: PreparedWorkerSsh): readonly number[] {
+  const selectedIndex = prepared.advertisedPorts.indexOf(prepared.port);
+  if (selectedIndex <= 0) {
+    return prepared.advertisedPorts;
+  }
+  return [
+    ...prepared.advertisedPorts.slice(selectedIndex),
+    ...prepared.advertisedPorts.slice(0, selectedIndex),
+  ];
+}
+
+type WorkerSshCommandResult = {
+  termination: string;
+  code: number | null;
+};
+
+function isWorkerSshTransportFailure(result: WorkerSshCommandResult): boolean {
+  return result.termination === "exit" && result.code === 255;
+}
+
+/** Retries SSH's transport-level exit 255 under one deadline and records proven exits. */
+export async function runWorkerSshCandidates<T extends WorkerSshCommandResult>(
+  prepared: PreparedWorkerSsh,
+  timeoutMs: number,
+  run: (port: number, remainingTimeoutMs: number) => Promise<T>,
+): Promise<T> {
+  const deadlineMs = Date.now() + timeoutMs;
+  let lastResult: T | undefined;
+  for (const port of workerSshCandidatePorts(prepared)) {
+    const remainingTimeoutMs = deadlineMs - Date.now();
+    if (lastResult !== undefined && remainingTimeoutMs <= 0) {
+      return lastResult;
+    }
+    const result = await run(port, Math.max(0, remainingTimeoutMs));
+    lastResult = result;
+    if (result.termination === "exit" && result.code !== null && result.code !== 255) {
+      prepared.selectPort(port);
+      return result;
+    }
+    if (!isWorkerSshTransportFailure(result)) {
+      return result;
+    }
+  }
+  return lastResult!;
+}
+
+/** Moves a reconnect to the next candidate without overwriting a newer concurrent selection. */
+export function advanceWorkerSshAfterTransportExit(
+  prepared: PreparedWorkerSsh,
+  failedPort: number,
+  exit: { code: number | null; signal: NodeJS.Signals | null },
+): boolean {
+  if (exit.code !== 255 || exit.signal !== null || prepared.port !== failedPort) {
+    return false;
+  }
+  const nextPort = workerSshCandidatePorts(prepared)[1];
+  if (nextPort === undefined) {
+    return false;
+  }
+  prepared.selectPort(nextPort);
+  return true;
 }
 
 /** Pinned SSH options shared by bootstrap, tunnel control, and workspace transfer. */

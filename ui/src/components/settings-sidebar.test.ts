@@ -20,6 +20,11 @@ const saveIndicator = () => ({
   onApply: vi.fn(),
 });
 
+const inactiveRefresh = {
+  refreshRequired: false,
+  onRefresh: () => undefined,
+};
+
 beforeEach(async () => {
   await i18n.setLocale("en");
   container = document.createElement("div");
@@ -40,10 +45,11 @@ describe("settings sidebar search", () => {
         activeRouteId: "model-setup",
         offline: false,
         lastError: null,
-        version: "",
+        gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
+        ...inactiveRefresh,
         searchQuery: "",
         onExit: vi.fn(),
         onRetryConnect: vi.fn(),
@@ -71,10 +77,11 @@ describe("settings sidebar search", () => {
         activeRouteId: "appearance",
         offline: false,
         lastError: null,
-        version: "",
+        gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
+        ...inactiveRefresh,
         searchQuery: "",
         onExit: vi.fn(),
         onRetryConnect: vi.fn(),
@@ -101,10 +108,11 @@ describe("settings sidebar search", () => {
         activeRouteId: "appearance",
         offline: false,
         lastError: null,
-        version: "",
+        gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
+        ...inactiveRefresh,
         searchQuery: "cp",
         searchBlockMatches: [
           {
@@ -139,10 +147,11 @@ describe("settings sidebar search", () => {
         activeRouteId: "appearance",
         offline: false,
         lastError: null,
-        version: "",
+        gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
+        ...inactiveRefresh,
         searchQuery: "mcp",
         searchBlockMatches: [
           {
@@ -194,10 +203,11 @@ describe("settings sidebar search", () => {
         activeRouteId: "appearance",
         offline: false,
         lastError: null,
-        version: "",
+        gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
+        ...inactiveRefresh,
         searchQuery: "infrastructure",
         searchBlockMatches: [
           {
@@ -242,10 +252,11 @@ describe("settings sidebar search", () => {
         activeRouteId: "agents",
         offline: false,
         lastError: null,
-        version: "",
+        gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
+        ...inactiveRefresh,
         searchQuery: "agent defaults",
         onExit: vi.fn(),
         onRetryConnect: vi.fn(),
@@ -273,10 +284,11 @@ describe("settings sidebar search", () => {
         activeHash: "#memory-backend",
         offline: false,
         lastError: null,
-        version: "",
+        gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
+        ...inactiveRefresh,
         searchQuery: "backend",
         searchBlockMatches: [
           {
@@ -318,10 +330,11 @@ describe("settings sidebar search", () => {
           activeRouteId: "appearance",
           offline: false,
           lastError: null,
-          version: "",
+          gatewayVersion: "",
           updateAvailable: null,
-          updateRunning: false,
+          updateBusy: false,
           onUpdate: vi.fn(),
+          ...inactiveRefresh,
           searchQuery,
           onExit: vi.fn(),
           onRetryConnect: vi.fn(),
@@ -358,7 +371,8 @@ describe("settings sidebar search", () => {
     expect(allLabels).not.toContain("Activity");
     expect(allLabels).not.toContain("Sessions");
     expect(allLabels).toContain("Privacy & Security");
-    expect(allLabels.indexOf("About")).toBe(allLabels.indexOf("Logs") + 1);
+    expect(allLabels.indexOf("Updates")).toBe(allLabels.indexOf("Logs") + 1);
+    expect(allLabels.indexOf("About")).toBe(allLabels.indexOf("Updates") + 1);
 
     enterQuery("  ThEmE  ");
     expect(labels()).toEqual(["Appearance"]);
@@ -399,10 +413,11 @@ describe("settings sidebar search", () => {
         activeRouteId: "appearance",
         offline: false,
         lastError: null,
-        version: "",
+        gatewayVersion: "",
         updateAvailable: null,
-        updateRunning: false,
+        updateBusy: false,
         onUpdate: vi.fn(),
+        ...inactiveRefresh,
         searchQuery: "",
         onExit: vi.fn(),
         onRetryConnect: vi.fn(),
@@ -422,26 +437,31 @@ describe("settings sidebar search", () => {
     expect(labels).toContain("Avancado");
   });
 
-  it("keeps the update card above the settings footer", async () => {
+  it("keeps the refresh card above the settings footer and forwards its action", async () => {
     const onUpdate = vi.fn();
+    const onRefresh = vi.fn();
+    const onNavigate = vi.fn();
     render(
       renderSettingsSidebar({
         basePath: "",
         activeRouteId: "appearance",
         offline: false,
         lastError: null,
-        version: "1.0.0",
+        gatewayVersion: "1.0.0",
         updateAvailable: {
           currentVersion: "1.0.0",
           latestVersion: "2.0.0",
           channel: "stable",
         },
-        updateRunning: false,
+        updateBusy: false,
+        canUpdate: true,
         onUpdate,
+        refreshRequired: true,
+        onRefresh,
         searchQuery: "",
         onExit: vi.fn(),
         onRetryConnect: vi.fn(),
-        onNavigate: vi.fn(),
+        onNavigate,
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
         saveIndicator: saveIndicator(),
@@ -455,7 +475,21 @@ describe("settings sidebar search", () => {
     await card?.updateComplete;
     expect(card?.nextElementSibling?.classList.contains("settings-sidebar__footer")).toBe(true);
     card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
-    expect(onUpdate).toHaveBeenCalledOnce();
+    expect(onRefresh).toHaveBeenCalledOnce();
+    expect(onUpdate).not.toHaveBeenCalled();
+
+    const buildChip = container.querySelector<
+      HTMLElement & {
+        gatewayVersion: string | null;
+        variant: string;
+        updateComplete: Promise<boolean>;
+      }
+    >("openclaw-sidebar-build-chip");
+    await buildChip?.updateComplete;
+    expect(buildChip?.gatewayVersion).toBe("1.0.0");
+    expect(buildChip?.variant).toBe("settings");
+    buildChip?.querySelector<HTMLAnchorElement>(".sidebar-footer-build")?.click();
+    expect(onNavigate).toHaveBeenCalledWith("about");
   });
 
   it("shows the offline retry action without an online status", () => {
@@ -468,10 +502,11 @@ describe("settings sidebar search", () => {
           offline,
           queuedOutboxCount,
           lastError,
-          version: "1.0.0",
+          gatewayVersion: "1.0.0",
           updateAvailable: null,
-          updateRunning: false,
+          updateBusy: false,
           onUpdate: vi.fn(),
+          ...inactiveRefresh,
           searchQuery: "",
           onExit: vi.fn(),
           onRetryConnect,

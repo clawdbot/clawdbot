@@ -1,3 +1,4 @@
+// @vitest-environment node
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +13,11 @@ const undefinedTokenMappings = {
   "bg-subtle": "bg-muted",
   "border-subtle": "border",
   fg: "text",
+  // Font aliases arrive from surfaces that publish their own token names
+  // (canvas widgets, the MCP Apps spec keys in mcp-app-theme.ts); inside
+  // Control UI only --mono and --font-body exist.
+  "font-mono": "mono",
+  "font-sans": "font-body",
   foreground: "text",
   "panel-2": "panel-strong",
   success: "ok",

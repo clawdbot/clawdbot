@@ -10,15 +10,17 @@ import type {
   WorkerSessionPlacements,
 } from "../../state/openclaw-state-db.generated.js";
 import {
+  activeTurnClaimForState,
   assertRecordShape,
   localTurnClaimForState,
   nextGeneration,
   normalizeCursor,
   normalizeEpoch,
+  normalizeWorkerPlacementExecutionMode,
+  normalizeTimestamp,
   nullableRequired,
   required,
   unclaimedTurnForState,
-  workerTurnClaimForState,
   type EmptyWorkerPlacementMetadata,
   type OwnedWorkerPlacementMetadata,
   type PersistedTurnClaim,
@@ -29,7 +31,10 @@ import {
 import { parseWorkerSessionPlacementState } from "./placement-state.js";
 
 type PlacementRow = Selectable<WorkerSessionPlacements>;
-type PlacementDatabase = Pick<StateDatabase, "worker_session_placements">;
+type PlacementDatabase = Pick<
+  StateDatabase,
+  "worker_session_placements" | "worker_session_tool_operations" | "worker_turn_tool_authorities"
+>;
 
 export const query = (db: DatabaseSync) => getNodeSqliteKysely<PlacementDatabase>(db);
 
@@ -42,6 +47,8 @@ const EMPTY_WORKER_METADATA: EmptyWorkerPlacementMetadata = {
   lastTranscriptAckCursor: null,
   lastLiveEventAckCursor: null,
   recoveryError: null,
+  terminalReason: null,
+  terminalAtMs: null,
 };
 
 function parseTurnClaim(row: PlacementRow): PersistedTurnClaim | null {
@@ -80,6 +87,8 @@ type ParsedWorkerMetadata = {
   workerBundleHash: string | null;
   lastTranscriptAckCursor: number | null;
   lastLiveEventAckCursor: number | null;
+  terminalReason: string | null;
+  terminalAtMs: number | null;
 };
 
 function ownedWorkerMetadata(
@@ -104,11 +113,14 @@ function ownedWorkerMetadata(
     lastTranscriptAckCursor: parsed.lastTranscriptAckCursor,
     lastLiveEventAckCursor: parsed.lastLiveEventAckCursor,
     recoveryError: null,
+    terminalReason: null,
+    terminalAtMs: null,
   };
 }
 
 export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
   const state = parseWorkerSessionPlacementState(row.state);
+  const executionMode = normalizeWorkerPlacementExecutionMode(row.execution_mode);
   const parsed: ParsedWorkerMetadata = {
     environmentId:
       row.environment_id === null ? null : required(row.environment_id, "environment id"),
@@ -127,6 +139,8 @@ export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
       "transcript ACK cursor",
     ),
     lastLiveEventAckCursor: normalizeCursor(row.last_live_event_ack_cursor, "live ACK cursor"),
+    terminalReason: nullableRequired(row.terminal_reason, "terminal reason"),
+    terminalAtMs: normalizeTimestamp(row.terminal_at_ms, "terminal timestamp"),
   };
   const recoveryError = nullableRequired(row.recovery_error, "recovery error");
   const turnClaim = parseTurnClaim(row);
@@ -134,12 +148,13 @@ export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
     sessionId: row.session_id,
     agentId: row.agent_id,
     sessionKey: row.session_key,
+    executionMode,
     generation: row.transition_generation,
     createdAtMs: row.created_at_ms,
     updatedAtMs: row.updated_at_ms,
     stateChangedAtMs: row.state_changed_at_ms,
   };
-  assertRecordShape({ state, ...parsed, recoveryError, turnClaim });
+  assertRecordShape({ state, executionMode, ...parsed, recoveryError, turnClaim });
   switch (state) {
     case "local": {
       return {
@@ -203,7 +218,7 @@ export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
       return {
         ...base,
         state,
-        turnClaim: workerTurnClaimForState(turnClaim, state),
+        turnClaim: activeTurnClaimForState(turnClaim, state, executionMode),
         ...ownedWorkerMetadata(parsed, state),
       };
     }
@@ -211,7 +226,7 @@ export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
       return {
         ...base,
         state,
-        turnClaim: workerTurnClaimForState(turnClaim, state),
+        turnClaim: activeTurnClaimForState(turnClaim, state, executionMode),
         ...ownedWorkerMetadata(parsed, state),
       };
     }
@@ -229,6 +244,8 @@ export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
         state,
         turnClaim: unclaimedTurnForState(turnClaim, state),
         ...ownedWorkerMetadata(parsed, state),
+        terminalReason: parsed.terminalReason,
+        terminalAtMs: parsed.terminalAtMs,
       };
     }
     case "failed": {
@@ -247,6 +264,8 @@ export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
         lastTranscriptAckCursor: parsed.lastTranscriptAckCursor,
         lastLiveEventAckCursor: parsed.lastLiveEventAckCursor,
         recoveryError,
+        terminalReason: parsed.terminalReason,
+        terminalAtMs: parsed.terminalAtMs,
       };
     }
   }
@@ -296,6 +315,7 @@ function insertLocal(
       session_id: identity.sessionId,
       agent_id: identity.agentId,
       session_key: identity.sessionKey,
+      execution_mode: null,
       state: "local",
       environment_id: null,
       transition_generation: 0,
@@ -306,6 +326,8 @@ function insertLocal(
       last_transcript_ack_cursor: null,
       last_live_event_ack_cursor: null,
       recovery_error: null,
+      terminal_reason: null,
+      terminal_at_ms: null,
       turn_claim_owner: null,
       turn_claim_id: null,
       turn_claim_run_id: null,
@@ -364,6 +386,7 @@ export function transitionValues(
     session_id: current.sessionId,
     agent_id: current.agentId,
     session_key: current.sessionKey,
+    execution_mode: current.executionMode,
     state: to,
     environment_id: environmentId,
     transition_generation: generation,
@@ -406,6 +429,15 @@ export function transitionValues(
         : patch.recoveryError === null
           ? null
           : required(patch.recoveryError, "recovery error"),
+    terminal_reason:
+      to === "failed"
+        ? patch.terminalReason === undefined
+          ? current.terminalReason
+          : patch.terminalReason === null
+            ? null
+            : required(patch.terminalReason, "terminal reason")
+        : null,
+    terminal_at_ms: to === "reclaimed" || to === "failed" ? (current.terminalAtMs ?? nowMs) : null,
     turn_claim_owner: null,
     turn_claim_id: null,
     turn_claim_run_id: null,
@@ -417,6 +449,7 @@ export function transitionValues(
   };
   assertRecordShape({
     state: to,
+    executionMode: current.executionMode,
     environmentId,
     activeOwnerEpoch,
     workspaceBaseManifestRef: values.workspace_base_manifest_ref,
@@ -425,6 +458,8 @@ export function transitionValues(
     lastTranscriptAckCursor: values.last_transcript_ack_cursor,
     lastLiveEventAckCursor: values.last_live_event_ack_cursor,
     recoveryError: values.recovery_error,
+    terminalReason: values.terminal_reason,
+    terminalAtMs: values.terminal_at_ms,
     turnClaim: null,
   });
   return values;

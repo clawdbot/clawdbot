@@ -16,6 +16,7 @@ import {
   OLLAMA_DEFAULT_MAX_TOKENS,
   OLLAMA_LOCAL_CONTEXT_TOKENS,
 } from "./defaults.js";
+import { supportsOllamaCloudFullThinkingEffort } from "./model-reasoning.js";
 
 export type OllamaTagModel = {
   name: string;
@@ -34,9 +35,17 @@ export type OllamaTagsResponse = {
   models?: OllamaTagModel[];
 };
 
+type OllamaRunningModel = {
+  name?: unknown;
+  model?: unknown;
+};
+
+type OllamaModelRow = OllamaTagModel | OllamaRunningModel;
+
 export type OllamaModelWithContext = OllamaTagModel & {
   contextWindow?: number;
   capabilities?: string[];
+  showInspectionFailed?: boolean;
 };
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
@@ -81,7 +90,13 @@ export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
 export type OllamaModelShowInfo = {
   contextWindow?: number;
   capabilities?: string[];
+  /** Distinguishes a failed request from a successful response that omitted capabilities. */
+  showInspectionFailed?: boolean;
 };
+
+const OLLAMA_FAILED_SHOW_INFO: OllamaModelShowInfo = Object.freeze({
+  showInspectionFailed: true,
+});
 
 type OllamaModelRequestOptions = {
   apiKey?: string;
@@ -165,7 +180,7 @@ export async function readOllamaModelShowInfo(
     init: {
       method: "POST",
       headers,
-      body: JSON.stringify({ name: modelName }),
+      body: JSON.stringify({ model: modelName }),
     },
     // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
     timeoutMs: Math.min(opts?.timeoutMs ?? OLLAMA_SHOW_TIMEOUT_MS, OLLAMA_SHOW_TIMEOUT_MS),
@@ -175,7 +190,9 @@ export async function readOllamaModelShowInfo(
   });
   try {
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
+      // Capture can retain a cloned tee branch, so cancellation must not delay
+      // the guard's bounded dispatcher release.
+      void response.body?.cancel().catch(() => undefined);
       throw new Error(`Ollama model inspection failed with HTTP ${response.status}`);
     }
     const data = await readProviderJsonResponse<{
@@ -227,7 +244,7 @@ export async function queryOllamaModelShowInfo(
     return await readOllamaModelShowInfo(apiBase, modelName, opts);
   } catch {
     throwIfOllamaRequestAborted(opts?.signal);
-    return {};
+    return OLLAMA_FAILED_SHOW_INFO;
   }
 }
 
@@ -279,10 +296,7 @@ export async function enrichOllamaModelsWithContext(
     const batchResults = await Promise.all(
       batch.map(async (model) => {
         const showInfo = await queryOllamaModelShowInfoCached(apiBase, model, opts);
-        return Object.assign({}, model, {
-          contextWindow: showInfo.contextWindow,
-          capabilities: showInfo.capabilities,
-        });
+        return Object.assign({}, model, showInfo);
       }),
     );
     enriched.push(...batchResults);
@@ -330,29 +344,22 @@ export function isReasoningModelHeuristic(modelId: string): boolean {
   return /r1|reasoning|think|reason/i.test(modelId);
 }
 
-function isKnownOllamaCloudReasoningModel(modelId: string): boolean {
-  // Match both the canonical direct-host id and the local `:cloud` routing alias.
-  const normalized = modelId
-    .trim()
-    .toLowerCase()
-    .replace(/:cloud$/, "");
-  return normalized === "glm-5.2" || /^deepseek-v4-(?:flash|pro)$/.test(normalized);
-}
-
 export function buildOllamaModelDefinition(
   modelId: string,
   contextWindow?: number,
   capabilities?: string[],
+  opts?: { showInspectionFailed?: boolean },
 ): ModelDefinitionConfig {
   const hasVision = capabilities?.includes("vision") ?? false;
   const input: ("text" | "image")[] = hasVision ? ["text", "image"] : ["text"];
   const reasoning =
-    isKnownOllamaCloudReasoningModel(modelId) ||
+    supportsOllamaCloudFullThinkingEffort(modelId) ||
     (capabilities === undefined
       ? isReasoningModelHeuristic(modelId)
       : capabilities.includes("thinking"));
   const compat = {
-    supportsTools: capabilities?.includes("tools") ?? true,
+    supportsTools:
+      opts?.showInspectionFailed === true ? false : (capabilities?.includes("tools") ?? true),
     supportsUsageInStreaming: true,
     supportsJsonSchemaResponseFormat: !isOllamaCloudModel(modelId),
   };
@@ -412,44 +419,94 @@ type OllamaModelsFetchDeps = {
   lookupFn?: LookupFn;
 };
 
-export async function fetchOllamaModels(
-  baseUrl: string,
-  opts?: OllamaModelRequestOptions,
-  deps?: OllamaModelsFetchDeps,
-): Promise<{ reachable: boolean; models: OllamaTagModel[] }> {
+async function fetchOllamaModelRows(params: {
+  baseUrl: string;
+  endpoint: "ps" | "tags";
+  opts?: OllamaModelRequestOptions;
+  deps?: OllamaModelsFetchDeps;
+}): Promise<{ reachable: boolean; models: OllamaModelRow[] }> {
   try {
-    const apiBase = resolveOllamaApiBase(baseUrl);
+    const apiBase = resolveOllamaApiBase(params.baseUrl);
+    const auditContext = `ollama-provider-models.${params.endpoint}`;
     const { response, release } = await fetchWithSsrFGuard({
-      url: `${apiBase}/api/tags`,
+      url: `${apiBase}/api/${params.endpoint}`,
       init: {
-        headers: opts?.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : undefined,
+        headers: params.opts?.apiKey
+          ? { Authorization: `Bearer ${params.opts.apiKey}` }
+          : undefined,
       },
       // Guard-owned timeoutMs also bounds DNS/proxy preflight; init.signal does not.
-      timeoutMs: Math.min(opts?.timeoutMs ?? OLLAMA_TAGS_TIMEOUT_MS, OLLAMA_TAGS_TIMEOUT_MS),
-      ...(opts?.signal ? { signal: opts.signal } : {}),
+      timeoutMs: Math.min(params.opts?.timeoutMs ?? OLLAMA_TAGS_TIMEOUT_MS, OLLAMA_TAGS_TIMEOUT_MS),
+      ...(params.opts?.signal ? { signal: params.opts.signal } : {}),
       policy: buildOllamaBaseUrlSsrFPolicy(apiBase),
-      auditContext: "ollama-provider-models.tags",
-      ...(deps?.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
-      ...(deps?.lookupFn ? { lookupFn: deps.lookupFn } : {}),
+      auditContext,
+      ...(params.deps?.fetchImpl ? { fetchImpl: params.deps.fetchImpl } : {}),
+      ...(params.deps?.lookupFn ? { lookupFn: params.deps.lookupFn } : {}),
     });
     try {
       if (!response.ok) {
-        await response.body?.cancel().catch(() => undefined);
+        // Capture can retain a cloned tee branch, so cancellation must not delay
+        // the guard's bounded dispatcher release.
+        void response.body?.cancel().catch(() => undefined);
         return { reachable: true, models: [] };
       }
-      const data = await readProviderJsonResponse<OllamaTagsResponse>(
+      const data = await readProviderJsonResponse<{ models?: OllamaModelRow[] }>(
         response,
-        "ollama-provider-models.tags",
+        auditContext,
       );
-      const models = (data.models ?? []).filter((m) => m.name);
+      const models = Array.isArray(data.models) ? data.models : [];
       return { reachable: true, models };
     } finally {
       await release();
     }
   } catch {
-    throwIfOllamaRequestAborted(opts?.signal);
+    throwIfOllamaRequestAborted(params.opts?.signal);
     return { reachable: false, models: [] };
   }
+}
+
+export async function fetchOllamaModels(
+  baseUrl: string,
+  opts?: OllamaModelRequestOptions,
+  deps?: OllamaModelsFetchDeps,
+): Promise<{ reachable: boolean; models: OllamaTagModel[] }> {
+  const result = await fetchOllamaModelRows({
+    baseUrl,
+    endpoint: "tags",
+    opts,
+    deps,
+  });
+  return {
+    reachable: result.reachable,
+    models: result.models.filter(
+      (model): model is OllamaTagModel => typeof model.name === "string" && Boolean(model.name),
+    ),
+  };
+}
+
+export async function fetchLoadedOllamaModelNames(
+  baseUrl: string,
+  opts?: OllamaModelRequestOptions,
+  deps?: OllamaModelsFetchDeps,
+): Promise<{ reachable: boolean; models: string[] }> {
+  const result = await fetchOllamaModelRows({
+    baseUrl,
+    endpoint: "ps",
+    opts,
+    deps,
+  });
+  return {
+    reachable: result.reachable,
+    models: result.models
+      .map((model) =>
+        typeof model.name === "string"
+          ? model.name.trim()
+          : "model" in model && typeof model.model === "string"
+            ? model.model.trim()
+            : "",
+      )
+      .filter(Boolean),
+  };
 }
 
 export async function buildOllamaProvider(
@@ -467,7 +524,9 @@ export async function buildOllamaProvider(
     baseUrl: apiBase,
     api: "ollama",
     models: discovered.map((model) =>
-      buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities),
+      buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities, {
+        showInspectionFailed: model.showInspectionFailed,
+      }),
     ),
   };
 }

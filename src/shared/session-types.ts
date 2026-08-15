@@ -17,6 +17,7 @@ type GatewayAgentModel = {
 export type GatewayAgentRuntime = {
   id: string;
   fallback?: "openclaw" | "none";
+  cloudPlacementSupported?: boolean;
   source:
     | "env"
     | "agent"
@@ -65,7 +66,7 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   nextOffset?: number | null;
   hasMore?: boolean;
   /** Complete creator facet for the filtered result, independent of pagination. */
-  creators?: Array<{ id: string; label?: string }>;
+  creators?: Array<{ id: string; label?: string; avatarUrl?: string }>;
   defaults: TDefaults;
   sessions: TRow[];
 };

@@ -281,9 +281,12 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: providerHttpMocks.resolveApiKeyForProviderMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
+vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => ({
   assertOkOrThrowHttpError: providerHttpMocks.assertOkOrThrowHttpErrorMock,
   assertOkOrThrowProviderError: providerHttpMocks.assertOkOrThrowProviderErrorMock,
+  assertProviderBinaryResponseContent: (
+    await importActual<typeof import("openclaw/plugin-sdk/provider-http")>()
+  ).assertProviderBinaryResponseContent,
   createProviderOperationDeadline: ({
     label,
     timeoutMs,

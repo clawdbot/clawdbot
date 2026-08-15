@@ -314,6 +314,37 @@ describeTelegramDispatch("dispatchTelegramMessage progress-summary", () => {
     );
   });
 
+  it("keeps Claude CLI pre-tool commentary after the progress window collapses", async () => {
+    const markers = "Test markers: caribou-lampion-473, fromage-quantique, satellite-en-tricot";
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        expect(replyOptions?.commentaryPayloadsEnabled).toBe(true);
+        expect(replyOptions?.shouldDeliverCommentaryPayloads).toBeUndefined();
+        await replyOptions?.onItemEvent?.({
+          kind: "preamble",
+          itemId: "commentary-1",
+          progressText: markers,
+          suppressDurableProgress: true,
+        });
+        await replyOptions?.onBlockReplyQueued?.({ text: markers, isCommentary: true });
+        await dispatcherOptions.deliver({ text: markers, isCommentary: true }, { kind: "block" });
+        await replyOptions?.onToolStart?.({ name: "Bash", phase: "start" });
+        await dispatcherOptions.deliver({ text: "TEST DONE" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress" } },
+    });
+
+    expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
+    expect(allDeliveredReplyTexts()).toEqual([markers, "TEST DONE"]);
+  });
+
   it("never streams an interim answer block into the progress window (Discord parity)", async () => {
     // Progress mode: the window is a pure activity log. An intermediate assistant
     // answer block (info.kind === "block", before the final) must NOT render into
@@ -503,13 +534,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress-summary", () => {
       });
 
       const lastUpdate = answerDraftStream.updatePreview.mock.calls.at(-1)?.[0];
-      expect(lastUpdate?.text).toContain("install dependencies");
+      expect(lastUpdate?.text).not.toContain("install dependencies");
       expect(lastUpdate?.text).not.toContain("completed");
       expect(lastUpdate).toEqual(
-        telegramProgressPreview(
-          "Shelling\n\n🛠️ install dependencies",
-          "<b>Shelling</b>\n<b>🛠️ Exec</b> <code>install dependencies</code>",
-        ),
+        telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
       );
     } finally {
       vi.useRealTimers();
@@ -537,7 +565,11 @@ describeTelegramDispatch("dispatchTelegramMessage progress-summary", () => {
       telegramProgressPreview("Cracking\n\n🛠️ Exec", "<b>Cracking</b>\n<b>🛠️ Exec</b>"),
     );
     expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, trailingFinalStatusText);
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(
+      1,
+      trailingFinalStatusText,
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(2);
     expect(
       requireInvocationOrder(answerDraftStream.forceNewMessage, 1, "second answer draft rotation"),

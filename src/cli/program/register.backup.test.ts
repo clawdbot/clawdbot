@@ -5,6 +5,7 @@ import { registerBackupCommand } from "./register.backup.js";
 
 const mocks = vi.hoisted(() => ({
   backupCreateCommand: vi.fn(),
+  backupRestoreCommand: vi.fn(),
   backupSqliteCreateCommand: vi.fn(),
   backupSqliteListCommand: vi.fn(),
   backupSqliteRestoreCommand: vi.fn(),
@@ -18,6 +19,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 const backupCreateCommand = mocks.backupCreateCommand;
+const backupRestoreCommand = mocks.backupRestoreCommand;
 const backupSqliteCreateCommand = mocks.backupSqliteCreateCommand;
 const backupSqliteListCommand = mocks.backupSqliteListCommand;
 const backupSqliteRestoreCommand = mocks.backupSqliteRestoreCommand;
@@ -27,6 +29,10 @@ const runtime = mocks.runtime;
 
 vi.mock("../../commands/backup.js", () => ({
   backupCreateCommand: mocks.backupCreateCommand,
+}));
+
+vi.mock("../../commands/backup-restore.js", () => ({
+  backupRestoreCommand: mocks.backupRestoreCommand,
 }));
 
 vi.mock("../../commands/backup-verify.js", () => ({
@@ -54,6 +60,7 @@ describe("registerBackupCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     backupCreateCommand.mockResolvedValue(undefined);
+    backupRestoreCommand.mockResolvedValue(undefined);
     backupSqliteCreateCommand.mockResolvedValue(undefined);
     backupSqliteListCommand.mockResolvedValue(undefined);
     backupSqliteRestoreCommand.mockResolvedValue(undefined);
@@ -111,6 +118,24 @@ describe("registerBackupCommand", () => {
     const options = expectForwardedOptions(backupVerifyCommand);
     expect(options.archive).toBe("/tmp/openclaw-backup.tar.gz");
     expect(options.json).toBe(true);
+  });
+
+  it("runs whole-archive restore with forwarded options", async () => {
+    await runCli([
+      "backup",
+      "restore",
+      "/tmp/openclaw-backup.tar.gz",
+      "--target",
+      "/tmp/restored-openclaw",
+      "--json",
+    ]);
+
+    const options = expectForwardedOptions(backupRestoreCommand);
+    expect(options).toEqual({
+      archive: "/tmp/openclaw-backup.tar.gz",
+      target: "/tmp/restored-openclaw",
+      json: true,
+    });
   });
 
   it("registers the SQLite snapshot command group", () => {

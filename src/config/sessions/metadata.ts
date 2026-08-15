@@ -193,9 +193,13 @@ function deriveGroupSessionPatch(params: {
   };
   if (nextSubject) {
     patch.subject = nextSubject;
+    // These fields are alternate presentations of the same chat. Clear the stale channel title
+    // when ingress now owns a human subject, or an old opaque route id will keep winning in UI.
+    patch.groupChannel = undefined;
   }
   if (nextGroupChannel) {
     patch.groupChannel = nextGroupChannel;
+    patch.subject = undefined;
   }
   if (space) {
     patch.space = space;
@@ -203,8 +207,8 @@ function deriveGroupSessionPatch(params: {
 
   const displayName = buildGroupDisplayName({
     provider: channel,
-    subject: nextSubject ?? params.existing?.subject,
-    groupChannel: nextGroupChannel ?? params.existing?.groupChannel,
+    subject: nextSubject ?? (nextGroupChannel ? undefined : params.existing?.subject),
+    groupChannel: nextGroupChannel ?? (nextSubject ? undefined : params.existing?.groupChannel),
     space: space ?? params.existing?.space,
     id: resolution.id,
     key: params.sessionKey,

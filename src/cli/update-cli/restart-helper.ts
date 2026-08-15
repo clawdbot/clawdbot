@@ -7,10 +7,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { DEFAULT_GATEWAY_PORT } from "../../config/paths.js";
 import { quoteCmdScriptArg } from "../../daemon/cmd-argv.js";
 import {
-  resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../../daemon/constants.js";
+import { resolveLaunchAgentLabel } from "../../daemon/launchd-label.js";
+import { renderSystemLaunchDaemonOwnershipShellProbe } from "../../daemon/launchd-system.js";
 import { resolveGatewayTaskScriptPath } from "../../daemon/paths.js";
 import {
   renderPosixRestartLogSetup,
@@ -43,14 +44,6 @@ function resolveSystemdUnit(env: NodeJS.ProcessEnv): string {
     return override.endsWith(".service") ? override : `${override}.service`;
   }
   return `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
-}
-
-function resolveLaunchdLabel(env: NodeJS.ProcessEnv): string {
-  const override = normalizeOptionalString(env.OPENCLAW_LAUNCHD_LABEL);
-  if (override) {
-    return override;
-  }
-  return resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
 }
 
 function resolveWindowsTaskName(env: NodeJS.ProcessEnv): string {
@@ -187,7 +180,7 @@ rmdir "$script_dir" 2>/dev/null || true
 exit "$status"
 `;
     } else if (platform === "darwin") {
-      const label = resolveLaunchdLabel(env);
+      const label = resolveLaunchAgentLabel(env);
       const escaped = shellEscape(label);
       // Fallback to 501 if getuid is not available (though it should be on macOS)
       const uid = process.getuid ? process.getuid() : 501;
@@ -197,6 +190,7 @@ exit "$status"
       const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
       const escapedPlistPath = shellEscape(plistPath);
       const logSetup = renderPosixRestartLogSetup({ ...process.env, ...env });
+      const systemOwnershipProbe = renderSystemLaunchDaemonOwnershipShellProbe(label);
       filename = `openclaw-restart-${timestamp}.sh`;
       scriptContent = `#!/bin/sh
 # Standalone restart script — survives parent process termination.
@@ -207,6 +201,7 @@ sleep 1
 # is temporarily unavailable.
 ${logSetup}
 printf '[%s] openclaw restart attempt source=update target=%s\\n' "$(date -u +%FT%TZ)" '${shellEscapeRestartLogValue(label)}' >&2
+${systemOwnershipProbe}
 # Try kickstart first (works when the service is still registered).
 # If it fails (e.g. after bootout), clear any persisted disabled state,
 # then re-register via bootstrap. Bootstrap loads RunAtLoad agents, so the
@@ -214,7 +209,10 @@ printf '[%s] openclaw restart attempt source=update target=%s\\n' "$(date -u +%F
 # The final status is captured
 # before self-cleanup so a genuine failure remains observable.
 status=0
-if ! launchctl kickstart -k 'gui/${uid}/${escaped}'; then
+if [ -n "$openclaw_system_launchd_conflict" ]; then
+  status=78
+  printf '[%s] openclaw restart blocked source=update reason=%s\n' "$(date -u +%FT%TZ)" "$openclaw_system_launchd_detail" >&2
+elif ! launchctl kickstart -k 'gui/${uid}/${escaped}'; then
   launchctl enable 'gui/${uid}/${escaped}'
   if launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}'; then
     status=0

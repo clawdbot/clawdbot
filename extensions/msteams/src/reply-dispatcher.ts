@@ -211,21 +211,28 @@ export function createMSTeamsReplyDispatcher(params: {
     content?: string;
   };
 
+  type AcceptedDeliveryPart = {
+    messageIds: string[];
+    content?: string;
+  };
+
   type PendingDelivery = {
     messages: MSTeamsRenderedMessage[];
     finalization: ReturnType<typeof createDeferred<DeliveryOutcome>>;
     content?: string;
+    nativeResult?: AcceptedDeliveryPart;
+    blockResults: AcceptedDeliveryPart[];
     native: boolean;
     nativeSettled: boolean;
     blockSettled: boolean;
     settled: boolean;
-    visibleReplySent: boolean;
-    nativeMessageId?: string;
-    messageIds: string[];
     errors: unknown[];
   };
 
   const pendingDeliveries: PendingDelivery[] = [];
+
+  const joinAcceptedContents = (contents: readonly (string | undefined)[]): string =>
+    contents.filter((content): content is string => Boolean(content)).join("\n");
 
   const sendMessages = async (messages: MSTeamsRenderedMessage[]): Promise<string[]> => {
     return sendMSTeamsMessages({
@@ -287,16 +294,19 @@ export function createMSTeamsReplyDispatcher(params: {
   };
 
   const deliveryOutcome = (delivery: PendingDelivery): DeliveryOutcome => {
-    const messageIds = [
-      ...(delivery.nativeMessageId ? [delivery.nativeMessageId] : []),
-      ...delivery.messageIds,
+    const acceptedParts = [
+      ...(delivery.nativeResult ? [delivery.nativeResult] : []),
+      ...delivery.blockResults,
     ];
+    const messageIds = acceptedParts.flatMap((part) => part.messageIds);
+    const content =
+      delivery.errors.length > 0
+        ? joinAcceptedContents(acceptedParts.map((part) => part.content))
+        : delivery.content;
     return {
-      visibleReplySent: delivery.visibleReplySent,
+      visibleReplySent: acceptedParts.length > 0,
       ...(messageIds.length > 0 ? { messageIds } : {}),
-      ...(delivery.visibleReplySent && delivery.content !== undefined
-        ? { content: delivery.content }
-        : {}),
+      ...(acceptedParts.length > 0 && content !== undefined ? { content } : {}),
     };
   };
 
@@ -320,7 +330,7 @@ export function createMSTeamsReplyDispatcher(params: {
         (candidate) => !(candidate instanceof PlatformMessageNotDispatchedError),
       ) ?? delivery.errors[0];
     delivery.finalization.reject(
-      delivery.visibleReplySent
+      outcome.visibleReplySent
         ? createChannelPartialDeliveryError(error, {
             ...outcome,
             visibleReplySent: true,
@@ -339,12 +349,11 @@ export function createMSTeamsReplyDispatcher(params: {
       messages,
       finalization,
       content: payload.text,
+      blockResults: [],
       native,
       nativeSettled: !native,
       blockSettled: messages.length === 0,
       settled: false,
-      visibleReplySent: false,
-      messageIds: [],
       errors: [],
     };
     pendingDeliveries.push(delivery);
@@ -364,9 +373,13 @@ export function createMSTeamsReplyDispatcher(params: {
       for (const msg of toSend) {
         try {
           const msgIds = await sendMessages([msg]);
-          delivery.visibleReplySent ||= msgIds.length > 0;
           const validIds = msgIds.filter((id) => id.trim() && id !== "unknown");
-          delivery.messageIds.push(...validIds);
+          if (msgIds.length > 0) {
+            delivery.blockResults.push({
+              messageIds: validIds,
+              ...(msg.text ? { content: msg.text } : {}),
+            });
+          }
           sentIds.push(...validIds);
         } catch (msgError) {
           failed += 1;
@@ -480,13 +493,30 @@ export function createMSTeamsReplyDispatcher(params: {
       return;
     }
 
-    nativeDelivery.visibleReplySent ||= nativeResult.visibleReplySent;
-    nativeDelivery.nativeMessageId = nativeResult.messageId;
-    if (nativeResult.content !== undefined) {
+    if (nativeResult.visibleReplySent) {
+      nativeDelivery.nativeResult = {
+        messageIds: nativeResult.messageId ? [nativeResult.messageId] : [],
+        ...(nativeResult.content !== undefined ? { content: nativeResult.content } : {}),
+      };
+    }
+    const hasPostNativePayloads = Boolean(nativeResult.postNativePayloads?.length);
+    if (nativeResult.logicalContent !== undefined) {
+      nativeDelivery.content = nativeResult.logicalContent;
+    } else if (
+      nativeResult.content !== undefined &&
+      ((!nativeResult.fallbackPayload && !hasPostNativePayloads) ||
+        nativeDelivery.content === undefined)
+    ) {
       nativeDelivery.content = nativeResult.content;
     }
-    if (nativeResult.fallbackPayload) {
-      nativeDelivery.messages.push(...renderReplyPayload(nativeResult.fallbackPayload));
+    const afterNativePayloads = [
+      ...(nativeResult.fallbackPayload ? [nativeResult.fallbackPayload] : []),
+      ...(nativeResult.postNativePayloads ?? []),
+    ];
+    if (afterNativePayloads.length > 0) {
+      nativeDelivery.messages.push(
+        ...afterNativePayloads.flatMap((payload) => renderReplyPayload(payload)),
+      );
       nativeDelivery.blockSettled = nativeDelivery.messages.length === 0;
     }
     nativeDelivery.nativeSettled = true;
@@ -511,7 +541,11 @@ export function createMSTeamsReplyDispatcher(params: {
   // tools fire (instead of the rotating "Thinking..." label sitting unchanged
   // for the duration of a long tool chain). In other modes these calls are
   // no-ops on the controller side.
-  const previewToolProgressEnabled = resolveChannelStreamingPreviewToolProgress(msteamsCfg);
+  const previewToolProgressEnabled = resolveChannelStreamingPreviewToolProgress(
+    msteamsCfg,
+    true,
+    teamsStreamMode,
+  );
   const suppressDefaultToolProgressMessages =
     resolveChannelStreamingSuppressDefaultToolProgressMessages(msteamsCfg);
   const shouldSuppressDefaultToolProgressMessages =
@@ -531,11 +565,11 @@ export function createMSTeamsReplyDispatcher(params: {
         onReasoningStream: async (payload: PipelinePayload) => {
           const text = typeof payload?.text === "string" ? payload.text : undefined;
           if (!text) {
-            return;
+            return false;
           }
           if (payload?.isReasoningSnapshot !== true) {
             await streamController.pushProgressLine(text);
-            return;
+            return false;
           }
           await streamController.pushProgressLine(
             buildChannelProgressDraftLine({
@@ -546,6 +580,7 @@ export function createMSTeamsReplyDispatcher(params: {
               progressText: text,
             }),
           );
+          return false;
         },
         onToolStart: async (payload: PipelinePayload) => {
           const name = typeof payload?.name === "string" ? payload.name : undefined;
@@ -570,6 +605,7 @@ export function createMSTeamsReplyDispatcher(params: {
             ),
             name ? { toolName: name } : undefined,
           );
+          return false;
         },
         onItemEvent: async (payload: PipelinePayload) => {
           await streamController.pushProgressLine(
@@ -591,18 +627,20 @@ export function createMSTeamsReplyDispatcher(params: {
               ...(typeof payload?.meta === "string" ? { meta: payload.meta } : {}),
             }),
           );
+          return false;
         },
         onPlanUpdate: async (payload: PipelinePayload) => {
           if (payload?.phase !== "update") {
-            return;
+            return false;
           }
           await streamController.pushPlanProgress(normalizeAgentPlanSteps(payload.steps), {
             explanation: typeof payload.explanation === "string" ? payload.explanation : undefined,
           });
+          return false;
         },
         onApprovalEvent: async (payload: PipelinePayload) => {
           if (payload?.phase !== "requested") {
-            return;
+            return false;
           }
           await streamController.pushProgressLine(
             buildChannelProgressDraftLine({
@@ -614,13 +652,14 @@ export function createMSTeamsReplyDispatcher(params: {
               ...(typeof payload?.message === "string" ? { message: payload.message } : {}),
             }),
           );
+          return false;
         },
         onCommandOutput: async (payload: PipelinePayload) => {
           if (payload?.phase !== "end") {
-            return;
+            return false;
           }
           await streamController.pushProgressLine(
-            buildChannelProgressDraftLine({
+            buildChannelProgressDraftLineForEntry(msteamsCfg, {
               event: "command-output",
               ...(typeof payload?.itemId === "string" ? { itemId: payload.itemId } : {}),
               ...(typeof payload?.toolCallId === "string"
@@ -633,10 +672,11 @@ export function createMSTeamsReplyDispatcher(params: {
               ...(typeof payload?.exitCode === "number" ? { exitCode: payload.exitCode } : {}),
             }),
           );
+          return false;
         },
         onPatchSummary: async (payload: PipelinePayload) => {
           if (payload?.phase !== "end") {
-            return;
+            return false;
           }
           await streamController.pushProgressLine(
             buildChannelProgressDraftLine({
@@ -663,6 +703,7 @@ export function createMSTeamsReplyDispatcher(params: {
               ...(typeof payload?.summary === "string" ? { summary: payload.summary } : {}),
             }),
           );
+          return false;
         },
       }
     : {};
@@ -676,8 +717,10 @@ export function createMSTeamsReplyDispatcher(params: {
     replyOptions: {
       ...(streamController.hasStream()
         ? {
-            onPartialReply: (payload: { text?: string }) =>
-              streamController.onPartialReply(payload),
+            onPartialReply: (payload: { text?: string }) => {
+              streamController.onPartialReply(payload);
+              return false;
+            },
           }
         : {}),
       ...progressCallbacks,

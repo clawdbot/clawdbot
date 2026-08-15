@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
   authorizeHttpGatewayConnect,
+  authorizeUserProfileAvatarHttpGatewayConnect,
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
@@ -51,6 +52,7 @@ export function getBearerToken(req: IncomingMessage): string | undefined {
 type SharedSecretGatewayAuth = Pick<ResolvedGatewayAuth, "mode">;
 export type AuthorizedGatewayHttpRequest = {
   authMethod?: GatewayAuthResult["method"];
+  user?: string;
   trustDeclaredOperatorScopes: boolean;
   controlUiPluginGrants?: ControlUiPluginTabAuthGrant[];
   controlUiPluginGrant?: ControlUiPluginTabAuthGrant;
@@ -65,6 +67,23 @@ export type GatewayHttpRequestAuthCheckResult =
       ok: false;
       authResult: GatewayAuthResult;
     };
+
+type GatewayHttpRequestAuthParams = {
+  req: IncomingMessage;
+  res: ServerResponse;
+  auth: ResolvedGatewayAuth;
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+  rateLimiter?: AuthRateLimiter;
+};
+
+type GatewayHttpRequestAuthCheckParams = Omit<GatewayHttpRequestAuthParams, "res"> & {
+  cfg?: OpenClawConfig;
+};
+
+type GatewayHttpConnectAuthorizer = (
+  params: Parameters<typeof authorizeHttpGatewayConnect>[0],
+) => Promise<GatewayAuthResult>;
 
 export function resolveHttpBrowserOriginPolicy(
   req: IncomingMessage,
@@ -102,7 +121,14 @@ export async function authorizeGatewayHttpRequestOrReply(params: {
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
 }): Promise<AuthorizedGatewayHttpRequest | null> {
-  const result = await checkGatewayHttpRequestAuth(params);
+  return await authorizeGatewayHttpRequestWithOrReply(params, authorizeHttpGatewayConnect);
+}
+
+async function authorizeGatewayHttpRequestWithOrReply(
+  params: GatewayHttpRequestAuthParams,
+  authorizeConnect: GatewayHttpConnectAuthorizer,
+): Promise<AuthorizedGatewayHttpRequest | null> {
+  const result = await checkGatewayHttpRequestAuthWith(params, authorizeConnect);
   if (!result.ok) {
     sendGatewayAuthFailure(params.res, result.authResult);
     return null;
@@ -205,9 +231,16 @@ export async function checkGatewayHttpRequestAuth(params: {
   rateLimiter?: AuthRateLimiter;
   cfg?: OpenClawConfig;
 }): Promise<GatewayHttpRequestAuthCheckResult> {
+  return await checkGatewayHttpRequestAuthWith(params, authorizeHttpGatewayConnect);
+}
+
+async function checkGatewayHttpRequestAuthWith(
+  params: GatewayHttpRequestAuthCheckParams,
+  authorizeConnect: GatewayHttpConnectAuthorizer,
+): Promise<GatewayHttpRequestAuthCheckResult> {
   const token = getBearerToken(params.req);
   const browserOriginPolicy = resolveHttpBrowserOriginPolicy(params.req, params.cfg);
-  const authResult = await authorizeHttpGatewayConnect({
+  const authResult = await authorizeConnect({
     auth: params.auth,
     connectAuth: token ? { token, password: token } : null,
     req: params.req,
@@ -226,6 +259,7 @@ export async function checkGatewayHttpRequestAuth(params: {
     ok: true,
     requestAuth: {
       authMethod: authResult.method,
+      ...(authResult.user ? { user: authResult.user } : {}),
       // Shared-secret bearer auth proves possession of the gateway secret, but it
       // does not prove a narrower per-request operator identity. HTTP endpoints
       // must opt in explicitly if they want to treat that shared-secret path as a
@@ -252,15 +286,35 @@ export async function authorizeScopedGatewayHttpRequestOrReply(params: {
   requestAuth: AuthorizedGatewayHttpRequest;
   operatorScopes: string[];
 } | null> {
+  return await authorizeScopedGatewayHttpRequestWithOrReply(params, authorizeHttpGatewayConnect);
+}
+
+/** Authorize the read-only avatar route without broadening ordinary HTTP auth. */
+export async function authorizeScopedUserProfileAvatarHttpRequestOrReply(
+  params: Parameters<typeof authorizeScopedGatewayHttpRequestOrReply>[0],
+): ReturnType<typeof authorizeScopedGatewayHttpRequestOrReply> {
+  return await authorizeScopedGatewayHttpRequestWithOrReply(
+    params,
+    authorizeUserProfileAvatarHttpGatewayConnect,
+  );
+}
+
+async function authorizeScopedGatewayHttpRequestWithOrReply(
+  params: Parameters<typeof authorizeScopedGatewayHttpRequestOrReply>[0],
+  authorizeConnect: GatewayHttpConnectAuthorizer,
+): ReturnType<typeof authorizeScopedGatewayHttpRequestOrReply> {
   const cfg = getRuntimeConfig();
-  const requestAuth = await authorizeGatewayHttpRequestOrReply({
-    req: params.req,
-    res: params.res,
-    auth: params.auth,
-    trustedProxies: params.trustedProxies ?? cfg.gateway?.trustedProxies,
-    allowRealIpFallback: params.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
-    rateLimiter: params.rateLimiter,
-  });
+  const requestAuth = await authorizeGatewayHttpRequestWithOrReply(
+    {
+      req: params.req,
+      res: params.res,
+      auth: params.auth,
+      trustedProxies: params.trustedProxies ?? cfg.gateway?.trustedProxies,
+      allowRealIpFallback: params.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
+      rateLimiter: params.rateLimiter,
+    },
+    authorizeConnect,
+  );
   if (!requestAuth) {
     return null;
   }

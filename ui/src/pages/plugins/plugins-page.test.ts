@@ -2,8 +2,16 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayRequestError } from "../../api/gateway.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
-import type { PluginListResult, PluginSearchResult } from "../../lib/plugins/index.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import type {
+  PluginInstallRequest,
+  PluginListResult,
+  PluginMutationResult,
+  PluginSearchResult,
+} from "../../lib/plugins/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   clickRowAction,
@@ -193,6 +201,87 @@ describe("PluginsPage", () => {
     );
   });
 
+  it("owns install-policy reviews by install identity across row aliases", async () => {
+    let installCalls = 0;
+    const { client } = createClient(async (method) => {
+      if (method === "plugins.list") {
+        return createResult(
+          createPlugin({ id: "bluebubbles", name: "BlueBubbles", installed: true }),
+        );
+      }
+      if (method !== "plugins.install") {
+        throw new Error(`Unexpected method ${method}`);
+      }
+      installCalls += 1;
+      if (installCalls <= 2) {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "install requires review",
+          details: {
+            installPolicyCode: "install_policy_warning_acknowledgement_required",
+            targetName: "@openclaw/bluebubbles",
+            targetType: "plugin",
+            requestMode: "install",
+            reason: `Review this plugin (${installCalls}).`,
+          },
+        });
+      }
+      return {
+        ok: true,
+        plugin: createPlugin({ id: "bluebubbles", name: "BlueBubbles", installed: true }),
+        restartRequired: false,
+      } satisfies PluginMutationResult;
+    });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(
+        harness.gateway,
+        createResult(
+          createPlugin({
+            id: "@openclaw/bluebubbles",
+            name: "BlueBubbles",
+            packageName: "@openclaw/bluebubbles",
+            installed: false,
+            enabled: false,
+            state: "not-installed",
+            install: { source: "official", pluginId: "@openclaw/bluebubbles" },
+          }),
+        ),
+      ),
+    );
+    const installIdentity = "plugin:@openclaw/bluebubbles";
+    const catalogRequest = {
+      source: "official",
+      pluginId: "@openclaw/bluebubbles",
+    } satisfies PluginInstallRequest;
+    const searchRequest = {
+      source: "clawhub",
+      packageName: "@openclaw/bluebubbles",
+    } satisfies PluginInstallRequest;
+    page.messages["plugin:workboard"] = { kind: "success", text: "Unrelated message." };
+
+    await page.install(catalogRequest, installIdentity);
+    expect(page.messages[installIdentity]?.installPolicyWarning?.details.reason).toBe(
+      "Review this plugin (1).",
+    );
+
+    await page.install(searchRequest, installIdentity);
+    expect(page.messages[installIdentity]?.installPolicyWarning?.details.reason).toBe(
+      "Review this plugin (2).",
+    );
+
+    await page.install(
+      { ...searchRequest, acknowledgeInstallPolicyWarning: true },
+      installIdentity,
+    );
+
+    expect(page.messages[installIdentity]).toBeUndefined();
+    expect(page.messages["plugin:bluebubbles"]?.kind).toBe("success");
+    expect(page.result?.plugins.map((plugin) => plugin.id)).toEqual(["bluebubbles"]);
+    expect(page.messages["plugin:workboard"]?.text).toBe("Unrelated message.");
+  });
+
   it("debounces two-character ClawHub searches and cancels stale input", async () => {
     vi.useFakeTimers();
     const { client, request } = createClient(async (method) => {
@@ -315,6 +404,122 @@ describe("PluginsPage", () => {
     expect(calls).toContainEqual(["config.get", {}]);
   });
 
+  it.each(["install", "enable", "uninstall"] as const)(
+    "flushes a pending config draft before plugin %s and refreshes afterward",
+    async (action) => {
+      vi.useFakeTimers();
+      const method =
+        action === "install"
+          ? "plugins.install"
+          : action === "enable"
+            ? "plugins.setEnabled"
+            : "plugins.uninstall";
+      const order: string[] = [];
+      let config: Record<string, unknown> = { pending: false };
+      let hash = "hash-1";
+      const enabledPlugin = createPlugin({ enabled: true, state: "enabled" });
+      const installedPlugin = createPlugin({
+        id: "example-plugin",
+        name: "Example Plugin",
+        origin: "global",
+        installed: true,
+        enabled: true,
+        state: "enabled",
+      });
+      const removablePlugin = createPlugin({
+        id: "community-thing",
+        name: "Community Thing",
+        origin: "global",
+        removable: true,
+        featured: false,
+      });
+      const { client } = createClient(async (requestMethod, params) => {
+        if (requestMethod === "config.get") {
+          order.push(requestMethod);
+          return {
+            config,
+            sourceConfig: config,
+            raw: JSON.stringify(config),
+            hash,
+            valid: true,
+            issues: [],
+          };
+        }
+        if (requestMethod === "config.set") {
+          order.push(requestMethod);
+          config = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
+          hash = "hash-2";
+          return { hash };
+        }
+        if (requestMethod === method) {
+          order.push(requestMethod);
+          config = { ...config, pluginMutation: action };
+          hash = "hash-3";
+          if (action === "uninstall") {
+            return {
+              ok: true,
+              pluginId: "community-thing",
+              restartRequired: true,
+              removed: ["config entry"],
+            };
+          }
+          return {
+            ok: true,
+            plugin: action === "install" ? installedPlugin : enabledPlugin,
+            restartRequired: true,
+          };
+        }
+        if (requestMethod === "plugins.list") {
+          order.push(requestMethod);
+          return createResult(action === "install" ? installedPlugin : enabledPlugin);
+        }
+        throw new Error(`Unexpected method ${requestMethod}`);
+      });
+      const gatewayHarness = createGateway(client);
+      const runtimeConfig = createRuntimeConfigCapability(gatewayHarness.gateway);
+      await runtimeConfig.ensureLoaded();
+      const context = {
+        ...createContext(gatewayHarness.gateway, runtimeConfig.refresh),
+        runtimeConfig,
+      } as ApplicationContext;
+      const { page } = await mountPage(context, {
+        gateway: gatewayHarness.gateway,
+        gatewaySnapshot: gatewayHarness.gateway.snapshot,
+        location: createPluginsRouteLocation(),
+        result: {
+          plugins: [createPlugin(), removablePlugin],
+          diagnostics: [],
+          mutationAllowed: true,
+        },
+        error: null,
+      });
+      order.length = 0;
+      runtimeConfig.patchForm(["pending"], true);
+
+      if (action === "install") {
+        await page.install(
+          {
+            source: "clawhub",
+            packageName: "example-plugin",
+          } as PluginInstallRequest,
+          "clawhub:example-plugin",
+        );
+      } else if (action === "enable") {
+        await page.updateEnabled("workboard", true);
+      } else {
+        await page.uninstall("community-thing", "plugin:community-thing");
+      }
+
+      expect(order).toEqual(["config.set", method, "config.get", "plugins.list"]);
+      expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
+      expect(runtimeConfig.state.configForm).toMatchObject({
+        pending: true,
+        pluginMutation: action,
+      });
+      runtimeConfig.dispose();
+    },
+  );
+
   it("keeps the enable action retryable after a failed enable", async () => {
     const { client, request } = createClient(async (method) => {
       if (method === "plugins.setEnabled") {
@@ -415,9 +620,9 @@ describe("PluginsPage", () => {
     expect(page.loading).toBe(false);
   });
 
-  it("surfaces and retries a runtime config refresh failure", async () => {
+  it("keeps a committed enable successful when its config refresh fails", async () => {
     const enabledPlugin = createPlugin({ enabled: true, state: "enabled" });
-    const { client } = createClient(async (method) => {
+    const { client, request } = createClient(async (method) => {
       if (method === "plugins.setEnabled") {
         return { ok: true, plugin: enabledPlugin, restartRequired: false };
       }
@@ -431,13 +636,8 @@ describe("PluginsPage", () => {
       configFormDirty: false,
       lastError: null,
     };
-    let refreshCalls = 0;
     const refreshConfig = vi.fn(async () => {
-      refreshCalls += 1;
-      if (refreshCalls === 1) {
-        throw new Error("config.get failed");
-      }
-      runtimeConfigState.lastError = null;
+      throw new Error("config.get failed after plugin commit");
     });
     const { page } = await mountPage(
       createContext(harness.gateway, refreshConfig, runtimeConfigState),
@@ -446,14 +646,15 @@ describe("PluginsPage", () => {
 
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
     await waitForFast(() =>
-      expect(page.querySelector(".plugins-page-error")?.textContent).toContain(
-        "Could not refresh Control UI configuration: config.get failed",
+      expect(page.querySelector('[role="status"]')?.textContent).toContain(
+        "config.get failed after plugin commit",
       ),
     );
-
-    page.querySelector<HTMLButtonElement>(".plugins-page-error button")?.click();
-    await waitForFast(() => expect(page.querySelector(".plugins-page-error")).toBeNull());
-    expect(refreshConfig).toHaveBeenCalledTimes(2);
+    expect(page.result?.plugins[0]?.enabled).toBe(true);
+    expect(request.mock.calls.filter(([method]) => method === "plugins.setEnabled")).toHaveLength(
+      1,
+    );
+    expect(refreshConfig).toHaveBeenCalledOnce();
   });
 
   it("does not let an old mutation clear replacement-source busy state", async () => {

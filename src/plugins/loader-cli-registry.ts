@@ -17,7 +17,7 @@ import {
   createPluginModuleLoader,
   formatBundledChannelWrongLoaderError,
   resolvePluginModuleExport,
-  runPluginRegisterSync,
+  runPluginRegisterSyncInRegistry,
 } from "./loader-module-runtime.js";
 import {
   formatAutoEnabledActivationReason,
@@ -39,7 +39,6 @@ import {
 import type { PluginLoadOptions } from "./loader-types.js";
 import { withProfile } from "./plugin-load-profile.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
-import { createPluginRegistrationTransaction } from "./plugin-registration-transaction.js";
 import { createPluginIdScopeSet } from "./plugin-scope.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -63,7 +62,7 @@ export async function loadOpenClawPluginCliRegistry(
     devSourceRoot: context.devSourceRoot,
     pluginSdkResolution: options.pluginSdkResolution,
   });
-  const { registry, registerCli } = createPluginRegistry({
+  const { registry, registerCli, rollbackPluginGlobalSideEffects } = createPluginRegistry({
     logger,
     runtime: {} as PluginRuntime,
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
@@ -330,16 +329,14 @@ export async function loadOpenClawPluginCliRegistry(
         registerCli: (registrar, opts) => registerCli(record, registrar, opts),
       },
     });
-    const transaction = createPluginRegistrationTransaction({ registry, activeRecord: record });
     try {
       withProfile({ pluginId: record.id, source: record.source }, "cli-metadata:register", () =>
-        runPluginRegisterSync(register, api),
+        runPluginRegisterSyncInRegistry(register, api, registry, record.id),
       );
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
-      transaction.commit({ activate: true });
     } catch (error) {
-      transaction.rollback();
+      rollbackPluginGlobalSideEffects(record.id, record);
       recordPluginError({
         logger,
         registry,

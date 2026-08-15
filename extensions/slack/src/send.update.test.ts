@@ -2,6 +2,7 @@
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
 import { countSlackTextUtf8Bytes } from "./truncate.js";
 
@@ -87,5 +88,24 @@ describe("updateMessageSlack", () => {
     const sentText = (payload as { text?: string }).text ?? "";
     expect(sentText).toBe(`${"x".repeat(3_997)}…`);
     expect(countSlackTextUtf8Bytes(sentText)).toBe(SLACK_EDIT_TEXT_MAX_BYTES);
+  });
+
+  it("uses a workspace-scoped client for an Enterprise finalization update", async () => {
+    const client = createUpdateClient();
+    getSlackWriteClientMock.mockReturnValue(client);
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      await updateMessageSlack({
+        cfg: SLACK_TEST_CFG,
+        channelId: "C123",
+        teamId: "T123",
+        messageTs: "171234.567",
+        text: "done",
+        blocks: statusBlocks,
+      });
+      expect(getSlackWriteClientMock).toHaveBeenCalledWith("xoxb-test", { teamId: "T123" });
+    } finally {
+      installationState.release();
+    }
   });
 });

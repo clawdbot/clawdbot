@@ -191,7 +191,7 @@ export const imessageCompletionNote = {
   ],
 };
 
-export const imessageSetupAdapter: ChannelSetupAdapter = {
+const imessageSetupAdapter: ChannelSetupAdapter = {
   ...createPatchedAccountSetupAdapter({
     channelKey: channel,
     buildPatch: (input) => buildIMessageSetupPatch(input as IMessageSetupInput),

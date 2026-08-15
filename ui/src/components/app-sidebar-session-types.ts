@@ -1,8 +1,9 @@
+import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { SessionVisibility } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionCreatedActor } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-icon.js";
+import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
@@ -18,6 +19,7 @@ import {
 } from "../lib/sessions/grouping.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
+import type { CloudWorkerStopAction } from "./cloud-worker-stop.ts";
 import type { SessionPlacementState } from "./session-row-badges.ts";
 
 export type SidebarSessionAttention =
@@ -53,18 +55,20 @@ export function sidebarSessionAttentionPriority(attention: SidebarSessionAttenti
 
 export type SidebarRecentSession = {
   key: string;
+  sessionId?: string;
   displayName?: string;
   incognito?: boolean;
   createdActor?: SessionCreatedActor;
   archivedBy?: SessionCreatedActor;
   label: string;
-  meta: string;
   /** Compact repo/branch/node line for work sessions. */
   subtitle?: string;
   href: string;
   active: boolean;
   visuallyActive: boolean;
   hasActiveRun: boolean;
+  /** Raw Gateway liveness used for operations even when display status is terminal. */
+  gatewayHasActiveRun?: boolean;
   activeRunIds?: readonly string[];
   modelSelectionLocked: boolean;
   kind?: string;
@@ -72,8 +76,8 @@ export type SidebarRecentSession = {
   archived?: boolean;
   visibility?: SessionVisibility;
   draftOwnedBySelf?: boolean;
-  icon?: string;
   category?: string;
+  icon?: string;
   boardFace?: BoardFace;
   channel?: string;
   channelSession?: boolean;
@@ -82,12 +86,15 @@ export type SidebarRecentSession = {
   acpSession?: boolean;
   worktreeId?: string;
   placementState?: SessionPlacementState;
+  diskSpaceStatus?: SessionPlacementDiskSpace["status"];
   workspaceConflictCount?: number;
-  cloudWorkerActive: boolean;
+  cloudWorkerStopAction: CloudWorkerStopAction | null;
   hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
   outboxCount?: number;
+  hasComposerDraft?: boolean;
   unread: boolean;
+  lastMessagePreview?: string;
   lastReadAt?: number;
   attention: SidebarSessionAttention;
   agentStatusNote?: string;
@@ -96,6 +103,7 @@ export type SidebarRecentSession = {
     "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   >;
   spawnedBy?: string;
+  forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
   status?: SessionRunStatus;
   startedAt?: number;
   updatedAt?: number | null;
@@ -128,7 +136,6 @@ export function rowDemandsVisibility(
       : row.visuallyActive ||
         row.containsActiveDescendant ||
         row.hasActiveRun ||
-        row.status === "running" ||
         row.runningChildCount > 0 ||
         row.attention.kind !== "none";
 }
@@ -145,7 +152,7 @@ export type SidebarSessionGroupMenuState = {
   y: number;
 };
 
-export type SidebarSessionSortMode = "created" | "updated";
+export type SidebarSessionSortMode = "created" | "updated" | "people";
 export type SidebarSessionStatusFilter = "active" | "archived" | "all";
 export type SidebarSessionsScrollState = "none" | "top" | "middle" | "bottom";
 
@@ -185,8 +192,8 @@ export type SidebarSessionPatch = {
   pinned?: boolean;
   unread?: boolean;
   label?: string | null;
-  category?: string | null;
   icon?: string | null;
+  category?: string | null;
 };
 
 export const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;
@@ -197,12 +204,20 @@ export function sidebarSessionMetaId(key: string): string {
   return `sidebar-session-meta-${encodeURIComponent(key)}`;
 }
 
+export function sidebarSessionStateId(key: string): string {
+  return `sidebar-session-state-${encodeURIComponent(key)}`;
+}
+
 const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
 const SIDEBAR_SESSION_CATALOG_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:catalog-grouping";
 const SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY = "openclaw:sidebar:sessions:show-cron";
+const SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY = "openclaw:sidebar:sessions:show-system";
 const SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY = "openclaw:sidebar:sessions:status-filter";
 const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
   "openclaw:sidebar:sessions:collapsed-sections";
+const SIDEBAR_HIDDEN_SESSION_CATALOGS_STORAGE_KEY = "openclaw:sidebar:sessions:hidden-catalogs";
+export const SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT =
+  "openclaw:sidebar-hidden-catalogs-changed";
 
 export function limitSidebarSessionRows(rows: SidebarRecentSession[], limit: number) {
   const requiredCount = rows.filter((row) => row.active || row.pinned).length;
@@ -237,6 +252,10 @@ export function loadStoredSidebarSessionsShowCron(): boolean {
   return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY) === "true";
 }
 
+export function loadStoredSidebarSessionsShowSystem(): boolean {
+  return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY) === "true";
+}
+
 export function loadStoredSidebarSessionStatusFilter(): SidebarSessionStatusFilter {
   const stored = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY);
   return stored === "archived" || stored === "all" ? stored : "active";
@@ -261,6 +280,21 @@ export function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
   }
 }
 
+export function loadStoredHiddenSessionCatalogIds(): ReadonlySet<string> {
+  try {
+    const parsed: unknown = JSON.parse(
+      getSafeLocalStorage()?.getItem(SIDEBAR_HIDDEN_SESSION_CATALOGS_STORAGE_KEY) ?? "[]",
+    );
+    return new Set(
+      Array.isArray(parsed)
+        ? parsed.flatMap((value) => (typeof value === "string" && value ? [value] : []))
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 export function storeSidebarSessionsGrouping(grouping: SidebarSessionsGrouping) {
   getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_GROUPING_STORAGE_KEY, grouping);
 }
@@ -271,6 +305,10 @@ export function storeSidebarCatalogGrouping(value: CatalogProjectGrouping) {
 
 export function storeSidebarSessionsShowCron(show: boolean) {
   getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY, String(show));
+}
+
+export function storeSidebarSessionsShowSystem(show: boolean) {
+  getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY, String(show));
 }
 
 export function storeSidebarSessionStatusFilter(value: SidebarSessionStatusFilter) {
@@ -284,12 +322,35 @@ export function storeCollapsedSessionSections(sections: ReadonlySet<string>) {
   );
 }
 
+function storeHiddenSessionCatalogIds(ids: ReadonlySet<string>) {
+  getSafeLocalStorage()?.setItem(
+    SIDEBAR_HIDDEN_SESSION_CATALOGS_STORAGE_KEY,
+    JSON.stringify([...ids]),
+  );
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT));
+  }
+}
+
+/** Single owner for hide/show of one section: sidebar menu, undo, and Settings all
+ * land here, so no caller re-derives the set from its own possibly stale copy. */
+export function setStoredSessionCatalogHidden(catalogId: string, hidden: boolean) {
+  const next = new Set(loadStoredHiddenSessionCatalogIds());
+  if (hidden) {
+    next.add(catalogId);
+  } else {
+    next.delete(catalogId);
+  }
+  storeHiddenSessionCatalogIds(next);
+}
+
 export const SIDEBAR_SESSION_SORT_OPTIONS = [
   { mode: "created", labelKey: "chat.sidebar.sortCreated" },
   { mode: "updated", labelKey: "chat.sidebar.sortUpdated" },
+  { mode: "people", labelKey: "sessionsView.people" },
 ] as const satisfies ReadonlyArray<{
   mode: SidebarSessionSortMode;
-  labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated";
+  labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated" | "sessionsView.people";
 }>;
 
 export const SIDEBAR_SESSION_STATUS_OPTIONS = [

@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 struct ChatMediaAudioAttachment: View {
     private enum LoadState {
         case loading
+        case preparing
         case loaded(ChatMediaAudioPlayer)
         case unavailable
     }
@@ -15,6 +16,7 @@ struct ChatMediaAudioAttachment: View {
     let artifactId: String
     let label: String
     let durationSeconds: Double?
+    let playback: OpenClawChatPlaybackMode?
     let resolverReady: Bool
     let playbackAllowed: @MainActor @Sendable () -> Bool
     let load: @MainActor @Sendable (String) async throws -> OpenClawChatLoadedMedia?
@@ -27,6 +29,8 @@ struct ChatMediaAudioAttachment: View {
             switch self.state {
             case .loading:
                 self.loadingRow
+            case .preparing:
+                self.preparingRow
             case let .loaded(player):
                 self.playerRow(player)
             case .unavailable:
@@ -47,6 +51,23 @@ struct ChatMediaAudioAttachment: View {
         HStack(spacing: 8) {
             ProgressView()
             Text(String(localized: "Loading audio…"))
+                .font(OpenClawChatTypography.footnote)
+                .foregroundStyle(.secondary)
+            Spacer()
+            if let durationSeconds {
+                Text(openClawVoiceNoteDurationLabel(durationSeconds))
+                    .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(minHeight: 52)
+        .padding(.horizontal, 10)
+    }
+
+    private var preparingRow: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+            Text(String(localized: "Preparing playback…"))
                 .font(OpenClawChatTypography.footnote)
                 .foregroundStyle(.secondary)
             Spacer()
@@ -148,7 +169,10 @@ struct ChatMediaAudioAttachment: View {
         }
         self.state = .loading
         do {
-            guard let loaded = try await self.load(self.artifactId), !Task.isCancelled else {
+            let loaded = try await ChatMediaPlaybackLoader.load(
+                request: { try await self.load(self.artifactId) },
+                onPreparing: { self.state = .preparing })
+            guard let loaded, !Task.isCancelled else {
                 if !Task.isCancelled { self.state = .unavailable }
                 return
             }
@@ -160,6 +184,7 @@ struct ChatMediaAudioAttachment: View {
             }
             self.state = try .loaded(ChatMediaAudioPlayer(
                 media: media,
+                title: self.label,
                 fallbackDuration: self.durationSeconds,
                 playbackAllowed: self.playbackAllowed))
         } catch is CancellationError {
@@ -173,7 +198,7 @@ struct ChatMediaAudioAttachment: View {
 
 @MainActor
 @Observable
-final class ChatMediaAudioPlayer: NSObject, ChatMediaPlaybackOwner {
+final class ChatMediaAudioPlayer: NSObject, ChatMediaNowPlayingOwner {
     private(set) var isPlaying = false
     private(set) var isPlaybackBlocked = false
     private(set) var isUnavailable = false
@@ -181,12 +206,14 @@ final class ChatMediaAudioPlayer: NSObject, ChatMediaPlaybackOwner {
     let duration: TimeInterval
 
     @ObservationIgnored private let player: AVAudioPlayer
+    @ObservationIgnored private let title: String
     @ObservationIgnored private let playbackAllowed: @MainActor @Sendable () -> Bool
     @ObservationIgnored private var progressTask: Task<Void, Never>?
     @ObservationIgnored private var ownsAudioSession = false
 
     init(
         media: OpenClawChatMediaData,
+        title: String,
         fallbackDuration: TimeInterval?,
         playbackAllowed: @escaping @MainActor @Sendable () -> Bool) throws
     {
@@ -195,6 +222,7 @@ final class ChatMediaAudioPlayer: NSObject, ChatMediaPlaybackOwner {
         self.duration = self.player.duration.isFinite && self.player.duration > 0
             ? self.player.duration
             : max(0, fallbackDuration ?? 0)
+        self.title = title
         self.playbackAllowed = playbackAllowed
         super.init()
         self.player.delegate = self
@@ -214,6 +242,7 @@ final class ChatMediaAudioPlayer: NSObject, ChatMediaPlaybackOwner {
         let target = min(max(0, time), max(0, upperBound))
         self.player.currentTime = target
         self.currentTime = target
+        ChatMediaPlaybackCoordinator.shared.updateNowPlaying(self)
     }
 
     func stop() {
@@ -229,6 +258,22 @@ final class ChatMediaAudioPlayer: NSObject, ChatMediaPlaybackOwner {
 
     func stopForMediaPlaybackInterruption() {
         self.pause()
+    }
+
+    var nowPlayingMetadata: ChatMediaNowPlayingMetadata {
+        ChatMediaNowPlayingMetadata(
+            title: self.title,
+            duration: self.duration,
+            elapsed: self.currentTime,
+            playbackRate: self.isPlaying ? 1 : 0)
+    }
+
+    func handleRemoteCommand(_ command: ChatMediaRemoteCommand) {
+        switch command {
+        case .play: self.play()
+        case .pause: self.pause()
+        case .toggle: self.toggle()
+        }
     }
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully _: Bool) {
@@ -264,6 +309,7 @@ final class ChatMediaAudioPlayer: NSObject, ChatMediaPlaybackOwner {
             return
         }
         self.isPlaying = true
+        ChatMediaPlaybackCoordinator.shared.updateNowPlaying(self)
         self.startProgressUpdates()
     }
 
@@ -274,7 +320,7 @@ final class ChatMediaAudioPlayer: NSObject, ChatMediaPlaybackOwner {
         self.currentTime = self.player.currentTime
         self.isPlaying = false
         self.deactivateAudioSession()
-        ChatMediaPlaybackCoordinator.shared.release(self)
+        ChatMediaPlaybackCoordinator.shared.updateNowPlaying(self)
     }
 
     private func rewindIfFinished() {
@@ -303,6 +349,7 @@ final class ChatMediaAudioPlayer: NSObject, ChatMediaPlaybackOwner {
                     return
                 }
                 self.currentTime = self.player.currentTime
+                ChatMediaPlaybackCoordinator.shared.updateNowPlaying(self)
             }
         }
     }

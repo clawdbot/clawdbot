@@ -4,6 +4,7 @@ import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/se
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -11,11 +12,13 @@ import type {
   CronJob,
   CronNextCheckProposal,
   CronRunOutcome,
+  CronRunStatus,
   CronRunTelemetry,
 } from "../types.js";
+import type { CronRunReceiptSettlementDisposition } from "./run-receipts.js";
 import type { CronServiceState } from "./state.js";
 
-export const MAX_TIMER_DELAY_MS = 60_000;
+export const MAX_CRON_TIMER_DELAY_MS = 60_000;
 
 export const HEARTBEAT_SKIP_DISABLED = "disabled";
 
@@ -46,6 +49,8 @@ export type TimedCronRunOutcome = CronRunOutcome &
     isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
     activeJobMarker?: CronActiveJobMarker;
     reservationIdentity?: object;
+    runReceipt?: CronRunReceiptHandle;
+    receiptSettlementDisposition?: CronRunReceiptSettlementDisposition;
     startedAt: number;
     endedAt: number;
     triggerEval?: CronTriggerEvalOutcome;
@@ -58,6 +63,7 @@ export type CronJobRunResult = CronRunOutcome &
   Pick<CronRunTelemetry, "provider"> & {
     deliveryError?: string;
     delivered?: boolean;
+    deliveryAttempted?: boolean;
     startedAt: number;
     endedAt: number;
     nextCheck?: CronNextCheckProposal;
@@ -92,6 +98,10 @@ export type StartupCatchupCandidate = {
 export type StartupDeferredJob = {
   jobId: string;
   delayMs?: number;
+  configRevision: string;
+  nextRunAtMs: number | undefined;
+  lastRunAtMs: number | undefined;
+  lastRunStatus: CronRunStatus | undefined;
 };
 
 export type StartupCatchupPlan = {
@@ -109,6 +119,8 @@ export type ExecuteJobCoreOptions = {
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
+  /** Revalidates the durable run fence after awaited planning and before effects. */
+  assertRunCurrent?: () => void;
   streamBatch?: string;
   // Source definition and logical identity are an inseparable admission claim.
   // The key catches edits; the identity catches disable→re-enable and A→B→A.

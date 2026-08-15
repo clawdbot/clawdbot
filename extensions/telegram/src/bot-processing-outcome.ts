@@ -56,9 +56,21 @@ export class TelegramSpooledReplayProcessingError extends Error {
 export async function runWithTelegramUpdateProcessingFrame<T>(
   fn: () => Promise<T>,
 ): Promise<{ value: T; result?: TelegramMessageProcessingResult }> {
-  const frame: TelegramUpdateProcessingFrame = {};
-  const value = await telegramUpdateProcessingFrames.run(frame, fn);
+  const inheritedFrame = telegramUpdateProcessingFrames.getStore();
+  // Durable ingress owns the outer frame; bot middleware must update that same fact.
+  const frame = inheritedFrame ?? {};
+  const value = inheritedFrame ? await fn() : await telegramUpdateProcessingFrames.run(frame, fn);
   return frame.result ? { value, result: frame.result } : { value };
+}
+
+/** Records a default only when a handler has not already chosen its terminal disposition. */
+export function ensureTelegramMessageProcessingResult(
+  result: TelegramMessageProcessingResult,
+): void {
+  const frame = telegramUpdateProcessingFrames.getStore();
+  if (frame && !frame.result) {
+    frame.result = result;
+  }
 }
 
 export function recordTelegramMessageProcessingResult(
@@ -82,6 +94,9 @@ export function createTelegramSpooledReplayParticipant(
 ): TelegramSpooledReplayDeferredParticipant {
   const abortController = new AbortController();
   const ownerAbortSignal = telegramSpooledReplayFrames.getStore()?.lifecycle?.abortSignal;
+  const abortSignal = ownerAbortSignal
+    ? AbortSignal.any([abortController.signal, ownerAbortSignal])
+    : abortController.signal;
   let settled = false;
   let ownerAbortedWhilePending = ownerAbortSignal?.aborted === true;
   let settlementHeld = false;
@@ -109,7 +124,9 @@ export function createTelegramSpooledReplayParticipant(
   };
   return {
     key,
-    abortSignal: abortController.signal,
+    // Buffered work outlives the ALS frame, so its signal must retain the
+    // claim owner's pre-adoption cancellation boundary.
+    abortSignal,
     task,
     isSettled: () => settled,
     wasOwnerAbortedWhilePending: () => ownerAbortedWhilePending,

@@ -7,7 +7,7 @@ read_when:
   - You want to use Volcengine Speech text-to-speech
 ---
 
-The Volcengine provider gives access to Doubao models and third-party models hosted on Volcano Engine, with separate endpoints for general and coding workloads. The same bundled plugin also registers Volcengine Speech as a TTS provider.
+The Volcengine provider gives access to Doubao models and third-party models hosted on Volcano Engine, with separate endpoints for general and coding workloads. The same official plugin also registers Volcengine Speech as a TTS provider.
 
 | Detail     | Value                                                      |
 | ---------- | ---------------------------------------------------------- |
@@ -19,6 +19,12 @@ The Volcengine provider gives access to Doubao models and third-party models hos
 ## Getting started
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/volcengine-provider
+    openclaw gateway restart
+    ```
+  </Step>
   <Step title="Set the API key">
     Run interactive onboarding:
 
@@ -52,7 +58,7 @@ The Volcengine provider gives access to Doubao models and third-party models hos
 For non-interactive setup (CI, scripting), pass the key directly:
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice volcengine-api-key \
   --volcengine-api-key "$VOLCANO_ENGINE_API_KEY"

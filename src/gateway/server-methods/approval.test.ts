@@ -34,9 +34,19 @@ function getOperatorApproval(params: Parameters<typeof getOperatorApprovalDetail
   const result = getOperatorApprovalDetailed(params);
   return result.outcome === "found" ? result.record : null;
 }
-import { cancelRunBoundExecApprovals } from "./approval-run-cancellation.js";
+import {
+  cancelAgentRuntimeBoundApprovals,
+  cancelUnboundRunApprovals,
+  cancelWorkerTurnClaimBoundApprovals,
+} from "./approval-run-cancellation.js";
 import { createApprovalHandlers } from "./approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+
+const prepareApprovalChannelCustodyMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../approval-channel-custody.js", () => ({
+  prepareApprovalChannelCustody: prepareApprovalChannelCustodyMock,
+}));
 
 const tempDirs: string[] = [];
 type OperatorApprovalDatabase = Pick<OpenClawStateKyselyDatabase, "operator_approvals">;
@@ -313,6 +323,47 @@ describe("unified approval handlers", () => {
     expect(context.getApprovalClientConnIds).toHaveBeenCalledWith(
       expect.objectContaining({ approvalKind: "system-agent" }),
     );
+  });
+
+  it("checks live channel custody before the canonical resolution CAS", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerExec(managers.exec, {
+      id: "channel-custody-cas",
+      request: { turnSourceChannel: "telegram", turnSourceAccountId: "ops" },
+      reviewerDeviceIds: [],
+    });
+    prepareApprovalChannelCustodyMock.mockReturnValue({
+      resolverId: "telegram:ops",
+      authorizes: (request: { request: ExecApprovalRequestPayload }) =>
+        request.request.turnSourceAccountId === "ops",
+    });
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+
+    const response = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: {
+        id: pending.record.id,
+        kind: "exec",
+        decision: "deny",
+        reviewer: { channel: "telegram", accountId: "ops", senderId: "owner" },
+      },
+      client: createClient({ internal: true }),
+    });
+
+    expect(response.result).toMatchObject({
+      applied: true,
+      approval: { status: "denied", decision: "deny" },
+    });
+    expect(getOperatorApproval({ id: pending.record.id, databaseOptions })?.resolver).toEqual({
+      kind: "channel",
+      id: "telegram:ops",
+    });
   });
 
   it("returns mapped terminal history with attribution and a next cursor", async () => {
@@ -654,12 +705,13 @@ describe("unified approval handlers", () => {
       request: { runId: "run-completed", toolCallId: "tool-completed" },
     });
     const context = createContext();
+    const publish = vi.fn();
 
     expect(
-      cancelRunBoundExecApprovals({
+      cancelUnboundRunApprovals({
         runId: "run-active",
         manager: managers.exec,
-        context,
+        publish,
       }),
     ).toBe(1);
 
@@ -673,11 +725,9 @@ describe("unified approval handlers", () => {
       request: { runId: "run-completed" },
     });
     expect(completedRunSnapshot?.resolvedAtMs).toBeUndefined();
-    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-      "exec.approval.resolved",
+    expect(publish).toHaveBeenCalledWith(
       expect.objectContaining({ id: aborted.record.id, decision: "deny" }),
-      new Set(["approval-client"]),
-      { dropIfSlow: true },
+      expect.objectContaining({ id: aborted.record.id }),
     );
 
     const handlers = createApprovalHandlers({
@@ -700,6 +750,107 @@ describe("unified approval handlers", () => {
         reason: "run-aborted",
       },
     });
+  });
+
+  it("cancels only approvals bound to the exact fenced worker claim", async () => {
+    const manager = new ExecApprovalManager({
+      validateAgentRuntimeDelegatedAuthority: () => true,
+    });
+    const claim = {
+      sessionId: "session-worker",
+      claimId: "claim-worker",
+      runId: "run-worker",
+      placementGeneration: 4,
+      owner: { kind: "worker" as const, environmentId: "environment-1", ownerEpoch: 7 },
+    };
+    const bind = (id: string, ownerEpoch: number) => {
+      const record = manager.create({ command: "echo ok", runId: claim.runId }, 60_000, id);
+      record.agentRuntimeDelegatedAuthority = {
+        kind: "worker",
+        operationalRunInstance: { instanceId: `instance-${id}`, runId: claim.runId },
+        lifecycleGeneration: "lifecycle-1",
+        claimId: `run-claim-${id}`,
+        turnClaim: { ...claim, owner: { ...claim.owner, ownerEpoch } },
+      };
+      const decision = manager.register(record, 60_000);
+      return { record, decision };
+    };
+    const fenced = bind("worker-fenced", 7);
+    const successor = bind("worker-successor", 8);
+    const publish = vi.fn();
+
+    expect(cancelWorkerTurnClaimBoundApprovals({ claim, manager, publish })).toBe(1);
+    await expect(fenced.decision).resolves.toBeNull();
+    expect(successor.record.resolvedAtMs).toBeUndefined();
+    expect(publish).toHaveBeenCalledOnce();
+    manager.forceDenyDetailed(
+      successor.record.id,
+      "run-aborted",
+      { kind: "system", id: null },
+      "cancelled",
+    );
+    await expect(successor.decision).resolves.toBeNull();
+  });
+
+  it("cancels exact exec and plugin authority without touching a same-run successor", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const oldAuthority = {
+      kind: "local" as const,
+      operationalRunInstance: { instanceId: "instance-old", runId: "run-reused" },
+      lifecycleGeneration: "generation-1",
+      claimId: "claim-old",
+    };
+    const successorAuthority = {
+      kind: "local" as const,
+      operationalRunInstance: { instanceId: "instance-new", runId: "run-reused" },
+      lifecycleGeneration: "generation-1",
+      claimId: "claim-new",
+    };
+    const oldExec = registerExec(managers.exec, {
+      id: "old-exec-authority",
+      request: { runId: "run-reused" },
+    });
+    const successorExec = registerExec(managers.exec, {
+      id: "successor-exec-authority",
+      request: { runId: "run-reused" },
+    });
+    const oldPlugin = registerPlugin(managers.plugin, {
+      id: "old-plugin-authority",
+      request: { runId: "run-reused" },
+    });
+    const successorPlugin = registerPlugin(managers.plugin, {
+      id: "successor-plugin-authority",
+      request: { runId: "run-reused" },
+    });
+    oldExec.record.agentRuntimeDelegatedAuthority = oldAuthority;
+    oldPlugin.record.agentRuntimeDelegatedAuthority = oldAuthority;
+    successorExec.record.agentRuntimeDelegatedAuthority = successorAuthority;
+    successorPlugin.record.agentRuntimeDelegatedAuthority = successorAuthority;
+
+    expect(
+      cancelAgentRuntimeBoundApprovals({
+        authority: oldAuthority,
+        manager: managers.exec,
+        publish: () => {},
+      }),
+    ).toBe(1);
+    expect(
+      cancelAgentRuntimeBoundApprovals({
+        authority: oldAuthority,
+        manager: managers.plugin,
+        publish: () => {},
+      }),
+    ).toBe(1);
+
+    await expect(oldExec.decision).resolves.toBeNull();
+    await expect(oldPlugin.decision).resolves.toBeNull();
+    expect(managers.exec.getSnapshot(successorExec.record.id)?.resolvedAtMs).toBeUndefined();
+    expect(managers.plugin.getSnapshot(successorPlugin.record.id)?.resolvedAtMs).toBeUndefined();
+    managers.exec.resolve(successorExec.record.id, "deny");
+    managers.plugin.resolve(successorPlugin.record.id, "deny");
+    await successorExec.decision;
+    await successorPlugin.decision;
   });
 
   it("keeps JSON Schema-sized astral plugin text visible", async () => {

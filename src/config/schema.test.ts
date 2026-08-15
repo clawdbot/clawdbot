@@ -2,15 +2,16 @@ import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-ur
 // Covers canonical config schema defaults, validation, and sensitive redaction.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
-import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
+import { buildConfigSchemaCore, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags } from "./schema.tags.js";
 import { applyResolvedConfigTierHints } from "./schema.tiers.js";
+import { validateConfigObjectRaw } from "./validation.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("config schema", () => {
-  type SchemaInput = NonNullable<Parameters<typeof buildConfigSchema>[0]>;
-  let baseSchema: ReturnType<typeof buildConfigSchema>;
+  type SchemaInput = NonNullable<Parameters<typeof buildConfigSchemaCore>[0]>;
+  let baseSchema: ReturnType<typeof buildConfigSchemaCore>;
   let pluginUiHintInput: SchemaInput;
   let tokenHintInput: SchemaInput;
   let mergedSchemaInput: SchemaInput;
@@ -18,7 +19,7 @@ describe("config schema", () => {
   let cachedMergeInput: SchemaInput;
 
   beforeAll(() => {
-    baseSchema = buildConfigSchema();
+    baseSchema = buildConfigSchemaCore();
     pluginUiHintInput = {
       plugins: [
         {
@@ -167,19 +168,6 @@ describe("config schema", () => {
     expect(res.generatedAt.trim().length).toBeGreaterThan(0);
   });
 
-  it("accepts qmd query rerank override", () => {
-    const result = OpenClawSchema.safeParse({
-      memory: {
-        backend: "qmd",
-        qmd: {
-          searchMode: "query",
-          rerank: false,
-        },
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
   it("rejects retired status reaction emoji overrides", () => {
     const result = OpenClawSchema.safeParse({
       messages: {
@@ -255,6 +243,55 @@ describe("config schema", () => {
           nodeHost: { mcp: { servers: { [serverName]: { command: "server" } } } },
         }),
       ).toThrow(/MCP server name must be non-empty and must not have surrounding whitespace/);
+    }
+  });
+
+  it("rejects the reserved __proto__ MCP server name without tightening other names", () => {
+    for (const raw of [
+      '{"mcp":{"servers":{"__proto__":{"command":"server"}}}}',
+      '{"nodeHost":{"mcp":{"servers":{"__proto__":{"command":"server"}}}}}',
+    ]) {
+      const result = OpenClawSchema.safeParse(JSON.parse(raw));
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toContainEqual(
+          expect.objectContaining({
+            message: 'MCP server name "__proto__" is reserved; rename the server',
+          }),
+        );
+      }
+    }
+
+    for (const serverName of ["docs", "_internal"]) {
+      expect(
+        OpenClawSchema.safeParse({
+          mcp: { servers: { [serverName]: { command: "server" } } },
+          nodeHost: { mcp: { servers: { [serverName]: { command: "server" } } } },
+        }).success,
+      ).toBe(true);
+    }
+  });
+
+  it("rejects reserved MCP server names from the pre-normalization config", () => {
+    const sourceRaw = JSON.parse('{"mcp":{"servers":{"__proto__":{"command":"server"}}}}');
+    const result = validateConfigObjectRaw({ mcp: { servers: {} } }, { sourceRaw });
+
+    expect(result).toEqual({
+      ok: false,
+      issues: [
+        expect.objectContaining({
+          path: "mcp.servers.__proto__",
+          message: 'MCP server name "__proto__" is reserved; rename the server',
+        }),
+      ],
+    });
+
+    const directResult = validateConfigObjectRaw(sourceRaw);
+    expect(directResult.ok).toBe(false);
+    if (!directResult.ok) {
+      expect(
+        directResult.issues.filter((issue) => issue.path === "mcp.servers.__proto__"),
+      ).toHaveLength(1);
     }
   });
 
@@ -373,6 +410,127 @@ describe("config schema", () => {
     ).toThrow();
   });
 
+  it("validates MCP OAuth credential identity", () => {
+    for (const identity of ["shared", "per-requester"] as const) {
+      expect(
+        OpenClawSchema.safeParse({
+          mcp: {
+            servers: {
+              docs: {
+                url: "https://mcp.example.com/mcp",
+                auth: "oauth",
+                oauth: { identity },
+              },
+            },
+          },
+        }).success,
+      ).toBe(true);
+    }
+
+    const missingAuth = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          docs: {
+            url: "https://mcp.example.com/mcp",
+            oauth: { identity: "per-requester" },
+          },
+        },
+      },
+    });
+    expect(missingAuth.success).toBe(false);
+    if (missingAuth.success) {
+      throw new Error("Expected per-requester OAuth without auth mode to fail validation");
+    }
+    expect(missingAuth.error.issues).toContainEqual(
+      expect.objectContaining({
+        message: 'oauth.identity "per-requester" requires auth: "oauth"',
+        path: ["mcp", "servers", "docs", "oauth", "identity"],
+      }),
+    );
+
+    expect(
+      OpenClawSchema.safeParse({
+        mcp: {
+          servers: {
+            docs: {
+              url: "https://mcp.example.com/mcp",
+              auth: "oauth",
+              oauth: { identity: "per-requester", authProfileId: "docs:mcp" },
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      OpenClawSchema.safeParse({
+        mcp: {
+          servers: {
+            docs: {
+              command: "docs-mcp",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
+    // URL plus command resolves stdio and would strand the server silently.
+    expect(
+      OpenClawSchema.safeParse({
+        mcp: {
+          servers: {
+            docs: {
+              url: "https://mcp.example.com/mcp",
+              command: "docs-mcp",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      OpenClawSchema.safeParse({
+        mcp: {
+          servers: {
+            docs: {
+              url: "https://mcp.example.com/mcp",
+              transport: "stdio",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires a bare HTTPS Gateway public origin except on loopback", () => {
+    for (const publicOrigin of [
+      "https://gateway.example.com",
+      "https://gateway.example.com:443",
+      "http://localhost:80",
+      "http://localhost:18789/",
+      "http://127.0.0.1:18789",
+      "http://[::1]:18789",
+    ]) {
+      expect(OpenClawSchema.safeParse({ gateway: { publicOrigin } }).success).toBe(true);
+    }
+    // Built via URL so no credential-shaped literal lands in source (secret scanners).
+    const userinfoOrigin = new URL("https://gateway.example.com");
+    userinfoOrigin.username = "operator";
+    for (const publicOrigin of [
+      "https://gateway.example.com/path",
+      "https://gateway.example.com?query=1",
+      "https://gateway.example.com/#fragment",
+      "http://gateway.example.com",
+      userinfoOrigin.href,
+      "data:text/html,hello",
+    ]) {
+      expect(OpenClawSchema.safeParse({ gateway: { publicOrigin } }).success).toBe(false);
+    }
+  });
+
   it("accepts stdio transport for command-bearing MCP servers", () => {
     const result = OpenClawSchema.safeParse({
       mcp: {
@@ -434,7 +592,7 @@ describe("config schema", () => {
   });
 
   it("merges plugin ui hints", () => {
-    const res = buildConfigSchema(pluginUiHintInput);
+    const res = buildConfigSchemaCore(pluginUiHintInput);
 
     expect(res.uiHints["plugins.entries.voice-call"]?.label).toBe("Voice Call");
     expect(res.uiHints["plugins.entries.voice-call.config"]?.label).toBe("Voice Call Config");
@@ -445,13 +603,13 @@ describe("config schema", () => {
   });
 
   it("does not re-mark existing non-sensitive token-like fields", () => {
-    const res = buildConfigSchema(tokenHintInput);
+    const res = buildConfigSchemaCore(tokenHintInput);
 
     expect(res.uiHints["plugins.entries.voice-call.config.tokens"]?.sensitive).toBe(false);
   });
 
   it("merges plugin + channel schemas", () => {
-    const res = buildConfigSchema(mergedSchemaInput);
+    const res = buildConfigSchemaCore(mergedSchemaInput);
 
     const schema = res.schema as {
       properties?: Record<string, unknown>;
@@ -507,7 +665,7 @@ describe("config schema", () => {
   });
 
   it("omits a single oversized plugin schema from the full schema response", () => {
-    const res = buildConfigSchema({
+    const res = buildConfigSchemaCore({
       cache: false,
       plugins: [
         {
@@ -535,7 +693,7 @@ describe("config schema", () => {
   });
 
   it("omits later plugin schemas after the aggregate extension schema budget is exhausted", () => {
-    const res = buildConfigSchema({
+    const res = buildConfigSchemaCore({
       cache: false,
       plugins: Array.from({ length: 40 }, (_, index) => ({
         id: `plugin-${index}`,
@@ -560,7 +718,7 @@ describe("config schema", () => {
   });
 
   it("looks up plugin config paths for slash-delimited plugin ids", () => {
-    const res = buildConfigSchema({
+    const res = buildConfigSchemaCore({
       plugins: [
         {
           id: "pack/one",
@@ -585,20 +743,22 @@ describe("config schema", () => {
   });
 
   it("adds heartbeat target hints with dynamic channels", () => {
-    const res = buildConfigSchema(heartbeatChannelInput);
+    const res = buildConfigSchemaCore(heartbeatChannelInput);
 
     const defaultsHint = res.uiHints["agents.defaults.heartbeat.target"];
     const entryHint = res.uiHints["agents.entries.*.heartbeat.target"];
     expect(defaultsHint?.help).toContain("imessage");
+    expect(defaultsHint?.help).toContain("owner");
     expect(defaultsHint?.help).toContain("last");
+    expect(defaultsHint?.placeholder).toBe("owner");
     expect(entryHint?.help).toContain("imessage");
   });
 
   it("caches merged schemas for identical plugin/channel metadata", () => {
-    const first = buildConfigSchema(cachedMergeInput);
+    const first = buildConfigSchemaCore(cachedMergeInput);
     const plugin = expectDefined(cachedMergeInput.plugins?.[0], "cached plugin metadata");
     const channel = expectDefined(cachedMergeInput.channels?.[0], "cached channel metadata");
-    const second = buildConfigSchema({
+    const second = buildConfigSchemaCore({
       plugins: [{ ...plugin }],
       channels: [{ ...channel }],
     });
@@ -651,6 +811,44 @@ describe("config schema", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it("accepts plain web fetch header strings but rejects non-string and SecretRef values", () => {
+    const parsed = ToolsSchema.parse({
+      web: {
+        fetch: {
+          headers: {
+            "X-Routing-Target": "staging",
+            "X-Presence-Flag": "",
+          },
+        },
+      },
+    });
+
+    expect(parsed?.web?.fetch?.headers).toEqual({
+      "X-Routing-Target": "staging",
+      "X-Presence-Flag": "",
+    });
+    expect(
+      ToolsSchema.safeParse({
+        web: { fetch: { headers: { "X-Routing-Target": 42 } } },
+      }).success,
+    ).toBe(false);
+    expect(
+      ToolsSchema.safeParse({
+        web: {
+          fetch: {
+            headers: {
+              "X-Routing-Target": {
+                source: "env",
+                provider: "default",
+                id: "WEB_FETCH_ROUTING_TARGET",
+              },
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("keeps top-level subagent tools schema limited to tool policy", () => {
@@ -947,6 +1145,8 @@ describe("config schema", () => {
       web: {
         fetch: {
           ssrfPolicy: {
+            dangerouslyAllowPrivateNetwork: true,
+            allowedHostnames: ["127.0.0.1"],
             allowRfc2544BenchmarkRange: true,
             allowIpv6UniqueLocalRange: true,
           },
@@ -955,6 +1155,8 @@ describe("config schema", () => {
     });
 
     expect(parsed?.web?.fetch?.ssrfPolicy).toEqual({
+      dangerouslyAllowPrivateNetwork: true,
+      allowedHostnames: ["127.0.0.1"],
       allowRfc2544BenchmarkRange: true,
       allowIpv6UniqueLocalRange: true,
     });

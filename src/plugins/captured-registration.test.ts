@@ -1,5 +1,5 @@
 // Covers captured plugin registration behavior in test registries.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { capturePluginRegistration } from "./captured-registration.js";
 import type { AnyAgentTool, OpenClawPluginApi } from "./types.js";
 
@@ -155,6 +155,34 @@ describe("captured plugin registration", () => {
     expect(captured.agentToolResultMiddlewares).toHaveLength(1);
     expect(captured.agentToolResultMiddlewares[0]?.runtimes).toEqual(["codex"]);
     expect(captured.api.registerMemoryEmbeddingProvider).toBeTypeOf("function");
+  });
+
+  it("enforces captured middleware runtime and tool scopes", async () => {
+    const handler = vi.fn(() => undefined);
+    const captured = capturePluginRegistration({
+      register(api) {
+        api.registerAgentToolResultMiddleware(handler, {
+          runtimes: ["codex"],
+          matcher: ["exec"],
+        });
+      },
+    });
+    const registration = captured.agentToolResultMiddlewares[0];
+    expect(registration).toBeDefined();
+    if (!registration) {
+      return;
+    }
+    const event = {
+      toolCallId: "call-1",
+      args: {},
+      result: { content: [{ type: "text" as const, text: "ok" }], details: {} },
+    };
+
+    await registration.handler({ ...event, toolName: "web_search" }, { runtime: "codex" });
+    await registration.handler({ ...event, toolName: "exec" }, { runtime: "openclaw" });
+    await registration.handler({ ...event, toolName: "exec" }, { runtime: "codex" });
+
+    expect(handler).toHaveBeenCalledOnce();
   });
 
   it("returns synthetic scheduled-turn ids independent of human-readable names", async () => {

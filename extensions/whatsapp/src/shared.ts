@@ -106,8 +106,7 @@ function createWhatsAppSetupWizardProxy(
 export function createWhatsAppPluginBase(params: {
   groups: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["groups"]>;
   setupWizard: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupWizard"]>;
-  setup: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setup"]>;
-  setupContract?: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupContract"]>;
+  setupContract: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupContract"]>;
   isConfigured: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["config"]>["isConfigured"];
   isLinked: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["config"]>["isLinked"];
 }) {
@@ -213,8 +212,7 @@ export function createWhatsAppPluginBase(params: {
       collectWarnings: collectWhatsAppSecurityWarnings,
     },
     doctor: whatsappDoctor,
-    setup: params.setup,
-    ...(params.setupContract ? { setupContract: params.setupContract } : {}),
+    setupContract: params.setupContract,
     groups: params.groups,
   });
   return {
@@ -253,7 +251,7 @@ export function createWhatsAppPluginBase(params: {
     | "secrets"
     | "security"
     | "doctor"
-    | "setup"
+    | "setupContract"
     | "groups"
   >;
 }

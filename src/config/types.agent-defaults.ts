@@ -196,23 +196,15 @@ export type AgentDefaultsConfig = {
    * - once: inject once per unique truncation signature
    * - always: inject on every run with truncation (default)
    */
-  /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
+  /**
+   * Optional IANA timezone for model-visible timestamps, prompt context, system events,
+   * and heartbeat active hours. Defaults to the host timezone.
+   */
   userTimezone?: string;
   /** Runtime-owned first-turn startup context for bare /new and /reset. */
   startupContext?: AgentStartupContextConfig;
   /** Focused context-budget overrides for high-volume injected/read surfaces. */
   contextLimits?: AgentContextLimitsConfig;
-  /** Time format in system prompt: auto (OS preference), 12-hour, or 24-hour. */
-  /**
-   * Envelope timestamp timezone: "utc" (default), "local", "user", or an IANA timezone string.
-   */
-  /**
-   * Include absolute timestamps in message envelopes, direct agent prompt prefixes,
-   * and embedded model-input prefixes ("on" | "off", default: "on").
-   */
-  /**
-   * Include elapsed time in message envelopes ("on" | "off", default: "on").
-   */
   /** Optional context window cap (used for runtime estimates + status %). */
   contextTokens?: number;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
@@ -303,11 +295,11 @@ export type AgentDefaultsConfig = {
     model?: string;
     /** Session key for heartbeat runs ("main" or explicit session key). */
     session?: string;
-    /** Delivery target ("last", "none", or a channel id). */
+    /** Delivery target. Default "owner" uses explicit ownerAllowFrom/allowFrom; "last" may follow groups. */
     target?: string;
     /** Direct/DM delivery policy. Default: "allow". */
     directPolicy?: "allow" | "block";
-    /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). Supports :topic:NNN suffix for Telegram topics. */
+    /** Explicit channel destination; ignored for target "owner" or an unset target. */
     to?: string;
     /** Optional account id for multi-account channels. */
     accountId?: string;
@@ -330,6 +322,14 @@ export type AgentDefaultsConfig = {
   };
   /** Owner for ambient OpenClaw system-agent/Custodian inference. */
   systemAgent?: {
+    agentId?: string;
+  };
+  /** Upgrade-only owner for the inherited credential store until H2-2 relocates credentials. */
+  authInheritance?: {
+    agentId?: string;
+  };
+  /** Upgrade-only owner for retired main-agent rows and legacy fixed session stores. */
+  sessionStore?: {
     agentId?: string;
   };
   /** Max concurrent agent runs across all conversations. Default: min(16, max(8, available CPU parallelism)). */

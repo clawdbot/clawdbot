@@ -1,0 +1,27 @@
+title: Gateway exec approvals
+
+scenario:
+  id: gateway-exec-approvals
+  surface: gateway
+  category: gateway.approvals-and-remote-execution
+  coverage:
+    primary:
+      - gateway.exec-approvals
+  objective: Verify Gateway exec approval policy snapshots and pending approval decisions through authenticated WebSocket clients.
+  successCriteria:
+    - The Gateway returns a redacted persisted approval policy snapshot and its authoritative hash.
+    - A hash-guarded replacement succeeds while a stale replacement is rejected without changing stored policy.
+    - A two-phase exec approval request is accepted and visible through list and lookup RPCs.
+    - A distinct authenticated reviewer resolves a concurrent waitDecision request.
+    - The resolved request leaves the pending approval inventory.
+  docsRefs:
+    - docs/gateway/protocol.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/gateway/server-methods/exec-approvals.ts
+    - src/gateway/server-methods/exec-approval.ts
+    - test/e2e/qa-lab/runtime/gateway-exec-approvals.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/gateway-exec-approvals.e2e.test.ts
+    summary: Run a real Gateway with authenticated requester and reviewer WebSocket clients across snapshot mutation and approval decision APIs.

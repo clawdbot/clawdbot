@@ -11,6 +11,7 @@ import {
   resolveDefaultVitestPool,
 } from "../test/vitest/vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
+import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -18,6 +19,10 @@ const workspaceSourceAliases = [
   {
     find: "@openclaw/gateway-client/browser",
     replacement: path.resolve(repoRoot, "packages/gateway-client/src/browser.ts"),
+  },
+  {
+    find: "@openclaw/gateway-client/scope-upgrade",
+    replacement: path.resolve(repoRoot, "packages/gateway-client/src/scope-upgrade.ts"),
   },
   {
     find: /^@openclaw\/gateway-protocol\/(.+)$/u,
@@ -93,6 +98,10 @@ const nodeDrivenBrowserLayoutTests = [
   "src/pages/chat/chat-responsive.browser.test.ts",
   "src/components/form-controls.browser.test.ts",
   "src/pages/sessions/view.browser.test.ts",
+  "src/styles/cursor-policy.browser.test.ts",
+  "src/styles/chat-file-link-presentation.browser.test.ts",
+  "src/styles/chat-github-link-presentation.browser.test.ts",
+  "src/styles/sr-only.browser.test.ts",
 ] as const;
 const mockRegistryUnitTests = [
   ...uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length)),
@@ -140,6 +149,7 @@ export default defineConfig({
     ...sharedUiTestConfig,
     projects: [
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -159,6 +169,7 @@ export default defineConfig({
         },
       }),
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -175,6 +186,7 @@ export default defineConfig({
         },
       }),
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -188,6 +200,7 @@ export default defineConfig({
         },
       }),
       defineProject({
+        plugins: [controlUiLocaleModulesPlugin()],
         resolve: {
           alias: workspaceSourceAliases,
         },

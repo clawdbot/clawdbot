@@ -2,6 +2,7 @@
 // prompt-data wrappers, and conservative HTML markup.
 import { describe, expect, it } from "vitest";
 import { escapeInternalRuntimeContextDelimiters } from "../../agents/internal-runtime-context.js";
+import { stripInternalRuntimeScaffoldingFromPayload } from "./deliver-payload.js";
 import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 import { sanitizeForPlainText } from "./sanitize-text.js";
 
@@ -90,6 +91,70 @@ describe("sanitizeForPlainText", () => {
     expect(sanitized).not.toContain("<script");
   });
 
+  it("preserves tag-shaped code inside fenced blocks while converting prose tags", () => {
+    const reply = [
+      "Here is the nginx snippet:",
+      "",
+      "```xml",
+      '<server port="8080">',
+      '  <route path="/api"/>',
+      "</server>",
+      "```",
+      "",
+      "Wrap it in <b>bold</b> when quoting.",
+    ].join("\n");
+
+    expect(sanitizeForPlainText(reply, { style: "markdown" })).toBe(
+      [
+        "Here is the nginx snippet:",
+        "",
+        "```xml",
+        '<server port="8080">',
+        '  <route path="/api"/>',
+        "</server>",
+        "```",
+        "",
+        "Wrap it in **bold** when quoting.",
+      ].join("\n"),
+    );
+  });
+
+  it("preserves large control-character runs around code", () => {
+    const reply = `${"\u0000".repeat(40_000)}e\u0000p\n\`\`\`text\nline one\n\n\n<Button>\n\`\`\``;
+
+    expect(sanitizeForPlainText(reply)).toBe(reply);
+  });
+
+  it("preserves generics and JSX inside inline code spans", () => {
+    expect(
+      sanitizeForPlainText("Use `Array<string>` for ids, and render `<Button onClick={save}>`."),
+    ).toBe("Use `Array<string>` for ids, and render `<Button onClick={save}>`.");
+  });
+
+  it("keeps paired HTML formatting that wraps an inline code span", () => {
+    expect(sanitizeForPlainText("<strong>Use `<Button>` now</strong>")).toBe(
+      "*Use `<Button>` now*",
+    );
+    expect(sanitizeForPlainText("<em>render `<Button>` twice</em>", { style: "markdown" })).toBe(
+      "_render `<Button>` twice_",
+    );
+    expect(sanitizeForPlainText("<li>call `Array<string>` first</li>")).toBe(
+      "• call `Array<string>` first\n",
+    );
+  });
+
+  it("preserves tag-shaped code inside indented code blocks", () => {
+    expect(sanitizeForPlainText('Example:\n\n    <div id="root"></div>\n\ndone')).toBe(
+      'Example:\n\n    <div id="root"></div>\n\ndone',
+    );
+  });
+
+  it("keeps stripping tags after an unterminated inline code delimiter", () => {
+    expect(sanitizeForPlainText("prefix ` unterminated <span>text</span>")).toBe(
+      "prefix ` unterminated text",
+    );
+  });
+
   it("strips known internal runtime scaffolding tags including underscore names", () => {
     expect(sanitizeForPlainText("ok <previous_response>null</previous_response> done")).toBe(
       "ok  done",
@@ -134,6 +199,56 @@ describe("sanitizeForPlainText", () => {
 });
 
 describe("stripInternalRuntimeScaffolding", () => {
+  it.each([
+    ["backtick fence", "```json", "```"],
+    ["tilde fence", "~~~json", "~~~"],
+    ["unterminated fence", "```json", ""],
+  ])("preserves plain-text tool-call examples inside a %s", (_name, open, close) => {
+    const example = [open, "[server]", '{"host":"example.test"}', "[/server]", close]
+      .filter(Boolean)
+      .join("\n");
+
+    expect(stripInternalRuntimeScaffolding(example)).toBe(example);
+  });
+
+  it("preserves indented plain-text tool-call examples", () => {
+    const example = ["    [read]", '    {"path":"example.txt"}', "    [/read]"].join("\n");
+
+    expect(stripInternalRuntimeScaffolding(example)).toBe(example);
+  });
+
+  it("still strips unfenced plain-text tool calls", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        ["before", "[read]", '{"path":"secret.txt"}', "[/read]", "after"].join("\n"),
+      ),
+    ).toBe("before\nafter");
+  });
+
+  it("preserves fenced examples across nested outbound payload fields", () => {
+    const example = ["```json", "[read]", '{"path":"example.txt"}', "[/read]", "```"].join("\n");
+    const stripped = stripInternalRuntimeScaffoldingFromPayload({
+      text: example,
+      channelData: {
+        example,
+        leaked: ["[read]", '{"path":"secret.txt"}', "[/read]"].join("\n"),
+      },
+    });
+
+    expect(stripped).toMatchObject({
+      text: example,
+      channelData: { example, leaked: "" },
+    });
+  });
+
+  it("does not let Markdown fences bypass private runtime scaffolding removal", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        ["```xml", "<system-reminder>private runtime data</system-reminder>", "```"].join("\n"),
+      ),
+    ).toBe(["```xml", "", "```"].join("\n"));
+  });
+
   it("removes closed, self-closing, and stray internal runtime tags", () => {
     expect(
       stripInternalRuntimeScaffolding(

@@ -5,26 +5,31 @@ import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
-  claimAgentRunContext,
-  consumeCronNextCheckProposal,
   getAgentEventLifecycleGeneration,
-  getAgentRunContext,
-  releaseAgentRunContext,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import {
+  bindAgentRunTaskRunId,
+  claimAgentRunContext,
+  consumeCronNextCheckProposal,
+  getAgentRunContext,
+  releaseAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { removeCronRunContinuationSessionIfIdle } from "../../tasks/cron-run-continuation-cleanup.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronAbortReasonText } from "../service/execution-errors.js";
+import { getActiveCronTaskRunId } from "../service/task-runs.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
-  CronJob,
+  CronStoredJob,
 } from "../types.js";
 import { finalizeCronRun } from "./run-finalize.js";
 import { prepareCronRunContext } from "./run-prepare.js";
@@ -34,10 +39,6 @@ import type { RunCronAgentTurnResult } from "./run.types.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 
 const cronExecutorRuntimeLoader = createLazyImportLoader(() => import("./run-executor.runtime.js"));
-
-async function loadCronExecutorRuntime() {
-  return await cronExecutorRuntimeLoader.load();
-}
 
 function isCronNestedLaneTaskTimeoutError(err: unknown): boolean {
   return isCommandLaneTaskTimeoutError(err, CommandLane.CronNested);
@@ -79,7 +80,7 @@ async function disposeCronRunContext(params: {
 export async function runCronIsolatedAgentTurn(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
-  job: CronJob;
+  job: CronStoredJob;
   message: string;
   abortSignal?: AbortSignal;
   signal?: AbortSignal;
@@ -200,7 +201,13 @@ export async function runCronIsolatedAgentTurn(params: {
         ownsContext: ownsRunContext,
       },
     );
-    const { executeCronRun } = await loadCronExecutorRuntime();
+    if (runContextOwnerToken) {
+      const taskRunId = getActiveCronTaskRunId();
+      if (taskRunId) {
+        bindAgentRunTaskRunId(initialSessionId, runContextOwnerToken, taskRunId);
+      }
+    }
+    const { executeCronRun } = await cronExecutorRuntimeLoader.load();
     const executionParams: Parameters<typeof executeCronRun>[0] = {
       cfg: params.cfg,
       cfgWithAgentDefaults: prepared.context.cfgWithAgentDefaults,
@@ -221,7 +228,6 @@ export async function runCronIsolatedAgentTurn(params: {
       resolvedDeliveryOk: prepared.context.resolvedDelivery.ok,
       deliveryRequested: prepared.context.deliveryRequested,
       sourceDelivery: prepared.context.sourceDelivery,
-      messageToolPromptEnabled: prepared.context.messageToolPromptEnabled,
       skillsSnapshot: prepared.context.skillsSnapshot,
       agentPayload: prepared.context.agentPayload,
       useSubagentFallbacks: prepared.context.useSubagentFallbacks,
@@ -242,15 +248,19 @@ export async function runCronIsolatedAgentTurn(params: {
       onLaneWait: params.onLaneWait,
       abortReason,
       isAborted,
-      thinkLevel: prepared.context.thinkLevel,
-      thinkingCatalog: prepared.context.thinkingCatalog,
+      immutableThinkLevel: prepared.context.thinkingSelection.immutableThinkLevel,
+      thinkingCatalog: prepared.context.thinkingSelection.catalog,
+      loadThinkingCatalog: prepared.context.thinkingSelection.loadThinkingCatalog,
       timeoutMs: prepared.context.timeoutMs,
       runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
+      pluginRegistry: prepared.context.pluginRegistry,
     };
     const execution = await prepared.context.sessionWorkAdmission.run(() =>
       withAgentRunLifecycleGeneration(runLifecycleGeneration, () =>
-        executeCronRun(executionParams),
+        withPluginRuntimeRegistryScope(prepared.context.pluginRegistry, () =>
+          executeCronRun(executionParams),
+        ),
       ),
     );
     const finalized = await finalizeCronRun({

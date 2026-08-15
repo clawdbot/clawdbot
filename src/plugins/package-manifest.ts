@@ -55,6 +55,8 @@ export type PluginPackageChannel = {
 
 export type PluginPackageChannelDoctorCapabilities = {
   dmAllowFromMode?: "topOnly" | "topOrNested" | "nestedOnly";
+  /** Whether dmPolicy="open" requires an explicit "*" in allowFrom. Defaults to true. */
+  openDmRequiresAllowFromWildcard?: boolean;
   groupModel?: "sender" | "route" | "hybrid";
   groupAllowFromFallbackToAllowFrom?: boolean;
   warnOnEmptyGroupSenderAllowlist?: boolean;
@@ -79,16 +81,12 @@ export type PluginPackageInstall = {
   requiredPlatformPackages?: string[];
 };
 
-type OpenClawPackageStartup = {
-  /**
-   * Opt-in for channel plugins whose `setupEntry` fully covers the gateway
-   * startup surface needed before the server starts listening.
-   */
-  deferConfiguredChannelFullLoadUntilAfterListen?: boolean;
-};
-
 type OpenClawPackageSetupFeatures = {
   configPromotion?: boolean;
+  /**
+   * @deprecated Declare doctorContract.stateMigrations in openclaw.plugin.json instead.
+   * Removal plan: remove the setup-entry adapter after the 2027.1 external-plugin migration window.
+   */
   legacyStateMigrations?: boolean;
   legacySessionSurfaces?: boolean;
 };
@@ -117,7 +115,6 @@ export type OpenClawPackageManifest = {
   channel?: PluginPackageChannel;
   compat?: OpenClawPackageCompat;
   install?: PluginPackageInstall;
-  startup?: OpenClawPackageStartup;
   build?: OpenClawPackageBuild;
 };
 

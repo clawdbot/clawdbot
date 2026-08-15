@@ -132,8 +132,6 @@ export function createWhatsAppIngressMonitor(params: {
     deliver: (admission, lifecycle) => params.dispatch(admission, lifecycle),
     pollIntervalMs: params.pollIntervalMs,
     retention: {
-      pendingTtlMs: 30 * 24 * 60 * 60 * 1_000,
-      pendingMaxEntries: 450,
       completedTtlMs: 7 * 24 * 60 * 60 * 1_000,
       completedMaxEntries: 5_000,
       failedMaxEntries: 450,

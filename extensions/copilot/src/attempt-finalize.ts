@@ -18,6 +18,7 @@ export async function completeCopilotAttempt(params: {
   aborted: boolean;
   attemptStartedAt: number;
   bridge: ReturnType<typeof attachEventBridge> | undefined;
+  codeModeEngaged: boolean | undefined;
   downgradedFromResume: boolean;
   externalAbort: boolean;
   hookContext: CopilotAgentEndHookParams["ctx"];
@@ -49,6 +50,7 @@ export async function completeCopilotAttempt(params: {
     aborted,
     attemptStartedAt,
     bridge,
+    codeModeEngaged,
     downgradedFromResume,
     externalAbort,
     hookContext,
@@ -93,6 +95,7 @@ export async function completeCopilotAttempt(params: {
   const result = createResult(input, {
     aborted,
     assistantTexts,
+    codeModeEngaged,
     currentAttemptAssistant: lastAssistant,
     currentAttemptCompletedAssistant: settledFinalizationAssistantCompleted
       ? lastAssistant
@@ -118,6 +121,7 @@ export async function completeCopilotAttempt(params: {
     messagesSnapshot,
     assistantTranscriptOwned: transcript?.assistantTranscriptOwned,
     assistantTranscriptIdempotencyKey: transcript?.assistantTranscriptIdempotencyKey,
+    contextEngineTerminalAnchor: transcript?.terminalAnchor,
     nativeReplayInvalid: transcript?.replayInvalid === true || nativeSessionHistoryUnvalidated,
     now,
     promptError,

@@ -1,10 +1,10 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 /**
  * Channel health monitor regression tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import type { ChannelManager } from "./server-channels.js";
@@ -12,11 +12,13 @@ import type { ChannelManager } from "./server-channels.js";
 function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelManager {
   return {
     getRuntimeSnapshot: vi.fn(() => ({ channels: {}, channelAccounts: {} })),
+    getPluginCommandCatalogAccounts: vi.fn(() => new Map()),
     startChannels: vi.fn(async () => {}),
     startChannel: vi.fn(async () => {}),
     stopChannel: vi.fn(async () => {}),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
+    recoverAutostartSuppression: vi.fn(async () => false),
     setAmbientAutostartSuppressedChannelIds: vi.fn(),
     isAmbientAutostartSuppressed: vi.fn(() => false),
     markChannelLoggedOut: vi.fn(),
@@ -261,14 +263,6 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
-  it("accepts timing.monitorStartupGraceMs", async () => {
-    const manager = createMockChannelManager();
-    const monitor = startDefaultMonitor(manager, { timing: { monitorStartupGraceMs: 60_000 } });
-    await vi.advanceTimersByTimeAsync(5_001);
-    expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
-    monitor.stop();
-  });
-
   it("skips healthy channels (running + connected)", async () => {
     const manager = createSnapshotManager({
       discord: {
@@ -283,7 +277,12 @@ describe("channel-health-monitor", () => {
 
   it("treats crash-loop suppressed accounts as expected stopped", async () => {
     let suppressed = true;
+    let allowRecovery = false;
     const suppression = { reason: "crash-loop-breaker" as const, message: "safe mode" };
+    const recoverAutostartSuppression = vi.fn(async () => {
+      suppressed = !allowRecovery;
+      return allowRecovery;
+    });
     const manager = createSnapshotManager(
       {
         discord: {
@@ -292,6 +291,7 @@ describe("channel-health-monitor", () => {
       },
       {
         getAutostartSuppression: vi.fn(() => (suppressed ? suppression : null)),
+        recoverAutostartSuppression,
       },
     );
     const monitor = startDefaultMonitor(manager, {
@@ -305,9 +305,10 @@ describe("channel-health-monitor", () => {
     expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
     expect(manager.startChannel).not.toHaveBeenCalled();
 
-    suppressed = false;
+    allowRecovery = true;
     await vi.advanceTimersByTimeAsync(101);
 
+    expect(recoverAutostartSuppression).toHaveBeenCalled();
     expect(manager.resetRestartAttempts).toHaveBeenCalledWith("discord", "default");
     expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
     monitor.stop();
@@ -361,6 +362,18 @@ describe("channel-health-monitor", () => {
           terminalDisconnect: true,
         },
       },
+    });
+    await expectNoRestart(manager);
+  });
+
+  it("does not restart a channel with blocked lifecycle", async () => {
+    const manager = createSlackSnapshotManager({
+      running: true,
+      connected: true,
+      enabled: true,
+      configured: true,
+      lifecycle: "blocked",
+      lastError: "Slack identity unavailable",
     });
     await expectNoRestart(manager);
   });
@@ -449,11 +462,12 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
-  it("restarts a stuck channel (running but not connected)", async () => {
+  it("restarts a starting channel that stays disconnected past connect grace", async () => {
     const now = Date.now();
     const manager = createSnapshotManager({
       whatsapp: {
         default: disconnectedAccount(now - 300_000, {
+          lifecycle: "starting",
           linked: true,
         }),
       },
@@ -500,6 +514,7 @@ describe("channel-health-monitor", () => {
           connected: false,
           enabled: true,
           configured: true,
+          lifecycle: "starting",
           lastStartAt: now - 5_000,
         },
       },
@@ -611,6 +626,145 @@ describe("channel-health-monitor", () => {
 
     expect(manager.stopChannel).toHaveBeenCalledTimes(1);
     expect(manager.startChannel).toHaveBeenCalledTimes(2);
+    monitor.stop();
+  });
+
+  it("caps an account stuck in pending restart instead of thrashing forever", async () => {
+    const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: account,
+        },
+      },
+      {
+        // Every start attempt leaves the account stuck in pending restart.
+        startChannel: vi.fn(async () => {
+          account.running = false;
+          account.connected = false;
+          account.restartPending = true;
+          account.reconnectAttempts = 0;
+        }),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, {
+      checkIntervalMs: 1_000,
+      cooldownCycles: 1,
+      maxRestartsPerHour: 3,
+    });
+    await vi.advanceTimersByTimeAsync(20_001);
+    // Budgeted restart, one free continuation, then two more budgeted restarts
+    // before the hourly cap closes; a stuck account must not restart per check.
+    expect(manager.startChannel).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(manager.startChannel).toHaveBeenCalledTimes(4);
+    monitor.stop();
+  });
+
+  it("runs the free continuation even when the hourly budget is exhausted", async () => {
+    const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: account,
+        },
+      },
+      {
+        startChannel: vi.fn(async () => {
+          account.running = false;
+          account.connected = false;
+          account.restartPending = true;
+          account.reconnectAttempts = 0;
+        }),
+      },
+    );
+    // The budgeted restart consumes the only hourly slot; the continuation that
+    // finishes that same recovery must still run.
+    const monitor = await startAndRunCheck(manager, { maxRestartsPerHour: 1 });
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledTimes(2);
+    monitor.stop();
+  });
+
+  it("does not re-arm the free continuation on a transient reconnect-attempt bump", async () => {
+    const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: account,
+        },
+      },
+      {
+        startChannel: vi.fn(async () => {
+          account.running = false;
+          account.connected = false;
+          account.restartPending = true;
+          account.reconnectAttempts = 0;
+        }),
+      },
+    );
+    const monitor = await startAndRunCheck(manager, { cooldownCycles: 10 });
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledTimes(2);
+
+    // Supervisor retry bumps attempts while the account stays stuck pending…
+    account.reconnectAttempts = 2;
+    await advanceHealthCheck();
+    // …and returning to zero must not grant another unmetered continuation.
+    account.reconnectAttempts = 0;
+    await advanceHealthCheck();
+    await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledTimes(2);
+    monitor.stop();
+  });
+
+  it("grants a fresh pending continuation after the account recovers", async () => {
+    const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
+    let startBehavior: "pending" | "healthy" = "pending";
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: account,
+        },
+      },
+      {
+        startChannel: vi.fn(async () => {
+          if (startBehavior === "pending") {
+            account.running = false;
+            account.connected = false;
+            account.restartPending = true;
+            account.reconnectAttempts = 0;
+          } else {
+            account.running = true;
+            account.connected = true;
+            account.restartPending = false;
+          }
+        }),
+      },
+    );
+    // Long cooldown proves later continuations run on the free pass, not on an
+    // expired cooldown window.
+    const monitor = await startAndRunCheck(manager, { cooldownCycles: 10 });
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+
+    startBehavior = "healthy";
+    await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledTimes(2);
+
+    // Healthy pass clears the used continuation.
+    await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledTimes(2);
+
+    // A new timed-out recovery marks pending again; its continuation must not
+    // wait behind the still-active cooldown.
+    account.running = false;
+    account.connected = false;
+    account.restartPending = true;
+    account.reconnectAttempts = 0;
+    await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledTimes(3);
     monitor.stop();
   });
 

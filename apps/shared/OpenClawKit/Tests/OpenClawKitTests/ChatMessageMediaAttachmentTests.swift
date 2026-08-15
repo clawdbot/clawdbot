@@ -48,6 +48,7 @@ struct ChatMessageMediaAttachmentTests {
                     "mimeType": "video/mp4",
                     "fileName": "demo.mp4",
                     "durationMs": 1250,
+                    "playback": "transcode",
                     "width": 1920,
                     "height": 1080
                   }]
@@ -58,6 +59,7 @@ struct ChatMessageMediaAttachmentTests {
         #expect(video.artifactId == "artifact_managed_media_22222222-2222-4222-8222-222222222222")
         #expect(video.mediaKind == .video)
         #expect(video.durationSeconds == 1.25)
+        #expect(video.playback == .transcode)
         #expect(video.isInlineAttachment)
     }
 

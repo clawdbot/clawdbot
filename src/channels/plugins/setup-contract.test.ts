@@ -1,7 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import { defineChannelSetupContract } from "./setup-contract.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  defineChannelSetupContract,
+  resolveChannelSetupExecutionAdapter,
+} from "./setup-contract.js";
 
 describe("defineChannelSetupContract", () => {
+  it("keeps released adapters intact while preferring channel-owned contracts", () => {
+    const setup = { applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg };
+    const setupContract = defineChannelSetupContract({ fields: {}, adapter: setup });
+
+    expect(resolveChannelSetupExecutionAdapter({ setup })).toBe(setup);
+    expect(resolveChannelSetupExecutionAdapter({ setup, setupContract })).toBe(setupContract);
+    expect(resolveChannelSetupExecutionAdapter({})).toBeUndefined();
+  });
+
   it("requires field keys to match camelCased long flag names", () => {
     expect(() =>
       defineChannelSetupContract({
@@ -209,6 +222,12 @@ describe("defineChannelSetupContract", () => {
           choices: ["socket", "http"],
           cli: { flags: "--mode <mode>", description: "Connection mode" },
         },
+        useEnv: {
+          kind: "boolean",
+          cli: { flags: "--use-env", description: "Use environment credentials" },
+          envVars: ["CHAT_TOKEN", "CHAT_TOKEN_FILE"],
+          envVarMode: "any",
+        },
       },
       adapter: {
         applyAccountConfig: ({ cfg }) => cfg,
@@ -228,6 +247,13 @@ describe("defineChannelSetupContract", () => {
           kind: "choice",
           choices: ["socket", "http"],
           cli: { flags: "--mode <mode>", description: "Connection mode" },
+        },
+        {
+          key: "useEnv",
+          kind: "boolean",
+          cli: { flags: "--use-env", description: "Use environment credentials" },
+          envVars: ["CHAT_TOKEN", "CHAT_TOKEN_FILE"],
+          envVarMode: "any",
         },
       ],
     });

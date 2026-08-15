@@ -1,3 +1,4 @@
+import { bucketRelativeTimeMs, type RelativeTimeUnit } from "@openclaw/normalization-core";
 // Control UI module implements format behavior.
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -8,6 +9,12 @@ import {
 import { i18n, t } from "../i18n/index.ts";
 
 export { formatByteSize } from "@openclaw/normalization-core";
+
+export function formatCountdown(deadlineMs: number, nowMs: number, padMinutes = false): string {
+  const totalSeconds = Math.max(0, Math.ceil((deadlineMs - nowMs) / 1_000));
+  const minutes = String(Math.floor(totalSeconds / 60));
+  return `${padMinutes ? minutes.padStart(2, "0") : minutes}:${String(totalSeconds % 60).padStart(2, "0")}`;
+}
 
 type FormatTimeAgoOptions = {
   suffix?: boolean;
@@ -21,13 +28,7 @@ type FormatRelativeTimestampOptions = {
   suffix?: boolean;
 };
 
-type FormatDurationCompactOptions = {
-  spaced?: boolean;
-};
-
-type RelativeUnit = "second" | "minute" | "hour" | "day";
-
-function formatUnit(value: number, unit: RelativeUnit | "millisecond"): string {
+function formatUnit(value: number, unit: RelativeTimeUnit | "millisecond"): string {
   return new Intl.NumberFormat(i18n.getLocale(), {
     style: "unit",
     unit,
@@ -36,7 +37,7 @@ function formatUnit(value: number, unit: RelativeUnit | "millisecond"): string {
   }).format(value);
 }
 
-function formatRelative(value: number, unit: RelativeUnit): string {
+function formatRelative(value: number, unit: RelativeTimeUnit): string {
   return new Intl.RelativeTimeFormat(i18n.getLocale(), {
     numeric: "auto",
     style: "narrow",
@@ -52,27 +53,10 @@ export function formatTimeAgo(
     return fallback;
   }
 
-  const seconds = Math.round(durationMs / 1000);
-  const minutes = Math.round(seconds / 60);
-  let value: number;
-  let unit: RelativeUnit;
-  if (seconds < 60) {
+  const { value, unit } = bucketRelativeTimeMs(durationMs);
+  if (unit === "second") {
     if (options.suffix !== false) {
       return t("common.justNow");
-    }
-    value = seconds;
-    unit = "second";
-  } else if (minutes < 60) {
-    value = minutes;
-    unit = "minute";
-  } else {
-    const hours = Math.round(minutes / 60);
-    if (hours < 48) {
-      value = hours;
-      unit = "hour";
-    } else {
-      value = Math.round(hours / 24);
-      unit = "day";
     }
   }
   return options.suffix === false ? formatUnit(value, unit) : formatRelative(-value, unit);
@@ -89,25 +73,12 @@ export function formatRelativeTimestamp(
 
   const diff = timestampMs - Date.now();
   const isPast = diff <= 0;
-  const seconds = Math.round(Math.abs(diff) / 1000);
-  if (seconds < 60) {
+  const { value, unit } = bucketRelativeTimeMs(Math.abs(diff));
+  if (unit === "second") {
     if (options.suffix === false) {
-      return formatUnit(seconds, "second");
+      return formatUnit(value, unit);
     }
-    return isPast ? t("common.justNow") : formatRelative(seconds, "second");
-  }
-
-  const minutes = Math.round(seconds / 60);
-  let value = minutes;
-  let unit: RelativeUnit = "minute";
-  if (minutes >= 60) {
-    const hours = Math.round(minutes / 60);
-    value = hours;
-    unit = "hour";
-    if (hours >= 48) {
-      value = Math.round(hours / 24);
-      unit = "day";
-    }
+    return isPast ? t("common.justNow") : formatRelative(value, unit);
   }
 
   if (options.dateFallback && unit === "day" && value > 7) {
@@ -126,11 +97,8 @@ export function formatRelativeTimestamp(
   return options.suffix === false ? formatUnit(value, unit) : formatRelative(signedValue, unit);
 }
 
-export function formatDurationCompact(
-  ms?: number | null,
-  options: FormatDurationCompactOptions = {},
-): string | undefined {
-  const coreValue = formatDurationCompactCore(ms, options);
+export function formatDurationCompact(ms?: number | null): string | undefined {
+  const coreValue = formatDurationCompactCore(ms, { spaced: true });
   if (!coreValue || ms == null || !Number.isFinite(ms) || ms <= 0) {
     return coreValue;
   }
@@ -149,7 +117,7 @@ export function formatDurationCompact(
     if (seconds > 0) {
       parts.push(formatUnit(seconds, "second"));
     }
-    return parts.join(options.spaced ? " " : "");
+    return parts.join(" ");
   }
   const hours = Math.floor(totalMinutes / 60);
   if (hours >= 24) {
@@ -159,14 +127,14 @@ export function formatDurationCompact(
     if (remainingHours > 0) {
       parts.push(formatUnit(remainingHours, "hour"));
     }
-    return parts.join(options.spaced ? " " : "");
+    return parts.join(" ");
   }
   const minutes = totalMinutes % 60;
   const parts = [formatUnit(hours, "hour")];
   if (minutes > 0) {
     parts.push(formatUnit(minutes, "minute"));
   }
-  return parts.join(options.spaced ? " " : "");
+  return parts.join(" ");
 }
 
 export function formatDurationHuman(ms?: number | null, fallback = t("common.na")): string {
@@ -220,33 +188,12 @@ export function formatUnknownText(
   return Object.prototype.toString.call(value);
 }
 
-type UiTimeFormatPreference = "auto" | "12" | "24";
-
-// Resolved `agents.defaults.timeFormat`, threaded in once at bootstrap. "auto"
-// (or unset) keeps the browser locale default so existing deployments render
-// unchanged; only "12"/"24" force an hour cycle across Control UI timestamps.
-let uiTimeFormatPreference: UiTimeFormatPreference = "auto";
-
-export function setUiTimeFormatPreference(value: UiTimeFormatPreference | null | undefined): void {
-  uiTimeFormatPreference = value === "12" || value === "24" ? value : "auto";
-}
-
-export function resolveUiHourCycleOptions(): Intl.DateTimeFormatOptions {
-  if (uiTimeFormatPreference === "12") {
-    return { hour12: true };
-  }
-  if (uiTimeFormatPreference === "24") {
-    return { hour12: false };
-  }
-  return {};
-}
-
 export function formatMs(ms?: number | null): string {
   const timestampMs = asDateTimestampMs(ms);
   if (timestampMs === undefined) {
     return t("common.na");
   }
-  return new Date(timestampMs).toLocaleString(i18n.getLocale(), resolveUiHourCycleOptions());
+  return new Date(timestampMs).toLocaleString(i18n.getLocale());
 }
 
 export function formatDateMs(
@@ -268,10 +215,7 @@ export function formatTimeMs(
   const timestampMs = asDateTimestampMs(ms);
   return timestampMs === undefined
     ? fallback
-    : new Date(timestampMs).toLocaleTimeString(i18n.getLocale(), {
-        ...resolveUiHourCycleOptions(),
-        ...options,
-      });
+    : new Date(timestampMs).toLocaleTimeString(i18n.getLocale(), options);
 }
 
 export function formatDateTimeMs(
@@ -282,10 +226,7 @@ export function formatDateTimeMs(
   const timestampMs = asDateTimestampMs(ms);
   return timestampMs === undefined
     ? fallback
-    : new Date(timestampMs).toLocaleString(i18n.getLocale(), {
-        ...resolveUiHourCycleOptions(),
-        ...options,
-      });
+    : new Date(timestampMs).toLocaleString(i18n.getLocale(), options);
 }
 
 export function formatList(values?: Array<string | null | undefined>): string {
@@ -341,36 +282,23 @@ export function formatCost(cost: number | null | undefined, fallback = "$0.00"):
   return `$${cost.toFixed(2)}`;
 }
 
-export function formatTokens(tokens: number | null | undefined, fallback = "0"): string {
-  if (tokens == null || !Number.isFinite(tokens)) {
-    return fallback;
-  }
-  if (tokens < 1000) {
-    return String(Math.round(tokens));
-  }
-  if (tokens < 1_000_000) {
-    const k = tokens / 1000;
-    if (k < 10) {
-      return `${k.toFixed(1)}k`;
-    }
-    const rounded = Math.round(k);
-    // 999_500..999_999 rounds to 1000k; roll it over to the M branch instead of emitting "1000k".
-    if (rounded < 1000) {
-      return `${rounded}k`;
-    }
-  }
-  const m = tokens / 1_000_000;
-  return m < 10 ? `${m.toFixed(1)}M` : `${Math.round(m)}M`;
-}
-
+// The one token formatter: every surface showing the same count must render the
+// same string, or a session reads "16k" in one pane and "15.6k" in another.
 export function formatCompactTokenCount(
-  tokens: number,
+  tokens: number | null | undefined,
   options: { thousandsSuffix?: string; millionsSuffix?: string; trimTrailingZero?: boolean } = {},
 ): string {
+  if (tokens == null || !Number.isFinite(tokens)) {
+    return "0";
+  }
   const thousandsSuffix = options.thousandsSuffix ?? "k";
   const millionsSuffix = options.millionsSuffix ?? "M";
   const trimTrailingZero = options.trimTrailingZero ?? true;
   const trim = (value: string) => (trimTrailingZero ? value.replace(/\.0$/, "") : value);
+  // Month-scale provider totals can cross a billion; keep the suffix ladder closed.
+  if (tokens >= 1_000_000_000) {
+    return `${trim((tokens / 1_000_000_000).toFixed(1))}B`;
+  }
   if (tokens >= 1_000_000) {
     return `${trim((tokens / 1_000_000).toFixed(1))}${millionsSuffix}`;
   }
@@ -381,30 +309,12 @@ export function formatCompactTokenCount(
     }
     return `${trim(thousands)}${thousandsSuffix}`;
   }
-  return String(tokens);
+  return String(Math.round(tokens));
 }
 
-export function parseSessionKeyParts(
-  key: string,
-): { agentId: string; channel: string; accountId: string } | null {
-  if (!key.startsWith("agent:")) {
-    return null;
+export function formatContextTokenCapacity(tokens: number): string {
+  if (tokens < 1_000_000) {
+    return formatCompactTokenCount(tokens);
   }
-  const rest = key.slice("agent:".length);
-  const firstColon = rest.indexOf(":");
-  if (firstColon < 1) {
-    return null;
-  }
-  const agentId = rest.slice(0, firstColon);
-  const afterAgent = rest.slice(firstColon + 1);
-  const secondColon = afterAgent.indexOf(":");
-  if (secondColon < 1) {
-    return null;
-  }
-  const channel = afterAgent.slice(0, secondColon);
-  const accountId = afterAgent.slice(secondColon + 1);
-  if (!accountId) {
-    return null;
-  }
-  return { agentId, channel, accountId };
+  return `${Math.floor(tokens / 100_000) / 10}M`;
 }

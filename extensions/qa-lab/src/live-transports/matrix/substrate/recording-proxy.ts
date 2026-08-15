@@ -5,6 +5,8 @@ import {
   startMatrixQaFaultProxy,
   type MatrixQaFaultProxyExchange,
   type MatrixQaFaultProxyObserver,
+  type MatrixQaFaultProxyRule,
+  type MatrixQaFaultProxyRuleHandle,
 } from "./fault-proxy.js";
 import { normalizeMatrixQaRoute } from "./recording-proxy-internals.js";
 
@@ -109,8 +111,10 @@ export type MatrixQaRecordingProxy = MatrixQaFaultProxyObserver & {
     scenarioIds: string[];
     substrate: MatrixQaRouteStateManifest["substrate"];
   }): MatrixQaRouteStateManifest;
+  installFaultRule(rule: MatrixQaFaultProxyRule): MatrixQaFaultProxyRuleHandle;
   records(): MatrixQaRecordedExchange[];
   setScenarioId(scenarioId: string): void;
+  setTargetBaseUrl(targetBaseUrl: string): void;
   stop(): Promise<void>;
 };
 
@@ -617,6 +621,7 @@ export async function startMatrixQaRecordingProxy(params: {
         substrate,
       };
     },
+    installFaultRule: (rule) => proxy.installRule(rule),
     records: () =>
       structuredClone(
         records
@@ -626,6 +631,7 @@ export async function startMatrixQaRecordingProxy(params: {
     setScenarioId(nextScenarioId) {
       scenarioId = nextScenarioId;
     },
+    setTargetBaseUrl: (targetBaseUrl) => proxy.setTargetBaseUrl(targetBaseUrl),
     stop: () => proxy.stop(),
   };
 }

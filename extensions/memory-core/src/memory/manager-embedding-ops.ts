@@ -17,6 +17,8 @@ import {
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
   MEMORY_EMBEDDING_CACHE_TABLE,
+  MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
+  MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
   remapChunkLines,
@@ -24,13 +26,13 @@ import {
   runWithConcurrency,
   stripMemoryAnnotationCarriers,
   type MemoryChunk,
-  type MemorySource,
   type MemoryEntryProvenance,
-  MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
+  type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-runtime";
+import { readSessionResetRecallCutoffMetadata } from "../session-reset-recall-metadata.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import {
   MEMORY_BATCH_FAILURE_LIMIT,
@@ -58,6 +60,7 @@ import {
   resolveMemoryIndexProviderIdentities,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
+import { chunkSessionContentAtResetBoundary } from "./manager-reset-chunk-boundary.js";
 import {
   MemoryManagerSyncOps,
   type MemoryIndexWorkItem,
@@ -983,17 +986,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         );
         this.db
           .prepare(
-            `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at, importance, triggers, project_key)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                hash=excluded.hash,
                model=excluded.model,
                text=excluded.text,
                embedding=excluded.embedding,
-               updated_at=excluded.updated_at,
-               importance=excluded.importance,
-               triggers=excluded.triggers,
-               project_key=excluded.project_key`,
+               updated_at=excluded.updated_at`,
           )
           .run(
             id,
@@ -1006,10 +1006,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             chunk.text,
             JSON.stringify(embedding),
             now,
-            chunk.importance,
-            chunk.triggers,
-            chunk.projectKey,
           );
+        this.db
+          .prepare(
+            `INSERT INTO ${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE} (
+               chunk_id, importance, triggers, project_key
+             ) VALUES (?, ?, ?, ?)
+             ON CONFLICT(chunk_id) DO UPDATE SET
+               importance=excluded.importance,
+               triggers=excluded.triggers,
+               project_key=excluded.project_key`,
+          )
+          .run(id, chunk.importance, chunk.triggers, chunk.projectKey);
         const provenance = chunk.provenance ?? {
           originClass: "untrusted" as const,
           sessionKind: "unknown" as const,
@@ -1115,11 +1123,19 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       (normalizedEntryPath === "MEMORY.md" || normalizedEntryPath === "USER.md");
     const indexingContent =
       options.source === "memory" ? stripMemoryAnnotationCarriers(content) : content;
+    const chunkOptions = { ...this.settings.chunking, perEntry };
     const baseChunks = filterNonEmptyMemoryChunks(
-      chunkMarkdown(indexingContent, {
-        ...this.settings.chunking,
-        perEntry,
-      }),
+      options.source === "sessions"
+        ? chunkSessionContentAtResetBoundary({
+            content: indexingContent,
+            cutoffLine: (() => {
+              const cutoff = readSessionResetRecallCutoffMetadata(entry);
+              return cutoff.state === "valid" ? cutoff.cutoffLine : undefined;
+            })(),
+            lineMap: entry.lineMap,
+            chunking: chunkOptions,
+          })
+        : chunkMarkdown(indexingContent, chunkOptions),
     );
     for (const chunk of baseChunks) {
       chunk.provenance = this.resolveChunkProvenance(

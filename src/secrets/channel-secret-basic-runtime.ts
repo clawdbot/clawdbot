@@ -80,6 +80,101 @@ export function createChannelSecretTargetRegistryEntries(params: {
   ];
 }
 
+/** Builds the common registry and runtime collector used by simple channel secrets. */
+export function createSimpleChannelSecretContract(params: {
+  channelKey: string;
+  label: string;
+  accountFields: readonly string[];
+  channelFields: readonly string[];
+  mode:
+    | "account-inheritance"
+    | "channel-surface"
+    | "channel-only"
+    | { kind: "surface-inheritance"; collectionFields: readonly string[] };
+}): {
+  secretTargetRegistryEntries: SecretTargetRegistryEntry[];
+  collectRuntimeConfigAssignments: (params: {
+    config: { channels?: Record<string, unknown> };
+    defaults?: SecretDefaults;
+    context: ResolverContext;
+  }) => void;
+} {
+  const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
+    channelKey: params.channelKey,
+    account: params.accountFields,
+    channel: params.channelFields,
+  });
+  const collectionFields =
+    typeof params.mode === "object"
+      ? params.mode.collectionFields
+      : [...new Set([...params.accountFields, ...params.channelFields])];
+
+  const collectRuntimeConfigAssignments = (collectorParams: {
+    config: { channels?: Record<string, unknown> };
+    defaults?: SecretDefaults;
+    context: ResolverContext;
+  }): void => {
+    if (params.mode === "channel-only") {
+      const channel = getChannelRecord(collectorParams.config, params.channelKey);
+      if (!channel) {
+        return;
+      }
+      for (const field of collectionFields) {
+        collectSecretInputAssignment({
+          value: channel[field],
+          path: `channels.${params.channelKey}.${field}`,
+          expected: "string",
+          defaults: collectorParams.defaults,
+          context: collectorParams.context,
+          active: channel.enabled !== false,
+          inactiveReason: `${params.label} channel is disabled.`,
+          // Direct-record channels bind the full config as one atomic owner contract.
+          owner: {
+            ownerKind: "account",
+            ownerId: `${params.channelKey}:default`,
+            requiredForGateway: false,
+            disposition: "isolate",
+            contract: channel,
+          },
+          apply: (value) => {
+            channel[field] = value;
+          },
+        });
+      }
+      return;
+    }
+
+    const resolved = getChannelSurface(collectorParams.config, params.channelKey);
+    if (!resolved) {
+      return;
+    }
+    const { channel, surface } = resolved;
+    for (const field of collectionFields) {
+      const topInactiveReason =
+        params.mode === "channel-surface"
+          ? `${params.label} channel is disabled.`
+          : params.mode === "account-inheritance"
+            ? `no enabled account inherits this top-level ${params.label} ${field}.`
+            : `no enabled ${params.label} surface inherits this top-level ${field}.`;
+      collectSimpleChannelFieldAssignments({
+        channelKey: params.channelKey,
+        field,
+        channel,
+        surface,
+        defaults: collectorParams.defaults,
+        context: collectorParams.context,
+        topInactiveReason,
+        accountInactiveReason:
+          params.mode === "channel-surface"
+            ? `${params.label} channel is disabled.`
+            : `${params.label} account is disabled.`,
+      });
+    }
+  };
+
+  return { secretTargetRegistryEntries, collectRuntimeConfigAssignments };
+}
+
 export type ChannelAccountEntry = {
   accountId: string;
   account: Record<string, unknown>;

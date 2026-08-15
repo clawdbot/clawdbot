@@ -41,6 +41,38 @@ struct GatewayEnvironmentTests {
         #expect(Semver.parse(normalized2) == Semver(major: 2026, minor: 4, patch: 2))
     }
 
+    @Test func `failed global version probe falls back to local package`() async throws {
+        let projectRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-gateway-environment-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: projectRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: projectRoot) }
+        try Data(#"{"version":"2026.7.29"}"#.utf8)
+            .write(to: projectRoot.appendingPathComponent("package.json"))
+
+        let version = await GatewayEnvironment.installedGatewayVersion(
+            gatewayBin: "/usr/bin/false",
+            projectRoot: projectRoot,
+            searchPaths: ["/usr/bin"])
+
+        #expect(version == "2026.7.29")
+    }
+
+    @Test func `gateway version probe tolerates loaded host delay`() async throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gateway = root.appendingPathComponent("openclaw")
+        try "#!/bin/sh\nsleep 2.1\necho OpenClaw 2026.7.30\n"
+            .write(to: gateway, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: gateway.path)
+
+        let version = await GatewayEnvironment.installedGatewayVersion(
+            gatewayBin: gateway.path,
+            projectRoot: root,
+            searchPaths: [root.path, "/usr/bin", "/bin"])
+
+        #expect(version == "2026.7.30")
+    }
+
     @Test func `semver compatibility requires same major and not older`() {
         let required = Semver(major: 2, minor: 1, patch: 0)
         #expect(Semver(major: 2, minor: 1, patch: 0).compatible(with: required))
@@ -64,6 +96,35 @@ struct GatewayEnvironmentTests {
             defer { UserDefaults.standard.removeObject(forKey: "gatewayPort") }
             #expect(GatewayEnvironment.gatewayPort() == 19999)
         }
+    }
+
+    @Test func `named profiles derive stable distinct gateway ports after explicit precedence`() {
+        let work = AppProfile(environment: ["OPENCLAW_PROFILE": "work"])
+        let personal = AppProfile(environment: ["OPENCLAW_PROFILE": "personal"])
+        let workPort = GatewayEnvironment.resolvedGatewayPort(
+            environment: [:],
+            configPort: nil,
+            storedPort: 0,
+            profile: work)
+        #expect((20000..<60000).contains(workPort))
+        #expect(workPort == work.defaultGatewayPort)
+        #expect(workPort != personal.defaultGatewayPort)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: ["OPENCLAW_GATEWAY_PORT": "21001"],
+            configPort: 22001,
+            storedPort: 23001,
+            profile: work) == 21001)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: [:],
+            configPort: 22001,
+            storedPort: 23001,
+            profile: work) == 22001)
+        #expect(GatewayEnvironment.resolvedGatewayPort(
+            environment: [:],
+            configPort: nil,
+            storedPort: 23001,
+            profile: work) == 23001)
+        #expect(AppProfile(environment: [:]).defaultGatewayPort == 18789)
     }
 
     @Test func `expected gateway version from string uses parser`() {

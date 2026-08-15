@@ -178,7 +178,7 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
         completed: true,
       },
     );
-    expect(result.toolMetas).toEqual([{ toolName: "sessions_send" }]);
+    expect(result.toolMetas).toEqual([{ toolName: "sessions_send", isError: false }]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
       "user",
       "assistant",

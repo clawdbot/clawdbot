@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
@@ -11,6 +12,7 @@ import {
   type ActiveSessionCatalog,
 } from "openclaw/plugin-sdk/session-catalog-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { BEAM_MAX_BODY_BYTES, BEAM_MAX_ITEM_CHARS, BEAM_MAX_ITEMS } from "./types.js";
 
 const MIRROR_CONFIG_PATH = "plugins.entries.beam.config.mirror";
@@ -134,7 +136,7 @@ export function beamMirrorId(catalogId: string, hostId: string, threadId: string
 }
 
 function clipText(text: string): string {
-  return text.length > BEAM_MAX_ITEM_CHARS ? text.slice(0, BEAM_MAX_ITEM_CHARS) : text;
+  return truncateUtf16Safe(text, BEAM_MAX_ITEM_CHARS);
 }
 
 function droppedSummary(counts: Map<string, number>): string | undefined {
@@ -293,19 +295,27 @@ export function createBeamMirrorRunner(params: {
       },
       body: JSON.stringify(payload),
     });
-    if (!response.ok) {
-      warnThrottled(`beam mirror upload failed (${response.status}) for ${payload.source}`);
-      return false;
+    try {
+      if (!response.ok) {
+        warnThrottled(`beam mirror upload failed (${response.status}) for ${payload.source}`);
+        return false;
+      }
+      return true;
+    } finally {
+      // The mirror uses only the status; cancel the ignored payload so slow
+      // receiver responses cannot retain connection slots across poll retries.
+      await response.body?.cancel().catch(() => undefined);
     }
-    return true;
   };
 
   const buildUpload = async (
+    agentId: string,
     catalog: ActiveSessionCatalog,
     candidate: BeamMirrorCandidate,
     completed: boolean,
   ): Promise<BeamMirrorUpload> => {
     const transcript = await catalog.read({
+      agentId,
       hostId: candidate.hostId,
       threadId: candidate.threadId,
       limit: MIRROR_READ_LIMIT,
@@ -318,7 +328,7 @@ export function createBeamMirrorRunner(params: {
       version: 1,
       beamId: beamMirrorId(candidate.catalogId, candidate.hostId, candidate.threadId),
       source: candidate.catalogId,
-      title: candidate.title.slice(0, 160),
+      title: truncateUtf16Safe(candidate.title, 160),
       updatedAt: new Date(candidate.recencyAt || now()).toISOString(),
       completed,
       items,
@@ -351,6 +361,13 @@ export function createBeamMirrorRunner(params: {
         warnThrottled(`beam mirror disabled: ${mirror}`);
         return;
       }
+      let agentId: string;
+      try {
+        agentId = resolveSessionAgentIds({ config: config as OpenClawConfig }).defaultAgentId;
+      } catch (error) {
+        warnThrottled(`beam mirror disabled: ${String(error)}`);
+        return;
+      }
       let token: string | undefined;
       if (mirror.token !== undefined) {
         const resolved = await resolveConfiguredSecretInputString({
@@ -379,7 +396,7 @@ export function createBeamMirrorRunner(params: {
       const candidates: BeamMirrorCandidate[] = [];
       for (const catalog of catalogs) {
         try {
-          const hosts = await catalog.list({ limitPerHost: MIRROR_LIST_LIMIT });
+          const hosts = await catalog.list({ agentId, limitPerHost: MIRROR_LIST_LIMIT });
           candidates.push(...hostCandidates(catalog.id, hosts, activeSinceMs));
         } catch (error) {
           warnThrottled(`beam mirror list failed for ${catalog.id}: ${String(error)}`);
@@ -396,7 +413,7 @@ export function createBeamMirrorRunner(params: {
           continue;
         }
         try {
-          const payload = await buildUpload(catalog, candidate, false);
+          const payload = await buildUpload(agentId, catalog, candidate, false);
           const fingerprint = mirrorFingerprint(payload);
           if (tracked.get(key)?.fingerprint === fingerprint) {
             continue;
@@ -420,7 +437,7 @@ export function createBeamMirrorRunner(params: {
           continue;
         }
         try {
-          const payload = await buildUpload(catalog, entry.candidate, true);
+          const payload = await buildUpload(agentId, catalog, entry.candidate, true);
           await upload(mirror.endpoint, token, payload);
         } catch {
           // The session store may already be gone; the receiver TTL cleans up.

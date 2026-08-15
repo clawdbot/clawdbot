@@ -2,7 +2,10 @@
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOpenAICompatibleReasoningPayload } from "openclaw/plugin-sdk/provider-stream-shared";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
 const KILOCODE_FEATURE_DEFAULT = "openclaw";
@@ -22,17 +25,11 @@ function normalizeKilocodeStopPayload(payloadObj: Record<string, unknown>): void
   }
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function normalizeKilocodeStopAfterCaller(
   value: unknown,
   fallbackPayload: Record<string, unknown> | undefined,
 ): unknown {
-  const replacementPayload = asRecord(value);
+  const replacementPayload = asOptionalRecord(value);
   if (replacementPayload) {
     normalizeKilocodeStopPayload(replacementPayload);
     return value;
@@ -80,7 +77,7 @@ function createKilocodeStreamWrapper(
       ...options,
       headers,
       onPayload(payload, payloadModel) {
-        const payloadObj = asRecord(payload);
+        const payloadObj = asOptionalRecord(payload);
         if (payloadObj) {
           // Keep Kilo thinking defaults overrideable by later caller/config payload hooks.
           normalizeOpenAICompatibleReasoningPayload(payloadObj, thinkingLevel);

@@ -51,7 +51,12 @@ export class McpAppUnmountGate {
     return this.renderedValue;
   }
 
-  render(key: string, value: unknown, leavingRoots: () => Iterable<ParentNode>): unknown {
+  render(
+    key: string,
+    value: unknown,
+    leavingRoots: () => Iterable<ParentNode>,
+    options: { retainRenderedValue?: boolean } = {},
+  ): unknown {
     if (this.pending) {
       return this.renderedValue;
     }
@@ -67,7 +72,12 @@ export class McpAppUnmountGate {
           }
         }
       });
-      return this.apply(key, value);
+      return this.renderedKey === key && options.retainRenderedValue
+        ? this.renderedValue
+        : this.apply(key, value);
+    }
+    if (this.renderedKey === key && options.retainRenderedValue) {
+      return this.renderedValue;
     }
     if (this.renderedKey === null || this.renderedKey === key) {
       return this.apply(key, value);

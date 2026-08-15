@@ -5,7 +5,6 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { describe, expect, it, vi } from "vitest";
 import * as appServerPolicy from "./app-server-policy.js";
 import * as bindingConnection from "./binding-connection.js";
-import * as codexConfig from "./config.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
 import { createParams, setupRunAttemptTestHooks, tempDir } from "./run-attempt-test-harness.js";
 import {
@@ -37,10 +36,6 @@ describe("prepareCodexAttemptConnection", () => {
 
     const resolveConnection = vi.spyOn(bindingConnection, "resolveCodexBindingAppServerConnection");
     const resolveModelPolicy = vi.spyOn(appServerPolicy, "resolveCodexAppServerForModelProvider");
-    const readApprovalRequirements = vi.spyOn(
-      codexConfig,
-      "isCodexAppServerApprovalPolicyAllowedByRequirements",
-    );
     const stat = vi.spyOn(fs, "stat");
 
     const connection = await prepareCodexAttemptConnection({
@@ -51,7 +46,6 @@ describe("prepareCodexAttemptConnection", () => {
     expect(connection.effectiveWorkspace).toBe(workspaceDir);
     expect(resolveConnection).toHaveBeenCalledTimes(1);
     expect(resolveModelPolicy).toHaveBeenCalledTimes(1);
-    expect(readApprovalRequirements).not.toHaveBeenCalled();
     expect(stat.mock.calls.filter(([candidate]) => candidate === workspaceDir)).toHaveLength(0);
     expect(connection.mutable.startupBinding?.threadId).toBe(
       existingThread ? "thread-existing" : undefined,
@@ -100,27 +94,24 @@ describe("prepareCodexAttemptConnection", () => {
     expect(resolveModelPolicy).toHaveBeenCalledTimes(2);
   });
 
-  it("still checks enterprise requirements before promoting tool approvals", async () => {
+  it("does not give OpenClaw ownership of an explicit operator approval policy", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
     );
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionFile = path.join(tempDir, "explicit-approval-policy.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-explicit-approval-policy");
     const params = createParams(sessionFile, workspaceDir);
     params.agentDir = path.join(tempDir, "agent");
     registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
-    const readApprovalRequirements = vi.spyOn(
-      codexConfig,
-      "isCodexAppServerApprovalPolicyAllowedByRequirements",
-    );
 
     const connection = await prepareCodexAttemptConnection({
       params,
-      options: { bindingStore: testCodexAppServerBindingStore },
+      options: {
+        bindingStore: testCodexAppServerBindingStore,
+        pluginConfig: { appServer: { approvalPolicy: "untrusted" } },
+      },
     });
 
-    expect(readApprovalRequirements).toHaveBeenCalledOnce();
-    expect(readApprovalRequirements).toHaveBeenCalledWith("untrusted");
     expect(connection.appServer.approvalPolicy).toBe("untrusted");
   });
 });

@@ -1,5 +1,4 @@
-// Grep tool stream error tests verify that stdout/stderr errors reject the tool
-// promise instead of crashing the agent runtime.
+// Grep tool streaming tests cover result limits, cancellation, and subprocess errors.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -42,7 +41,73 @@ function createChild(): MockChild {
   return child;
 }
 
-describe("grep tool stream errors", () => {
+function grepMatch(lineNumber: number): string {
+  return `${JSON.stringify({
+    type: "match",
+    data: {
+      path: { text: "/tmp/match.txt" },
+      line_number: lineNumber,
+      lines: { text: "foo\n" },
+    },
+  })}\n`;
+}
+
+function textContent(
+  result: Awaited<ReturnType<ReturnType<typeof createGrepToolDefinition>["execute"]>>,
+): string {
+  const first = result.content[0];
+  return first?.type === "text" ? (first.text ?? "") : "";
+}
+
+describe("grep tool streaming", () => {
+  it.each([
+    {
+      name: "keeps an exact-size result complete",
+      matchCount: 2,
+      closeCode: 0,
+      expectedText: "match.txt:1: foo\nmatch.txt:2: foo",
+      expectedLimitReached: undefined,
+      expectedKilled: false,
+    },
+    {
+      name: "uses one extra match as the truncation sentinel",
+      matchCount: 3,
+      closeCode: null,
+      expectedText:
+        "match.txt:1: foo\nmatch.txt:2: foo\n\n[2 matches limit reached. Use limit=4 for more, or refine pattern]",
+      expectedLimitReached: 2,
+      expectedKilled: true,
+    },
+  ])(
+    "$name",
+    async ({ matchCount, closeCode, expectedText, expectedLimitReached, expectedKilled }) => {
+      const child = createChild();
+      vi.mocked(spawnCommand).mockReturnValue(child as never);
+      vi.mocked(ensureTool).mockResolvedValue("rg");
+
+      const tool = createGrepToolDefinition(process.cwd());
+      const resultPromise = tool.execute(
+        "call-limit",
+        { pattern: "foo", limit: 2 },
+        undefined,
+        undefined,
+        {} as never,
+      );
+      await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+      for (let lineNumber = 1; lineNumber <= matchCount; lineNumber += 1) {
+        child.stdout.write(grepMatch(lineNumber));
+      }
+      child.stdout.end();
+      child.stderr.end();
+      child.emit("close", closeCode);
+
+      const result = await resultPromise;
+      expect(textContent(result)).toBe(expectedText);
+      expect(result.details?.matchLimitReached).toBe(expectedLimitReached);
+      expect(child.killed).toBe(expectedKilled);
+    },
+  );
+
   it("settles promptly when aborted while resolving rg", async () => {
     let resolveEnsureTool: ((value: string) => void) | undefined;
     vi.mocked(ensureTool).mockImplementationOnce(

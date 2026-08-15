@@ -1,4 +1,4 @@
-import { controlUiSessionSlug } from "@openclaw/session-url-contract";
+import { controlUiSessionSlug, SHORT_SESSION_ID_RE } from "@openclaw/session-url-contract";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { notFound } from "@openclaw/uirouter";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -29,19 +29,15 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiGlobalAliasAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { draftRouteDataFromLocation, draftSearchFromLocation } from "./route-draft.ts";
+import { findCachedShortSession, sessionKeyUuid } from "./route-loader-short-cache.ts";
 import {
-  findCachedShortSession,
-  incompleteShortSessionResolution,
-  narrowShortResolutionBySlugHint,
-  requireShortSessionResolution,
-  sessionKeyUuid,
-  type ShortSessionResolution as SessionReferenceResolution,
-} from "./route-loader-short-cache.ts";
+  resolveShortSessionReference,
+  type SessionReferenceResolution,
+} from "./route-loader-short-resolve.ts";
 
 const SESSION_REF_SEARCH_LIMIT = 20;
 const SESSION_REF_SEARCH_MAX_PAGES = 5;
-// A uuid's first block is the longest run that is contiguous in both the hyphenated
-// stored key and the hyphen-stripped short id used in URLs.
 
 type SessionCandidate = {
   agentId: string;
@@ -56,6 +52,7 @@ export type ChatRouteData =
       sessionKey: string;
       agentId?: string;
       draft?: string;
+      focusComposer?: boolean;
       face: BoardFace;
       shortId?: string;
       canonicalLocation?: RouteLocation;
@@ -78,23 +75,18 @@ export type SessionChatRouteData = Omit<
   kind?: "session";
 };
 
-export function locationWithoutDraft(location: RouteLocation): RouteLocation {
-  const params = new URLSearchParams(location.search);
-  params.delete("draft");
-  const search = params.toString();
-  return { ...location, search: search ? `?${search}` : "" };
-}
-
 type SessionReferenceSearch = { agentId: string } & (
-  | { kind: "short"; value: string }
   | { kind: "exact"; value: string }
   | { kind: "slug"; value: string }
 );
 
-const resolutionCache = new WeakMap<
-  GatewayBrowserClient,
-  Map<string, Promise<SessionReferenceResolution | null>>
->();
+type PendingSessionReference = {
+  controller: AbortController;
+  promise: Promise<SessionReferenceResolution | null>;
+  subscribers: Set<AbortSignal>;
+};
+
+const resolutionCache = new WeakMap<GatewayBrowserClient, Map<string, PendingSessionReference>>();
 
 function uniqueShortIdPrefix(
   value: string,
@@ -102,7 +94,7 @@ function uniqueShortIdPrefix(
   truncated: boolean,
 ): string | null {
   const uuid = value.toLowerCase().replaceAll("-", "");
-  if (!/^[0-9a-f]{8,32}$/u.test(uuid)) {
+  if (!SHORT_SESSION_ID_RE.test(uuid)) {
     return null;
   }
   if (truncated) {
@@ -152,19 +144,11 @@ function sessionReferenceSearchText(
     }
     return search.value;
   }
-  if (search.kind === "slug") {
-    // controlUiSessionSlug builds every token from a contiguous alphanumeric run of the
-    // lowercased display name, so one token always matches while the joined slug would
-    // miss any name whose separators were punctuation ("Fix: auth bug" -> "fix-auth-bug").
-    // The longest token is the most selective of those.
-    return search.value
-      .split("-")
-      .reduce((longest, token) => (token.length > longest.length ? token : longest), "");
-  }
-  // Short ids are compared hyphen-stripped, but the stored key holds a hyphenated uuid,
-  // so only its first block survives as a contiguous substring. Anything longer (from a
-  // disambiguation link or a canonicalized slug) would match nothing server-side.
-  return search.value.slice(0, 8);
+  // controlUiSessionSlug builds every token from a contiguous alphanumeric run of the
+  // lowercased display name, so the longest token is the safest selective search term.
+  return search.value
+    .split("-")
+    .reduce((longest, token) => (token.length > longest.length ? token : longest), "");
 }
 
 function sessionReferenceMatches(
@@ -180,58 +164,85 @@ function sessionReferenceMatches(
         (isUiGlobalSessionKey(row.key) && aliasAgentId === normalizeAgentId(search.agentId)),
     );
   }
-  if (search.kind === "slug") {
-    return result.sessions.filter(
-      (row) =>
-        sessionKeyUuid(row.key) !== null && controlUiSessionSlug(row.displayName) === search.value,
-    );
-  }
-  const prefix = search.value.toLowerCase().replaceAll("-", "");
-  return result.sessions.filter((row) => sessionKeyUuid(row.key)?.startsWith(prefix) === true);
+  return result.sessions.filter(
+    (row) =>
+      sessionKeyUuid(row.key) !== null && controlUiSessionSlug(row.displayName) === search.value,
+  );
 }
 
-// Two sessions can share a short id's prefix, which would send an otherwise exact link to
-// the disambiguation view. When the link also carries a display-name slug, that slug says
-// which one was meant, so it settles the tie and keeps generated links durable at their
-// normal length. It can only narrow: a hint that matches nothing (a stale or hand-edited
-// name) leaves the original candidates for the chooser rather than dropping the session.
-//
-// A truncated set is not a tie, it is an unfinished search. Another page could hold the
-// same prefix under the same slug, so settling here would be the guess the bounded search
-// exists to avoid.
 async function querySessionReference(
   context: ApplicationContext,
   search: SessionReferenceSearch,
   signal: AbortSignal,
 ): Promise<SessionReferenceResolution | null> {
   const client = await waitForGatewayClient(context.gateway, signal);
-  let cache = resolutionCache.get(client);
-  if (!cache) {
-    cache = new Map();
-    resolutionCache.set(client, cache);
-  }
+  signal.throwIfAborted();
+  const cache = resolutionCache.get(client) ?? new Map<string, PendingSessionReference>();
+  resolutionCache.set(client, cache);
   const cacheKey = `${normalizeAgentId(search.agentId)}:${search.kind}:${search.value}`;
   let pending = cache.get(cacheKey);
-  if (!pending) {
-    pending = querySessionReferencePages(context, search);
+  if (!pending || pending.controller.signal.aborted) {
+    const controller = new AbortController();
+    pending = {
+      controller,
+      promise: Promise.resolve().then(() =>
+        querySessionReferencePages(context, search, controller.signal),
+      ),
+      subscribers: new Set(),
+    };
     cache.set(cacheKey, pending);
   }
+  pending.subscribers.add(signal);
+  const shared = pending;
+  let rejectAbort: (reason: unknown) => void = () => undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const onAbort = () => {
+    shared.subscribers.delete(signal);
+    // The producer is shared: one cancelled navigation must not cancel another
+    // active route's lookup, but the final subscriber must stop later pages.
+    if (shared.subscribers.size === 0) {
+      shared.controller.abort(signal.reason);
+    }
+    rejectAbort(signal.reason);
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  if (signal.aborted) {
+    onAbort();
+  }
   try {
-    return await pending;
+    return await Promise.race([shared.promise, aborted]);
   } finally {
-    if (cache.get(cacheKey) === pending) {
+    signal.removeEventListener("abort", onAbort);
+    shared.subscribers.delete(signal);
+    if (shared.subscribers.size === 0 && cache.get(cacheKey) === shared) {
       cache.delete(cacheKey);
     }
   }
 }
 
+function incompleteSessionReferenceResolution(
+  kind: SessionReferenceSearch["kind"],
+  sessions: GatewaySessionRow[],
+): SessionReferenceResolution {
+  if (kind === "slug" && sessions.length === 0) {
+    // Slugs are best-effort: an incomplete exact-key search must retain the
+    // authoritative literal route, while a bounded zero-match slug is a 404.
+    return { kind: "not-found" };
+  }
+  return { kind: "ambiguous", sessions, truncated: true };
+}
+
 async function querySessionReferencePages(
   context: ApplicationContext,
   search: SessionReferenceSearch,
+  signal: AbortSignal,
 ): Promise<SessionReferenceResolution | null> {
   const matches = new Map<string, GatewaySessionRow>();
   let offset = 0;
   for (let page = 0; ; page += 1) {
+    signal.throwIfAborted();
     const result = await context.sessions.list({
       agentId: search.agentId,
       archivedFilter: "all",
@@ -240,6 +251,7 @@ async function querySessionReferencePages(
       search: sessionReferenceSearchText(context, search),
       ...(offset > 0 ? { offset } : {}),
     });
+    signal.throwIfAborted();
     if (!result) {
       return null;
     }
@@ -258,18 +270,14 @@ async function querySessionReferencePages(
       return session ? { kind: "unique", session } : { kind: "not-found" };
     }
     if (page === SESSION_REF_SEARCH_MAX_PAGES - 1) {
-      return incompleteShortSessionResolution(search.kind, sessions);
+      return incompleteSessionReferenceResolution(search.kind, sessions);
     }
     const nextOffset = result.nextOffset ?? offset + result.sessions.length;
     if (nextOffset <= offset) {
-      return incompleteShortSessionResolution(search.kind, sessions);
+      return incompleteSessionReferenceResolution(search.kind, sessions);
     }
     offset = nextOffset;
   }
-}
-
-function draftFromLocation(location: RouteLocation): string | undefined {
-  return new URLSearchParams(location.search).get("draft") || undefined;
 }
 
 function isPreferenceDerivedFace(location: RouteLocation): boolean {
@@ -388,7 +396,7 @@ function candidatesForResolution(
   context: ApplicationContext,
   face: BoardFace,
   resolution: Extract<SessionReferenceResolution, { kind: "ambiguous" }>,
-  draft: string | undefined,
+  location: RouteLocation,
   preferenceDerived: boolean,
 ): SessionCandidate[] {
   const resolvedRows = resolution.sessions.flatMap((row) => {
@@ -413,7 +421,7 @@ function candidatesForResolution(
           {
             agentId,
             displayName: row.displayName?.trim() || row.key,
-            href: `${href}${draft ? `?${new URLSearchParams({ draft }).toString()}` : ""}`,
+            href: `${href}${draftSearchFromLocation(location)}`,
             idPrefix: prefix,
           },
         ]
@@ -446,7 +454,7 @@ function resolvedSessionRouteData(params: {
   return {
     kind: "session",
     sessionKey: params.row.key,
-    draft: draftFromLocation(params.location),
+    ...draftRouteDataFromLocation(params.location),
     face,
     ...(params.shortId && params.shortId.length > 8 ? { shortId: params.shortId } : {}),
     ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: params.location } : {}),
@@ -484,7 +492,7 @@ function resolvedMainSessionRouteData(params: {
     kind: "session",
     sessionKey: params.row.key,
     agentId: params.target.agentId,
-    draft: draftFromLocation(params.location),
+    ...draftRouteDataFromLocation(params.location),
     face,
     ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: params.location } : {}),
   };
@@ -534,7 +542,7 @@ export async function loadChatRoute(
       kind: "session",
       sessionKey,
       agentId: target.agentId,
-      draft: draftFromLocation(routeLocation),
+      ...draftRouteDataFromLocation(routeLocation),
       face: resolvedFace,
       // Non-null only on a preference-derived open, where it always at least drops the
       // marker from the URL.
@@ -568,7 +576,7 @@ export async function loadChatRoute(
     return {
       kind: "session",
       sessionKey,
-      draft: draftFromLocation(routeLocation),
+      ...draftRouteDataFromLocation(routeLocation),
       face,
       ...(canonicalLocation && canonicalLocation.search !== routeLocation.search
         ? { canonicalLocation, canonicalLocationSource: routeLocation }
@@ -627,7 +635,7 @@ export async function loadChatRoute(
               context,
               face,
               slugResolution,
-              draftFromLocation(routeLocation),
+              routeLocation,
               preferenceDerived,
             ),
             truncated: slugResolution.truncated,
@@ -666,7 +674,7 @@ export async function loadChatRoute(
     return {
       kind: "session",
       sessionKey: target.sessionKey,
-      draft: draftFromLocation(routeLocation),
+      ...draftRouteDataFromLocation(routeLocation),
       face,
       ...(canonicalLocation
         ? { canonicalLocation, canonicalLocationSource: routeLocation }
@@ -685,7 +693,7 @@ export async function loadChatRoute(
     return {
       kind: "session",
       sessionKey: cached.sessionKey,
-      draft: draftFromLocation(routeLocation),
+      ...draftRouteDataFromLocation(routeLocation),
       face,
       ...(target.shortId.length > 8 ? { shortId: target.shortId } : {}),
       ...(canonicalLocationChanged
@@ -695,16 +703,7 @@ export async function loadChatRoute(
   }
   const resolution = cached?.row
     ? ({ kind: "unique", session: cached.row } as const)
-    : narrowShortResolutionBySlugHint(
-        requireShortSessionResolution(
-          await querySessionReference(
-            context,
-            { kind: "short", value: target.shortId, agentId: target.agentId },
-            signal,
-          ),
-        ),
-        target.slugHint,
-      );
+    : await resolveShortSessionReference(context, target, signal);
   if (resolution.kind === "not-found") {
     return notFound({ routeId: face });
   }
@@ -716,7 +715,7 @@ export async function loadChatRoute(
         context,
         face,
         resolution,
-        draftFromLocation(routeLocation),
+        routeLocation,
         preferenceDerived,
       ),
       truncated: resolution.truncated,

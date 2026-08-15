@@ -1,14 +1,18 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ModelRegistry as CoreModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../auth-profiles.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { normalizeProviderId } from "../model-selection.js";
-import { shouldSuppressBuiltInModel, shouldUnconditionallySuppress } from "../model-suppression.js";
+import {
+  shouldSuppressBuiltInModelCore,
+  shouldUnconditionallySuppress,
+} from "../model-suppression.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
-import { resolveConfiguredFallbackModel } from "./model.configured-fallback.js";
+import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import {
   applyConfiguredProviderOverrides,
   findInlineModelMatch,
@@ -35,6 +39,16 @@ type ExplicitModelResolution =
   | { kind: "resolved"; dropOnRuntimeMiss: boolean; model: Model; source: "registry" }
   | { kind: "suppressed" };
 
+function getRegistryProviderMetadataOwners(
+  modelRegistry: CoreModelRegistry,
+): PluginMetadataSnapshotOwnerMaps | undefined {
+  return (
+    modelRegistry as CoreModelRegistry & {
+      getProviderMetadataOwners?: () => PluginMetadataSnapshotOwnerMaps | undefined;
+    }
+  ).getProviderMetadataOwners?.();
+}
+
 export function resolveExplicitModelWithRegistry(params: {
   provider: string;
   modelId: string;
@@ -48,6 +62,7 @@ export function resolveExplicitModelWithRegistry(params: {
   preparedStaticCatalogModel?: StaticCatalogFallbackModel;
 }): ExplicitModelResolution | undefined {
   const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir, runtimeHooks } = params;
+  const providerMetadataOwners = getRegistryProviderMetadataOwners(modelRegistry);
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const inlineMatch = findInlineModelMatch({
     providers: cfg?.models?.providers ?? {},
@@ -100,6 +115,7 @@ export function resolveExplicitModelWithRegistry(params: {
           modelId,
           cfg,
           manifestAlias: params.manifestAlias,
+          providerMetadataOwners,
           runtimeHooks,
           workspaceDir,
           preferDiscoveredTransport: true,
@@ -129,7 +145,7 @@ export function resolveExplicitModelWithRegistry(params: {
         : undefined;
     const effectiveBaseUrl = configuredBaseUrl ?? discoveredBaseUrl;
     if (
-      shouldSuppressBuiltInModel({
+      shouldSuppressBuiltInModelCore({
         provider,
         id: modelId,
         ...(cfg ? { config: cfg } : {}),
@@ -158,6 +174,7 @@ export function resolveExplicitModelWithRegistry(params: {
           modelId,
           cfg,
           manifestAlias: params.manifestAlias,
+          providerMetadataOwners,
           runtimeHooks,
           workspaceDir,
         }),
@@ -172,7 +189,7 @@ export function resolveExplicitModelWithRegistry(params: {
     return undefined;
   }
   if (
-    shouldSuppressBuiltInModel({
+    shouldSuppressBuiltInModelCore({
       provider,
       id: modelId,
       ...(cfg ? { config: cfg } : {}),
@@ -309,6 +326,7 @@ function resolvePluginDynamicModelWithRegistry(params: {
     modelId,
     cfg,
     manifestAlias: params.manifestAlias,
+    providerMetadataOwners: getRegistryProviderMetadataOwners(modelRegistry),
     runtimeHooks,
     workspaceDir,
     preferDiscoveredModelMetadata,
@@ -446,7 +464,12 @@ export function resolveModelWithPreparedRegistry(
   if (pluginDynamicModel) {
     return pluginDynamicModel;
   }
-  return params.skipConfiguredFallback ? undefined : resolveConfiguredFallbackModel(params);
+  return params.skipConfiguredFallback
+    ? undefined
+    : buildConfiguredFallbackModel({
+        ...params,
+        providerMetadataOwners: getRegistryProviderMetadataOwners(params.modelRegistry),
+      });
 }
 
 export function resolveModelWithRegistry(

@@ -18,6 +18,8 @@ export type OutboundMessageSendOverrides = ReplyToOverride & {
   formatting?: OutboundDeliveryFormattingOptions;
   /** Stable zero-based platform-send index within one durable payload. */
   deliveryPartIndex?: number;
+  /** Exact platform-send count for this payload. */
+  deliveryPartCount?: number;
 };
 
 /**
@@ -131,8 +133,16 @@ export function planOutboundTextMessageUnits(params: {
     };
   };
 
+  const withDeliveryTopology = (units: OutboundMessageUnit[]): OutboundMessageUnit[] => {
+    const deliveryPartCount = units.length;
+    return units.map((unit) => ({
+      ...unit,
+      overrides: { ...unit.overrides, deliveryPartCount },
+    }));
+  };
+
   if (!params.chunker || params.textLimit === undefined) {
-    return [planTextUnit(params.text, 0)];
+    return withDeliveryTopology([planTextUnit(params.text, 0)]);
   }
 
   if (params.chunkMode === "newline") {
@@ -160,15 +170,17 @@ export function planOutboundTextMessageUnits(params: {
         units.push(planChunkedTextUnit(chunk, units.length));
       }
     }
-    return units;
+    return withDeliveryTopology(units);
   }
 
-  return chunkTextForPlan({
-    text: params.text,
-    limit: params.textLimit,
-    chunker: params.chunker,
-    formatting: params.formatting,
-  }).map(planChunkedTextUnit);
+  return withDeliveryTopology(
+    chunkTextForPlan({
+      text: params.text,
+      limit: params.textLimit,
+      chunker: params.chunker,
+      formatting: params.formatting,
+    }).map(planChunkedTextUnit),
+  );
 }
 
 /**
@@ -180,6 +192,7 @@ export function planOutboundMediaMessageUnits(params: {
   overrides: OutboundMessageSendOverrides;
   consumeReplyTo?: PlanReplyToConsumption;
 }): OutboundMessageUnit[] {
+  const deliveryPartCount = params.mediaUrls.length;
   return params.mediaUrls.map((mediaUrl, index) => ({
     kind: "media" as const,
     mediaUrl,
@@ -187,6 +200,7 @@ export function planOutboundMediaMessageUnits(params: {
     overrides: {
       ...withPlannedReplyTo(params.overrides, params.consumeReplyTo),
       deliveryPartIndex: index,
+      deliveryPartCount,
     },
   }));
 }

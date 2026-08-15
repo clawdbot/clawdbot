@@ -1,14 +1,15 @@
 // Handles TUI keyboard, paste, backend, and command events.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   hasSessionProjectionAcceptedFinal,
   reduceSessionProjectionRunEvent,
+  type SessionProjectionRunStatus,
 } from "../../packages/gateway-client/src/session-projection.js";
 import {
-  asString,
+  formatPrimitiveString,
   extractTextFromMessage,
-  isCommandMessage,
-  sanitizeRenderableText,
+  extractTuiAbortedText,
+  formatTuiAbortDiagnostic,
+  isCommandMarkedMessage,
 } from "./tui-formatters.js";
 import { createTuiRunLifecycle } from "./tui-run-lifecycle.js";
 import { matchesSelectedTuiSession, readTuiSessionUserMessage } from "./tui-session-events.js";
@@ -16,7 +17,7 @@ import {
   getTuiSessionProjection,
   hasDisplayableTuiSessionFinal,
   isIdentityOnlyTuiSessionInvalidation,
-  isReplayableTuiSessionMessage,
+  projectTuiSessionMessage,
   projectTuiSessionFinal,
   readTuiSessionProjectionScope,
   reduceTuiSessionProjection,
@@ -60,17 +61,8 @@ type EventHandlerBtwPresenter = {
   clear: () => void;
 };
 
-const MAX_ABORT_DIAGNOSTIC_LENGTH = 160;
-
-function formatAbortDiagnostic(value: string | undefined): string | undefined {
-  const diagnostic = sanitizeRenderableText(value ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return diagnostic
-    ? diagnostic.length > MAX_ABORT_DIAGNOSTIC_LENGTH
-      ? `${truncateUtf16Safe(diagnostic, MAX_ABORT_DIAGNOSTIC_LENGTH - 1)}…`
-      : diagnostic
-    : undefined;
+function isFailedTuiRunStatus(status: SessionProjectionRunStatus | undefined): boolean {
+  return status === "aborted" || status === "error" || status === "timeout";
 }
 
 type EventHandlerContext = {
@@ -206,6 +198,17 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const previousProjectedRun = reducedRun.previousRun;
     state.sessionProjection = reducedRun.projection;
+    if (evt.state === "final" && isFailedTuiRunStatus(previousProjectedRun?.status)) {
+      const hasRecoverableFinalText =
+        Boolean(extractTuiAbortedText(evt.message, state.showThinking).trim()) ||
+        streamAssembler.hasDisplayText(evt.runId);
+      if (!hasRecoverableFinalText) {
+        // The shared projection keeps failure precedence while allowing a real
+        // recovered reply. Attachment fallback alone cannot turn failure into completion.
+        clearStaleStreamingIfNoTrackedRunRemains();
+        return;
+      }
+    }
     if (evt.state === "aborted" && previousProjectedRun?.status === "aborted") {
       clearStaleStreamingIfNoTrackedRunRemains();
       return;
@@ -297,7 +300,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         tui.requestRender(true);
         return;
       }
-      if (isCommandMessage(evt.message)) {
+      if (isCommandMarkedMessage(evt.message)) {
         maybeRefreshHistoryForRun(evt.runId, { wasPendingChatRun: isPendingChatRun });
         const text = extractTextFromMessage(evt.message);
         if (text) {
@@ -321,10 +324,8 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (!suppressEmptyExternalPlaceholder) {
         projectTuiSessionFinal(state, evt, finalText, hasStreamedText);
       }
-      // Skip the history reload when the final event produced displayable
-      // output. loadHistory() does clearAll() + rebuild from server data,
-      // but the server may not have persisted this message yet — causing
-      // the just-rendered final message to vanish (#87922).
+      // Skip history reload for displayable output: loadHistory() rebuilds from
+      // server data that may not contain the final yet, making it vanish (#87922).
       maybeRefreshHistoryForRun(evt.runId, {
         hasDisplayableFinal: !suppressEmptyExternalPlaceholder,
         wasPendingChatRun: isPendingChatRun,
@@ -345,18 +346,17 @@ export function createEventHandlers(context: EventHandlerContext) {
       forgetLocalBtwRunId?.(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
       // Determine content from the message and stream, not the user-visible
-      // empty placeholder: "(no output)" is also valid assistant text.
+      // fallbacks: attachment-only aborts remain cancellation diagnostics.
       const hasDisplayableAbortedText =
-        Boolean(
-          extractTextFromMessage(evt.message, { includeThinking: state.showThinking }).trim(),
-        ) || streamAssembler.hasDisplayText(evt.runId);
+        Boolean(extractTuiAbortedText(evt.message, state.showThinking).trim()) ||
+        streamAssembler.hasDisplayText(evt.runId);
       // Abort envelopes carry the complete buffered reply, including text
       // suppressed by Gateway delta throttling; finalize it before run cleanup.
       const abortedText = streamAssembler.finalize(evt.runId, evt.message, state.showThinking);
       if (hasDisplayableAbortedText) {
         chatLog.finalizeAssistant(abortedText, evt.runId);
       }
-      const diagnostic = formatAbortDiagnostic(evt.errorMessage);
+      const diagnostic = formatTuiAbortDiagnostic(evt.errorMessage);
       chatLog.addSystem(diagnostic ? `run aborted: ${diagnostic}` : "run aborted");
       terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
       maybeRefreshHistoryForRun(evt.runId, {
@@ -471,6 +471,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       finalizedRunIds,
       displayedRunIds,
     } = collectTrackedSessionRunIds();
+    state.sessionGeneration = (state.sessionGeneration ?? 0) + 1;
     // Reduce the old epoch before adopting its replacement ID; otherwise the
     // canonical reducer correctly rejects the reset as a foreign session.
     reduceTuiSessionProjection(state, {
@@ -506,13 +507,12 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
 
-    if (isReplayableTuiSessionMessage(evt)) {
-      reduceTuiSessionProjection(state, {
-        type: "messagePersisted",
-        message: evt.message,
-        envelope: evt,
-        scope: readTuiSessionProjectionScope(state),
-      });
+    const unboundDisplayedRunIds = [...finalizedRunsWithDisplay.keys()].filter(
+      (runId) => !persistedTerminalRunIds.has(runId),
+    );
+    const authoritativeRunId = projectTuiSessionMessage(state, evt, unboundDisplayedRunIds);
+    if (authoritativeRunId) {
+      runCoordinator.notePersistedRun(authoritativeRunId);
     }
     const liveUserMessage = readTuiSessionUserMessage(evt);
     if (liveUserMessage) {
@@ -538,11 +538,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
     }
 
-    if (runCoordinator.deferSessionMessageRefresh()) {
+    if (runCoordinator.routeSessionMessageRefresh(Boolean(liveUserMessage || authoritativeRunId))) {
       void refreshSessionInfo?.();
-      return;
     }
-    flushPendingHistoryRefreshIfIdle();
   };
 
   const handleAgentEvent = (payload: unknown) => {
@@ -565,7 +563,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       !finalizedRuns.has(evt.runId);
     if (
       evt.stream === "lifecycle" &&
-      asString(evt.data?.phase, "") === "start" &&
+      formatPrimitiveString(evt.data?.phase, "") === "start" &&
       !finalizedRuns.has(evt.runId) &&
       !(isLocalBtwRunId?.(evt.runId) ?? false) &&
       matchesSelectedTuiSession(state, evt)
@@ -607,9 +605,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       const data = evt.data ?? {};
-      const phase = asString(data.phase, "");
-      const toolCallId = asString(data.toolCallId, "");
-      const toolName = asString(data.name, "tool");
+      const phase = formatPrimitiveString(data.phase, "");
+      const toolCallId = formatPrimitiveString(data.toolCallId, "");
+      const toolName = formatPrimitiveString(data.name, "tool");
       if (!toolCallId) {
         return;
       }
@@ -671,14 +669,15 @@ export function createEventHandlers(context: EventHandlerContext) {
         clearStreamingWatchdog();
         setActivityStatus("finishing context");
       }
-      let forceRender = false;
+      let forceRender = phase === "end";
       if (phase === "end") {
         postFinalizingRuns.delete(evt.runId);
         if (!canUpdateActivityStatus) {
           return;
         }
-        setActivityStatus("idle");
-        forceRender = true;
+        if (!localMode || !isLocalRunId?.(evt.runId) || finalizedRuns.has(evt.runId)) {
+          setActivityStatus("idle"); // Local chat.final proves post-turn maintenance finished.
+        }
       }
       if (phase === "error") {
         postFinalizingRuns.delete(evt.runId);
@@ -694,10 +693,8 @@ export function createEventHandlers(context: EventHandlerContext) {
                 ? evt.data.errorMessage
                 : "unknown";
           scheduleTerminalLifecycleError(evt.runId, errorMessage);
-          setActivityStatus("error");
-        } else {
-          setActivityStatus("error");
         }
+        setActivityStatus("error");
         forceRender = true;
       }
       tui.requestRender(forceRender);

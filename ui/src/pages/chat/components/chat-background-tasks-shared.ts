@@ -1,5 +1,6 @@
 import { t } from "../../../i18n/index.ts";
-import { isActiveTask, taskStatusLabel, type TaskSummary } from "../../../lib/tasks/data.ts";
+import { isActiveTask, taskStatusLabel } from "../../../lib/tasks/data.ts";
+import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 
 export { newestTaskSnapshot } from "../../../lib/tasks/data.ts";
 

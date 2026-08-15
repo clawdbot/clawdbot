@@ -1,6 +1,6 @@
 // Covers bounded TUI run ownership and transcript persistence coordination.
 import { describe, expect, it, vi } from "vitest";
-import { TuiSessionRunCoordinator } from "./tui-session-run-coordinator.js";
+import { createTuiRunIdTracker, TuiSessionRunCoordinator } from "./tui-session-run-coordinator.js";
 import type { ChatEvent, TuiHistoryLoadResult, TuiStateAccess } from "./tui-types.js";
 
 function makeState(overrides?: Partial<TuiStateAccess>): TuiStateAccess {
@@ -64,6 +64,24 @@ function createCoordinator(overrides?: {
     requestRender,
   };
 }
+
+describe("createTuiRunIdTracker", () => {
+  it("bounds FIFO membership and supports explicit cleanup", () => {
+    const tracker = createTuiRunIdTracker();
+    tracker.note("");
+    for (let index = 0; index <= 200; index += 1) {
+      tracker.note(`run-${index}`);
+    }
+
+    expect(tracker.has("")).toBe(false);
+    expect(tracker.has("run-0")).toBe(false);
+    expect(tracker.has("run-200")).toBe(true);
+    tracker.forget("run-200");
+    expect(tracker.has("run-200")).toBe(false);
+    tracker.clear();
+    expect(tracker.has("run-100")).toBe(false);
+  });
+});
 
 describe("TuiSessionRunCoordinator", () => {
   it("keeps the active session run while pruning hundreds of abandoned runs", () => {
@@ -161,28 +179,6 @@ describe("TuiSessionRunCoordinator", () => {
     coordinator.noteSessionRun("run-orphan");
 
     expect(coordinator.resolveMostRecentPromotableRun()).toBe("run-pending");
-  });
-
-  it("keeps every displayed final behind its own persistence barrier", () => {
-    const { coordinator } = createCoordinator();
-    coordinator.noteFinalizedRun("run-first", { displayedFinal: true });
-    coordinator.noteFinalizedRun("run-second", { displayedFinal: true });
-
-    expect(coordinator.deferSessionMessageRefresh()).toBe(true);
-    coordinator.notePersistedRun("run-second");
-    expect(coordinator.isSessionMessagePersistencePending).toBe(true);
-    coordinator.notePersistedRun("run-first");
-    expect(coordinator.isSessionMessagePersistencePending).toBe(false);
-    expect(coordinator.hasPendingSessionMessageRefresh).toBe(true);
-  });
-
-  it("recognizes persistence that arrives before a visible final", () => {
-    const { coordinator } = createCoordinator();
-    coordinator.notePersistedRun("run-first");
-    coordinator.noteFinalizedRun("run-first", { displayedFinal: true });
-
-    expect(coordinator.deferSessionMessageRefresh()).toBe(false);
-    expect(coordinator.isSessionMessagePersistencePending).toBe(false);
   });
 
   it("serializes queued reloads and replays a gated terminal event", async () => {

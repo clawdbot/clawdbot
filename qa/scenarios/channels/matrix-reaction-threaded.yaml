@@ -8,6 +8,8 @@ scenario:
   execution:
     kind: flow
     channel: matrix
+    suiteIsolation: isolated
+    isolationReason: Posts native reaction state against a fresh canary reply and cannot inherit a shared Matrix session.
     timeoutMs: 45000
     retryCount: 0
     config:

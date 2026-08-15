@@ -1,9 +1,12 @@
-// Lmstudio tests cover stream plugin behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Lmstudio tests cover stream plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let wrapLmstudioInferencePreload: typeof import("./stream.js").wrapLmstudioInferencePreload;
+let defaultBaseUrl: string;
+let defaultBaseUrlSequence = 0;
 
 const ensureLmstudioModelLoadedMock = vi.hoisted(() => vi.fn());
 const resolveLmstudioProviderHeadersMock = vi.hoisted(() =>
@@ -13,37 +16,22 @@ const resolveLmstudioRuntimeApiKeyMock = vi.hoisted(() =>
   vi.fn(async (_params?: unknown) => undefined),
 );
 
-vi.mock("./models.fetch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./models.fetch.js")>();
-  return {
-    ...actual,
-    ensureLmstudioModelLoaded: (params: unknown) => ensureLmstudioModelLoadedMock(params),
-  };
-});
+vi.mock("./models.fetch.js", () => ({
+  ensureLmstudioModelLoaded: (params: unknown) => ensureLmstudioModelLoadedMock(params),
+}));
 
-vi.mock("./runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./runtime.js")>();
-  return {
-    ...actual,
-    resolveLmstudioProviderHeaders: (params: unknown) => resolveLmstudioProviderHeadersMock(params),
-    resolveLmstudioRuntimeApiKey: (params: unknown) => resolveLmstudioRuntimeApiKeyMock(params),
-  };
-});
+vi.mock("./runtime.js", () => ({
+  resolveLmstudioProviderHeaders: (params: unknown) => resolveLmstudioProviderHeadersMock(params),
+  resolveLmstudioRuntimeApiKey: (params: unknown) => resolveLmstudioRuntimeApiKeyMock(params),
+}));
 
-afterAll(() => {
-  vi.doUnmock("./models.fetch.js");
-  vi.doUnmock("./runtime.js");
-  vi.resetModules();
+beforeAll(async () => {
+  ({ wrapLmstudioInferencePreload } = await import("./stream.js"));
 });
 
 type StreamEvent = { type: string } & Record<string, unknown>;
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
@@ -147,7 +135,7 @@ function createWrappedLmstudioStream(
       models: {
         providers: {
           lmstudio: {
-            baseUrl: params?.baseUrl ?? "http://localhost:1234",
+            baseUrl: params?.baseUrl ?? defaultBaseUrl,
             models: [],
           },
         },
@@ -194,9 +182,10 @@ function runWrappedLmstudioStream(
 }
 
 describe("lmstudio stream wrapper", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ wrapLmstudioInferencePreload } = await import("./stream.js"));
+  beforeEach(() => {
+    // Production preload state is keyed by base URL, model, and context length.
+    // Give each test a real cache namespace while preserving within-test reuse.
+    defaultBaseUrl = `http://lmstudio-test-${defaultBaseUrlSequence++}.localhost:1234`;
   });
 
   afterEach(() => {
@@ -242,7 +231,7 @@ describe("lmstudio stream wrapper", () => {
     expectSingleDoneEvent(events);
     expectEnsureLoadedFields({
       modelKey: variantKey,
-      baseUrl: "http://localhost:1234/v1",
+      baseUrl: `${defaultBaseUrl}/v1`,
     });
     expectBaseStreamModelFields(baseStream, {
       provider: "lmstudio",
@@ -309,7 +298,7 @@ describe("lmstudio stream wrapper", () => {
         models: {
           providers: {
             lmstudio: {
-              baseUrl: "http://localhost:1234",
+              baseUrl: defaultBaseUrl,
               models: [],
             },
           },
@@ -392,7 +381,7 @@ describe("lmstudio stream wrapper", () => {
         models: {
           providers: {
             lmstudio: {
-              baseUrl: "http://localhost:1234",
+              baseUrl: defaultBaseUrl,
               params: { preload: false },
               models: [],
             },
@@ -442,7 +431,7 @@ describe("lmstudio stream wrapper", () => {
         models: {
           providers: {
             lmstudio: {
-              baseUrl: "http://localhost:1234",
+              baseUrl: defaultBaseUrl,
               models: [],
             },
           },
@@ -561,7 +550,7 @@ describe("lmstudio stream wrapper", () => {
         models: {
           providers: {
             lmstudio: {
-              baseUrl: "http://localhost:1234",
+              baseUrl: defaultBaseUrl,
               models: [],
             },
           },
@@ -638,7 +627,7 @@ describe("lmstudio stream wrapper", () => {
         models: {
           providers: {
             lmstudio: {
-              baseUrl: "http://localhost:1234",
+              baseUrl: defaultBaseUrl,
               models: [],
             },
           },
@@ -724,7 +713,7 @@ describe("lmstudio stream wrapper", () => {
         models: {
           providers: {
             lmstudio: {
-              baseUrl: "http://localhost:1234",
+              baseUrl: defaultBaseUrl,
               models: [],
             },
           },
@@ -810,7 +799,7 @@ describe("lmstudio stream wrapper", () => {
         models: {
           providers: {
             lmstudio: {
-              baseUrl: "http://localhost:1234",
+              baseUrl: defaultBaseUrl,
               params: { preload: false },
               models: [],
             },

@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import type { BoundedSerialQueue } from "../shared/bounded-serial-queue.js";
 import type { RealtimeVoiceAgentControlResult } from "../talk/agent-run-control.js";
 import type {
   RealtimeVoiceBrowserAudioContract,
@@ -12,6 +14,7 @@ import type { RealtimeVoiceSessionHarness } from "../talk/realtime-session-harne
 import type { RealtimeVoiceBridgeSession } from "../talk/session-runtime.js";
 import type { TalkEvent } from "../talk/talk-session-controller.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import type { RelayToolCallLedger } from "./talk-realtime-relay-tool-call-ledger.js";
 
 export const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
 export const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
@@ -51,6 +54,7 @@ export type TalkRealtimeRelayEventPayload =
       args: unknown;
       forced?: boolean;
     }
+  | { relaySessionId: string; type: "toolCallCancelled"; callId: string }
   | { relaySessionId: string; type: "toolResult"; callId: string }
   | { relaySessionId: string; type: "toolProgress"; result: RealtimeVoiceAgentControlResult }
   | {
@@ -92,14 +96,10 @@ export type RelaySession = {
   activeAgentRuns: Map<string, string>;
   provider: string;
   activeAgentToolCalls: Map<string, string>;
-  completedAgentToolCalls: Set<string>;
-  // Cancelled calls retain their original turn long enough to terminally satisfy
-  // late browser results without creating a replacement turn or owner success event.
-  cancelledAgentToolCalls: Map<string, string>;
+  toolCalls: RelayToolCallLedger;
+  providerToolCallIds: Map<string, string>;
+  relayToolCallIdsByProviderId: Map<string, string>;
   pendingFinalToolResults: Map<string, Promise<void>>;
-  // Provider acceptance survives partial retries independently from the owner-facing
-  // agent-call lifecycle, so accepted native ids are never submitted twice.
-  completedProviderToolResults: Set<string>;
   pendingProviderToolResults: Map<string, Promise<void>>;
   // A final result must wait until the provider accepts its continuation result;
   // otherwise async bridges can observe final-before-working ordering.
@@ -112,7 +112,9 @@ export type RelaySession = {
   voiceConfig?: OpenClawConfig;
   voiceSessionCreated: boolean;
   voiceTranscriptSeq: number;
-  voiceTranscriptWrites: Promise<void>;
+  voiceTranscriptQueue: BoundedSerialQueue;
+  voiceSessionClose?: Promise<void>;
+  failSession: (message: string) => void;
   pendingVoiceTranscripts: Array<{ role: "user" | "assistant"; text: string }>;
 };
 
@@ -142,27 +144,72 @@ export type TalkRealtimeRelaySessionResult = {
 };
 
 export const relaySessions = new Map<string, RelaySession>();
+// Closed relays leave the active map immediately so late provider/client events
+// are ignored, but their accepted transcript prefix still owns bounded memory
+// until durable close settles. Session limits count both maps.
+export const drainingRelaySessions = new Set<RelaySession>();
+
+export function adoptRelayProviderToolCallId(
+  session: RelaySession,
+  providerCallId: string,
+): string | undefined {
+  const current = session.relayToolCallIdsByProviderId.get(providerCallId);
+  if (current) {
+    if (
+      session.toolCalls.isAgentCompleted(current) ||
+      session.toolCalls.isProviderCompleted(providerCallId)
+    ) {
+      return undefined;
+    }
+    return current;
+  }
+  const relayCallId = session.toolCalls.isAgentCompleted(providerCallId)
+    ? `relay-${randomUUID()}`
+    : providerCallId;
+  // Realtime protocols define no replay window. Retain every admitted identity
+  // for the session and fail closed at the hard cap instead of evicting dedupe state.
+  if (!session.toolCalls.tryAdmit([providerCallId, relayCallId])) {
+    return undefined;
+  }
+  session.toolCalls.deleteProviderCompleted(providerCallId);
+  session.toolCalls.deleteAgentCompleted(relayCallId);
+  session.providerToolCallIds.set(relayCallId, providerCallId);
+  session.relayToolCallIdsByProviderId.set(providerCallId, relayCallId);
+  return relayCallId;
+}
+
+export function resolveRelayProviderToolCallId(session: RelaySession, relayCallId: string): string {
+  return session.providerToolCallIds.get(relayCallId) ?? relayCallId;
+}
 
 export function broadcastToOwner(
   context: GatewayRequestContext,
   connId: string,
   event: TalkRealtimeRelayEvent,
-  options: { dropIfSlow?: boolean } = { dropIfSlow: true },
 ): void {
-  context.broadcastToConnIds(RELAY_EVENT, event, new Set([connId]), options);
+  // Classify the materialized Talk event so final results cannot be mistaken
+  // for transient tool progress by individual provider callback paths.
+  const delivery = relayEventDeliveryOptions(event, event.talkEvent);
+  context.broadcastToConnIds(RELAY_EVENT, event, new Set([connId]), delivery);
 }
 
-export function relayEventDeliveryOptions(event: TalkRealtimeRelayEventPayload): {
+function relayEventDeliveryOptions(
+  event: TalkRealtimeRelayEventPayload,
+  talkEvent?: TalkEvent,
+): {
   dropIfSlow?: boolean;
 } {
   switch (event.type) {
-    case "ready":
-    case "error":
-    case "close":
-    case "mark":
-      return { dropIfSlow: false };
-    default:
+    case "audio":
+    case "inputAudio":
       return { dropIfSlow: true };
+    case "transcript":
+      return { dropIfSlow: !event.final };
+    case "toolProgress":
+    case "toolResult":
+      return { dropIfSlow: talkEvent?.final !== true };
+    default:
+      return { dropIfSlow: false };
   }
 }
 

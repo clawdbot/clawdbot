@@ -6,6 +6,7 @@ import type {
   PluginHookAgentContext,
   PluginHookAgentTrigger,
   PluginHookRegistration,
+  PluginToolMatcher,
 } from "./types.js";
 
 export { addTestHook, createMockPluginRegistry };
@@ -30,17 +31,19 @@ export function addStaticTestHooks<TResult>(
     hooks: ReadonlyArray<{
       pluginId: string;
       result: TResult;
+      matcher?: PluginToolMatcher;
       priority?: number;
       handler?: () => TResult | Promise<TResult>;
     }>;
   },
 ) {
-  for (const { pluginId, result, priority, handler } of params.hooks) {
+  for (const { pluginId, result, matcher, priority, handler } of params.hooks) {
     addTestHook({
       registry,
       pluginId,
       hookName: params.hookName,
       handler: (handler ?? (() => result)) as PluginHookRegistration["handler"],
+      ...(matcher ? { matcher } : {}),
       ...(priority !== undefined ? { priority } : {}),
     });
   }

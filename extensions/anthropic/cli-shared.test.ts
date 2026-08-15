@@ -65,6 +65,58 @@ describe("Claude CLI adapter equivalence", () => {
       }),
     ).toEqual({ env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000" } });
   });
+
+  it("privately acknowledges isolated completion preparation", () => {
+    const backend = buildAnthropicCliBackend();
+    const prepared = backend.prepareExecution?.({
+      workspaceDir: "/tmp/openclaw-claude-cli",
+      provider: "claude-cli",
+      modelId: "claude-opus-4-8",
+      isolatedCompletionPrompt: "TASK: return JSON",
+      isolatedCompletionSystemPrompt: "Return JSON.",
+    } as Parameters<NonNullable<typeof backend.prepareExecution>>[0] & {
+      isolatedCompletionPrompt: string;
+      isolatedCompletionSystemPrompt: string;
+    }) as { env?: Record<string, string>; isolatedCompletionEnforced?: true };
+
+    expect(prepared).toEqual({ env: {}, isolatedCompletionEnforced: true });
+  });
+
+  it("builds Claude Code's native manual compaction command", () => {
+    const backend = buildAnthropicCliBackend();
+    const manualCompaction = backend.manualCompaction;
+    // Redacted fixtures preserve the control fields observed from Claude Code 2.0.76-2.1.226.
+    const compactingStatus = { type: "system", subtype: "status", status: "compacting" };
+    const compactResult = { compact_result: "success" };
+    const compactBoundary = { type: "system", subtype: "compact_boundary" };
+
+    expect(manualCompaction?.buildPrompt()).toBe("/compact");
+    expect(manualCompaction?.buildPrompt(" keep operator decisions ")).toBe(
+      "/compact keep operator decisions",
+    );
+    expect(manualCompaction?.input).toBe("arg");
+    expect(
+      manualCompaction?.validateOutput(
+        [compactingStatus, compactResult, compactBoundary]
+          .map((event) => JSON.stringify(event))
+          .join("\n"),
+      ),
+    ).toEqual({ ok: true });
+    expect(manualCompaction?.validateOutput(`${JSON.stringify(compactResult)}\n`)).toEqual({
+      ok: true,
+    });
+    expect(manualCompaction?.validateOutput(`${JSON.stringify(compactBoundary)}\n`)).toEqual({
+      ok: true,
+    });
+    expect(
+      manualCompaction?.validateOutput(
+        `${JSON.stringify(compactingStatus)}\n${JSON.stringify({ type: "system", subtype: "local_command" })}\n`,
+      ),
+    ).toEqual({
+      ok: false,
+      reason: "Claude CLI did not confirm that native compaction ran.",
+    });
+  });
 });
 
 describe("resolveClaudeCliAutoCompactEnv", () => {
@@ -99,17 +151,6 @@ function normalizeClaudeArgs(
 }
 
 describe("Claude backend permission args", () => {
-  it("leaves args alone when they omit permission flags", () => {
-    expect(normalizeClaudeArgs(["-p", "--output-format", "stream-json", "--verbose"])).toEqual([
-      "-p",
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      "--setting-sources",
-      "user",
-    ]);
-  });
-
   it("removes legacy skip-permissions without adding bypassPermissions", () => {
     expect(normalizeClaudeArgs(["-p", "--dangerously-skip-permissions", "--verbose"])).toEqual([
       "-p",
@@ -200,6 +241,31 @@ describe("Claude CLI model aliases", () => {
 });
 
 describe("resolveClaudeCliExecutionArgs", () => {
+  it("keeps the real resumed manual-compaction command enabled", () => {
+    const backend = buildAnthropicCliBackend();
+    const manualCompaction = backend.manualCompaction;
+    const baseArgs = backend.config.resumeArgs?.map((arg) =>
+      arg.replaceAll("{sessionId}", "native-session"),
+    );
+    if (!manualCompaction || !baseArgs) {
+      throw new Error("Anthropic CLI backend must expose resumed manual compaction");
+    }
+
+    const argv = [
+      ...resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-8",
+        useResume: true,
+        baseArgs,
+      }),
+      manualCompaction.buildPrompt(),
+    ];
+
+    expect(argv).toContain("/compact");
+    expect(argv).not.toContain("--disable-slash-commands");
+  });
+
   it("isolates OpenClaw from Claude user customizations while preserving exact MCP", () => {
     expect(
       resolveClaudeCliExecutionArgs({
@@ -653,6 +719,12 @@ describe("normalizeClaudeBackendConfig", () => {
       packageName: "@anthropic-ai/claude-code",
       entrypoint: "command",
       nativeExecutableNames: ["claude", "claude.exe"],
+    });
+    expect(backend.liveSessionRequirement).toEqual({
+      capability: "msg_lifecycle_v1",
+      minimumVersion: "2.1.206",
+      versionArgs: ["--version"],
+      updateCommand: "claude update",
     });
 
     const normalized = normalizeConfig?.({

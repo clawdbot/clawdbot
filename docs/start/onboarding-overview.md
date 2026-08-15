@@ -93,8 +93,10 @@ offering a verified manual API-key step when nothing is found. Sensitive
 credentials use masked input. Once inference passes, OpenClaw starts and
 helps configure the rest.
 
-Gemini CLI remains available for normal agents after setup, but it is not
-offered for this inference gate because it cannot enforce the tool-free probe.
+Gemini CLI remains available as an explicitly configured runtime after setup,
+but Gemini CLI and Antigravity are not offered as detected inference routes.
+Use Google AI Studio API-key or Vertex AI for guided setup. The optional Gemini
+CLI runtime specifically requires an AI Studio API-key profile.
 
 Full reference: [Onboarding (macOS App)](/start/onboarding)
 

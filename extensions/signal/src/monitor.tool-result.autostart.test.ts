@@ -1,5 +1,6 @@
 // Signal tests cover monitor.tool result.autostart plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { SignalDaemonHandle } from "./daemon.js";
 import {
@@ -198,6 +199,7 @@ describe("monitorSignalProvider autostart", () => {
 
   it("fails fast when auto-started signal daemon exits during startup", async () => {
     const runtime = createMonitorRuntime();
+    const statusSink = vi.fn();
     setSignalAutoStartConfig();
     spawnSignalDaemonMock.mockReturnValueOnce(
       createMockSignalDaemonHandle({
@@ -232,8 +234,12 @@ describe("monitorSignalProvider autostart", () => {
         autoStart: true,
         baseUrl: SIGNAL_BASE_URL,
         runtime,
+        statusSink,
       }),
     ).rejects.toThrow(/signal daemon exited/i);
+    expect(statusSink).toHaveBeenCalledWith(
+      expect.objectContaining({ lifecycle: "recovering", connected: false }),
+    );
   });
 
   it("treats daemon exit after user abort as clean shutdown", async () => {
@@ -309,17 +315,3 @@ describe("monitorSignalProvider autostart", () => {
     expect(settled).toBe(true);
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

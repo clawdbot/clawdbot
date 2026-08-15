@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SessionEntry } from "../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 
 describe("buildForkedGatewaySessionEntry", () => {
@@ -7,6 +7,7 @@ describe("buildForkedGatewaySessionEntry", () => {
     const previous: SessionEntry = {
       sessionId: "adopted-generation",
       updatedAt: 1,
+      lifecycleRunId: "adopted-run",
       forkSource: { sessionKey: "agent:main:original", sessionId: "original-generation" },
     };
 
@@ -22,6 +23,7 @@ describe("buildForkedGatewaySessionEntry", () => {
       previousSessionId: "adopted-generation",
       forkSource: { sessionKey: "agent:main:original", sessionId: "original-generation" },
     });
+    expect(forked.lifecycleRunId).toBeUndefined();
   });
 
   it("uses the requested ancestry for a genuinely new node", () => {

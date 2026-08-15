@@ -274,8 +274,17 @@ function buildRequestBody(req: VideoGenerationRequest, model: string): Record<st
   return body;
 }
 
-function isTerminalFailure(status: string | undefined): boolean {
-  return status === "failed" || status === "cancelled" || status === "expired";
+function resolveVideoJobState(status: string | undefined): "active" | "completed" | "failure" {
+  if (status === "completed") {
+    return "completed";
+  }
+  if (status === "failed" || status === "cancelled" || status === "expired") {
+    return "failure";
+  }
+  if (status && ["queued", "pending", "in_progress", "processing", "running"].includes(status)) {
+    return "active";
+  }
+  throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
 }
 
 async function fetchOpenRouterJson(params: {
@@ -325,17 +334,11 @@ async function pollOpenRouterVideo(params: {
       auditContext: "openrouter-video-status",
     });
     const status = normalizeOptionalString(payload.status);
-    if (
-      !status ||
-      (!["queued", "pending", "processing", "running", "completed"].includes(status) &&
-        !isTerminalFailure(status))
-    ) {
-      throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
-    }
-    if (status === "completed") {
+    const state = resolveVideoJobState(status);
+    if (state === "completed") {
       return payload;
     }
-    if (isTerminalFailure(status)) {
+    if (state === "failure") {
       throw new Error(
         normalizeOptionalString(payload.error) ?? `OpenRouter video generation ${status}`,
       );
@@ -422,8 +425,7 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
     label: "OpenRouter",
     defaultModel: DEFAULT_MODEL,
     models: [DEFAULT_MODEL],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({ provider: "openrouter", agentDir }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "openrouter", ...ctx }),
     resolveModelCapabilities: resolveOpenRouterVideoModelCapabilities,
     capabilities: {
       providerOptions: {
@@ -517,21 +519,15 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
           throw new Error("OpenRouter video generation response missing job details");
         }
         const submittedStatus = normalizeOptionalString(submitted.status);
-        if (
-          submittedStatus &&
-          !["queued", "pending", "processing", "running", "completed"].includes(submittedStatus) &&
-          !isTerminalFailure(submittedStatus)
-        ) {
-          throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
-        }
-        if (isTerminalFailure(submittedStatus)) {
+        const submittedState = submittedStatus ? resolveVideoJobState(submittedStatus) : "active";
+        if (submittedState === "failure") {
           throw new Error(
             normalizeOptionalString(submitted.error) ??
               `OpenRouter video generation ${submittedStatus}`,
           );
         }
         const completed =
-          submittedStatus === "completed"
+          submittedState === "completed"
             ? submitted
             : await pollOpenRouterVideo({
                 pollingUrl,

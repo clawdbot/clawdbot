@@ -8,18 +8,37 @@ import { registerHealthCheck } from "./health-check-registry.js";
 
 // Bridges bundled plugin doctor checks into the core health registry.
 type BundledHealthApi = {
+  registerCuaDriverDoctorChecks?: (host: {
+    registerHealthCheck: typeof registerHealthCheck;
+  }) => void;
   registerPolicyDoctorChecks?: (host: { registerHealthCheck: typeof registerHealthCheck }) => void;
 };
 
 /** Registers bundled health checks that are explicitly enabled by config and owner policy. */
 export function registerBundledHealthChecks(params: { cfg: OpenClawConfig; cwd?: string }): void {
-  if (!shouldRegisterPolicyHealth(params)) {
-    return;
+  if (shouldRegisterPolicyHealth(params)) {
+    loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
+      dirName: "policy",
+      artifactBasename: "api.js",
+    }).registerPolicyDoctorChecks?.({ registerHealthCheck });
   }
-  loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
-    dirName: "policy",
-    artifactBasename: "api.js",
-  }).registerPolicyDoctorChecks?.({ registerHealthCheck });
+  if (shouldRegisterPluginHealth(params.cfg, "cua-computer")) {
+    loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
+      dirName: "cua-computer",
+      artifactBasename: "api.js",
+    }).registerCuaDriverDoctorChecks?.({ registerHealthCheck });
+  }
+}
+
+function shouldRegisterPluginHealth(cfg: OpenClawConfig, pluginId: string): boolean {
+  const entry = cfg.plugins?.entries?.[pluginId];
+  if (entry?.enabled !== true) {
+    return false;
+  }
+  return passesManifestOwnerBasePolicy({
+    plugin: { id: pluginId },
+    normalizedConfig: normalizePluginsConfig(cfg.plugins),
+  });
 }
 
 function shouldRegisterPolicyHealth(params: { cfg: OpenClawConfig; cwd?: string }): boolean {

@@ -3,6 +3,7 @@ import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
 
 export type CodexAppServerEventProjectorOptions = {
+  initialContextTokens?: number;
   nativePostToolUseRelayEnabled?: boolean;
   onNativeToolResultRecorded?: () => void | Promise<void>;
   prepareNativeMcpAppResultDetails?: (item: CodexThreadItem) => Promise<unknown>;
@@ -12,7 +13,7 @@ export type CodexAppServerEventProjectorOptions = {
   readRemoteWorkspaceFile?: CodexRemoteWorkspaceFileReader;
   remoteWorkspaceRequestTimeoutMs?: number;
   trajectoryRecorder?: CodexTrajectoryRecorder | null;
-  onContextCompacted?: () => void;
+  onContextCompacted?: () => void | Promise<void>;
   resolveDynamicToolResultContentSource?: (toolName: string) => "network" | undefined;
   upstreamUserText?: string;
 };

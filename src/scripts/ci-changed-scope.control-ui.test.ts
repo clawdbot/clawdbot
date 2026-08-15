@@ -14,3 +14,16 @@ it("skips control-ui localization checks for test-only UI source", () => {
     false,
   );
 });
+
+it("runs Chromium UI tests for browser copilot extension changes", () => {
+  expect(detectChangedScope(["extensions/browser/chrome-extension/sidepanel.ts"]).runUiTests).toBe(
+    true,
+  );
+});
+
+it.each(["package.json", ".github/workflows/ci.yml"])(
+  "runs Chromium UI tests when %s can change the browser copilot CI route",
+  (changedPath) => {
+    expect(detectChangedScope([changedPath]).runUiTests).toBe(true);
+  },
+);

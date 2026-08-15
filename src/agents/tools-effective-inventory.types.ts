@@ -38,6 +38,7 @@ export type EffectiveToolInventoryNotice = {
   id: string;
   severity: "info" | "warning";
   message: string;
+  servers?: string[];
 };
 
 /** Effective tool inventory result for one agent/profile. */

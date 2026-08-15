@@ -1,9 +1,10 @@
 // Cron job patch tests cover applying partial updates to scheduled jobs.
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { projectCronJobThroughStorageCodec } from "../store/row-codec.js";
-import type { CronJob } from "../types.js";
-import { applyJobPatch } from "./jobs.js";
+import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
+import { applyJobPatch, createJob } from "./jobs.js";
 
 function makeJob(overrides: Partial<CronJob> = {}): CronJob {
   const now = Date.now();
@@ -87,6 +88,57 @@ describe("applyJobPatch schedule retention", () => {
 
     expect(job.deleteAfterRun).toBe(false);
   });
+});
+
+describe("schedule activation ownership", () => {
+  it("ignores caller-supplied activation state during creation", () => {
+    const now = Date.parse("2026-07-30T00:00:00.000Z");
+    const input = {
+      name: "owned activation",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: { scheduleActivatedAtMs: now - 60_000 },
+    } as unknown as CronJobCreate;
+
+    const job = createJob(
+      {
+        deps: {
+          nowMs: () => now,
+          defaultAgentId: "main",
+        },
+      } as never,
+      input,
+    );
+
+    expect(job.state.scheduleActivatedAtMs).toBeUndefined();
+  });
+
+  it("ignores caller-supplied activation state during updates", () => {
+    const job = makeJob({ state: { scheduleActivatedAtMs: 456 } });
+    const patch = {
+      state: { scheduleActivatedAtMs: 123 },
+    } as unknown as CronJobPatch;
+
+    applyJobPatch(job, patch);
+
+    expect(job.state.scheduleActivatedAtMs).toBe(456);
+  });
+
+  it.each(["nextRunAtMs", "startupCatchupAtMs", "pacedNextRunAtMs"] as const)(
+    "rejects out-of-Date-range caller state for %s",
+    (field) => {
+      const job = makeJob({ enabled: false });
+      const patch = {
+        state: { [field]: MAX_DATE_TIMESTAMP_MS + 1 },
+      } as CronJobPatch;
+
+      expect(() => applyJobPatch(job, patch)).toThrow(`cron state.${field}`);
+      expect(job.state[field]).toBeUndefined();
+    },
+  );
 });
 
 describe("applyJobPatch delivery merge", () => {

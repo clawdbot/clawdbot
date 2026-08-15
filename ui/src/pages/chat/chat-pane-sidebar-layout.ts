@@ -5,10 +5,7 @@ import type {
   SidebarPanelTemplates,
   SidebarRegionCallbacks,
 } from "./components/chat-sidebar-region-types.ts";
-import type {
-  DetailFullMessageResult,
-  SidebarFullMessageRequest,
-} from "./components/chat-sidebar.ts";
+import type { SidebarFullMessageLoader } from "./components/chat-sidebar.ts";
 import {
   closeSlot,
   detachPanelToColumn,
@@ -195,15 +192,15 @@ export function restoreHiddenSidebarChat(params: {
 export function createSidebarFullMessageLoader(
   state: { client: GatewayBrowserClient | null; connected: boolean },
   disabled: boolean,
-): ((request: SidebarFullMessageRequest) => Promise<DetailFullMessageResult | null>) | null {
-  if (disabled) {
+): SidebarFullMessageLoader | null {
+  if (disabled || !state.client || !state.connected) {
     return null;
   }
   return async (request) => {
     if (!state.client || !state.connected) {
       return null;
     }
-    return state.client.request<DetailFullMessageResult>("chat.message.get", {
+    return state.client.request("chat.message.get", {
       sessionKey: request.sessionKey,
       ...(request.agentId ? { agentId: request.agentId } : {}),
       messageId: request.messageId,

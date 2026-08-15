@@ -1,6 +1,7 @@
 /**
  * Provider-entry configuration and stored-profile binding for model auth.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
@@ -16,12 +17,14 @@ import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import {
-  type AuthProfileCredential,
-  type AuthProfileStore,
   isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
-  resolveApiKeyForProfile,
-} from "./auth-profiles.js";
+} from "./auth-profiles/order.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import {
+  isAuthCooldownBypassedForProvider,
+  resolveProfileUnusableUntil,
+} from "./auth-profiles/usage-state.js";
 import { resolveEnvApiKey, type EnvApiKeyResult } from "./model-auth-env.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
@@ -32,7 +35,7 @@ import {
 } from "./model-auth-markers.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import { isLocalProviderBaseUrl } from "./model-provider-local.js";
-import { normalizeProviderId } from "./model-selection.js";
+import type { ProviderAuthAliasLookupParams } from "./provider-auth-aliases.js";
 
 const MODEL_AUTH_LOCAL_HOST_ALIASES = new Set([
   "docker.orb.internal",
@@ -223,6 +226,35 @@ export function shouldPreferExplicitConfigApiKeyAuth(
   );
 }
 
+/** True when a custom local provider can use a synthetic no-auth placeholder. */
+export function hasSyntheticLocalProviderAuthConfig(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+}): boolean {
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  if (!providerConfig) {
+    return false;
+  }
+  const hasApiConfig =
+    Boolean(providerConfig.api?.trim()) ||
+    Boolean(providerConfig.baseUrl?.trim()) ||
+    (Array.isArray(providerConfig.models) && providerConfig.models.length > 0);
+  if (!hasApiConfig) {
+    return false;
+  }
+  const authOverride = resolveProviderAuthOverride(params.cfg, params.provider);
+  if (authOverride && authOverride !== "api-key") {
+    return false;
+  }
+  if (
+    !isCustomLocalProviderConfig(providerConfig) ||
+    hasExplicitProviderApiKeyConfig(providerConfig)
+  ) {
+    return false;
+  }
+  return Boolean(providerConfig.baseUrl && isLocalAuthProviderBaseUrl(providerConfig.baseUrl));
+}
+
 export function resolveProviderAuthOverride(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -342,6 +374,7 @@ function isBearerProfileCredential(credential: AuthProfileCredential): boolean {
 /** True when a bearer auth profile can safely satisfy a provider-entry apiKey reference. */
 export function canUseProfileAsProviderEntryApiKey(params: {
   cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   provider: string;
   credential: AuthProfileCredential;
 }): boolean {
@@ -351,6 +384,7 @@ export function canUseProfileAsProviderEntryApiKey(params: {
   if (
     isStoredCredentialCompatibleWithAuthProvider({
       cfg: params.cfg,
+      authAliasLookupParams: params.authAliasLookupParams,
       provider: params.provider,
       credential: params.credential,
     })
@@ -370,6 +404,7 @@ export function canUseProfileAsProviderEntryApiKey(params: {
 /** Classifies a provider entry apiKey as literal/profile/marker before resolving secrets. */
 export function resolveProviderEntryApiKeyProfileReference(params: {
   cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   provider: string;
   store: AuthProfileStore;
 }): ProviderEntryApiKeyProfileReference {
@@ -398,7 +433,12 @@ export function resolveProviderEntryApiKeyProfileReference(params: {
     };
   }
   if (
-    !canUseProfileAsProviderEntryApiKey({ cfg: params.cfg, provider: params.provider, credential })
+    !canUseProfileAsProviderEntryApiKey({
+      cfg: params.cfg,
+      authAliasLookupParams: params.authAliasLookupParams,
+      provider: params.provider,
+      credential,
+    })
   ) {
     return {
       kind: "profile-incompatible",
@@ -435,6 +475,7 @@ export async function resolveProviderEntryApiKeyBinding(params: {
     return reference;
   }
   try {
+    const { resolveApiKeyForProfile } = await import("./auth-profiles/oauth.js");
     const resolved = await resolveApiKeyForProfile({
       cfg: params.cfg,
       store: params.store,
@@ -483,18 +524,79 @@ export function resolveConfiguredAwsSdkProfileAuth(params: {
   };
 }
 
-export function isLocalAuthProviderBaseUrl(baseUrl: string): boolean {
+function isLocalAuthProviderBaseUrl(baseUrl: string): boolean {
   return isLocalProviderBaseUrl(baseUrl, MODEL_AUTH_LOCAL_HOST_ALIASES);
 }
 
-export function hasExplicitProviderApiKeyConfig(providerConfig: ModelProviderConfig): boolean {
+function hasExplicitProviderApiKeyConfig(providerConfig: ModelProviderConfig): boolean {
   return (
     normalizeOptionalSecretInput(providerConfig.apiKey) !== undefined ||
     coerceSecretRef(providerConfig.apiKey) !== null
   );
 }
 
-export function isCustomLocalProviderConfig(providerConfig: ModelProviderConfig): boolean {
+function isInlineProviderApiKeySource(source: string): boolean {
+  return (
+    source === "models.json" ||
+    source.endsWith(" (models.json secretref)") ||
+    source.endsWith(" (models.json marker)")
+  );
+}
+
+/** True when a resolved credential came from an inline `models.providers.<id>.apiKey`. */
+export function isConfigBackedInlineProviderApiKey(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  source: string;
+  store?: AuthProfileStore;
+}): boolean {
+  if (isInlineProviderApiKeySource(params.source)) {
+    return true;
+  }
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  if (!providerConfig || !hasExplicitProviderApiKeyConfig(providerConfig)) {
+    return false;
+  }
+  if (coerceSecretRef(providerConfig.apiKey)) {
+    return true;
+  }
+  const perEntryRawKey = normalizeOptionalSecretInput(providerConfig.apiKey);
+  return Boolean(perEntryRawKey && !params.store?.profiles[perEntryRawKey]);
+}
+
+// Reads the inline provider API-key cooldown via usage-state primitives instead
+// of the auth-profiles usage module, so model-auth keeps working in the many
+// tests that partially mock that module. Mirrors the usage-module helper of the
+// same intent, using the same provider normalization as the write side so the
+// `inline-api-key:<provider>` usage id matches what the failure marker records.
+export function resolveInlineProviderApiKeyCooldownUntil(
+  store: AuthProfileStore,
+  provider: string,
+): number | null {
+  if (isAuthCooldownBypassedForProvider(provider)) {
+    return null;
+  }
+  const stats = store.usageStats?.[`inline-api-key:${normalizeProviderId(provider)}`];
+  return stats ? resolveProfileUnusableUntil(stats) : null;
+}
+
+/** Fails closed while an inline provider API key is inside its billing/auth cooldown. */
+export function assertInlineProviderApiKeyUsable(params: {
+  store: AuthProfileStore;
+  provider: string;
+}): void {
+  const unusableUntil = resolveInlineProviderApiKeyCooldownUntil(params.store, params.provider);
+  if (typeof unusableUntil !== "number" || unusableUntil <= Date.now()) {
+    return;
+  }
+  const waitMs = Math.max(0, unusableUntil - Date.now());
+  const waitMinutes = Math.max(1, Math.ceil(waitMs / 60_000));
+  throw new Error(
+    `Inline API key for provider "${params.provider}" is temporarily disabled after a provider auth/billing failure. Retry after about ${waitMinutes} minute${waitMinutes === 1 ? "" : "s"}, or switch to a different auth profile/API key.`,
+  );
+}
+
+function isCustomLocalProviderConfig(providerConfig: ModelProviderConfig): boolean {
   return (
     typeof providerConfig.baseUrl === "string" &&
     providerConfig.baseUrl.trim().length > 0 &&

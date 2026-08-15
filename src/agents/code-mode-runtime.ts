@@ -2,15 +2,20 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { parse, tokenizer } from "acorn";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
-import { toCodeModeJsonSafe } from "./code-mode-json.js";
+import { boundCodeModeResult } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
+import {
+  buildCodeModeScriptParseSource,
+  parseCodeModeScriptSyntax,
+} from "./code-mode-script-syntax.js";
 import {
   CODE_MODE_SHELL_SOURCE_ERROR,
   isShellLikeCodeModeSource,
 } from "./code-mode-shell-source.js";
+import { loadCodeModeTypeScriptRuntime } from "./code-mode-typescript-runtime.js";
 import type { CodeModeFailurePhase, CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
 import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
@@ -90,14 +95,6 @@ export type CodeModeWorkerResult =
       bridgeDispatchStarted: boolean;
       output: unknown[];
     };
-
-const typescriptRuntimeLoader = createLazyPromiseLoader(() => import("typescript"), {
-  cacheRejections: true,
-});
-let typescriptRuntimeForTest:
-  | typeof import("typescript")
-  | Promise<typeof import("typescript")>
-  | null = null;
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
   const codeMode = value;
@@ -236,51 +233,25 @@ export function resolveCodeModeHeadlessConfig(
   >,
 ): CodeModeConfig {
   const base = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
-  return {
-    ...base,
-    timeoutMs: clampNumber(readPositiveInteger(overrides?.timeoutMs, base.timeoutMs), 100, 60_000),
-    memoryLimitBytes: clampNumber(
-      readPositiveInteger(overrides?.memoryLimitBytes, base.memoryLimitBytes),
-      1024 * 1024,
-      1024 * 1024 * 1024,
-    ),
-    maxOutputBytes: clampNumber(
-      readPositiveInteger(overrides?.maxOutputBytes, base.maxOutputBytes),
-      1024,
-      10 * 1024 * 1024,
-    ),
-    maxSnapshotBytes: clampNumber(
-      readPositiveInteger(overrides?.maxSnapshotBytes, base.maxSnapshotBytes),
-      1024,
-      256 * 1024 * 1024,
-    ),
-    maxPendingToolCalls: clampNumber(
-      readPositiveInteger(overrides?.maxPendingToolCalls, base.maxPendingToolCalls),
-      1,
-      128,
-    ),
-  };
-}
-
-function jsonByteLength(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(toCodeModeJsonSafe(value)) ?? "null", "utf8");
+  const definedOverrides = Object.fromEntries(
+    Object.entries(overrides ?? {}).filter(([, value]) => value !== undefined),
+  );
+  return resolveCodeModeConfig({
+    tools: { codeMode: { ...base, ...definedOverrides } },
+  } as OpenClawConfig);
 }
 
 class CodeModeLimitError extends ToolInputError {
-  readonly code: Extract<CodeModeFailureCode, "output_limit_exceeded" | "snapshot_limit_exceeded">;
+  readonly code = "snapshot_limit_exceeded" as const;
 
-  constructor(
-    code: Extract<CodeModeFailureCode, "output_limit_exceeded" | "snapshot_limit_exceeded">,
-    message: string,
-  ) {
+  constructor(message: string) {
     super(message);
     this.name = "CodeModeLimitError";
-    this.code = code;
   }
 }
 
 function isRuntimeInterruptedError(error: unknown): boolean {
-  return errorMessage(error) === "interrupted";
+  return (error instanceof Error ? error.message : error) === "interrupted";
 }
 
 export function codeModeFailureCode(error: unknown): CodeModeFailureCode {
@@ -294,31 +265,15 @@ export function codeModeFailureCode(error: unknown): CodeModeFailureCode {
 }
 
 export function codeModeFailureMessage(error: unknown): string {
-  return isRuntimeInterruptedError(error) ? "code mode timeout exceeded" : errorMessage(error);
+  return isRuntimeInterruptedError(error)
+    ? "code mode timeout exceeded"
+    : formatErrorMessage(error);
 }
 
-export function enforceOutputLimit(output: unknown[], config: CodeModeConfig): void {
-  if (jsonByteLength(output) > config.maxOutputBytes) {
-    throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
-  }
-}
-
-export function enforceResultLimit(params: {
-  output: unknown[];
-  value?: unknown;
-  config: CodeModeConfig;
-}): void {
-  const serializedOutputBytes = jsonByteLength(params.output);
-  if (serializedOutputBytes > params.config.maxOutputBytes) {
-    throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
-  }
-  const outputBytes = params.output.length > 0 ? serializedOutputBytes : 0;
-  if (
-    params.value !== undefined &&
-    outputBytes + jsonByteLength(params.value) > params.config.maxOutputBytes
-  ) {
-    throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
-  }
+export function boundOutputToLimit(output: unknown[], config: CodeModeConfig): boolean {
+  const bounded = boundCodeModeResult({ output, maxOutputBytes: config.maxOutputBytes });
+  output.splice(0, output.length, ...bounded.output);
+  return bounded.truncated;
 }
 
 export function readCode(args: unknown): {
@@ -378,10 +333,10 @@ function maskCodeLiteralsAndComments(
   };
 
   try {
-    const prefix = "(async () => {\n";
-    parse(`${prefix}${code}\n})`, {
+    const wrapped = buildCodeModeScriptParseSource(code);
+    parse(wrapped.source, {
       ecmaVersion: "latest",
-      onComment: (_isBlock, _text, start, end) => maskRange(start, end, prefix.length),
+      onComment: (_isBlock, _text, start, end) => maskRange(start, end, wrapped.codeOffset),
       onToken: (token) => {
         // Parse in the real async guest context: standalone tokenization can
         // mistake executable division for a regex after contextual keywords.
@@ -390,7 +345,7 @@ function maskCodeLiteralsAndComments(
           token.type.label === "regexp" ||
           token.type.label === "template"
         ) {
-          maskRange(token.start, token.end, prefix.length);
+          maskRange(token.start, token.end, wrapped.codeOffset);
         }
       },
     });
@@ -546,31 +501,21 @@ function rejectsModuleAccess(
   code: string,
   typescriptRuntime?: typeof import("typescript"),
 ): boolean {
-  try {
-    const source = parse(`(async () => {\n${code}\n})`, {
-      ecmaVersion: "latest",
-    });
+  const parsed = parseCodeModeScriptSyntax(code);
+  if (parsed.ok) {
     // The WASI guest has no host module loader. Only executable module syntax
     // belongs in this early check; ordinary guest methods are not capabilities.
-    return containsModuleAccess(source);
-  } catch {
-    if (typescriptRuntime) {
-      try {
-        return typeScriptContainsModuleAccess(code, typescriptRuntime);
-      } catch {
-        // Keep malformed input on the conservative lexical fallback.
-      }
+    return containsModuleAccess(parsed.program);
+  }
+  if (typescriptRuntime) {
+    try {
+      return typeScriptContainsModuleAccess(code, typescriptRuntime);
+    } catch {
+      // Keep malformed input on the conservative lexical fallback.
     }
   }
   const source = maskCodeLiteralsAndComments(code, typescriptRuntime);
   return /\bimport\b\s*(?:\.|\(|["'`{*]|\w)|\brequire\b\s*\(/u.test(source);
-}
-
-async function loadTypeScriptRuntime(): Promise<typeof import("typescript")> {
-  if (typescriptRuntimeForTest) {
-    return await typescriptRuntimeForTest;
-  }
-  return await typescriptRuntimeLoader.load();
 }
 
 export async function prepareSource(input: {
@@ -591,7 +536,7 @@ export async function prepareSource(input: {
     }
     return input.code;
   }
-  const ts = await loadTypeScriptRuntime();
+  const ts = await loadCodeModeTypeScriptRuntime();
   if (rejectsModuleAccess(input.code, ts)) {
     throw new ToolInputError("code mode module access is disabled.");
   }
@@ -623,13 +568,6 @@ export async function prepareSource(input: {
   return transformed.outputText;
 }
 
-export function errorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message || String(error);
-  }
-  return String(error);
-}
-
 export function createCodeModeApiFilesForRun(
   namespaceRuntime: CodeModeNamespaceRuntime,
   swarmEnabled: boolean,
@@ -641,20 +579,8 @@ export function createCodeModeApiFilesForRun(
 export function enforceSnapshotPayloadLimits(params: {
   snapshotBytes: Uint8Array;
   config: CodeModeConfig;
-  output: unknown[];
 }) {
   if (params.snapshotBytes.byteLength > params.config.maxSnapshotBytes) {
-    throw new CodeModeLimitError("snapshot_limit_exceeded", "code mode snapshot limit exceeded");
+    throw new CodeModeLimitError("code mode snapshot limit exceeded");
   }
-  enforceOutputLimit(params.output, params.config);
 }
-
-export const codeModeRuntimeTesting = {
-  getTypescriptRuntimePromise: (): Promise<typeof import("typescript")> | null =>
-    typescriptRuntimeLoader.peek() ?? null,
-  setTypescriptRuntimeForTest: (
-    runtime: typeof import("typescript") | Promise<typeof import("typescript")> | null,
-  ) => {
-    typescriptRuntimeForTest = runtime;
-  },
-};

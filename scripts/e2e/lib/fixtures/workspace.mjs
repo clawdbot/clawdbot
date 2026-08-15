@@ -1,6 +1,7 @@
 // Workspace fixture writer commands for E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
+import { readPositiveIntEnv } from "../env-limits.mjs";
 import { readTextFileTail } from "../text-file-utils.mjs";
 import { assert, readJson, requireArg, write, writeJson } from "./common.mjs";
 
@@ -9,18 +10,6 @@ const AGENTS_DELETE_OUTPUT_MAX_BYTES = readPositiveIntEnv(
   1024 * 1024,
 );
 const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
-
-function readPositiveIntEnv(name, fallback) {
-  const text = String(process.env[name] ?? fallback).trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`invalid ${name}: ${text}`);
-  }
-  const value = Number(text);
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`invalid ${name}: ${text}`);
-  }
-  return value;
-}
 
 function writeOpenWebUiWorkspace() {
   const workspace =
@@ -41,6 +30,8 @@ function writeAgentsDeleteConfig() {
   fs.mkdirSync(sharedWorkspace, { recursive: true });
   writeJson(path.join(stateDir, "openclaw.json"), {
     agents: {
+      ownership: "explicit",
+      defaults: { heartbeat: { agentId: "main" } },
       entries: {
         main: { workspace: sharedWorkspace },
         ops: { workspace: sharedWorkspace },
@@ -76,6 +67,7 @@ function assertAgentsDeleteResult([outputPath]) {
     [parsed.workspace, process.env.SHARED_WORKSPACE, "workspace"],
     [parsed.workspaceRetained, true, "workspaceRetained"],
     [parsed.workspaceRetainedReason, "shared", "workspaceRetainedReason"],
+    [parsed.transport, "gateway", "transport"],
   ];
   for (const [actual, expected, label] of comparisons) {
     assert(actual === expected, `${label} mismatch: ${JSON.stringify(actual)}`);

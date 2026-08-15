@@ -2,12 +2,6 @@ import type { PresenceEntry } from "../api/types.ts";
 
 export type AuthenticatedUser = NonNullable<PresenceEntry["user"]>;
 export type PresencePayload = { presence: readonly PresenceEntry[] };
-export type ActorIdentityUser = {
-  id: string;
-  name?: string;
-  email?: string;
-  avatarUrl?: string;
-};
 
 export function readPresenceEntries(value: unknown): PresenceEntry[] | undefined {
   if (!value || typeof value !== "object") {
@@ -48,56 +42,10 @@ export function resolveCurrentSelfUser({
     : presenceUser;
 }
 
-function normalizeActorIdentityUser(
-  user: AuthenticatedUser | null | undefined,
-): ActorIdentityUser | null {
-  if (!user) {
-    return null;
-  }
-  const id = user.id.trim();
-  if (!id) {
-    return null;
-  }
-  const optional = (value: string | null | undefined) => value?.trim() || undefined;
-  return {
-    id,
-    ...(optional(user.name) ? { name: optional(user.name) } : {}),
-    ...(optional(user.email) ? { email: optional(user.email) } : {}),
-    ...(optional(user.avatarUrl) ? { avatarUrl: optional(user.avatarUrl) } : {}),
-  };
-}
-
-/** Builds actor identities from the same self and presence sources as the sidebar footer. */
-export function resolveActorIdentityUsers({
-  snapshotUser,
-  presenceEntries,
-  presenceInstanceId,
-}: {
-  snapshotUser?: AuthenticatedUser | null;
-  presenceEntries?: readonly PresenceEntry[];
-  presenceInstanceId?: string;
-}): ReadonlyMap<string, ActorIdentityUser> {
-  const users = new Map<string, ActorIdentityUser>();
-  const addUser = (user: AuthenticatedUser | null | undefined) => {
-    const normalized = normalizeActorIdentityUser(user);
-    if (!normalized) {
-      return;
-    }
-    users.set(normalized.id, { ...users.get(normalized.id), ...normalized });
-  };
-  for (const entry of presenceEntries ?? []) {
-    if (entry.reason !== "disconnect") {
-      addUser(entry.user);
-    }
-  }
-  addUser(resolveCurrentSelfUser({ snapshotUser, presenceEntries, presenceInstanceId }));
-  return users;
-}
-
 export function userProfileAvatarUrl(
   gatewayUrl: string,
   profileId: string,
-  updatedAt: number,
+  revision: string | number,
   documentHref = globalThis.location?.href,
 ): string | null {
   if (!documentHref) {
@@ -118,7 +66,7 @@ export function userProfileAvatarUrl(
     url.username = "";
     url.password = "";
     url.pathname = `/api/users/${encodeURIComponent(profileId)}/avatar`;
-    url.search = `?v=${updatedAt}`;
+    url.search = `?v=${revision}`;
     url.hash = "";
     return url.href;
   } catch {

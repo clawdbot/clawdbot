@@ -1,10 +1,11 @@
 import type {
-  AgentHarness,
+  AgentHarnessV2,
   AgentHarnessSettledTurnFinalizationResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { runBoundedCodexAppServerTurn, type CodexBoundedTurnOptions } from "./bounded-turn.js";
 import { createAssistantMessage } from "./event-projector-assistant-message.js";
+import { isJsonObject, type CodexThreadItem } from "./protocol.js";
 import { projectSettledCodexMessages } from "./settled-turn-projection.js";
 import {
   fingerprintCodexMirrorSourceMessage,
@@ -21,7 +22,9 @@ const FINALIZER_DEVELOPER_INSTRUCTIONS =
   "support success.";
 const FINALIZER_PASSIVE_ITEM_TYPES = new Set(["agentMessage", "reasoning"]);
 
-type CodexSettledTurnFinalization = Parameters<NonNullable<AgentHarness["finalizeSettledTurn"]>>[0];
+type CodexSettledTurnFinalization = Parameters<
+  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
+>[0];
 
 export async function runCodexSettledTurnFinalization(
   operation: CodexSettledTurnFinalization,
@@ -36,6 +39,7 @@ export async function runCodexSettledTurnFinalization(
   const bounded = await runBoundedCodexAppServerTurn({
     config: attempt.config,
     model: { mode: "required", id: attempt.modelId },
+    modelProvider: "openai",
     profile: attempt.authProfileId,
     timeoutMs: attempt.runTimeoutOverrideMs ?? attempt.timeoutMs,
     signal: attempt.abortSignal,
@@ -49,15 +53,47 @@ export async function runCodexSettledTurnFinalization(
     isolation: "private-stdio",
     historyItems,
     requireNoExternalCapabilities: true,
+    allowEmptyText: true,
   });
-  const unexpectedItem = bounded.items.find((item) => !FINALIZER_PASSIVE_ITEM_TYPES.has(item.type));
+  let promptEchoSeen = false;
+  let unexpectedItem: CodexThreadItem | undefined;
+  for (const item of bounded.items) {
+    if (FINALIZER_PASSIVE_ITEM_TYPES.has(item.type)) {
+      continue;
+    }
+    if (item.type === "userMessage" && !promptEchoSeen) {
+      const content = Array.isArray(item.content) ? item.content : [];
+      const input = content[0];
+      const isPromptEcho =
+        content.length === 1 &&
+        isJsonObject(input) &&
+        input.type === "text" &&
+        input.text === attempt.prompt;
+      if (isPromptEcho) {
+        promptEchoSeen = true;
+        continue;
+      }
+    }
+    unexpectedItem = item;
+    break;
+  }
   if (unexpectedItem) {
     throw new Error(
       `Codex settled-turn finalization returned unexpected native item: ${unexpectedItem.type}`,
     );
   }
   const text = bounded.text.trim();
-  if (!text || isSilentReplyText(text)) {
+  if (!text) {
+    return {
+      assistant: createAssistantMessage(attempt, "", {
+        tokenUsage: bounded.usage,
+        aborted: false,
+        promptError: null,
+      }),
+      ...(bounded.usage ? { usage: bounded.usage } : {}),
+    };
+  }
+  if (isSilentReplyText(text)) {
     throw new Error("Codex settled-turn finalization completed without a visible answer");
   }
 
@@ -94,13 +130,10 @@ export async function runCodexSettledTurnFinalization(
     throw new Error("Codex settled-turn final answer transcript attestation mismatch");
   }
   const persistedAssistant = persistedMessage;
-  const persistedAssistantRecord = persistedAssistant as unknown as {
-    idempotencyKey?: unknown;
-  };
+  const persistedIdempotencyKey =
+    "idempotencyKey" in persistedAssistant ? persistedAssistant.idempotencyKey : undefined;
   const assistantTranscriptIdempotencyKey =
-    typeof persistedAssistantRecord.idempotencyKey === "string"
-      ? persistedAssistantRecord.idempotencyKey.trim()
-      : "";
+    typeof persistedIdempotencyKey === "string" ? persistedIdempotencyKey.trim() : "";
   return {
     assistant: persistedAssistant,
     assistantTranscriptOwned: true,

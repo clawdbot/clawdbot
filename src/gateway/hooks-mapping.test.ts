@@ -220,6 +220,71 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("defaults agent mappings to isolated sessions and accepts persistent overrides", async () => {
+    const isolated = await applyGmailMappings({
+      mappings: [
+        createGmailAgentMapping({
+          id: "isolated",
+          messageTemplate: "Subject: {{messages[0].subject}}",
+        }),
+      ],
+    });
+    expect(isolated?.ok).toBe(true);
+    if (isolated?.ok && isolated.action?.kind === "agent") {
+      expect(isolated.action.sessionMode).toBe("isolated");
+    }
+
+    const persistent = await applyGmailMappings({
+      mappings: [
+        {
+          ...createGmailAgentMapping({
+            id: "persistent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+          }),
+          sessionMode: "persistent",
+        },
+      ],
+    });
+    expect(persistent?.ok).toBe(true);
+    if (persistent?.ok && persistent.action?.kind === "agent") {
+      expect(persistent.action.sessionMode).toBe("persistent");
+    }
+  });
+
+  it("validates sessionMode returned by hook transforms", async () => {
+    const configDir = makeTempDir(hooksTempDirs, "openclaw-hook-session-mode-");
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(transformsRoot, "transform.mjs"),
+      'export default () => ({ sessionMode: "shared" });',
+    );
+    const mappings = resolveHookMappings(
+      {
+        mappings: [
+          {
+            match: { path: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            transform: { module: "transform.mjs" },
+          },
+        ],
+      },
+      { configDir },
+    );
+
+    const result = await applyHookMappings(mappings, {
+      payload: gmailPayload,
+      headers: {},
+      url: baseUrl,
+      path: "gmail",
+    });
+    expect(result).toEqual({
+      ok: false,
+      error: "hook mapping sessionMode must be isolated or persistent",
+    });
+  });
+
   it("marks template-derived session keys as templated", async () => {
     const result = await applyGmailMappings({
       mappings: [
@@ -256,6 +321,86 @@ describe("hooks mapping", () => {
       expect(result.action.sessionKey).toBe("hook:gmail:static");
       expect(result.action.sessionKeySource).toBe("static");
     }
+  });
+
+  it("carries wake agent and session routing from mappings", async () => {
+    const mappings = resolveHookMappings({
+      mappings: [
+        {
+          id: "targeted-wake",
+          match: { path: "gmail" },
+          action: "wake",
+          textTemplate: "Subject: {{messages[0].subject}}",
+          agentId: "hooks",
+          sessionKey: "hook:gmail:{{messages[0].subject}}",
+        },
+      ],
+    });
+    const result = await applyHookMappings(mappings, {
+      payload: gmailPayload,
+      headers: {},
+      url: baseUrl,
+      path: "gmail",
+    });
+
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "wake") {
+      expect(result.action).toMatchObject({
+        agentId: "hooks",
+        sessionKey: "hook:gmail:Hello",
+        sessionKeySource: "templated",
+      });
+    }
+  });
+
+  it.each(["wake", "agent"] as const)(
+    "rejects %s session key templates that render empty",
+    async (action) => {
+      const mappings = resolveHookMappings({
+        mappings: [
+          {
+            id: `empty-${action}-session-key`,
+            match: { path: "gmail" },
+            action,
+            ...(action === "wake"
+              ? { textTemplate: "Subject: {{messages[0].subject}}" }
+              : { messageTemplate: "Subject: {{messages[0].subject}}" }),
+            sessionKey: "{{messages[0].missing}}",
+          },
+        ],
+      });
+      const result = await applyHookMappings(mappings, {
+        payload: gmailPayload,
+        headers: {},
+        url: baseUrl,
+        path: "gmail",
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        error: "hook mapping sessionKey template rendered empty",
+      });
+    },
+  );
+
+  it("rejects custom wake sessions that cannot be drained on the next heartbeat", async () => {
+    const result = await applyGmailMappings({
+      mappings: [
+        {
+          id: "deferred-targeted-wake",
+          match: { path: "gmail" },
+          action: "wake",
+          textTemplate: "Subject: {{messages[0].subject}}",
+          wakeMode: "next-heartbeat",
+          sessionKey: "hook:gmail:fixed",
+        },
+      ],
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "hook mapping sessionKey requires wakeMode=now",
+    });
   });
 
   it("runs transform module", async () => {

@@ -458,6 +458,44 @@ describe("chat realtime actions", () => {
     ]);
   });
 
+  it("clears partial realtime state when session startup fails", async () => {
+    let rejectStart: (error: Error) => void = () => undefined;
+    startSpy.mockImplementationOnce(
+      () =>
+        new Promise<undefined>((_resolve, reject) => {
+          rejectStart = reject;
+        }),
+    );
+    const state = createState();
+
+    const starting = state.toggleRealtimeTalk();
+    await vi.waitFor(() => expect(state.realtimeTalkSession).not.toBeNull());
+    const session = inspectSession(state);
+    session.callbacks.onStatus?.("listening");
+    session.callbacks.onVideoCapability?.(true);
+    session.callbacks.onInputLevel?.(0.8);
+    session.callbacks.onTranscript?.({ role: "user", text: "partial", final: false });
+    session.callbacks.onVideoStream?.({} as MediaStream);
+    state.realtimeTalkCameraDevices = [{ deviceId: "camera", label: "Camera" }];
+    state.realtimeTalkVideoPending = true;
+    state.realtimeTalkCameraError = true;
+
+    rejectStart(new Error("startup failed"));
+    await starting;
+
+    expect(state.realtimeTalkSession).toBeNull();
+    expect(state.realtimeTalkActive).toBe(false);
+    expect(state.realtimeTalkStatus).toBe("error");
+    expect(state.realtimeTalkDetail).toBe("startup failed");
+    expect(state.realtimeTalkInputLevel.value).toBe(0);
+    expect(state.realtimeTalkConversation).toEqual([]);
+    expect(state.realtimeTalkVideoStream).toBeNull();
+    expect(state.realtimeTalkCameraDevices).toEqual([]);
+    expect(state.realtimeTalkVideoCapable).toBe(false);
+    expect(state.realtimeTalkVideoPending).toBe(false);
+    expect(state.realtimeTalkCameraError).toBe(false);
+  });
+
   it("ignores a stopped session that rejects after its replacement starts", async () => {
     let rejectFirstStart: (error: Error) => void = () => undefined;
     startSpy.mockImplementationOnce(
@@ -478,14 +516,38 @@ describe("chat realtime actions", () => {
 
     rejectFirstStart(new Error("late setup failure"));
     await firstStart;
+    firstCallbacks.onVideoCapability?.(true);
     firstCallbacks.onInputLevel?.(0.9);
     firstCallbacks.onTranscript?.({ role: "user", text: "stale", final: true });
+    firstCallbacks.onVideoStream?.({} as MediaStream);
+    firstCallbacks.onVideoError?.(new Error("stale camera failure"));
     firstCallbacks.onStatus?.("error", "stale failure");
 
     expect(state.realtimeTalkSession).toBe(secondSession);
     expect(state.realtimeTalkActive).toBe(true);
     expect(state.realtimeTalkStatus).toBe("listening");
+    expect(state.realtimeTalkDetail).toBeNull();
     expect(state.realtimeTalkInputLevel.value).toBe(0);
     expect(state.realtimeTalkConversation).toEqual([]);
+    expect(state.realtimeTalkVideoStream).toBeNull();
+    expect(state.realtimeTalkVideoCapable).toBe(false);
+    expect(state.realtimeTalkCameraError).toBe(false);
+  });
+
+  it("retires callback ownership before stopping a session", async () => {
+    const state = createState();
+    await state.toggleRealtimeTalk();
+    const firstSession = inspectSession(state);
+    const stop = vi
+      .spyOn(RealtimeTalkSession.prototype, "stop")
+      .mockImplementationOnce(() => firstSession.callbacks.onStatus?.("error", "late stop"));
+
+    await state.toggleRealtimeTalk();
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(state.realtimeTalkSession).toBeNull();
+    expect(state.realtimeTalkActive).toBe(false);
+    expect(state.realtimeTalkStatus).toBe("idle");
+    expect(state.realtimeTalkDetail).toBeNull();
   });
 });

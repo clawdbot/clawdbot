@@ -1,7 +1,7 @@
 // Slack plugin module implements preview finalize behavior.
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { editSlackMessage } from "../../actions.js";
+import { editSlackRenderedMessage } from "../../actions.js";
 import { buildSlackBlocksFallbackText } from "../../blocks-fallback.js";
 import { buildSlackEditTextPayload } from "../../edit-text.js";
 import { normalizeSlackOutboundText } from "../../format.js";
@@ -103,8 +103,9 @@ async function readSlackMessageAfterEditError(params: {
       channel: params.channelId,
       ts: params.threadTs,
       latest: params.messageId,
+      oldest: params.messageId,
       inclusive: true,
-      limit: 100,
+      limit: 1,
     });
     const reply = (replyResult.messages ?? []).find(
       (message) => (message as SlackReadbackMessage | undefined)?.ts === params.messageId,
@@ -166,7 +167,7 @@ export async function finalizeSlackPreviewEdit(params: {
   threadTs?: string;
 }): Promise<void> {
   try {
-    await editSlackMessage(params.channelId, params.messageId, params.text, {
+    await editSlackRenderedMessage(params.channelId, params.messageId, params.text, {
       token: params.token,
       accountId: params.accountId,
       client: params.client,

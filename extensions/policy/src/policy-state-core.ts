@@ -1,6 +1,6 @@
 // Policy plugin channel, model, MCP, and network evidence.
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNonArrayRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ocPathSegment, readBooleanPath } from "./policy-state-helpers.js";
 import { RESERVED_CHANNEL_CONFIG_KEYS } from "./policy-state-types.js";
 import type {
@@ -128,11 +128,11 @@ export function scanPolicyNetwork(cfg: Record<string, unknown>): readonly Policy
 }
 
 export function configuredChannels(cfg: Record<string, unknown>): Record<string, unknown> {
-  return isRecord(cfg.channels) ? cfg.channels : {};
+  return asNonArrayRecord(cfg.channels);
 }
 
 function configuredMcpServers(cfg: Record<string, unknown>): Record<string, unknown> {
-  return isRecord(cfg.mcp) && isRecord(cfg.mcp.servers) ? cfg.mcp.servers : {};
+  return asNonArrayRecord(asNonArrayRecord(cfg.mcp).servers);
 }
 
 function mcpServerTransport(value: unknown): PolicyMcpServerEvidence["transport"] {
@@ -161,7 +161,7 @@ function redactMcpUrlForEvidence(raw: string): string {
 }
 
 function configuredModelProviders(cfg: Record<string, unknown>): Record<string, unknown> {
-  return isRecord(cfg.models) && isRecord(cfg.models.providers) ? cfg.models.providers : {};
+  return asNonArrayRecord(asNonArrayRecord(cfg.models).providers);
 }
 
 function networkBooleanEvidence(

@@ -7,11 +7,12 @@ import {
   optionalPositiveIntegerSchema,
 } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { isIncognitoSessionKey, normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Type } from "typebox";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
@@ -24,7 +25,7 @@ import {
 import {
   buildMemoryRecallUnavailableResult,
   createEmbeddings,
-  formatMemoryRecallError,
+  isMemoryRecallTimeoutError,
   MemoryRecallEmbeddingError,
   runWithTimeout,
 } from "./embeddings.js";
@@ -53,7 +54,7 @@ const loadMemoryHostCoreModule = createLazyRuntimeModule(
 
 const DEFAULT_AUTO_RECALL_TIMEOUT_MS = 15_000;
 const DEFAULT_TOOL_RECALL_TIMEOUT_MS = 15_000;
-const DEFAULT_TOOL_RECALL_COOLDOWN_MS = 60_000;
+const DEFAULT_RECALL_COOLDOWN_MS = 60_000;
 const DEFAULT_TOOL_RECALL_OVERFETCH_EXTRA = 10;
 
 // Auto-recall over-fetches from the vector store, then filters envelope sludge
@@ -153,7 +154,7 @@ export default definePluginEntry({
           ...(typeof cfg.embedding.dimensions === "number"
             ? { dimensions: cfg.embedding.dimensions }
             : {}),
-          ...asRecord(runtimePluginConfig.embedding),
+          ...asOptionalRecord(runtimePluginConfig.embedding),
         },
         ...(cfg.dreaming ? { dreaming: cfg.dreaming } : {}),
         dbPath: cfg.dbPath,
@@ -162,7 +163,7 @@ export default definePluginEntry({
         captureMaxChars: cfg.captureMaxChars,
         recallMaxChars: cfg.recallMaxChars,
         ...(cfg.storageOptions ? { storageOptions: cfg.storageOptions } : {}),
-        ...asRecord(runtimePluginConfig),
+        ...asOptionalRecord(runtimePluginConfig),
       });
     };
     const readMemoryRecallCooldown = (agentId: string): { error: string } | undefined => {
@@ -178,7 +179,7 @@ export default definePluginEntry({
     };
     const recordMemoryRecallCooldown = (agentId: string, error: string): void => {
       memoryRecallCooldowns.set(agentId, {
-        until: Date.now() + DEFAULT_TOOL_RECALL_COOLDOWN_MS,
+        until: Date.now() + DEFAULT_RECALL_COOLDOWN_MS,
         error,
       });
     };
@@ -221,25 +222,29 @@ export default definePluginEntry({
             if (cooldown) {
               return buildMemoryRecallUnavailableResult(cooldown.error);
             }
+            let recallPhase: "embedding" | "search" = "embedding";
             let recall: Awaited<ReturnType<typeof runWithTimeout<MemorySearchResult[]>>>;
             try {
               recall = await runWithTimeout({
                 timeoutMs: DEFAULT_TOOL_RECALL_TIMEOUT_MS,
-                task: async () => {
+                task: async (deadlineAtMs) => {
                   let vector: number[];
                   try {
                     vector = await embeddings.embed(
+                      agentId,
                       normalizeRecallQuery(query, currentCfg.recallMaxChars),
-                      { timeoutMs: DEFAULT_TOOL_RECALL_TIMEOUT_MS },
+                      { timeoutMs: Math.max(1, deadlineAtMs - Date.now()) },
                     );
                   } catch (error) {
                     throw new MemoryRecallEmbeddingError(error);
                   }
+                  recallPhase = "search";
                   return await db.search(
                     agentId,
                     vector,
                     limit + DEFAULT_TOOL_RECALL_OVERFETCH_EXTRA,
                     0.1,
+                    { timeoutMs: Math.max(0, deadlineAtMs - Date.now()) },
                   );
                 },
               });
@@ -247,8 +252,10 @@ export default definePluginEntry({
               if (!(error instanceof MemoryRecallEmbeddingError)) {
                 throw error;
               }
-              const message = formatMemoryRecallError(error.originalError);
-              recordMemoryRecallCooldown(agentId, message);
+              const message = formatErrorMessage(error.originalError);
+              if (isMemoryRecallTimeoutError(error.originalError)) {
+                recordMemoryRecallCooldown(agentId, message);
+              }
               api.logger.warn?.(
                 `memory-lancedb: memory_recall failed: ${message}; returning unavailable memory result`,
               );
@@ -256,7 +263,9 @@ export default definePluginEntry({
             }
             if (recall.status === "timeout") {
               const message = `memory_recall timed out after ${Math.round(DEFAULT_TOOL_RECALL_TIMEOUT_MS / 1000)}s`;
-              recordMemoryRecallCooldown(agentId, message);
+              if (recallPhase === "embedding") {
+                recordMemoryRecallCooldown(agentId, message);
+              }
               api.logger.warn?.(
                 `memory-lancedb: memory_recall timed out after ${DEFAULT_TOOL_RECALL_TIMEOUT_MS}ms; returning unavailable memory result`,
               );
@@ -362,7 +371,7 @@ export default definePluginEntry({
               };
             }
 
-            const vector = await embeddings.embed(text);
+            const vector = await embeddings.embed(agentId, text);
 
             const existing = await findCleanDuplicateMemory(db, agentId, vector);
             if (existing) {
@@ -435,6 +444,7 @@ export default definePluginEntry({
             if (query) {
               const currentCfg = resolveCurrentHookConfig();
               const vector = await embeddings.embed(
+                agentId,
                 normalizeRecallQuery(query, currentCfg.recallMaxChars),
               );
               const results = await db.search(agentId, vector, 5, 0.7);
@@ -502,6 +512,15 @@ export default definePluginEntry({
       if (!event.prompt || event.prompt.length < 5) {
         return undefined;
       }
+      // One hung embedding request must not stall both automatic and explicit recall.
+      // Keep the breaker per agent so unrelated memory namespaces still probe.
+      const cooldown = readMemoryRecallCooldown(agentId);
+      if (cooldown) {
+        api.logger.debug?.(
+          `memory-lancedb: auto-recall skipped during recall cooldown: ${cooldown.error}`,
+        );
+        return undefined;
+      }
 
       try {
         const recallQuery = normalizeRecallQuery(
@@ -514,18 +533,35 @@ export default definePluginEntry({
         if (!recallQuery) {
           return undefined;
         }
+        let recallPhase: "embedding" | "search" = "embedding";
         const recall = await runWithTimeout({
           timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
-          task: async () => {
-            const vector = await embeddings.embed(recallQuery, {
-              timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
-            });
+          task: async (deadlineAtMs) => {
+            let vector: number[];
+            try {
+              vector = await embeddings.embed(agentId, recallQuery, {
+                timeoutMs: Math.max(1, deadlineAtMs - Date.now()),
+              });
+            } catch (error) {
+              throw new MemoryRecallEmbeddingError(error);
+            }
+            // Keep one end-to-end deadline, but only let embedding timeouts trip
+            // the shared breaker. LanceDB stalls remain retryable next turn.
+            recallPhase = "search";
             // Overfetch to compensate for sludge filtering: if contaminated
             // entries occupy the top slots we still surface enough clean ones.
-            return await db.search(agentId, vector, DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT, 0.3);
+            return await db.search(agentId, vector, DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT, 0.3, {
+              timeoutMs: Math.max(0, deadlineAtMs - Date.now()),
+            });
           },
         });
         if (recall.status === "timeout") {
+          if (recallPhase === "embedding") {
+            recordMemoryRecallCooldown(
+              agentId,
+              `auto-recall timed out after ${Math.round(DEFAULT_AUTO_RECALL_TIMEOUT_MS / 1000)}s`,
+            );
+          }
           api.logger.warn?.(
             `memory-lancedb: auto-recall timed out after ${DEFAULT_AUTO_RECALL_TIMEOUT_MS}ms; skipping memory injection to avoid stalling agent startup`,
           );
@@ -552,6 +588,12 @@ export default definePluginEntry({
           prependContext: context,
         };
       } catch (err) {
+        if (
+          err instanceof MemoryRecallEmbeddingError &&
+          isMemoryRecallTimeoutError(err.originalError)
+        ) {
+          recordMemoryRecallCooldown(agentId, formatErrorMessage(err.originalError));
+        }
         api.logger.warn(`memory-lancedb: recall failed: ${String(err)}`);
       }
       return undefined;
@@ -602,7 +644,7 @@ export default definePluginEntry({
               }
 
               const category = detectCategory(sanitized);
-              const vector = await embeddings.embed(sanitized);
+              const vector = await embeddings.embed(agentId, sanitized);
 
               const existing = await findCleanDuplicateMemory(db, agentId, vector);
               if (existing) {

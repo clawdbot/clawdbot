@@ -130,4 +130,20 @@ describe("doctor group allowFrom fallback migration", () => {
 
     expect(maybeRepairGroupAllowFromFallback(cfg)).toEqual({ config: cfg, changes: [] });
   });
+
+  it("skips bundled-extension channels absent from generated metadata", () => {
+    // agentmail ships as a ClawHub extension and has no generated-metadata schema entry,
+    // so doctor cannot prove groupAllowFrom is a valid field for it; regression test for a
+    // bug where the missing entry was treated as "no restriction" and doctor wrote a field
+    // agentmail's own runtime schema rejects, failing config validation on every run.
+    const cfg = {
+      channels: {
+        agentmail: {
+          allowFrom: ["someone@example.com"],
+        },
+      },
+    };
+
+    expect(maybeRepairGroupAllowFromFallback(cfg)).toEqual({ config: cfg, changes: [] });
+  });
 });

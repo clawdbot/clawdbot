@@ -58,7 +58,7 @@ export class ComponentRegistry<
       const existing = this.oneOffComponents.get(key);
       if (existing) {
         clearTimeout(existing.timer);
-        existing.resolve({ success: false, message, reason: "timed out" });
+        existing.resolve({ success: false, message: existing.message, reason: "timed out" });
       }
       const timer = setTimeout(
         () => {

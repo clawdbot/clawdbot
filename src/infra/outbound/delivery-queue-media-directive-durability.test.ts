@@ -8,19 +8,17 @@ import type {
 } from "../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import {
-  releasePinnedPluginChannelRegistry,
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { collectEntrySpoolPaths } from "./delivery-queue-media-spool.js";
+import { drainPendingDeliveriesCore, type DeliverFn } from "./delivery-queue-recovery.js";
 import { loadPendingDeliveries } from "./delivery-queue-storage.js";
-import { drainPendingDeliveries, type DeliverFn } from "./delivery-queue.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
 } from "./delivery-queue.test-helpers.js";
+import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
 let deliverOutboundPayloads: typeof import("./deliver.js").deliverOutboundPayloads;
 
@@ -100,7 +98,7 @@ describe("delivery-queue MEDIA-directive durability (end-to-end)", () => {
   });
 
   afterEach(() => {
-    releasePinnedPluginChannelRegistry();
+    resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
@@ -134,11 +132,14 @@ describe("delivery-queue MEDIA-directive durability (end-to-end)", () => {
     const [entry] = await loadPendingDeliveries(tmpDir);
     expect(entry).toBeDefined();
     // mediaUrl and mediaUrls[0] both anchor to the one staged copy, so dedupe.
-    const spoolPaths = [...new Set(collectEntrySpoolPaths(entry?.payloads ?? [], tmpDir))];
+    const queuedPayloads = entry
+      ? acceptedPreparedOutboundEntries(entry.preparedBatch).map((prepared) => prepared.payload)
+      : [];
+    const spoolPaths = [...new Set(collectEntrySpoolPaths(queuedPayloads, tmpDir))];
     expect(spoolPaths).toHaveLength(1);
     expect(path.dirname(spoolPaths[0] ?? "")).toBe(spoolRoot);
-    // Raw pre-hook text (directive included) is preserved on the row.
-    expect(entry?.payloads[0]?.text).toBe(`caption\nMEDIA:${source}`);
+    // The canonical row preserves the post-policy caption without its directive.
+    expect(queuedPayloads[0]?.text).toBe("caption");
     // Spool bytes equal source bytes.
     expect(await fs.readFile(spoolPaths[0] ?? "")).toEqual(bytes);
 
@@ -150,7 +151,7 @@ describe("delivery-queue MEDIA-directive durability (end-to-end)", () => {
     const recovered: RecoveredSend[] = [];
     installMatrixAdapter(recoveryPhaseAdapter(recovered, spoolRoot));
     const deliver = vi.fn<DeliverFn>(async (params) => deliverOutboundPayloads(params));
-    await drainPendingDeliveries({
+    await drainPendingDeliveriesCore({
       drainKey: "media-directive-test",
       logLabel: "media-directive drain",
       cfg,

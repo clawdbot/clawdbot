@@ -94,8 +94,12 @@ describeLive("skill experience review live OpenAI eval", () => {
     // Warm the plugin runtime outside the review lane: the first load compiles
     // extensions synchronously and can exceed the lane's no-progress watchdog
     // on a loaded machine.
-    const { ensureRuntimePluginsLoaded } = await import("../../agents/runtime-plugins.js");
-    ensureRuntimePluginsLoaded({ config: candidate("warmup", []).config ?? {}, workspaceDir });
+    const { loadAgentRuntimePluginRegistryHandle } =
+      await import("../../agents/runtime-plugins.js");
+    loadAgentRuntimePluginRegistryHandle({
+      config: candidate("warmup", []).config ?? {},
+      workspaceDir,
+    });
   }, 600_000);
 
   afterAll(async () => {

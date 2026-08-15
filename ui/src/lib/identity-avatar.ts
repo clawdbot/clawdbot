@@ -1,4 +1,5 @@
 import { AVATAR_MAX_BYTES } from "../../../src/shared/avatar-limits.js";
+import { normalizeBasePath } from "../app-route-paths.ts";
 import { formatSenderLabel, type SenderIdentity } from "./chat/sender-label.ts";
 import { fnv1aUtf16 } from "./fnv1a.ts";
 
@@ -12,6 +13,7 @@ export type IdentityAvatarInput = SenderIdentity & {
 const ORIGIN_PROBE = "https://origin-probe.invalid";
 
 let appGatewayOrigin: string | null = null;
+let appGatewayBasePath = "";
 let appGatewayAuthHeader: string | null = null;
 
 const IDENTITY_AVATAR_CACHE_MAX_ENTRIES = 128;
@@ -73,13 +75,22 @@ function toHttpOrigin(url: string | null | undefined): string | null {
 export function setAvatarGatewayOrigin(
   gatewayUrl: string | null | undefined,
   authHeader: string | null = null,
+  controlUiBasePath = "",
 ): void {
   const nextOrigin = toHttpOrigin(gatewayUrl);
+  const documentOrigin = globalThis.location?.origin;
+  const nextBasePath =
+    nextOrigin && documentOrigin === nextOrigin ? normalizeBasePath(controlUiBasePath) : "";
   const nextAuthHeader = authHeader?.trim() || null;
-  if (appGatewayOrigin !== nextOrigin || appGatewayAuthHeader !== nextAuthHeader) {
+  if (
+    appGatewayOrigin !== nextOrigin ||
+    appGatewayBasePath !== nextBasePath ||
+    appGatewayAuthHeader !== nextAuthHeader
+  ) {
     clearIdentityAvatarCache();
   }
   appGatewayOrigin = nextOrigin;
+  appGatewayBasePath = nextBasePath;
   appGatewayAuthHeader = nextAuthHeader;
 }
 
@@ -98,11 +109,17 @@ const USER_AVATAR_PATHNAME = /^\/api\/users\/[^/]+\/avatar$/u;
 function toTrustedAvatarUrl(value: string, gatewayOrigin: string | null): string | null {
   try {
     const parsed = new URL(value, ORIGIN_PROBE);
-    if (!USER_AVATAR_PATHNAME.test(parsed.pathname)) {
+    const relativeRoute = parsed.origin === ORIGIN_PROBE;
+    const canonicalPathname = relativeRoute
+      ? parsed.pathname
+      : appGatewayBasePath && parsed.pathname.startsWith(`${appGatewayBasePath}/`)
+        ? parsed.pathname.slice(appGatewayBasePath.length)
+        : parsed.pathname;
+    if (!USER_AVATAR_PATHNAME.test(canonicalPathname)) {
       return null;
     }
-    const suffix = parsed.pathname + parsed.search;
-    if (parsed.origin === ORIGIN_PROBE) {
+    const suffix = `${appGatewayBasePath}${canonicalPathname}${parsed.search}`;
+    if (relativeRoute) {
       return gatewayOrigin ? new URL(suffix, gatewayOrigin).toString() : suffix;
     }
     return gatewayOrigin && parsed.origin === gatewayOrigin ? gatewayOrigin + suffix : null;
@@ -171,15 +188,19 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> {
   return entry.promise;
 }
 
-/** Fetch protected or cross-origin profile images once and render CSP-safe blobs. */
+/** Fetch connected-gateway profile images once and render CSP-safe blobs. */
 export function resolveAvatarImageUrl(value: string): string | Promise<string | null> | null {
   const trusted = toTrustedAvatarUrl(value, appGatewayOrigin);
   if (!trusted) {
     return null;
   }
+  // Connected same-origin routes need the loader too: it resolves a missing
+  // avatar before Lit can reconcile an <img> error back over its initials.
   const pageOrigin = globalThis.location?.origin;
   const crossOrigin = pageOrigin ? new URL(trusted, pageOrigin).origin !== pageOrigin : false;
-  return appGatewayAuthHeader || crossOrigin ? loadIdentityAvatar(trusted) : trusted;
+  return appGatewayOrigin || appGatewayAuthHeader || crossOrigin
+    ? loadIdentityAvatar(trusted)
+    : trusted;
 }
 
 /** A blob stays live until its image has finished loading or definitively failed. */

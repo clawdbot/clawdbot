@@ -53,7 +53,7 @@ function swiftFunctionBody(source: string, name: string): string {
   }
 
   const rest = source.slice(start + startMarker.length);
-  const nextFunction = rest.search(/\n    (?:private )?func /);
+  const nextFunction = rest.search(/\n {4}(?:private )?func /);
   return nextFunction < 0 ? rest : rest.slice(0, nextFunction);
 }
 
@@ -320,7 +320,9 @@ describe("iOS Fastlane release upload gates", () => {
     expect(iosJob).toContain("Capture iOS release screenshots");
     expect(iosJob).toContain("github.event_name == 'workflow_dispatch'");
     expect(iosJob).toContain("github.event_name == 'pull_request'");
-    expect(iosJob).toContain("needs.preflight.outputs.run_macos == 'true'");
+    expect(iosJob).toContain("inputs.release_gate");
+    expect(iosJob).toContain("needs.preflight.outputs.run_ios_screenshots == 'true'");
+    expect(iosJob).not.toContain("needs.preflight.outputs.run_macos == 'true'");
     expect(iosJob).toContain("run: pnpm ios:screenshots");
     expect(iosJob).toContain("Upload iOS release screenshot evidence");
     expect(iosJob).toContain("apps/ios/build/SnapshotTestResults/*.xcresult");

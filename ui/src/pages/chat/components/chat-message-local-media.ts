@@ -129,3 +129,22 @@ export function buildAssistantAttachmentUrl(
   }
   return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
 }
+
+export function appendAttachmentUrlSearchParam(
+  source: string,
+  name: string,
+  value: string,
+): string {
+  const trimmed = source.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const hashIndex = trimmed.indexOf("#");
+  const hash = hashIndex === -1 ? "" : trimmed.slice(hashIndex);
+  const withoutHash = hashIndex === -1 ? trimmed : trimmed.slice(0, hashIndex);
+  const queryIndex = withoutHash.indexOf("?");
+  const path = queryIndex === -1 ? withoutHash : withoutHash.slice(0, queryIndex);
+  const params = new URLSearchParams(queryIndex === -1 ? "" : withoutHash.slice(queryIndex + 1));
+  params.set(name, value);
+  return `${path}?${params.toString()}${hash}`;
+}

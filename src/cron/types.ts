@@ -1,8 +1,9 @@
-/** Cron scheduling, delivery, diagnostics, and store data contracts. */
-import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
+/** Cron scheduling, delivery, diagnostics, and store data contracts. */
+import type { FailoverReason } from "../agents/failover/signal.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
+import type { CronRuntimeAuthority } from "./runtime-authority.js";
 import type { CronScheduledToolPolicy } from "./scheduled-tool-policy.js";
 import type { CronJobBase, CronPacing } from "./types-shared.js";
 
@@ -360,6 +361,13 @@ type CronScriptPayloadPatch = {
 /** Mutable runtime state persisted beside the immutable cron job spec. */
 export type CronJobState = {
   nextRunAtMs?: number;
+  /**
+   * When the current scheduling inputs took effect. Restart catch-up replays a
+   * missed slot only when the slot is newer than this, because slots computed
+   * from a freshly edited schedule never existed under the old one. Absent on
+   * jobs whose schedule has not changed, where every computed slot is real.
+   */
+  scheduleActivatedAtMs?: number;
   /** Exact startup catch-up slot protected from future-slot repair across restarts. */
   startupCatchupAtMs?: number;
   /** Exact paced completion slot protected from future-slot repair until consumed. */
@@ -382,6 +390,12 @@ export type CronJobState = {
   lastDurationMs?: number;
   /** Number of consecutive execution errors (reset on success). Used for backoff. */
   consecutiveErrors?: number;
+  /** Durable explanation for a scheduler-owned automatic disable transition. */
+  autoDisabled?: {
+    reason: "consecutive-failures" | "schedule-errors";
+    atMs: number;
+    consecutiveErrors: number;
+  };
   /** Number of consecutive skipped executions (reset on success or error). */
   consecutiveSkipped?: number;
   /** Last failure alert timestamp (ms since epoch) for cooldown gating. */
@@ -450,7 +464,7 @@ export type CronTriggerEvaluationResult =
   | { kind: "busy" }
   | { kind: "error"; code: CronTriggerFailureCode; error: string };
 
-/** Fully persisted cron job with spec fields and mutable run state. */
+/** Public cron job contract with spec fields and mutable run state. */
 export type CronJob = CronJobBase<
   CronSchedule,
   CronSessionTarget,
@@ -473,13 +487,30 @@ export type CronJob = CronJobBase<
   state: CronJobState;
 };
 
+/** Store-only proof omitted from public Gateway results and the CronJob wire/type contract. */
+export type CronToolsAllowProvenance = {
+  version: 1;
+  source: "final-executable-surface";
+};
+
+/** Persisted row shape; public Gateway and wire contracts use CronJob. */
+export type CronStoredJob = CronJob & {
+  toolsAllowProvenance?: CronToolsAllowProvenance;
+  /** Runtime-private authority omitted from public Gateway and wire contracts. */
+  runtimeAuthority?: CronRuntimeAuthority;
+  /** Authority was explicitly cleared and must be reauthorized before app reuse. */
+  runtimeAuthorityRecoveryRequired?: true;
+};
+
 /** Versioned cron store file shape. */
 export type CronStoreFile = {
   version: 1;
-  jobs: CronJob[];
+  jobs: CronStoredJob[];
 };
 
-type CronJobStateInput = Partial<Omit<CronJobState, "streamSourceIdentity">>;
+type CronJobStateInput = Partial<
+  Omit<CronJobState, "autoDisabled" | "scheduleActivatedAtMs" | "streamSourceIdentity">
+>;
 
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<
@@ -506,6 +537,7 @@ export type CronJobPatch = Partial<
     | "owner"
     | "scheduledToolPolicy"
     | "pacing"
+    | "trigger"
   >
 > & {
   displayName?: string | null;

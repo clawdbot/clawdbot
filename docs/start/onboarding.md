@@ -91,15 +91,16 @@ To use a Claude subscription when the Gateway host has no Claude CLI login, run
 printed token as **Anthropic setup-token** under **Connect with an API key or
 token**.
 
-Installed Gemini CLI, Antigravity, Pi, and OpenCode CLIs are shown for context
-when they cannot be selected as the reusable guided-setup inference route.
-Gemini and Antigravity cannot enforce the tool-free inference probe. Pi and
-OpenCode are whole-agent harnesses rather than setup inference routes; their
-session integrations require separate runtime and plugin setup.
+Pi and OpenCode installs may be shown for context when they cannot be selected
+as the reusable guided-setup inference route. They are whole-agent harnesses,
+not setup inference routes; their session integrations require separate runtime
+and plugin setup. Gemini CLI and Antigravity are not offered as detected setup
+routes.
 
 You can also sign in through the provider's own OAuth or device-pairing flow.
-The built-in choices include OpenAI/ChatGPT, OpenRouter, GitHub Copilot, Google
-Gemini CLI, xAI, MiniMax Global and CN, and Chutes. The list comes from the
+The built-in choices include OpenAI/ChatGPT, OpenRouter, GitHub Copilot, xAI,
+MiniMax Global and CN, and Chutes. Google is available through the supported AI
+Studio API-key route. The list comes from the
 Gateway's active text-inference provider plugins rather than a fixed app list,
 so another provider can opt in without adding provider-specific macOS code.
 

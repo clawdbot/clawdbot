@@ -80,6 +80,24 @@ function recordFailedCall(
   });
 }
 
+function createExecLoopResult(params: {
+  status: "completed" | "failed";
+  exitCode: number | null;
+  output: string;
+  aggregated?: string;
+  timedOut?: boolean;
+}) {
+  return {
+    content: [{ type: "text", text: params.output }],
+    details: {
+      status: params.status,
+      exitCode: params.exitCode,
+      aggregated: params.aggregated ?? params.output,
+      ...(params.timedOut === undefined ? {} : { timedOut: params.timedOut }),
+    },
+  };
+}
+
 function recordRepeatedSuccessfulCalls(params: {
   state: SessionState;
   toolName: string;
@@ -955,6 +973,246 @@ describe("tool-loop-detection", () => {
       );
 
       expect(loopResult.stuck).toBe(false);
+    });
+
+    it.each([
+      {
+        label: "completed normal process failures",
+        status: "completed",
+        exitCode: 1,
+        output: "Traceback: missing package\n\n(Command exited with code 1)",
+      },
+      {
+        label: "failed non-executable commands",
+        status: "failed",
+        exitCode: 126,
+        output: "Command not executable (permission denied)",
+        aggregated: "",
+      },
+      {
+        label: "failed missing commands",
+        status: "failed",
+        exitCode: 127,
+        output: "Command not found",
+        aggregated: "",
+      },
+    ] as const)("blocks repeated $label across changing exec arguments", (testCase) => {
+      const state = createState();
+      const result = createExecLoopResult(testCase);
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(state, "exec", { command: `python job-${index}.py` }, result, index);
+      }
+
+      expect(
+        state.toolCallHistory?.every((record) => record.outcomeKind === "terminal-exec-failure"),
+      ).toBe(true);
+      expect(
+        detectToolCallLoop(
+          state,
+          "exec",
+          { command: "python next-job.py" },
+          enabledLoopDetectionConfig,
+        ),
+      ).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "generic_repeat",
+        count: CRITICAL_THRESHOLD,
+      });
+    });
+
+    it("anchors changing-argument exec vetoes until the global circuit breaker", () => {
+      const state = createState();
+      const result = createExecLoopResult({
+        status: "completed",
+        exitCode: 1,
+        output: "Traceback: missing package\n\n(Command exited with code 1)",
+      });
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(state, "exec", { command: `python job-${index}.py` }, result, index);
+      }
+      for (let index = CRITICAL_THRESHOLD; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const params = { command: `python job-${index}.py` };
+        expect(detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig)).toMatchObject(
+          {
+            stuck: true,
+            level: "critical",
+            detector: "generic_repeat",
+            count: index,
+          },
+        );
+        expect(
+          recordToolCallOutcome(state, {
+            toolName: "exec",
+            toolParams: params,
+            toolCallId: `exec-veto-${index}`,
+            result: {
+              content: [{ type: "text", text: "blocked" }],
+              details: { status: "blocked", deniedReason: "tool-loop" },
+            },
+            config: enabledLoopDetectionConfig,
+          }),
+        ).toMatchObject({ outcomeKind: "tool-loop-veto", resultHash: undefined });
+      }
+
+      expect(
+        detectToolCallLoop(
+          state,
+          "exec",
+          { command: "python final-job.py" },
+          enabledLoopDetectionConfig,
+        ),
+      ).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "global_circuit_breaker",
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+      });
+    });
+
+    it.each([
+      {
+        label: "synthetic exit-code-only output",
+        result: createExecLoopResult({
+          status: "completed",
+          exitCode: 1,
+          output: "\n\n(Command exited with code 1)",
+        }),
+      },
+      {
+        label: "successful command batches",
+        result: createExecLoopResult({ status: "completed", exitCode: 0, output: "done" }),
+      },
+      {
+        label: "timed-out executions",
+        result: createExecLoopResult({
+          status: "failed",
+          exitCode: 1,
+          output: "Command timed out",
+          timedOut: true,
+        }),
+      },
+      {
+        label: "non-finite exit codes",
+        result: createExecLoopResult({
+          status: "failed",
+          exitCode: Number.POSITIVE_INFINITY,
+          output: "process failed",
+        }),
+      },
+      {
+        label: "failures without an exit code",
+        result: createExecLoopResult({
+          status: "failed",
+          exitCode: null,
+          output: "process failed before spawning",
+        }),
+      },
+    ])("does not semantically block $label", ({ result }) => {
+      const state = createState();
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        recordSuccessfulCall(state, "exec", { command: `grep target-${index}` }, result, index);
+      }
+
+      expect(state.toolCallHistory?.every((record) => record.outcomeKind === undefined)).toBe(true);
+      expect(
+        detectToolCallLoop(
+          state,
+          "exec",
+          { command: "grep next-target" },
+          enabledLoopDetectionConfig,
+        ),
+      ).toEqual({ stuck: false });
+    });
+
+    it.each([
+      {
+        label: "a distinct terminal failure",
+        toolName: "exec",
+        result: createExecLoopResult({
+          status: "completed",
+          exitCode: 1,
+          output: "Traceback: different package\n\n(Command exited with code 1)",
+        }),
+      },
+      {
+        label: "a successful execution",
+        toolName: "exec",
+        result: createExecLoopResult({ status: "completed", exitCode: 0, output: "done" }),
+      },
+      {
+        label: "a timed-out execution",
+        toolName: "exec",
+        result: createExecLoopResult({
+          status: "failed",
+          exitCode: 1,
+          output: "Command timed out",
+          timedOut: true,
+        }),
+      },
+      {
+        label: "another tool",
+        toolName: "read",
+        result: { content: [{ type: "text", text: "read complete" }], details: { ok: true } },
+      },
+    ])("resets the semantic exec failure tail after $label", ({ toolName, result }) => {
+      const state = createState();
+      const failure = createExecLoopResult({
+        status: "completed",
+        exitCode: 1,
+        output: "Traceback: missing package\n\n(Command exited with code 1)",
+      });
+      for (let index = 0; index < CRITICAL_THRESHOLD - 1; index += 1) {
+        recordSuccessfulCall(state, "exec", { command: `python job-${index}.py` }, failure, index);
+      }
+      recordSuccessfulCall(state, toolName, { command: "interruption" }, result, 19);
+      recordSuccessfulCall(state, "exec", { command: "python latest.py" }, failure, 20);
+
+      expect(
+        detectToolCallLoop(
+          state,
+          "exec",
+          { command: "python next.py" },
+          enabledLoopDetectionConfig,
+        ),
+      ).toEqual({ stuck: false });
+    });
+
+    it("does not carry semantic exec failures into another run", () => {
+      const state = createState();
+      const result = createExecLoopResult({
+        status: "completed",
+        exitCode: 1,
+        output: "Traceback: missing package\n\n(Command exited with code 1)",
+      });
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        const params = { command: `python job-${index}.py` };
+        const toolCallId = `exec-old-run-${index}`;
+        recordToolCall(state, "exec", params, toolCallId, enabledLoopDetectionConfig, {
+          runId: "old-run",
+        });
+        recordToolCallOutcome(state, {
+          toolName: "exec",
+          toolParams: params,
+          toolCallId,
+          result,
+          config: enabledLoopDetectionConfig,
+          runId: "old-run",
+        });
+      }
+
+      expect(
+        detectToolCallLoop(
+          state,
+          "exec",
+          { command: "python next.py" },
+          enabledLoopDetectionConfig,
+          { runId: "new-run" },
+        ),
+      ).toEqual({ stuck: false });
     });
 
     it("blocks repeated completed exec calls despite volatile runtime details", () => {

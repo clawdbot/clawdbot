@@ -9,8 +9,10 @@ import type { ChatCommandDefinition } from "../../auto-reply/commands-registry.t
 const mockSkillCommands = [
   {
     skillName: "code-review",
+    displayName: "Code Review",
     name: "code_review",
     description: "Run code review",
+    modelVisible: true,
     acceptsArgs: true,
   },
 ];
@@ -94,6 +96,10 @@ type RuntimeCommandRegistration = {
     acceptsArgs?: boolean;
     nativeNames?: Record<string, string>;
     channels?: string[];
+    clientPresentation?: {
+      when: "no-arguments";
+      action: { kind: "device-pairing" };
+    };
   };
 };
 const runtimeMocks = vi.hoisted(() => ({
@@ -131,39 +137,28 @@ vi.mock("../../plugins/command-specs.js", () => ({
     }));
   }),
   getPluginCommandEntrySpecsFromRegistrations: vi.fn(
-    (
-      commands: Array<{
-        command: {
-          name: string;
-          description: string;
-          acceptsArgs?: boolean;
-          nativeNames?: Record<string, string>;
-          channels?: string[];
-        };
-      }>,
-      provider?: string,
-    ) => {
+    (commands: RuntimeCommandRegistration[], provider?: string) => {
       return commands
         .filter(
           (entry) =>
             !provider || !entry.command.channels || entry.command.channels.includes(provider),
         )
         .map((entry) => {
-          const spec: {
-            name: string;
-            nativeName?: string;
-            description: string;
-            acceptsArgs: boolean;
-          } = {
+          const spec = {
             name: entry.command.name.trim(),
             description: entry.command.description.trim(),
             acceptsArgs: entry.command.acceptsArgs ?? false,
           };
           if (provider !== "whatsapp") {
-            spec.nativeName =
-              (provider ? entry.command.nativeNames?.[provider] : undefined) ??
-              entry.command.nativeNames?.default ??
-              entry.command.name.trim();
+            Object.assign(spec, {
+              nativeName:
+                (provider ? entry.command.nativeNames?.[provider] : undefined) ??
+                entry.command.nativeNames?.default ??
+                entry.command.name.trim(),
+            });
+          }
+          if (entry.command.clientPresentation) {
+            Object.assign(spec, { clientPresentation: entry.command.clientPresentation });
           }
           return spec;
         });
@@ -187,8 +182,10 @@ vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
 }));
 vi.mock("../../agents/agent-scope.js", () => ({
+  AgentSelectionRequiredError: class AgentSelectionRequiredError extends Error {},
   listAgentIds: vi.fn(() => ["main", "dev"]),
   resolveDefaultAgentId: vi.fn(() => "main"),
+  tryResolveLegacyCompatibilityAgentId: vi.fn(() => "main"),
 }));
 vi.mock("../../channels/plugins/index.js", () => ({
   getLoadedChannelPlugin: vi.fn((provider: string) => {
@@ -372,6 +369,8 @@ describe("commands.list handler", () => {
     const commands = listCommands();
     const skill = commands.find((c) => c.name === "code_review");
     expect(skill?.source).toBe("skill");
+    expect(skill?.skillDisplayName).toBe("Code Review");
+    expect(skill?.skillModelVisible).toBe(true);
     expect(skill?.category).toBe("tools");
   });
 
@@ -469,6 +468,10 @@ describe("commands.list handler", () => {
           name: "  demo  ",
           description: "  Demo command  ",
           acceptsArgs: true,
+          clientPresentation: {
+            when: "no-arguments",
+            action: { kind: "device-pairing" },
+          },
         },
       },
     ]);
@@ -480,6 +483,10 @@ describe("commands.list handler", () => {
     expect(demo?.description).toBe("Demo command");
     expect(demo?.textAliases).toEqual(["/demo"]);
     expect(demo?.acceptsArgs).toBe(true);
+    expect(demo?.clientPresentation).toEqual({
+      when: "no-arguments",
+      action: { kind: "device-pairing" },
+    });
     expect(commands.find((c) => c.source === "plugin" && c.name === "tts")).toBeUndefined();
   });
 

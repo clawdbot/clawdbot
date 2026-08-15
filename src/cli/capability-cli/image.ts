@@ -28,8 +28,8 @@ import { getImageMetadata } from "../../media/media-services.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { getModelsCommandSecretTargetIds } from "../command-secret-targets.js";
+import { readInputFiles, writeOutputAsset } from "../media-output.js";
 import { collectOption } from "../program/helpers.js";
-import { readInputFiles, writeOutputAsset } from "./media-output.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import {
@@ -40,6 +40,7 @@ import {
   providerHasGenericConfig,
   providerSummaryText,
   requireProviderModelOverride,
+  resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,
   resolveSelectedProviderFromModelRef,
 } from "./shared.js";
@@ -407,10 +408,12 @@ export function registerImageCapabilityCommands(capability: Command): void {
   image
     .command("providers")
     .description("List image generation providers")
+    .option("--agent <id>", "Agent whose provider state should be inspected")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = getRuntimeConfig();
+        const agentId = resolveCapabilityProviderAgentId(cfg, opts.agent as string | undefined);
         const selectedProvider = resolveSelectedProviderFromModelRef(
           resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.image),
         );
@@ -418,7 +421,7 @@ export function registerImageCapabilityCommands(capability: Command): void {
           available: true,
           configured:
             selectedProvider === provider.id ||
-            providerHasGenericConfig({ cfg, providerId: provider.id }),
+            providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
           selected: selectedProvider === provider.id,
           id: provider.id,
           label: provider.label,

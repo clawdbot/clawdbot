@@ -1,8 +1,8 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { getRuntimeConfig } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { NodePairingGeneration } from "../../infra/device-pairing-node-state.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { NodePairingGeneration } from "../../infra/node-pairing-state.js";
 import {
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,

@@ -310,6 +310,59 @@ describe("Codex native hook relay config", () => {
     expect((config["hooks.PostToolUse"] as Array<{ matcher?: unknown }>)[0]).not.toHaveProperty(
       "matcher",
     );
+    const hookState = config["hooks.state"] as Record<
+      string,
+      { enabled: boolean; trusted_hash: string }
+    >;
+    expect(hookState["/<session-flags>/config.toml:pre_tool_use:0:0"]?.trusted_hash).toBe(
+      "sha256:00eef2fb113075f6aa238484c41e5eac82830c98c6379611019592ad93d2e56b",
+    );
+    expect(hookState["/<session-flags>/config.toml:post_tool_use:0:0"]?.trusted_hash).toBe(
+      "sha256:64b626a7cee798d42404b892982925feda7b335a9cd0ed62be905ab2e2766c1f",
+    );
+  });
+
+  it("projects canonical OpenClaw ids to Codex canonical and alias matcher names", () => {
+    const config = buildCodexNativeHookRelayConfig({
+      relay: createRelay({
+        matchers: {
+          pre_tool_use: ["exec"],
+          post_tool_use: ["apply_patch", "spawn_agent"],
+        },
+      }),
+      events: ["pre_tool_use", "post_tool_use"],
+      loopDetectionPreToolUseRelay: false,
+    });
+
+    expect(config["hooks.PreToolUse"]).toEqual([
+      expect.objectContaining({ matcher: "Bash|exec|exec_command" }),
+    ]);
+    expect(config["hooks.PostToolUse"]).toEqual([
+      expect.objectContaining({ matcher: "Agent|Edit|Write|apply_patch|spawn_agent" }),
+    ]);
+    expect(JSON.stringify(config)).not.toContain("web_search");
+  });
+
+  it("matches custom Codex tool names case-insensitively without widening the scope", () => {
+    const config = buildCodexNativeHookRelayConfig({
+      relay: createRelay({ matchers: { pre_tool_use: ["deploy"] } }),
+      events: ["pre_tool_use"],
+      loopDetectionPreToolUseRelay: false,
+    });
+
+    expect(config["hooks.PreToolUse"]).toEqual([
+      expect.objectContaining({ matcher: "(?i)^(?:deploy)$" }),
+    ]);
+  });
+
+  it("rejects an empty canonical matcher scope instead of widening to match-all", () => {
+    expect(() =>
+      buildCodexNativeHookRelayConfig({
+        relay: createRelay({ matchers: { pre_tool_use: [] } }),
+        events: ["pre_tool_use"],
+        loopDetectionPreToolUseRelay: false,
+      }),
+    ).toThrow("Codex native hook matcher requires at least one tool name");
   });
 
   it("builds deterministic clearing config when the relay is disabled", () => {
@@ -373,6 +426,12 @@ describe("Codex native hook relay config", () => {
 
 function createRelay(options?: {
   inactiveEvents?: readonly NativeHookRelayRegistrationHandle["allowedEvents"][number][];
+  matchers?: Partial<
+    Record<
+      NativeHookRelayRegistrationHandle["allowedEvents"][number],
+      readonly string[] | undefined
+    >
+  >;
 }): NativeHookRelayRegistrationHandle {
   const inactiveEvents = new Set(options?.inactiveEvents ?? []);
   return {
@@ -385,6 +444,7 @@ function createRelay(options?: {
     allowedEvents: ["pre_tool_use", "post_tool_use", "permission_request", "before_agent_finalize"],
     expiresAtMs: Date.now() + 1000,
     shouldRelayEvent: (event) => !inactiveEvents.has(event),
+    toolMatcherForEvent: (event) => options?.matchers?.[event],
     commandForEvent: (event, commandOptions) =>
       `openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event ${event}${
         event === "pre_tool_use" && inactiveEvents.has(event)

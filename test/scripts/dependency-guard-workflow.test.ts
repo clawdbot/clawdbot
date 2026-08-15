@@ -221,6 +221,15 @@ describe("dependency guard workflow", () => {
     expect(script).toContain("process.exitCode = 1");
   });
 
+  it("keeps removal-only dependency changes informational", () => {
+    const script = readFileSync("scripts/github/dependency-guard.mjs", "utf8");
+
+    expect(script).toContain("isRemovalOnlyDependencyGraphChange");
+    expect(script).toContain("Dependency removals detected; guard is informational.");
+    expect(script).toContain("/dependency-graph/compare/");
+    expect(script).toContain('change.change_type === "removed"');
+  });
+
   it("cleans dependency label and guard comment after successful autoscrub", () => {
     const script = readFileSync("scripts/github/dependency-guard.mjs", "utf8");
     const autoscrubCommitIndex = script.indexOf("const commit = await createAutoscrubCommit");
@@ -243,13 +252,15 @@ describe("dependency guard workflow", () => {
     expect(autoscrubCommentIndex).toBeGreaterThan(deleteCommentIndex);
   });
 
-  it("checks trusted actors before autoscrub can mutate dependency changes", () => {
+  it("checks trusted actors before dependency graph comparison and autoscrub", () => {
     const script = readFileSync("scripts/github/dependency-guard.mjs", "utf8");
     const trustedActorIndex = script.indexOf("const trustedActor =");
+    const dependencyGraphCompareIndex = script.indexOf("const dependencyGraphChanges =");
     const autoscrubCandidateIndex = script.indexOf("const autoscrubCandidate =");
     const autoscrubOutputIndex = script.indexOf('await setOutput("autoscrub", "true")');
 
     expect(trustedActorIndex).toBeGreaterThan(0);
+    expect(dependencyGraphCompareIndex).toBeGreaterThan(trustedActorIndex);
     expect(autoscrubCandidateIndex).toBeGreaterThan(trustedActorIndex);
     expect(autoscrubOutputIndex).toBeGreaterThan(trustedActorIndex);
   });

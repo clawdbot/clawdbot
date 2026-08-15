@@ -2,6 +2,8 @@ import { afterEach, beforeEach, vi } from "vitest";
 import type {
   SessionCatalogPullRequestSummary,
   SessionsCatalogListResult,
+  SessionsPatchManyParams,
+  SessionsPatchManyResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
@@ -13,7 +15,7 @@ import type {
   ApplicationGatewaySnapshot,
 } from "../app/context.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
-import type { ApplicationOverlays } from "../app/overlays.ts";
+import type { ApplicationOverlays } from "../app/overlays-types.ts";
 import type {
   SidebarWorkboardBoard,
   SidebarWorkboardRenderers,
@@ -21,7 +23,11 @@ import type {
 import type { SessionDataController } from "../components/session-data-controller.ts";
 import type { SessionOrganizerController } from "../components/session-organizer-controller.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
-import type { SessionCapability } from "../lib/sessions/index.ts";
+import {
+  createSessionCapability,
+  type SessionCapability,
+  type SessionListOptions,
+} from "../lib/sessions/index.ts";
 import { reconcileSessionHistory } from "../lib/sessions/reconcile.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
 import { createStorageMock } from "./storage.ts";
@@ -33,14 +39,20 @@ vi.mock("../components/sidebar-attention.ts", () => ({}));
 export type SessionGroupMutationResult = Awaited<ReturnType<SessionCapability["groupsRename"]>>;
 type SessionDeleteResult = Awaited<ReturnType<SessionCapability["delete"]>>;
 type SessionState = SessionCapability["state"];
+const sidebarSessionGatewayBindings = new WeakMap<
+  SessionCapability,
+  (gateway: ApplicationGateway) => void
+>();
 
 export type SidebarLifecycleState = HTMLElement & {
+  hiddenSessionCatalogIds: ReadonlySet<string>;
   activeRouteId?: string;
   activeWorkboardBoardId: string;
   enabledRouteIds?: readonly NavigationRouteId[];
   connected: boolean;
   offline: boolean;
   outboxCountForSession: (sessionKey: string) => number;
+  hasSessionDraft: (sessionKey: string) => boolean;
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
@@ -58,11 +70,19 @@ export type SidebarLifecycleState = HTMLElement & {
   ) => void;
   readonly sessionData: SessionDataController;
   readonly sessionOrganizer: SessionOrganizerController;
+  listSessionGroupFolders(path?: string): Promise<{
+    path: string;
+    home: string;
+    entries: Array<{ name: string; path: string; type: "directory" | "file" }>;
+  }>;
   requestUpdate: () => void;
   updateComplete: Promise<boolean>;
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
-  updateRunning: boolean;
+  updateBusy: boolean;
+  canUpdate: boolean;
   onUpdate: () => void;
+  refreshRequired: boolean;
+  onRefresh: () => void;
   onRetryConnect?: () => void;
   onOpenNewSession?: (agentId: string, target?: { catalogId: string }) => void;
   variant: "panel" | "drawer";
@@ -74,6 +94,8 @@ export type LobsterPetElement = HTMLElement & {
 
 export type TestSessionMenu = HTMLElement & {
   forkDisabled: boolean;
+  forkFromLastCompleted: boolean;
+  onAction: (action: { kind: "fork" }) => void;
   selectionCount: number;
   readonly updateComplete: Promise<boolean>;
 };
@@ -172,6 +194,7 @@ export function createSessionState(agentId: string, keys: string[]): SessionStat
     },
     sessions: keys.map((key, index) => ({
       key,
+      sessionId: `session:${key}`,
       kind: "direct" as const,
       updatedAt: index + 1,
     })),
@@ -184,6 +207,7 @@ export function createSessionState(agentId: string, keys: string[]): SessionStat
     error: null,
     deletedSessions: [],
     groups: [],
+    groupSettings: [],
     sectionOrder: [],
   };
 }
@@ -212,7 +236,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
-  const groupsPut = vi.fn(() => Promise.resolve());
+  const groupsPut = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsDelete = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const create = vi.fn(() => Promise.resolve("agent:main:fork"));
@@ -229,8 +253,22 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       preservedWorktrees: [] as Array<{ id: string; branch: string; path: string }>,
     }),
   );
-  const refresh = vi.fn(() => Promise.resolve());
+  const refresh = vi.fn((_options?: Parameters<SessionCapability["refresh"]>[0]) =>
+    Promise.resolve(),
+  );
   const refreshReplacement = vi.fn(() => Promise.resolve());
+  const patchMany = vi.fn(
+    async (
+      targets: SessionsPatchManyParams["targets"],
+      _patch: SessionsPatchManyParams["patch"],
+    ): Promise<SessionsPatchManyResult> => ({
+      outcomes: targets.map((target) => ({
+        ok: true,
+        key: target.key,
+        ...(target.agentId ? { agentId: target.agentId } : {}),
+      })),
+    }),
+  );
   const setCreatorFilter = vi.fn(() => Promise.resolve());
   const subscribeMessages = vi.fn((key: string, options?: { agentId?: string | null }) =>
     Promise.resolve({ key, agentId: options?.agentId ?? null }),
@@ -239,7 +277,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     (_subscription: Parameters<SessionCapability["unsubscribeMessages"]>[0]) => Promise.resolve(),
   );
   const list = vi.fn((_options?: Parameters<SessionCapability["list"]>[0]) =>
-    Promise.resolve<SessionsListResult | null>(null),
+    Promise.resolve<SessionsListResult | null>(state.result),
   );
   const reconcile = vi.fn<SessionCapability["reconcile"]>((row, defaults, options) => {
     const result = reconcileSessionHistory(state.result, row, defaults, options);
@@ -252,6 +290,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     }
     return true;
   });
+  let scopedSessions: SessionCapability | null = null;
   const sessions = {
     get state() {
       return state;
@@ -277,14 +316,41 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       }
     },
     groupsLoad: () => Promise.resolve(),
+    groupsGeneration: () => 0,
+    groupsStatus: () => "ready",
+    groupsInvalidate: () => undefined,
     groupsPut,
     groupsRename,
     groupsDelete,
     create,
     patch,
+    patchMany,
     delete: deleteSession,
     deleteMany,
     list,
+    listSnapshot(scope: Parameters<SessionCapability["listSnapshot"]>[0]) {
+      if (!scope.archivedFilter || scope.archivedFilter === "active") {
+        return {
+          result: state.result,
+          agentId: state.agentId,
+          loading: state.loading,
+          error: state.error,
+        };
+      }
+      return scopedSessions!.listSnapshot(scope);
+    },
+    subscribeList(
+      scope: Parameters<SessionCapability["subscribeList"]>[0],
+      listener: Parameters<SessionCapability["subscribeList"]>[1],
+    ) {
+      return scopedSessions!.subscribeList(scope, listener);
+    },
+    refreshList(options: Parameters<SessionCapability["refreshList"]>[0]) {
+      if (!options?.archivedFilter || options.archivedFilter === "active") {
+        return refresh(options);
+      }
+      return scopedSessions!.refreshList(options);
+    },
     reconcile,
     setCreatorFilter,
     refresh,
@@ -292,6 +358,61 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     subscribeMessages,
     unsubscribeMessages,
   } as unknown as SessionCapability;
+  let boundGateway: ApplicationGateway | null = null;
+  const scopedClients = new WeakMap<GatewayBrowserClient, GatewayBrowserClient>();
+  sidebarSessionGatewayBindings.set(sessions, (gateway) => {
+    if (boundGateway === gateway) {
+      return;
+    }
+    scopedSessions?.dispose();
+    boundGateway = gateway;
+    const scopedClient = (client: GatewayBrowserClient | null): GatewayBrowserClient | null => {
+      if (!client) {
+        return null;
+      }
+      const existing = scopedClients.get(client);
+      if (existing) {
+        return existing;
+      }
+      const proxy = {
+        request: async <T>(method: string, params?: unknown): Promise<T> => {
+          if (method === "sessions.subscribe") {
+            return { subscribed: true } as T;
+          }
+          if (method === "sessions.patchMany") {
+            const { targets, patch: sessionPatch } = params as SessionsPatchManyParams;
+            return (await patchMany(targets, sessionPatch)) as T;
+          }
+          if (method !== "sessions.list") {
+            return client.request<T>(method, params);
+          }
+          const { archived, ...options } = (params ?? {}) as SessionListOptions & {
+            archived?: true | "all";
+          };
+          if (!archived) {
+            return state.result as T;
+          }
+          return (await list({
+            ...options,
+            archivedFilter: archived === true ? "archived" : "all",
+          })) as T;
+        },
+      } as GatewayBrowserClient;
+      scopedClients.set(client, proxy);
+      return proxy;
+    };
+    scopedSessions = createSessionCapability({
+      get snapshot() {
+        const snapshot = gateway.snapshot;
+        return { ...snapshot, client: scopedClient(snapshot.client) };
+      },
+      subscribe: (listener) =>
+        gateway.subscribe((snapshot) =>
+          listener({ ...snapshot, client: scopedClient(snapshot.client) }),
+        ),
+      subscribeEvents: (listener) => gateway.subscribeEvents(listener),
+    });
+  });
   const publish = (statePatch: Partial<SessionState>) => {
     state = { ...state, ...statePatch };
     for (const listener of listeners) {
@@ -305,6 +426,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     groupsDelete,
     create,
     patch,
+    patchMany,
     deleteSession,
     deleteMany,
     list,
@@ -343,6 +465,7 @@ export function createContext(
     subscribe: () => () => undefined,
   },
 ): ApplicationContext<RouteId> {
+  sidebarSessionGatewayBindings.get(sessions)?.(gateway);
   const selectedAgentId = sessions.state.agentId ?? "main";
   return {
     gateway,
@@ -403,7 +526,7 @@ export async function mountSidebar(
 export const TWO_AGENTS = {
   defaultId: "main",
   mainKey: "main",
-  scope: "agent",
+  scope: "per-sender",
   agents: [{ id: "main", identity: { name: "Molty" } }, { id: "research" }],
 } as AgentsListResult;
 
@@ -411,7 +534,7 @@ export const manyAgents = (count: number) =>
   ({
     defaultId: "agent-1",
     mainKey: "main",
-    scope: "agent",
+    scope: "per-sender",
     agents: Array.from({ length: count }, (_, index) => ({ id: `agent-${index + 1}` })),
   }) as AgentsListResult;
 

@@ -2,6 +2,7 @@ import { uniqueValues } from "@openclaw/normalization-core/string-normalization"
 import { replaceConfigFile } from "../config/config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { resolveConfigPath } from "../config/paths.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { collectUnsupportedSecretRefPolicyIssues } from "../config/validation.js";
@@ -9,8 +10,10 @@ import { diffConfigPaths } from "../gateway/config-diff.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.js";
 import { danger, info } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
+import { toDotPath } from "../shared/dot-path.js";
 import { shortenHomePath } from "../utils.js";
 import {
   ConfigSetDryRunValidationError,
@@ -27,7 +30,6 @@ import {
   getAtPath,
   mergeAtPath,
   setAtPath,
-  toDotPath,
   type JsonSchemaRecord,
   type PathSegment,
   unsetAtPath,
@@ -234,10 +236,10 @@ export function configApplyHintForOperations(
     beforeConfig,
     afterConfig,
   );
-  if (
-    paths.length === 0 ||
-    paths.some((path) => path === "plugins.entries" || path.startsWith("plugins.entries."))
-  ) {
+  if (paths.length === 0) {
+    return "No gateway restart needed.";
+  }
+  if (paths.some((path) => path === "plugins.entries" || path.startsWith("plugins.entries."))) {
     return "Restart the gateway to apply.";
   }
   const plan = buildGatewayReloadPlan(paths, { candidateConfig: afterConfig });
@@ -300,8 +302,10 @@ export async function runConfigOperations(params: {
   const explicitSetPaths: PathSegment[][] = [];
   for (const operation of operations) {
     if (operation.mutation === "delete") {
-      unsetAtPath(next, operation.setPath);
-      unsetPaths.push(operation.setPath);
+      const unsetResult = unsetAtPath(next, operation.setPath);
+      if (!unsetResult.removed || unsetResult.leafContainer !== "array") {
+        unsetPaths.push(operation.setPath);
+      }
       continue;
     }
     explicitSetPaths.push(operation.setPath);
@@ -492,15 +496,28 @@ export function handleConfigMutationError(params: {
   runtime: RuntimeEnv;
   options: ConfigMutationOptions;
 }) {
-  if (
-    params.options.dryRun &&
-    params.options.json &&
-    params.err instanceof ConfigSetDryRunValidationError
-  ) {
-    writeRuntimeJson(params.runtime, params.err.result);
+  const message = formatErrorMessage(params.err);
+  if (params.options.dryRun && params.options.json) {
+    if (params.err instanceof ConfigSetDryRunValidationError) {
+      writeRuntimeJson(params.runtime, params.err.result);
+      params.runtime.exit(1);
+      return;
+    }
+    const result: ConfigSetDryRunResult = {
+      ok: false,
+      operations: 0,
+      configPath: resolveConfigPath(),
+      inputModes: [],
+      checks: { schema: false, resolvability: false, resolvabilityComplete: false },
+      refsChecked: 0,
+      skippedExecRefs: 0,
+      errors: [{ kind: "schema", message }],
+    };
+    writeRuntimeJson(params.runtime, result);
+    params.runtime.error(danger(message));
     params.runtime.exit(1);
     return;
   }
-  params.runtime.error(danger(String(params.err)));
+  params.runtime.error(danger(message));
   params.runtime.exit(1);
 }

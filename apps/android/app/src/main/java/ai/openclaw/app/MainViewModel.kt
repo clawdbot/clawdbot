@@ -47,6 +47,8 @@ import ai.openclaw.app.voice.VoiceConversationEntry
 import ai.openclaw.app.voice.VoiceWakePreferences
 import android.Manifest
 import android.app.Application
+import android.content.Intent
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.SavedStateHandle
@@ -65,7 +67,9 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
@@ -276,17 +280,33 @@ class MainViewModel private constructor(
   app: Application,
   private val prefs: SecurePrefs,
   savedStateHandle: SavedStateHandle,
+  private val resolveShareMimeType: (Uri) -> String?,
+  shareLaunchCapacity: Int,
 ) : AndroidViewModel(app) {
   constructor(
     app: Application,
     savedStateHandle: SavedStateHandle,
-  ) : this(app, (app as NodeApp).prefs, savedStateHandle)
+  ) : this(
+    app = app,
+    prefs = (app as NodeApp).prefs,
+    savedStateHandle = savedStateHandle,
+    resolveShareMimeType = app.contentResolver::getType,
+    shareLaunchCapacity = MAX_PENDING_CHAT_SHARES,
+  )
 
   internal constructor(
     app: NodeApp,
     prefs: SecurePrefs,
     savedStateHandle: SavedStateHandle,
-  ) : this(app as Application, prefs, savedStateHandle)
+    resolveShareMimeType: (Uri) -> String? = app.contentResolver::getType,
+    shareLaunchCapacity: Int = MAX_PENDING_CHAT_SHARES,
+  ) : this(
+    app = app as Application,
+    prefs = prefs,
+    savedStateHandle = savedStateHandle,
+    resolveShareMimeType = resolveShareMimeType,
+    shareLaunchCapacity = shareLaunchCapacity,
+  )
 
   private val nodeApp = app as NodeApp
   private val runtimeRef = MutableStateFlow<NodeRuntime?>(null)
@@ -296,6 +316,10 @@ class MainViewModel private constructor(
   // Multiple MainActivity instances can overlap across sender tasks; the process owns one queue.
   private val chatShareDraftSeq = nodeApp.chatShareDraftSeq
   private val chatShareDraftQueue = nodeApp.chatShareDraftQueue
+  private val shareLaunchMutex = Mutex()
+  private val shareLaunchSlots = Semaphore(shareLaunchCapacity)
+  private val shareLaunchOverflowLock = Any()
+  private var pendingShareLaunchOverflowCount = 0
 
   // One bounded heap-only slot follows the ViewModel across Activity recreation.
   // Detail disposal clears it; process death drops it with the ViewModel.
@@ -352,6 +376,8 @@ class MainViewModel private constructor(
   val chatShareDraft: StateFlow<ChatShareDraft?> = chatShareDraftQueue.head
   internal val chatShareDrafts: StateFlow<List<ChatShareDraft>> = chatShareDraftQueue.queued
   internal val chatShareDraftOwnerRevision: StateFlow<Long> = chatShareDraftQueue.ownerRevision
+  private val shareLaunchOverflowRevisionMutable = MutableStateFlow(0L)
+  internal val shareLaunchOverflowRevision: StateFlow<Long> = shareLaunchOverflowRevisionMutable.asStateFlow()
   private val pendingAssistantAutoSendMutable = MutableStateFlow<PendingAssistantAutoSend?>(null)
   internal val pendingAssistantAutoSend: StateFlow<PendingAssistantAutoSend?> = pendingAssistantAutoSendMutable
   private val _assistantAutoSendInFlight = MutableStateFlow(false)
@@ -491,6 +517,8 @@ class MainViewModel private constructor(
   val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
   val gatewayControlPage: StateFlow<NodeRuntime.GatewayControlPage?> =
     runtimeState(initial = null) { it.gatewayControlPage }
+  val desktopObserveAvailable: StateFlow<Boolean> =
+    runtimeState(initial = false) { it.desktopObserveAvailable }
   val isNodeConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.nodeConnected }
   val nodeCapabilityApproval: StateFlow<GatewayNodeCapabilityApproval> =
     runtimeState(initial = GatewayNodeCapabilityApproval.Loading) { it.nodeCapabilityApproval }
@@ -645,6 +673,8 @@ class MainViewModel private constructor(
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.chatModelCatalog }
   val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chatStreamingAssistantText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatPendingToolCalls }
+  val chatSubagentActivities: StateFlow<Map<String, ai.openclaw.app.chat.ChatSubagentActivity>> =
+    runtimeState(initial = emptyMap()) { it.chatSubagentActivities }
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = runtimeState(initial = emptyList()) { it.chatQuestions }
   val chatPlanSteps: StateFlow<List<ChatPlanStep>> = runtimeState(initial = emptyList()) { it.chatPlanSteps }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
@@ -704,6 +734,10 @@ class MainViewModel private constructor(
       queueRuntimeStartup()
     }
     runtimeRef.value?.setForeground(value)
+  }
+
+  fun refreshNodePermissionSurface() {
+    runtimeRef.value?.refreshNodePermissionSurface()
   }
 
   fun setDisplayName(value: String) {
@@ -810,6 +844,7 @@ class MainViewModel private constructor(
             host = config.host,
             port = config.port,
             tlsEnabled = config.tls,
+            contextPath = config.contextPath,
           )
         val targetAlreadyPaired =
           prefs.gatewayRegistry.entries.value
@@ -844,6 +879,7 @@ class MainViewModel private constructor(
             host = config.host,
             port = config.port,
             tls = config.tls,
+            contextPath = config.contextPath,
           ),
         )
 
@@ -964,8 +1000,49 @@ class MainViewModel private constructor(
     setChatDraft(request.prompt?.let { ChatDraft(text = it, placement = ChatDraftPlacement.Replace, owner = owner) })
   }
 
+  /**
+   * Owns share admission through queue insertion so Activity recreation cannot cancel accepted work.
+   */
+  internal fun handleShareLaunchIntent(intent: Intent): Boolean {
+    if (!shareLaunchSlots.tryAcquire()) {
+      reportShareLaunchOverflow()
+      return false
+    }
+    val retainedIntent = Intent(intent)
+    val owner = captureChatShareOwner()
+    viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+      try {
+        shareLaunchMutex.withLock {
+          val request =
+            withContext(Dispatchers.IO) {
+              parseShareLaunchIntent(retainedIntent, resolveShareMimeType)
+            } ?: return@withLock
+          if (!enqueueShareLaunch(request, owner)) reportShareLaunchOverflow()
+        }
+      } finally {
+        shareLaunchSlots.release()
+      }
+    }
+    return true
+  }
+
+  internal fun reportShareLaunchOverflow(count: Int = 1) {
+    if (count <= 0) return
+    synchronized(shareLaunchOverflowLock) {
+      pendingShareLaunchOverflowCount += count
+      shareLaunchOverflowRevisionMutable.value += 1
+    }
+  }
+
+  internal fun takeShareLaunchOverflowCount(): Int =
+    synchronized(shareLaunchOverflowLock) {
+      pendingShareLaunchOverflowCount.also {
+        pendingShareLaunchOverflowCount = 0
+      }
+    }
+
   /** Opens shared content as a fresh composer draft; sending still requires an explicit tap. */
-  internal fun handleShareLaunch(
+  private fun enqueueShareLaunch(
     request: ShareLaunchRequest,
     owner: ChatComposerOwner,
   ): Boolean {
@@ -992,6 +1069,15 @@ class MainViewModel private constructor(
 
   fun requestHomeDestination(destination: HomeDestination) {
     _requestedHomeDestination.value = destination
+  }
+
+  internal fun openConversationNotification(target: ConversationNotificationTarget) {
+    resumeNodeServiceForConnection()
+    viewModelScope.launch(Dispatchers.Default) {
+      if (ensureRuntime().openConversationNotificationTarget(target)) {
+        _requestedHomeDestination.value = HomeDestination.Chat
+      }
+    }
   }
 
   internal fun consumeChatDraft(
@@ -1314,7 +1400,8 @@ class MainViewModel private constructor(
   internal suspend fun loadChatMediaArtifact(
     artifactId: String,
     kind: GatewayMediaKind,
-  ) = ensureRuntime().loadChatMediaArtifact(artifactId, kind)
+    playbackRendition: Boolean,
+  ) = ensureRuntime().loadChatMediaArtifact(artifactId, kind, playbackRendition)
 
   fun requestCanvasRehydrate(source: String = "screen_tab") {
     ensureRuntime().requestCanvasRehydrate(source = source, force = true)
@@ -1536,6 +1623,7 @@ class MainViewModel private constructor(
   suspend fun patchChatSession(
     key: String,
     ownerAgentId: String? = null,
+    expectedSessionId: String? = null,
     label: String? = null,
     clearLabel: Boolean = false,
     category: String? = null,
@@ -1547,6 +1635,7 @@ class MainViewModel private constructor(
     ensureRuntime().patchChatSession(
       key = key,
       ownerAgentId = ownerAgentId,
+      expectedSessionId = expectedSessionId,
       label = label,
       clearLabel = clearLabel,
       category = category,
@@ -1597,7 +1686,8 @@ class MainViewModel private constructor(
   suspend fun forkChatSession(
     parentKey: String,
     ownerAgentId: String? = null,
-  ): String? = ensureRuntime().forkChatSession(parentKey, ownerAgentId)
+    fromLastCompleted: Boolean = false,
+  ): String? = ensureRuntime().forkChatSession(parentKey, ownerAgentId, fromLastCompleted)
 
   suspend fun rewindChatAtEntry(entryId: String): SessionRewindResult? = ensureRuntime().rewindChatAtEntry(entryId)
 

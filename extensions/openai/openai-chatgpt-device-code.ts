@@ -151,12 +151,13 @@ function formatDeviceCodeError(params: {
     : `${params.prefix}: HTTP ${params.status}`;
 }
 
-async function readOpenAICodexDeviceBody(response: Response): Promise<string> {
+async function readOpenAICodexDeviceBody(response: Response, timeoutMs: number): Promise<string> {
   return await readResponseTextLimited(
     response,
     response.ok
       ? OPENAI_CODEX_DEVICE_JSON_BODY_LIMIT_BYTES
       : OPENAI_CODEX_DEVICE_ERROR_BODY_LIMIT_BYTES,
+    { chunkTimeoutMs: timeoutMs },
   );
 }
 
@@ -185,7 +186,7 @@ async function runOpenAICodexDeviceRequest(params: {
     return {
       ok: response.ok,
       status: response.status,
-      bodyText: await readOpenAICodexDeviceBody(response),
+      bodyText: await readOpenAICodexDeviceBody(response, params.timeoutMs),
     };
   } finally {
     await release();

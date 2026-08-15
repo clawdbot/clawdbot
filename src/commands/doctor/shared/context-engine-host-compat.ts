@@ -4,7 +4,10 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { normalizeEmbeddedAgentRuntime } from "../../../agents/agent-runtime-id.js";
 import {
   listAgentEntriesWithSource,
-  resolveDefaultAgentDir,
+  resolveAgentDir,
+  resolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+  tryResolveSystemAgentTargetAgentId,
 } from "../../../agents/agent-scope-config.js";
 import { resolveCliBackendConfig } from "../../../agents/cli-backends.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
@@ -24,7 +27,9 @@ import {
   resolveContextEngine,
 } from "../../../context-engine/registry.js";
 import type { ContextEngineInfo } from "../../../context-engine/types.js";
-import { ensurePluginRegistryLoaded } from "../../../plugins/runtime/runtime-registry-loader.js";
+import { loadPluginRegistryHandle } from "../../../plugins/loader.js";
+import type { PluginRegistry } from "../../../plugins/registry-types.js";
+import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultSlotIdForKey } from "../../../plugins/slots.js";
 import { isRecord, resolveUserPath } from "../../../utils.js";
 
@@ -248,16 +253,16 @@ async function resolveSelectedContextEngineInfo(params: {
   }
 
   ensureContextEnginesInitialized();
+  let pluginRegistry: PluginRegistry | undefined;
   if (getContextEngineRegistration(engineId)?.lifecycle !== "runtime") {
     try {
-      ensurePluginRegistryLoaded({
-        scope: "all",
+      pluginRegistry = loadPluginRegistryHandle({
         config: params.cfg,
         env: params.env,
         onlyPluginIds: [engineId],
       });
     } catch (error) {
-      if (getContextEngineRegistration(engineId)?.lifecycle !== "runtime") {
+      if (pluginRegistry?.contextEngines.get(engineId)?.lifecycle !== "runtime") {
         const message = error instanceof Error ? error.message : String(error);
         return {
           warnings: [
@@ -266,7 +271,7 @@ async function resolveSelectedContextEngineInfo(params: {
         };
       }
     }
-    if (getContextEngineRegistration(engineId)?.lifecycle !== "runtime") {
+    if (pluginRegistry?.contextEngines.get(engineId)?.lifecycle !== "runtime") {
       return {
         warnings: [
           `- plugins.slots.contextEngine: could not inspect context engine "${engineId}" host requirements because it is not registered.`,
@@ -276,12 +281,21 @@ async function resolveSelectedContextEngineInfo(params: {
   }
 
   try {
-    const engine = await resolveContextEngine(params.cfg, {
-      agentDir: resolveDefaultAgentDir(params.cfg, params.env),
-      workspaceDir: params.cfg.agents?.defaults?.workspace
-        ? resolveUserPath(params.cfg.agents.defaults.workspace, params.env)
-        : undefined,
-    });
+    const agentId =
+      tryResolveLegacyCompatibilityAgentId(params.cfg) ??
+      tryResolveSystemAgentTargetAgentId(params.cfg) ??
+      resolveDefaultAgentId(params.cfg, {
+        surface: "context-engine Doctor checks",
+        hint: "Set agents.defaults.systemAgent.agentId before running Doctor.",
+      });
+    const resolve = () =>
+      resolveContextEngine(params.cfg, {
+        agentDir: resolveAgentDir(params.cfg, agentId, params.env),
+        workspaceDir: params.cfg.agents?.defaults?.workspace
+          ? resolveUserPath(params.cfg.agents.defaults.workspace, params.env)
+          : undefined,
+      });
+    const engine = await withPluginRuntimeRegistryScope(pluginRegistry, resolve);
     return { info: engine.info, warnings: [] };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

@@ -21,7 +21,6 @@ paths:
   - src/plugin-sdk/ssrf-policy.ts
   - src/web-fetch
   - src/web/provider-runtime-shared.ts
-  - packages/memory-host-sdk/src/host/ssrf-policy.ts
   - packages/net-policy/src
 
 paths-ignore:

@@ -148,6 +148,19 @@ describe("agent-runner-utils", () => {
       enforceFinalTag: true,
       cwd: "/tmp/task-repo",
       taskSuggestionDeliveryMode: "gateway",
+      trustedInternalHandoff: {
+        kind: "subagent-completion",
+        sourceSessionKey: "agent:child",
+        targetSessionKey: "agent:parent",
+        targetSessionId: "session-1",
+        provider: "openai",
+        model: "gpt-5.6-luna",
+      },
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+      runtimePluginToolGrant: {
+        pluginId: "workboard",
+        toolNames: ["workboard_complete"],
+      },
     });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
@@ -172,6 +185,9 @@ describe("agent-runner-utils", () => {
     expect(resolved.config).toBe(run.config);
     expect(resolved.skillsSnapshot).toBe(run.skillsSnapshot);
     expect(resolved.ownerNumbers).toBe(run.ownerNumbers);
+    expect(resolved.trustedInternalHandoff).toBe(run.trustedInternalHandoff);
+    expect(resolved.scheduledToolPolicy).toBe(run.scheduledToolPolicy);
+    expect(resolved.runtimePluginToolGrant).toBe(run.runtimePluginToolGrant);
     expect(resolved.enforceFinalTag).toBe(true);
     expect(resolved.provider).toBe("openai");
     expect(resolved.model).toBe("gpt-4.1-mini");
@@ -203,6 +219,24 @@ describe("agent-runner-utils", () => {
 
     expect(resolved.runBaseParams.runId).toBe("run-1");
     expect(resolved.runBaseParams.promptCacheKey).toBe("stable-session-cache-key");
+  });
+
+  it("uses the queued conversation policy snapshot", () => {
+    const run = makeRun({ conversationToolPolicy: { deny: ["exec"] } });
+
+    const resolved = buildEmbeddedRunExecutionParams({
+      run,
+      sessionCtx: {
+        Provider: "telegram",
+        ConversationToolPolicy: { deny: ["write"] },
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+    });
+
+    expect(resolved.runBaseParams.conversationToolPolicy).toEqual({ deny: ["exec"] });
   });
 
   it("uses session chat type over stale queued metadata for embedded execution params", () => {

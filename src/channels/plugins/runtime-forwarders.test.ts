@@ -1,5 +1,6 @@
 // Runtime forwarder tests cover channel plugin runtime method delegation and fallback handling.
 import { describe, expect, it, vi } from "vitest";
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import {
   createRuntimeDirectoryLiveAdapter,
   createRuntimeOutboundDelegates,
@@ -68,7 +69,7 @@ describe("createRuntimeOutboundDelegates", () => {
     expect(sendText).toHaveBeenCalled();
   });
 
-  it("throws the configured unavailable message", async () => {
+  it("classifies unavailable outbound runtime methods as definitely not dispatched", async () => {
     const outbound = createRuntimeOutboundDelegates({
       getRuntime: async () => ({ outbound: {} }),
       sendPoll: {
@@ -77,12 +78,34 @@ describe("createRuntimeOutboundDelegates", () => {
       },
     });
 
-    await expect(
-      outbound.sendPoll?.({
+    const error = await outbound
+      .sendPoll?.({
         cfg: {} as never,
         to: "a",
         poll: { question: "q", options: ["a"] },
-      }),
-    ).rejects.toThrow("poll unavailable");
+      })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(error).toMatchObject({ message: "poll unavailable" });
+  });
+
+  it("classifies outbound runtime loading failures before method dispatch", async () => {
+    const loadError = new Error("runtime import failed");
+    const outbound = createRuntimeOutboundDelegates({
+      getRuntime: async () => {
+        throw loadError;
+      },
+      sendText: {
+        resolve: (runtime: { sendText?: ChannelOutboundAdapter["sendText"] }) => runtime.sendText,
+      },
+    });
+
+    await expect(
+      outbound.sendText?.({ cfg: {} as never, to: "a", text: "hi" }),
+    ).rejects.toMatchObject({
+      name: "PlatformMessageNotDispatchedError",
+      message: "runtime import failed",
+      cause: loadError,
+    });
   });
 });

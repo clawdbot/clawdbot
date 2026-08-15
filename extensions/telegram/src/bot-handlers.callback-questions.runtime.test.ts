@@ -1,6 +1,6 @@
 // Telegram question callback feedback tests.
 import { describe, expect, it, vi } from "vitest";
-import { handleTelegramQuestionCallback } from "./bot-handlers.callback-questions.runtime.js";
+import { handleTelegramQuestionCallback } from "./bot-handlers.callback-actions.js";
 
 const callback = {
   questionId: "ask_0123456789abcdef0123456789abcdef",

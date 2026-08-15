@@ -6,6 +6,8 @@
 export type BundledCliBackendAuthPolicy = {
   /** Disable profile fallback and fail closed when the selected profile cannot materialize. */
   strictSelectedProfile: boolean;
+  /** Owner responsible for refreshing selected OAuth credentials before execution. */
+  oauthRefreshOwner: "core" | "cli";
   /** Provider whose imported OAuth profiles use identity-verified native passthrough. */
   nativePassthroughProviderId?: string;
 };
@@ -13,9 +15,13 @@ export type BundledCliBackendAuthPolicy = {
 const BUNDLED_CLI_BACKEND_AUTH_POLICIES = {
   "claude-cli": {
     strictSelectedProfile: true,
+    oauthRefreshOwner: "core",
     nativePassthroughProviderId: "claude-cli",
   },
-  "google-gemini-cli": { strictSelectedProfile: false },
+  "google-gemini-cli": {
+    strictSelectedProfile: false,
+    oauthRefreshOwner: "cli",
+  },
 } satisfies Record<string, BundledCliBackendAuthPolicy>;
 
 export function resolveBundledCliBackendAuthPolicy(

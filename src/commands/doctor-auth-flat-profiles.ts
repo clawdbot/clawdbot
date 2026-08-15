@@ -5,52 +5,66 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { resolveAgentDir, resolveDefaultAgentDir, listAgentIds } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import {
   clearAuthProfileMigrationDiagnostics,
+  listLegacyAuthProfileArchives,
   resolveLegacyOAuthPath,
 } from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import {
+  areOAuthCredentialsEquivalent,
+  hasMatchingOAuthIdentity,
+} from "../agents/auth-profiles/oauth-shared.js";
+import { isInheritedMainOAuthCredentialFromStores } from "../agents/auth-profiles/ownership.js";
+import {
+  resolveSharedAuthStoreOwnership,
+  resolveSharedAuthStorePath,
+} from "../agents/auth-profiles/path-resolve.js";
 import {
   applyLegacyAuthStore,
   coerceLegacyAuthStore,
   coercePersistedAuthProfileStore,
   loadPersistedAuthProfileStore,
+  loadPersistedSharedAuthProfileStore,
   parseLegacyCredentialEntry,
 } from "../agents/auth-profiles/persisted.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   inspectPersistedAuthProfileStateRaw,
   inspectPersistedAuthProfileStoreRaw,
+  inspectPersistedSharedAuthProfileStateRaw,
+  inspectPersistedSharedAuthProfileStoreRaw,
   readPersistedAuthProfileStateRaw,
+  readPersistedSharedAuthProfileStateRaw,
   resolveAuthProfileDatabasePath,
   runAuthProfileWriteTransaction,
+  type AuthProfileDatabase,
 } from "../agents/auth-profiles/sqlite.js";
 import { coerceAuthProfileState } from "../agents/auth-profiles/state.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  isInheritedMainOAuthCredential,
-  saveAuthProfileStore,
-} from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import type {
   AuthProfileCredential,
   AuthProfileState,
   AuthProfileStore,
 } from "../agents/auth-profiles/types.js";
+import { resolveLegacyInheritedAuthDir } from "../agents/legacy-inherited-auth-dir.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveStateDir } from "../config/paths.js";
 import type { AuthProfileConfig } from "../config/types.auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
-import { loadJsonFile } from "../infra/json-file.js";
-import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { loadJsonFileThroughSymlink } from "../infra/json-file.js";
+import { readLegacyMigrationReceipt } from "../infra/state-migrations.receipts.js";
 import { shortenHomePath } from "../utils.js";
 import {
+  listAuthProfileRepairCandidates,
   resolveLegacyAuthProfilesPath as resolveAuthStorePath,
   resolveLegacyAuthStatePath as resolveAuthStatePath,
   resolveLegacyFlatAuthPath as resolveLegacyAuthStorePath,
+  type AuthProfileRepairCandidate,
 } from "./doctor-auth-legacy-paths.js";
 import {
   acquireAuthProfileMigrationSourceLocks,
@@ -64,21 +78,17 @@ import {
 } from "./doctor-auth-migration-receipts.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
-type AuthProfileRepairCandidate = {
-  agentDir?: string;
-  authPath: string;
-};
-
-type LegacyFlatAuthProfileStore = {
-  agentDir?: string;
-  authPath: string;
-  store: AuthProfileStore;
-};
-
 type AuthProfileSqliteMigrationCandidate = AuthProfileRepairCandidate & {
   statePath: string;
   legacyPath: string;
 };
+
+function resolveMigrationTargetDatabasePath(
+  agentDir?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath(env);
+}
 
 type AwsSdkProfileMarker = {
   profileId: string;
@@ -115,10 +125,6 @@ type LegacyFlatAuthProfileRepairResult = {
 };
 
 const UNSAFE_LEGACY_AUTH_PROFILE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 function isSafeLegacyProviderKey(key: string): boolean {
   return key.trim().length > 0 && !UNSAFE_LEGACY_AUTH_PROFILE_KEYS.has(key);
@@ -282,68 +288,16 @@ function coerceLegacyFlatAuthProfileStore(raw: unknown): AuthProfileStore | null
   return Object.keys(store.profiles).length > 0 ? store : null;
 }
 
-function addCandidate(
-  candidates: Map<string, AuthProfileRepairCandidate>,
-  agentDir: string | undefined,
-): void {
-  const authPath = resolveAuthStorePath(agentDir);
-  candidates.set(path.resolve(authPath), { agentDir, authPath });
-}
-
-function listExistingAgentDirsFromState(env: NodeJS.ProcessEnv): string[] {
-  const root = path.join(resolveStateDir(env), "agents");
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(root, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  return entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(root, entry.name, "agent"))
-    .filter((agentDir) => {
-      try {
-        return fs.statSync(agentDir).isDirectory();
-      } catch {
-        return false;
-      }
-    });
-}
-
-function listAuthProfileRepairCandidates(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): AuthProfileRepairCandidate[] {
-  const candidates = new Map<string, AuthProfileRepairCandidate>();
-  addCandidate(candidates, resolveDefaultAgentDir(cfg, env));
-  const envAgentDir =
-    readNonEmptyString(env.OPENCLAW_AGENT_DIR) ?? readNonEmptyString(env.PI_CODING_AGENT_DIR);
-  if (envAgentDir) {
-    addCandidate(candidates, envAgentDir);
-  }
-  for (const agentId of listAgentIds(cfg)) {
-    addCandidate(candidates, resolveAgentDir(cfg, agentId, env));
-  }
-  for (const agentDir of listExistingAgentDirsFromState(env)) {
-    addCandidate(candidates, agentDir);
-  }
-  return [...candidates.values()];
-}
-
 function listAuthProfileSqliteMigrationCandidates(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): AuthProfileSqliteMigrationCandidate[] {
-  const candidates: AuthProfileSqliteMigrationCandidate[] = [];
-  for (const candidate of listAuthProfileRepairCandidates(cfg, env)) {
-    candidates.push({
-      agentDir: candidate.agentDir,
-      authPath: candidate.authPath,
-      statePath: resolveAuthStatePath(candidate.agentDir),
-      legacyPath: resolveLegacyAuthStorePath(candidate.agentDir),
-    });
-  }
-  return candidates;
+  return listAuthProfileRepairCandidates(cfg, env).map((candidate) => ({
+    agentDir: candidate.agentDir,
+    authPath: candidate.authPath,
+    statePath: resolveAuthStatePath(candidate.agentDir),
+    legacyPath: resolveLegacyAuthStorePath(candidate.agentDir),
+  }));
 }
 
 function hasAuthProfileState(state: AuthProfileState): boolean {
@@ -363,7 +317,9 @@ function normalizeLegacyApiKeyAliasesForImport(raw: unknown): void {
       continue;
     }
     const hasCanonicalCredential =
-      readNonEmptyString(profile.key) !== undefined || coerceSecretRef(profile.keyRef) !== null;
+      readNonEmptyString(profile.key) !== undefined ||
+      coerceSecretRef(profile.key) !== null ||
+      coerceSecretRef(profile.keyRef) !== null;
     if (hasCanonicalCredential || profile["api_key"] === undefined) {
       continue;
     }
@@ -372,19 +328,13 @@ function normalizeLegacyApiKeyAliasesForImport(raw: unknown): void {
 }
 
 function collectAuthProfileStateProfileIds(state: AuthProfileState): string[] {
-  const profileIds = new Set<string>();
-  for (const entries of Object.values(state.order ?? {})) {
-    for (const profileId of entries) {
-      profileIds.add(profileId);
-    }
-  }
-  for (const profileId of Object.values(state.lastGood ?? {})) {
-    profileIds.add(profileId);
-  }
-  for (const profileId of Object.keys(state.usageStats ?? {})) {
-    profileIds.add(profileId);
-  }
-  return [...profileIds];
+  return [
+    ...new Set([
+      ...Object.values(state.order ?? {}).flat(),
+      ...Object.values(state.lastGood ?? {}),
+      ...Object.keys(state.usageStats ?? {}),
+    ]),
+  ];
 }
 
 function inferLegacyConfigAuthProfileMode(
@@ -498,7 +448,10 @@ function isDefaultAgentCandidate(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  return path.resolve(candidate.agentDir ?? "") === path.resolve(resolveDefaultAgentDir(cfg, env));
+  return (
+    candidate.agentDir === undefined ||
+    path.resolve(candidate.agentDir) === path.resolve(resolveLegacyInheritedAuthDir(cfg, env))
+  );
 }
 
 function stripImportedConfigAuthProfileCredentials(
@@ -569,45 +522,23 @@ function mergeImportedAuthProfileState(params: {
   existingState: AuthProfileState;
 }): AuthProfileStore {
   // Preserve current SQLite state over imported JSON state; old files are backup-only after import.
-  return {
-    ...params.store,
-    ...(params.state.order
-      ? {
-          order: {
-            ...params.store.order,
-            ...Object.fromEntries(
-              Object.entries(params.state.order).filter(
-                ([provider]) => !params.existingState.order?.[provider],
-              ),
-            ),
-          },
-        }
-      : {}),
-    ...(params.state.lastGood
-      ? {
-          lastGood: {
-            ...params.store.lastGood,
-            ...Object.fromEntries(
-              Object.entries(params.state.lastGood).filter(
-                ([provider]) => !params.existingState.lastGood?.[provider],
-              ),
-            ),
-          },
-        }
-      : {}),
-    ...(params.state.usageStats
-      ? {
-          usageStats: {
-            ...params.store.usageStats,
-            ...Object.fromEntries(
-              Object.entries(params.state.usageStats).filter(
-                ([profileId]) => !params.existingState.usageStats?.[profileId],
-              ),
-            ),
-          },
-        }
-      : {}),
-  };
+  const next = { ...params.store };
+  for (const field of ["order", "lastGood", "usageStats"] as const) {
+    const incoming = params.state[field];
+    if (!incoming) {
+      continue;
+    }
+    const existing = params.existingState[field] ?? {};
+    Object.assign(next, {
+      [field]: {
+        ...params.store[field],
+        ...Object.fromEntries(
+          Object.entries(incoming).filter(([key]) => !Object.hasOwn(existing, key)),
+        ),
+      },
+    });
+  }
+  return next;
 }
 
 function formatMissingAuthProfileSqliteVerification(params: {
@@ -650,80 +581,6 @@ function formatMissingAuthProfileSqliteVerification(params: {
   return parts.length > 0 ? parts.join("; ") : null;
 }
 
-function filterRawAuthProfileState(
-  raw: Record<string, unknown>,
-  shouldKeepProfileId: (profileId: string) => boolean,
-): void {
-  if (isRecord(raw.order)) {
-    for (const [provider, profileIds] of Object.entries(raw.order)) {
-      if (!Array.isArray(profileIds)) {
-        continue;
-      }
-      const kept = profileIds.filter(
-        (profileId): profileId is string =>
-          typeof profileId === "string" && shouldKeepProfileId(profileId),
-      );
-      if (kept.length > 0) {
-        raw.order[provider] = kept;
-      } else {
-        delete raw.order[provider];
-      }
-    }
-    if (Object.keys(raw.order).length === 0) {
-      delete raw.order;
-    }
-  }
-  if (isRecord(raw.lastGood)) {
-    for (const [provider, profileId] of Object.entries(raw.lastGood)) {
-      if (typeof profileId !== "string" || !shouldKeepProfileId(profileId)) {
-        delete raw.lastGood[provider];
-      }
-    }
-    if (Object.keys(raw.lastGood).length === 0) {
-      delete raw.lastGood;
-    }
-  }
-  if (isRecord(raw.usageStats)) {
-    for (const profileId of Object.keys(raw.usageStats)) {
-      if (!shouldKeepProfileId(profileId)) {
-        delete raw.usageStats[profileId];
-      }
-    }
-    if (Object.keys(raw.usageStats).length === 0) {
-      delete raw.usageStats;
-    }
-  }
-}
-
-function pruneRawAuthProfileIds(raw: unknown, profileIds: ReadonlySet<string>): void {
-  if (!isRecord(raw) || !isRecord(raw.profiles)) {
-    return;
-  }
-  for (const profileId of profileIds) {
-    delete raw.profiles[profileId];
-  }
-  filterRawAuthProfileState(raw, (profileId) => !profileIds.has(profileId));
-}
-
-function pickRawAuthProfileIds(
-  raw: unknown,
-  profileIds: ReadonlySet<string>,
-): Record<string, unknown> | null {
-  if (!isRecord(raw) || !isRecord(raw.profiles)) {
-    return null;
-  }
-  const profiles = Object.fromEntries(
-    Object.entries(raw.profiles).filter(([profileId]) => profileIds.has(profileId)),
-  );
-  if (Object.keys(profiles).length === 0) {
-    return null;
-  }
-  const next = structuredClone(raw);
-  next.profiles = profiles;
-  filterRawAuthProfileState(next, (profileId) => profileIds.has(profileId));
-  return next;
-}
-
 function collectUnresolvedLegacyOAuthSidecarProfileIds(raw: unknown): string[] {
   if (!isRecord(raw) || !isRecord(raw.profiles)) {
     return [];
@@ -760,6 +617,7 @@ function prepareAuthProfileSourceReceipt(params: {
   pathname: string;
   targetDatabasePath: string;
   targetTable: AuthProfileMigrationSourceReceipt["targetTable"];
+  targetStoreKey?: AuthProfileMigrationSourceReceipt["targetStoreKey"];
   now: () => number;
   env?: NodeJS.ProcessEnv;
 }): AuthProfileMigrationSourceReceipt {
@@ -777,6 +635,7 @@ function prepareAuthProfileSourceReceipt(params: {
     sourceRecordCount,
     targetDatabasePath: params.targetDatabasePath,
     targetTable: params.targetTable,
+    ...(params.targetStoreKey ? { targetStoreKey: params.targetStoreKey } : {}),
     now: new Date(params.now()),
     ...(params.env ? { env: params.env } : {}),
   });
@@ -867,24 +726,37 @@ function coerceLegacyOAuthFile(raw: unknown): {
 function loadAuthProfileMigrationTargetStore(
   agentDir: string | undefined,
   loadStore: typeof loadPersistedAuthProfileStore = loadPersistedAuthProfileStore,
-  database?: OpenClawAgentDatabase,
+  database?: AuthProfileDatabase,
+  env: NodeJS.ProcessEnv = process.env,
 ): AuthProfileStore {
-  const inspection = inspectPersistedAuthProfileStoreRaw(agentDir, database);
-  const store = loadStore(agentDir, database ? { database } : undefined);
+  const explicitSharedRead = agentDir === undefined && database === undefined;
+  const inspection = explicitSharedRead
+    ? inspectPersistedSharedAuthProfileStoreRaw(env)
+    : inspectPersistedAuthProfileStoreRaw(agentDir, database);
+  const store =
+    explicitSharedRead && loadStore === loadPersistedAuthProfileStore
+      ? loadPersistedSharedAuthProfileStore(env)
+      : loadStore(agentDir, database ? { database } : undefined);
   if (store) {
     return store;
   }
   if (inspection.status !== "missing") {
     throw new Error("canonical auth profile store is unreadable; legacy source left in place");
   }
-  const stateInspection = inspectPersistedAuthProfileStateRaw(agentDir, database);
+  const stateInspection = explicitSharedRead
+    ? inspectPersistedSharedAuthProfileStateRaw(env)
+    : inspectPersistedAuthProfileStateRaw(agentDir, database);
   if (stateInspection.status === "unreadable") {
     throw new Error("canonical auth profile state is unreadable; legacy source left in place");
   }
   return {
     version: AUTH_STORE_VERSION,
     profiles: {},
-    ...coerceAuthProfileState(readPersistedAuthProfileStateRaw(agentDir, database)),
+    ...coerceAuthProfileState(
+      explicitSharedRead
+        ? readPersistedSharedAuthProfileStateRaw(env)
+        : readPersistedAuthProfileStateRaw(agentDir, database),
+    ),
   };
 }
 
@@ -911,19 +783,20 @@ function migrateLockedLegacyOAuthFile(params: {
   now: () => number;
   result: LegacyFlatAuthProfileRepairResult;
 }): void {
-  const mainAgentDir = resolveSharedMainAuthAgentDir(params.env);
-  const targetDatabasePath = resolveAuthProfileDatabasePath(mainAgentDir);
+  const targetDatabasePath = resolveSharedAuthStorePath(params.env);
+  const sharedStateTarget = resolveSharedAuthStoreOwnership(params.env).location === "state-db";
   const receipt = prepareAuthProfileSourceReceipt({
     pathname: params.oauthPath,
     targetDatabasePath,
-    targetTable: "auth_profile_store",
+    targetTable: sharedStateTarget ? "auth_profile_stores" : "auth_profile_store",
+    targetStoreKey: sharedStateTarget ? "shared" : "primary",
     now: params.now,
     env: params.env,
   });
   if (archivePreviouslyMigratedAuthProfileSource(receipt, params.result)) {
     return;
   }
-  const raw = loadJsonFile(params.oauthPath);
+  const raw = loadJsonFileThroughSymlink(params.oauthPath);
   const parsed = coerceLegacyOAuthFile(raw);
   const imported = parsed.store;
   if (!imported) {
@@ -933,51 +806,60 @@ function migrateLockedLegacyOAuthFile(params: {
     );
     return;
   }
-  const existing = loadAuthProfileMigrationTargetStore(mainAgentDir);
+  const existing = loadAuthProfileMigrationTargetStore(
+    undefined,
+    loadPersistedAuthProfileStore,
+    undefined,
+    params.env,
+  );
   const importedProfileIds = new Set(Object.keys(imported.profiles));
   const next = mergeImportedAuthProfiles({
     store: existing,
     profiles: imported.profiles,
     existingProfileIds: new Set(Object.keys(existing.profiles)),
   });
-  const loaded = runAuthProfileWriteTransaction(mainAgentDir, (database) => {
-    const authoritative = loadAuthProfileMigrationTargetStore(
-      mainAgentDir,
-      loadPersistedAuthProfileStore,
-      database,
-    );
-    if (!isDeepStrictEqual(authoritative, existing)) {
-      throw new Error("canonical auth profile store changed during legacy OAuth migration");
-    }
-    saveAuthProfileStore(
-      next,
-      mainAgentDir,
-      {
-        filterExternalAuthProfiles: false,
-        preserveStateProfileIds: collectAuthProfileStateProfileIds(
-          coerceAuthProfileState(existing),
-        ),
-        syncExternalCli: false,
-      },
-      database,
-    );
-    const verified = loadPersistedAuthProfileStore(mainAgentDir, { database });
-    const verificationFailure = formatMissingAuthProfileSqliteVerification({
-      expected: next,
-      importedProfileIds,
-      loaded: verified,
-    });
-    const mismatched = [...importedProfileIds].filter((profileId) => {
-      if (existing.profiles[profileId]) {
-        return false;
+  const loaded = runAuthProfileWriteTransaction(
+    undefined,
+    (database) => {
+      const authoritative = loadAuthProfileMigrationTargetStore(
+        undefined,
+        loadPersistedAuthProfileStore,
+        database,
+      );
+      if (!isDeepStrictEqual(authoritative, existing)) {
+        throw new Error("canonical auth profile store changed during legacy OAuth migration");
       }
-      return !isDeepStrictEqual(verified?.profiles[profileId], imported.profiles[profileId]);
-    });
-    if (verificationFailure || mismatched.length > 0 || !verified) {
-      throw new Error("legacy OAuth import verification failed");
-    }
-    return verified;
-  });
+      saveAuthProfileStore(
+        next,
+        undefined,
+        {
+          filterExternalAuthProfiles: false,
+          preserveStateProfileIds: collectAuthProfileStateProfileIds(
+            coerceAuthProfileState(existing),
+          ),
+          syncExternalCli: false,
+        },
+        database,
+      );
+      const verified = loadPersistedAuthProfileStore(undefined, { database });
+      const verificationFailure = formatMissingAuthProfileSqliteVerification({
+        expected: next,
+        importedProfileIds,
+        loaded: verified,
+      });
+      const mismatched = [...importedProfileIds].filter((profileId) => {
+        if (existing.profiles[profileId]) {
+          return false;
+        }
+        return !isDeepStrictEqual(verified?.profiles[profileId], imported.profiles[profileId]);
+      });
+      if (verificationFailure || mismatched.length > 0 || !verified) {
+        throw new Error("legacy OAuth import verification failed");
+      }
+      return verified;
+    },
+    { env: params.env },
+  );
   receipt.expectedProfileSha256 = Object.fromEntries(
     [...importedProfileIds].map((profileId) => [
       profileId,
@@ -1003,13 +885,14 @@ function migrateLockedLegacyOAuthFile(params: {
  * Imports legacy auth profile JSON and state files into the per-agent SQLite store.
  *
  * JSON files are verified and atomically renamed to timestamped archives only after import.
- * OAuth profiles that still depend on unresolved sidecar secrets remain as a migration input.
+ * OAuth profiles that still depend on missing sidecar secrets migrate as unavailable ref-only rows.
  */
 export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
   cfg: OpenClawConfig;
   prompter: Pick<DoctorPrompter, "confirmAutoFix">;
   now?: () => number;
   env?: NodeJS.ProcessEnv;
+  openAICodexAuthProfileIdMap?: ReadonlyMap<string, string>;
   deps?: {
     loadPersistedAuthProfileStore?: typeof loadPersistedAuthProfileStore;
   };
@@ -1089,6 +972,11 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
     return result;
   }
 
+  // Config, credential import, and session repair must share one collision
+  // decision; archived legacy JSON cannot recreate it after migration.
+  const openAIProfileIdMap =
+    params.openAICodexAuthProfileIdMap ??
+    collectOpenAICodexAuthProfileStoreIdMap({ cfg: params.cfg, env });
   for (const candidate of detected) {
     let releaseSources: (() => void) | undefined;
     try {
@@ -1097,42 +985,25 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         fs.mkdirSync(path.dirname(pathname), { recursive: true });
       }
       releaseSources = acquireAuthProfileMigrationSourceLocks(candidateSourcePaths);
-      const targetDatabasePath = resolveAuthProfileDatabasePath(candidate.agentDir);
-      let sourceReceipts = [
-        ...(fs.existsSync(candidate.authPath)
-          ? [
-              prepareAuthProfileSourceReceipt({
-                pathname: candidate.authPath,
-                targetDatabasePath,
-                targetTable: "auth_profile_store",
-                now,
-                env,
-              }),
-            ]
-          : []),
-        ...(fs.existsSync(candidate.statePath)
-          ? [
-              prepareAuthProfileSourceReceipt({
-                pathname: candidate.statePath,
-                targetDatabasePath,
-                targetTable: "auth_profile_state",
-                now,
-                env,
-              }),
-            ]
-          : []),
-        ...(fs.existsSync(candidate.legacyPath)
-          ? [
-              prepareAuthProfileSourceReceipt({
-                pathname: candidate.legacyPath,
-                targetDatabasePath,
-                targetTable: "auth_profile_store",
-                now,
-                env,
-              }),
-            ]
-          : []),
-      ];
+      const targetDatabasePath = resolveMigrationTargetDatabasePath(candidate.agentDir, env);
+      const sharedStateTarget =
+        candidate.agentDir === undefined &&
+        resolveSharedAuthStoreOwnership(env).location === "state-db";
+      let sourceReceipts = candidateSourcePaths.filter(fs.existsSync).map((pathname) =>
+        prepareAuthProfileSourceReceipt({
+          pathname,
+          targetDatabasePath,
+          targetTable:
+            pathname === candidate.statePath
+              ? "auth_profile_state"
+              : sharedStateTarget
+                ? "auth_profile_stores"
+                : "auth_profile_store",
+          targetStoreKey: sharedStateTarget ? "shared" : "primary",
+          now,
+          env,
+        }),
+      );
       sourceReceipts = sourceReceipts.filter(
         (receipt) => !archivePreviouslyMigratedAuthProfileSource(receipt, result),
       );
@@ -1146,20 +1017,14 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       const rawStore = parseAuthProfileMigrationSource(
         receiptByPath.get(path.resolve(candidate.authPath)),
       );
+      const openAIProviderRepair = canonicalizeLegacyOpenAIAuthStore(rawStore, openAIProfileIdMap);
       const unresolvedSidecarProfileIds = new Set(
         collectUnresolvedLegacyOAuthSidecarProfileIds(rawStore),
       );
-      const unresolvedSidecarRawStore =
+      const unresolvedSidecarWarning =
         unresolvedSidecarProfileIds.size > 0
-          ? pickRawAuthProfileIds(rawStore, unresolvedSidecarProfileIds)
-          : null;
-      if (unresolvedSidecarProfileIds.size > 0) {
-        // Sidecar-backed OAuth entries cannot move into SQLite until their secret material exists.
-        pruneRawAuthProfileIds(rawStore, unresolvedSidecarProfileIds);
-        result.warnings.push(
-          `Left ${unresolvedSidecarProfileIds.size} legacy OAuth sidecar profile${unresolvedSidecarProfileIds.size === 1 ? "" : "s"} in ${shortenHomePath(candidate.authPath)}; rerun ${formatCliCommand("openclaw doctor --fix")} after sidecar migration or re-authenticate those profiles.`,
-        );
-      }
+          ? `Migrated ${unresolvedSidecarProfileIds.size} legacy OAuth sidecar profile${unresolvedSidecarProfileIds.size === 1 ? "" : "s"} from ${shortenHomePath(candidate.authPath)} into SQLite as configured-unavailable without credentials; re-authenticate ${unresolvedSidecarProfileIds.size === 1 ? "this profile" : "these profiles"} to restore access.`
+          : undefined;
       const awsSdkMarkerStore =
         isRecord(rawStore) && isRecord(rawStore.profiles)
           ? resolveAwsSdkAuthProfileMarkerStore(candidate)
@@ -1204,7 +1069,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         !hasAuthProfileState(state) &&
         !awsSdkMarkerStore
       ) {
-        if (!unresolvedSidecarRawStore && sourceReceipts.length > 0) {
+        if (sourceReceipts.length > 0) {
           const archived = sourceReceipts.map((receipt) => {
             finalizeAuthProfileMigrationSource(receipt, "archived-unparsed", {
               sourceLocked: true,
@@ -1212,7 +1077,8 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
             return receipt.archivePath;
           });
           result.warnings.push(
-            `Archived unparseable auth profile input without import for ${shortenHomePath(candidate.authPath)} (${archived.map(shortenHomePath).join(", ")}).`,
+            unresolvedSidecarWarning ??
+              `Archived unparseable auth profile input without import for ${shortenHomePath(candidate.authPath)} (${archived.map(shortenHomePath).join(", ")}).`,
           );
           continue;
         }
@@ -1222,7 +1088,12 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         continue;
       }
 
-      const existing = loadAuthProfileMigrationTargetStore(candidate.agentDir, loadMigratedStore);
+      const existing = loadAuthProfileMigrationTargetStore(
+        candidate.agentDir,
+        loadMigratedStore,
+        undefined,
+        env,
+      );
       const existingProfileIds = new Set(Object.keys(existing.profiles));
       const existingState = coerceAuthProfileState(existing);
       let next: AuthProfileStore = { ...existing };
@@ -1288,68 +1159,83 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         ];
         try {
           assertAuthProfileMigrationSourcesUnchanged(candidate, sourceReceipts);
-          verifiedStore = runAuthProfileWriteTransaction(candidate.agentDir, (database) => {
-            const authoritative = loadAuthProfileMigrationTargetStore(
-              candidate.agentDir,
-              loadMigratedStore,
-              database,
-            );
-            // This store includes the separately persisted auth_profile_state row,
-            // so state-only concurrent changes abort before either table is written.
-            if (!isDeepStrictEqual(authoritative, existing)) {
-              throw new Error("canonical auth profile store changed during legacy migration");
-            }
-            saveAuthProfileStore(
-              next,
-              candidate.agentDir,
-              {
-                filterExternalAuthProfiles: false,
-                // Imported state may reference external profiles absent from this store.
-                preserveStateProfileIds: stateProfileIds,
-                syncExternalCli: false,
-              },
-              database,
-            );
-            const loaded = loadMigratedStore(candidate.agentDir, { database });
-            // A non-main store drops an OAuth credential the main store already
-            // owns at the same or newer expiry. That dedup is intentional, so
-            // verifying it as missing would abort a migration that lost nothing
-            // and leave the legacy JSON in place, which blocks gateway startup.
-            const dedupedToMainProfileIds = new Set(
-              [...importedProfileIds].filter((profileId) => {
-                const credential = next.profiles[profileId];
-                return (
-                  credential !== undefined &&
-                  !loaded?.profiles[profileId] &&
-                  isInheritedMainOAuthCredential({
-                    agentDir: candidate.agentDir,
-                    profileId,
-                    credential,
-                  })
-                );
-              }),
-            );
-            const verifiableProfileIds = new Set(
-              [...importedProfileIds].filter(
-                (profileId) => !dedupedToMainProfileIds.has(profileId),
-              ),
-            );
-            const verificationFailure = formatMissingAuthProfileSqliteVerification({
-              expected: next,
-              importedProfileIds: verifiableProfileIds,
-              loaded,
-            });
-            const mismatchedCredential = [...verifiableProfileIds].some((profileId) => {
-              if (existingProfileIds.has(profileId)) {
-                return false;
+          verifiedStore = runAuthProfileWriteTransaction(
+            candidate.agentDir,
+            (database) => {
+              const authoritative = loadAuthProfileMigrationTargetStore(
+                candidate.agentDir,
+                loadMigratedStore,
+                database,
+              );
+              // This store includes the separately persisted auth_profile_state row,
+              // so state-only concurrent changes abort before either table is written.
+              if (!isDeepStrictEqual(authoritative, existing)) {
+                throw new Error("canonical auth profile store changed during legacy migration");
               }
-              return !isDeepStrictEqual(loaded?.profiles[profileId], next.profiles[profileId]);
-            });
-            if (verificationFailure || mismatchedCredential || !loaded) {
-              throw new AuthProfileMigrationVerificationError(verificationFailure);
-            }
-            return loaded;
-          });
+              saveAuthProfileStore(
+                next,
+                candidate.agentDir,
+                {
+                  filterExternalAuthProfiles: false,
+                  // Imported state may reference external profiles absent from this store.
+                  preserveStateProfileIds: stateProfileIds,
+                  syncExternalCli: false,
+                },
+                database,
+              );
+              const loaded = loadMigratedStore(candidate.agentDir, { database });
+              const persistedStores = {
+                isMainStore:
+                  resolveMigrationTargetDatabasePath(candidate.agentDir, env) ===
+                  resolveSharedAuthStorePath(env),
+                localStore: loaded,
+                mainStore:
+                  resolveMigrationTargetDatabasePath(candidate.agentDir, env) ===
+                  resolveSharedAuthStorePath(env)
+                    ? loaded
+                    : loadPersistedSharedAuthProfileStore(env),
+              };
+              // A non-main store drops an OAuth credential the main store already
+              // owns at the same or newer expiry. That dedup is intentional, so
+              // verifying it as missing would abort a migration that lost nothing
+              // and leave the legacy JSON in place, which blocks gateway startup.
+              const dedupedToMainProfileIds = new Set(
+                [...importedProfileIds].filter((profileId) => {
+                  const credential = next.profiles[profileId];
+                  return (
+                    credential !== undefined &&
+                    !loaded?.profiles[profileId] &&
+                    isInheritedMainOAuthCredentialFromStores({
+                      profileId,
+                      credential,
+                      persistedStores,
+                    })
+                  );
+                }),
+              );
+              const verifiableProfileIds = new Set(
+                [...importedProfileIds].filter(
+                  (profileId) => !dedupedToMainProfileIds.has(profileId),
+                ),
+              );
+              const verificationFailure = formatMissingAuthProfileSqliteVerification({
+                expected: next,
+                importedProfileIds: verifiableProfileIds,
+                loaded,
+              });
+              const mismatchedCredential = [...verifiableProfileIds].some((profileId) => {
+                if (existingProfileIds.has(profileId)) {
+                  return false;
+                }
+                return !isDeepStrictEqual(loaded?.profiles[profileId], next.profiles[profileId]);
+              });
+              if (verificationFailure || mismatchedCredential || !loaded) {
+                throw new AuthProfileMigrationVerificationError(verificationFailure);
+              }
+              return loaded;
+            },
+            { env },
+          );
         } catch (error) {
           if (!(error instanceof AuthProfileMigrationVerificationError)) {
             throw error;
@@ -1392,11 +1278,8 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
           receipt.expectedStateSha256 = expectedStateSha256;
         }
       }
-      const archivalReceipts = unresolvedSidecarRawStore
-        ? sourceReceipts.filter((receipt) => receipt.sourcePath !== candidate.authPath)
-        : sourceReceipts;
       assertAuthProfileMigrationSourcesUnchanged(candidate, sourceReceipts);
-      const archives = archivalReceipts.map((receipt) =>
+      const archives = sourceReceipts.map((receipt) =>
         archiveVerifiedAuthProfileSource(receipt, true),
       );
       const archiveText =
@@ -1406,6 +1289,14 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       result.changes.push(
         `Migrated auth profile JSON for ${shortenHomePath(candidate.authPath)} into SQLite (${archiveText}).`,
       );
+      if (unresolvedSidecarWarning) {
+        result.warnings.push(unresolvedSidecarWarning);
+      }
+      if (openAIProviderRepair !== null) {
+        result.changes.push(
+          `Migrated ${openAIProviderRepair} OpenAI Codex auth profile(s) in ${shortenHomePath(candidate.authPath)} to provider "openai".`,
+        );
+      }
       if (awsSdkMarkerStore) {
         result.changes.push(
           `Moved aws-sdk profile metadata from ${shortenHomePath(candidate.authPath)} to auth.profiles before removing the legacy auth profile JSON.`,
@@ -1431,9 +1322,9 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
   } else if (hasLegacyOAuth) {
     try {
       migrateLegacyOAuthFile({ oauthPath, env, now, result });
-    } catch {
+    } catch (err) {
       result.warnings.push(
-        `Failed to migrate shared legacy OAuth credentials; the source was left in place.`,
+        `Failed to migrate shared legacy OAuth credentials; the source was left in place: ${String(err)}`,
       );
     }
   }
@@ -1448,45 +1339,13 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
   return result;
 }
 
-function resolveLegacyFlatStore(
-  candidate: AuthProfileRepairCandidate,
-): LegacyFlatAuthProfileStore | null {
-  if (!fs.existsSync(candidate.authPath)) {
-    return null;
-  }
-  const raw = loadJsonFile(candidate.authPath);
-  if (!raw || typeof raw !== "object" || "profiles" in raw) {
-    return null;
-  }
-  const store = coerceLegacyFlatAuthProfileStore(raw);
-  if (!store || Object.keys(store.profiles).length === 0) {
-    return null;
-  }
-  return {
-    ...candidate,
-    store,
-  };
-}
-
-function backupAuthProfileStore(authPath: string, now: () => number): string {
-  const backupPath = `${authPath}.legacy-flat.${now()}.bak`;
-  fs.copyFileSync(authPath, backupPath);
-  return backupPath;
-}
-
-function backupAwsSdkProfileMarkerStore(authPath: string, now: () => number): string {
-  const backupPath = `${authPath}.aws-sdk-profile.${now()}.bak`;
-  fs.copyFileSync(authPath, backupPath);
-  return backupPath;
-}
-
 function resolveAwsSdkAuthProfileMarkerStore(
   candidate: AuthProfileRepairCandidate,
 ): AwsSdkAuthProfileMarkerStore | null {
   if (!fs.existsSync(candidate.authPath)) {
     return null;
   }
-  const raw = loadJsonFile(candidate.authPath);
+  const raw = loadJsonFileThroughSymlink(candidate.authPath);
   if (!isRecord(raw) || !isRecord(raw.profiles)) {
     return null;
   }
@@ -1540,254 +1399,6 @@ function removeAwsSdkProfileMarkers(raw: Record<string, unknown>, profileIds: st
   for (const profileId of profileIds) {
     delete raw.profiles[profileId];
   }
-}
-
-/**
- * Rewrites pre-versioned flat auth profile JSON into canonical profile stores.
- *
- * Also lifts aws-sdk profile markers into config because those entries are routing metadata, not
- * credentials, and the runtime no longer treats them as stored secrets.
- */
-export async function maybeRepairLegacyFlatAuthProfileStores(params: {
-  cfg: OpenClawConfig;
-  prompter: DoctorPrompter;
-  now?: () => number;
-  env?: NodeJS.ProcessEnv;
-}): Promise<LegacyFlatAuthProfileRepairResult> {
-  const now = params.now ?? Date.now;
-  const env = params.env ?? process.env;
-  const legacyStores = listAuthProfileRepairCandidates(params.cfg, env)
-    .map(resolveLegacyFlatStore)
-    .filter((entry): entry is LegacyFlatAuthProfileStore => entry !== null);
-  const awsSdkMarkerStores = listAuthProfileRepairCandidates(params.cfg, env)
-    .map(resolveAwsSdkAuthProfileMarkerStore)
-    .filter((entry): entry is AwsSdkAuthProfileMarkerStore => entry !== null);
-
-  const result: LegacyFlatAuthProfileRepairResult = {
-    detected: [
-      ...legacyStores.map((entry) => entry.authPath),
-      ...awsSdkMarkerStores.map((entry) => entry.authPath),
-    ],
-    changes: [],
-    warnings: [],
-  };
-  if (legacyStores.length === 0 && awsSdkMarkerStores.length === 0) {
-    return result;
-  }
-
-  const noteLines = [
-    ...legacyStores.map(
-      (entry) => `- ${shortenHomePath(entry.authPath)} uses the legacy flat auth profile format.`,
-    ),
-    ...awsSdkMarkerStores.map(
-      (entry) =>
-        `- ${shortenHomePath(entry.authPath)} contains aws-sdk profile markers that belong in openclaw.json auth.profiles.`,
-    ),
-  ];
-  if (legacyStores.length > 0) {
-    noteLines.push(
-      `- The gateway expects the canonical version/profiles store; ${formatCliCommand("openclaw doctor --fix")} rewrites this legacy shape with a backup.`,
-    );
-  }
-  if (awsSdkMarkerStores.length > 0) {
-    noteLines.push(
-      `- AWS SDK profile markers are routing metadata, not stored credentials; ${formatCliCommand("openclaw doctor --fix")} moves them to config with a backup.`,
-    );
-  }
-  note(noteLines.join("\n"), "Auth profiles");
-
-  const shouldRepair = await params.prompter.confirmAutoFix({
-    message: "Repair legacy auth-profiles.json files now?",
-    initialValue: true,
-  });
-  if (!shouldRepair) {
-    return result;
-  }
-
-  for (const entry of legacyStores) {
-    try {
-      const existing = loadPersistedAuthProfileStore(entry.agentDir) ?? {
-        version: AUTH_STORE_VERSION,
-        profiles: {},
-      };
-      const importedProfileIds = new Set(Object.keys(entry.store.profiles));
-      const merged = mergeImportedAuthProfiles({
-        store: { ...existing, version: Math.max(existing.version, entry.store.version) },
-        profiles: entry.store.profiles,
-        existingProfileIds: new Set(Object.keys(existing.profiles)),
-      });
-      const backupPath = backupAuthProfileStore(entry.authPath, now);
-      saveAuthProfileStore(merged, entry.agentDir, { syncExternalCli: false });
-      const verificationFailure = formatMissingAuthProfileSqliteVerification({
-        expected: merged,
-        importedProfileIds,
-        loaded: loadPersistedAuthProfileStore(entry.agentDir),
-      });
-      if (verificationFailure) {
-        result.warnings.push(
-          `Left auth profile JSON in place for ${shortenHomePath(entry.authPath)} because SQLite verification did not find ${verificationFailure}.`,
-        );
-        continue;
-      }
-      fs.unlinkSync(entry.authPath);
-      result.changes.push(
-        `Migrated ${shortenHomePath(entry.authPath)} to the SQLite auth profile store (backup: ${shortenHomePath(backupPath)}).`,
-      );
-    } catch (err) {
-      result.warnings.push(`Failed to rewrite ${shortenHomePath(entry.authPath)}: ${String(err)}`);
-    }
-  }
-  for (const entry of awsSdkMarkerStores) {
-    try {
-      const backupPath = backupAwsSdkProfileMarkerStore(entry.authPath, now);
-      const configProfiles = ensureConfigAuthProfiles(params.cfg);
-      for (const marker of entry.profiles) {
-        configProfiles[marker.profileId] = {
-          provider: marker.provider,
-          mode: "aws-sdk",
-          ...(marker.email ? { email: marker.email } : {}),
-          ...(marker.displayName ? { displayName: marker.displayName } : {}),
-        };
-      }
-      removeAwsSdkProfileMarkers(
-        entry.raw,
-        entry.profiles.map((profile) => profile.profileId),
-      );
-      fs.writeFileSync(entry.authPath, `${JSON.stringify(entry.raw, null, 2)}\n`);
-      result.changes.push(
-        `Moved aws-sdk profile metadata from ${shortenHomePath(entry.authPath)} to auth.profiles (backup: ${shortenHomePath(backupPath)}).`,
-      );
-    } catch (err) {
-      result.warnings.push(
-        `Failed to migrate aws-sdk profile markers from ${shortenHomePath(entry.authPath)}: ${String(err)}`,
-      );
-    }
-  }
-  clearRuntimeAuthProfileStoreSnapshots();
-  if (result.changes.length > 0) {
-    note(result.changes.map((change) => `- ${change}`).join("\n"), "Doctor changes");
-  }
-  if (result.warnings.length > 0) {
-    note(result.warnings.map((warning) => `- ${warning}`).join("\n"), "Doctor warnings");
-  }
-  return result;
-}
-
-type CanonicalApiKeyAliasRepair = {
-  authPath: string;
-  raw: Record<string, unknown>;
-  profileIds: string[];
-};
-
-function resolveCanonicalApiKeyAliasRepair(
-  candidate: AuthProfileRepairCandidate,
-): CanonicalApiKeyAliasRepair | null {
-  if (!fs.existsSync(candidate.authPath)) {
-    return null;
-  }
-  const raw = loadJsonFile(candidate.authPath);
-  if (!isRecord(raw) || !isRecord(raw.profiles)) {
-    return null;
-  }
-  const profileIds: string[] = [];
-  for (const [profileId, value] of Object.entries(raw.profiles)) {
-    if (!isRecord(value)) {
-      continue;
-    }
-    const type = readNonEmptyString(value.type) ?? readNonEmptyString(value.mode);
-    const hasApiKeyField =
-      readNonEmptyString(value["api_key"]) !== undefined ||
-      coerceSecretRef(value["api_key"]) !== null;
-    const hasCanonicalKey =
-      readNonEmptyString(value.key) !== undefined || coerceSecretRef(value.key) !== null;
-    const hasCanonicalKeyRef = coerceSecretRef(value.keyRef) !== null;
-    if (type === "api_key" && hasApiKeyField && !hasCanonicalKey && !hasCanonicalKeyRef) {
-      profileIds.push(profileId);
-    }
-  }
-  return profileIds.length > 0 ? { authPath: candidate.authPath, raw, profileIds } : null;
-}
-
-function backupCanonicalApiKeyAlias(authPath: string, now: () => number): string {
-  const backupPath = `${authPath}.api-key-alias.${now()}.bak`;
-  fs.copyFileSync(authPath, backupPath);
-  return backupPath;
-}
-
-/**
- * Repairs auth profile JSON that used the historical "api_key" credential field.
- *
- * Runtime parsing reads "key" or "keyRef"; doctor preserves the original file as a backup before
- * moving the alias into the canonical key slot.
- */
-export async function maybeRepairCanonicalApiKeyFieldAlias(params: {
-  cfg: OpenClawConfig;
-  prompter: DoctorPrompter;
-  now?: () => number;
-  env?: NodeJS.ProcessEnv;
-}): Promise<LegacyFlatAuthProfileRepairResult> {
-  const now = params.now ?? Date.now;
-  const env = params.env ?? process.env;
-  const repairs = listAuthProfileRepairCandidates(params.cfg, env)
-    .map(resolveCanonicalApiKeyAliasRepair)
-    .filter((entry): entry is CanonicalApiKeyAliasRepair => entry !== null);
-
-  const result: LegacyFlatAuthProfileRepairResult = {
-    detected: repairs.map((entry) => entry.authPath),
-    changes: [],
-    warnings: [],
-  };
-  if (repairs.length === 0) {
-    return result;
-  }
-
-  const noteLines = repairs.map(
-    (entry) =>
-      `- ${shortenHomePath(entry.authPath)} has ${entry.profileIds.length} profile(s) using the non-canonical "api_key" field; the canonical field is "key".`,
-  );
-  noteLines.push(
-    `- Runtime auth parsing only reads canonical "key" and "keyRef" fields, so these profiles are silently skipped; ${formatCliCommand("openclaw doctor --fix")} rewrites "api_key" to "key" with a backup.`,
-  );
-  note(noteLines.join("\n"), "Auth profiles");
-
-  const shouldRepair = await params.prompter.confirmAutoFix({
-    message: 'Rewrite non-canonical "api_key" fields to "key" now?',
-    initialValue: true,
-  });
-  if (!shouldRepair) {
-    return result;
-  }
-
-  for (const entry of repairs) {
-    try {
-      const backupPath = backupCanonicalApiKeyAlias(entry.authPath, now);
-      const profiles = entry.raw.profiles as Record<string, Record<string, unknown>>;
-      for (const profileId of entry.profileIds) {
-        const profile = profiles[profileId];
-        if (!isRecord(profile)) {
-          continue;
-        }
-        profile.key = profile["api_key"];
-        delete profile["api_key"];
-      }
-      fs.writeFileSync(entry.authPath, `${JSON.stringify(entry.raw, null, 2)}\n`);
-      result.changes.push(
-        `Rewrote ${entry.profileIds.length} "api_key" field(s) to "key" in ${shortenHomePath(entry.authPath)} (backup: ${shortenHomePath(backupPath)}).`,
-      );
-    } catch (err) {
-      result.warnings.push(
-        `Failed to rewrite "api_key" fields in ${shortenHomePath(entry.authPath)}: ${String(err)}`,
-      );
-    }
-  }
-  clearRuntimeAuthProfileStoreSnapshots();
-  if (result.changes.length > 0) {
-    note(result.changes.map((change) => `- ${change}`).join("\n"), "Doctor changes");
-  }
-  if (result.warnings.length > 0) {
-    note(result.warnings.map((warning) => `- ${warning}`).join("\n"), "Doctor warnings");
-  }
-  return result;
 }
 
 const LEGACY_OPENAI_CODEX_PROVIDER_ID = "openai-codex";
@@ -2072,21 +1683,10 @@ export function maybeRepairOpenAICodexAuthConfig(
   };
 }
 
-type OpenAICodexAuthStoreRepair = {
-  authPath: string;
-  raw: Record<string, unknown>;
-  profileIdMap: Map<string, string>;
-  changed: boolean;
-};
-
-function resolveOpenAICodexAuthStoreRepair(
-  candidate: AuthProfileRepairCandidate,
-  profileIdMap?: ReadonlyMap<string, string>,
-): OpenAICodexAuthStoreRepair | null {
-  if (!fs.existsSync(candidate.authPath)) {
-    return null;
-  }
-  const raw = loadJsonFile(candidate.authPath);
+function canonicalizeLegacyOpenAIAuthStore(
+  raw: unknown,
+  profileIdMap: ReadonlyMap<string, string>,
+): number | null {
   if (!isRecord(raw) || !isRecord(raw.profiles)) {
     return null;
   }
@@ -2101,18 +1701,114 @@ function resolveOpenAICodexAuthStoreRepair(
   if (rewrite.profileIdMap.size > 0) {
     replaceMappedProfileId(raw, rewrite.profileIdMap);
   }
-  const changed = rewrite.changed || orderChanged || usageChanged || lastGoodChanged;
-  return changed
-    ? {
-        authPath: candidate.authPath,
-        raw,
-        profileIdMap: rewrite.profileIdMap,
-        changed,
-      }
+  return rewrite.changed || orderChanged || usageChanged || lastGoodChanged
+    ? rewrite.profileIdMap.size
     : null;
 }
 
-/** Collects deterministic legacy-to-canonical OpenAI profile ids across all agent stores. */
+function recoverArchivedOpenAICodexAuthProfileIdMap(params: {
+  candidates: readonly AuthProfileRepairCandidate[];
+  env: NodeJS.ProcessEnv;
+}): Map<string, string> {
+  const recovered = new Map<string, string>();
+  const ambiguous = new Set<string>();
+  const agentDirs = [
+    resolveSharedMainAuthAgentDir(params.env),
+    ...params.candidates.flatMap((candidate) => (candidate.agentDir ? [candidate.agentDir] : [])),
+  ];
+  const archives = listLegacyAuthProfileArchives({ agentDirs, env: params.env }).filter(
+    (archive) => archive.kind === "auth-profiles",
+  );
+  for (const candidate of params.candidates) {
+    const canonicalProfiles = (
+      candidate.agentDir
+        ? loadPersistedAuthProfileStore(candidate.agentDir)
+        : loadPersistedSharedAuthProfileStore(params.env)
+    )?.profiles;
+    if (!canonicalProfiles) {
+      continue;
+    }
+    for (const archive of archives.filter((entry) =>
+      entry.path.startsWith(`${candidate.authPath}.migrated-`),
+    )) {
+      try {
+        const sourceBytes = fs.readFileSync(archive.path);
+        const sourceSha256 = createHash("sha256").update(sourceBytes).digest("hex");
+        const sourceKey = `auth-profile-v2:${createHash("sha256")
+          .update(`${path.resolve(candidate.authPath)}\0${sourceSha256}`)
+          .digest("hex")}`;
+        const receipt = readLegacyMigrationReceipt(sourceKey, params.env);
+        if (!receipt?.removedSource || receipt.sourceSha256 !== sourceSha256) {
+          continue;
+        }
+        const report = JSON.parse(receipt.reportJson) as unknown;
+        const sharedStateTarget =
+          candidate.agentDir === undefined &&
+          resolveSharedAuthStoreOwnership(params.env).location === "state-db";
+        if (
+          !isRecord(report) ||
+          report.format !== "auth-profile-json-to-sqlite-v2" ||
+          report.completionStatus !== "completed" ||
+          report.targetTable !==
+            (sharedStateTarget ? "auth_profile_stores" : "auth_profile_store") ||
+          typeof report.archivePath !== "string" ||
+          path.resolve(report.archivePath) !== path.resolve(archive.path) ||
+          typeof report.targetDatabasePath !== "string" ||
+          path.resolve(report.targetDatabasePath) !==
+            path.resolve(resolveMigrationTargetDatabasePath(candidate.agentDir, params.env)) ||
+          !isRecord(report.expectedProfileSha256)
+        ) {
+          continue;
+        }
+        const archivedStore = JSON.parse(sourceBytes.toString("utf8")) as unknown;
+        if (!isRecord(archivedStore) || !isRecord(archivedStore.profiles)) {
+          continue;
+        }
+        for (const [legacyProfileId, rawCredential] of Object.entries(archivedStore.profiles)) {
+          if (!isLegacyOpenAICodexProfileId(legacyProfileId) || !isRecord(rawCredential)) {
+            continue;
+          }
+          const archivedCredential = parseLegacyCredentialEntry(
+            { ...rawCredential, provider: "openai" },
+            "openai",
+          );
+          if (archivedCredential?.type !== "oauth") {
+            continue;
+          }
+          const matches = Object.entries(report.expectedProfileSha256).flatMap(
+            ([canonicalProfileId, expectedSha256]) => {
+              const credential = canonicalProfiles[canonicalProfileId];
+              return typeof expectedSha256 === "string" &&
+                credential?.type === "oauth" &&
+                credential.provider === "openai" &&
+                (hasMatchingOAuthIdentity(archivedCredential, credential) ||
+                  areOAuthCredentialsEquivalent(archivedCredential, credential))
+                ? [canonicalProfileId]
+                : [];
+            },
+          );
+          if (matches.length !== 1) {
+            continue;
+          }
+          const canonicalProfileId = matches[0]!;
+          const previous = recovered.get(legacyProfileId);
+          if (previous && previous !== canonicalProfileId) {
+            recovered.delete(legacyProfileId);
+            ambiguous.add(legacyProfileId);
+          } else if (!ambiguous.has(legacyProfileId)) {
+            recovered.set(legacyProfileId, canonicalProfileId);
+          }
+        }
+      } catch {
+        // Archives without a matching verified receipt or parseable identity
+        // cannot prove account ownership; leave their session pins untouched.
+      }
+    }
+  }
+  return recovered;
+}
+
+/** Collects collision-safe OpenAI profile ids across config, SQLite, and legacy agent stores. */
 export function collectOpenAICodexAuthProfileStoreIdMap(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -2121,71 +1817,43 @@ export function collectOpenAICodexAuthProfileStoreIdMap(params: {
   const occupiedProfileIds = new Set<string>();
   const legacyProfileIds = new Set<string>();
   const profileIdMap = new Map<string, string>();
-  for (const candidate of listAuthProfileRepairCandidates(params.cfg, env)) {
-    if (!fs.existsSync(candidate.authPath)) {
-      continue;
-    }
-    const raw = loadJsonFile(candidate.authPath);
-    if (!isRecord(raw) || !isRecord(raw.profiles)) {
-      continue;
-    }
-    for (const profileId of Object.keys(raw.profiles)) {
+  const candidates = listAuthProfileRepairCandidates(params.cfg, env);
+  const addProfileIds = (profileIds: Iterable<string>): void => {
+    for (const profileId of profileIds) {
       if (isLegacyOpenAICodexProfileId(profileId)) {
         legacyProfileIds.add(profileId);
       } else {
         occupiedProfileIds.add(profileId);
       }
     }
+  };
+  addProfileIds(Object.keys(params.cfg.auth?.profiles ?? {}));
+  for (const candidate of candidates) {
+    const persistedStore = candidate.agentDir
+      ? loadPersistedAuthProfileStore(candidate.agentDir)
+      : loadPersistedSharedAuthProfileStore(env);
+    addProfileIds(Object.keys(persistedStore?.profiles ?? {}));
+    if (!fs.existsSync(candidate.authPath)) {
+      continue;
+    }
+    const raw = loadJsonFileThroughSymlink(candidate.authPath);
+    if (!isRecord(raw) || !isRecord(raw.profiles)) {
+      continue;
+    }
+    addProfileIds(Object.keys(raw.profiles));
   }
   for (const profileId of [...legacyProfileIds].toSorted((a, b) => a.localeCompare(b))) {
     profileIdMap.set(profileId, allocateOpenAIProfileId(profileId, occupiedProfileIds));
   }
+  for (const [legacyProfileId, canonicalProfileId] of recoverArchivedOpenAICodexAuthProfileIdMap({
+    candidates,
+    env,
+  })) {
+    if (!profileIdMap.has(legacyProfileId)) {
+      profileIdMap.set(legacyProfileId, canonicalProfileId);
+    }
+  }
   return profileIdMap;
 }
 
-function backupOpenAIProviderUnification(authPath: string, now: () => number): string {
-  const backupPath = `${authPath}.openai-provider-unification.${now()}.bak`;
-  fs.copyFileSync(authPath, backupPath);
-  return backupPath;
-}
-
-/**
- * Rewrites legacy OpenAI Codex auth profiles in JSON stores to the canonical OpenAI provider id.
- */
-export async function maybeRepairOpenAICodexAuthProfileStores(params: {
-  cfg: OpenClawConfig;
-  now?: () => number;
-  env?: NodeJS.ProcessEnv;
-}): Promise<LegacyFlatAuthProfileRepairResult> {
-  const now = params.now ?? Date.now;
-  const env = params.env ?? process.env;
-  const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg: params.cfg, env });
-  const repairs = listAuthProfileRepairCandidates(params.cfg, env)
-    .map((candidate) => resolveOpenAICodexAuthStoreRepair(candidate, profileIdMap))
-    .filter((entry): entry is OpenAICodexAuthStoreRepair => entry !== null);
-  const result: LegacyFlatAuthProfileRepairResult = {
-    detected: repairs.map((entry) => entry.authPath),
-    changes: [],
-    warnings: [],
-  };
-  if (repairs.length === 0) {
-    return result;
-  }
-  for (const entry of repairs) {
-    try {
-      const backupPath = backupOpenAIProviderUnification(entry.authPath, now);
-      fs.writeFileSync(entry.authPath, `${JSON.stringify(entry.raw, null, 2)}\n`);
-      const movedCount = entry.profileIdMap.size;
-      result.changes.push(
-        `Migrated ${movedCount} OpenAI Codex auth profile(s) in ${shortenHomePath(entry.authPath)} to provider "openai" (backup: ${shortenHomePath(backupPath)}).`,
-      );
-    } catch (err) {
-      result.warnings.push(
-        `Failed to migrate OpenAI Codex auth profiles in ${shortenHomePath(entry.authPath)}: ${String(err)}`,
-      );
-    }
-  }
-  clearRuntimeAuthProfileStoreSnapshots();
-  return result;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

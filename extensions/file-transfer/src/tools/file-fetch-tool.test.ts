@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { FILE_TRANSFER_SUBDIR } from "./descriptors.js";
 import { createFileFetchTool } from "./file-fetch-tool.js";
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
@@ -57,7 +58,7 @@ describe("file_fetch tool", () => {
     });
     vi.mocked(saveMediaBuffer).mockResolvedValue({
       id: "media-1",
-      path: "/gateway/media/file-transfer/report.md",
+      path: "/gateway/media/tool-file-transfer/report.md",
       size: Buffer.byteLength(fileText),
       contentType: "text/markdown",
     });
@@ -95,7 +96,7 @@ describe("file_fetch tool", () => {
     });
     vi.mocked(saveMediaBuffer).mockResolvedValue({
       id: "media-1",
-      path: "/gateway/media/file-transfer/bom.md",
+      path: "/gateway/media/tool-file-transfer/bom.md",
       size: originalBuffer.byteLength,
       contentType: "text/markdown",
     });
@@ -111,7 +112,7 @@ describe("file_fetch tool", () => {
     expect(saveMediaBuffer).toHaveBeenCalledWith(
       originalBuffer,
       "text/markdown",
-      expect.any(String),
+      FILE_TRANSFER_SUBDIR,
       expect.any(Number),
     );
     const details = result.details as { sha256: string; size: number };
@@ -134,7 +135,7 @@ describe("file_fetch tool", () => {
     });
     vi.mocked(saveMediaBuffer).mockResolvedValue({
       id: "media-1",
-      path: "/gateway/media/file-transfer/empty.png",
+      path: "/gateway/media/tool-file-transfer/empty.png",
       size: 0,
       contentType: "image/png",
     });
@@ -148,7 +149,7 @@ describe("file_fetch tool", () => {
     expect(result.content[0]?.type).toBe("text");
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
     expect(text).toContain("Fetched /tmp/empty.png");
-    expect(text).toContain("saved at /gateway/media/file-transfer/empty.png");
+    expect(text).toContain("saved at /gateway/media/tool-file-transfer/empty.png");
   });
 
   it("still inlines a non-empty image payload", async () => {
@@ -167,7 +168,7 @@ describe("file_fetch tool", () => {
     });
     vi.mocked(saveMediaBuffer).mockResolvedValue({
       id: "media-1",
-      path: "/gateway/media/file-transfer/photo.png",
+      path: "/gateway/media/tool-file-transfer/photo.png",
       size: buffer.byteLength,
       contentType: "image/png",
     });

@@ -5,4 +5,3 @@ export {
   SGLANG_MODEL_PLACEHOLDER,
   SGLANG_PROVIDER_LABEL,
 } from "./defaults.js";
-export { buildSglangProvider } from "./models.js";

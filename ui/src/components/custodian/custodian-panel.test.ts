@@ -5,7 +5,6 @@ import { createContext } from "../../pages/custodian/custodian-page.test-harness
 import { CustodianSessionStore } from "../../pages/custodian/custodian-session-store.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../panel-toggle-contract.ts";
 import "./custodian-panel.ts";
 
 type TestCustodianPanel = HTMLElement & {
@@ -62,8 +61,8 @@ describe("custodian panel", () => {
     store.connect(context, "caretaker");
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     store.messages = [
-      { id: 1, role: "assistant", text: "Ready.", at: 1, question: null },
-      { id: 2, role: "user", text: "Check this system", at: 2, question: null },
+      { id: 1, role: "assistant", text: "Ready.", at: 1, question: null, step: null },
+      { id: 2, role: "user", text: "Check this system", at: 2, question: null, step: null },
     ];
 
     panel.suppressed = false;
@@ -88,16 +87,22 @@ describe("custodian panel", () => {
     expect(panel.custodianPanelOpen).toBe(true);
   });
 
-  it("suppresses the dock on the full page and ignores explicit toggles there", async () => {
-    const { panel } = await mountPanel();
+  it("hides and restores the dock across full-page suppression", async () => {
+    const { panel, store } = await mountPanel();
+    store.messages = [
+      { id: 1, role: "user", text: "Check this system", at: 1, question: null, step: null },
+    ];
 
-    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
+    panel.suppressed = false;
+    panel.minimizeRequestId = 1;
+    await panel.updateComplete;
+    expect(panel.custodianPanelOpen).toBe(true);
+
+    panel.suppressed = true;
     await panel.updateComplete;
     expect(panel.custodianPanelOpen).toBe(false);
 
     panel.suppressed = false;
-    await panel.updateComplete;
-    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
     await panel.updateComplete;
     expect(panel.custodianPanelOpen).toBe(true);
 
@@ -110,7 +115,9 @@ describe("custodian panel", () => {
     const { context, panel, request, store } = await mountPanel();
     store.connect(context, "caretaker");
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    store.messages = [{ id: 1, role: "user", text: "Check this system", at: 1, question: null }];
+    store.messages = [
+      { id: 1, role: "user", text: "Check this system", at: 1, question: null, step: null },
+    ];
     panel.available = false;
     panel.suppressed = false;
     panel.minimizeRequestId = 1;
@@ -127,8 +134,15 @@ describe("custodian panel", () => {
     store.connect(context, "onboarding");
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     store.messages = [
-      { id: 1, role: "assistant", text: "Set up your system", at: 1, question: null },
-      { id: 2, role: "user", text: "Continue setup", at: 2, question: null },
+      {
+        id: 1,
+        role: "assistant",
+        text: "Set up your system",
+        at: 1,
+        question: null,
+        step: null,
+      },
+      { id: 2, role: "user", text: "Continue setup", at: 2, question: null, step: null },
     ];
 
     panel.suppressed = false;
@@ -146,8 +160,11 @@ describe("custodian panel", () => {
 
   it("updates the panel mascot mood with shared sending state", async () => {
     const { panel, store } = await mountPanel();
+    store.messages = [
+      { id: 1, role: "user", text: "Check this system", at: 1, question: null, step: null },
+    ];
     panel.suppressed = false;
-    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
+    panel.minimizeRequestId = 1;
     await panel.updateComplete;
 
     store.sending = true;

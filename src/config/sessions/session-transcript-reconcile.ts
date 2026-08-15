@@ -2,10 +2,13 @@
 // request paths may only schedule it and return a bounded retryable response.
 import { randomInt } from "node:crypto";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { Worker } from "node:worker_threads";
+import { Worker, type WorkerOptions } from "node:worker_threads";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
@@ -17,7 +20,11 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { deleteOrphanedTranscriptIndexRowsInTransaction } from "./session-transcript-index.js";
+import {
+  deleteOrphanedTranscriptIndexRowsInTransaction,
+  listSessionsNeedingTranscriptIndexReconcile,
+  sessionTranscriptIndexNeedsReconcile,
+} from "./session-transcript-index.js";
 import {
   appendPreparedSessionTranscriptProjectionChunkInTransaction,
   claimPreparedSessionTranscriptProjectionInTransaction,
@@ -33,6 +40,7 @@ import type {
 
 const log = createSubsystemLogger("sessions/transcript-index");
 const PROJECTION_WRITE_CHUNK_ROWS = 512;
+const PROJECTION_READY_POLL_MS = 10;
 
 type RunningReconcile = {
   pending: boolean;
@@ -47,6 +55,7 @@ export type SessionTranscriptReconcileResult = {
 };
 
 type SessionTranscriptReconcileParams = OpenClawAgentDatabaseOptions & {
+  createWorker?: (filename: string | URL, options: WorkerOptions) => Worker;
   preferredSessionId?: string;
 };
 
@@ -82,10 +91,6 @@ function yieldToGateway(): Promise<void> {
 
 function nextProjectionClaimId(): number {
   return -randomInt(1, 2 ** 47);
-}
-
-function normalizeReconcileError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }
 
 // Node Worker messages take a transfer list, unlike Window.postMessage.
@@ -198,7 +203,7 @@ async function finalizePreparedProjection(
 }
 
 /** Prepares full trees off-thread, then commits bounded chunks through the runtime writer owner. */
-export function reconcileSessionTranscriptIndexes(
+export async function reconcileSessionTranscriptIndexes(
   params: SessionTranscriptReconcileParams,
 ): Promise<SessionTranscriptReconcileResult> {
   const databasePath = resolveOpenClawAgentSqlitePath(params);
@@ -207,6 +212,19 @@ export function reconcileSessionTranscriptIndexes(
     ...(params.env ? { env: params.env } : {}),
     path: databasePath,
   };
+  // The SQLite owner can cheaply prove a clean projection before paying for a
+  // Worker. Keep the post-worker sweep too, because request-time writers may race.
+  const needsWorker = await runProjectionWrite(
+    databaseOptions,
+    "sessions.transcript-index.preflight",
+    (database) => {
+      deleteOrphanedTranscriptIndexRowsInTransaction(database.db);
+      return listSessionsNeedingTranscriptIndexReconcile(database.db).length > 0;
+    },
+  );
+  if (!needsWorker) {
+    return { reconciledSessions: 0 };
+  }
   const workerUrl = resolveSessionTranscriptReconcileWorkerUrl();
   const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   const input: SessionTranscriptReconcileWorkerInput = {
@@ -216,9 +234,12 @@ export function reconcileSessionTranscriptIndexes(
   };
   let worker: Worker;
   try {
-    worker = new Worker(workerUrl, { workerData: input, execArgv: sourceWorkerExecArgv });
+    worker = (params.createWorker ?? ((filename, options) => new Worker(filename, options)))(
+      workerUrl,
+      { workerData: input, execArgv: sourceWorkerExecArgv },
+    );
   } catch (error) {
-    return Promise.reject(normalizeReconcileError(error));
+    throw toStringifiedError(error);
   }
 
   return new Promise<SessionTranscriptReconcileResult>((resolve, reject) => {
@@ -258,7 +279,7 @@ export function reconcileSessionTranscriptIndexes(
             (database) => deleteOrphanedTranscriptIndexRowsInTransaction(database.db),
           );
         } catch (error) {
-          settle(() => reject(normalizeReconcileError(error)), true);
+          settle(() => reject(toStringifiedError(error)), true);
           return;
         }
         settle(() => resolve({ reconciledSessions }), false);
@@ -297,14 +318,14 @@ export function reconcileSessionTranscriptIndexes(
         }
         continueProjectionWorker(worker, owned);
       } catch (error) {
-        settle(() => reject(normalizeReconcileError(error)), true);
+        settle(() => reject(toStringifiedError(error)), true);
       }
     };
     worker.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
       void handleMessage(message);
     });
     worker.once("error", (error) => {
-      settle(() => reject(normalizeReconcileError(error)), true);
+      settle(() => reject(toStringifiedError(error)), true);
     });
     worker.once("exit", (code) => {
       if (doneReceived && code === 0) {
@@ -393,10 +414,17 @@ export async function waitForSessionTranscriptIndexReconcile(
   await runningReconciles.get(reconcileKey(params))?.promise;
 }
 
-/** Waits for a projection rebuild already scheduled by a failed transcript read. */
+/** Waits only until the requested session's scheduled projection rebuild settles. */
 export async function waitForSessionTranscriptProjection(
   scope: SessionTranscriptReadScope,
 ): Promise<void> {
   const resolved = resolveSqliteTranscriptReadScope(scope);
-  await waitForSessionTranscriptIndexReconcile(toDatabaseOptions(resolved));
+  const databaseOptions = toDatabaseOptions(resolved);
+  const database = openOpenClawAgentDatabase(databaseOptions);
+  while (
+    isSessionTranscriptIndexReconcileRunning(databaseOptions) &&
+    sessionTranscriptIndexNeedsReconcile(database.db, resolved.sessionId)
+  ) {
+    await delay(PROJECTION_READY_POLL_MS);
+  }
 }

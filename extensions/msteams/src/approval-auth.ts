@@ -8,14 +8,10 @@ const MSTEAMS_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 
 function normalizeMSTeamsApproverId(value: string | number): string | undefined {
   const normalized = normalizeMSTeamsMessagingTarget(String(value));
-  if (!normalized?.startsWith("user:")) {
-    return undefined;
-  }
-  const id = normalizeOptionalLowercaseString(normalized.slice("user:".length));
-  if (!id) {
-    return undefined;
-  }
-  return MSTEAMS_ID_RE.test(id) ? id : undefined;
+  const id = normalizeOptionalLowercaseString(
+    normalized?.startsWith("user:") ? normalized.slice("user:".length) : normalized,
+  );
+  return id && MSTEAMS_ID_RE.test(id) ? id : undefined;
 }
 
 function resolveMSTeamsChannelConfig(cfg: OpenClawConfig) {

@@ -1,5 +1,6 @@
 import type {
   SessionCatalog,
+  SessionCatalogHost,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
@@ -42,6 +43,34 @@ export function adoptedCatalogSessionKeys(catalogs: readonly SessionCatalog[]): 
   return keys;
 }
 
+/** Catalogs the sidebar actually renders. Adopted-key exclusion must read this
+    same projection: excluding a key whose catalog is hidden (or whose section
+    the archived filter suppresses) deletes the session from the entire sidebar
+    with no row anywhere. */
+export function visibleSessionCatalogProjection(
+  catalogs: readonly SessionCatalog[],
+  hiddenCatalogIds: ReadonlySet<string>,
+  archivedFilter: boolean,
+): SessionCatalog[] {
+  return archivedFilter ? [] : catalogs.filter((catalog) => !hiddenCatalogIds.has(catalog.id));
+}
+
+export function visibleCatalogHosts(
+  hosts: readonly SessionCatalogHost[],
+  creatorId?: string | null,
+): SessionCatalogHost[] {
+  const visible: SessionCatalogHost[] = [];
+  for (const host of hosts) {
+    const sessions = host.sessions.filter(
+      (session) => !creatorId || session.createdActor?.id === creatorId,
+    );
+    if (sessions.length > 0) {
+      visible.push(sessions.length === host.sessions.length ? host : { ...host, sessions });
+    }
+  }
+  return visible;
+}
+
 export type CatalogBackingSessionDisplay = {
   label: string;
   subtitle?: string;
@@ -52,6 +81,7 @@ export type CatalogBackingSessionDisplay = {
 
 export type CatalogSessionMenuRequest = {
   key: CatalogSessionKey;
+  agentId: string;
   routeId: "chat" | "new-session";
   navigation: ApplicationNavigationOptions;
   canOpenTerminal: boolean;

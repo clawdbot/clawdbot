@@ -5,12 +5,8 @@ import {
   formatFastModeAutoProgressText,
   resolveAgentRunAbortLifecycleFields,
   resolveFastModeForElapsed,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
-  interruptCodexTurnBestEffort,
-} from "./attempt-client-cleanup.js";
 import { reportCodexExecutionNotification } from "./attempt-notification-state.js";
 import {
   resolveTerminalDynamicToolBatchAction,
@@ -30,7 +26,7 @@ export function createCodexAttemptLifecycleController(
   resources: CodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
 ) {
-  const { prompt, state: resourceState, trajectoryRecorder } = resources;
+  const { prompt, trajectoryRecorder } = resources;
   const { connection } = prompt.context.runtime;
   const {
     params,
@@ -39,8 +35,7 @@ export function createCodexAttemptLifecycleController(
     fastModeAutoStartedAtMs,
     fastModeAutoProgressState,
   } = connection;
-  const { state, activeTurnItemIds, pendingOpenClawDynamicToolCompletionIds, turnWatches } =
-    turnRuntime;
+  const { state, activeTurnItemIds, pendingOpenClawDynamicToolCompletionIds } = turnRuntime;
   const releaseTurnAfterTerminalDynamicTool = (value: {
     call: CodexDynamicToolCallParams;
     response: CodexDynamicToolCallResponse;
@@ -78,16 +73,8 @@ export function createCodexAttemptLifecycleController(
     // Interrupt drops accepted pending input. Reject unconsumed steering first so
     // completion delivery can use its fallback path instead of reporting success.
     turnRuntime.steeringQueueRef.current?.cancel();
-    interruptCodexTurnBestEffort(resourceState.client, {
-      threadId: value.call.threadId,
-      turnId: value.call.turnId,
-      timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
-    });
-    state.completed = true;
-    turnWatches.clearCompletionIdleTimer();
-    turnWatches.clearAssistantCompletionIdleTimer();
-    turnWatches.clearTerminalIdleTimer();
-    state.resolveCompletion?.();
+    void turnRuntime.interruptTurn(value.call.turnId, { locallyCompleted: true });
+    turnRuntime.completeTurn();
   };
   const scheduleTerminalDynamicToolReleaseCheck = () => {
     if (

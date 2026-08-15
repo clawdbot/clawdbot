@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it } from "vitest";
 import {
   describeTelegramDispatch,
@@ -15,15 +16,103 @@ import {
   sendMessageTelegram,
   setupDraftStreams,
 } from "./bot-message-dispatch.test-harness.js";
-import type { TelegramMessageContext } from "./bot-message-dispatch.test-harness.js";
-import { notifyTelegramInboundEventOutboundSuccess } from "./inbound-event-delivery.js";
+import type {
+  DispatchReplyWithBufferedBlockDispatcherArgs,
+  TelegramMessageContext,
+} from "./bot-message-dispatch.test-harness.js";
+import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
+
+const GROUP_CHAT_ID = -100123;
+const GROUP_SESSION_KEY = "agent:main:telegram:group:-100123";
+
+const emptyDispatchResult = {
+  queuedFinal: false,
+  counts: { block: 0, final: 0, tool: 0 },
+};
+
+const messageToolOnlyDispatchResult = {
+  ...emptyDispatchResult,
+  sourceReplyDeliveryMode: "message_tool_only" as const,
+};
+
+function mockTurn(
+  run: (params: DispatchReplyWithBufferedBlockDispatcherArgs) => Promise<void>,
+  result: unknown = { queuedFinal: true },
+) {
+  dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) => {
+    await run(params);
+    return result;
+  });
+}
+
+function createGroupFixture(
+  params: {
+    commandAuthorized?: boolean;
+    entries?: Array<{ sender: string; body: string; timestamp: number }>;
+    topicId?: number;
+  } = {},
+) {
+  const { commandAuthorized, topicId } = params;
+  const entries = params.entries ?? [{ sender: "Alice", body: "lunch at two", timestamp: 1 }];
+  const historyKey = `telegram:group:${GROUP_CHAT_ID}${topicId ? `:topic:${topicId}` : ""}`;
+  const groupHistories = new Map([[historyKey, entries]]);
+  const context = (
+    messageId: number,
+    body: string,
+    kind: "user_request" | "room_event" = "room_event",
+    overrides: Partial<TelegramMessageContext> = {},
+  ) =>
+    createContext({
+      ...overrides,
+      ctxPayload: {
+        InboundEventKind: kind,
+        SessionKey: GROUP_SESSION_KEY,
+        ChatType: "group",
+        MessageSid: String(messageId),
+        RawBody: body,
+        BodyForAgent: body,
+        CommandBody: body,
+        ...(commandAuthorized ? { CommandAuthorized: true } : {}),
+      } as unknown as TelegramMessageContext["ctxPayload"],
+      msg: {
+        chat: { id: GROUP_CHAT_ID, type: "supergroup", ...(topicId ? { is_forum: true } : {}) },
+        message_id: messageId,
+        ...(topicId ? { message_thread_id: topicId } : {}),
+      } as unknown as TelegramMessageContext["msg"],
+      chatId: GROUP_CHAT_ID,
+      isGroup: true,
+      historyKey,
+      historyLimit: 10,
+      groupHistories,
+      threadSpec: topicId ? { id: topicId, scope: "forum" } : { id: undefined, scope: "none" },
+    });
+  return { context, groupHistories, historyKey };
+}
+
+function mockSupersedingRoomEvents() {
+  const firstStarted = createDeferred<void>();
+  const firstRelease = createDeferred<void>();
+  const secondStarted = createDeferred<void>();
+  dispatchReplyWithBufferedBlockDispatcher
+    .mockImplementationOnce(async () => {
+      firstStarted.resolve();
+      await firstRelease.promise;
+      return messageToolOnlyDispatchResult;
+    })
+    .mockImplementationOnce(async () => {
+      secondStarted.resolve();
+      return messageToolOnlyDispatchResult;
+    });
+  return {
+    firstStarted: firstStarted.promise,
+    releaseFirst: firstRelease.resolve,
+    secondStarted: secondStarted.promise,
+  };
+}
 
 describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => {
   it("keeps shared durable reasoning payloads disabled when reasoning is off", async () => {
-    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
-      queuedFinal: false,
-      counts: { block: 0, final: 0, tool: 0 },
-    });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue(emptyDispatchResult);
 
     await dispatchWithContext({ context: createContext() });
 
@@ -38,10 +127,7 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
       answerMessageId: 2001,
       reasoningMessageId: 3001,
     });
-    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
-      queuedFinal: false,
-      counts: { block: 0, final: 0, tool: 0 },
-    });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue(emptyDispatchResult);
 
     await dispatchWithContext({ context: createReasoningStreamContext() });
 
@@ -53,10 +139,7 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
 
   it("keeps shared durable reasoning payloads disabled in progress stream mode", async () => {
     setupDraftStreams({ answerMessageId: 2001 });
-    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
-      queuedFinal: false,
-      counts: { block: 0, final: 0, tool: 0 },
-    });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue(emptyDispatchResult);
 
     await dispatchWithContext({
       context: createReasoningStreamContext(),
@@ -71,12 +154,11 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
 
   it("suppresses typed reasoning-only finals without raw text fallback", async () => {
     setupDraftStreams({ answerMessageId: 2001, reasoningMessageId: 3001 });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+    mockTurn(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
         { text: "<think>hidden</think>", isReasoning: true },
         { kind: "final" },
       );
-      return { queuedFinal: true };
     });
 
     await dispatchWithContext({ context: createContext() });
@@ -90,17 +172,37 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
       answerMessageId: 2001,
       reasoningMessageId: 3001,
     });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+    mockTurn(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
         { text: "<think>hidden</think>", isReasoning: true },
         { kind: "final" },
       );
-      return { queuedFinal: true };
     });
 
     await dispatchWithContext({ context: createReasoningStreamContext() });
 
-    expect(reasoningDraftStream.update).toHaveBeenCalledWith("🧠 _hidden_");
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith(
+      "🧠 _hidden_",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("suppresses internal reflection when reasoning streams", async () => {
+    const { reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    mockTurn(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "<internal>private reflection</internal>", isReasoning: true },
+        { kind: "final" },
+      );
+    });
+
+    await dispatchWithContext({ context: createReasoningStreamContext() });
+
+    expect(reasoningDraftStream.update).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -108,12 +210,11 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
     loadSessionStore.mockReturnValue({
       s1: { reasoningLevel: "on" },
     });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+    mockTurn(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
         { text: "<think>hidden</think>", isReasoning: true },
         { kind: "final" },
       );
-      return { queuedFinal: true };
     });
 
     await dispatchWithContext({
@@ -128,12 +229,11 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
 
   it("does not persist typed reasoning-only finals in progress stream mode", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+    mockTurn(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
         { text: "<think>hidden</think>", isReasoning: true },
         { kind: "final" },
       );
-      return { queuedFinal: true };
     });
 
     await dispatchWithContext({
@@ -150,27 +250,25 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
       answerMessageId: 2001,
       reasoningMessageId: 3001,
     });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+    mockTurn(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(
         { text: "Before <think>literal tag text after" },
         { kind: "final" },
       );
-      return { queuedFinal: true };
     });
 
     await dispatchWithContext({ context: createContext() });
 
-    expect(answerDraftStream.update).toHaveBeenCalledWith("Before <think>literal tag text after");
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "Before <think>literal tag text after",
+      expect.objectContaining({ onPlatformSendDispatch: expect.any(Function) }),
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("does not add silent fallback when source delivery is message-tool-only", async () => {
     setupDraftStreams({ answerMessageId: 2001, reasoningMessageId: 3001 });
-    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
-      queuedFinal: false,
-      counts: { block: 0, final: 0, tool: 0 },
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue(messageToolOnlyDispatchResult);
 
     await dispatchWithContext({
       context: createContext({
@@ -196,48 +294,23 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
   });
 
   it("runs ambient room events as tool-only invisible turns", async () => {
-    const historyKey = "telegram:group:-100123";
-    const groupHistories = new Map([
-      [historyKey, [{ sender: "Alice", body: "side chatter", timestamp: 1 }]],
-    ]);
+    const { context, groupHistories, historyKey } = createGroupFixture({
+      entries: [{ sender: "Alice", body: "side chatter", timestamp: 1 }],
+    });
     const statusReactionController = createStatusReactionController();
     loadSessionStore.mockReturnValue({
-      "agent:main:telegram:group:-100123": { reasoningLevel: "stream" },
+      [GROUP_SESSION_KEY]: { reasoningLevel: "stream" },
     });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+    mockTurn(async ({ replyOptions }) => {
       await replyOptions?.onReasoningStream?.({ text: "<think>ambient reasoning</think>" });
       await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       await replyOptions?.onCompactionStart?.();
       await replyOptions?.onCompactionEnd?.();
-      return {
-        queuedFinal: false,
-        counts: { block: 0, final: 0, tool: 0 },
-        sourceReplyDeliveryMode: "message_tool_only",
-      };
-    });
+    }, messageToolOnlyDispatchResult);
 
     await dispatchWithContext({
-      context: createContext({
+      context: context(99, "ambient", "room_event", {
         statusReactionController: statusReactionController as never,
-        ctxPayload: {
-          InboundEventKind: "room_event",
-          SessionKey: "agent:main:telegram:group:-100123",
-          ChatType: "group",
-          MessageSid: "99",
-          RawBody: "ambient",
-          BodyForAgent: "ambient",
-          CommandBody: "ambient",
-        } as unknown as TelegramMessageContext["ctxPayload"],
-        msg: {
-          chat: { id: -100123, type: "supergroup" },
-          message_id: 99,
-        } as unknown as TelegramMessageContext["msg"],
-        chatId: -100123,
-        isGroup: true,
-        historyKey,
-        historyLimit: 10,
-        groupHistories,
-        threadSpec: { id: undefined, scope: "none" },
       }),
       streamMode: "partial",
     });
@@ -269,257 +342,89 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
   });
 
   it("keeps room-event history when a newer turn supersedes dispatch", async () => {
-    const historyKey = "telegram:group:-100123";
-    const groupHistories = new Map([
-      [historyKey, [{ sender: "Alice", body: "lunch at two", timestamp: 1 }]],
-    ]);
-    let releaseFirst: (() => void) | undefined;
-    const firstGate = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-    let secondStarted: (() => void) | undefined;
-    const secondStartGate = new Promise<void>((resolve) => {
-      secondStarted = resolve;
-    });
-    dispatchReplyWithBufferedBlockDispatcher
-      .mockImplementationOnce(async () => {
-        await firstGate;
-        return {
-          queuedFinal: false,
-          counts: { block: 0, final: 0, tool: 0 },
-          sourceReplyDeliveryMode: "message_tool_only",
-        };
-      })
-      .mockImplementationOnce(async () => {
-        secondStarted?.();
-        return {
-          queuedFinal: false,
-          counts: { block: 0, final: 0, tool: 0 },
-          sourceReplyDeliveryMode: "message_tool_only",
-        };
-      });
-
-    const createRoomContext = (messageId: number, body: string) =>
-      createContext({
-        ctxPayload: {
-          InboundEventKind: "room_event",
-          SessionKey: "agent:main:telegram:group:-100123",
-          ChatType: "group",
-          MessageSid: String(messageId),
-          RawBody: body,
-          BodyForAgent: body,
-          CommandBody: body,
-        } as unknown as TelegramMessageContext["ctxPayload"],
-        msg: {
-          chat: { id: -100123, type: "supergroup" },
-          message_id: messageId,
-        } as unknown as TelegramMessageContext["msg"],
-        chatId: -100123,
-        isGroup: true,
-        historyKey,
-        historyLimit: 10,
-        groupHistories,
-        threadSpec: { id: undefined, scope: "none" },
-      });
+    const { context, groupHistories, historyKey } = createGroupFixture();
+    const { releaseFirst, secondStarted } = mockSupersedingRoomEvents();
 
     const firstPromise = dispatchWithContext({
-      context: createRoomContext(99, "ambient one"),
+      context: context(99, "ambient one"),
       streamMode: "partial",
     });
     const secondPromise = dispatchWithContext({
-      context: createRoomContext(100, "ambient two"),
+      context: context(100, "ambient two"),
       streamMode: "partial",
     });
 
-    await secondStartGate;
-    releaseFirst?.();
+    await secondStarted;
+    releaseFirst();
     await Promise.all([firstPromise, secondPromise]);
 
     expect(groupHistories.get(historyKey)).toHaveLength(1);
   });
 
   it("keeps delivered room-event history when a newer turn supersedes dispatch", async () => {
-    const historyKey = "telegram:group:-100123";
-    const groupHistories = new Map([
-      [historyKey, [{ sender: "Alice", body: "lunch at two", timestamp: 1 }]],
-    ]);
-    let firstStarted: (() => void) | undefined;
-    const firstStartGate = new Promise<void>((resolve) => {
-      firstStarted = resolve;
-    });
-    let releaseFirst: (() => void) | undefined;
-    const firstGate = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-    let secondStarted: (() => void) | undefined;
-    const secondStartGate = new Promise<void>((resolve) => {
-      secondStarted = resolve;
-    });
-    dispatchReplyWithBufferedBlockDispatcher
-      .mockImplementationOnce(async () => {
-        firstStarted?.();
-        await firstGate;
-        return {
-          queuedFinal: false,
-          counts: { block: 0, final: 0, tool: 0 },
-          sourceReplyDeliveryMode: "message_tool_only",
-        };
-      })
-      .mockImplementationOnce(async () => {
-        secondStarted?.();
-        return {
-          queuedFinal: false,
-          counts: { block: 0, final: 0, tool: 0 },
-          sourceReplyDeliveryMode: "message_tool_only",
-        };
-      });
-
-    const createRoomContext = (messageId: number, body: string) =>
-      createContext({
-        ctxPayload: {
-          InboundEventKind: "room_event",
-          SessionKey: "agent:main:telegram:group:-100123",
-          ChatType: "group",
-          MessageSid: String(messageId),
-          RawBody: body,
-          BodyForAgent: body,
-          CommandBody: body,
-        } as unknown as TelegramMessageContext["ctxPayload"],
-        msg: {
-          chat: { id: -100123, type: "supergroup" },
-          message_id: messageId,
-        } as unknown as TelegramMessageContext["msg"],
-        chatId: -100123,
-        isGroup: true,
-        historyKey,
-        historyLimit: 10,
-        groupHistories,
-        threadSpec: { id: undefined, scope: "none" },
-      });
+    const { context, groupHistories, historyKey } = createGroupFixture();
+    const { firstStarted, releaseFirst, secondStarted } = mockSupersedingRoomEvents();
 
     const firstPromise = dispatchWithContext({
-      context: createRoomContext(99, "ambient one"),
+      context: context(99, "ambient one"),
       streamMode: "partial",
     });
-    await firstStartGate;
-    notifyTelegramInboundEventOutboundSuccess({
-      sessionKey: "agent:main:telegram:group:-100123",
+    await firstStarted;
+    telegramInboundEventDelivery.notify({
+      sessionKey: GROUP_SESSION_KEY,
       to: "telegram:-100123",
       inboundEventKind: "room_event",
     });
     const secondPromise = dispatchWithContext({
-      context: createRoomContext(100, "ambient two"),
+      context: context(100, "ambient two"),
       streamMode: "partial",
     });
 
-    await secondStartGate;
-    releaseFirst?.();
+    await secondStarted;
+    releaseFirst();
     await Promise.all([firstPromise, secondPromise]);
 
     expect(groupHistories.get(historyKey)).toHaveLength(1);
   });
 
   it("keeps topic room-event history for a send to another topic", async () => {
-    const historyKey = "telegram:group:-100123:topic:77";
-    const groupHistories = new Map([
-      [historyKey, [{ sender: "Alice", body: "topic 77 context", timestamp: 1 }]],
-    ]);
-    let firstStarted: (() => void) | undefined;
-    const firstStartGate = new Promise<void>((resolve) => {
-      firstStarted = resolve;
+    const { context, groupHistories, historyKey } = createGroupFixture({
+      entries: [{ sender: "Alice", body: "topic 77 context", timestamp: 1 }],
+      topicId: 77,
     });
-    let releaseFirst: (() => void) | undefined;
-    const firstGate = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-    let secondStarted: (() => void) | undefined;
-    const secondStartGate = new Promise<void>((resolve) => {
-      secondStarted = resolve;
-    });
-    dispatchReplyWithBufferedBlockDispatcher
-      .mockImplementationOnce(async () => {
-        firstStarted?.();
-        await firstGate;
-        return {
-          queuedFinal: false,
-          counts: { block: 0, final: 0, tool: 0 },
-          sourceReplyDeliveryMode: "message_tool_only",
-        };
-      })
-      .mockImplementationOnce(async () => {
-        secondStarted?.();
-        return {
-          queuedFinal: false,
-          counts: { block: 0, final: 0, tool: 0 },
-          sourceReplyDeliveryMode: "message_tool_only",
-        };
-      });
-
-    const createRoomContext = (messageId: number, body: string) =>
-      createContext({
-        ctxPayload: {
-          InboundEventKind: "room_event",
-          SessionKey: "agent:main:telegram:group:-100123",
-          ChatType: "group",
-          MessageSid: String(messageId),
-          RawBody: body,
-          BodyForAgent: body,
-          CommandBody: body,
-        } as unknown as TelegramMessageContext["ctxPayload"],
-        msg: {
-          chat: { id: -100123, type: "supergroup", is_forum: true },
-          message_id: messageId,
-          message_thread_id: 77,
-        } as unknown as TelegramMessageContext["msg"],
-        chatId: -100123,
-        isGroup: true,
-        historyKey,
-        historyLimit: 10,
-        groupHistories,
-        threadSpec: { id: 77, scope: "forum" },
-      });
+    const { firstStarted, releaseFirst, secondStarted } = mockSupersedingRoomEvents();
 
     const firstPromise = dispatchWithContext({
-      context: createRoomContext(99, "ambient one"),
+      context: context(99, "ambient one"),
       streamMode: "partial",
     });
-    await firstStartGate;
-    notifyTelegramInboundEventOutboundSuccess({
-      sessionKey: "agent:main:telegram:group:-100123",
+    await firstStarted;
+    telegramInboundEventDelivery.notify({
+      sessionKey: GROUP_SESSION_KEY,
       to: "telegram:group:-100123:topic:88",
       inboundEventKind: "room_event",
     });
     const secondPromise = dispatchWithContext({
-      context: createRoomContext(100, "ambient two"),
+      context: context(100, "ambient two"),
       streamMode: "partial",
     });
 
-    await secondStartGate;
-    releaseFirst?.();
+    await secondStarted;
+    releaseFirst();
     await Promise.all([firstPromise, secondPromise]);
 
     expect(groupHistories.get(historyKey)).toHaveLength(1);
   });
 
   it("does not let room events supersede active user-request dispatch", async () => {
-    const historyKey = "telegram:group:-100123";
-    const groupHistories = new Map([[historyKey, []]]);
-    let firstStarted: (() => void) | undefined;
-    const firstStartGate = new Promise<void>((resolve) => {
-      firstStarted = resolve;
-    });
-    let releaseFirst: (() => void) | undefined;
-    const firstGate = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-    let roomEventStarted: (() => void) | undefined;
-    const roomEventStartGate = new Promise<void>((resolve) => {
-      roomEventStarted = resolve;
-    });
+    const { context } = createGroupFixture({ commandAuthorized: true, entries: [] });
+    const firstStarted = createDeferred<void>();
+    const firstRelease = createDeferred<void>();
+    const roomEventStarted = createDeferred<void>();
     dispatchReplyWithBufferedBlockDispatcher
       .mockImplementationOnce(async ({ dispatcherOptions }) => {
-        firstStarted?.();
-        await firstGate;
+        firstStarted.resolve();
+        await firstRelease.promise;
         await dispatcherOptions.deliver({ text: "visible request answer" }, { kind: "final" });
         return {
           queuedFinal: true,
@@ -527,53 +432,21 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
         };
       })
       .mockImplementationOnce(async () => {
-        roomEventStarted?.();
-        return {
-          queuedFinal: false,
-          counts: { block: 0, final: 0, tool: 0 },
-          sourceReplyDeliveryMode: "message_tool_only",
-        };
-      });
-
-    const createGroupContext = (
-      kind: "user_request" | "room_event",
-      messageId: number,
-      body: string,
-    ) =>
-      createContext({
-        ctxPayload: {
-          InboundEventKind: kind,
-          SessionKey: "agent:main:telegram:group:-100123",
-          ChatType: "group",
-          MessageSid: String(messageId),
-          RawBody: body,
-          BodyForAgent: body,
-          CommandBody: body,
-          CommandAuthorized: true,
-        } as unknown as TelegramMessageContext["ctxPayload"],
-        msg: {
-          chat: { id: -100123, type: "supergroup" },
-          message_id: messageId,
-        } as unknown as TelegramMessageContext["msg"],
-        chatId: -100123,
-        isGroup: true,
-        historyKey,
-        historyLimit: 10,
-        groupHistories,
-        threadSpec: { id: undefined, scope: "none" },
+        roomEventStarted.resolve();
+        return messageToolOnlyDispatchResult;
       });
 
     const userRequestPromise = dispatchWithContext({
-      context: createGroupContext("user_request", 99, "@bot answer this"),
+      context: context(99, "@bot answer this", "user_request"),
       streamMode: "off",
     });
-    await firstStartGate;
+    await firstStarted.promise;
     const roomEventPromise = dispatchWithContext({
-      context: createGroupContext("room_event", 100, "ambient chatter"),
+      context: context(100, "ambient chatter"),
       streamMode: "off",
     });
-    await roomEventStartGate;
-    releaseFirst?.();
+    await roomEventStarted.promise;
+    firstRelease.resolve();
     await Promise.all([userRequestPromise, roomEventPromise]);
 
     const deliveredTexts = deliverReplies.mock.calls.flatMap((call) =>

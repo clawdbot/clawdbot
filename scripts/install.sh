@@ -821,50 +821,33 @@ apt_get_install() {
 install_build_tools_linux() {
     require_sudo
 
+    # apt_get already escalates privileges itself, so it stays separate from the
+    # sudo-prefixed command list below.
     if command -v apt-get &> /dev/null; then
         run_quiet_step "Updating package index" apt_get_update
         run_quiet_step "Installing build tools" apt_get_install build-essential python3 make g++ cmake
-        return 0
+        return
     fi
 
+    local -a build_tools_cmd=()
     if command -v pacman &> /dev/null && is_arch_linux; then
-        if is_root; then
-            run_quiet_step "Installing build tools" pacman -Sy --noconfirm base-devel python make cmake gcc
-        else
-            run_quiet_step "Installing build tools" sudo pacman -Sy --noconfirm base-devel python make cmake gcc
-        fi
-        return 0
+        build_tools_cmd=(pacman -Sy --noconfirm base-devel python make cmake gcc)
+    elif command -v dnf &> /dev/null; then
+        build_tools_cmd=(dnf install -y -q gcc gcc-c++ make cmake python3)
+    elif command -v yum &> /dev/null; then
+        build_tools_cmd=(yum install -y -q gcc gcc-c++ make cmake python3)
+    elif command -v apk &> /dev/null && is_alpine_linux; then
+        build_tools_cmd=(apk add --no-cache build-base python3 cmake)
+    else
+        ui_warn "Could not detect package manager for auto-installing build tools"
+        return 1
     fi
 
-    if command -v dnf &> /dev/null; then
-        if is_root; then
-            run_quiet_step "Installing build tools" dnf install -y -q gcc gcc-c++ make cmake python3
-        else
-            run_quiet_step "Installing build tools" sudo dnf install -y -q gcc gcc-c++ make cmake python3
-        fi
-        return 0
-    fi
-
-    if command -v yum &> /dev/null; then
-        if is_root; then
-            run_quiet_step "Installing build tools" yum install -y -q gcc gcc-c++ make cmake python3
-        else
-            run_quiet_step "Installing build tools" sudo yum install -y -q gcc gcc-c++ make cmake python3
-        fi
-        return 0
-    fi
-
-    if command -v apk &> /dev/null && is_alpine_linux; then
-        if is_root; then
-            run_quiet_step "Installing build tools" apk add --no-cache build-base python3 cmake
-        else
-            run_quiet_step "Installing build tools" sudo apk add --no-cache build-base python3 cmake
-        fi
-        return 0
-    fi
-
-    ui_warn "Could not detect package manager for auto-installing build tools"
-    return 1
+    is_root || build_tools_cmd=(sudo "${build_tools_cmd[@]}")
+    # Return the package manager's status: callers choose between "Build tools
+    # installed" and the continue-without-build-tools warning based on it, so
+    # swallowing a failure here makes the installer claim success after an error.
+    run_quiet_step "Installing build tools" "${build_tools_cmd[@]}"
 }
 
 install_build_tools_macos() {
@@ -2418,6 +2401,21 @@ checkout_git_openclaw_ref() {
     return 1
 }
 
+validate_git_checkout_head() {
+    local repo_dir="$1"
+
+    if [[ ! -d "$repo_dir/.git" ]]; then
+        return 0
+    fi
+    if git --git-dir="$repo_dir/.git" --work-tree="$repo_dir" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null 2>&1; then
+        return 0
+    fi
+
+    ui_error "Git checkout has no commit: ${repo_dir}"
+    ui_info "Move or remove this incomplete checkout, then retry the installer."
+    return 1
+}
+
 git_install_lockfile_flag() {
     local repo_dir="$1"
     local ref="$2"
@@ -2873,9 +2871,14 @@ install_openclaw_from_git() {
     ensure_pnpm
     ensure_pnpm_binary_for_scripts
 
+    validate_git_checkout_head "$repo_dir" || return 1
     if [[ ! -d "$repo_dir" ]]; then
         mkdir -p "$(dirname "$repo_dir")"
-        run_quiet_step "Cloning OpenClaw" git clone "$repo_url" "$repo_dir"
+        # Blobless clone: the installer checks out one release tag, so full blob
+        # history is downloaded and then discarded. blob:none keeps ref metadata
+        # (unlike --depth 1) so ref switching and later updates still work, and
+        # git warns and falls back to a full clone if the server cannot filter.
+        run_quiet_step "Cloning OpenClaw" git clone --filter=blob:none "$repo_url" "$repo_dir"
     fi
 
     local git_ref

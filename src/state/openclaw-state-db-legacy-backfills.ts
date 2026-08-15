@@ -1,6 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
+import { asFiniteNumber, asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
+import { selectDeliverableSessionsReply } from "../agents/tools/sessions-send-tokens.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { compactLegacyDeliveryQueueFailures } from "./openclaw-state-db-delivery-queue-backfill.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 
@@ -120,6 +126,193 @@ export function repairLegacyTaskDeliveryStatuses(db: DatabaseSync): void {
   `);
 }
 
+type LegacyRetainedResultRow = {
+  run_id: string;
+  payload_json: string;
+  pending_final_delivery_payload_json: string | null;
+  frozen_result_text: string | null;
+  fallback_frozen_result_text: string | null;
+};
+
+function nullableTextValue(record: Record<string, unknown> | null, key: string) {
+  if (!record || !Object.hasOwn(record, key)) {
+    return undefined;
+  }
+  const value = record[key];
+  return typeof value === "string" || value === null ? value : undefined;
+}
+
+function selectLegacyRetainedTaskResult(
+  completion: Record<string, unknown>,
+  primary: string | null | undefined,
+  fallback: string | null | undefined,
+): string | null {
+  const terminalReply = normalizeAgentRunTerminalReplySnapshot(completion.terminalReply);
+  if (terminalReply) {
+    return terminalReply.disposition === "visible" ? terminalReply.text : null;
+  }
+  return selectDeliverableSessionsReply(primary, fallback) ?? null;
+}
+
+/** Promote shipped retained results before runtime hydrates canonical subagent/task state. */
+export function repairLegacySubagentRetainedResults(db: DatabaseSync): void {
+  if (
+    !tableExists(db, "subagent_runs") ||
+    !tableHasColumn(db, "subagent_runs", "pending_final_delivery_payload_json") ||
+    !tableHasColumn(db, "subagent_runs", "frozen_result_text") ||
+    !tableHasColumn(db, "subagent_runs", "fallback_frozen_result_text")
+  ) {
+    return;
+  }
+  const repair = () => {
+    const rows = db
+      .prepare(
+        `SELECT run_id, payload_json, pending_final_delivery_payload_json,
+                frozen_result_text, fallback_frozen_result_text
+           FROM subagent_runs`,
+      )
+      .all() as LegacyRetainedResultRow[];
+    const updateRun = db.prepare(
+      `UPDATE subagent_runs
+          SET payload_json = ?,
+              pending_final_delivery_payload_json = ?,
+              frozen_result_text = ?,
+              fallback_frozen_result_text = ?
+        WHERE run_id = ?`,
+    );
+    const canProjectTasks =
+      tableExists(db, "task_runs") && tableHasColumn(db, "task_runs", "progress_summary");
+    const updateTask = canProjectTasks
+      ? db.prepare(
+          `UPDATE task_runs
+              SET progress_summary = ?
+            WHERE runtime = 'subagent'
+              AND run_id = ?
+              AND (progress_summary IS NULL
+                OR trim(progress_summary) = ''
+                OR (? IS NOT NULL AND trim(progress_summary) = ?))`,
+        )
+      : undefined;
+
+    for (const row of rows) {
+      const payload = parseJsonRecord(row.payload_json);
+      const completion = payload ? recordField(payload, "completion") : null;
+      if (!payload || !completion) {
+        continue;
+      }
+      const delivery = recordField(payload, "delivery");
+      const deliveryPayload = delivery ? recordField(delivery, "payload") : null;
+      const pendingPayload = row.pending_final_delivery_payload_json
+        ? parseJsonRecord(row.pending_final_delivery_payload_json)
+        : null;
+      const hasLegacyResult = Boolean(
+        (deliveryPayload &&
+          (Object.hasOwn(deliveryPayload, "frozenResultText") ||
+            Object.hasOwn(deliveryPayload, "fallbackFrozenResultText"))) ||
+        (pendingPayload &&
+          (Object.hasOwn(pendingPayload, "frozenResultText") ||
+            Object.hasOwn(pendingPayload, "fallbackFrozenResultText"))),
+      );
+      if (!hasLegacyResult) {
+        continue;
+      }
+      const legacyPrimary =
+        nullableTextValue(deliveryPayload, "frozenResultText") ??
+        nullableTextValue(pendingPayload, "frozenResultText");
+      const legacyFallback =
+        nullableTextValue(deliveryPayload, "fallbackFrozenResultText") ??
+        nullableTextValue(pendingPayload, "fallbackFrozenResultText");
+      if (nullableTextValue(completion, "resultText") == null && legacyPrimary !== undefined) {
+        completion.resultText = legacyPrimary;
+      }
+      if (
+        nullableTextValue(completion, "fallbackResultText") == null &&
+        legacyFallback !== undefined
+      ) {
+        completion.fallbackResultText = legacyFallback;
+      }
+      delete deliveryPayload?.frozenResultText;
+      delete deliveryPayload?.fallbackFrozenResultText;
+      delete pendingPayload?.frozenResultText;
+      delete pendingPayload?.fallbackFrozenResultText;
+      const primary = nullableTextValue(completion, "resultText");
+      const fallback = nullableTextValue(completion, "fallbackResultText");
+      updateRun.run(
+        JSON.stringify(payload),
+        pendingPayload ? JSON.stringify(pendingPayload) : row.pending_final_delivery_payload_json,
+        typeof primary === "string" ? primary : null,
+        typeof fallback === "string" ? fallback : null,
+        row.run_id,
+      );
+      const taskRunId = textField(payload, "taskRunId") ?? row.run_id;
+      const terminalReply = normalizeAgentRunTerminalReplySnapshot(completion.terminalReply);
+      const taskResult = selectLegacyRetainedTaskResult(completion, primary, fallback);
+      if (updateTask && (taskResult || terminalReply)) {
+        const retainedPrimary = primary?.trim() || null;
+        updateTask.run(taskResult, taskRunId, retainedPrimary, retainedPrimary);
+      }
+    }
+  };
+  if (db.isTransaction) {
+    repair();
+    return;
+  }
+  runSqliteImmediateTransactionSync(db, repair);
+}
+
+/** Canonicalize shipped subagent rows whose pause/kill owner only wrote root terminal fields. */
+export function repairLegacySubagentExecutionPayloads(db: DatabaseSync): void {
+  if (!tableExists(db, "subagent_runs")) {
+    return;
+  }
+  db.exec(`
+    UPDATE subagent_runs
+    SET payload_json = json_remove(
+      CASE
+        WHEN json_extract(payload_json, '$.pauseReason') = 'sessions_yield'
+          AND json_extract(payload_json, '$.execution.status') <> 'terminal'
+          AND json_type(payload_json, '$.endedAt') IN ('integer', 'real')
+        THEN json_remove(json_set(
+          payload_json,
+          '$.execution.status', 'terminal',
+          '$.execution.endedAt', json_extract(payload_json, '$.endedAt')
+        ), '$.execution.outcome')
+        WHEN (json_type(payload_json, '$.killReconciliation') = 'object'
+          OR json_extract(payload_json, '$.endedReason') = 'subagent-killed')
+          AND json_extract(payload_json, '$.execution.status') <> 'terminal'
+          AND json_type(payload_json, '$.endedAt') IN ('integer', 'real')
+          AND json_type(payload_json, '$.outcome') = 'object'
+        THEN json_set(
+          payload_json,
+          '$.execution.status', 'terminal',
+          '$.execution.endedAt', json_extract(payload_json, '$.endedAt'),
+          '$.execution.outcome', json_extract(payload_json, '$.outcome')
+        )
+        ELSE payload_json
+      END,
+      '$.startedAt', '$.endedAt', '$.outcome'
+    )
+    WHERE json_valid(payload_json)
+      AND (json_type(payload_json, '$.startedAt') IS NOT NULL
+        OR json_type(payload_json, '$.endedAt') IS NOT NULL
+        OR json_type(payload_json, '$.outcome') IS NOT NULL);
+  `);
+}
+
+/** Canonicalize the shipped suspension reason before runtime hydrates subagent state. */
+export function repairLegacySubagentSuspensionReasons(db: DatabaseSync): void {
+  if (!tableExists(db, "subagent_runs")) {
+    return;
+  }
+  // v2026.6.34 persisted retry-limit; remove this backfill after its 7-day retention window.
+  db.exec(`
+    UPDATE subagent_runs
+    SET payload_json = json_set(payload_json, '$.delivery.suspendedReason', 'permanent_failure')
+    WHERE json_valid(payload_json)
+      AND json_extract(payload_json, '$.delivery.suspendedReason') = 'retry-limit';
+  `);
+}
+
 export function backfillAcpReplayEstimatedBytes(db: DatabaseSync): void {
   if (
     !tableExists(db, "acp_replay_events") ||
@@ -184,14 +377,7 @@ export function backfillCronRunLogEntryJson(db: DatabaseSync): void {
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
-  }
+  return safeParseJsonRecord(value) ?? null;
 }
 
 function textField(record: Record<string, unknown>, key: string): string | null {
@@ -200,15 +386,11 @@ function textField(record: Record<string, unknown>, key: string): string | null 
 }
 
 function numberField(record: Record<string, unknown>, key: string): number | null {
-  const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+  return asFiniteNumber(record[key]) ?? null;
 }
 
 function recordField(record: Record<string, unknown>, key: string): Record<string, unknown> | null {
-  const value = record[key];
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
+  return asNullableRecord(record[key]);
 }
 
 function jsonField(value: unknown): string | null {
@@ -477,11 +659,12 @@ export function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): voi
   ) {
     return;
   }
+  compactLegacyDeliveryQueueFailures(db);
   const rows = db
     .prepare(
       `SELECT queue_name, id, entry_json
          FROM delivery_queue_entries
-        WHERE status <> 'completed'
+        WHERE status = 'pending'
           AND (retry_count = 0
             OR last_attempt_at IS NULL
             OR last_error IS NULL
@@ -534,11 +717,11 @@ export function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): voi
       metadataStringField(entry, "accountId") ??
         (route ? metadataStringField(route, "accountId") : null) ??
         (deliveryContext ? metadataStringField(deliveryContext, "accountId") : null),
-      numberField(entry, "retryCount") ?? 0,
-      numberField(entry, "lastAttemptAt"),
+      asSafeIntegerInRange(entry.retryCount, { min: 0 }) ?? 0,
+      asSafeIntegerInRange(entry.lastAttemptAt, { min: 0 }) ?? null,
       metadataStringField(entry, "lastError"),
       metadataStringField(entry, "recoveryState"),
-      numberField(entry, "platformSendStartedAt"),
+      asSafeIntegerInRange(entry.platformSendStartedAt, { min: 0 }) ?? null,
       row.queue_name,
       row.id,
     );

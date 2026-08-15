@@ -1,23 +1,18 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import type { Page } from "playwright";
+import { expect, it } from "vitest";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI usage session filter Unicode",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not available at ${executablePath}`,
+});
+
 const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-
-let browser: Browser;
-let server: ControlUiE2eServer;
 
 const usageTotals = {
   input: 100,
@@ -109,20 +104,7 @@ async function captureProof(page: Page, name: string): Promise<void> {
   await page.locator(".usage-page").screenshot({ path: path.join(proofDir, name) });
 }
 
-describeControlUiE2e("Control UI usage session filter Unicode", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is not available at ${chromiumExecutablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it.each([
     {
       name: "surrogate pair at the truncation boundary",
@@ -143,54 +125,59 @@ describeControlUiE2e("Control UI usage session filter Unicode", () => {
       screenshot: "usage-session-ascii.png",
     },
   ])("preserves $name after a selected Gateway session disappears", async (scenario) => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.usage": usageResponse(scenario.key),
-        "usage.cost": costResponse(),
-        "usage.status": { updatedAt: Date.now(), providers: [] },
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
       },
-    });
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "sessions.usage": usageResponse(scenario.key),
+            "usage.cost": costResponse(),
+            "usage.status": { updatedAt: Date.now(), providers: [] },
+          },
+        });
 
-    try {
-      const response = await page.goto(`${server.baseUrl}usage`);
-      expect(response?.status()).toBe(200);
-      await expect
-        .poll(() => gateway.getRequests("sessions.usage"), { timeout: 10_000 })
-        .not.toHaveLength(0);
+        const response = await page.goto(`${suite.server.baseUrl}usage`);
+        expect(response?.status()).toBe(200);
+        await expect
+          .poll(() => gateway.getRequests("sessions.usage"), { timeout: 10_000 })
+          .not.toHaveLength(0);
 
-      const row = page.locator(".session-bar-row").filter({ hasText: scenario.key });
-      await expect.poll(() => row.count(), { timeout: 10_000 }).toBe(1);
-      await row.click();
+        const row = page.locator(".session-bar-row").filter({ hasText: scenario.key });
+        await expect.poll(() => row.count(), { timeout: 10_000 }).toBe(1);
+        const select = row.getByRole("button", { name: scenario.key, exact: true });
+        expect(await select.getAttribute("aria-pressed")).toBe("false");
+        await select.focus();
+        await page.keyboard.press("Shift+Enter");
+        await expect.poll(() => select.getAttribute("aria-pressed")).toBe("true");
 
-      const chip = page.locator(".filter-chip").filter({ has: page.locator(".filter-chip-label") });
-      const label = chip.locator(".filter-chip-label");
-      await expect.poll(() => label.textContent(), { timeout: 10_000 }).toContain(scenario.key);
-      await expect.poll(() => chip.getAttribute("title")).toBe(scenario.key);
+        const chip = page
+          .locator(".filter-chip")
+          .filter({ has: page.locator(".filter-chip-label") });
+        const label = chip.locator(".filter-chip-label");
+        await expect.poll(() => label.textContent(), { timeout: 10_000 }).toContain(scenario.key);
+        await expect.poll(() => chip.getAttribute("title")).toBe(scenario.key);
 
-      const previousRequests = (await gateway.getRequests("sessions.usage")).length;
-      await gateway.setMethodResponse("sessions.usage", usageResponse());
-      await page
-        .locator("openclaw-usage-page")
-        .getByRole("button", { name: "Refresh", exact: true })
-        .click();
-      await expect
-        .poll(() => gateway.getRequests("sessions.usage"), { timeout: 10_000 })
-        .toHaveLength(previousRequests + 1);
+        const previousRequests = (await gateway.getRequests("sessions.usage")).length;
+        await gateway.setMethodResponse("sessions.usage", usageResponse());
+        await page
+          .locator("openclaw-usage-page")
+          .getByRole("button", { name: "Refresh", exact: true })
+          .click();
+        await expect
+          .poll(() => gateway.getRequests("sessions.usage"), { timeout: 10_000 })
+          .toHaveLength(previousRequests + 1);
 
-      await captureProof(page, scenario.screenshot);
-      await expect.poll(() => chip.getAttribute("title")).toBe(scenario.key);
-      await expect.poll(() => label.textContent()).toBe(`Session: ${scenario.truncated}`);
-      const renderedLabel = (await label.textContent()) ?? "";
-      expect((renderedLabel as string & { isWellFormed(): boolean }).isWellFormed()).toBe(true);
-      expect(renderedLabel).not.toContain("�");
-    } finally {
-      await context.close();
-    }
+        await captureProof(page, scenario.screenshot);
+        await expect.poll(() => chip.getAttribute("title")).toBe(scenario.key);
+        await expect.poll(() => label.textContent()).toBe(`Session: ${scenario.truncated}`);
+        const renderedLabel = (await label.textContent()) ?? "";
+        expect((renderedLabel as string & { isWellFormed(): boolean }).isWellFormed()).toBe(true);
+        expect(renderedLabel).not.toContain("�");
+      },
+    );
   });
 });

@@ -1,5 +1,14 @@
 import type { MediaKind } from "@openclaw/media-core/constants";
-import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import {
+  getFileExtension,
+  kindFromMime,
+  mimeTypeFromFilePath,
+  normalizeMimeType,
+} from "@openclaw/media-core/mime";
+import {
+  asFiniteNumberInRange,
+  asPositiveSafeInteger as normalizePositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PromptImageOrderEntry } from "./prompt-image-order.js";
 
@@ -32,7 +41,7 @@ export type MediaFactInput = {
 const RUNTIME_PROMPT_MEDIA_FACTS = Symbol.for("openclaw.runtimePromptMediaFacts");
 
 function normalizeNonNegativeNumber(value: number | null | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  return asFiniteNumberInRange(value, { min: 0 });
 }
 
 /** Attaches facts to a runtime prompt message without changing serialized/model-visible bytes. */
@@ -274,37 +283,52 @@ export function readRuntimePromptImageOrder(message: object): PromptImageOrderEn
   return Array.isArray(imageOrder) ? (imageOrder as PromptImageOrderEntry[]) : undefined;
 }
 
-/** Returns whether a fact can produce native image input. */
-export function isImageMediaFact(fact: MediaFactInput): boolean {
+/** Returns whether a declared MIME only describes otherwise unclassified binary bytes. */
+export function isGenericBinaryMediaContentType(contentType?: string | null): boolean {
+  const normalizedContentType = normalizeMimeType(contentType);
+  return (
+    normalizedContentType === "application/octet-stream" ||
+    normalizedContentType === "binary/octet-stream"
+  );
+}
+
+function classifyMediaFact(fact: MediaFactInput): MediaKind | undefined {
   if (fact.kind && fact.kind !== "unknown") {
-    return fact.kind === "image" || fact.kind === "sticker";
+    return fact.kind;
   }
-  const contentType = normalizeOptionalString(fact.contentType);
-  const normalizedContentType = contentType?.split(";")[0]?.trim().toLowerCase();
-  if (
-    normalizedContentType &&
-    normalizedContentType !== "application/octet-stream" &&
-    normalizedContentType !== "binary/octet-stream"
-  ) {
+  const normalizedContentType = normalizeMimeType(fact.contentType);
+  if (normalizedContentType && !isGenericBinaryMediaContentType(normalizedContentType)) {
     const mimeKind = kindFromMime(normalizedContentType);
     if (mimeKind) {
-      return mimeKind === "image";
+      return mimeKind;
     }
-    // Legacy channel-mode projections persist bare kinds as MediaType; honor
-    // them, and fall through to filename inference for other unknown strings.
-    if (normalizedContentType === "image" || normalizedContentType === "sticker") {
-      return true;
-    }
-    if (
-      normalizedContentType === "audio" ||
-      normalizedContentType === "video" ||
-      normalizedContentType === "document"
-    ) {
-      return false;
-    }
+    // Legacy channel-mode projections persist bare image or sticker kind as MediaType.
+    return LEGACY_MEDIA_KINDS.has(normalizedContentType as MediaKind)
+      ? (normalizedContentType as MediaKind)
+      : undefined;
   }
   const pathValue = normalizeOptionalString(fact.path) ?? normalizeOptionalString(fact.url);
-  return kindFromMime(mimeTypeFromFilePath(pathValue)) === "image";
+  const inferredMime = mimeTypeFromFilePath(pathValue);
+  if (inferredMime === "image/svg+xml") {
+    return undefined;
+  }
+  const inferredKind = kindFromMime(inferredMime);
+  if (inferredKind) {
+    return inferredKind;
+  }
+  const extension = getFileExtension(pathValue);
+  return extension === ".tif" || extension === ".tiff" ? "image" : undefined;
+}
+
+/** Returns whether a fact can produce native image input. */
+export function isImageMediaFact(fact: MediaFactInput): boolean {
+  const kind = classifyMediaFact(fact);
+  return kind === "image" || kind === "sticker";
+}
+
+/** Returns whether a fact can produce native video input. */
+export function isVideoMediaFact(fact: MediaFactInput): boolean {
+  return classifyMediaFact(fact) === "video";
 }
 
 type MediaFactDefaults<TInput extends MediaFactInput = MediaFactInput> = {
@@ -313,10 +337,6 @@ type MediaFactDefaults<TInput extends MediaFactInput = MediaFactInput> = {
   workspaceDir?: string;
   transcribed?: (media: TInput, index: number) => boolean;
 };
-
-function normalizePositiveInteger(value: number | null | undefined): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
 
 export type MediaFactLegacyProjection = {
   /** @deprecated Use `media[0]?.path`. */
@@ -355,7 +375,10 @@ function normalizeMediaFact<TInput extends MediaFactInput>(
     path: normalizeOptionalString(media.path),
     url: normalizeOptionalString(media.url),
     contentType,
-    kind: media.kind ?? defaults.kind ?? kindFromMime(contentType),
+    kind:
+      media.kind ??
+      defaults.kind ??
+      (isGenericBinaryMediaContentType(contentType) ? undefined : kindFromMime(contentType)),
     fileName: normalizeOptionalString(media.fileName),
     sizeBytes: normalizeNonNegativeNumber(media.sizeBytes),
     ...(durationMs ? { durationMs } : {}),

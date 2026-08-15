@@ -1,3 +1,4 @@
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 /**
  * Extracts visible delivery evidence from embedded-agent run results.
@@ -85,6 +86,16 @@ export function hasCompletedSourceReplyDeliveryEvidence(
   );
 }
 
+/** Returns whether messaging-tool evidence completes the current source reply. */
+export function hasCompletedMessagingToolDeliveryEvidence(
+  result: AgentDeliveryEvidence & SourceReplyDeliveryEvidence & ExplicitFinalSourceReplyEvidence,
+): boolean {
+  return (
+    resolveExplicitFinalSourceReplyDeliveryEvidence(result) ??
+    hasMessagingToolDeliveryEvidence(result)
+  );
+}
+
 /** Returns whether delivery evidence completes the current interactive turn. */
 export function hasCompletedTerminalDeliveryEvidence(
   result: AgentDeliveryEvidence & SourceReplyDeliveryEvidence & ExplicitFinalSourceReplyEvidence,
@@ -95,10 +106,6 @@ export function hasCompletedTerminalDeliveryEvidence(
     (explicitFinal === undefined && hasVisibleOutboundDeliveryEvidence(result)) ||
     result.didSendDeterministicApprovalPrompt === true
   );
-}
-
-function hasNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 function hasNonEmptyArray(value: unknown): boolean {
@@ -338,13 +345,6 @@ export function hasCompleteAutomaticMediaDeliveryOutcomeEvidence(
   });
 }
 
-/** Returns whether per-payload automatic delivery evidence is present. */
-export function hasPayloadDeliveryOutcomes(
-  result: Pick<AgentDeliveryEvidence, "deliveryStatus">,
-): boolean {
-  return getPayloadDeliveryOutcomes(result) !== undefined;
-}
-
 /** Returns whether any automatic payload was sent or may have committed before failure. */
 export function hasPayloadOutcomeSendEvidence(
   result: Pick<AgentDeliveryEvidence, "deliveryStatus">,
@@ -358,64 +358,6 @@ export function hasPayloadOutcomeSendEvidence(
       return normalizeEvidenceStatus(record.status) === "sent" || record.sentBeforeError === true;
     }) === true
   );
-}
-
-/** Returns whether a failed payload may have committed before reporting its error. */
-export function hasAmbiguousPayloadSendBeforeError(
-  result: Pick<AgentDeliveryEvidence, "deliveryStatus">,
-): boolean {
-  return (
-    getPayloadDeliveryOutcomes(result)?.some(
-      (outcome) =>
-        Boolean(outcome && typeof outcome === "object" && !Array.isArray(outcome)) &&
-        normalizeEvidenceStatus((outcome as Record<string, unknown>).status) === "failed" &&
-        (outcome as Record<string, unknown>).sentBeforeError === true,
-    ) === true
-  );
-}
-
-/** Returns whether a partial send lacks one valid outcome for every payload. */
-export function hasIncompletePartialPayloadOutcomeEvidence(
-  result: Pick<AgentDeliveryEvidence, "deliveryStatus" | "payloads">,
-): boolean {
-  const deliveryStatus = getPayloadDeliveryStatusRecord(result);
-  if (normalizeEvidenceStatus(deliveryStatus?.status) !== "partial_failed") {
-    return false;
-  }
-  const payloads = Array.isArray(result.payloads) ? result.payloads : [];
-  const outcomes = getPayloadDeliveryOutcomes(result);
-  if (!outcomes || payloads.length === 0 || outcomes.length !== payloads.length) {
-    return true;
-  }
-  const seenIndexes = new Set<number>();
-  for (const outcome of outcomes) {
-    if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) {
-      return true;
-    }
-    const record = outcome as Record<string, unknown>;
-    const index =
-      typeof record.index === "number" && Number.isInteger(record.index) ? record.index : undefined;
-    const status = normalizeEvidenceStatus(record.status);
-    if (
-      index === undefined ||
-      index < 0 ||
-      index >= payloads.length ||
-      seenIndexes.has(index) ||
-      (status !== "sent" && status !== "suppressed" && status !== "failed") ||
-      (status === "failed" && typeof record.sentBeforeError !== "boolean")
-    ) {
-      return true;
-    }
-    seenIndexes.add(index);
-  }
-  return seenIndexes.size !== payloads.length;
-}
-
-/** Returns whether aggregate automatic delivery was intentionally suppressed. */
-export function hasSuppressedPayloadDeliveryStatus(
-  result: Pick<AgentDeliveryEvidence, "deliveryStatus">,
-): boolean {
-  return normalizeEvidenceStatus(getPayloadDeliveryStatusRecord(result)?.status) === "suppressed";
 }
 
 function hasPositiveNumber(value: unknown): boolean {
@@ -584,13 +526,22 @@ export function hasVisibleOutboundDeliveryEvidence(result: AgentDeliveryEvidence
   );
 }
 
+/** Returns whether committed non-messaging resource effects make replay unsafe. */
+function hasCommittedNonMessagingOutboundDeliveryEvidence(
+  result: Pick<AgentDeliveryEvidence, "acceptedSessionSpawns" | "successfulCronAdds">,
+): boolean {
+  return (
+    (Array.isArray(result.acceptedSessionSpawns) &&
+      hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
+    hasPositiveNumber(result.successfulCronAdds)
+  );
+}
+
 /** Returns whether committed outbound evidence makes replay unsafe. */
 export function hasCommittedOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
   return (
     hasMessagingToolDeliveryEvidence(result) ||
-    (Array.isArray(result.acceptedSessionSpawns) &&
-      hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
-    hasPositiveNumber(result.successfulCronAdds)
+    hasCommittedNonMessagingOutboundDeliveryEvidence(result)
   );
 }
 

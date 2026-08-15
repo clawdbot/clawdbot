@@ -1,3 +1,4 @@
+import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   clearPersistedContextEngineQuarantineForProcess,
@@ -13,7 +14,6 @@ type ContextEngineRuntimeQuarantineForTests = {
 };
 
 type ContextEngineRegistryStateForTests = {
-  engines: Map<string, unknown>;
   quarantinedEngines: Map<string, ContextEngineRuntimeQuarantineForTests>;
 };
 
@@ -22,19 +22,20 @@ const CONTEXT_ENGINE_REGISTRY_STATE = Symbol.for("openclaw.contextEngineRegistry
 function getContextEngineRegistryStateForTests(): ContextEngineRegistryStateForTests {
   return resolveGlobalSingleton<ContextEngineRegistryStateForTests>(
     CONTEXT_ENGINE_REGISTRY_STATE,
-    () => ({ engines: new Map(), quarantinedEngines: new Map() }),
+    () => ({ quarantinedEngines: new Map() }),
   );
 }
 
 export function captureContextEngineRegistryStateForTests(): () => void {
   const state = getContextEngineRegistryStateForTests();
-  const engines = new Map(state.engines);
+  const registry = requireActivePluginRegistry();
+  const engines = new Map(registry.contextEngines);
   const quarantinedEngines = new Map(state.quarantinedEngines);
 
   return () => {
-    state.engines.clear();
+    registry.contextEngines.clear();
     for (const [engineId, registration] of engines) {
-      state.engines.set(engineId, registration);
+      registry.contextEngines.set(engineId, registration as never);
     }
 
     state.quarantinedEngines.clear();

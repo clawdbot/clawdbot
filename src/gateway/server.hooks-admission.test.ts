@@ -1,5 +1,6 @@
 /** Focused HTTP coverage for hook admission feedback and pending replay behavior. */
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import {
@@ -43,14 +44,6 @@ async function waitForCronIsolatedRuns(count: number): Promise<void> {
     .toBe(count);
 }
 
-function createDeferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((innerResolve) => {
-    resolve = innerResolve;
-  });
-  return { promise, resolve };
-}
-
 async function waitForDuplicateRequest(): Promise<void> {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, 25);
@@ -58,6 +51,52 @@ async function waitForDuplicateRequest(): Promise<void> {
 }
 
 describe("gateway hook admission", () => {
+  test("shares one pending persistent dispatch without losing its session target", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:"],
+    };
+    await withGatewayServer(async ({ port }) => {
+      const runnerAdmission = createDeferred();
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockImplementationOnce(async (params: unknown) => {
+        expect((params as { job?: { sessionTarget?: string } }).job?.sessionTarget).toBe(
+          "session:hook:admission:shared",
+        );
+        await runnerAdmission.promise;
+        (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
+        return { status: "ok", summary: "done" };
+      });
+      const request = () =>
+        postHook(
+          port,
+          "/hooks/agent",
+          {
+            message: "Dispatch",
+            sessionKey: "hook:admission:shared",
+            sessionMode: "persistent",
+          },
+          "pending-persistent-idem",
+        );
+
+      const firstResponse = request();
+      await waitForCronIsolatedRuns(1);
+      const duplicateResponse = request();
+      await waitForDuplicateRequest();
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      runnerAdmission.resolve();
+
+      const [first, duplicate] = await Promise.all([firstResponse, duplicateResponse]);
+      expect(first.status).toBe(200);
+      expect(duplicate.status).toBe(200);
+      const firstBody = (await first.json()) as { runId?: string };
+      const duplicateBody = (await duplicate.json()) as { runId?: string };
+      expect(duplicateBody.runId).toBe(firstBody.runId);
+    });
+  });
+
   test("shares one pending direct dispatch across simultaneous duplicates", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     await withGatewayServer(async ({ port }) => {

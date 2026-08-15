@@ -113,6 +113,66 @@ struct GatewayErrorsTests {
         #expect(problem.actionLabelPresentation == .verbatim("Custom gateway action"))
     }
 
+    @Test func `typed and textual transport errors share exact problem facts`() throws {
+        let typedCases: [(URLError.Code, GatewayConnectionProblem.Kind)] = [
+            (.timedOut, .timeout),
+            (.cannotConnectToHost, .connectionRefused),
+            (.cannotFindHost, .reachabilityFailed),
+            (.dnsLookupFailed, .reachabilityFailed),
+            (.notConnectedToInternet, .reachabilityFailed),
+            (.networkConnectionLost, .reachabilityFailed),
+            (.internationalRoamingOff, .reachabilityFailed),
+            (.callIsActive, .reachabilityFailed),
+            (.dataNotAllowed, .reachabilityFailed),
+            (.cancelled, .websocketCancelled),
+        ]
+        for (code, kind) in typedCases {
+            let rawMessage = "typed \(code.rawValue)"
+            let error = NSError(
+                domain: URLError.errorDomain,
+                code: code.rawValue,
+                userInfo: [NSLocalizedDescriptionKey: rawMessage])
+            let problem = try #require(GatewayConnectionProblemMapper.map(error: error))
+            #expect(problem == Self.transportProblem(kind: kind, technicalDetails: rawMessage))
+        }
+
+        let textCases: [(String, GatewayConnectionProblem.Kind)] = [
+            ("gateway timed out", .timeout),
+            ("connection refused", .connectionRefused),
+            ("request refused", .connectionRefused),
+            ("cannot find host", .reachabilityFailed),
+            ("could not connect", .reachabilityFailed),
+            ("network is unreachable", .reachabilityFailed),
+            ("operation cancelled", .websocketCancelled),
+            ("operation canceled", .websocketCancelled),
+        ]
+        for (rawMessage, kind) in textCases {
+            let error = NSError(
+                domain: "GatewayTransport",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: rawMessage])
+            let problem = try #require(GatewayConnectionProblemMapper.map(error: error))
+            #expect(problem == Self.transportProblem(kind: kind, technicalDetails: rawMessage))
+        }
+    }
+
+    @Test func `URL error codes remain domain gated before text fallback`() throws {
+        let wrongDomain = NSError(
+            domain: "GatewayTransport",
+            code: URLError.timedOut.rawValue,
+            userInfo: [NSLocalizedDescriptionKey: "neutral failure"])
+        #expect(GatewayConnectionProblemMapper.map(error: wrongDomain) == nil)
+
+        let textualFallback = NSError(
+            domain: "GatewayTransport",
+            code: URLError.timedOut.rawValue,
+            userInfo: [NSLocalizedDescriptionKey: "connection refused"])
+        let problem = try #require(GatewayConnectionProblemMapper.map(error: textualFallback))
+        #expect(problem == Self.transportProblem(
+            kind: .connectionRefused,
+            technicalDetails: "connection refused"))
+    }
+
     @Test func `protocol mismatch maps older app to update problem`() {
         let error = GatewayConnectAuthError(
             message: "protocol mismatch",
@@ -361,6 +421,44 @@ struct GatewayErrorsTests {
 
         #expect(problem?.kind == .tlsPinMismatch)
         #expect(problem?.canTrustRotatedCertificate == false)
+    }
+
+    private static let troubleshootingDocs = "https://docs.openclaw.ai/gateway/troubleshooting"
+
+    private static func transportProblem(
+        kind: GatewayConnectionProblem.Kind,
+        technicalDetails: String) -> GatewayConnectionProblem
+    {
+        let facts: (title: String, message: String, actionLabel: String)
+        switch kind {
+        case .timeout:
+            facts = ("Connection timed out", "The gateway did not respond before the connection timed out.", "Retry")
+        case .connectionRefused:
+            facts = (
+                "Gateway refused the connection",
+                "The gateway host was reachable, but it refused the connection.",
+                "Retry")
+        case .reachabilityFailed:
+            facts = (
+                "Gateway is not reachable", "OpenClaw could not reach the gateway over the current network.",
+                "Check network")
+        case .websocketCancelled:
+            facts = (
+                "Connection interrupted", "The connection to the gateway was interrupted before setup completed.",
+                "Retry")
+        default:
+            preconditionFailure("Unexpected transport problem kind")
+        }
+        return GatewayConnectionProblem(
+            kind: kind,
+            owner: .network,
+            title: facts.title,
+            message: facts.message,
+            actionLabel: facts.actionLabel,
+            docsURL: URL(string: Self.troubleshootingDocs),
+            retryable: true,
+            pauseReconnect: false,
+            technicalDetails: technicalDetails)
     }
 }
 

@@ -1,6 +1,6 @@
 /** Composes queued admission, canonical execution, accounting, and delivery. */
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import { clearAgentRunContext } from "../../infra/agent-events.js";
+import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { accountFollowupTurn } from "./agent-runner-result-accounting.js";
@@ -119,11 +119,15 @@ export function createFollowupRunner(
         await defaults.opts?.onObservedReplyDelivery?.();
       }
       const accounting = await accountFollowupTurn({ turn, defaults, execution });
+      const deliveryOpts = {
+        ...defaults.opts,
+        commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
+      };
       const decision = resolveFollowupDeliveryDecision({
         turn,
         execution: execution.execution,
         accounting,
-        opts: defaults.opts,
+        opts: deliveryOpts,
       });
       await deliverFollowupDecision({
         decision,

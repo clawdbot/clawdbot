@@ -1,5 +1,10 @@
-import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
+import {
+  MODEL_SELECTION_LOCKED_MESSAGE,
+  resolvePersistedSessionRuntimeId,
+} from "openclaw/plugin-sdk/model-session-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import type { CodexComputerUseSetupParams } from "./app-server/computer-use.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
@@ -7,12 +12,10 @@ import {
   resolveCodexNativeExecutionBlock,
   resolveCodexNativeSandboxBlock,
 } from "./app-server/sandbox-guard.js";
+import { sessionBindingIdentity } from "./app-server/session-binding.js";
+import { isSameCodexAppServerThreadOwner } from "./app-server/thread-ownership.js";
 import { canMutateCodexHost } from "./command-authorization.js";
-import {
-  formatCodexDisplayText,
-  formatComputerUseStatus,
-  readString,
-} from "./command-formatters.js";
+import { formatCodexDisplayText, formatComputerUseStatus } from "./command-formatters.js";
 import {
   formatComputerUsePersistentIdentityMigration,
   parseBindArgs,
@@ -259,8 +262,8 @@ function formatNativeGoal(response: JsonValue | undefined): string {
   if (!goal) {
     return "No Codex goal is active.";
   }
-  const objective = readString(goal, "objective") ?? "unknown";
-  const status = readString(goal, "status") ?? "unknown";
+  const objective = normalizeOptionalString(goal.objective) ?? "unknown";
+  const status = normalizeOptionalString(goal.status) ?? "unknown";
   const tokensUsed = typeof goal.tokensUsed === "number" ? goal.tokensUsed : 0;
   const tokenBudget = typeof goal.tokenBudget === "number" ? goal.tokenBudget : undefined;
   return [
@@ -331,9 +334,23 @@ export async function setConversationModel(
     return "Cannot set Codex model because this command did not include a stable binding identity.";
   }
   if (!normalized) {
+    const currentSession =
+      ctx.sessionId && ctx.sessionKey
+        ? getSessionEntry({
+            storePath: resolveStorePath(ctx.config.session?.store, { agentId: target.agentId }),
+            sessionKey: ctx.sessionKey,
+            hydrateSkillPromptRefs: false,
+            readConsistency: "latest",
+          })
+        : undefined;
+    const selectedModel =
+      currentSession && currentSession.sessionId === ctx.sessionId
+        ? currentSession.modelOverride
+        : undefined;
     const binding = await deps.bindingStore.read(target.identity);
-    return binding?.model
-      ? `Codex model: ${formatCodexDisplayText(binding.model)}`
+    const activeModel = selectedModel ?? binding?.model;
+    return activeModel
+      ? `Codex model: ${formatCodexDisplayText(activeModel)}`
       : "Usage: /codex model <model>";
   }
   return await deps.setCodexConversationModel({
@@ -343,6 +360,15 @@ export async function setConversationModel(
     model: normalized,
     agentDir: target.agentDir,
     config: ctx.config,
+    ...(ctx.sessionId && ctx.sessionKey
+      ? {
+          session: {
+            agentId: target.agentId,
+            sessionId: ctx.sessionId,
+            sessionKey: ctx.sessionKey,
+          },
+        }
+      : {}),
   });
 }
 
@@ -401,17 +427,63 @@ export async function startThreadAction(
   kind: "compact" | "review",
   args: string[],
 ): Promise<string> {
-  const label = kind === "compact" ? "compaction" : "review";
   if (args.length > 0) {
-    return `Usage: /codex ${label === "compaction" ? "compact" : label}`;
+    return `Usage: /codex ${kind}`;
   }
   const target = await resolveControlTarget(ctx);
   if (!target) {
-    return `Cannot start Codex ${label} because this command did not include a stable binding identity.`;
+    return `Cannot start Codex ${kind === "compact" ? "compaction" : "review"} because this command did not include a stable binding identity.`;
   }
   const binding = await deps.bindingStore.read(target.identity);
   if (!binding?.threadId) {
     return `No Codex thread is attached to this OpenClaw session yet.`;
+  }
+  if (kind === "compact") {
+    const sessionTarget = ctx.sessionTarget;
+    if (
+      !ctx.sessionId ||
+      !ctx.sessionKey ||
+      !sessionTarget ||
+      sessionTarget.sessionId !== ctx.sessionId ||
+      sessionTarget.sessionKey !== ctx.sessionKey
+    ) {
+      return "Codex compaction is unavailable because this command is not bound to a complete session identity.";
+    }
+    const currentSession = getSessionEntry({
+      storePath: sessionTarget.storePath,
+      sessionKey: ctx.sessionKey,
+      hydrateSkillPromptRefs: false,
+      readConsistency: "latest",
+    });
+    if (
+      currentSession?.sessionId !== ctx.sessionId ||
+      resolvePersistedSessionRuntimeId(currentSession) !== "codex"
+    ) {
+      return "Codex compaction is unavailable because the current OpenClaw session is not using the Codex runtime.";
+    }
+    if (target.identity.kind === "conversation") {
+      const sessionBinding = ctx.sessionId
+        ? await deps.bindingStore.read(
+            sessionBindingIdentity({
+              sessionId: ctx.sessionId,
+              sessionKey: ctx.sessionKey,
+              agentId: sessionTarget.agentId,
+              config: ctx.config,
+            }),
+          )
+        : undefined;
+      if (!isSameCodexAppServerThreadOwner(binding, sessionBinding)) {
+        return "Codex compaction is unavailable because the conversation-bound thread differs from the current session binding. Resume that thread into the session first.";
+      }
+    }
+    const compactCurrent = ctx.runtimeContext?.compactCurrent;
+    if (!compactCurrent) {
+      return "Codex compaction is unavailable because this command is not bound to a session.";
+    }
+    const result = await compactCurrent();
+    return result.compacted
+      ? `Compacted Codex session (${result.tokensAfter ?? "unknown"} tokens after).`
+      : `Codex compaction did not complete: ${formatCodexDisplayText(result.reason ?? "no reason returned")}.`;
   }
   const connection = resolveCodexBindingAppServerConnection({
     binding,
@@ -420,10 +492,8 @@ export async function startThreadAction(
   });
   await deps.codexControlRequest(
     pluginConfig,
-    kind === "compact" ? CODEX_CONTROL_METHODS.compact : CODEX_CONTROL_METHODS.review,
-    kind === "review"
-      ? { threadId: binding.threadId, target: { type: "uncommittedChanges" } }
-      : { threadId: binding.threadId },
+    CODEX_CONTROL_METHODS.review,
+    { threadId: binding.threadId, target: { type: "uncommittedChanges" } },
     {
       agentDir: target.agentDir,
       authProfileId: connection.clientAuthProfileId,
@@ -431,5 +501,5 @@ export async function startThreadAction(
       ...(connection.usesSupervisionConnection ? { startOptions: connection.appServer.start } : {}),
     },
   );
-  return `Started Codex ${label} for thread ${formatCodexDisplayText(binding.threadId)}.`;
+  return `Started Codex review for thread ${formatCodexDisplayText(binding.threadId)}.`;
 }

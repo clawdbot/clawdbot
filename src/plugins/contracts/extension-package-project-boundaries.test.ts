@@ -47,7 +47,7 @@ type PackageJson = {
 const MEMORY_HOST_SDK_EXPORTS = [
   "./engine-embeddings",
   "./engine-foundation",
-  "./engine-qmd",
+  "./engine-sessions",
   "./engine-storage",
   "./multimodal",
   "./query",
@@ -57,7 +57,9 @@ const MEMORY_HOST_SDK_EXPORTS = [
   "./status",
 ] as const;
 const MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES = [
+  "packages/memory-host-sdk/src/host/error-utils.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-auth.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-kysely.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-network.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime.ts",
@@ -141,7 +143,7 @@ describe("opt-in extension package boundaries", () => {
     });
   });
 
-  it("keeps path aliases in a dedicated shared config", () => {
+  it("keeps package boundaries and path aliases in shared configs", () => {
     const pathsConfig = readJsonFile<TsConfigJson>(EXTENSION_PACKAGE_BOUNDARY_PATHS_CONFIG);
     expect(pathsConfig.extends).toBe("../tsconfig.json");
     expect(pathsConfig.compilerOptions?.paths).toEqual(EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS);
@@ -150,7 +152,15 @@ describe("opt-in extension package boundaries", () => {
     expect(baseConfig.extends).toBe("./tsconfig.package-boundary.paths.json");
     expect(baseConfig.compilerOptions).toEqual({
       ignoreDeprecations: "6.0",
+      rootDir: "${configDir}",
     });
+    const asPackageRelativeTemplate = (entry: string) => entry.replace(/^\.\//u, "${configDir}/");
+    expect(baseConfig.include).toEqual(
+      EXTENSION_PACKAGE_BOUNDARY_INCLUDE.map(asPackageRelativeTemplate),
+    );
+    expect(baseConfig.exclude).toEqual(
+      EXTENSION_PACKAGE_BOUNDARY_EXCLUDE.map(asPackageRelativeTemplate),
+    );
   });
 
   it("keeps every opt-in extension rooted inside its package and on the package sdk", () => {
@@ -162,9 +172,9 @@ describe("opt-in extension package boundaries", () => {
     for (const extensionName of optInExtensions) {
       const tsconfig = readExtensionPackageBoundaryTsconfig(extensionName, REPO_ROOT);
       expect(isOptInExtensionPackageBoundaryTsconfig(tsconfig)).toBe(true);
-      expect(tsconfig.compilerOptions?.rootDir).toBe(".");
-      expect(tsconfig.include).toEqual([...EXTENSION_PACKAGE_BOUNDARY_INCLUDE]);
-      expect(tsconfig.exclude).toEqual([...EXTENSION_PACKAGE_BOUNDARY_EXCLUDE]);
+      expect(tsconfig.compilerOptions?.rootDir).toBeUndefined();
+      expect(tsconfig.include).toBeUndefined();
+      expect(tsconfig.exclude).toBeUndefined();
 
       const packageJson = readExtensionPackageBoundaryPackageJson(extensionName, REPO_ROOT);
       expect(packageJson.devDependencies?.["@openclaw/plugin-sdk"]).toBe("workspace:*");
@@ -217,12 +227,6 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./acp-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/acp-runtime.d.ts",
     );
-    expect(packageJson.exports?.["./channel-secret-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/channel-secret-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./channel-streaming"]?.types).toBe(
-      "./dist/src/plugin-sdk/channel-streaming.d.ts",
-    );
     expect(packageJson.exports?.["./cli-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/cli-runtime.d.ts",
     );
@@ -254,8 +258,8 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./provider-web-search-config-contract"]?.types).toBe(
       "./dist/src/plugin-sdk/provider-web-search-config-contract.d.ts",
     );
-    expect(packageJson.exports?.["./runtime-doctor"]?.types).toBe(
-      "./dist/src/plugin-sdk/runtime-doctor.d.ts",
+    expect(packageJson.exports?.["./runtime-env"]?.types).toBe(
+      "./dist/src/plugin-sdk/runtime-env.d.ts",
     );
     expect(packageJson.exports?.["./security-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/security-runtime.d.ts",
@@ -281,10 +285,6 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./infra-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/infra-runtime.d.ts",
     );
-    expect(packageJson.exports?.["./text-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/text-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./zod"]?.types).toBe("./dist/src/plugin-sdk/zod.d.ts");
     expect(fs.existsSync(resolve(REPO_ROOT, "packages/plugin-sdk/types/plugin-entry.d.ts"))).toBe(
       false,
     );

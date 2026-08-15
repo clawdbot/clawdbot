@@ -21,6 +21,7 @@ export type {
   ChannelIngressAccessGroupMembershipResolver,
   ChannelIngressCommandPresetInput,
   ChannelIngressConfigInput,
+  ChannelIngressContextBinding,
   ChannelIngressEventInput,
   ChannelIngressEventPresetInput,
   ChannelIngressIdentityDescriptor,
@@ -45,9 +46,81 @@ export type {
 } from "../channels/message-access/index.js";
 export type { ResolvedChannelImplicitMentions } from "../config/implicit-mentions.js";
 
-import type { ChannelIngressMonitorLifecycle } from "../channels/message/ingress-monitor.js";
+import {
+  createChannelIngressMonitor,
+  type ChannelIngressMonitorDrainOptions,
+  type ChannelIngressMonitorFacts,
+  type ChannelIngressMonitorLifecycle,
+  type ChannelIngressMonitorPayloadCodec,
+  type CreateChannelIngressMonitorOptions,
+} from "../channels/message/ingress-monitor.js";
 
 type ChannelIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
+
+type StandardRawEventPayload = { version: 1; rawEvent: string };
+type StandardRawEventAdmission<TInspection> =
+  | { kind: "invalid"; message: string }
+  | { kind: "durable" | (null extends TInspection ? "ignored" : never) };
+type StandardRawEventIngressOptions<TRaw, TMetadata, TInspection> = Omit<
+  CreateChannelIngressMonitorOptions<TRaw, string, StandardRawEventPayload, TMetadata>,
+  "admissionMode" | "drain" | "inspect" | "payload" | "pollIntervalMs" | "retention"
+> & {
+  inspect: (raw: TRaw) => TInspection;
+  payload: Omit<
+    ChannelIngressMonitorPayloadCodec<TRaw, string, StandardRawEventPayload, TMetadata>,
+    "storage" | "version"
+  >;
+  pollIntervalMs?: number;
+  drain?: Omit<ChannelIngressMonitorDrainOptions<StandardRawEventPayload, TMetadata>, "startLimit">;
+  classifyAdmissionError: (error: unknown) => string | undefined;
+};
+
+/** Version-1 raw events, 500 ms polling, eight deliveries, and standard retention. */
+export function createStandardRawEventIngressMonitor<
+  TRaw,
+  TMetadata,
+  TInspection extends ChannelIngressMonitorFacts | null,
+>(options: StandardRawEventIngressOptions<TRaw, TMetadata, TInspection>) {
+  const { classifyAdmissionError, createStoppedError, drain, payload, pollIntervalMs, ...base } =
+    options;
+  const stoppedError =
+    createStoppedError ?? (() => new Error("Channel ingress monitor is stopped."));
+  const monitor = createChannelIngressMonitor({
+    ...base,
+    inspect: options.inspect,
+    payload: { ...payload, storage: "raw-event", version: 1 },
+    pollIntervalMs: pollIntervalMs ?? 500,
+    retention: "standard",
+    drain: { ...drain, startLimit: 8 },
+    admissionMode: "while-running",
+    createStoppedError: stoppedError,
+  });
+  return {
+    receive: async (raw: TRaw): Promise<StandardRawEventAdmission<TInspection>> => {
+      if (!monitor.isRunning()) {
+        throw stoppedError();
+      }
+      let facts: TInspection;
+      try {
+        facts = options.inspect(raw);
+      } catch (error) {
+        const message = classifyAdmissionError(error);
+        if (message === undefined) {
+          throw error;
+        }
+        return { kind: "invalid", message };
+      }
+      if (!facts) {
+        return { kind: "ignored" } as StandardRawEventAdmission<TInspection>;
+      }
+      await monitor.admit(raw, { facts });
+      return { kind: "durable" };
+    },
+    start: monitor.start,
+    stop: monitor.stop,
+    waitForIdle: monitor.waitForIdle,
+  };
+}
 
 /** Fan one logical inbound turn's ownership lifecycle across its durable claims. */
 export function fanInChannelIngressLifecycles(
@@ -56,11 +129,17 @@ export function fanInChannelIngressLifecycles(
   lifecycle: ChannelIngressLifecycle | undefined;
   settle: () => Promise<void>;
   abandon: (error?: unknown) => Promise<void>;
+  cancel: () => Promise<void>;
 } {
   const lifecycles = inputs.filter((lifecycle) => lifecycle !== undefined);
   const first = lifecycles[0];
   if (!first) {
-    return { lifecycle: undefined, settle: async () => {}, abandon: async () => {} };
+    return {
+      lifecycle: undefined,
+      settle: async () => {},
+      abandon: async () => {},
+      cancel: async () => {},
+    };
   }
 
   let handedOff = false;
@@ -69,13 +148,21 @@ export function fanInChannelIngressLifecycles(
       await lifecycle.onAdopted();
     }
   };
-  const abandonAll = async () => {
-    await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onAbandoned()));
+  const fanOut = async (invoke: (lifecycle: ChannelIngressLifecycle) => void | Promise<void>) => {
+    await Promise.all(lifecycles.map(async (lifecycle) => await invoke(lifecycle)));
   };
-  const failAll = async (error: unknown) => {
-    await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onFailed?.(error)));
-  };
-
+  const abandonAll = () => fanOut((lifecycle) => lifecycle.onAbandoned());
+  const failAll = (error: unknown) =>
+    fanOut((lifecycle) =>
+      lifecycle.onFailed ? lifecycle.onFailed(error) : lifecycle.onAbandoned(),
+    );
+  const supportsCancellation = lifecycles.every((lifecycle) => lifecycle.onCancelled !== undefined);
+  // Omit aggregate cancellation unless every durable source supports it. Callers
+  // can then use settle/abandon without an acknowledged-but-unsettled claim.
+  const cancelAll = () =>
+    fanOut((lifecycle) =>
+      lifecycle.onCancelled ? lifecycle.onCancelled() : lifecycle.onAbandoned(),
+    );
   return {
     lifecycle: {
       abortSignal:
@@ -101,6 +188,14 @@ export function fanInChannelIngressLifecycles(
         handedOff = true;
         await failAll(error);
       },
+      ...(supportsCancellation
+        ? {
+            onCancelled: async () => {
+              handedOff = true;
+              await cancelAll();
+            },
+          }
+        : {}),
       onAbandoned: async () => {
         handedOff = true;
         await abandonAll();
@@ -113,10 +208,18 @@ export function fanInChannelIngressLifecycles(
         handedOff = true;
       }
     },
-    abandon: async (_error?: unknown) => {
+    abandon: async (error?: unknown) => {
       if (!handedOff) {
         handedOff = true;
-        await abandonAll();
+        await (error === undefined ? abandonAll() : failAll(error));
+      }
+    },
+    // Source-compatible lifecycles predate onCancelled. Settle each source through
+    // its strongest release callback so mixed fan-in cannot strand a durable claim.
+    cancel: async () => {
+      if (!handedOff) {
+        handedOff = true;
+        await cancelAll();
       }
     },
   };

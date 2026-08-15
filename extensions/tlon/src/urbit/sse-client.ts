@@ -543,19 +543,15 @@ export class UrbitSSEClient {
       }));
 
       {
-        const { response, release } = await this.putChannelPayload(unsubscribes, {
+        const { release } = await this.putChannelPayload(unsubscribes, {
           timeoutMs: 30_000,
           auditContext: "tlon-urbit-unsubscribe",
         });
-        try {
-          void response.body?.cancel().catch(() => undefined);
-        } finally {
-          await release();
-        }
+        await release();
       }
 
       {
-        const { response, release } = await urbitFetch({
+        const { release } = await urbitFetch({
           baseUrl: this.url,
           path: `/~/channel/${this.channelId}`,
           init: {
@@ -570,11 +566,7 @@ export class UrbitSSEClient {
           timeoutMs: 30_000,
           auditContext: "tlon-urbit-channel-close",
         });
-        try {
-          void response.body?.cancel().catch(() => undefined);
-        } finally {
-          await release();
-        }
+        await release();
       }
     } catch (error) {
       this.logger.error?.(`Error closing channel: ${String(error)}`);

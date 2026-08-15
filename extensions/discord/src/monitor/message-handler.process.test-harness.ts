@@ -4,6 +4,7 @@ import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testi
 import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeAll, beforeEach, vi } from "vitest";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });
 
@@ -47,6 +48,8 @@ export function createMockDraftStream() {
     discardPending: vi.fn(async () => {}),
     seal: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
+    retarget: vi.fn(async () => {}),
+    cleanupRetargeted: vi.fn(async () => {}),
     forceNewMessage: vi.fn(() => {
       messageId = undefined;
     }),
@@ -156,6 +159,8 @@ export type DispatchInboundParams = {
     }) => Promise<void> | void;
     onReasoningEnd?: () => Promise<void> | void;
     onToolStart?: (payload: {
+      itemId?: string;
+      toolCallId?: string;
       name?: string;
       phase?: string;
       args?: Record<string, unknown>;
@@ -170,7 +175,7 @@ export type DispatchInboundParams = {
       summary?: string;
       title?: string;
       name?: string;
-    }) => Promise<false | void> | false | void;
+    }) => Promise<boolean | void> | boolean | void;
     onNarrationUpdate?: (payload: { text: string }) => Promise<void> | void;
     onProgressNarratorLifecycle?: (lifecycle: {
       beginTurn: () => void;
@@ -179,6 +184,8 @@ export type DispatchInboundParams = {
     isProgressDraftVisible?: () => boolean;
     progressPreambleEnabled?: boolean;
     narrationHideCommandText?: boolean;
+    commentaryPayloadsEnabled?: boolean;
+    shouldDeliverCommentaryPayloads?: () => boolean;
     onVerboseProgressVisibility?: (isActive: () => boolean) => void;
     onPlanUpdate?: (payload: {
       phase?: string;
@@ -187,6 +194,7 @@ export type DispatchInboundParams = {
     }) => Promise<void> | void;
     onApprovalEvent?: (payload: { phase?: string; command?: string }) => Promise<void> | void;
     onCommandOutput?: (payload: {
+      toolCallId?: string;
       phase?: string;
       name?: string;
       title?: string;
@@ -213,6 +221,7 @@ export type DispatchInboundParams = {
     onCompactionEnd?: () => Promise<void> | void;
     onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
     onAssistantMessageStart?: () => Promise<void> | void;
+    onQueuedFollowupAdmitted?: () => Promise<void> | void;
     allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
     onTypingCleanup?: () => Promise<void> | void;
   };
@@ -229,6 +238,7 @@ const dispatchInboundMessage = vi.hoisted(() =>
     counts: { final: 0, tool: 0, block: 0 },
   })),
 );
+const readAgentRunTerminalOutcome = vi.hoisted(() => vi.fn());
 const recordInboundSession = vi.hoisted(() =>
   vi.fn<(params?: unknown) => Promise<void>>(async () => {}),
 );
@@ -264,15 +274,15 @@ export const sendMocksForTest = sendMocks;
 export const typingMocksForTest = typingMocks;
 export const discordTargetMocksForTest = discordTargetMocks;
 export const dispatchInboundMessageForTest = dispatchInboundMessage;
+export const readAgentRunTerminalOutcomeForTest = readAgentRunTerminalOutcome;
 export const recordInboundSessionForTest = recordInboundSession;
 export const createDiscordRestClientSpyForTest = createDiscordRestClientSpy;
 let createBaseDiscordMessageContext: typeof import("./message-handler.test-harness.js").createBaseDiscordMessageContext;
 let createDiscordDirectMessageContextOverrides: typeof import("./message-handler.test-harness.js").createDiscordDirectMessageContextOverrides;
-let threadBindingTesting: typeof import("./thread-bindings.js").testing;
 export let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 let processDiscordMessage: typeof import("./message-handler.process.js").processDiscordMessage;
 export let formatDiscordReplySkip: typeof import("./message-handler.process.js").formatDiscordReplySkip;
-export let notifyDiscordInboundEventOutboundSuccess: typeof import("../inbound-event-delivery.js").notifyDiscordInboundEventOutboundSuccess;
+export let discordInboundEventDelivery: typeof import("../inbound-event-delivery.js").discordInboundEventDelivery;
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   dispatchReplyWithBufferedBlockDispatcher: async (params: {
@@ -397,6 +407,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const replyRuntime = await import("openclaw/plugin-sdk/reply-runtime");
   return {
     ...actual,
+    readAgentRunTerminalOutcome,
     dispatchChannelInboundTurn: async (
       plan: import("openclaw/plugin-sdk/channel-inbound").ChannelInboundTurnPlan<"provider_message_sending">,
     ) => {
@@ -409,7 +420,13 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
               cfg,
               dispatcherOptions: {
                 ...plan.dispatcherOptions,
-                deliver: (delivery.deliverWithProviderMessageSending ?? delivery.deliver)!,
+                deliver: (payload, info) => {
+                  const providerInfo = {
+                    ...info,
+                    onPlatformSendDispatch: async () => undefined,
+                  };
+                  return delivery.deliverWithProviderMessageSending(payload, providerInfo);
+                },
                 onError: delivery.onError,
               },
               toolsAllow: plan.toolsAllow,
@@ -555,11 +572,10 @@ export function registerDiscordProcessTestLifecycle() {
     vi.useRealTimers();
     ({ createBaseDiscordMessageContext, createDiscordDirectMessageContextOverrides } =
       await import("./message-handler.test-harness.js"));
-    ({ testing: threadBindingTesting, createThreadBindingManager } =
-      await import("./thread-bindings.js"));
+    ({ createThreadBindingManager } = await import("./thread-bindings.js"));
     ({ processDiscordMessage, formatDiscordReplySkip } =
       await import("./message-handler.process.js"));
-    ({ notifyDiscordInboundEventOutboundSuccess } = await import("../inbound-event-delivery.js"));
+    ({ discordInboundEventDelivery } = await import("../inbound-event-delivery.js"));
   });
 
   beforeEach(() => {
@@ -573,6 +589,7 @@ export function registerDiscordProcessTestLifecycle() {
     deliverDiscordReply.mockClear();
     createDiscordDraftStream.mockClear();
     dispatchInboundMessage.mockClear();
+    readAgentRunTerminalOutcome.mockReset().mockReturnValue(undefined);
     recordInboundSession.mockClear();
     readSessionUpdatedAt.mockClear();
     getSessionEntry.mockClear();
@@ -587,7 +604,7 @@ export function registerDiscordProcessTestLifecycle() {
     readLatestAssistantTextByIdentity.mockResolvedValue(undefined);
     resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
     getGlobalHookRunner.mockReturnValue(null);
-    threadBindingTesting.resetThreadBindingsForTests();
+    resetThreadBindingsForTests();
   });
 
   afterEach(() => {

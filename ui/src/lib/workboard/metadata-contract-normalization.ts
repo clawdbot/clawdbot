@@ -1,4 +1,4 @@
-import { isRecord } from "./normalization-utils.ts";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   WorkboardAutomation,
   WorkboardDiagnosticAction,

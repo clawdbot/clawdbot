@@ -1,5 +1,6 @@
 // Codex tests cover index plugin behavior.
 import fs from "node:fs";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import openAIPlugin from "../openai/index.js";
@@ -17,6 +18,12 @@ import { CODEX_SUPERVISION_COMPAT_TOOL_NAMES } from "./src/supervision-tools.js"
 
 const runCodexAppServerAttemptMock = vi.hoisted(() => vi.fn());
 const runCodexAppServerSideQuestionMock = vi.hoisted(() => vi.fn());
+const explicitAgentConfig = {
+  agents: {
+    ownership: "explicit",
+    entries: { main: {}, clawblocker: {}, blockdigest: {} },
+  },
+} as OpenClawConfig;
 
 function createCodexTestRuntime(
   current?: () => unknown,
@@ -55,7 +62,7 @@ describe("codex plugin", () => {
     expect(manifest.providers).toBeUndefined();
   });
 
-  it("does not open plugin state while registering with the base runtime", () => {
+  it("does not select an agent or open plugin state while registering", () => {
     const openSyncKeyedStore = vi.fn(() => {
       throw new Error("openSyncKeyedStore is only available through the plugin runtime proxy");
     });
@@ -66,13 +73,93 @@ describe("codex plugin", () => {
           id: "codex",
           name: "Codex",
           source: "test",
-          config: {},
+          config: explicitAgentConfig,
           pluginConfig: {},
           runtime: { state: { openSyncKeyedStore } } as never,
         }),
       ),
     ).not.toThrow();
     expect(openSyncKeyedStore).not.toHaveBeenCalled();
+  });
+
+  it("registers request-scoped surfaces with explicit multi-agent ownership", () => {
+    const registerAgentHarness = vi.fn();
+    const registerNodeHostCommand = vi.fn();
+    const registerSessionCatalog = vi.fn();
+
+    expect(() =>
+      plugin.register(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: explicitAgentConfig,
+          pluginConfig: {},
+          runtime: createCodexTestRuntime(() => explicitAgentConfig),
+          registerAgentHarness,
+          registerNodeHostCommand,
+          registerSessionCatalog,
+        }),
+      ),
+    ).not.toThrow();
+
+    expect(registerAgentHarness).toHaveBeenCalledOnce();
+    expect(registerSessionCatalog).toHaveBeenCalledOnce();
+    expect(registerNodeHostCommand.mock.calls.map(([command]) => command.command)).toEqual(
+      expect.arrayContaining([
+        "codex.appServer.threads.list.v1",
+        "codex.appServer.thread.turns.list.v1",
+        "codex.terminal.resume.v1",
+      ]),
+    );
+  });
+
+  it("proactively monitors an explicitly configured remote websocket app-server", () => {
+    const registerService = vi.fn();
+
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {
+          appServer: {
+            transport: "websocket",
+            url: "ws://127.0.0.1:39175",
+          },
+        },
+        runtime: createCodexTestRuntime(),
+        registerService,
+      }),
+    );
+
+    expect(registerService).toHaveBeenCalledOnce();
+    expect(mockCallArg(registerService)).toMatchObject({
+      id: "codex-app-server-connection-health",
+      start: expect.any(Function),
+      stop: expect.any(Function),
+    });
+  });
+
+  it("does not start remote connection monitoring for local Codex transports", () => {
+    for (const appServer of [undefined, { transport: "stdio" }, { transport: "unix" }]) {
+      const registerService = vi.fn();
+
+      plugin.register(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: {},
+          pluginConfig: appServer ? { appServer } : {},
+          runtime: createCodexTestRuntime(),
+          registerService,
+        }),
+      );
+
+      expect(registerService).not.toHaveBeenCalled();
+    }
   });
 
   it("registers the agent harness, native thread tool, and hosted web search", () => {
@@ -125,6 +212,7 @@ describe("codex plugin", () => {
     });
     expect(typeof agentHarnessRegistration.dispose).toBe("function");
     expect(typeof agentHarnessRegistration.fetchUsageSnapshot).toBe("function");
+    expect(typeof agentHarnessRegistration.loadMcpToolCatalog).toBe("function");
     expect(mediaProviderRegistration?.id).toBe("codex");
     expect(mediaProviderRegistration?.capabilities).toEqual(["image"]);
     expect(mediaProviderRegistration?.defaultModels).toEqual({ image: "gpt-5.6-sol" });
@@ -148,11 +236,15 @@ describe("codex plugin", () => {
     expect(migrationRegistration?.id).toBe("codex");
     expect(migrationRegistration?.label).toBe("Codex");
     expect(registerTool).toHaveBeenCalledWith(expect.any(Function), { name: "codex_threads" });
+    expect(registerTool).toHaveBeenCalledWith(expect.any(Function), { name: "codex_plugins" });
     expect(registerTool).not.toHaveBeenCalledWith(expect.any(Function), {
       names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES],
     });
     expect(registerToolMetadata).toHaveBeenCalledWith(
       expect.objectContaining({ toolName: "codex_threads", risk: "high" }),
+    );
+    expect(registerToolMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "codex_plugins", risk: "low" }),
     );
     expect(inboundClaimRegistration?.[0]).toBe("inbound_claim");
     expect(typeof inboundClaimRegistration?.[1]).toBe("function");
@@ -169,7 +261,7 @@ describe("codex plugin", () => {
         id: "codex",
         name: "Codex",
         source: "test",
-        config: {},
+        config: explicitAgentConfig,
         pluginConfig: { sessionCatalog: { enabled: false } },
         runtime: createCodexTestRuntime(),
         registerAgentHarness,

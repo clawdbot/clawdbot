@@ -39,7 +39,6 @@ const INFLECTED_COUNT_MARKER = "](inflect: true)";
 const IOS_CATALOG_PATH = "apps/ios/Resources/Localizable.xcstrings";
 const MACOS_CATALOG_PATH = "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings";
 const MACOS_INFO_PLIST_PATH = "apps/macos/Sources/OpenClaw/Resources/Info.plist";
-const IOS_CONTRADICTIONS_PATH = "apps/.i18n/apple-translation-contradictions.json";
 const NATIVE_SOURCE_PATH = "apps/.i18n/native-source.json";
 const NATIVE_TRANSLATIONS_DIR = "apps/.i18n/native";
 const SHARED_CHAT_UI_SOURCE_PREFIX = "apps/shared/OpenClawKit/Sources/OpenClawChatUI/";
@@ -167,7 +166,6 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "struct SettingsCardGroup<Content: View>: View {\n    let title: SettingsTextValue",
     "struct SettingsCardRow<Content: View>: View {\n    let title: SettingsTextValue\n    let subtitle: SettingsTextValue?",
     "struct SettingsCardToggleRow: View {\n    let title: SettingsTextValue\n    let subtitle: SettingsTextValue?",
-    "struct SettingsToggleRow: View {\n    let title: SettingsTextValue\n    let subtitle: SettingsTextValue?",
     "Text(verbatim: value)",
   ],
   "apps/ios/Sources/Design/OpenClawProComponents.swift": [
@@ -434,10 +432,8 @@ type Catalog = {
 
 type NativeSourceEntry = {
   id: string;
-  kind: string;
-  line: number;
-  path: string;
   source: string;
+  sites: Array<{ kind: string; path: string }>;
   surface: string;
 };
 
@@ -447,8 +443,8 @@ type NativeSourceArtifact = {
 };
 
 type NativeTranslationArtifact = {
-  entries: Array<{ id: string; source: string; translated: string }>;
   locale: string;
+  translations: Record<string, string>;
   version: number;
 };
 
@@ -477,10 +473,6 @@ function compareCodeUnits(left: string, right: string): number {
 
 function serializeCatalog(catalog: Catalog): string {
   return `${JSON.stringify(catalog, null, 2)}\n`;
-}
-
-function serializeContradictions(contradictions: AppleTranslationContradiction[]): string {
-  return `${JSON.stringify({ version: 1, contradictions }, null, 2)}\n`;
 }
 
 function decodeXml(value: string): string {
@@ -539,20 +531,19 @@ export function selectInfoPlistTranslation(
 export function infoPlistTranslationCandidates(
   artifact: NativeTranslationArtifact | undefined,
   sourceId: string,
-  source: string,
+  _source: string,
 ): string[] {
-  return (
-    artifact?.entries
-      .filter((entry) => entry.id === sourceId && entry.source === source)
-      .map((entry) => entry.translated) ?? []
-  );
+  const translated = artifact?.translations[sourceId];
+  return typeof translated === "string" ? [translated] : [];
 }
 
 function infoPlistSourceIds(nativeSource: NativeSourceArtifact): Map<string, string> {
   return new Map(
-    nativeSource.entries
-      .filter((entry) => entry.kind === "plist-string")
-      .map((entry) => [[entry.path, entry.source].join("\u0000"), entry.id]),
+    nativeSource.entries.flatMap((entry) =>
+      entry.sites
+        .filter((site) => site.kind === "plist-string")
+        .map((site) => [[site.path, entry.source].join("\u0000"), entry.id] as const),
+    ),
   );
 }
 
@@ -592,8 +583,11 @@ async function readOptionalFile(filePath: string): Promise<string | null> {
 function isIosCatalogEntry(entry: NativeSourceEntry): boolean {
   return (
     entry.surface === "apple" &&
-    IOS_SOURCE_PREFIXES.some((prefix) => entry.path.startsWith(prefix)) &&
-    APPLE_CATALOG_KINDS.has(entry.kind) &&
+    entry.sites.some(
+      (site) =>
+        IOS_SOURCE_PREFIXES.some((prefix) => site.path.startsWith(prefix)) &&
+        APPLE_CATALOG_KINDS.has(site.kind),
+    ) &&
     (!entry.source.includes("\\(") || isInflectedCountSource(entry.source)) &&
     !IOS_CATALOG_EXCLUSIONS.has(entry.source)
   );
@@ -602,8 +596,11 @@ function isIosCatalogEntry(entry: NativeSourceEntry): boolean {
 function isMacosCatalogEntry(entry: NativeSourceEntry): boolean {
   return (
     entry.surface === "apple" &&
-    MACOS_SOURCE_PREFIXES.some((prefix) => entry.path.startsWith(prefix)) &&
-    APPLE_CATALOG_KINDS.has(entry.kind) &&
+    entry.sites.some(
+      (site) =>
+        MACOS_SOURCE_PREFIXES.some((prefix) => site.path.startsWith(prefix)) &&
+        APPLE_CATALOG_KINDS.has(site.kind),
+    ) &&
     !entry.source.includes("\\(") &&
     !MACOS_CATALOG_EXCLUSIONS.has(entry.source)
   );
@@ -663,28 +660,20 @@ function buildAppleCatalog(
   const sources = [...new Set(catalogEntries.map(([, source]) => source))].toSorted(
     compareCodeUnits,
   );
-  const sourceSet = new Set(sources);
-  const appleIdsBySource = new Map<string, Set<string>>();
-  for (const [entry, source] of catalogEntries) {
-    const ids = appleIdsBySource.get(source) ?? new Set<string>();
-    ids.add(entry.id);
-    appleIdsBySource.set(source, ids);
-  }
+  const catalogIds = new Set(catalogEntries.map(([entry]) => entry.id));
   const existingStrings = existingCatalog.strings ?? {};
+  const nativeEntryById = new Map(nativeSource.entries.map((entry) => [entry.id, entry]));
   const translationsByLocale = new Map(
     translations.map((artifact) => {
       const bySource = new Map<string, string[]>();
-      for (const entry of artifact.entries) {
+      for (const [id, translated] of Object.entries(artifact.translations)) {
+        const entry = nativeEntryById.get(id);
+        if (!entry || !catalogIds.has(id)) {
+          continue;
+        }
         const source = appleCatalogValue(entry.source);
-        if (!sourceSet.has(source)) {
-          continue;
-        }
-        const appleIds = appleIdsBySource.get(source);
-        if (appleIds && !appleIds.has(entry.id)) {
-          continue;
-        }
         const values = bySource.get(source) ?? [];
-        values.push(appleCatalogValue(entry.translated));
+        values.push(appleCatalogValue(translated));
         bySource.set(source, values);
       }
       return [artifact.locale, bySource] as const;
@@ -933,17 +922,6 @@ export async function syncIosCatalog(write: boolean): Promise<AppleCatalogBuild>
     }
     await writeFile(catalogPath, expected, "utf8");
   }
-  const contradictionsPath = path.join(ROOT, IOS_CONTRADICTIONS_PATH);
-  const expectedContradictions = serializeContradictions(build.contradictions);
-  const actualContradictions = await readOptionalFile(contradictionsPath);
-  if (actualContradictions !== expectedContradictions) {
-    if (!write) {
-      throw new Error(
-        `Apple contradiction report ${IOS_CONTRADICTIONS_PATH} is stale; run apple-app-i18n.ts sync-ios --write`,
-      );
-    }
-    await writeFile(contradictionsPath, expectedContradictions, "utf8");
-  }
   return build;
 }
 
@@ -971,9 +949,9 @@ export function assertMacosCatalogCurrent(actual: string, build: AppleCatalogBui
 }
 
 /**
- * Regenerates every Apple derived artifact (app catalogs, contradiction report,
- * InfoPlist strings). Shared by this CLI and native-app-i18n's sync so the
- * inventory can never be rewritten without its derived catalogs.
+ * Regenerates every Apple derived artifact (app catalogs and InfoPlist strings).
+ * Shared by this CLI and native-app-i18n's sync so the inventory can never be
+ * rewritten without its derived catalogs.
  */
 export async function syncAppleAppI18n(): Promise<{
   build: AppleCatalogBuild;

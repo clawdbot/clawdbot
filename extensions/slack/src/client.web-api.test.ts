@@ -2,10 +2,11 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebClient } from "@slack/web-api";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createSlackLookupClient,
   createSlackReadClient,
+  createSlackStartupAuthClient,
   createSlackWebClient,
   getSlackListenerUploadCompletionClient,
 } from "./client.js";
@@ -187,6 +188,68 @@ afterEach(() => {
 });
 
 describe("Slack Web API routing", () => {
+  it("retries two transient startup auth failures", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("request timed out"))
+      .mockRejectedValueOnce(new Error("connection reset"))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true, team_id: "TMOCK", user_id: "UMOCK" }), {
+          status: 200,
+        }),
+      );
+    const client = createSlackStartupAuthClient("startup-fixture", {
+      fetch: fetchMock as never,
+    });
+
+    await expect(client.auth.test()).resolves.toMatchObject({
+      ok: true,
+      team_id: "TMOCK",
+      user_id: "UMOCK",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not retry a permanent startup auth error", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), {
+        status: 200,
+      }),
+    );
+    const client = createSlackStartupAuthClient("invalid-fixture", {
+      fetch: fetchMock as never,
+    });
+
+    await expect(client.auth.test()).rejects.toThrow("invalid_auth");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries startup auth after a rate limit", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: false, error: "ratelimited" }), {
+          status: 429,
+          headers: { "retry-after": "0" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true, team_id: "TMOCK", user_id: "UMOCK" }), {
+          status: 200,
+        }),
+      );
+    const client = createSlackStartupAuthClient("rate-limited-fixture", {
+      fetch: fetchMock as never,
+    });
+
+    await expect(client.auth.test()).resolves.toMatchObject({
+      ok: true,
+      team_id: "TMOCK",
+      user_id: "UMOCK",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("aborts a stalled-header lookup after one request", async () => {
     for (const key of TEST_ENV_KEYS) {
       delete process.env[key];

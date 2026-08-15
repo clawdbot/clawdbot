@@ -9,7 +9,7 @@ describe("nostr setup plugin", () => {
     const nsec = nip19.nsecEncode(Buffer.from(TEST_HEX_PRIVATE_KEY, "hex")).toUpperCase();
 
     expect(
-      nostrSetupPlugin.setup?.validateInput?.({
+      nostrSetupPlugin.setupContract?.validateInput?.({
         cfg: {},
         accountId: "default",
         input: { privateKey: nsec },

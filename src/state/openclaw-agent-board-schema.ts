@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
 const BOARD_SCHEMA_START = "CREATE TABLE IF NOT EXISTS board_tabs (";
 const BOARD_SCHEMA_END = "CREATE TABLE IF NOT EXISTS heartbeat_outcomes (";

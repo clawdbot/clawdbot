@@ -64,12 +64,20 @@ export async function prepareCodexAttemptContext(
     sessionFile: activeSessionFile,
     sessionId: activeSessionId,
     sessionKey: contextSessionKey,
+    sessionTarget: params.sessionTarget,
+  };
+  const readFencedHistory = async () => {
+    const transcriptReadFence = params.userTurnTranscriptRecorder?.getAdmissionReceipt();
+    return await readMirroredSessionHistoryMessages({
+      ...activeTranscriptTarget,
+      ...(transcriptReadFence ? { admission: transcriptReadFence } : {}),
+    });
   };
   const historyState = {
     messages:
       !activeContextEngine && initialStartupBindingHadInactiveThreadBootstrap
         ? []
-        : ((await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ?? []),
+        : ((await readFencedHistory()) ?? []),
   };
   const hadSessionTranscriptState = historyState.messages.length > 0;
   const hookContextWindowFields = {
@@ -97,9 +105,6 @@ export async function prepareCodexAttemptContext(
     ...hookContextWindowFields,
   };
   const hookRunner = getAgentHarnessHookRunner();
-  const activeContextEnginePluginId = activeContextEngine
-    ? resolveContextEngineOwnerPluginId(activeContextEngine)
-    : undefined;
   const buildActiveContextEngineRuntimeContext = () =>
     buildHarnessContextEngineRuntimeContext({
       attempt: buildActiveRunAttemptParams(),
@@ -107,7 +112,7 @@ export async function prepareCodexAttemptContext(
       cwd: effectiveCwd,
       agentDir,
       activeAgentId: sessionAgentId,
-      contextEnginePluginId: activeContextEnginePluginId,
+      contextEnginePluginId: resolveContextEngineOwnerPluginId(activeContextEngine),
       tokenBudget: effectiveContextTokenBudget,
     });
   if (activeContextEngine) {
@@ -119,6 +124,7 @@ export async function prepareCodexAttemptContext(
       sessionFile: activeSessionFile,
       sessionTarget: params.sessionTarget,
       runtimeContext: buildActiveContextEngineRuntimeContext(),
+      transcriptReadFence: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
       contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
       providerId: effectiveRuntimeProviderId,
       requestedModelId: usesSupervisionConnection ? undefined : params.requestedModelId,
@@ -129,8 +135,7 @@ export async function prepareCodexAttemptContext(
       config: params.config,
       warn: (message) => embeddedAgentLog.warn(message),
     });
-    historyState.messages =
-      (await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ?? historyState.messages;
+    historyState.messages = (await readFencedHistory()) ?? historyState.messages;
   }
   const memoryToolNames = getCodexWorkspaceMemoryToolNames(toolBridge.availableSpecs);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({

@@ -3,18 +3,23 @@
  * explicit per-model config, global defaults, catalog metadata, and model
  * family fallbacks.
  */
-import { resolveClaudeOpus5ModelIdentity } from "@openclaw/llm-core";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
-import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import { legacyModelKey, modelKey, normalizeProviderId } from "./model-ref-shared.js";
-import { normalizeModelSelection } from "./model-selection-resolve.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
+import {
+  resolveConfiguredThinkingDefaultCore,
+  resolveThinkingDefaultCore,
+} from "./model-thinking-default-core.js";
+
+/** Resolves configured thinking without consulting model capability metadata. */
+export function resolveConfiguredThinkingDefault(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): ThinkLevel | undefined {
+  return resolveConfiguredThinkingDefaultCore(params);
+}
 
 /** Resolves the default thinking level for a provider/model pair. */
 export function resolveThinkingDefault(params: {
@@ -24,90 +29,7 @@ export function resolveThinkingDefault(params: {
   catalog?: ModelCatalogEntry[];
   agentRuntime?: string | null;
 }): ThinkLevel {
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const normalizedModel = normalizeLowercaseStringOrEmpty(params.model).replace(/\./g, "-");
-  const catalog = Array.isArray(params.catalog)
-    ? params.catalog
-    : buildConfiguredModelCatalog({ cfg: params.cfg });
-  const catalogCandidate = catalog.find(
-    (entry) => entry.provider === params.provider && entry.id === params.model,
-  );
-  const configuredModels = params.cfg.agents?.defaults?.models;
-  const canonicalKey = modelKey(params.provider, params.model);
-  const legacyKey = legacyModelKey(params.provider, params.model);
-  const normalizedCanonicalKey = normalizeLowercaseStringOrEmpty(canonicalKey);
-  const normalizedLegacyKey = normalizeOptionalLowercaseString(legacyKey);
-  const primarySelection = normalizeModelSelection(params.cfg.agents?.defaults?.model);
-  const normalizedPrimarySelection = normalizeOptionalLowercaseString(primarySelection);
-  const explicitModelConfigured =
-    (configuredModels ? canonicalKey in configuredModels : false) ||
-    Boolean(legacyKey && configuredModels && legacyKey in configuredModels) ||
-    normalizedPrimarySelection === normalizedCanonicalKey ||
-    Boolean(normalizedLegacyKey && normalizedPrimarySelection === normalizedLegacyKey) ||
-    normalizedPrimarySelection === normalizeLowercaseStringOrEmpty(params.model);
-  const perModelThinking =
-    configuredModels?.[canonicalKey]?.params?.thinking ??
-    (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
-  // Accept boolean false and common disable aliases as "off".
-  if (
-    perModelThinking === false ||
-    perModelThinking === "disabled" ||
-    perModelThinking === "none"
-  ) {
-    return "off";
-  }
-  if (
-    perModelThinking === "off" ||
-    perModelThinking === "minimal" ||
-    perModelThinking === "low" ||
-    perModelThinking === "medium" ||
-    perModelThinking === "high" ||
-    perModelThinking === "xhigh" ||
-    perModelThinking === "adaptive" ||
-    perModelThinking === "max" ||
-    perModelThinking === "ultra"
-  ) {
-    return perModelThinking;
-  }
-  const configured = params.cfg.agents?.defaults?.thinkingDefault;
-  if (configured) {
-    return configured;
-  }
-  const isClaudeProvider =
-    normalizedProvider === "anthropic" ||
-    normalizedProvider === "anthropic-vertex" ||
-    normalizedProvider === "claude-cli";
-  if (isClaudeProvider && resolveClaudeOpus5ModelIdentity({ id: normalizedModel })) {
-    return "high";
-  }
-  if (
-    isClaudeProvider &&
-    (normalizedModel.startsWith("claude-opus-4-8") || normalizedModel.startsWith("claude-opus-4.8"))
-  ) {
-    return "off";
-  }
-  if (
-    isClaudeProvider &&
-    (normalizedModel.startsWith("claude-opus-4-7") || normalizedModel.startsWith("claude-opus-4.7"))
-  ) {
-    return "off";
-  }
-  if (
-    normalizedProvider === "anthropic" &&
-    explicitModelConfigured &&
-    typeof catalogCandidate?.name === "string" &&
-    /4\.6\b/.test(catalogCandidate.name) &&
-    (normalizedModel.startsWith("claude-opus-4-6") ||
-      normalizedModel.startsWith("claude-sonnet-4-6"))
-  ) {
-    return "adaptive";
-  }
-  return resolveThinkingDefaultForModel({
-    provider: params.provider,
-    model: params.model,
-    catalog,
-    agentRuntime: params.agentRuntime,
-  });
+  return resolveThinkingDefaultCore(params);
 }
 
 /** Resolves thinking default after loading runtime catalog only when needed. */

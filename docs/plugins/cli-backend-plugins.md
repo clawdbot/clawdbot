@@ -237,12 +237,21 @@ only for behavior that really belongs to the backend.
 | `toolAvailabilityEnforcement`      | Declare whether exact tool caps are enforced in argv or execution staging   |
 | `sideQuestionToolMode`             | Declare disabled native tools for `/btw` side questions                     |
 | `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge                                |
-| `ownsNativeCompaction`             | Backend owns its own compaction - OpenClaw defers                           |
+| `ownsNativeCompaction`             | Backend owns its own automatic compaction - OpenClaw defers                 |
+| `manualCompaction`                 | Atomic command, transport, and positive-acknowledgement contract            |
 | `subscriptionAuthDispatch`         | Opted-in embedded runs on subscription credentials execute via this backend |
 | `runtimeArtifact`                  | Bound a script launcher to its complete bundled package tree                |
+| `liveSessionRequirement`           | Require an init capability before trusting long-lived session output        |
 
 Keep these hooks provider-owned. Do not add CLI-specific branches to core when
 a backend hook can express the behavior.
+
+`liveSessionRequirement` declares one exact capability that the CLI must
+advertise in its initialization record before OpenClaw trusts streamed output.
+It also supplies the first known compatible version, version-probe arguments,
+and update command used by setup and Doctor. Runtime support remains
+capability-based, so a compatible backport or wrapper is not rejected only
+because of its version string.
 
 `prepareExecution(ctx)` receives `ctx.contextTokenBudget`, the effective token
 limit selected for the run. Backends that own native compaction can map that
@@ -304,14 +313,34 @@ preserves it through the `2026.8.x` line. New and updated plugins should use can
 `toolAvailabilityEnforcement: "execution-args"` explicitly; the beta
 compatibility path is scheduled for removal after that window.
 
+### `parseJsonlEvent`: provider-specific JSONL streams
+
+Set `parseJsonlEvent` when a backend emits line-delimited JSON that does not
+match the built-in Claude, Codex, or Gemini dialects. The hook receives one raw
+line plus the resolved backend id and config, and returns one normalized event,
+multiple events, or `null` to let the built-in parser try the line.
+
+Supported events are incremental assistant text, incremental thinking, native
+tool start/result display, session ids, and terminal results. Terminal results
+may include final text, usage, an error, and a successor session id. Session ids
+reported by either event shape participate in resumed-session and fork
+persistence.
+
+Tool events describe work the backend already performed. OpenClaw renders and
+summarizes them, but does not treat them as host tool execution, trusted
+diagnostics, loopback correlation, or message-delivery evidence.
+
 ### `ownsNativeCompaction`: opting out of OpenClaw compaction
 
 If your backend runs an agent that compacts its **own** transcript, set
 `ownsNativeCompaction: true` so OpenClaw's safeguard summarizer never runs
-against its sessions - the CLI compaction lifecycle returns a no-op and the
+against its sessions - automatic CLI compaction defers to the backend and the
 turn proceeds. `claude-cli` declares it because Claude Code compacts
-internally with no harness endpoint. Native-harness sessions such as Codex
-keep routing to their harness compaction endpoint instead.
+internally with no harness endpoint. It also declares
+`manualCompaction`, so an explicit OpenClaw `/compact` resumes the
+bound Claude Code session and invokes its native `/compact` command without
+recording a conversation turn. Native-harness sessions such as Codex keep
+routing to their harness compaction endpoint instead.
 
 **Only declare it when all of the following hold**, or a deferred
 over-budget session can stay over budget or go stale (OpenClaw no longer
@@ -323,6 +352,27 @@ rescues it):
   (for example `--resume` / `--session-id`);
 - it is not a native-harness compaction session - matching `agentHarnessId`
   sessions route to the harness endpoint instead.
+
+If the backend supports an in-place manual command, declare it alongside the
+ownership flag:
+
+```typescript
+manualCompaction: {
+  buildPrompt: (instructions) =>
+    instructions ? `/compact ${instructions}` : "/compact",
+  input: "arg",
+  validateOutput: (rawOutput) =>
+    rawOutput.includes('"type":"compaction_complete"')
+      ? { ok: true }
+      : { ok: false, reason: "CLI did not confirm compaction." },
+},
+```
+
+The builder receives optional `/compact` instructions. The validator receives
+the bounded raw process output and must require a backend-owned positive
+acknowledgement; a zero exit alone is not proof of compaction. Do not declare
+this capability for a command that creates a separate session or requires an
+ordinary model turn.
 
 ## MCP tool bridge
 

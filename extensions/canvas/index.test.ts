@@ -1,4 +1,6 @@
 // Canvas tests cover index plugin behavior.
+import type { AgentMessage, StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
 import type {
   AnyAgentTool,
   OpenClawPluginApi,
@@ -171,6 +173,7 @@ describe("Canvas plugin entry", () => {
       return tool as AnyAgentTool;
     });
     expect(registeredTools.map((tool) => tool.name)).toEqual(["canvas"]);
+    expect(registeredTools.map((tool) => tool.resultContentSource)).toEqual(["network"]);
     expect(mocks.createCanvasTool).not.toHaveBeenCalled();
 
     const [canvasTool] = registeredTools;
@@ -181,6 +184,100 @@ describe("Canvas plugin entry", () => {
       agentSessionKey: "agent:main:canvas",
     });
     expect(mocks.toolExecute).toHaveBeenCalledWith("tool-call", { action: "hide" });
+  });
+
+  it("preserves registered Canvas network provenance through the real agent loop", async () => {
+    const [{ runAgentLoop }, { createAssistantMessageEventStream }] = await Promise.all([
+      vi.importActual<typeof import("openclaw/plugin-sdk/agent-core")>(
+        "openclaw/plugin-sdk/agent-core",
+      ),
+      vi.importActual<typeof import("openclaw/plugin-sdk/llm")>("openclaw/plugin-sdk/llm"),
+    ]);
+    const registeredTool = registerCanvas().tools[0]?.tool;
+    if (typeof registeredTool !== "function") {
+      throw new Error("Canvas did not register its lazy tool factory");
+    }
+    const canvasTool = registeredTool({ config: {} });
+    if (!canvasTool || Array.isArray(canvasTool)) {
+      throw new Error("Canvas did not resolve its registered agent tool");
+    }
+    const model: Model = {
+      id: "canvas-proof-model",
+      name: "Canvas proof model",
+      api: "test-api",
+      provider: "test-provider",
+      baseUrl: "https://example.test",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000,
+      maxTokens: 1_000,
+    };
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      const message: AssistantMessage = {
+        role: "assistant",
+        content:
+          turn === 1
+            ? [
+                {
+                  type: "toolCall",
+                  id: "canvas-call",
+                  name: "canvas",
+                  arguments: { action: "hide" },
+                },
+              ]
+            : [{ type: "text", text: "Canvas result observed" }],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: turn === 1 ? "toolUse" : "stop",
+        timestamp: turn,
+      };
+      queueMicrotask(() => {
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "Inspect the Canvas page", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [canvasTool] },
+      { model, convertToLlm: (agentMessages: AgentMessage[]) => agentMessages as never },
+      () => {},
+      undefined,
+      streamFn,
+    );
+    const metadata = (message: AgentMessage | undefined) =>
+      message ? (message as unknown as Record<string, unknown>)["__openclaw"] : undefined;
+
+    expect(metadata(messages.find((message) => message.role === "toolResult"))).toEqual({
+      resultContentSource: "network",
+    });
+    expect(metadata(messages.findLast((message) => message.role === "assistant"))).toEqual({
+      turnTainted: true,
+    });
+    expect(mocks.toolExecute).toHaveBeenCalledWith(
+      "canvas-call",
+      { action: "hide" },
+      undefined,
+      expect.any(Function),
+    );
   });
 
   it.each([

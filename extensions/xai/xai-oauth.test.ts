@@ -6,11 +6,8 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createXaiDeviceCodeAuthMethod,
-  createXaiOAuthAuthMethod,
-  refreshXaiOAuthCredential,
-} from "./xai-oauth.js";
+import { createXaiDeviceCodeAuthMethod, createXaiOAuthAuthMethod } from "./xai-oauth-entry.js";
+import { refreshXaiOAuthCredential } from "./xai-oauth.js";
 
 const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
@@ -429,6 +426,11 @@ describe("xAI OAuth", () => {
       accountId: "acct-1",
       access: expect.any(String),
     });
+    expect(result.defaultModel).toBe("xai/auto");
+    expect(result.configPatch?.agents?.defaults?.model).toEqual({
+      primary: "xai/auto",
+    });
+    expect(result.configPatch?.agents?.defaults?.models?.["xai/auto"]?.alias).toBe("Grok");
     expect(progress.update).toHaveBeenCalledWith("Waiting for xAI device authorization...");
     expect(progress.stop).toHaveBeenCalledWith("xAI OAuth complete");
   });

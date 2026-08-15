@@ -1,25 +1,17 @@
 // Control UI E2E tests cover suggestion queue and solo-dormancy behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { chromium, expect, type Browser, type Page } from "playwright/test";
-import { afterAll, beforeAll, describe, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  controlUiSessionUrl,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { expect, type Page } from "playwright/test";
+import { it } from "vitest";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI session suggestions",
+  startServerBeforeBrowser: true,
+});
+
 const sessionKey = "agent:main:main";
-
-let browser: Browser;
-let server: ControlUiE2eServer;
 
 function artifactDir(): string | undefined {
   return process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim() || undefined;
@@ -30,7 +22,7 @@ async function contextAndPage() {
   if (output) {
     await fs.mkdir(output, { recursive: true });
   }
-  const context = await browser.newContext({
+  const context = await suite.browser.newContext({
     viewport: { height: 760, width: 1180 },
     ...(output ? { recordVideo: { dir: output, size: { height: 760, width: 1180 } } } : {}),
   });
@@ -74,17 +66,7 @@ const featureMethods = [
   "session.typing",
 ];
 
-describeControlUiE2e("Control UI session suggestions", () => {
-  beforeAll(async () => {
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("submits a viewer draft as a suggestion and shows its pending state", async () => {
     const { context, page } = await contextAndPage();
     const suggestion = {
@@ -115,10 +97,18 @@ describeControlUiE2e("Control UI session suggestions", () => {
       },
     });
 
-    await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
     const composer = page.locator(".agent-chat__composer-combobox textarea");
+    const modelTrigger = page.locator(".chat-controls__model-trigger");
+    const outsideTypingIndicator = page.locator(".agent-chat__typing-indicator--outside");
     await gateway.waitForRequest("session.suggestions.list");
     await expect(composer).toBeEnabled();
+    await modelTrigger.waitFor();
+    const idleModelBox = await modelTrigger.boundingBox();
+    if (idleModelBox === null) {
+      throw new Error("Expected the model trigger before remote typing");
+    }
+    await expect(outsideTypingIndicator).toHaveCount(0);
     await gateway.emitGatewayEvent("session.typing", {
       sessionKey: "main",
       sessionId: "session-main",
@@ -127,7 +117,22 @@ describeControlUiE2e("Control UI session suggestions", () => {
       typing: true,
       ts: Date.now(),
     });
-    await expect(page.locator(".agent-chat__typing-indicator")).toHaveText("Owner is typing…");
+    await expect(page.locator(".agent-chat__typing-text")).toHaveText("Owner is typing…");
+    const [typingModelBox, typingIndicatorBox, composerShellBox] = await Promise.all([
+      modelTrigger.boundingBox(),
+      outsideTypingIndicator.boundingBox(),
+      page.locator(".agent-chat__composer-shell").boundingBox(),
+    ]);
+    if (typingModelBox === null || typingIndicatorBox === null || composerShellBox === null) {
+      throw new Error("Expected the composer layout after remote typing");
+    }
+    expect(Math.abs(typingModelBox.x - idleModelBox.x)).toBeLessThanOrEqual(0.5);
+    // The #122809 regression shifted the picker by a full indicator row
+    // (~20px); allow subpixel/rounding jitter seen on CI renderers (2.41px).
+    expect(Math.abs(typingModelBox.y - idleModelBox.y)).toBeLessThanOrEqual(4);
+    expect(typingIndicatorBox.y + typingIndicatorBox.height).toBeLessThanOrEqual(
+      composerShellBox.y + 1,
+    );
     await composer.fill("Try the focused change");
     const typing = await gateway.waitForRequest("session.typing");
     expect(typing.params).toMatchObject({ sessionId: "session-main" });
@@ -164,7 +169,7 @@ describeControlUiE2e("Control UI session suggestions", () => {
       },
     });
 
-    await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
     const row = page.locator(".session-suggestion");
     await expect(row).toBeVisible();
     await expect(row.locator("button")).toHaveCount(4);
@@ -206,7 +211,7 @@ describeControlUiE2e("Control UI session suggestions", () => {
       methodResponses: { "sessions.list": sessionRow("viewer") },
     });
 
-    await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
     await expect(page.locator(".agent-chat__composer-combobox textarea")).toBeDisabled();
     await expect(page.getByRole("button", { name: "Suggest message" })).toHaveCount(0);
     await expect(page.locator(".agent-chat__typing-indicator")).toHaveCount(0);
@@ -225,7 +230,7 @@ describeControlUiE2e("Control UI session suggestions", () => {
       methodResponses: { "sessions.list": sessionRow("viewer") },
     });
 
-    await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
     await expect(page.locator(".agent-chat__composer-combobox textarea")).toBeDisabled();
     await expect(page.getByRole("button", { name: "Suggest message" })).toHaveCount(0);
     await context.close();

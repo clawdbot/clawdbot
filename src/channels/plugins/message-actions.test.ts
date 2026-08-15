@@ -2,10 +2,7 @@
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  EMPTY_PREPARED_MESSAGE_TOOL_CATALOG,
-  getPreparedMessageToolCatalog,
-} from "../../plugins/prepared-message-tool-catalog.js";
+import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -23,6 +20,11 @@ import type { ChannelMessageCapability } from "./message-capabilities.js";
 import type { ChannelPlugin } from "./types.public.js";
 
 const emptyRegistry = createTestRegistry([]);
+const EMPTY_PREPARED_MESSAGE_TOOL_CATALOG = {
+  version: 0,
+  channels: [],
+  getChannel: () => undefined,
+} as const;
 
 function createMessageActionsPlugin(params: {
   id: "demo-buttons" | "demo-cards";

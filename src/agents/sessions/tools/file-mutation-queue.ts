@@ -5,8 +5,12 @@
  */
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
+import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 
-const fileMutationTails = new Map<string, Promise<void>>();
+const fileMutationTails = resolveGlobalMap<string, Promise<void>>(
+  Symbol.for("openclaw.fileMutationTails"),
+  "close-only",
+);
 
 function getMutationQueueKey(filePath: string): string {
   const resolvedPath = resolve(filePath);

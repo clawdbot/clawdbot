@@ -31,7 +31,7 @@ provider or agent runtime in three different ways.
       </Step>
       <Step title="Set a default model">
         ```bash
-        openclaw models set github-copilot/claude-opus-5
+        openclaw models set github-copilot/claude-sonnet-5
         ```
 
         Or in config:
@@ -39,7 +39,7 @@ provider or agent runtime in three different ways.
         ```json5
         {
           agents: {
-            defaults: { model: { primary: "github-copilot/claude-opus-5" } },
+            defaults: { model: { primary: "github-copilot/claude-sonnet-5" } },
           },
         }
         ```
@@ -202,6 +202,14 @@ back to `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, then `GITHUB_TOKEN`. Use
 `--secret-input-mode ref` with `COPILOT_GITHUB_TOKEN` set to store an env-backed
 `tokenRef` instead of plaintext in `auth-profiles.json`.
 
+Fresh non-interactive setup validates the token before saving it. When setup
+must choose a default, it also checks the live Copilot model catalog. OpenClaw
+prefers the provider's current general-purpose model when that model is
+enabled for the account; otherwise it chooses a deterministic eligible fallback.
+Setup fails without writing a new auth profile if the account has no
+picker-visible model that supports streaming and tool calls. An explicitly
+configured default model is never replaced.
+
 <AccordionGroup>
   <Accordion title="Interactive TTY required">
     The device-login flow requires an interactive TTY. Run it directly in a
@@ -209,8 +217,9 @@ back to `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, then `GITHUB_TOKEN`. Use
   </Accordion>
 
   <Accordion title="Model availability depends on your plan">
-    Copilot model availability depends on your GitHub plan. If a model is
-    rejected, try another ID (for example `github-copilot/gpt-5.6-sol`). See
+    Copilot model availability depends on your GitHub plan and organization
+    policy. Interactive onboarding uses the live catalog for its model picker,
+    while non-interactive onboarding selects an eligible model automatically. See
     GitHub's [supported models per Copilot plan](https://docs.github.com/en/copilot/reference/ai-models/supported-models#supported-ai-models-per-copilot-plan)
     for the current model list.
   </Accordion>
@@ -220,8 +229,11 @@ back to `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, then `GITHUB_TOKEN`. Use
     OpenClaw refreshes the model catalog on demand from `${baseUrl}/models`
     (the same endpoint VS Code Copilot uses) so the runtime tracks
     per-account entitlement and accurate context windows without manifest
-    churn. Newly published Copilot models become visible without an OpenClaw
-    upgrade, and context windows reflect the real per-model limits
+    churn. The visible live catalog excludes models hidden from GitHub's picker
+    or disabled by account policy. Automatic setup defaults additionally require
+    streaming and tool-call support.
+    Newly published Copilot models become visible without an OpenClaw upgrade,
+    and context windows reflect the real per-model limits
     (e.g. 400k for the gpt-5.x series, 1M for the internal
     `claude-opus-*-1m` variants).
 

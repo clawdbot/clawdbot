@@ -1,5 +1,6 @@
 package ai.openclaw.app.gateway
 
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -14,6 +15,7 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -28,12 +30,14 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.Buffer
+import java.io.IOException
 import java.net.URI
 import java.util.Base64
 import java.util.Locale
@@ -84,7 +88,61 @@ sealed interface GatewayLoadedMedia {
     val headers: Map<String, String>,
     val client: OkHttpClient,
     val mimeType: String?,
+    val retryPreparingPlayback: Boolean,
   ) : GatewayLoadedMedia
+}
+
+internal data class GatewayPlaybackRetryPolicy(
+  val maxElapsedMs: Long = 120_000L,
+  val initialDelayMs: Long = 500L,
+  val maxDelayMs: Long = 5_000L,
+) {
+  init {
+    require(maxElapsedMs > 0L && initialDelayMs >= 0L && maxDelayMs >= initialDelayMs)
+  }
+}
+
+/** Shared bounded backoff for both buffered fetches and Media3's streaming HTTP path. */
+internal class GatewayPlaybackRetryState(
+  private val policy: GatewayPlaybackRetryPolicy = GatewayPlaybackRetryPolicy(),
+  private val startedAtMs: Long = SystemClock.elapsedRealtime(),
+) {
+  private var attempt = 0
+
+  fun canAttempt(nowMs: Long = SystemClock.elapsedRealtime()): Boolean = nowMs - startedAtMs < policy.maxElapsedMs
+
+  fun nextDelayMs(nowMs: Long = SystemClock.elapsedRealtime()): Long? {
+    val remainingMs = policy.maxElapsedMs - (nowMs - startedAtMs).coerceAtLeast(0L)
+    if (remainingMs <= 0L) return null
+    val multiplier = 1L shl attempt.coerceAtMost(30)
+    val delayMs = (policy.initialDelayMs * multiplier).coerceAtMost(policy.maxDelayMs)
+    attempt += 1
+    return delayMs.coerceAtMost(remainingMs)
+  }
+}
+
+/** Keeps Media3's OkHttp data source in its loading state while a rendition is being prepared. */
+internal class GatewayPreparingPlaybackInterceptor(
+  private val policy: GatewayPlaybackRetryPolicy = GatewayPlaybackRetryPolicy(),
+  private val nowMs: () -> Long = SystemClock::elapsedRealtime,
+  private val sleepMs: (Long) -> Unit = Thread::sleep,
+) : Interceptor {
+  override fun intercept(chain: Interceptor.Chain): okhttp3.Response {
+    val retry = GatewayPlaybackRetryState(policy = policy, startedAtMs = nowMs())
+    while (true) {
+      if (!retry.canAttempt(nowMs())) throw IOException("playback preparation timed out")
+      val response = chain.proceed(chain.request())
+      if (response.code != 202) return response
+      val retryDelayMs = retry.nextDelayMs(nowMs()) ?: return response
+      response.close()
+      try {
+        sleepMs(retryDelayMs)
+      } catch (error: InterruptedException) {
+        Thread.currentThread().interrupt()
+        throw IOException("playback preparation interrupted", error)
+      }
+    }
+  }
 }
 
 /**
@@ -171,6 +229,7 @@ private data class SelectedConnectAuth(
   val authDeviceToken: String?,
   val authPassword: String?,
   val signatureToken: String?,
+  val storedToken: String?,
   val storedScopes: List<String>,
   val authSource: GatewayConnectAuthSource,
   val attemptedDeviceTokenRetry: Boolean,
@@ -673,6 +732,7 @@ class GatewaySession(
     agentId: String?,
     artifactId: String,
     kind: GatewayMediaKind,
+    playbackRendition: Boolean = false,
   ): GatewayLoadedMedia? {
     val conn = readyConnection(expectedEndpointStableId) ?: return null
     val params =
@@ -709,9 +769,9 @@ class GatewaySession(
         conn.bufferedMedia(bytes = bytes, mimeType = resolvedMimeType)
       } ?: payload["url"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)?.let { ticketedPath ->
         if (kind == GatewayMediaKind.Video) {
-          conn.resolveTicketedMediaStream(ticketedPath, mimeType)
+          conn.resolveTicketedMediaStream(ticketedPath, mimeType, playbackRendition)
         } else {
-          conn.loadTicketedMedia(ticketedPath, kind)
+          conn.loadTicketedMedia(ticketedPath, kind, playbackRendition)
         }
       } ?: return null
     return synchronized(lifecycleLock) {
@@ -848,6 +908,11 @@ class GatewaySession(
     val hello: GatewayHelloSummary,
   )
 
+  private data class ConnectChallenge(
+    val nonce: String,
+    val issuedAtMs: Long,
+  )
+
   private enum class ConnectionState {
     CONNECTING,
     READY,
@@ -867,7 +932,7 @@ class GatewaySession(
     private val state = AtomicReference(ConnectionState.CONNECTING)
     private val connectDeferred = CompletableDeferred<ConnectedGateway>()
     private val closedDeferred = CompletableDeferred<Unit>()
-    private val connectNonceDeferred = CompletableDeferred<String>()
+    private val connectChallengeDeferred = CompletableDeferred<ConnectChallenge>()
     private val terminalCallbackClaimed = AtomicBoolean(false)
     private val connectResponseAccepted = AtomicBoolean(false)
 
@@ -941,13 +1006,15 @@ class GatewaySession(
     fun resolveTicketedMediaStream(
       ticketedPath: String,
       mimeType: String?,
+      playbackRendition: Boolean,
     ): GatewayLoadedMedia.Streaming? {
-      val request = resolveTicketedMediaRequest(ticketedPath) ?: return null
+      val request = resolveTicketedMediaRequest(ticketedPath, playbackRendition) ?: return null
       return GatewayLoadedMedia.Streaming(
         url = request.url,
         headers = request.headers + ("Accept" to "video/*"),
         client = client,
         mimeType = mimeType,
+        retryPreparingPlayback = playbackRendition,
       )
     }
 
@@ -965,38 +1032,53 @@ class GatewaySession(
     suspend fun loadTicketedMedia(
       ticketedPath: String,
       kind: GatewayMediaKind,
+      playbackRendition: Boolean,
     ): GatewayLoadedMedia.Buffered? =
       withContext(Dispatchers.IO) {
         if (kind == GatewayMediaKind.Video) return@withContext null
-        val resolved = resolveTicketedMediaRequest(ticketedPath) ?: return@withContext null
+        val resolved = resolveTicketedMediaRequest(ticketedPath, playbackRendition) ?: return@withContext null
         val request = Request.Builder().url(resolved.url).header("Accept", "${kind.wireValue}/*")
         for ((name, value) in resolved.headers) {
           request.header(name, value)
         }
-        val call = client.newCall(request.build())
-        call.timeout().timeout(20, java.util.concurrent.TimeUnit.SECONDS)
-        call.execute().use { response ->
-          if (!response.isSuccessful) return@withContext null
-          val body = response.body
-          val mimeType = body.contentType()?.toString()?.lowercase(Locale.ROOT) ?: return@withContext null
-          if (!mimeType.startsWith("${kind.wireValue}/")) return@withContext null
-          val maximumBytes = kind.maximumBufferedBytes
-          val declaredLength = body.contentLength()
-          if (declaredLength > maximumBytes) return@withContext null
-          val buffer = Buffer()
-          val source = body.source()
-          var total = 0L
-          while (true) {
-            val read = source.read(buffer, minOf(8192L, maximumBytes + 1L - total))
-            if (read == -1L) break
-            total += read
-            if (total > maximumBytes) return@withContext null
+        val retry = GatewayPlaybackRetryState()
+        repeat(Int.MAX_VALUE) {
+          if (!retry.canAttempt()) return@withContext null
+          val call = client.newCall(request.build())
+          call.timeout().timeout(20, java.util.concurrent.TimeUnit.SECONDS)
+          var retryDelayMs: Long? = null
+          call.execute().use { response ->
+            if (response.code == 202 && playbackRendition) {
+              retryDelayMs = retry.nextDelayMs()
+            } else {
+              if (!response.isSuccessful) return@withContext null
+              val body = response.body
+              val mimeType = body.contentType()?.toString()?.lowercase(Locale.ROOT) ?: return@withContext null
+              if (!mimeType.startsWith("${kind.wireValue}/")) return@withContext null
+              val maximumBytes = kind.maximumBufferedBytes
+              val declaredLength = body.contentLength()
+              if (declaredLength > maximumBytes) return@withContext null
+              val buffer = Buffer()
+              val source = body.source()
+              var total = 0L
+              while (true) {
+                val read = source.read(buffer, minOf(8192L, maximumBytes + 1L - total))
+                if (read == -1L) break
+                total += read
+                if (total > maximumBytes) return@withContext null
+              }
+              return@withContext bufferedMedia(bytes = buffer.readByteArray(), mimeType = mimeType)
+            }
           }
-          bufferedMedia(bytes = buffer.readByteArray(), mimeType = mimeType)
+          delay(retryDelayMs ?: return@withContext null)
         }
+        null
       }
 
-    private fun resolveTicketedMediaRequest(ticketedPath: String): TicketedMediaRequest? {
+    private fun resolveTicketedMediaRequest(
+      ticketedPath: String,
+      playbackRendition: Boolean = false,
+    ): TicketedMediaRequest? {
       val uri = runCatching { URI(ticketedPath) }.getOrNull() ?: return null
       val rawPath = uri.rawPath ?: return null
       val rawQuery = uri.rawQuery ?: return null
@@ -1007,7 +1089,13 @@ class GatewaySession(
           .any { field -> field.substringBefore('=') == "mediaTicket" && field.substringAfter('=', "").isNotEmpty() }
       if (!rawPath.startsWith("/api/chat/media/outgoing/") || !hasMediaTicket) return null
       val scheme = if (tlsConfig != null) "https" else "http"
-      val url = "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}$ticketedPath"
+      val playbackPath =
+        if (playbackRendition && rawQuery.split('&').none { it.substringBefore('=') == "playback" }) {
+          "$ticketedPath&playback=1"
+        } else {
+          ticketedPath
+        }
+      val url = "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}$playbackPath"
       val headers = mediaTransportHeaders()
       return TicketedMediaRequest(url = url, headers = headers)
     }
@@ -1142,7 +1230,7 @@ class GatewaySession(
             if (connectResponseAccepted.get()) {
               connectHandshakeJob?.join()
             } else {
-              connectNonceDeferred.completeExceptionally(connectError)
+              connectChallengeDeferred.completeExceptionally(connectError)
             }
             if (shouldNotify) onDisconnected(message)
           } finally {
@@ -1180,8 +1268,8 @@ class GatewaySession(
         connectHandshakeJob =
           connectionScope.launch {
             try {
-              val nonce = awaitConnectNonce()
-              sendConnect(nonce)
+              val challenge = awaitConnectChallenge()
+              sendConnect(challenge)
             } catch (err: Throwable) {
               connectDeferred.completeExceptionally(err)
               closeQuietly()
@@ -1228,7 +1316,7 @@ class GatewaySession(
       }
     }
 
-    private suspend fun sendConnect(connectNonce: String) {
+    private suspend fun sendConnect(connectChallenge: ConnectChallenge) {
       val identity = identityStore.loadOrCreate()
       val storedEntry = deviceAuthStore.loadEntry(endpoint.stableId, identity.deviceId, options.role)
       val storedToken = storedEntry?.token?.trim()
@@ -1249,7 +1337,7 @@ class GatewaySession(
       val payload =
         buildConnectParams(
           identity = identity,
-          connectNonce = connectNonce,
+          connectChallenge = connectChallenge,
           selectedAuth = selectedAuth,
         )
       val res = request(GatewayMethod.Connect.rawValue, payload, timeoutMs = CONNECT_RPC_TIMEOUT_MS)
@@ -1275,7 +1363,7 @@ class GatewaySession(
         }
         throw GatewayConnectFailure(error)
       }
-      val connected = parseConnectSuccess(res, identity.deviceId, selectedAuth.authSource)
+      val connected = parseConnectSuccess(res, identity.deviceId, selectedAuth)
       connectDeferred.complete(connected)
     }
 
@@ -1336,7 +1424,7 @@ class GatewaySession(
     private fun parseConnectSuccess(
       res: RpcResponse,
       deviceId: String,
-      authSource: GatewayConnectAuthSource,
+      selectedAuth: SelectedConnectAuth,
     ): ConnectedGateway {
       val payloadJson = res.payloadJson ?: throw IllegalStateException("connect failed: missing payload")
       val obj = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: throw IllegalStateException("connect failed")
@@ -1364,9 +1452,15 @@ class GatewaySession(
           ?.mapNotNull { it.asStringOrNull() }
           ?: emptyList()
       if (!deviceToken.isNullOrBlank()) {
-        persistIssuedDeviceToken(authSource, deviceId, authRole, deviceToken, authScopes)
+        // Hello scopes describe this socket. Reissuing the same stored token must not narrow its
+        // reusable grant metadata, while a rotated token starts with the live approved scopes.
+        val sameStoredTokenRecord =
+          deviceToken.trim() == selectedAuth.storedToken &&
+            authRole.trim().equals(options.role.trim(), ignoreCase = true)
+        val persistedScopes = if (sameStoredTokenRecord) selectedAuth.storedScopes else authScopes
+        persistIssuedDeviceToken(selectedAuth.authSource, deviceId, authRole, deviceToken, persistedScopes)
       }
-      if (shouldPersistBootstrapHandoffTokens(authSource)) {
+      if (shouldPersistBootstrapHandoffTokens(selectedAuth.authSource)) {
         // Bootstrap connects can mint role-specific device tokens; store only locally trusted handoffs.
         authObj
           ?.get("deviceTokens")
@@ -1430,7 +1524,7 @@ class GatewaySession(
 
     private fun buildConnectParams(
       identity: DeviceIdentity,
-      connectNonce: String,
+      connectChallenge: ConnectChallenge,
       selectedAuth: SelectedConnectAuth,
     ): JsonObject {
       val client = options.client
@@ -1466,7 +1560,8 @@ class GatewaySession(
         }
 
       val connectScopes = resolveConnectScopes(selectedAuth)
-      val signedAtMs = System.currentTimeMillis()
+      val signedAtMs = connectChallenge.issuedAtMs
+      val connectNonce = connectChallenge.nonce
       // V3 signatures bind the auth token, nonce, role, and scopes so replayed connect frames fail.
       val payload =
         DeviceAuthPayload.buildV3(
@@ -1599,9 +1694,15 @@ class GatewaySession(
       val payloadJson =
         frame["payload"]?.toString() ?: frame["payloadJSON"].asStringOrNull()
       if (event == GatewayEvent.ConnectChallenge.rawValue) {
-        val nonce = extractConnectNonce(payloadJson)
-        if (!connectNonceDeferred.isCompleted && !nonce.isNullOrBlank()) {
-          connectNonceDeferred.complete(nonce.trim())
+        if (!connectChallengeDeferred.isCompleted) {
+          val challenge = extractConnectChallenge(payloadJson)
+          if (challenge == null) {
+            connectChallengeDeferred.completeExceptionally(
+              IllegalStateException("gateway connect challenge invalid"),
+            )
+          } else {
+            connectChallengeDeferred.complete(challenge)
+          }
         }
         return
       }
@@ -1614,17 +1715,20 @@ class GatewaySession(
       onEvent(event, payloadJson)
     }
 
-    private suspend fun awaitConnectNonce(): String =
+    private suspend fun awaitConnectChallenge(): ConnectChallenge =
       try {
-        withTimeout(2_000) { connectNonceDeferred.await() }
-      } catch (err: Throwable) {
+        withTimeout(2_000) { connectChallengeDeferred.await() }
+      } catch (err: TimeoutCancellationException) {
         throw IllegalStateException("connect challenge timeout", err)
       }
 
-    private fun extractConnectNonce(payloadJson: String?): String? {
+    private fun extractConnectChallenge(payloadJson: String?): ConnectChallenge? {
       if (payloadJson.isNullOrBlank()) return null
       val obj = parseJsonOrNull(payloadJson)?.asObjectOrNull() ?: return null
-      return obj["nonce"].asStringOrNull()
+      val nonce = obj["nonce"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+      val issuedAtMs =
+        obj["ts"].asJsonIntegerLongOrNull()?.takeIf { it >= 0 } ?: return null
+      return ConnectChallenge(nonce = nonce, issuedAtMs = issuedAtMs)
     }
 
     private fun handleInvokeEvent(payloadJson: String) {
@@ -1945,6 +2049,7 @@ class GatewaySession(
       authDeviceToken = authDeviceToken,
       authPassword = explicitPassword,
       signatureToken = authToken ?: authBootstrapToken,
+      storedToken = storedToken,
       storedScopes = storedScopes,
       authSource = authSource,
       attemptedDeviceTokenRetry = shouldUseDeviceRetryToken,
@@ -2070,9 +2175,11 @@ internal fun buildGatewayWebSocketUrl(
   host: String,
   port: Int,
   useTls: Boolean,
+  contextPath: String = "",
 ): String {
   val scheme = if (useTls) "wss" else "ws"
-  return "$scheme://${formatGatewayAuthority(host, port)}"
+  val path = normalizeGatewayContextPath(contextPath)
+  return "$scheme://${formatGatewayAuthority(host, port)}$path"
 }
 
 /** Builds one gateway upgrade request without exposing proxy credentials to cleartext routes. */
@@ -2081,7 +2188,15 @@ internal fun buildGatewayWebSocketUpgradeRequest(
   tls: GatewayTlsParams?,
   customHeadersProvider: ((stableId: String) -> Map<String, String>)?,
 ): Request {
-  val request = Request.Builder().url(buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null))
+  val request =
+    Request.Builder().url(
+      buildGatewayWebSocketUrl(
+        endpoint.host,
+        endpoint.port,
+        tls != null,
+        endpoint.contextPath,
+      ),
+    )
   if (tls == null) return request.build()
 
   // Read at connect time so edits apply on the next reconnect. Headers may contain service tokens
@@ -2130,6 +2245,12 @@ private fun JsonElement?.asBooleanOrNull(): Boolean? =
 private fun JsonElement?.asLongOrNull(): Long? =
   when (this) {
     is JsonPrimitive -> content.toLongOrNull()
+    else -> null
+  }
+
+private fun JsonElement?.asJsonIntegerLongOrNull(): Long? =
+  when (this) {
+    is JsonPrimitive -> if (isString) null else content.toLongOrNull()
     else -> null
   }
 

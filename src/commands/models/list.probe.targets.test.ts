@@ -20,9 +20,11 @@ const resolveAuthProfileEligibilityMock = vi.fn<
 const resolveSecretRefStringMock = vi.fn(async () => "resolved-secret");
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog: loadModelCatalogMock,
 }));
 vi.mock("../../agents/model-auth.js", () => ({
+  hasSyntheticLocalProviderAuthConfig: () => false,
   hasUsableCustomProviderApiKey: (cfg: OpenClawConfig, provider: string) => {
     const raw = cfg.models?.providers?.[provider]?.apiKey;
     return typeof raw === "string" && raw.trim().length > 0 && raw !== "ollama-local";
@@ -114,7 +116,7 @@ vi.mock("../../secrets/resolve.js", () => ({
   resolveSecretRefString: resolveSecretRefStringMock,
 }));
 vi.mock("../status-all/format.js", () => ({
-  redactSecrets: (value: string) => value,
+  redactStatusSecrets: (value: string) => value,
 }));
 vi.mock("./shared.js", () => ({
   DEFAULT_PROVIDER: "openai",
@@ -772,6 +774,46 @@ describe("buildProbeTargets reason codes", () => {
         provider: "byteplus-plan",
         profileId: "byteplus-plan:saved",
         source: "profile",
+      }),
+    );
+  });
+
+  it("keeps no_model when a credential has no account-visible catalog model", async () => {
+    mockStore = {
+      version: 1,
+      profiles: {
+        "provider:account": {
+          type: "oauth",
+          provider: "provider",
+          access: "account-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+      order: { provider: ["provider:account"] },
+    };
+    mockAllowedProfiles = ["provider:account"];
+    resolveAuthProfileEligibilityMock.mockReturnValue({ eligible: true, reasonCode: "ok" });
+    loadModelCatalogMock.mockResolvedValueOnce([]);
+
+    const plan = await buildProbeTargets({
+      cfg: {} as OpenClawConfig,
+      providers: ["provider"],
+      modelCandidates: [],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(plan.targets).toStrictEqual([]);
+    expect(plan.results).toContainEqual(
+      expect.objectContaining({
+        provider: "provider",
+        profileId: "provider:account",
+        status: "no_model",
+        reasonCode: "no_model",
       }),
     );
   });
