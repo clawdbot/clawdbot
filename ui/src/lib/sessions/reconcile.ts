@@ -402,8 +402,9 @@ export function reconcileSessionChanged(
     ts: _ts,
     ...rowFields
   } = source;
+  // The gateway wire folds cron/spawn-child into "direct" before projection
+  // (session-utils-row.ts, #115299); cron detection is isCronSessionKey.
   const kind =
-    rowFields.kind === "cron" ||
     rowFields.kind === "direct" ||
     rowFields.kind === "group" ||
     rowFields.kind === "global" ||
@@ -434,38 +435,17 @@ export function reconcileSessionChanged(
     updatedAt: updatedAt ?? null,
     ...(sessionId ? { sessionId } : {}),
   } as GatewaySessionRow;
-  if (rowFields.archivedAt === null) {
-    delete row.archivedAt;
-  }
-  if (rowFields.archivedBy === null) {
-    delete row.archivedBy;
-  }
-  if (rowFields.pinnedAt === null) {
-    delete row.pinnedAt;
-  }
-  if (rowFields.label === null) {
-    delete row.label;
-  }
-  if (rowFields.icon === null) {
-    delete row.icon;
-  }
-  if (rowFields.category === null) {
-    delete row.category;
-  }
-  if (rowFields.displayName === null) {
-    delete row.displayName;
-  }
-  if (rowFields.createdActor === null) {
-    delete row.createdActor;
-  }
-  if (rowFields.thinkingLevel === null) {
-    delete row.thinkingLevel;
-  }
-  if (rowFields.lastRunError === null) {
-    delete row.lastRunError;
-  }
-  if (rowFields.agentStatus === null) {
-    delete row.agentStatus;
+  // The gateway emits explicit null tombstones so subscribed clients clear
+  // fields during merge-reconcile (session-event-payload.ts). Row fields are
+  // typed optional-not-null, so every null tombstone deletes — a hand-kept
+  // field list here drifts as new tombstoned fields ship (it already had:
+  // toolOverrides/observerDigest/controlOwnerSessionKey/restartRecoveryStatus/
+  // goal leaked null). updatedAt/activeLeafEntryId are the schema's only
+  // legitimately nullable row fields and keep their explicit handling.
+  for (const [field, value] of Object.entries(rowFields)) {
+    if (value === null && field !== "updatedAt" && field !== "activeLeafEntryId") {
+      delete row[field as keyof GatewaySessionRow];
+    }
   }
   const next = reconcileSessionHistory(result, row, undefined, {
     ...options,
@@ -567,7 +547,9 @@ export function reconcileSessionHistory(
     existing,
   );
   if (isStaleForActiveSession(visibleSession, existing)) {
-    return { ...result, defaults: nextDefaults };
+    // Keep result identity when nothing changed so the caller's
+    // result === state.result publish gate can skip a spurious re-render.
+    return defaults ? { ...result, defaults: nextDefaults } : result;
   }
   const sessions = sessionMatchesArchivedFilter(visibleSession, archivedFilter)
     ? [
