@@ -237,6 +237,11 @@ android {
     }
     create("thirdParty") {
       dimension = "store"
+    
+      // Fork 使用独立包名，避免与官方 APK 签名冲突
+      applicationIdSuffix = ".fork"
+      versionNameSuffix = "-fork"
+    
       manifestPlaceholders["nodeForegroundServiceType"] = "connectedDevice|microphone|location"
     }
   }
