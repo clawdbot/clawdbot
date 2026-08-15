@@ -302,7 +302,12 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
     .filter(Boolean)
     .join(" · ");
   const triggerMeta = activeModelOption?.contextWindow
-    ? formatContextTokenCapacity(activeModelOption.contextWindow)
+    ? activeModelOption.contextTokens &&
+      activeModelOption.contextTokens !== activeModelOption.contextWindow
+      ? t("chat.modelControls.contextActive", {
+          count: formatContextTokenCapacity(activeModelOption.contextTokens),
+        })
+      : formatContextTokenCapacity(activeModelOption.contextWindow)
     : "";
   const providerGroups = new Map<string, ChatModelPickerOption[]>();
   for (const option of params.modelOptions) {

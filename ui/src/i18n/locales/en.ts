@@ -5193,6 +5193,8 @@ export const en: TranslationMap = {
       fastHelp: "Fast responses finish sooner and can use more of your usage limits.",
       speedUnsupported: "Speed control is not supported for this model.",
       contextWindow: "{count} context",
+      contextActive: "{count} active",
+      contextActiveAndMax: "{active} active · {maximum} max",
       chatOnly: "Chat only",
       chatOnlyHelp:
         "This model can chat, but it cannot use tools. Choose another model for files, commands, web, or media tasks.",

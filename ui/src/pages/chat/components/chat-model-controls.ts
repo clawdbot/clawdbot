@@ -272,6 +272,31 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     !explicitOverride && currentOverride.trim().toLowerCase() === defaultModel.trim().toLowerCase()
       ? ""
       : currentOverride;
+  const activeModelOption =
+    pickerValue === ""
+      ? modelOptions.find((option) => option.isDefault)
+      : modelOptions.find((option) => option.value === pickerValue);
+  const activeSessionModel = activeSession?.model
+    ? resolveChatModelCatalogEntry(
+        activeSession.model.includes("/")
+          ? activeSession.model
+          : activeSession.modelProvider
+            ? `${activeSession.modelProvider}/${activeSession.model}`
+            : activeSession.model,
+        props.modelCatalog,
+      )
+    : undefined;
+  const activeOptionModel = activeModelOption
+    ? resolveChatModelCatalogEntry(activeModelOption.value, props.modelCatalog)
+    : undefined;
+  if (
+    activeModelOption &&
+    activeSession?.contextTokens &&
+    activeSessionModel !== undefined &&
+    activeSessionModel === activeOptionModel
+  ) {
+    activeModelOption.contextTokens = activeSession.contextTokens;
+  }
   const lockedModelLabel =
     props.modelSelectionRuntimeId?.trim().toLowerCase() === "codex"
       ? t("chat.selectors.nativeCodexModel")

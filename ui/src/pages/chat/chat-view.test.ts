@@ -5831,7 +5831,45 @@ describe("chat model controls", () => {
     expect(container.querySelector('[data-chat-model-provider-group="moonshotai"]')).toBeNull();
   });
 
-  it("shows model context size inline without a redundant tooltip", () => {
+  it("distinguishes the active context budget from native model capacity", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.6-sol",
+      modelProvider: "openai",
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          provider: "openai",
+          contextWindow: 1_050_000,
+          agentRuntime: { id: "openclaw", source: "model" },
+        },
+      ],
+    });
+    state.sessionsResult = createSessionsResultFromRows([
+      {
+        key: "main",
+        kind: "direct",
+        updatedAt: 1,
+        model: "gpt-5.6-sol",
+        modelProvider: "openai",
+        contextTokens: 272_000,
+      },
+    ]);
+    const container = renderModelControls(state);
+    const modelOption = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="openai/gpt-5.6-sol"]',
+    );
+
+    expect(modelOption?.querySelector(".chat-controls__model-option-meta")?.textContent).toBe(
+      "272k active · 1M max · OpenClaw",
+    );
+    expect(
+      getChatModelSelect(container).querySelector(".chat-controls__trigger-meta")?.textContent,
+    ).toBe("272k active");
+    expect(modelOption?.closest("openclaw-tooltip")).toBeNull();
+  });
+
+  it("does not pair a stale session budget with an optimistic model selection", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.6-sol",
       modelProvider: "openai",
@@ -5842,18 +5880,28 @@ describe("chat model controls", () => {
           provider: "openai",
           contextWindow: 1_050_000,
         },
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", contextWindow: 400_000 },
       ],
     });
-    const container = renderModelControls(state);
-    const modelOption = container.querySelector<HTMLButtonElement>(
-      '[data-chat-model-option="openai/gpt-5.6-sol"]',
-    );
+    state.sessionsResult = createSessionsResultFromRows([
+      {
+        key: "main",
+        kind: "direct",
+        updatedAt: 1,
+        model: "gpt-5.5",
+        modelProvider: "openai",
+        contextTokens: 272_000,
+      },
+    ]);
 
-    expect(modelOption?.querySelector(".chat-controls__model-option-meta")?.textContent).toBe("1M");
+    const container = renderModelControls(state, {
+      modelOverrides: { main: "openai/gpt-5.6-sol" },
+      modelSwitching: true,
+    });
+
     expect(
       getChatModelSelect(container).querySelector(".chat-controls__trigger-meta")?.textContent,
     ).toBe("1M");
-    expect(modelOption?.closest("openclaw-tooltip")).toBeNull();
   });
 
   it("synthesizes a selectable row for a persisted override missing from the catalog", () => {
