@@ -121,7 +121,7 @@ export async function createServiceChildRelayAdapter(params: {
   relay.unref();
 
   const control = relay.stdio[controlFd] as Duplex | null;
-  if (!relay.connected || !control) {
+  if (!relay.connected || !control || !relay.stdout || !relay.stderr) {
     relay.kill("SIGKILL");
     retainedRelays.delete(generation);
     throw new Error("service child relay channels were not created");
@@ -229,6 +229,14 @@ export async function createServiceChildRelayAdapter(params: {
         state = "closing";
       } else if (message.type === "startup-error") {
         loseIdentity(message.error);
+        outboundSequence += 1;
+        control.write(
+          encodeServiceChildMessage({
+            type: "startup-error-ack",
+            generation,
+            sequence: outboundSequence,
+          }),
+        );
       }
     }
   });

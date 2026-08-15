@@ -15,15 +15,10 @@ const LINEAGE_EXIT_OBSERVATION_MS = 100;
 
 type AnchorState = "starting" | "active" | "closing" | "closed";
 type StdioEntry = "ignore" | "inherit" | "pipe" | number;
-type ServiceChildHostMessage =
-  | ServiceChildStart
-  | {
-      type: "cancel";
-      generation: string;
-      sequence: number;
-      signal: "SIGTERM" | "SIGKILL";
-    };
-
+type ServiceChildControlMessage = {
+  generation: string;
+  sequence: number;
+} & ({ type: "cancel"; signal: "SIGTERM" | "SIGKILL" } | { type: "startup-error-ack" });
 function commandStdio(start: ServiceChildStart): {
   stdio: StdioEntry[];
   lineageFd: number;
@@ -80,6 +75,10 @@ export function runServiceChildGroupAnchor(): void {
   const rootSettledDone = new Promise<void>((resolve) => {
     resolveRootSettled = resolve;
   });
+  let resolveStartupErrorAck!: () => void;
+  const startupErrorAcknowledged = new Promise<void>((resolve) => {
+    resolveStartupErrorAck = resolve;
+  });
 
   const send = async (message: ServiceChildAnchorPayload) => {
     if (!start || !control || control.destroyed) {
@@ -113,6 +112,14 @@ export function runServiceChildGroupAnchor(): void {
       return;
     }
     control?.end(() => process.exit(0));
+  };
+
+  const reportStartupFailure = async (error: string) => {
+    await send({ type: "startup-error", error });
+    // A write callback only proves kernel acceptance. Keep the exact anchor alive until the
+    // host records the authoritative spawn failure and acknowledges it on this same channel.
+    await startupErrorAcknowledged;
+    await closeAuthority("lineage-lost", false);
   };
 
   const requestCleanup = async (
@@ -158,10 +165,9 @@ export function runServiceChildGroupAnchor(): void {
     await closeAuthority(reason, true);
   };
 
-  const onControlMessage = (message: ServiceChildHostMessage) => {
+  const onControlMessage = (message: ServiceChildControlMessage) => {
     if (
       !start ||
-      message.type !== "cancel" ||
       message.generation !== start.generation ||
       message.sequence <= lastHostSequence ||
       state === "closed"
@@ -169,6 +175,10 @@ export function runServiceChildGroupAnchor(): void {
       return;
     }
     lastHostSequence = message.sequence;
+    if (message.type === "startup-error-ack") {
+      resolveStartupErrorAck();
+      return;
+    }
     void requestCleanup("cancel", message.signal);
   };
 
@@ -187,7 +197,7 @@ export function runServiceChildGroupAnchor(): void {
         const line = pending.slice(0, newline);
         pending = pending.slice(newline + 1);
         try {
-          onControlMessage(JSON.parse(line) as ServiceChildHostMessage);
+          onControlMessage(JSON.parse(line) as ServiceChildControlMessage);
         } catch {
           void requestCleanup("parent-lost");
         }
@@ -214,11 +224,7 @@ export function runServiceChildGroupAnchor(): void {
         windowsHide: true,
       });
     } catch (error) {
-      await send({
-        type: "startup-error",
-        error: error instanceof Error ? error.message : String(error),
-      });
-      await closeAuthority("lineage-lost", false);
+      await reportStartupFailure(error instanceof Error ? error.message : String(error));
       return;
     }
     const lineage = command.stdio[lineageFd] as Readable | null;
@@ -323,12 +329,9 @@ export function runServiceChildGroupAnchor(): void {
       }
     }
     command.once("error", (error) => {
-      void (async () => {
-        if (state === "starting") {
-          await send({ type: "startup-error", error: error.message });
-          await closeAuthority("lineage-lost", false);
-        }
-      })();
+      if (state === "starting") {
+        void reportStartupFailure(error.message);
+      }
     });
     command.once("spawn", () => {
       if (!command?.pid || state !== "starting") {

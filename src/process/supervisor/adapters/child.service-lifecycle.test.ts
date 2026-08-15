@@ -285,6 +285,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       await expect(
         createChildAdapter({
           argv: ["/definitely/not/a/real-command"],
+          exactEnv: true,
           stdinMode: "pipe-closed",
           secretInput: {
             fd: 3,

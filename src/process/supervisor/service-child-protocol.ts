@@ -10,14 +10,10 @@ export type ServiceChildStart = {
   controlFd: number;
 };
 
-type ServiceChildHostMessage =
-  | ServiceChildStart
-  | {
-      type: "cancel";
-      generation: string;
-      sequence: number;
-      signal: "SIGTERM" | "SIGKILL";
-    };
+type ServiceChildControlMessage = {
+  generation: string;
+  sequence: number;
+} & ({ type: "cancel"; signal: "SIGTERM" | "SIGKILL" } | { type: "startup-error-ack" });
 
 type ServiceChildAnchorPayload =
   | {
@@ -50,7 +46,7 @@ export type ServiceChildRelayMessage =
   | { type: "relay-error"; generation: string; error: string };
 
 export function encodeServiceChildMessage(
-  message: ServiceChildHostMessage | ServiceChildAnchorMessage,
+  message: ServiceChildStart | ServiceChildControlMessage | ServiceChildAnchorMessage,
 ): string {
   return `${JSON.stringify(message)}\n`;
 }

@@ -1,14 +1,7 @@
 import type { Readable } from "node:stream";
 import { createWindowsOutputDecoder } from "../infra/windows-encoding.js";
 
-/** Delivers process output without splitting encoded characters across chunks. */
-export function onDecodedOutput(
-  stream: Readable | null | undefined,
-  listener: (chunk: string) => void,
-): void {
-  if (!stream) {
-    return;
-  }
+export function onDecodedOutput(stream: Readable, listener: (chunk: string) => void): void {
   const decoder = createWindowsOutputDecoder();
   const emit = (text: string) => {
     if (text) {
