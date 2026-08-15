@@ -668,7 +668,9 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       ? {
           agentId,
           sessionKey: options.sessionKey.trim(),
-          turnSourceChannel: gatewayCallerChannel,
+          turnSourceChannel: resolveGatewayMessageChannel(
+            options.messageChannel ?? options.messageProvider,
+          ),
           turnSourceTo:
             options.currentMessagingTarget ?? options.currentChannelId ?? options.messageTo,
           turnSourceAccountId: gatewayCaller.accountId,

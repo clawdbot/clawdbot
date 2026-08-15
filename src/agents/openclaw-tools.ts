@@ -486,7 +486,7 @@ export function createOpenClawTools(
             // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentId: sessionAgentId,
-            agentAccountId: caller.agentAccountId,
+            agentAccountId: gatewayCallerAccountId,
             config: options?.config,
             currentDeliveryContext: {
               channel: options?.agentChannel,
@@ -740,10 +740,13 @@ export function createOpenClawTools(
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
 
   const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
-  const wrapCaller = createGatewayToolCallerWrapper(hookAgentId, options ? caller : options);
+  const wrapGatewayCallerIdentity = createGatewayToolCallerWrapper(
+    hookAgentId,
+    options ? { ...options, agentAccountId: gatewayCallerAccountId } : options,
+  );
 
   if (options?.wrapBeforeToolCallHook === false) {
-    return allTools.map(wrapCaller);
+    return allTools.map(wrapGatewayCallerIdentity);
   }
   const defaultHookContext: HookContext = {
     ...(hookAgentId ? { agentId: hookAgentId } : {}),
@@ -761,5 +764,5 @@ export function createOpenClawTools(
         ? tool
         : wrapToolWithBeforeToolCallHook(tool, hookContext),
     )
-    .map(wrapCaller);
+    .map(wrapGatewayCallerIdentity);
 }
