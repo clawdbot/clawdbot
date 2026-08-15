@@ -9,7 +9,7 @@ import {
   MIN_PROMPT_BUDGET_TOKENS,
 } from "../../agent-compaction-constants.js";
 import { SAFETY_MARGIN } from "../../compaction.js";
-import type { AgentMessage, BashExecutionMessage } from "../../runtime/index.js";
+import type { AgentMessage } from "../../runtime/index.js";
 import {
   BRANCH_SUMMARY_PREFIX,
   BRANCH_SUMMARY_SUFFIX,
@@ -155,50 +155,53 @@ function estimateContentTokenPressure(
 }
 
 function estimateMessageTokenPressure(message: AgentMessage): number {
-  const role: unknown = Reflect.get(message, "role");
+  // Provider replay can carry legacy aliases outside the canonical AgentMessage union.
+  const legacy: Record<string, unknown> = isRecord(message) ? message : {};
   let tokens = MESSAGE_BOUNDARY_OVERHEAD_TOKENS;
 
-  if (role === "toolResult" || role === "tool" || Reflect.get(message, "type") === "toolResult") {
-    tokens += estimateContentTokenPressure(Reflect.get(message, "content"), "tool-result");
-    tokens += estimateIdentifierTokenPressure(
-      Reflect.get(message, "toolName") ?? Reflect.get(message, "tool_name"),
-    );
+  if (message.role === "toolResult" || legacy.role === "tool" || legacy.type === "toolResult") {
+    const content = message.role === "toolResult" ? message.content : legacy.content;
+    const toolName = message.role === "toolResult" ? message.toolName : legacy.toolName;
+    tokens += estimateContentTokenPressure(content, "tool-result");
+    tokens += estimateIdentifierTokenPressure(toolName ?? legacy.tool_name);
     return tokens;
   }
 
-  if (role === "bashExecution") {
-    if (Reflect.get(message, "excludeFromContext") === true) {
+  if (message.role === "bashExecution") {
+    if (message.excludeFromContext === true) {
       return 0;
     }
-    tokens += estimateStringTokenPressure(bashExecutionToText(message as BashExecutionMessage));
+    tokens += estimateStringTokenPressure(bashExecutionToText(message));
     return tokens;
   }
 
-  if (role === "branchSummary" || role === "compactionSummary") {
-    const rawSummary = Reflect.get(message, "summary");
-    const summary = typeof rawSummary === "string" ? rawSummary : "";
+  if (message.role === "branchSummary" || message.role === "compactionSummary") {
+    const summary = message.summary;
     const [prefix, suffix] =
-      role === "branchSummary"
+      message.role === "branchSummary"
         ? [BRANCH_SUMMARY_PREFIX, BRANCH_SUMMARY_SUFFIX]
         : [COMPACTION_SUMMARY_PREFIX, COMPACTION_SUMMARY_SUFFIX];
     return tokens + estimateStringTokenPressure(prefix + summary + suffix);
   }
 
-  if (role === "assistant") {
-    const content = Reflect.get(message, "content");
+  if (message.role === "assistant") {
+    const content = message.content;
     if (Array.isArray(content)) {
       for (const block of content) {
-        if (isRecord(block) && (block.type === "toolCall" || block.type === "tool_use")) {
-          tokens += estimateAssistantToolCallTokenPressure(block);
-        } else {
-          tokens += estimateContentBlockTokenPressure(block);
+        if (isRecord(block)) {
+          const blockType: unknown = block.type;
+          if (blockType === "toolCall" || blockType === "tool_use") {
+            tokens += estimateAssistantToolCallTokenPressure(block);
+            continue;
+          }
         }
+        tokens += estimateContentBlockTokenPressure(block);
       }
     } else {
       tokens += estimateContentTokenPressure(content);
     }
 
-    const toolCalls = Reflect.get(message, "toolCalls") ?? Reflect.get(message, "tool_calls");
+    const toolCalls = legacy.toolCalls ?? legacy.tool_calls;
     if (Array.isArray(toolCalls)) {
       for (const toolCall of toolCalls) {
         tokens += isRecord(toolCall)
@@ -209,7 +212,7 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
     return tokens;
   }
 
-  tokens += estimateContentTokenPressure(Reflect.get(message, "content"));
+  tokens += estimateContentTokenPressure(legacy.content);
   return tokens;
 }
 
