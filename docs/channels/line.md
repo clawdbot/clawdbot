@@ -74,7 +74,9 @@ LINE-specific settings:
   `group:<groupId>`, `room:<roomId>`, or `user:<userId>`; events without a
   conversation source use their own event-scoped lane. Within a lane, events
   dispatch in received order, so a retrying event delays later events in the same
-  chat but never other chats. Up to 8 deliveries run concurrently across lanes.
+  chat. One chat's backlog never blocks another chat's lane, but all lanes share
+  a cap of 8 concurrent deliveries: other chats progress independently while a
+  slot is free, and a 9th lane waits for one to open.
 - **Retries.** A failed delivery retries with exponential backoff starting at
   1 second and doubling per attempt, roughly two minutes of cumulative backoff
   across the window. After the 8th failed attempt the event dead-letters
@@ -101,10 +103,15 @@ LINE-specific settings:
   exists, a redelivered webhook for the same event is acknowledged without a
   second dispatch.
 
-The `500`-on-persistence-failure contract recovers events only when **Webhook
-redelivery** is enabled for the channel in the LINE Developers Console (Messaging
-API settings). Without it, LINE does not re-send failed webhook deliveries, and an
-event refused with `500` is lost.
+The `500`-on-persistence-failure contract only helps if LINE re-sends the event.
+LINE redelivers a webhook when **Webhook redelivery** is enabled for the channel in
+the LINE Developers Console (Messaging API settings, alongside **Use webhook**) and
+the bot server did not answer `2xx`. Without that setting, an event refused with
+`500` is not re-sent. Even enabled, redelivery is best effort rather than a
+guarantee: LINE documents that it is not reliable, that the retry count and
+interval are undisclosed, and that redelivered events may arrive out of order or
+more than once (the duplicate suppression window above absorbs the repeats). See
+[Redeliver a webhook that failed to be received](https://developers.line.biz/en/docs/messaging-api/receiving-messages/#webhook-redelivery).
 
 Dead-lettered events stay inspectable and, depending on the failure reason,
 recoverable; see [Inbound dead letters](/cli/channels#inbound-dead-letters) and
