@@ -1,9 +1,13 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
+export const CLAWHUB_UNSCANNED_TRUST_LABEL = "Not scanned by ClawHub";
+
 export type ClawHubSearchResult = {
   score: number;
   slug: string;
   installRef?: string;
+  detailRef?: string;
+  trustState?: "not-scanned-by-clawhub";
   displayName: string;
   summary?: string;
   icon?: string | null;
@@ -13,7 +17,7 @@ export type ClawHubSearchResult = {
 
 /**
  * Reference the operator actually picked. Several publishers can share one slug, and ClawHub
- * answers a bare slug with 409 AMBIGUOUS_SKILL_SLUG, so detail and install must send this.
+ * answers a bare slug with 409 AMBIGUOUS_SKILL_SLUG, so install must send this.
  * Gateways older than the installRef contract only supply the slug.
  */
 export function clawHubSkillRef(result: ClawHubSearchResult): string {

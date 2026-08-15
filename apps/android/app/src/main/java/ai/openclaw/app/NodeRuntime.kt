@@ -2634,9 +2634,18 @@ class NodeRuntime private constructor(
     scope.launch { searchClawHubSkillsFromGateway(query) }
   }
 
+  /**
+   * Routes a row to the only action its source supports. Install-only results skip review and
+   * install the exact reference search returned, so the picked source is the installed source.
+   */
   fun reviewClawHubSkillInstall(skill: GatewayClawHubSkillSummary) {
     if (skill.slug.isBlank()) return
-    scope.launch { reviewClawHubSkillInstallFromGateway(skill.copy(slug = skill.slug.trim())) }
+    val normalized = skill.copy(slug = skill.slug.trim())
+    if (!normalized.canReadDetails) {
+      installClawHubSkill(normalized.reference)
+      return
+    }
+    scope.launch { reviewClawHubSkillInstallFromGateway(normalized) }
   }
 
   fun dismissClawHubSkillInstallReview() {
@@ -6482,7 +6491,8 @@ class NodeRuntime private constructor(
         )
     }
     try {
-      val response = requestGatewayData(gatewayScope, "skills.detail", clawHubDetailParams(skill.reference))
+      val detailReference = skill.detailReference ?: skill.reference
+      val response = requestGatewayData(gatewayScope, "skills.detail", clawHubDetailParams(detailReference))
       val review = parseClawHubInstallReview(response, skill, json)
       publishGatewayData(gatewayScope) {
         if (clawHubSkillReviewSeq.get() == reviewSeq) {
@@ -6650,9 +6660,12 @@ class NodeRuntime private constructor(
     slug: String,
     version: String?,
   ): Boolean {
-    val exactVersion = version ?: return false
     if (!refreshSkillsFromGateway() || !isGatewayDataScopeCurrent(gatewayScope)) return false
-    return isClawHubSkillInstalled(_skillsSummary.value.skills, slug, exactVersion)
+    val skills = _skillsSummary.value.skills
+    // An install-only source resolves to a commit, not a release, so confirmation checks the
+    // tracked skill rather than a version the operator never chose.
+    return version?.let { isClawHubSkillInstalled(skills, slug, it) }
+      ?: isClawHubSkillInstalled(skills, slug)
   }
 
   private suspend fun releaseClawHubInstallClaim(

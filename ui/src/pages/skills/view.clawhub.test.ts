@@ -73,6 +73,7 @@ describe("renderSkills ClawHub", () => {
             {
               score: 0.95,
               slug: "github",
+              detailRef: "github",
               displayName: "GitHub",
               summary: "GitHub integration for OpenClaw",
               icon: `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`,
@@ -187,6 +188,7 @@ describe("renderSkills ClawHub", () => {
             score: 1,
             slug: "imap-smtp-email",
             installRef: `@${ownerHandle}/imap-smtp-email`,
+            detailRef: `@${ownerHandle}/imap-smtp-email`,
             displayName: "imap-smtp-email",
           })),
           onClawHubDetailOpen,
@@ -222,6 +224,68 @@ describe("renderSkills ClawHub", () => {
       "@gzlicanyi/imap-smtp-email",
       "@wangchenyu8/imap-smtp-email",
     ]);
+  });
+
+  it("offers install without a detail card for an install-only search result", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    const onClawHubDetailOpen = vi.fn();
+    const onClawHubInstall = vi.fn();
+
+    render(
+      renderSkills(
+        createProps({
+          clawhubQuery: "pdf",
+          clawhubResults: [
+            {
+              score: 1,
+              slug: "pdf",
+              // External sources carry no detailRef: the Gateway serves them install-only.
+              installRef: "skills-sh:anthropics/skills/pdf",
+              trustState: "not-scanned-by-clawhub",
+              displayName: "Pdf",
+            },
+            {
+              score: 1,
+              slug: "pdf",
+              installRef: "@awspace/pdf",
+              detailRef: "@awspace/pdf",
+              displayName: "Pdf",
+            },
+          ],
+          onClawHubDetailOpen,
+          onClawHubInstall,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const rows = [...container.querySelectorAll<HTMLElement>(".clawhub-skill-result__button")].map(
+      (copy) => copy.closest<HTMLElement>(".plugins-item")!,
+    );
+    expect(rows).toHaveLength(2);
+    // A detail button on the external row would open a dialog the Gateway always refuses.
+    expect(rows[0]!.querySelector(".plugins-item__detail-button")).toBeNull();
+    expect(rows[1]!.querySelector(".plugins-item__detail-button")).not.toBeNull();
+    // The row is the only place left to say the source was never scanned.
+    expect(rows[0]!.querySelector(".settings-row__desc")?.textContent).toContain(
+      "Not scanned by ClawHub",
+    );
+
+    for (const row of rows) {
+      row
+        .querySelector<HTMLButtonElement>(".btn.btn--sm")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    }
+
+    // Install keeps the exact source the operator picked instead of a same-slug native skill.
+    expect(onClawHubInstall.mock.calls.flat()).toEqual([
+      "skills-sh:anthropics/skills/pdf",
+      "@awspace/pdf",
+    ]);
+    expect(onClawHubDetailOpen).not.toHaveBeenCalled();
   });
 
   it("sizes the ClawHub detail dialog to a refusal message instead of a reader", async () => {

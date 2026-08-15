@@ -378,6 +378,9 @@ export const SkillsUploadCommitParamsSchema = closedObject({
 const CLAWHUB_SKILL_REF_DESCRIPTION =
   "ClawHub skill reference: `@owner/slug`, `skills-sh:owner/repo/slug`, or a bare `slug` when no publisher is known.";
 
+/** Wire copy of the core trust state; this package intentionally depends on typebox only. */
+const CLAWHUB_SKILLS_SH_TRUST_STATE_VALUE = "not-scanned-by-clawhub";
+
 /** Installs a skill from legacy install id, ClawHub, or uploaded archive. */
 export const SkillsInstallParamsSchema = Type.Union([
   closedObject({
@@ -446,7 +449,20 @@ export const SkillsSearchResultSchema = closedObject({
         Type.String({
           minLength: 1,
           description:
-            "Publisher-qualified reference for this result. Send it as `slug` to skills.detail and skills.install; several publishers can share one slug.",
+            "Source-qualified reference for this result. Send it as `slug` to skills.install; several publishers can share one slug.",
+        }),
+      ),
+      detailRef: Type.Optional(
+        Type.String({
+          minLength: 1,
+          description:
+            "Send it as `slug` to skills.detail. Absent when the result comes from an external source ClawHub serves install-only; offer install directly instead of a detail card.",
+        }),
+      ),
+      trustState: Type.Optional(
+        Type.Literal(CLAWHUB_SKILLS_SH_TRUST_STATE_VALUE, {
+          description:
+            "Present when ClawHub resolves this result from a source it has not scanned.",
         }),
       ),
       displayName: NonEmptyString,

@@ -12,6 +12,8 @@ private const val CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED = "clawhub_risk_acknowle
 internal const val CLAWHUB_INSTALL_REQUEST_TIMEOUT_MS = 125_000L
 internal const val CLAWHUB_SKILL_GATEWAY_UNAVAILABLE = "Update the Gateway to search and install ClawHub skills from Android."
 internal val CLAWHUB_SKILL_GATEWAY_METHODS = setOf("skills.search", "skills.detail", "skills.install")
+internal const val CLAWHUB_UNSCANNED_TRUST_STATE = "not-scanned-by-clawhub"
+internal const val CLAWHUB_UNSCANNED_TRUST_LABEL = "Not scanned by ClawHub"
 
 data class GatewayClawHubSkillSearchState(
   val query: String = "",
@@ -29,25 +31,61 @@ data class GatewayClawHubSkillSearchState(
 data class GatewayClawHubSkillSummary(
   val slug: String,
   val installRef: String?,
+  val detailRef: String?,
+  val trustState: String?,
   val displayName: String,
   val summary: String?,
   val version: String?,
 ) {
   /**
    * Several publishers can share one slug, so the Gateway-supplied reference is what identifies a
-   * result, what distinguishes rows, and what detail and install must send back.
+   * result, what distinguishes rows, and what install must send back. It names the result's own
+   * source, so it is never rebuilt from owner and slug.
    */
   val reference: String
     get() = installRef?.trim()?.takeIf(String::isNotEmpty) ?: slug
+
+  /**
+   * Reference the Gateway can serve a detail card for. External sources are install-only, so the
+   * Gateway omits it and this surface installs directly instead of offering a review that fails.
+   */
+  val detailReference: String?
+    get() = detailRef?.trim()?.takeIf(String::isNotEmpty)
+
+  /** Drives the affordance, so no client has to recognize external reference spellings itself. */
+  val canReadDetails: Boolean
+    get() = detailReference != null
+
+  val isUnscannedSource: Boolean
+    get() = trustState == CLAWHUB_UNSCANNED_TRUST_STATE
 }
 
 data class GatewayClawHubInstallReview(
   val slug: String,
   val displayName: String,
   val summary: String?,
-  val version: String,
+  /**
+   * Null for an install-only source: the Gateway pins those to a commit and rejects a version
+   * selector, so there is no release for the operator to review or acknowledge.
+   */
+  val version: String?,
   val author: String,
-)
+) {
+  companion object {
+    /**
+     * Install target for a result the Gateway serves no detail card for. It carries the search
+     * reference unchanged, so the source the operator picked is the source that gets installed.
+     */
+    fun directInstall(skill: GatewayClawHubSkillSummary): GatewayClawHubInstallReview =
+      GatewayClawHubInstallReview(
+        slug = skill.reference,
+        displayName = skill.displayName,
+        summary = skill.summary,
+        version = null,
+        author = if (skill.isUnscannedSource) CLAWHUB_UNSCANNED_TRUST_LABEL else "Unknown publisher",
+      )
+  }
+}
 
 internal data class GatewayClawHubInstallRejection(
   val message: String,
@@ -69,6 +107,8 @@ internal fun parseClawHubSearchResults(
       GatewayClawHubSkillSummary(
         slug = slug,
         installRef = value.string("installRef"),
+        detailRef = value.string("detailRef"),
+        trustState = value.string("trustState"),
         displayName = displayName,
         summary = value.string("summary"),
         version = value.string("version"),

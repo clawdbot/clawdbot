@@ -84,20 +84,34 @@ describe("clawhub skills", () => {
     ).resolves.toMatchObject([{ icon: undefined }, { icon: undefined }]);
   });
 
-  it("gives every search result the reference detail and install must send back", async () => {
+  it("keeps each search result on its own source and marks which ones detail can serve", async () => {
+    // Shape copied from a live https://clawhub.ai/api/v1/search response: the origin of a result
+    // arrives under `install`, never as a flat `installRef`.
     const fetchImpl: typeof fetch = async () =>
       new Response(
         JSON.stringify({
           results: [
-            { score: 2, slug: "email", ownerHandle: "alice", displayName: "Email" },
-            { score: 1, slug: "email", ownerHandle: "bob", displayName: "Email" },
+            {
+              score: 2,
+              slug: "email",
+              ownerHandle: "alice",
+              displayName: "Email",
+              install: { kind: "clawhub", reference: "alice/email" },
+            },
+            {
+              score: 1,
+              slug: "email",
+              ownerHandle: "bob",
+              displayName: "Email",
+              install: { kind: "clawhub", reference: "bob/email" },
+            },
             { score: 1, slug: "orphan", displayName: "Orphan" },
             {
               score: 1,
               slug: "weather",
-              installRef: "skills-sh:openclaw/skills/weather",
-              trustState: "not-scanned-by-clawhub",
+              ownerHandle: "openclaw",
               displayName: "Weather",
+              install: { kind: "skills-sh", reference: "skills-sh:openclaw/skills/weather" },
             },
           ],
         }),
@@ -106,13 +120,24 @@ describe("clawhub skills", () => {
 
     await expect(
       searchClawHubSkills({ query: "email", baseUrl: "https://registry.example", fetchImpl }).then(
-        (results) => results.map((entry) => entry.installRef),
+        (results) =>
+          results.map((entry) => ({
+            installRef: entry.installRef,
+            detailRef: entry.detailRef,
+            trustState: entry.trustState,
+          })),
       ),
     ).resolves.toEqual([
-      "@alice/email",
-      "@bob/email",
-      undefined,
-      "skills-sh:openclaw/skills/weather",
+      { installRef: "@alice/email", detailRef: "@alice/email", trustState: undefined },
+      { installRef: "@bob/email", detailRef: "@bob/email", trustState: undefined },
+      { installRef: undefined, detailRef: undefined, trustState: undefined },
+      // The external row keeps its own reference and stays out of detail; rewriting it to
+      // `@openclaw/weather` would install a different publisher's skill.
+      {
+        installRef: "skills-sh:openclaw/skills/weather",
+        detailRef: undefined,
+        trustState: "not-scanned-by-clawhub",
+      },
     ]);
   });
 

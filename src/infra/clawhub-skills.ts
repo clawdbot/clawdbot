@@ -18,16 +18,25 @@ const SKILL_CARD_MAX_BYTES = 256 * 1024;
 
 export const CLAWHUB_SKILLS_SH_TRUST_STATE = "not-scanned-by-clawhub" as const;
 export const CLAWHUB_SKILLS_SH_TRUST_LABEL = "Not scanned by ClawHub" as const;
+/** Marks a reference ClawHub resolves from an external source it never scanned. */
+export const CLAWHUB_SKILLS_SH_REF_PREFIX = "skills-sh:" as const;
 export type ClawHubSkillsShTrustState = typeof CLAWHUB_SKILLS_SH_TRUST_STATE;
 
 export type ClawHubSkillSearchResult = {
   score: number;
   slug: string;
   /**
-   * Reference every consumer must send back for detail and install. Search returns the same
-   * slug for several publishers, so the bare slug alone resolves to 409 AMBIGUOUS_SKILL_SLUG.
+   * Reference install must send back. Search returns the same slug for several publishers, so
+   * the bare slug alone resolves to 409 AMBIGUOUS_SKILL_SLUG. This names the result's own
+   * source: rewriting an external reference into `@owner/slug` would install a different skill.
    */
   installRef?: string;
+  /**
+   * Same identity as `installRef`, present only while ClawHub can also serve a detail card for
+   * it. External sources are install-only, so clients offer install directly instead of opening
+   * a card that cannot resolve.
+   */
+  detailRef?: string;
   trustState?: ClawHubSkillsShTrustState;
   // Search may return the same slug for multiple publishers; exact install refs need this handle.
   ownerHandle?: string | null;
@@ -36,6 +45,17 @@ export type ClawHubSkillSearchResult = {
   icon?: string | null;
   version?: string;
   updatedAt?: number;
+};
+
+/**
+ * Wire shape of one `/api/v1/search` row. ClawHub reports each result's origin under `install`,
+ * never as a flat `installRef`, so the mapping below is what keeps search identity honest.
+ */
+type ClawHubSkillSearchWireEntry = Omit<
+  ClawHubSkillSearchResult,
+  "installRef" | "detailRef" | "trustState"
+> & {
+  install?: { kind?: string | null; reference?: string | null } | null;
 };
 
 export type ClawHubSkillDetail = {
@@ -191,7 +211,7 @@ export async function searchClawHubSkills(params: {
   fetchImpl?: ClawHubFetch;
   limit?: number;
 }): Promise<ClawHubSkillSearchResult[]> {
-  const result = await fetchClawHubJson<{ results: ClawHubSkillSearchResult[] }>({
+  const result = await fetchClawHubJson<{ results: ClawHubSkillSearchWireEntry[] }>({
     baseUrl: params.baseUrl,
     path: "/api/v1/search",
     token: params.token,
@@ -202,17 +222,32 @@ export async function searchClawHubSkills(params: {
       limit: params.limit ? String(params.limit) : undefined,
     },
   });
-  const results = result.results ?? [];
-  for (const entry of results) {
-    entry.icon = resolveClawHubImageUrl(entry.icon, params.baseUrl);
-    // Publisher identity is recorded once, here, so every consumer reads one reference instead
-    // of rebuilding it. Registry-supplied refs (skills.sh) already name their own source.
-    const ownerHandle = normalizeOptionalString(entry.ownerHandle);
-    if (!entry.installRef && ownerHandle) {
-      entry.installRef = `@${ownerHandle}/${entry.slug}`;
-    }
+  return (result.results ?? []).map((entry) => toClawHubSkillSearchResult(entry, params.baseUrl));
+}
+
+/**
+ * Records each result's own source once, here, so no consumer rebuilds it. An external row keeps
+ * the registry's reference: rewriting it to `@owner/slug` would point install at a different
+ * publisher's skill, and ClawHub serves no detail card for that identity.
+ */
+function toClawHubSkillSearchResult(
+  entry: ClawHubSkillSearchWireEntry,
+  baseUrl?: string,
+): ClawHubSkillSearchResult {
+  const { install: _install, ...rest } = entry;
+  const base = { ...rest, icon: resolveClawHubImageUrl(entry.icon, baseUrl) };
+  const reference = normalizeOptionalString(entry.install?.reference);
+  if (reference?.startsWith(CLAWHUB_SKILLS_SH_REF_PREFIX)) {
+    return { ...base, installRef: reference, trustState: CLAWHUB_SKILLS_SH_TRUST_STATE };
   }
-  return results;
+  // ClawHub-native rows report `owner/slug`; this repo's reference grammar is `@owner/slug`, and
+  // that one identity answers both detail and install.
+  const ownerHandle = normalizeOptionalString(entry.ownerHandle);
+  if (!ownerHandle) {
+    return base;
+  }
+  const nativeRef = `@${ownerHandle}/${entry.slug}`;
+  return { ...base, installRef: nativeRef, detailRef: nativeRef };
 }
 
 export async function fetchClawHubSkillDetail(params: {

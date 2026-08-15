@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.CLAWHUB_SKILL_GATEWAY_UNAVAILABLE
+import ai.openclaw.app.CLAWHUB_UNSCANNED_TRUST_LABEL
 import ai.openclaw.app.GatewayClawHubInstallReview
 import ai.openclaw.app.GatewayClawHubSkillSearchState
 import ai.openclaw.app.GatewayClawHubSkillSummary
@@ -606,6 +607,8 @@ private fun ClawHubSkillSearchPanel(
           skill.summary,
           skill.reference,
           skill.version?.let { nativeString("Version \$it", it) },
+          // An install-only row never opens a review dialog, so the warning has to show here.
+          CLAWHUB_UNSCANNED_TRUST_LABEL.takeIf { skill.isUnscannedSource },
         )
       ClawDetailRow(
         title = skill.displayName,
@@ -620,7 +623,9 @@ private fun ClawHubSkillSearchPanel(
                 installed -> nativeString("Installed")
                 installing -> nativeString("Installing")
                 reviewing -> nativeString("Loading")
-                else -> nativeString("Review")
+                // The Gateway cannot answer detail for install-only sources, so no Review offer.
+                skill.canReadDetails -> nativeString("Review")
+                else -> nativeString("Install")
               },
             onClick = { onReviewInstall(skill) },
             enabled = isConnected && methodsAvailable && !installed && !reviewing && !installing,
@@ -756,7 +761,7 @@ private fun ClawHubInstallReviewDialog(
         review.summary?.let {
           Text(text = it, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-        ReviewLine(label = nativeString("Version"), value = review.version)
+        review.version?.let { ReviewLine(label = nativeString("Version"), value = it) }
         ReviewLine(label = nativeString("Publisher"), value = review.author)
         Text(
           text = nativeString("The Gateway will verify this exact release with ClawHub before download. If the release needs explicit risk acknowledgement, Android will show the Gateway warning before retrying."),

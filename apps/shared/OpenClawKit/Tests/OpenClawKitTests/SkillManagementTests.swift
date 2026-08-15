@@ -32,6 +32,28 @@ struct SkillManagementTests {
         #expect(search.results.map(\.id) == ["@alice/email", "@bob/email", "orphan"])
     }
 
+    @Test func `install-only results keep their source and expose no detail action`() throws {
+        let data = Data(
+            #"{"results":[{"slug":"pdf","installRef":"skills-sh:anthropics/skills/pdf","trustState":"not-scanned-by-clawhub","displayName":"Pdf"},{"slug":"pdf","installRef":"@awspace/pdf","detailRef":"@awspace/pdf","displayName":"Pdf"}]}"#
+                .utf8)
+        let search = try JSONDecoder().decode(ClawHubSkillSearchResult.self, from: data)
+        let external = try #require(search.results.first)
+        let native = try #require(search.results.last)
+
+        // Rewriting the external reference to @anthropics/pdf would install a different skill.
+        #expect(external.reference == "skills-sh:anthropics/skills/pdf")
+        #expect(!external.canReadDetails)
+        #expect(external.isUnscannedSource)
+        #expect(native.canReadDetails)
+        #expect(native.detailReference == "@awspace/pdf")
+
+        let review = ClawHubSkillInstallReview(directInstall: external)
+        #expect(review.slug == "skills-sh:anthropics/skills/pdf")
+        // The Gateway pins external sources to a commit and rejects a version selector.
+        #expect(review.version == nil)
+        #expect(review.isUnscannedSource)
+    }
+
     @Test func `risk acknowledgement stays bound to reviewed version`() {
         let matching = GatewayResponseError(
             method: "skills.install",

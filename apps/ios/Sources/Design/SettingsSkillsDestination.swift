@@ -392,7 +392,7 @@ struct SettingsSkillsDestination: View {
                     isBusy: self.reviewingSlug == skill.reference || self.installingSlug.map {
                         SkillManagementContract.sameClawHubSkill($0, skill.reference)
                     } == true,
-                    onReview: { Task { await self.review(skill) } })
+                    onAction: { Task { await self.act(on: skill) } })
             }
         }
     }
@@ -515,7 +515,21 @@ struct SettingsSkillsDestination: View {
         }
     }
 
-    private func review(_ skill: ClawHubSkillSummary) async {
+    /// Routes a row to the only action its source supports. Install-only results skip review and
+    /// install the exact reference search returned, so the picked source is the installed source.
+    private func act(on skill: ClawHubSkillSummary) async {
+        guard let detailReference = skill.detailReference else {
+            guard let route = try? await gatewayRoute() else { return }
+            await self.install(
+                ClawHubSkillInstallReview(directInstall: skill),
+                route: route,
+                acknowledgeRisk: false)
+            return
+        }
+        await self.review(skill, detailReference: detailReference)
+    }
+
+    private func review(_ skill: ClawHubSkillSummary, detailReference: String) async {
         guard self.canRead,
               self.loadedGatewayID == self.appModel.connectedGatewayID,
               self.reviewID == nil
@@ -535,7 +549,7 @@ struct SettingsSkillsDestination: View {
             let route = try await gatewayRoute()
             let data = try await request(
                 method: "skills.detail",
-                params: ClawHubDetailRequest(slug: skill.reference),
+                params: ClawHubDetailRequest(slug: detailReference),
                 timeoutSeconds: 20,
                 route: route)
             let detail = try JSONDecoder().decode(ClawHubSkillDetail.self, from: data)
@@ -590,11 +604,7 @@ struct SettingsSkillsDestination: View {
             guard self.appModel.connectedGatewayID == gatewayID else { return }
             self.installedSkills = try await self.fetchInstalledSkills(route: route)
             guard self.appModel.connectedGatewayID == gatewayID else { return }
-            guard SkillManagementContract.installed(
-                self.installedSkills,
-                slug: review.slug,
-                version: review.version)
-            else {
+            guard skillsInstalledAfter(self.installedSkills, review: review) else {
                 self.reviewSheet = nil
                 self.notice = SkillsNotice(
                     title: String(localized: "Install result unknown"),
@@ -637,7 +647,7 @@ struct SettingsSkillsDestination: View {
                appModel.connectedGatewayID == gatewayID
             {
                 self.installedSkills = skills
-                if SkillManagementContract.installed(skills, slug: review.slug, version: review.version) {
+                if skillsInstalledAfter(skills, review: review) {
                     self.reviewSheet = nil
                     self.notice = SkillsNotice(
                         title: String(localized: "Installed"),
@@ -900,7 +910,15 @@ private struct ClawHubSkillRow: View {
     let skill: ClawHubSkillSummary
     let installed: Bool
     let isBusy: Bool
-    let onReview: () -> Void
+    let onAction: () -> Void
+
+    private var actionTitle: String {
+        if self.installed {
+            return String(localized: "Installed")
+        }
+        // Install-only sources get no Review affordance; the Gateway cannot answer detail for them.
+        return self.skill.canReadDetails ? String(localized: "Review") : String(localized: "Install")
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -917,11 +935,16 @@ private struct ClawHubSkillRow: View {
                         Text(verbatim: version).font(OpenClawType.monoSmall).foregroundStyle(.secondary)
                     }
                 }
+                if self.skill.isUnscannedSource {
+                    // This row never opens a review card, so the trust warning has to live here.
+                    Text(verbatim: ClawHubSkillSummary.unscannedTrustLabel)
+                        .font(OpenClawType.caption)
+                        .foregroundStyle(OpenClawBrand.warn)
+                }
             }
             Spacer(minLength: 8)
-            Button(action: self.onReview) {
-                Text(self.installed ? String(localized: "Installed") : String(localized: "Install"))
-                    .font(OpenClawType.captionSemiBold)
+            Button(action: self.onAction) {
+                Text(self.actionTitle).font(OpenClawType.captionSemiBold)
             }
             .buttonStyle(.bordered)
             .disabled(self.isBusy || self.installed)
@@ -1070,7 +1093,9 @@ private struct SkillsReviewDetails: View {
                 if let summary = self.review.summary {
                     Text(summary).font(OpenClawType.body).foregroundStyle(.secondary)
                 }
-                SkillsReviewLine(label: "Version", value: self.review.version)
+                if let version = self.review.version {
+                    SkillsReviewLine(label: "Version", value: version)
+                }
                 SkillsReviewLine(label: "Publisher", value: self.review.author)
             }
         }
@@ -1098,10 +1123,20 @@ private struct ClawHubSearchRequest: Encodable {
 
 private struct ClawHubDetailRequest: Encodable { let slug: String }
 
+/// An install-only source resolves to a commit, not a release, so confirmation checks the tracked
+/// skill rather than a version the operator never chose.
+private func skillsInstalledAfter(_ skills: [SkillStatus], review: ClawHubSkillInstallReview) -> Bool {
+    guard let version = review.version else {
+        return SkillManagementContract.installed(skills, slug: review.slug)
+    }
+    return SkillManagementContract.installed(skills, slug: review.slug, version: version)
+}
+
 private struct ClawHubInstallRequest: Encodable {
     let source: String
     let slug: String
-    let version: String
+    /// Omitted for install-only sources: the Gateway pins those to a commit and rejects a version.
+    let version: String?
     let acknowledgeClawHubRisk: Bool?
     let timeoutMs: Int
 }

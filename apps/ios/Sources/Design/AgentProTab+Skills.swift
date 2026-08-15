@@ -173,6 +173,12 @@ extension AgentProTab {
                     .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+                if result.isUnscannedSource {
+                    // No review card on this surface, so the trust warning has to live in the row.
+                    Text(verbatim: ClawHubSkillSummary.unscannedTrustLabel)
+                        .font(OpenClawType.caption)
+                        .foregroundStyle(OpenClawBrand.warn)
+                }
             }
             Spacer(minLength: 8)
             Button {

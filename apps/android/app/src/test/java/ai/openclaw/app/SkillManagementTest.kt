@@ -29,6 +29,8 @@ class SkillManagementTest {
         GatewayClawHubSkillSummary(
           slug = "alpha",
           installRef = "@alice/alpha",
+          detailRef = null,
+          trustState = null,
           displayName = "Alpha",
           summary = "Useful",
           version = "1.2.3",
@@ -50,11 +52,34 @@ class SkillManagementTest {
   }
 
   @Test
+  fun installOnlyResultsKeepTheirSourceAndExposeNoDetailAction() {
+    val results =
+      parseClawHubSearchResults(
+        """{"results":[{"slug":"pdf","installRef":"skills-sh:anthropics/skills/pdf","trustState":"not-scanned-by-clawhub","displayName":"Pdf"},{"slug":"pdf","installRef":"@awspace/pdf","detailRef":"@awspace/pdf","displayName":"Pdf"}]}""",
+        json,
+      )
+
+    val external = results.first()
+    val native = results.last()
+    // Rewriting the external reference to @anthropics/pdf would install a different skill.
+    assertEquals("skills-sh:anthropics/skills/pdf", external.reference)
+    assertFalse(external.canReadDetails)
+    assertTrue(external.isUnscannedSource)
+    assertTrue(native.canReadDetails)
+    assertEquals("@awspace/pdf", native.detailReference)
+
+    val review = GatewayClawHubInstallReview.directInstall(external)
+    assertEquals("skills-sh:anthropics/skills/pdf", review.slug)
+    // The Gateway pins external sources to a commit and rejects a version selector.
+    assertNull(review.version)
+  }
+
+  @Test
   fun detailBindsExactVersionAndPublisherIdentity() {
     val review =
       parseClawHubInstallReview(
         """{"skill":{"displayName":"Alpha Skill","summary":"Reviewed metadata"},"latestVersion":{"version":"2.0.0"},"owner":{"displayName":"Alice","handle":"alice"}}""",
-        GatewayClawHubSkillSummary("alpha", null, "Alpha", null, null),
+        GatewayClawHubSkillSummary("alpha", null, null, null, "Alpha", null, null),
         json,
       )
 
@@ -75,7 +100,7 @@ class SkillManagementTest {
     val review =
       parseClawHubInstallReview(
         """{"skill":{"displayName":"Alpha"},"latestVersion":{"version":"2.0.0"},"owner":{"handle":"alice"}}""",
-        GatewayClawHubSkillSummary("alpha", null, "Alpha", null, "1.9.0"),
+        GatewayClawHubSkillSummary("alpha", null, null, null, "Alpha", null, "1.9.0"),
         json,
       )
 
@@ -87,7 +112,7 @@ class SkillManagementTest {
     val review =
       parseClawHubInstallReview(
         """{"skill":{"displayName":"Alpha"},"owner":{"handle":"alice"}}""",
-        GatewayClawHubSkillSummary("alpha", null, "Alpha", null, null),
+        GatewayClawHubSkillSummary("alpha", null, null, null, "Alpha", null, null),
         json,
       )
 
