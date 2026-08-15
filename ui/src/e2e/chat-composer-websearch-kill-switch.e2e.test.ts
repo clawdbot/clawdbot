@@ -1,6 +1,7 @@
 // Control UI tests prove the global web-search kill switch against a real Gateway.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server.js";
@@ -52,12 +53,6 @@ let browser: Browser;
 let ui: ControlUiE2eServer;
 let gateway: RealGateway;
 const openContexts = new Set<BrowserContext>();
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function requestMethodFromFrame(payload: string): string | null {
   try {
