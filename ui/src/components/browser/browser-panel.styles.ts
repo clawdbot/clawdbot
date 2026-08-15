@@ -102,11 +102,21 @@ export const browserPanelStyles = css`
   }
   .bp-viewport {
     position: relative;
+    display: flex;
     flex: 1;
     min-height: 0;
+    flex-direction: column;
     overflow: auto;
     background: var(--bg, #0e1015);
     outline: none;
+  }
+  /* The tab panel's own body must stretch, otherwise an empty state sizes to its
+     content and sits in the upper third instead of centring in the viewport. */
+  .bp-viewport::part(base) {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    flex-direction: column;
   }
   .bp-stage {
     position: relative;

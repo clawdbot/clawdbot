@@ -645,7 +645,7 @@ openclaw-chat-sidebar-region,
 
 .side-panel-type-menu__item::part(base) {
   min-height: var(--menu-item-height);
-  padding: 0 8px;
+  padding: 7px 8px;
   border-radius: var(--menu-item-radius);
   background: color-mix(in srgb, var(--text) 3%, transparent);
 }
@@ -685,7 +685,6 @@ openclaw-chat-sidebar-region,
   align-items: center;
   justify-content: center;
   padding: 0 6px;
-  border: 1px solid color-mix(in srgb, var(--muted) 12%, transparent);
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--text) 6%, transparent);
   color: var(--muted);
@@ -1378,8 +1377,30 @@ openclaw-chat-sidebar-region,
 }
 
 .chat-tasks-rail__task-inspector-state--error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   border-color: color-mix(in srgb, var(--danger) 30%, var(--border));
   color: var(--danger);
+}
+
+.chat-tasks-rail__task-inspector-retry {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 54%, transparent);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+}
+
+.chat-tasks-rail__task-inspector-retry:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.chat-tasks-rail__task-inspector-retry:disabled {
+  opacity: 0.55;
 }
 
 @keyframes chat-sidebar-fade-in {
