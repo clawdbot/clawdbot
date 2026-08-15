@@ -186,7 +186,10 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       }
 
       if (output.stopReason === "aborted" || output.stopReason === "error") {
-        throw new Error("An unknown error occurred");
+        // Preserve the provider's terminal fact; the catch below projects this
+        // message into output.errorMessage, and a generic string there makes a
+        // deterministic refusal look like a transient failure to failover.
+        throw new Error(output.errorMessage ?? "An unknown error occurred");
       }
 
       stream.push({ type: "done", reason: output.stopReason, message: output });
@@ -589,7 +592,11 @@ async function consumeChatStream(
 
     if (choice.finishReason) {
       terminalFinishReason = choice.finishReason;
-      output.stopReason = mapChatStopReason(choice.finishReason);
+      const terminal = mapChatStopReason(choice.finishReason);
+      output.stopReason = terminal.stopReason;
+      if (terminal.errorMessage) {
+        output.errorMessage = terminal.errorMessage;
+      }
     }
 
     const delta = choice.delta;
@@ -1015,22 +1022,31 @@ function mapToolChoice(
   };
 }
 
-function mapChatStopReason(reason: string | null): StopReason {
+type MistralStopReasonResult = {
+  stopReason: StopReason;
+  errorMessage?: string;
+};
+
+function mapChatStopReason(reason: string | null): MistralStopReasonResult {
   if (reason === null) {
-    return "stop";
+    return { stopReason: "stop" };
   }
   switch (reason) {
     case "stop":
-      return "stop";
+      return { stopReason: "stop" };
     case "length":
     case "model_length":
-      return "length";
+      return { stopReason: "length" };
     case "tool_calls":
-      return "toolUse";
-    case "error":
-      return "error";
-    default:
-      return "stop";
+      return { stopReason: "toolUse" };
   }
+  // The SDK types finishReason as an open enum, so a terminal this build does
+  // not know reaches here verbatim. Reporting it as a normal stop would present
+  // a filtered or failed turn as a completed one and drop its tool calls, so
+  // carry the provider's terminal fact instead.
+  return {
+    stopReason: "error",
+    errorMessage: `Provider finish_reason: ${reason}`,
+  };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

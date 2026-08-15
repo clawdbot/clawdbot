@@ -169,7 +169,7 @@ describe("Mistral bounded-stream-read direct (synthetic ReadableStream)", () => 
 });
 
 type MistralTerminalFixture = {
-  finishReason: "stop" | "length" | "error" | "tool_calls" | null;
+  finishReason: "stop" | "length" | "error" | "tool_calls" | "content_filter" | null;
   done: boolean;
   abort?: boolean;
   toolArguments?: string[];
@@ -296,6 +296,22 @@ describe("Mistral terminal ownership through the installed SDK and real HTTP/SSE
       expect(result.content).toEqual([{ type: "text", text: "Safe partial answer" }]);
       expect(events).not.toContain("toolcall_end");
       expect(events).toContain("done");
+    },
+  );
+
+  it.each(["content_filter", "error"] as const)(
+    "carries the provider terminal fact for a %s finish reason",
+    async (finishReason) => {
+      const { result, events } = await streamMistralTerminalFixture({
+        finishReason,
+        done: true,
+        toolArguments: ['{"action":"delete_all"}'],
+        text: "Partial answer",
+      });
+      expect(result.stopReason).toBe("error");
+      expect(result.errorMessage).toBe(`Provider finish_reason: ${finishReason}`);
+      expect(events).not.toContain("done");
+      expect(result.content).not.toContainEqual(expect.objectContaining({ type: "toolCall" }));
     },
   );
 
