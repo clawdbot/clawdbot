@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as mainSessionRecoveryStore from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   deleteSessionEntryLifecycle,
@@ -683,6 +684,65 @@ describe("reply turn admission", () => {
       expect(caught).toBeInstanceOf(Error);
       expect((caught as Error).message).toContain("automatic recovery exhausted");
       expect((caught as Error).message).not.toMatch(/changed while starting work/i);
+    },
+  );
+
+  it.each(["visible", "heartbeat"] as const)(
+    "uses the current tombstone state, not the pre-claim snapshot, for %s admission",
+    async (kind) => {
+      // Regression: admittedSessionEntry is captured before the awaited recovery-owner
+      // claim. A concurrent /new or reset that wins that race replaces the row, so the
+      // rejection message must re-read current state instead of describing the session
+      // as still blocked by a tombstone that no longer exists.
+      const sessionKey = `agent:main:telegram:topic:recovery-race-tombstone:${kind}`;
+      const sessionId = "tombstoned-session";
+      const storePath = createSessionStore({
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 100,
+          status: "failed",
+          abortedLastRun: false,
+          mainRestartRecovery: {
+            cycleId: "cycle-1",
+            revision: 4,
+            chargedAttempts: 3,
+            tombstone: { reason: "automatic recovery exhausted" },
+          },
+        },
+      });
+
+      // Simulate a concurrent /new winning the race: by the time the recovery-owner
+      // claim resolves, the row has already been replaced with a healthy, non-
+      // tombstoned session, and the claim reports the row changed underneath it.
+      const claimSpy = vi
+        .spyOn(mainSessionRecoveryStore, "claimMainSessionRecoveryOwner")
+        .mockImplementation(async () => {
+          replaceSessionEntrySync({ storePath, sessionKey }, {
+            sessionId: "reset-by-concurrent-new",
+            updatedAt: 200,
+            status: "running",
+            abortedLastRun: false,
+          } as SessionEntry);
+          return { kind: "invalidated", reason: "state_changed" } as const;
+        });
+
+      let caught: unknown;
+      try {
+        await admitTestReplyTurn({
+          sessionKey,
+          sessionId,
+          expectedSessionId: sessionId,
+          storePath,
+          kind,
+        });
+      } catch (err) {
+        caught = err;
+      } finally {
+        claimSpy.mockRestore();
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).not.toContain("automatic recovery exhausted");
+      expect((caught as Error).message).toMatch(/changed while starting work/i);
     },
   );
 

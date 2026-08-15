@@ -316,7 +316,18 @@ async function admitReplyTurnWithWaitSignal(
             // forever. The tombstone reason already names the fix (/new or reset); surface
             // it instead of the generic message so it reaches whatever eventually logs or
             // displays this error, rather than getting silently discarded at the throw site.
-            const tombstoneReason = admittedSessionEntry.mainRestartRecovery?.tombstone?.reason;
+            //
+            // admittedSessionEntry is a pre-claim snapshot: a concurrent /new or reset that
+            // wins the race during the awaited claim can replace this row, so re-read the
+            // current entry rather than trusting the stale tombstone it may still describe.
+            const currentSessionEntry = storePath
+              ? (loadSessionEntry({
+                  storePath,
+                  sessionKey: params.sessionKey,
+                  readConsistency: "latest",
+                }) as InternalSessionEntry | undefined)
+              : undefined;
+            const tombstoneReason = currentSessionEntry?.mainRestartRecovery?.tombstone?.reason;
             rejectLifecycleInvalidatedWork({
               kind: params.kind,
               message: tombstoneReason
