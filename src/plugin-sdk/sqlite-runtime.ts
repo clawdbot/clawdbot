@@ -11,5 +11,5 @@ export {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-export { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+export { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 export { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";

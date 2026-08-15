@@ -76,4 +76,38 @@ describe("memory vector index provider doctor diagnostic", () => {
       }),
     ).resolves.toBeNull();
   });
+
+  it("does not materialize WAL sidecars while inspecting an existing index", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-vector-wal-"));
+    roots.add(stateDir);
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    const sidecars = [`${agentPath}-shm`, `${agentPath}-wal`];
+    await fs.mkdir(path.dirname(agentPath), { recursive: true });
+    const db = new DatabaseSync(agentPath);
+    db.exec(
+      "PRAGMA journal_mode = WAL; CREATE TABLE memory_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT",
+    );
+    db.prepare("INSERT INTO memory_index_meta (key, value) VALUES (?, ?)").run(
+      "memory_index_meta_v1",
+      JSON.stringify({ model: "embeddinggemma-300m", vectorDims: 768 }),
+    );
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    db.close();
+    await Promise.all(sidecars.map((sidecar) => fs.rm(sidecar, { force: true })));
+
+    const params = {
+      config: { memory: {}, agents: { entries: {} } } satisfies OpenClawConfig,
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: {} as PluginDoctorStateMigrationContext,
+    };
+
+    await expect(vectorIndexProviderDiagnostic.detectLegacyState(params)).resolves.toEqual({
+      preview: [expect.stringContaining("embeddinggemma-300m")],
+    });
+    for (const sidecar of sidecars) {
+      await expect(fs.stat(sidecar)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  });
 });

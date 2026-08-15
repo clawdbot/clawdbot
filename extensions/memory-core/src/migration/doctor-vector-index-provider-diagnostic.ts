@@ -38,10 +38,11 @@ async function readExistingVectorModel(databasePath: string): Promise<string | n
   if (!fs.existsSync(databasePath)) {
     return null;
   }
-  const { openNodeSqliteDatabase } = await import("openclaw/plugin-sdk/sqlite-runtime");
+  const { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } =
+    await import("openclaw/plugin-sdk/sqlite-runtime");
   let db: ReturnType<typeof openNodeSqliteDatabase> | undefined;
   try {
-    db = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    db = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(databasePath), { readOnly: true });
     const row = db
       .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
       .get(MEMORY_INDEX_META_KEY) as { value?: unknown } | undefined;
