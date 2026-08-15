@@ -5,6 +5,7 @@ import path from "node:path";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
@@ -378,6 +379,81 @@ describe("Feishu durable ingress debounce lifecycle", () => {
 
     expect(harness.handleMessage).toHaveBeenCalledTimes(1);
     expect(second.calls.adopted).not.toHaveBeenCalled();
+  });
+
+  it("submits a second same-chat message while the first turn is still running", async () => {
+    const first = createLifecycle();
+    const second = createLifecycle();
+    const firstTurnGate = createDeferred<void>();
+    const secondTurnGate = createDeferred<void>();
+    const handleMessage = vi.fn(async (turn: HandleMessageParams) => {
+      turn.turnAdoptionLifecycle?.onAdoptionFinalizing();
+      await turn.turnAdoptionLifecycle?.onAdopted();
+      if (turn.event.message.message_id === "om-first") {
+        await firstTurnGate.promise;
+      } else {
+        await secondTurnGate.promise;
+      }
+    });
+    const claim = vi.spyOn(dedup, "claimUnprocessedFeishuMessage");
+    claim.mockImplementation(async () => ({
+      kind: "claimed",
+      handle: createClaim(`live-${claim.mock.calls.length}`),
+    }));
+    const channelRuntime = {
+      commands: { isControlCommandMessage: () => false },
+      debounce: {
+        resolveInboundDebounceMs: () => 25,
+        createInboundDebouncer,
+      },
+    } as unknown as PluginRuntime["channel"];
+    const handler = createFeishuMessageReceiveHandler({
+      cfg: {} as ClawdbotConfig,
+      channelRuntime,
+      accountId: "default",
+      runtime: createNonExitingRuntimeEnv(),
+      chatHistories: new Map(),
+      handleMessage,
+      resolveDebounceText: () => "hello",
+      hasProcessedMessage: vi.fn(async () => false),
+      getBotOpenId: () => "ou-bot",
+      resolveIngressLifecycle: (data) => {
+        const eventId = (data as { event_id?: string }).event_id;
+        if (eventId === "evt-first") {
+          return first.lifecycle;
+        }
+        if (eventId === "evt-second") {
+          return second.lifecycle;
+        }
+        return undefined;
+      },
+    });
+
+    await expect(handler(createTextEvent("evt-first", "om-first", "first"))).resolves.toEqual({
+      kind: "deferred",
+    });
+    await vi.waitFor(() =>
+      expect(handleMessage.mock.calls[0]?.[0]?.event.message.message_id).toBe("om-first"),
+    );
+    await expect(handler(createTextEvent("evt-second", "om-second", "second"))).resolves.toEqual({
+      kind: "deferred",
+    });
+    // Message 2's turn reaches the runner while message 1's turn is still
+    // running — the #54409 property. The full-turn-serializing queue never
+    // submits it until run 1 completes, so this fails on the old behavior.
+    await vi.waitFor(() =>
+      expect(handleMessage.mock.calls[1]?.[0]?.event.message.message_id).toBe("om-second"),
+    );
+    expect(handleMessage.mock.calls.map(([turn]) => turn.event.message.message_id)).toEqual([
+      "om-first",
+      "om-second",
+    ]);
+
+    firstTurnGate.resolve();
+    secondTurnGate.resolve();
+    await vi.waitFor(() => expect(first.calls.adopted).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(second.calls.adopted).toHaveBeenCalledTimes(1));
+    expect(handleMessage).toHaveBeenCalledTimes(2);
   });
 
   it("preserves abandon retry accounting, backoff, threshold, and restart behavior", async () => {
