@@ -1193,7 +1193,7 @@ function approvalKindForMethod(method: string): AgentApprovalEventData["kind"] {
 function emitApprovalEvent(params: EmbeddedRunAttemptParams, data: AgentApprovalEventData): void {
   void params.onAgentEvent?.({
     stream: "approval",
-    data: data as unknown as Record<string, unknown>,
+    data: { ...data },
   });
 }
 
