@@ -1,38 +1,38 @@
 ---
-summary: "OpenClaw is a multi-channel gateway for AI agents that runs on any OS."
+summary: "OpenCrustacean is a multi-channel gateway for AI agents that runs on any OS."
 read_when:
-  - Introducing OpenClaw to newcomers
-title: "OpenClaw"
+  - Introducing OpenCrustacean to newcomers
+title: "OpenCrustacean"
 ---
 
-# OpenClaw 🦞
+# OpenCrustacean 🐢
 
 <p align="center">
     <img
         src="/assets/openclaw-hero-light.png"
-        alt="OpenClaw"
+        alt="OpenCrustacean"
         width="500"
         class="dark:hidden"
     />
     <img
         src="/assets/openclaw-hero-dark.png"
-        alt="OpenClaw"
+        alt="OpenCrustacean"
         width="500"
         class="hidden dark:block"
     />
 </p>
 
-> _"EXFOLIATE! EXFOLIATE!"_ — A space lobster, probably
+> _"EXFOLIATE! EXFOLIATE!"_ — A space crustacean, probably
 
 <p align="center">
   <strong>Any OS gateway for AI agents across Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more.</strong><br />
   Send a message, get an agent response from your pocket. Run one Gateway across channel plugins, WebChat, and mobile nodes.<br />
-  Developed in the open by the <a href="https://openclaw.org">OpenClaw Foundation</a>, a non-profit.
+  Developed in the open by the <a href="https://openclaw.org">OpenCrustacean Foundation</a>, a non-profit.
 </p>
 
 <Columns>
   <Card title="Get Started" href="/start/getting-started" icon="rocket">
-    Install OpenClaw and bring up the Gateway in minutes.
+    Install OpenCrustacean and bring up the Gateway in minutes.
   </Card>
   <Card title="Run Onboarding" href="/start/wizard" icon="list-checks">
     Guided setup with `openclaw onboard` and pairing flows.
@@ -86,9 +86,9 @@ these hub links to reach the same top-level docs areas from the page body.
   </Card>
 </Columns>
 
-## What is OpenClaw?
+## What is OpenCrustacean?
 
-OpenClaw is a **self-hosted gateway** that connects your favorite chat apps — Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more via channel plugins — to AI coding agents. You run a single Gateway process on your own machine (or a server), and it becomes the bridge between your messaging apps and an always-available AI assistant.
+OpenCrustacean is a **self-hosted gateway** that connects your favorite chat apps — Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more via channel plugins — to AI coding agents. You run a single Gateway process on your own machine (or a server), and it becomes the bridge between your messaging apps and an always-available AI assistant.
 
 **Who is it for?** Developers and power users who want a personal AI assistant they can message from anywhere — without giving up control of their data or relying on a hosted service.
 
@@ -106,7 +106,7 @@ OpenClaw is a **self-hosted gateway** that connects your favorite chat apps — 
 ```mermaid
 flowchart LR
   A["Chat apps + plugins"] --> B["Gateway"]
-  B --> C["OpenClaw agent"]
+  B --> C["OpenCrustacean agent"]
   B --> D["CLI"]
   B --> E["Web Control UI"]
   B --> F["macOS app"]
@@ -141,7 +141,7 @@ The Gateway is the single source of truth for sessions, routing, and channel con
 ## Quick start
 
 <Steps>
-  <Step title="Install OpenClaw">
+  <Step title="Install OpenCrustacean">
     ```bash
     npm install -g openclaw@latest
     ```
@@ -173,14 +173,14 @@ Open the browser Control UI after the Gateway starts.
 - Remote access: [Web surfaces](/web) and [Tailscale](/gateway/tailscale)
 
 <p align="center">
-  <img src="/whatsapp-openclaw.jpg" alt="OpenClaw" width="420" />
+  <img src="/whatsapp-openclaw.jpg" alt="OpenCrustacean" width="420" />
 </p>
 
 ## Configuration (optional)
 
 Config lives at `~/.openclaw/openclaw.json`.
 
-- If you **do nothing**, OpenClaw uses the bundled OpenClaw agent runtime; DMs share the agent's main session, and each group chat gets its own session.
+- If you **do nothing**, OpenCrustacean uses the bundled OpenCrustacean agent runtime; DMs share the agent's main session, and each group chat gets its own session.
 - If you want to lock it down, start with `channels.whatsapp.allowFrom` and (for groups) mention rules.
 
 Example:

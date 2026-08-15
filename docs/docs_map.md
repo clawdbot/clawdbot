@@ -3404,6 +3404,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Agent defaults
   - H3: agents.defaults.workspace
   - H3: agents.defaults.repoRoot
+  - H3: agents.defaults.newSessionFolder
   - H3: agents.defaults.skills
   - H3: agents.defaults.skipBootstrap
   - H3: agents.defaults.skipOptionalBootstrapFiles
@@ -4481,9 +4482,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /
 - Headings:
-  - H1: OpenClaw 🦞
+  - H1: OpenCrustacean 🐢
   - H2: Browse docs
-  - H2: What is OpenClaw?
+  - H2: What is OpenCrustacean?
   - H2: How it works
   - H2: Key capabilities
   - H2: Quick start
@@ -10909,7 +10910,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Gateway host status
   - H2: Language support
   - H2: Appearance themes
-  - H2: OpenClaw system care
+  - H2: OpenCrustacean system care
   - H2: Manage plugins
   - H2: Apps and extensions
   - H2: Sidebar navigation
@@ -10936,6 +10937,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Blank Control UI page
   - H2: Debugging/testing: dev server + remote Gateway
   - H2: Related
+
+## web/crab-pet.md
+
+- Route: /web/crab-pet
+- Headings:
+  - H2: What you are looking at
+  - H2: When it shows up
+  - H2: Things you can do
+  - H2: Turning visits off (or back on)
+  - H2: The Crabdex
+  - H2: Field notes
+  - H2: Privacy
 
 ## web/dashboard-architecture.md
 
@@ -10991,18 +11004,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Tailscale access
   - H2: Security notes
   - H2: Building the UI
-
-## web/lobster.md
-
-- Route: /web/lobster
-- Headings:
-  - H2: What you are looking at
-  - H2: When it shows up
-  - H2: Things you can do
-  - H2: Turning visits off (or back on)
-  - H2: The Lobsterdex
-  - H2: Field notes
-  - H2: Privacy
 
 ## web/notifications.md
 

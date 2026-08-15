@@ -144,9 +144,9 @@ Appearance also has a Text size setting. It applies to chat text, composer text,
 
 Theme, theme mode, text size, language, and chat display preferences sync through the gateway config (`ui.prefs`), so they follow you across devices and agents can change them through the approval gate — connected clients apply changes live via the gateway's `config.changed` notice. Each browser keeps a local mirror for instant boot; clients that cannot write config (viewer scope, offline) keep changes device-local. See [Configuration reference](/gateway/configuration-reference#ui).
 
-## OpenClaw system care
+## OpenCrustacean system care
 
-Open **Settings → Ask OpenClaw** to talk to the system setup and repair agent. The page renders a centered chat with the animated OpenClaw mascot, which switches to a thinking pose while a turn is in flight. The conversation is not trapped in Settings: the lobster button in the thread workspace rail toggles the same live session as a dockable panel (right or bottom, with placement and size persisted in the browser profile), and leaving the full page mid-conversation automatically minimizes the chat into that dock so the session follows you. The dock hides itself while the full Ask OpenClaw page is open.
+Open **Settings → Ask OpenCrustacean** to talk to the system setup and repair agent. The page renders a centered chat with the animated OpenCrustacean mascot, which switches to a thinking pose while a turn is in flight. The conversation is not trapped in Settings: the crab button in the thread workspace rail toggles the same live session as a dockable panel (right or bottom, with placement and size persisted in the browser profile), and leaving the full page mid-conversation automatically minimizes the chat into that dock so the session follows you. The dock hides itself while the full Ask OpenCrustacean page is open.
 
 Each chat message carries the Control UI page you are currently viewing as an untrusted ambient hint, so requests like "configure this channel" or "why is this page empty?" resolve against the page you are looking at.
 

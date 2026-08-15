@@ -7,15 +7,52 @@
   </defs>
   <!-- SMIL, not CSS: Chromium/Safari only run declarative SMIL inside <img>-loaded
        SVGs, and every app surface loads this file via <img src>. OpenCrustacean
-       brand mark: geometric green crab claw that floats and snaps its pincer. -->
+       brand mark: round green crab that floats, snaps its pincers, and waves
+       its antennae. -->
   <g>
     <animateTransform attributeName="transform" type="translate" additive="sum"
       values="0 0; 0 -5; 0 0" keyTimes="0; 0.5; 1" dur="4s" repeatCount="indefinite"
       calcMode="spline" keySplines="0.42 0 0.58 1; 0.42 0 0.58 1"/>
     <animateTransform attributeName="transform" type="rotate" additive="sum"
-      values="0 58 56; 2 58 56; -2 58 56; 0 58 56" keyTimes="0; 0.4; 0.55; 0.7"
+      values="0 60 60; 1.5 60 60; -1.5 60 60; 0 60 60" keyTimes="0; 0.4; 0.55; 0.7"
       dur="4s" repeatCount="indefinite"
       calcMode="spline" keySplines="0.42 0 0.58 1; 0.42 0 0.58 1; 0.42 0 0.58 1"/>
-    <path d="M20 92 L34 100 L46 82 L58 78 L74 80 L96 76 L104 72 L92 64 L74 60 L58 56 L74 48 L92 42 L104 38 L96 32 L78 26 L60 28 L44 34 L32 46 L30 60 L34 74 Z" fill="url(#crab-gradient)"/>
+
+    <!-- antennae -->
+    <g stroke="#1f6b38" stroke-width="3" stroke-linecap="round" fill="none" opacity="0.85">
+      <path d="M42 26 Q36 14 26 10"/>
+      <path d="M78 26 Q84 14 94 10"/>
+    </g>
+    <!-- legs (behind shell) -->
+    <g stroke="#1f6b38" stroke-width="5" stroke-linecap="round" fill="none">
+      <path d="M40 88 L28 100"/>
+      <path d="M50 92 L42 104"/>
+      <path d="M58 94 L54 105"/>
+      <path d="M66 94 L70 105"/>
+      <path d="M74 92 L82 104"/>
+      <path d="M82 88 L94 100"/>
+    </g>
+    <!-- pincer claws -->
+    <g fill="url(#crab-gradient)">
+      <path d="M32 46 C20 40 8 44 4 52 C1 58 6 62 12 60 C20 57 27 53 32 51 Z"/>
+      <path d="M32 62 C22 68 10 66 5 60 C2 55 6 50 12 52 C18 55 26 58 32 60 Z"/>
+      <path d="M88 46 C100 40 112 44 116 52 C119 58 114 62 108 60 C100 57 93 53 88 51 Z"/>
+      <path d="M88 62 C98 68 110 66 115 60 C118 55 114 50 108 52 C102 55 94 58 88 60 Z"/>
+    </g>
+    <!-- shell -->
+    <path d="M60 28 C80 28 92 42 92 62 C92 84 80 96 60 96 C40 96 28 84 28 62 C28 42 40 28 60 28 Z" fill="url(#crab-gradient)" stroke="#0a2e1c" stroke-width="2.5" stroke-linejoin="round"/>
+    <!-- eye stalks -->
+    <g stroke="#1f6b38" stroke-width="4" stroke-linecap="round">
+      <path d="M48 36 L45 24"/>
+      <path d="M72 36 L75 24"/>
+    </g>
+    <g fill="#0a1014">
+      <circle cx="45" cy="20" r="5.5"/>
+      <circle cx="75" cy="20" r="5.5"/>
+    </g>
+    <g fill="#f5fbff">
+      <circle cx="46.5" cy="18.5" r="2"/>
+      <circle cx="76.5" cy="18.5" r="2"/>
+    </g>
   </g>
 </svg>
