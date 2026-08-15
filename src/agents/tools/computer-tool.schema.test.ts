@@ -45,7 +45,7 @@ describe("createComputerTool schema", () => {
   });
 
   it("keeps the v2 guidance provider-neutral and free of host setup instructions", () => {
-    const description = createComputerTool({
+    const tool = createComputerTool({
       capabilityDescriptor: v2Descriptor([
         "screenshot",
         "left_click",
@@ -53,7 +53,8 @@ describe("createComputerTool schema", () => {
         "get_window_state",
         "set_value",
       ]),
-    }).description;
+    });
+    const description = tool.description;
 
     expect(description).toContain("Observe first with `get_window_state`");
     expect(description).toContain('`effect:"confirmed"` > `unverifiable` > `suspected_noop`');
@@ -63,6 +64,19 @@ describe("createComputerTool schema", () => {
       /cua|peekaboo|\b(?:cli|mcp|daemon|socket|install(?:ation|ing)?)\b|verify_state|start_session|end_session|element_token|snapshot_id|window_id|delivery_mode/iu,
     );
     expect(description.length).toBeLessThan(2_400);
+    const schema = JSON.stringify(tool.parameters);
+    for (const nativeField of [
+      "providerTool",
+      "arguments",
+      "binaryPath",
+      "socketPath",
+      "session",
+      "driverArgs",
+      "output_dir",
+      "destinationRoot",
+    ]) {
+      expect(schema).not.toContain(`"${nativeField}":`);
+    }
   });
 
   it("filters guidance to the selected node's advertised capability families", () => {

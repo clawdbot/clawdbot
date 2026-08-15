@@ -314,20 +314,18 @@ export async function handleV2Act(
       verifyGeneration(state, driver.generation);
       const appName = input.app!;
       const app = resolveAppRef(state, appName);
-      if (appName.startsWith("cua:v2:app:") && !app) {
+      if (!app) {
         throw new Error("COMPUTER_STALE_OBSERVATION: refresh list_apps and retry");
       }
       const result = await callWindowTool(
         driver,
         state,
         "launch_app",
-        app
-          ? app.launchPath
-            ? { launch_path: app.launchPath }
-            : app.bundleId
-              ? { bundle_id: app.bundleId }
-              : { name: app.name }
-          : { name: appName },
+        app.launchPath
+          ? { launch_path: app.launchPath }
+          : app.bundleId
+            ? { bundle_id: app.bundleId }
+            : { name: app.name },
         signal,
       );
       const structured = projectedToolDetails(result, "launch_app");
