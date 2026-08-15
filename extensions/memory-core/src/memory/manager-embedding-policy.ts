@@ -99,8 +99,12 @@ const SPLITTABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
 // distinction core's failover classifier makes for chat-completion providers
 // (src/agents/failover/classification-rules.ts), reimplemented locally since extensions
 // cannot import core internals.
+// Deliberately no bare "billing" alternative: RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE
+// matches any 5xx, so a transient "500 billing service unavailable" would otherwise match
+// both regexes and get misclassified as a durable exhaustion instead of a retryable failure.
+// Every alternative below is specific enough to only appear in genuine billing-exhaustion text.
 const BILLING_EXHAUSTED_MEMORY_EMBEDDING_ERROR_RE =
-  /(^| )402(\D|$)|payment required|insufficient_quota|insufficient quota|check your subscription|billing|quota exceeded/i;
+  /(^| )402(\D|$)|payment required|insufficient_quota|insufficient quota|check your subscription|quota exceeded/i;
 
 // A periodic/scoped word alone is not enough to call a 402 transient -- e.g. "402 monthly
 // subscription quota exhausted; check your subscription" is a durable billing failure that

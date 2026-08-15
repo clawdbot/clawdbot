@@ -391,4 +391,14 @@ describe("memory embedding policy", () => {
       ),
     ).toBe(true);
   });
+
+  it("does not classify a transient 5xx that happens to mention billing as durable exhaustion", () => {
+    // Regression: a bare "billing" word alone used to match this classifier even without
+    // any 402/quota/payment signal, so a transient "500 billing service unavailable" (which
+    // also matches the 5xx retry classifier) would retry, exhaust attempts, and then get
+    // misclassified into a long billing cooldown instead of staying a plain retryable 5xx.
+    const message = "openai embeddings failed: 500 billing service unavailable";
+    expect(isBillingExhaustedMemoryEmbeddingError(message)).toBe(false);
+    expect(isRetryableMemoryEmbeddingError(message)).toBe(true);
+  });
 });

@@ -642,6 +642,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     });
   }
 
+  /** Clears an active billing cooldown once this provider actually completes a request. */
+  private clearMemoryEmbeddingCooldownOnSuccess(providerId: string): void {
+    if (this.embeddingBillingCooldown?.providerId !== providerId) {
+      return;
+    }
+    log.warn("memory embeddings: provider recovered, clearing billing cooldown", {
+      provider: providerId,
+    });
+    this.embeddingBillingCooldown = undefined;
+  }
+
   private async runProviderBatchWithRetry<T>(params: {
     items: T[];
     generation?: MemorySemanticProviderGeneration;
@@ -722,12 +733,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             },
           }),
       );
-      if (this.embeddingBillingCooldown?.providerId === provider.id) {
-        log.warn("memory embeddings: provider recovered, clearing billing cooldown", {
-          provider: provider.id,
-        });
-        this.embeddingBillingCooldown = undefined;
-      }
+      this.clearMemoryEmbeddingCooldownOnSuccess(provider.id);
       return batchResult;
     } catch (err) {
       if (!structured) {
@@ -800,7 +806,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
     }
     try {
-      return await this.withProviderUse(
+      const embedding = await this.withProviderUse(
         provider,
         async () =>
           await runMemoryEmbeddingRetryLoop({
@@ -824,6 +830,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
           }),
       );
+      this.clearMemoryEmbeddingCooldownOnSuccess(provider.id);
+      return embedding;
     } catch (err) {
       if (markDegraded) {
         this.markLocalEmbeddingProviderDegraded(err);

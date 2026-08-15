@@ -76,3 +76,23 @@ describe("memory embedding query retry cancellation", () => {
     expect(embedQuery).not.toHaveBeenCalled();
   });
 });
+
+describe("memory embedding query cooldown recovery", () => {
+  it("clears an active billing cooldown once a query embedding succeeds", async () => {
+    // Regression: only the batch-write success path cleared embeddingBillingCooldown, so
+    // after credits were restored, memory search could succeed via embedQueryWithRetry
+    // while every session write stayed skipped until the old cooldown deadline.
+    const embedQuery = vi.fn<EmbeddingProvider["embedQuery"]>().mockResolvedValue([0.1, 0.2]);
+    const manager = createEmbeddingQueryRetryHarness(embedQuery) as EmbeddingQueryRetryHarness & {
+      embeddingBillingCooldown?: { providerId: string; untilMs: number };
+    };
+    manager.embeddingBillingCooldown = {
+      providerId: "test-provider",
+      untilMs: Date.now() + 60_000,
+    };
+
+    await manager.embedQueryWithRetry("search terms");
+
+    expect(manager.embeddingBillingCooldown).toBeUndefined();
+  });
+});
