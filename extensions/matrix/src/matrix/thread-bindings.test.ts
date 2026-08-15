@@ -548,6 +548,15 @@ describe("matrix thread bindings", () => {
       conversationId: "$thread",
       targetSessionKey: "agent:ops:subagent:child",
     });
+
+    initialManager.stop();
+
+    expect(
+      replacementManager.getByConversation({
+        conversationId: "$thread-2",
+        parentConversationId: "!room:example",
+      })?.targetSessionKey,
+    ).toBe("agent:ops:subagent:replacement");
   });
 
   it("updates lifecycle windows by session key and refreshes activity", async () => {

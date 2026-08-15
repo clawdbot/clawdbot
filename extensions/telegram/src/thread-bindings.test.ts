@@ -32,6 +32,7 @@ import {
 } from "./thread-bindings-store.js";
 import {
   createTelegramThreadBindingManager as createTelegramThreadBindingManagerImpl,
+  getTelegramThreadBindingManager,
   setTelegramThreadBindingIdleTimeoutBySessionKey,
   setTelegramThreadBindingMaxAgeBySessionKey,
 } from "./thread-bindings.js";
@@ -162,6 +163,49 @@ describe("telegram thread bindings", () => {
     expect(bound.conversation.conversationId).toBe("-100200300:topic:77");
     expect(bound.targetSessionKey).toBe("agent:main:subagent:child-1");
     expect(manager.getByConversationId("-100200300:topic:77")?.boundBy).toBe("user-1");
+  });
+
+  it("drops stopped-manager bindings without clearing a replacement generation", async () => {
+    const stopped = createTelegramThreadBindingManager({
+      accountId: "manager-lifecycle",
+      persist: false,
+      enableSweeper: false,
+    });
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:main:subagent:stopped",
+      targetKind: "subagent",
+      conversation: {
+        channel: "telegram",
+        accountId: "manager-lifecycle",
+        conversationId: "stopped-thread",
+      },
+    });
+
+    stopped.stop();
+
+    const replacement = createTelegramThreadBindingManager({
+      accountId: "manager-lifecycle",
+      persist: false,
+      enableSweeper: false,
+    });
+    expect(replacement.getByConversationId("stopped-thread")).toBeUndefined();
+
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:main:subagent:replacement",
+      targetKind: "subagent",
+      conversation: {
+        channel: "telegram",
+        accountId: "manager-lifecycle",
+        conversationId: "replacement-thread",
+      },
+    });
+
+    stopped.stop();
+
+    expect(getTelegramThreadBindingManager("manager-lifecycle")).toBe(replacement);
+    expect(replacement.getByConversationId("replacement-thread")?.targetSessionKey).toBe(
+      "agent:main:subagent:replacement",
+    );
   });
 
   it("rejects child placement when conversationId is a bare topic ID with no group context", async () => {

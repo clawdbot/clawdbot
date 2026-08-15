@@ -19,6 +19,7 @@ import {
   resetPluginStateStoreForTests,
 } from "../../../../plugin-sdk/plugin-state-test-runtime.js";
 import { setActivePluginRegistry } from "../../../../plugins/runtime.js";
+import { loadBundledPluginFacade } from "../../../../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../../../test-utils/channel-plugins.js";
 import { getChannelPlugin } from "../../registry.js";
 import type { ChannelPlugin } from "../../types.public.js";
@@ -239,7 +240,10 @@ async function getDiscordContractApi() {
 }
 
 async function getTelegramContractApi() {
-  return await getContractApi<TelegramContractApi>("telegram", "channel-plugin-api");
+  return await loadBundledPluginFacade<TelegramContractApi>({
+    pluginId: "telegram",
+    artifactBasename: "channel-plugin-api.js",
+  });
 }
 
 async function stopDiscordSessionBindingManager() {
