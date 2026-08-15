@@ -12,6 +12,7 @@ import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/types.js";
 import { danger } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
 import {
   isOffsetlessIsoDateTime,
@@ -196,7 +197,7 @@ function formatCronStatusForDisplay(job: CronJob): string {
 }
 
 export function handleCronCliError(err: unknown) {
-  defaultRuntime.error(danger(String(err)));
+  defaultRuntime.error(danger(formatErrorMessage(err)));
   defaultRuntime.exit(1);
 }
 
