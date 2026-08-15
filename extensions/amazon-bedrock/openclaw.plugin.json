@@ -3,12 +3,16 @@
   "name": "Amazon Bedrock",
   "description": "OpenClaw Amazon Bedrock provider plugin with model discovery, embeddings, and guardrail support.",
   "activation": {
-    "onStartup": false
+    "onStartup": true
   },
   "enabledByDefault": true,
-  "providers": ["amazon-bedrock"],
+  "providers": [
+    "amazon-bedrock"
+  ],
   "contracts": {
-    "memoryEmbeddingProviders": ["bedrock"]
+    "memoryEmbeddingProviders": [
+      "bedrock"
+    ]
   },
   "configSchema": {
     "type": "object",
@@ -18,32 +22,69 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "enabled": { "type": "boolean" },
-          "region": { "type": "string" },
+          "enabled": {
+            "type": "boolean"
+          },
+          "region": {
+            "type": "string"
+          },
           "providerFilter": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           },
-          "refreshInterval": { "type": "integer", "minimum": 0 },
-          "defaultContextWindow": { "type": "integer", "minimum": 1 },
-          "defaultMaxTokens": { "type": "integer", "minimum": 1 }
+          "refreshInterval": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "defaultContextWindow": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "defaultMaxTokens": {
+            "type": "integer",
+            "minimum": 1
+          }
         }
       },
       "guardrail": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "guardrailIdentifier": { "type": "string" },
-          "guardrailVersion": { "type": "string" },
-          "streamProcessingMode": { "type": "string", "enum": ["sync", "async"] },
-          "trace": { "type": "string", "enum": ["enabled", "disabled", "enabled_full"] }
+          "guardrailIdentifier": {
+            "type": "string"
+          },
+          "guardrailVersion": {
+            "type": "string"
+          },
+          "streamProcessingMode": {
+            "type": "string",
+            "enum": [
+              "sync",
+              "async"
+            ]
+          },
+          "trace": {
+            "type": "string",
+            "enum": [
+              "enabled",
+              "disabled",
+              "enabled_full"
+            ]
+          }
         },
-        "required": ["guardrailIdentifier", "guardrailVersion"]
+        "required": [
+          "guardrailIdentifier",
+          "guardrailVersion"
+        ]
       }
     }
   },
   "configContracts": {
-    "compatibilityMigrationPaths": ["models.bedrockDiscovery"]
+    "compatibilityMigrationPaths": [
+      "models.bedrockDiscovery"
+    ]
   },
   "uiHints": {
     "discovery": {
