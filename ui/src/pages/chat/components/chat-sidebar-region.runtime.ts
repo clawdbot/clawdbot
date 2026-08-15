@@ -199,6 +199,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         id: panel.id,
         domId: `side-panel-tab-${panel.id}`,
         label: type.label,
+        labelTooltip: type.label,
         icon: type.icon,
         closeLabel: t("chat.sidebarColumns.close", { panel: type.label }),
       };

@@ -413,9 +413,12 @@ class Tooltip extends OpenClawLitElement {
     }
     const content = normalizeTooltipText(this.content);
     const triggerText = normalizeTooltipText(trigger.textContent ?? "");
-    const clipsContent = [trigger, ...trigger.querySelectorAll("*")].some(
-      (element) => isHtmlElement(element) && element.scrollWidth > element.clientWidth,
-    );
+    const clipsContent =
+      trigger.matches("[data-tooltip-overflow]") ||
+      trigger.querySelector("[data-tooltip-overflow]") !== null ||
+      [trigger, ...trigger.querySelectorAll("*")].some(
+        (element) => isHtmlElement(element) && element.scrollWidth > element.clientWidth,
+      );
     return Boolean(content && triggerText && triggerText.includes(content) && !clipsContent);
   }
 

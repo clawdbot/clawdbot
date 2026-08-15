@@ -431,6 +431,17 @@ openclaw-chat-sidebar-region,
   text-overflow: clip;
 }
 
+.side-panel__header .tabstrip-tab__tooltip-trigger {
+  width: 100%;
+  overflow: hidden;
+}
+
+.side-panel__header .tabstrip-tab__label-tooltip {
+  display: inline-flex !important;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 .side-panel__header .tabstrip-tab__label.is-overflowing {
   -webkit-mask-image: linear-gradient(to right, black calc(100% - 14px), transparent);
   mask-image: linear-gradient(to right, black calc(100% - 14px), transparent);

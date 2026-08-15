@@ -431,13 +431,41 @@ suite.define(() => {
                   labels.some((label) => {
                     const element = label as HTMLElement;
                     return (
-                      element.scrollWidth > element.clientWidth + 1 &&
+                      element.hasAttribute("data-tooltip-overflow") &&
                       getComputedStyle(element).maskImage !== "none"
                     );
                   }),
                 ),
             )
             .toBe(true);
+          const railLabels = sidePanel(page).locator(
+            ":scope > .side-panel__header .tabstrip-tab__label",
+          );
+          const overflowingLabelIndex = await railLabels.evaluateAll((labels) =>
+            labels.findIndex((label) => label.hasAttribute("data-tooltip-overflow")),
+          );
+          expect(overflowingLabelIndex).toBeGreaterThanOrEqual(0);
+          const overflowingLabel = railLabels.nth(overflowingLabelIndex);
+          const fullLabel = (await overflowingLabel.textContent())?.trim();
+          const tooltipTrigger = overflowingLabel.locator("..");
+          const labelTooltip = tooltipTrigger.locator("..");
+          expect(await labelTooltip.evaluate((element) => element.localName)).toBe(
+            "openclaw-tooltip",
+          );
+          expect(
+            await overflowingLabel.locator("xpath=ancestor::wa-tab").getAttribute("title"),
+          ).toBeNull();
+          await tooltipTrigger.hover();
+          await expect
+            .poll(() =>
+              labelTooltip
+                .locator("wa-tooltip")
+                .evaluate((tooltip) => Reflect.get(tooltip, "open")),
+            )
+            .toBe(true);
+          expect(await labelTooltip.locator("wa-tooltip .tooltip-content").textContent()).toContain(
+            fullLabel,
+          );
 
           await selectTab(page, "Files");
           await captureRichPanel(page, `rails-tabs-rich-${themeMode}`);
@@ -645,6 +673,14 @@ suite.define(() => {
               }),
             )
             .toEqual({ fits: true, mask: "none" });
+          const terminalTooltip = terminalLabel.locator("../..");
+          await terminalLabel.locator("..").hover();
+          await page.waitForTimeout(200);
+          expect(
+            await terminalTooltip
+              .locator("wa-tooltip")
+              .evaluate((tooltip) => Reflect.get(tooltip, "open")),
+          ).toBe(false);
         },
       );
     },

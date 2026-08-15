@@ -2,12 +2,14 @@ import { css, html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "./icons.ts";
+import "./tooltip.ts";
 import "./web-awesome-tabs.ts";
 
 export type PanelTabStripTab = {
   id: string;
   domId: string;
   label: string;
+  labelTooltip?: string | null;
   title?: string | null;
   icon?: TemplateResult | typeof nothing | null;
   statusLabel?: string | null;
@@ -70,7 +72,15 @@ function panelTabLabelOverflowRef() {
       return;
     }
     const update = () => {
-      element.classList.toggle("is-overflowing", element.scrollWidth > element.clientWidth + 1);
+      const tabWidth = element.closest<HTMLElement>("wa-tab")?.getBoundingClientRect().width ?? 0;
+      const overflowing =
+        element.scrollWidth > element.clientWidth + 1 ||
+        (element.clientWidth === 0 &&
+          tabWidth > 0 &&
+          tabWidth <= 28.5 &&
+          Boolean(element.textContent?.trim()));
+      element.classList.toggle("is-overflowing", overflowing);
+      element.toggleAttribute("data-tooltip-overflow", overflowing);
     };
     update();
     if (typeof ResizeObserver === "function") {
@@ -191,6 +201,16 @@ export function renderPanelTabStrip(params: {
             nextTab !== undefined &&
             tab.id !== params.activeId &&
             nextTab.id !== params.activeId;
+          const tabContent = html`
+            ${tab.icon == null || tab.icon === nothing
+              ? nothing
+              : html`<span class="tabstrip-tab__icon" aria-hidden="true">${tab.icon}</span>`}
+            <span class="tabstrip-tab__label" ${ref(panelTabLabelOverflowRef())}>${tab.label}</span>
+            ${tab.badge ? html`<span class="tabstrip-tab__badge">${tab.badge}</span>` : nothing}
+            ${tab.statusLabel
+              ? html`<span class="tabstrip-tab__status">${tab.statusLabel}</span>`
+              : nothing}
+          `;
           return html`
             <wa-tab
               id=${tab.domId}
@@ -287,16 +307,14 @@ export function renderPanelTabStrip(params: {
                 }
               }}
             >
-              ${tab.icon == null || tab.icon === nothing
-                ? nothing
-                : html`<span class="tabstrip-tab__icon" aria-hidden="true">${tab.icon}</span>`}
-              <span class="tabstrip-tab__label" ${ref(panelTabLabelOverflowRef())}
-                >${tab.label}</span
-              >
-              ${tab.badge ? html`<span class="tabstrip-tab__badge">${tab.badge}</span>` : nothing}
-              ${tab.statusLabel
-                ? html`<span class="tabstrip-tab__status">${tab.statusLabel}</span>`
-                : nothing}
+              ${tab.labelTooltip
+                ? html`<openclaw-tooltip
+                    class="tabstrip-tab__label-tooltip"
+                    .content=${tab.labelTooltip}
+                  >
+                    <span class="tabstrip-tab__tooltip-trigger">${tabContent}</span>
+                  </openclaw-tooltip>`
+                : tabContent}
             </wa-tab>
             <button
               slot="nav"
@@ -423,6 +441,13 @@ export const panelTabStripStyles = css`
     overflow: hidden;
     text-overflow: ellipsis;
     font-variant-numeric: tabular-nums;
+  }
+  .tabstrip-tab__tooltip-trigger {
+    display: inline-flex;
+    min-width: 0;
+    align-items: center;
+    gap: inherit;
+    flex: 1 1 auto;
   }
   .tabstrip-tab__status {
     font-size: 11px;
