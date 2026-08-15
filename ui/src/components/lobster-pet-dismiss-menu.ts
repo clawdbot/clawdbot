@@ -14,18 +14,9 @@ export function renderLobsterPetDismissMenu(params: {
   if (!position) {
     return nothing;
   }
-  // wa-dropdown's `size` (auto-size) middleware runs after `flip` and clamps
-  // `#menu` to `--auto-size-available-height` for whatever placement flip
-  // lands on (Web Awesome 3.10.0 popup source, chunk.7MPIABXH.js:197-273), so
-  // a popup anchored near a viewport edge can still get shrunk in place
-  // rather than flipped away from it — flip's own bestFit candidates
-  // (floating-ui/core 1.8.0 flip middleware, dist/floating-ui.core.mjs:444)
-  // are evaluated against the anchor's transient position, not the menu's
-  // real measured content. The pet always sits on the footer's bottom edge,
-  // so rather than depend on flip picking correctly, `top-start` is set as
-  // the preferred placement directly — it structurally has room by
-  // construction; `shift` and `auto-size` (already on for every wa-dropdown)
-  // then react to the menu's real measured content instead of a guess.
+  // Auto-size clamps the menu to whatever placement flip picks rather than
+  // relocating it, so top-start is forced directly since the footer always
+  // has clear room above — leaving it to flip risks a shrunk-in-place menu.
   return html`
     <openclaw-menu-surface>
       <wa-dropdown
