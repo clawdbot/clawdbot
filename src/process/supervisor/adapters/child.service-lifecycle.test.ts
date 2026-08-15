@@ -193,6 +193,114 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
   });
 
+  it("hard-cleans descendants that close lineage while the root exits during TERM grace", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const tempDir = tempDirs.make("openclaw-service-child-lineage-term-");
+    const descendantPath = path.join(tempDir, "descendant.cjs");
+    const rootPath = path.join(tempDir, "root.cjs");
+    await writeFile(
+      descendantPath,
+      `
+        const fs = require("node:fs");
+        process.on("SIGTERM", () => {
+          try { fs.closeSync(3); } catch {}
+        });
+        process.stdout.write("ready\\n");
+        setInterval(() => {}, 1000);
+      `,
+      "utf8",
+    );
+    await writeFile(
+      rootPath,
+      `
+        const { spawn } = require("node:child_process");
+        process.on("SIGTERM", () => process.exit(0));
+        const child = spawn(process.execPath, [${JSON.stringify(descendantPath)}], {
+          stdio: ["ignore", "pipe", "ignore", 3],
+        });
+        child.stdout.once("data", () => {
+          process.stdout.write(process.pid + " " + child.pid + "\\n");
+        });
+        setInterval(() => {}, 1000);
+      `,
+      "utf8",
+    );
+    const adapter = await createChildAdapter({
+      argv: [process.execPath, rootPath],
+      stdinMode: "pipe-closed",
+    });
+    let output = "";
+    adapter.onStdout((chunk) => {
+      output += chunk;
+    });
+    await waitFor(() => /^\d+ \d+/u.test(output));
+    const [rootPid, descendantPid] = parsePidPair(output);
+    activePids.add(rootPid);
+    activePids.add(descendantPid);
+
+    adapter.kill("SIGTERM");
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
+  });
+
+  it("preserves split UTF-8 sequences on service stdout and stderr", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const adapter = await createChildAdapter({
+      argv: [
+        process.execPath,
+        "-e",
+        `setTimeout(() => {
+          process.stdout.write(Buffer.from([0xf0, 0x9f]));
+          process.stderr.write(Buffer.from([0xf0, 0x9f]));
+          setTimeout(() => {
+            process.stdout.end(Buffer.from([0x98, 0x80]));
+            process.stderr.end(Buffer.from([0x98, 0x80]));
+          }, 50);
+        }, 100);`,
+      ],
+      stdinMode: "pipe-closed",
+    });
+    let stdout = "";
+    let stderr = "";
+    adapter.onStdout((chunk) => {
+      stdout += chunk;
+    });
+    adapter.onStderr((chunk) => {
+      stderr += chunk;
+    });
+
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    expect(stdout).toBe("😀");
+    expect(stderr).toBe("😀");
+  });
+
+  it("reports startup failure before secret-pipe failure without an unhandled rejection", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown) => {
+      unhandled.push(error);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      await expect(
+        createChildAdapter({
+          argv: ["/definitely/not/a/real-command"],
+          stdinMode: "pipe-closed",
+          secretInput: {
+            fd: 3,
+            createData: () => Buffer.alloc(8 * 1024 * 1024, 120),
+          },
+        }),
+      ).rejects.toThrow("ENOENT");
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
   it("keeps stdin and the secret descriptor distinct from lifecycle channels", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
     const adapter = await createChildAdapter({

@@ -4,6 +4,7 @@ import type { Duplex, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { onDecodedOutput } from "../decoded-output.js";
 import { addSecretInputStdio, writeSecretInputToChild } from "../spawn-secret-input.js";
 import {
   encodeServiceChildMessage,
@@ -128,14 +129,12 @@ export async function createServiceChildRelayAdapter(params: {
 
   const stdoutListeners = new Set<(chunk: string) => void>();
   const stderrListeners = new Set<(chunk: string) => void>();
-  relay.stdout?.on("data", (chunk: Buffer | string) => {
-    const text = chunk.toString();
+  onDecodedOutput(relay.stdout, (text) => {
     for (const listener of stdoutListeners) {
       listener(text);
     }
   });
-  relay.stderr?.on("data", (chunk: Buffer | string) => {
-    const text = chunk.toString();
+  onDecodedOutput(relay.stderr, (text) => {
     for (const listener of stderrListeners) {
       listener(text);
     }
@@ -282,13 +281,19 @@ export async function createServiceChildRelayAdapter(params: {
   };
   relay.send(start);
 
-  try {
-    await writeSecretInputToChild(relay, params.secretInput);
-    await startup;
-  } catch (error) {
+  const [startupResult, secretDeliveryResult] = await Promise.allSettled([
+    startup,
+    writeSecretInputToChild(relay, params.secretInput),
+  ]);
+  const startupError = startupResult.status === "rejected" ? startupResult.reason : undefined;
+  const secretDeliveryError =
+    secretDeliveryResult.status === "rejected" ? secretDeliveryResult.reason : undefined;
+  if (startupError !== undefined || secretDeliveryError !== undefined) {
     relay.kill("SIGKILL");
     retainedRelays.delete(generation);
-    throw error;
+    // Startup owns command admission, so its exact failure wins over a concurrent
+    // backpressured secret pipe closing as a consequence of that failed admission.
+    throw startupError ?? secretDeliveryError;
   }
 
   const stdin = createManagedStdin(relay.stdin);

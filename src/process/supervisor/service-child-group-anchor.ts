@@ -152,9 +152,9 @@ export function runServiceChildGroupAnchor(): void {
       if (state !== "closing" || cleanupClaim !== claim || !start) {
         return;
       }
-      await closeAuthority(reason, false);
-      return;
     }
+    // Lineage EOF records descriptor closure, not group extinction. Once cleanup owns the
+    // group, only the live in-group anchor may finish it after the TERM grace boundary.
     await closeAuthority(reason, true);
   };
 
@@ -322,18 +322,20 @@ export function runServiceChildGroupAnchor(): void {
         command.stdin.end();
       }
     }
-    command.once("error", async (error) => {
-      if (state === "starting") {
-        await send({ type: "startup-error", error: error.message });
-        await closeAuthority("lineage-lost", false);
-      }
+    command.once("error", (error) => {
+      void (async () => {
+        if (state === "starting") {
+          await send({ type: "startup-error", error: error.message });
+          await closeAuthority("lineage-lost", false);
+        }
+      })();
     });
-    command.once("spawn", async () => {
+    command.once("spawn", () => {
       if (!command?.pid || state !== "starting") {
         return;
       }
       state = "active";
-      await send({
+      void send({
         type: "ready",
         commandPid: command.pid,
         anchorPid: process.pid,
