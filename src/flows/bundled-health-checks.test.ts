@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPolicySurface } from "../plugins/provider-policy-surface.js";
-import { registerBundledHealthChecks } from "./bundled-health-checks.js";
+import {
+  registerBundledHealthChecks,
+  shouldIsolatePluginStateForBundledHealthChecks,
+} from "./bundled-health-checks.js";
+
+const STATE_ISOLATED_CHECK_ID = "memory-core/managed-local-embedding-setup";
 
 const mocks = vi.hoisted(() => ({
   inspectEmbeddingProviderSetup: vi.fn(),
@@ -17,7 +22,10 @@ const mocks = vi.hoisted(() => ({
   registerPolicyDoctorChecks: vi.fn(),
   loadBundledPluginPublicArtifactModuleSync: vi.fn(({ dirName }: { dirName: string }) =>
     dirName === "memory-core"
-      ? { registerMemoryCoreDoctorChecks: mocks.registerMemoryCoreDoctorChecks }
+      ? {
+          pluginStateIsolatedDoctorCheckIds: [STATE_ISOLATED_CHECK_ID],
+          registerMemoryCoreDoctorChecks: mocks.registerMemoryCoreDoctorChecks,
+        }
       : dirName === "cua-computer"
         ? { registerCuaDriverDoctorChecks: mocks.registerCuaDriverDoctorChecks }
         : { registerPolicyDoctorChecks: mocks.registerPolicyDoctorChecks },
@@ -48,6 +56,50 @@ describe("registerBundledHealthChecks", () => {
 
   afterEach(() => {
     rmSync(workspaceDir, { recursive: true, force: true });
+  });
+
+  it.each([
+    {
+      title: "isolates an explicitly selected owner-declared check",
+      selection: { onlyIds: [STATE_ISOLATED_CHECK_ID] },
+      expected: true,
+    },
+    {
+      title: "isolates owner-declared checks included by --all",
+      selection: { includeAllChecks: true },
+      expected: true,
+    },
+    {
+      title: "does not isolate ordinary default selection",
+      selection: {},
+      expected: false,
+    },
+    {
+      title: "does not isolate an unrelated explicit check",
+      selection: { onlyIds: ["core/doctor/final-config-validation"] },
+      expected: false,
+    },
+    {
+      title: "does not isolate a selected check excluded by --skip",
+      selection: {
+        onlyIds: [STATE_ISOLATED_CHECK_ID],
+        skipIds: [STATE_ISOLATED_CHECK_ID],
+      },
+      expected: false,
+    },
+    {
+      title: "does not isolate an owner-declared check excluded from --all",
+      selection: {
+        includeAllChecks: true,
+        skipIds: [STATE_ISOLATED_CHECK_ID],
+      },
+      expected: false,
+    },
+  ])("$title", ({ selection, expected }) => {
+    expect(shouldIsolatePluginStateForBundledHealthChecks(selection)).toBe(expected);
+    if (selection.onlyIds === undefined && selection.includeAllChecks !== true) {
+      expect(mocks.loadBundledPluginPublicArtifactModuleSync).not.toHaveBeenCalled();
+    }
   });
 
   it("always registers passive memory provider readiness without policy opt-in", async () => {

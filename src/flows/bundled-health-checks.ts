@@ -16,6 +16,7 @@ type EmbeddingProviderSetupInspectionResult =
 
 // Bridges bundled plugin doctor checks into the core health registry.
 type BundledHealthApi = {
+  pluginStateIsolatedDoctorCheckIds?: readonly string[];
   registerCuaDriverDoctorChecks?: (host: {
     registerHealthCheck: typeof registerHealthCheck;
   }) => void;
@@ -30,6 +31,40 @@ type BundledHealthApi = {
   registerPolicyDoctorChecks?: (host: { registerHealthCheck: typeof registerHealthCheck }) => void;
 };
 
+type BundledHealthCheckSelection = {
+  readonly skipIds?: readonly string[];
+  readonly onlyIds?: readonly string[];
+  readonly includeAllChecks?: boolean;
+};
+
+function loadMemoryCoreHealthApi(): BundledHealthApi {
+  return loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
+    dirName: "memory-core",
+    artifactBasename: "api.js",
+  });
+}
+
+export function shouldIsolatePluginStateForBundledHealthChecks(
+  selection: BundledHealthCheckSelection,
+): boolean {
+  if (
+    selection.includeAllChecks !== true &&
+    (selection.onlyIds === undefined || selection.onlyIds.length === 0)
+  ) {
+    return false;
+  }
+  const isolatedIds = loadMemoryCoreHealthApi().pluginStateIsolatedDoctorCheckIds ?? [];
+  const skippedIds = new Set(selection.skipIds ?? []);
+  const eligibleIds = isolatedIds.filter((id) => !skippedIds.has(id));
+  if (eligibleIds.length === 0) {
+    return false;
+  }
+  const onlyIds = new Set(selection.onlyIds ?? []);
+  return onlyIds.size > 0
+    ? eligibleIds.some((id) => onlyIds.has(id))
+    : selection.includeAllChecks === true;
+}
+
 /** Registers bundled health checks that are explicitly enabled by config and owner policy. */
 export function registerBundledHealthChecks(params: {
   cfg: OpenClawConfig;
@@ -40,10 +75,7 @@ export function registerBundledHealthChecks(params: {
   ) => Promise<T>;
 }): void {
   const env = params.env ?? process.env;
-  loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
-    dirName: "memory-core",
-    artifactBasename: "api.js",
-  }).registerMemoryCoreDoctorChecks?.({
+  loadMemoryCoreHealthApi().registerMemoryCoreDoctorChecks?.({
     getHealthCheck,
     registerHealthCheck,
     async inspectEmbeddingProviderSetup(providerParams) {

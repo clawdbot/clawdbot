@@ -15,6 +15,10 @@ import {
 export const MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID =
   "memory-core/managed-local-embedding-setup";
 
+export const pluginStateIsolatedDoctorCheckIds = [
+  MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
+] as const;
+
 type InspectManagedLocalEmbeddingSetup = (params: {
   config: Parameters<typeof collectVectorProviderFindings>[0]["config"];
   env: NodeJS.ProcessEnv;
