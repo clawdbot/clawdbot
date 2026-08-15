@@ -8035,20 +8035,20 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<已隐藏的密钥>"
           }
         },
         "zh-TW": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<已遮蔽的密鑰>"
           }
         },
         "pt-BR": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<segredo ocultado>"
           }
         },
         "de": {
@@ -8059,104 +8059,104 @@
         },
         "es": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<secreto redactado>"
           }
         },
         "ja-JP": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<編集済みのシークレット>"
           }
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<가려진 비밀 값>"
           }
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<secret masqué>"
           }
         },
         "hi": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<गोपनीय जानकारी हटाई गई>"
           }
         },
         "ar": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<سر محجوب>"
           }
         },
         "it": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<segreto oscurato>"
           }
         },
         "tr": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<gizli bilgi çıkarıldı>"
           }
         },
         "uk": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<прихований секрет>"
           }
         },
         "id": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<rahasia disunting>"
           }
         },
         "pl": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<sekret ukryty>"
           }
         },
         "th": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<ข้อมูลลับถูกปกปิด>"
           }
         },
         "vi": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<bí mật đã được ẩn>"
           }
         },
         "nl": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<geheim geredigeerd>"
           }
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<رمز محرمانه حذف‌شده>"
           }
         },
         "ru": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<секрет скрыт>"
           }
         },
         "sv": {
           "stringUnit": {
-            "state": "new",
-            "value": "<redacted secret>"
+            "state": "translated",
+            "value": "<dold hemlighet>"
           }
         }
       }
@@ -62885,8 +62885,8 @@
         },
         "fr": {
           "stringUnit": {
-            "state": "new",
-            "value": "Docs"
+            "state": "translated",
+            "value": "Documentation"
           }
         },
         "hi": {
@@ -218563,8 +218563,8 @@
         },
         "zh-CN": {
           "stringUnit": {
-            "state": "new",
-            "value": "© 2026 OpenClaw Foundation — MIT License."
+            "state": "translated",
+            "value": "© 2026 OpenClaw Foundation — MIT License。"
           }
         },
         "zh-TW": {
@@ -218581,8 +218581,8 @@
         },
         "de": {
           "stringUnit": {
-            "state": "new",
-            "value": "© 2026 OpenClaw Foundation — MIT License."
+            "state": "translated",
+            "value": "© 2026 OpenClaw Foundation — MIT-Lizenz."
           }
         },
         "es": {
@@ -218599,8 +218599,8 @@
         },
         "ko": {
           "stringUnit": {
-            "state": "new",
-            "value": "© 2026 OpenClaw Foundation — MIT License."
+            "state": "translated",
+            "value": "© 2026 OpenClaw Foundation — MIT 라이선스."
           }
         },
         "fr": {
@@ -218671,8 +218671,8 @@
         },
         "fa": {
           "stringUnit": {
-            "state": "new",
-            "value": "© 2026 OpenClaw Foundation — MIT License."
+            "state": "translated",
+            "value": "© 2026 OpenClaw Foundation — مجوز MIT."
           }
         },
         "ru": {

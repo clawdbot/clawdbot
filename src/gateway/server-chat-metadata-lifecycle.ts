@@ -11,6 +11,8 @@ export async function createGatewayChatMetadataLifecycle(params: {
   log: GatewayLogger;
 }) {
   let context: GatewayRequestContext | undefined;
+  let preparedModelRuntimeAvailable = false;
+  let preparedModelRuntimeEventVersion = 0;
   const { ChatMetadataSnapshotUnavailableError, createGatewayChatMetadataRuntime } =
     await import("./server-methods/chat-metadata-runtime.js");
   const runtime = createGatewayChatMetadataRuntime({
@@ -42,6 +44,14 @@ export async function createGatewayChatMetadataLifecycle(params: {
       params.log.warn(`chat metadata refresh failed: ${String(error)}`);
     });
   };
+  const invalidateForSubordinateChange = () => {
+    runtime.invalidate();
+    // Auth and skill facts are subordinate to the prepared model owner. During replacement the
+    // publication event owns the one catch-up refresh after every related fact is committed.
+    if (preparedModelRuntimeAvailable) {
+      refreshLogged();
+    }
+  };
   const registerRefreshListeners = async (): Promise<GatewayPostReadySidecarHandle | undefined> => {
     if (params.minimalTestGateway) {
       return undefined;
@@ -57,24 +67,26 @@ export async function createGatewayChatMetadataLifecycle(params: {
     ]);
     const unregisterPreparedModelRuntimePublication =
       registerPreparedModelRuntimePublicationListener((event) => {
+        preparedModelRuntimeEventVersion += 1;
         if (event.phase === "invalidated") {
+          preparedModelRuntimeAvailable = false;
           runtime.invalidate();
           return;
         }
         if (event.phase === "failed") {
+          preparedModelRuntimeAvailable = false;
           runtime.fail(event.error);
           return;
         }
+        preparedModelRuntimeAvailable = true;
         refreshLogged();
       });
     const unregisterSkillsChange = registerSkillsChangeListener(() => {
-      runtime.invalidate();
-      refreshLogged();
+      invalidateForSubordinateChange();
     });
     const unregisterRuntimeAuthProfileStoreMutation =
       registerRuntimeAuthProfileStoreMutationListener(() => {
-        runtime.invalidate();
-        refreshLogged();
+        invalidateForSubordinateChange();
       });
     return {
       stop: async () => {
@@ -97,11 +109,26 @@ export async function createGatewayChatMetadataLifecycle(params: {
         // Publications that complete before listener registration would otherwise be missed.
         // During ordinary startup the owner is published after attachment, so an unavailable
         // snapshot here is expected and the publication listener performs the first refresh.
-        await runtime.refresh().catch((error: unknown) => {
-          if (!(error instanceof ChatMetadataSnapshotUnavailableError)) {
-            params.log.warn(`chat metadata catch-up refresh failed: ${String(error)}`);
-          }
-        });
+        const eventVersion = preparedModelRuntimeEventVersion;
+        await runtime.refresh().then(
+          () => {
+            // A successful catch-up proves availability when publication completed before the
+            // listener was registered. Do not overwrite a newer invalidation or failure event.
+            if (preparedModelRuntimeEventVersion === eventVersion) {
+              preparedModelRuntimeAvailable = true;
+            }
+          },
+          (error: unknown) => {
+            if (!(error instanceof ChatMetadataSnapshotUnavailableError)) {
+              // Capture reached a published owner before this later metadata build failed. Keep
+              // stable auth/skill changes able to retry unless a newer owner event says otherwise.
+              if (preparedModelRuntimeEventVersion === eventVersion) {
+                preparedModelRuntimeAvailable = true;
+              }
+              params.log.warn(`chat metadata catch-up refresh failed: ${String(error)}`);
+            }
+          },
+        );
       }
     },
     read: runtime.read,

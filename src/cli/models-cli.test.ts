@@ -6,6 +6,7 @@ import { registerModelsCli } from "./models-cli.js";
 import { isCommandJsonOutputMode } from "./program/json-mode.js";
 
 const mocks = vi.hoisted(() => ({
+  modelsListCommand: vi.fn().mockResolvedValue(undefined),
   modelsStatusCommand: vi.fn().mockResolvedValue(undefined),
   modelsSetCommand: vi.fn().mockResolvedValue(undefined),
   modelsSetImageCommand: vi.fn().mockResolvedValue(undefined),
@@ -33,7 +34,7 @@ const {
 } = mocks;
 
 vi.mock("../commands/models/list.list-command.js", () => ({
-  modelsListCommand: mocks.noopAsync,
+  modelsListCommand: mocks.modelsListCommand,
 }));
 vi.mock("../commands/models/list.status-command.js", () => ({
   modelsStatusCommand: mocks.modelsStatusCommand,
@@ -85,6 +86,7 @@ vi.mock("../commands/models/set-image.js", () => ({
 
 describe("models cli", () => {
   beforeEach(() => {
+    mocks.modelsListCommand.mockClear();
     modelsAuthAddCommand.mockClear();
     modelsAuthListCommand.mockClear();
     modelsAuthLoginCommand.mockClear();
@@ -201,6 +203,14 @@ describe("models cli", () => {
   ])("passes --agent to models status ($label)", async ({ args }) => {
     await runModelsCommand(args);
     expectCommandOptions(modelsStatusCommand, { agent: "poe" });
+  });
+
+  it.each([
+    { label: "list flag", args: ["models", "list", "--agent", "poe"] },
+    { label: "parent flag", args: ["models", "--agent", "poe", "list"] },
+  ])("passes --agent to models list ($label)", async ({ args }) => {
+    await runModelsCommand(args);
+    expectCommandOptions(mocks.modelsListCommand, { agent: "poe" });
   });
 
   it.each([

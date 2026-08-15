@@ -196,12 +196,14 @@ Session store reads do not prune or cap entries during Gateway startup, so
 startup and isolated cron sessions do not pay for a full store cleanup.
 `openclaw sessions cleanup --enforce` applies the cap immediately.
 
-`maxEntries` counts only eviction-eligible session rows. Protected rows -
-archived or pinned sessions, active or admitted work, model-locked sessions,
-and durable external conversation pointers - stay outside that allowance, so
-the total stored row count can exceed `maxEntries`. Cleanup does not unprotect
-those rows; unarchive, unpin, or explicitly delete sessions you no longer want
-to retain.
+`maxEntries` counts every live session row. Archived or pinned sessions, active
+or admitted work, model-locked sessions, and durable external conversation
+pointers are protected from automatic eviction, but still consume the cap.
+Cleanup removes the oldest unprotected rows until it reaches `maxEntries` or
+runs out of eligible victims. The total can therefore remain above the cap when
+protected rows alone exceed it or active work temporarily blocks eviction.
+Cleanup does not unprotect those rows; unarchive, unpin, wait for active work to
+finish, or explicitly delete sessions you no longer want to retain.
 
 Gateway model-run probe sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is

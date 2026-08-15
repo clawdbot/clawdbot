@@ -1,10 +1,12 @@
 // Tests for gateway runtime subscription wiring.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createChannelParticipantAdmissionEvidence } from "../../test/helpers/channel-admission-evidence.js";
 import {
   configureExecutionIdentityAdmissionSink,
   enqueueExecutionIdentityContextAtAdmission,
   hasExecutionIdentityAdmissionSink,
 } from "../audit/execution-identity-admission.js";
+import { consumeChannelAdmissionEvidence } from "../channels/message-access/admission-evidence.js";
 import type { CronServiceState } from "../cron/service/state.js";
 import { tryFinishCronTaskRunWithoutHistory } from "../cron/service/task-runs.js";
 import {
@@ -68,6 +70,8 @@ const auditTestState = vi.hoisted(() => ({
   created: 0,
   recorded: 0,
   identityRecorded: 0,
+  decisionRecorded: 0,
+  executionIdentityEnabled: false,
   stopped: 0,
 }));
 const agentEventHandlerMocks = vi.hoisted(() => ({
@@ -85,6 +89,7 @@ vi.mock("../config/io.js", () => ({
 
 vi.mock("../audit/audit-config.js", () => ({
   isAuditLedgerEnabled: () => auditTestState.enabled,
+  isExecutionIdentityCollectionEnabled: () => auditTestState.executionIdentityEnabled,
   resolveAuditMessageMode: () => auditTestState.messageMode,
 }));
 
@@ -99,6 +104,10 @@ vi.mock("../audit/audit-recorder.js", () => ({
       recordMessage: vi.fn(),
       recordExecutionIdentity: vi.fn(() => {
         auditTestState.identityRecorded += 1;
+        return true;
+      }),
+      recordExecutionDecision: vi.fn(() => {
+        auditTestState.decisionRecorded += 1;
         return true;
       }),
       stop: vi.fn(async () => {
@@ -174,6 +183,8 @@ describe("startGatewayEventSubscriptions", () => {
     auditTestState.created = 0;
     auditTestState.recorded = 0;
     auditTestState.identityRecorded = 0;
+    auditTestState.decisionRecorded = 0;
+    auditTestState.executionIdentityEnabled = false;
     auditTestState.stopped = 0;
     transcriptBroadcastMocks.useActualHandler = false;
     transcriptBroadcastMocks.readMessageCount.mockReset();
@@ -222,6 +233,26 @@ describe("startGatewayEventSubscriptions", () => {
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
     expect(hasExecutionIdentityAdmissionSink()).toBe(false);
+  });
+
+  it("owns channel evidence collection for the configured gateway lifecycle", async () => {
+    auditTestState.executionIdentityEnabled = true;
+    unsubs = startGatewayEventSubscriptions(createParams());
+
+    const evidence = createChannelParticipantAdmissionEvidence({
+      channelId: "test",
+      participantId: "person-1",
+    });
+    expect(evidence).toBeDefined();
+
+    await unsubs.agentUnsub();
+    expect(consumeChannelAdmissionEvidence(evidence)).toMatchObject({ ingressState: "unknown" });
+    expect(
+      createChannelParticipantAdmissionEvidence({
+        channelId: "test",
+        participantId: "person-2",
+      }),
+    ).toBeUndefined();
   });
 
   it("keeps retention maintenance but creates no producers when audit.enabled is false", async () => {

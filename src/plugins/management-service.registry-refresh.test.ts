@@ -205,12 +205,54 @@ describe("plugin management registry refresh", () => {
     });
   });
 
-  it("does not forward source-install loggers into private persistence warnings", async () => {
+  it("keeps an ownerless managed install and returns the partial-scope action", async () => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        entries: {
+          main: { workspace: "/tmp/main-workspace" },
+          gadget: { workspace: "/tmp/gadget-workspace" },
+        },
+      },
+    };
     mockClawHubWorkboardInstall();
-    mocks.persistInstall.mockResolvedValue({});
+    mocks.readConfig.mockResolvedValue({
+      snapshot: {
+        valid: true,
+        parsed: config,
+        path: "/tmp/openclaw.json",
+        sourceConfig: config,
+        hash: "base-hash",
+      },
+      writeOptions: installSnapshot.writeOptions,
+    });
+    mocks.persistInstall.mockResolvedValue(config);
+    mocks.metadata.mockReturnValue(metadataSnapshot(false, true));
+
+    const result = await installManagedPlugin({
+      request: { source: "clawhub", packageName: "community/workboard" },
+      env: {},
+    });
+
+    expect(result.plugin.id).toBe("workboard");
+    expect(result.warnings).toContainEqual(
+      expect.stringContaining("set agents.defaults.systemAgent.agentId"),
+    );
+  });
+
+  it("returns persistence warnings without forwarding them to source-install loggers", async () => {
+    mockClawHubWorkboardInstall();
+    const instruction =
+      'Installed plugin "workboard" without enabling it because it requires configuration first.';
+    mocks.persistInstall.mockImplementation(
+      async (params: { persistenceLogger?: { warn?: (message: string) => void } }) => {
+        params.persistenceLogger?.warn?.(instruction);
+        return {};
+      },
+    );
     const logger = { warn: vi.fn() };
 
-    await installManagedPluginSource({
+    const result = await installManagedPluginSource({
       request: { source: "clawhub", spec: "clawhub:community/workboard" },
       snapshot: installSnapshot,
       env: {},
@@ -218,7 +260,7 @@ describe("plugin management registry refresh", () => {
     });
 
     expect(mocks.clawhubInstall).toHaveBeenCalledWith(expect.objectContaining({ logger }));
-    expect(mocks.persistInstall.mock.calls[0]?.[0]).not.toHaveProperty("persistenceLogger");
     expect(logger.warn).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true, warnings: [instruction] });
   });
 });

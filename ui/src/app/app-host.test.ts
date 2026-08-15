@@ -19,6 +19,7 @@ import { SESSION_FACE_PREFERENCE_PARAM } from "../lib/sessions/route-navigation.
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
+import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
 import "./app-host.ts";
 import type {
   ApplicationContext,
@@ -58,11 +59,6 @@ type ShellInitializationState = {
     snapshot: ApplicationGatewaySnapshot,
     runtimeConfig: ApplicationContext["runtimeConfig"],
   ) => void;
-};
-
-type ShellGatewaySynchronizationState = {
-  outboxStoreImport: { load: () => Promise<unknown> };
-  synchronizeGateway: (snapshot: ApplicationGatewaySnapshot) => void;
 };
 
 type I18nRecoveryWiring = {
@@ -319,10 +315,27 @@ describe("OpenClaw shell source initialization", () => {
 
   it("retries a pending locale once when the Gateway becomes connected", () => {
     const retryPendingLocale = vi.spyOn(i18n, "retryPendingLocale").mockImplementation(() => {});
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellGatewaySynchronizationState;
-    shell.outboxStoreImport = { load: vi.fn(async () => undefined) };
+    // Owner-direct: the shared jsdom lane can retain a sibling graph's
+    // openclaw-app-shell class bound to a different i18n instance; constructing
+    // the owner keeps the spy and the callee in the current module graph.
+    const host = {
+      activeSessionKey: "",
+      agentRosterRefreshTimer: null,
+      agentsListClient: null,
+      agentsListSource: null,
+      context: undefined,
+      criticalNoticeRuntime: null,
+      lastLocalePrefSignature: null,
+      outboxStoreImport: { load: vi.fn(async () => undefined) },
+      previousGatewayPhase: null,
+      routeState: {},
+      runtimeConfigClient: null,
+      runtimeConfigSource: null,
+      sessionKeyClient: null,
+      sidebarWorkboardRuntime: null,
+      syncSidebarWorkboard: vi.fn(),
+    } as unknown as ShellGatewayHost;
+    const owner = new ShellGatewayOwner(host);
     const reconnecting = {
       client: null,
       phase: "reconnecting",
@@ -334,10 +347,10 @@ describe("OpenClaw shell source initialization", () => {
       sessionKey: "",
     } as ApplicationGatewaySnapshot;
 
-    shell.synchronizeGateway(reconnecting);
-    shell.synchronizeGateway(connected);
-    shell.synchronizeGateway({ ...connected });
-    shell.synchronizeGateway({ ...connected });
+    owner.synchronizeGateway(reconnecting);
+    owner.synchronizeGateway(connected);
+    owner.synchronizeGateway({ ...connected });
+    owner.synchronizeGateway({ ...connected });
 
     expect(retryPendingLocale).toHaveBeenCalledOnce();
     retryPendingLocale.mockRestore();

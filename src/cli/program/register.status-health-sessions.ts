@@ -250,6 +250,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--json", "Output JSON instead of text", false)
     .option("--all", "Full diagnosis (read-only, pasteable)", false)
     .option("--usage", "Show model provider usage/quota snapshots", false)
+    .option("--agent <id>", "Agent id for --usage auth scope")
     .option("--deep", "Probe channels (WhatsApp Web + Telegram + Discord + Slack + Signal)", false)
     .option("--timeout <ms>", "Probe timeout in milliseconds", "10000")
     .option("--verbose", "Verbose logging", false)
@@ -283,6 +284,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             all: Boolean(opts.all),
             deep: Boolean(opts.deep),
             usage: Boolean(opts.usage),
+            ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
             timeoutMs,
             verbose,
           },

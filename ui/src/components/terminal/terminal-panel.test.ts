@@ -78,35 +78,50 @@ describe("OpenClawTerminalPanel", () => {
     await waitForFast(() => expect(panel.terminalPanelOpen).toBe(true));
   });
 
-  it("persists and restores the main content placement without a resizer", async () => {
-    localStorage.setItem(
-      "openclaw.terminal.panel.v1",
-      JSON.stringify({ open: true, dock: "bottom", height: 320, width: 520 }),
-    );
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
-    panel.available = true;
-    document.body.append(panel);
-    await panel.updateComplete;
+  it.each(["bottom", "right"] as const)(
+    "toggles main content placement back to the persisted %s dock",
+    async (dock) => {
+      localStorage.setItem(
+        "openclaw.terminal.panel.v1",
+        JSON.stringify({ open: true, dock, height: 320, width: 520 }),
+      );
+      const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+      panel.available = true;
+      document.body.append(panel);
+      await panel.updateComplete;
 
-    panel.renderRoot
-      .querySelector<HTMLButtonElement>('[aria-label="Fill main content area"]')
-      ?.click();
-    await panel.updateComplete;
+      panel.renderRoot
+        .querySelector<HTMLButtonElement>('[aria-label="Fill main content area"]')
+        ?.click();
+      await panel.updateComplete;
 
-    expect(panel.renderRoot.querySelector(".tp")?.classList.contains("tp--main")).toBe(true);
-    expect(panel.renderRoot.querySelector(".tp-resizer")).toBeNull();
-    expect(JSON.parse(localStorage.getItem("openclaw.terminal.panel.v1") ?? "{}")).toMatchObject({
-      open: true,
-      dock: "main",
-    });
+      expect(panel.renderRoot.querySelector(".tp")?.classList.contains("tp--main")).toBe(true);
+      expect(panel.renderRoot.querySelector(".tp-resizer")).toBeNull();
+      expect(JSON.parse(localStorage.getItem("openclaw.terminal.panel.v1") ?? "{}")).toMatchObject({
+        open: true,
+        dock: "main",
+        previousDock: dock,
+      });
 
-    panel.remove();
-    const restored = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
-    restored.available = true;
-    document.body.append(restored);
-    await restored.updateComplete;
-    expect(restored.renderRoot.querySelector(".tp")?.classList.contains("tp--main")).toBe(true);
-  });
+      panel.remove();
+      const restored = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+      restored.available = true;
+      document.body.append(restored);
+      await restored.updateComplete;
+      restored.renderRoot
+        .querySelector<HTMLButtonElement>('[aria-label="Fill main content area"]')
+        ?.click();
+      await restored.updateComplete;
+
+      expect(restored.renderRoot.querySelector(".tp")?.classList.contains(`tp--${dock}`)).toBe(
+        true,
+      );
+      expect(
+        restored.renderRoot.querySelector('[aria-label="Fill main content area"]')?.classList,
+      ).not.toContain("is-active");
+      restored.remove();
+    },
+  );
 
   it("opens new sessions for the selected agent", async () => {
     let createOptions: CreateOptions | undefined;
@@ -366,6 +381,7 @@ describe("OpenClawTerminalPanel", () => {
     expect(JSON.parse(localStorage.getItem("openclaw.terminal.panel.v1") ?? "{}")).toMatchObject({
       open: true,
       dock: "main",
+      previousDock: "bottom",
     });
 
     await waitForFast(() => {
@@ -378,6 +394,11 @@ describe("OpenClawTerminalPanel", () => {
     expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
       JSON.stringify(["persisted-1"]),
     );
+    panel.renderRoot
+      .querySelector<HTMLButtonElement>('[aria-label="Fill main content area"]')
+      ?.click();
+    await panel.updateComplete;
+    expect(panel.renderRoot.querySelector(".tp")?.classList.contains("tp--bottom")).toBe(true);
   });
 
   it("restores a vanished persisted session as exited without replaying stale output", async () => {

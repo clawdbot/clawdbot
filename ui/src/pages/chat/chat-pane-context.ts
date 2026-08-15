@@ -105,7 +105,11 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     this.refreshSwarmRoster();
     const selectedSession = selectedChatSessionRow(state);
     if (applySelectedSessionProjection(state, selectedSession)) {
-      this.markSessionRead(selectedSession);
+      // Hidden retained panes keep this subscription alive; only the pane the
+      // user is actually looking at may clear unread/attention state.
+      if (this.presented) {
+        this.markSessionRead(selectedSession);
+      }
     }
     this.syncSessionSuggestionTarget(
       stateValue.agentId ?? resolveChatAgentId(state) ?? "main",
@@ -237,6 +241,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       this.sessionDiscussionOpenUrls.clear();
       this.sessionDiscussionPanels.clear();
       this.sessionParticipationTracker.reset();
+      if (state.client !== snapshot.client) {
+        this.sessionCompanionThreads.retire();
+      }
       // A new gateway/account owns its own membership + identity data; drop the
       // previous connection's sharing cache so a stale loading entry cannot
       // suppress the fresh load or leak the prior account's identities.

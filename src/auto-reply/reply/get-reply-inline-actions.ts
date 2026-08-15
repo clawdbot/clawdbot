@@ -19,8 +19,7 @@ import {
   resolveSkillCommandInvocation,
   resolveSkillReferenceInvocations,
 } from "../../skills/discovery/chat-commands.js";
-import type { SkillCommandSpec } from "../../skills/types.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import type { ExplicitSkillSelection, SkillCommandSpec } from "../../skills/types.js";
 import {
   copyReplyPayloadMetadata,
   markCommandReplyForDelivery,
@@ -134,7 +133,13 @@ function applyExplicitSkillReferences(
   }
   const instruction = [
     "Use the following explicitly referenced skills for this request. Read each skill's SKILL.md before acting:",
-    ...skills.map((skill) => `- ${skill.skillName}`),
+    // Hidden skills are absent from the available-skills prompt, so explicit invocation
+    // carries the SKILL.md path the model needs to load them.
+    ...skills.map((skill) =>
+      skill.modelVisible === false && skill.skillFile
+        ? `- ${skill.skillName} (SKILL.md: ${skill.skillFile})`
+        : `- ${skill.skillName}`,
+    ),
     "",
     "User request:",
     body,
@@ -172,6 +177,7 @@ type InlineActionResult =
       directives: InlineDirectives;
       abortedLastRun: boolean;
       cleanedBody: string;
+      explicitSkillSelections?: ExplicitSkillSelection[];
     };
 
 function extractTextFromToolResult(result: unknown): string | null {
@@ -305,6 +311,7 @@ export async function handleInlineActions(params: {
 
   let directives = initialDirectives;
   let cleanedBody = initialCleanedBody;
+  let explicitSkillSelections: ExplicitSkillSelection[] | undefined;
   const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
 
   const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
@@ -352,9 +359,7 @@ export async function handleInlineActions(params: {
 
   const slashCommandName = resolveSlashCommandName(command.commandBodyNormalized);
   const hasSkillReferences =
-    command.isAuthorizedSender &&
-    ctx.Surface === INTERNAL_MESSAGE_CHANNEL &&
-    hasSkillReferenceCandidate(initialCleanedBody);
+    command.isAuthorizedSender && hasSkillReferenceCandidate(initialCleanedBody);
   const shouldLoadSkillCommands =
     allowTextCommands &&
     (hasSkillReferences ||
@@ -547,6 +552,10 @@ export async function handleInlineActions(params: {
       };
     }
     if (referenced.skills.length > 0) {
+      const selections = referenced.skills.flatMap((skill) =>
+        skill.skillFile ? [{ name: skill.name, path: skill.skillFile }] : [],
+      );
+      explicitSkillSelections = selections.length > 0 ? selections : undefined;
       cleanedBody = referenced.body;
       ctx.Body = cleanedBody;
       ctx.agentText = cleanedBody;
@@ -679,6 +688,7 @@ export async function handleInlineActions(params: {
       directives,
       abortedLastRun,
       cleanedBody,
+      ...(explicitSkillSelections ? { explicitSkillSelections } : {}),
     };
   }
   const remainingBodyAfterInlineStatus = (() => {
@@ -719,5 +729,6 @@ export async function handleInlineActions(params: {
     directives,
     abortedLastRun,
     cleanedBody,
+    ...(explicitSkillSelections ? { explicitSkillSelections } : {}),
   };
 }

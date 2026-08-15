@@ -220,7 +220,7 @@ describe("gateway startup import boundaries", () => {
     );
     const identityStart = workerStartup.indexOf("resolveSshIdentity: async", serviceStart);
     const bootstrapStart = workerStartup.indexOf("bootstrapWorker: async", serviceStart);
-    const loggerStart = workerStartup.indexOf("logger: params.log.child", bootstrapStart);
+    const loggerStart = workerStartup.indexOf("logger: workerEnvironmentLog", bootstrapStart);
 
     expect(prepareStart).toBeGreaterThan(-1);
     expect(serviceStart).toBeGreaterThan(prepareStart);

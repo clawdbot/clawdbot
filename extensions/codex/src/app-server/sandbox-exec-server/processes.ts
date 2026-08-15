@@ -5,6 +5,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sanitizeEnvVars } from "openclaw/plugin-sdk/sandbox";
 import type { WebSocket } from "ws";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { requireObject, requireString, requireStringArray } from "./json-rpc.js";
@@ -389,10 +390,13 @@ function readEnv(value: unknown): Record<string, string> {
 
 function readProcessEnv(record: JsonObject): Record<string, string> {
   const policyEnv = buildEnvFromPolicy(record.envPolicy);
-  return {
+  const requestedEnv = {
     ...policyEnv,
     ...readEnv(record.env),
   };
+  // Codex inherits its app-server's full environment by default. Scrub again at
+  // this last boundary so no credential can cross into any sandbox backend.
+  return sanitizeEnvVars(requestedEnv).allowed;
 }
 
 function buildEnvFromPolicy(value: unknown): Record<string, string> {

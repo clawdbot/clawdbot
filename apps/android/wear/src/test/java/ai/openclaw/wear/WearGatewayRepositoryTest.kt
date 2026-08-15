@@ -29,6 +29,127 @@ class WearGatewayRepositoryTest {
   }
 
   @Test
+  fun agentPulseRequiresNegotiatedCapabilityBeforeSendingItsRpc() =
+    runTest {
+      val requester = RecordingRequester { method, _ -> error("unexpected $method") }
+      val repository = WearGatewayRepository(requester)
+
+      val failure =
+        runCatching {
+          repository.agentPulse(
+            expectedNodeId = "phone-a",
+            capabilities = emptySet(),
+            selectedSessionKey = "agent:main",
+          )
+        }.exceptionOrNull()
+
+      assertEquals("unsupported_peer", (failure as? WearProxyException)?.code)
+      assertTrue(requester.calls.isEmpty())
+    }
+
+  @Test
+  fun agentPulseParsesOnlyAggregateCountsAndRequiresThePreferredPhone() =
+    runTest {
+      val requester =
+        RecordingRequester { method, _ ->
+          assertEquals(WearRpcMethod.AgentPulse, method)
+          json.parseToJsonElement(
+            """{"tasks":{"state":"ready","scope":"bounded","queued":2,"running":3,"completed":5,"failed":1,"activeAtLimit":false,"recentAtLimit":true},"swarm":{"state":"active","scope":"selected-session","groups":2,"running":4,"done":6,"failed":1,"phases":[{"queued":1,"running":2,"done":3,"failed":0,"hidden":4}],"morePhases":false},"approvals":{"state":"ready","pending":2}}""",
+          )
+        }
+      val repository = WearGatewayRepository(requester)
+
+      val pulse =
+        repository.agentPulse(
+          expectedNodeId = "phone-a",
+          capabilities = setOf(WearProxyCapability.AgentPulse),
+          selectedSessionKey = "agent:main",
+        )
+
+      assertEquals(WearAgentPulseTaskState.Ready, pulse.tasks.state)
+      assertEquals(2, pulse.tasks.queued)
+      assertEquals(3, pulse.tasks.running)
+      assertEquals(5, pulse.tasks.completed)
+      assertEquals(1, pulse.tasks.failed)
+      assertEquals(false, pulse.tasks.activeAtLimit)
+      assertEquals(true, pulse.tasks.recentAtLimit)
+      assertEquals(WearAgentPulseSwarmState.Active, pulse.swarm.state)
+      assertEquals(2, pulse.swarm.groups)
+      assertEquals(4, pulse.swarm.running)
+      assertEquals(6, pulse.swarm.done)
+      assertEquals(1, pulse.swarm.failed)
+      assertEquals(WearAgentPulsePhase(1, 2, 3, 0, 4), pulse.swarm.phases.single())
+      assertEquals(false, pulse.swarm.morePhases)
+      assertEquals(WearAgentPulseApprovalsState.Ready, pulse.approvals.state)
+      assertEquals(2, pulse.approvals.pending)
+      assertEquals(7L, pulse.eventSequence)
+      assertEquals("phone-a", pulse.phoneNodeId)
+      assertEquals(
+        json.parseToJsonElement("""{"sessionKey":"agent:main"}""").jsonObject,
+        requester.calls.single().second,
+      )
+      assertEquals("phone-a", requester.expectedNodeIds.single())
+      assertTrue(requester.requirePreferredNodes.single())
+    }
+
+  @Test
+  fun agentPulseKeepsUnavailableIdleAndRefreshingDistinctWithoutInventingZeroes() =
+    runTest {
+      val requester =
+        RecordingRequester { _, _ ->
+          json.parseToJsonElement(
+            """{"tasks":{"state":"unavailable"},"swarm":{"state":"idle","scope":"selected-session"},"approvals":{"state":"refreshing"}}""",
+          )
+        }
+
+      val pulse =
+        WearGatewayRepository(requester).agentPulse(
+          expectedNodeId = "phone-a",
+          capabilities = setOf(WearProxyCapability.AgentPulse),
+          selectedSessionKey = " ",
+        )
+
+      assertEquals(WearAgentPulseTaskState.Unavailable, pulse.tasks.state)
+      assertNull(pulse.tasks.running)
+      assertEquals(WearAgentPulseSwarmState.Idle, pulse.swarm.state)
+      assertNull(pulse.swarm.groups)
+      assertEquals(WearAgentPulseApprovalsState.Refreshing, pulse.approvals.state)
+      assertNull(pulse.approvals.pending)
+      assertTrue(
+        requester.calls
+          .single()
+          .second
+          .isEmpty(),
+      )
+    }
+
+  @Test
+  fun agentPulseRejectsUnknownStatesNegativeCountsAndOversizedPhaseLists() =
+    runTest {
+      val invalidPayloads =
+        listOf(
+          """{"tasks":{"state":"future"},"swarm":{"state":"unavailable"},"approvals":{"state":"unavailable"}}""",
+          """{"tasks":{"state":"ready","scope":"bounded","queued":-1,"running":0,"completed":0,"failed":0,"activeAtLimit":false,"recentAtLimit":false},"swarm":{"state":"unavailable"},"approvals":{"state":"unavailable"}}""",
+          """{"tasks":{"state":"unavailable"},"swarm":{"state":"active","scope":"selected-session","groups":1,"running":0,"done":0,"failed":0,"phases":[{"queued":0,"running":0,"done":0,"failed":0,"hidden":-1}],"morePhases":false},"approvals":{"state":"unavailable"}}""",
+          """{"tasks":{"state":"unavailable"},"swarm":{"state":"unavailable"},"approvals":{"state":"ready","pending":-1}}""",
+          """{"tasks":{"state":"unavailable"},"swarm":{"state":"active","scope":"selected-session","groups":1,"running":0,"done":0,"failed":0,"phases":[{},{},{},{},{},{},{},{},{}],"morePhases":true},"approvals":{"state":"unavailable"}}""",
+        )
+
+      invalidPayloads.forEach { payload ->
+        val requester = RecordingRequester { _, _ -> json.parseToJsonElement(payload) }
+        val failure =
+          runCatching {
+            WearGatewayRepository(requester).agentPulse(
+              expectedNodeId = "phone-a",
+              capabilities = setOf(WearProxyCapability.AgentPulse),
+            )
+          }.exceptionOrNull()
+
+        assertEquals("invalid_response", (failure as? WearProxyException)?.code)
+      }
+    }
+
+  @Test
   fun sessionsAndHistoryParseOnlyProjectedContract() =
     runTest {
       val requester =
@@ -86,7 +207,7 @@ class WearGatewayRepositoryTest {
             WearRpcMethod.AgentsSelect -> JsonObject(emptyMap())
             WearRpcMethod.GatewayDisconnect ->
               json.parseToJsonElement(
-                """{"connected":false,"status":"Offline","activeAgentId":"main","selectedModelRef":"openai/gpt-test","capabilities":["agent-controls","gateway-controls","model-controls","session-selection-lookup","attempt-scoped-realtime-audio"]}""",
+                """{"connected":false,"status":"Offline","activeAgentId":"main","selectedModelRef":"openai/gpt-test","capabilities":["agent-controls","gateway-controls","model-controls","session-selection-lookup","agent-pulse","attempt-scoped-realtime-audio"]}""",
               )
             else -> error("unexpected $method")
           }
@@ -154,7 +275,7 @@ class WearGatewayRepositoryTest {
       val requester =
         RecordingRequester { _, _ ->
           json.parseToJsonElement(
-            """{"connected":true,"status":"Connected","capabilities":["agent-controls","future-capability","gateway-controls","model-controls","session-selection-lookup","attempt-scoped-realtime-audio"]}""",
+            """{"connected":true,"status":"Connected","capabilities":["agent-controls","future-capability","gateway-controls","model-controls","session-selection-lookup","agent-pulse","attempt-scoped-realtime-audio"]}""",
           )
         }
 

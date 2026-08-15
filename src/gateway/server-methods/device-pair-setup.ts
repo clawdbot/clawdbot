@@ -6,8 +6,11 @@ import {
   ErrorCodes,
   errorShape,
   validateDevicePairSetupCodeParams,
+  validateDevicePairSetupStatusParams,
+  type DevicePairSetupStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readDevicePairSetupCompletion } from "../../infra/device-bootstrap.js";
 import { registerDevicePairingJoinCode } from "../../infra/device-pairing-join-code.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import {
@@ -131,6 +134,8 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
       respond(
         true,
         {
+          setupId: resolved.setupId,
+          expiresAtMs: resolved.expiresAtMs,
           setupCode,
           ...(joinUrl ? { joinUrl } : {}),
           ...(qrDataUrl ? { qrDataUrl } : {}),
@@ -140,11 +145,46 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
           auth: resolved.authLabel,
           urlSource: requestPublicUrl ? "request.publicUrl" : resolved.urlSource,
           access: resolved.access,
-          expiresAtMs: resolved.expiresAtMs,
           ...(resolved.accessDowngraded ? { accessDowngraded: true } : {}),
         },
         undefined,
       );
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
+  // Recovery path for the best-effort device.pair.setup.completed broadcast: a
+  // client that missed the frame must not present a redeemed setup as expired.
+  "device.pair.setupStatus": async ({ params, respond }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateDevicePairSetupStatusParams,
+        "device.pair.setupStatus",
+        respond,
+      )
+    ) {
+      return;
+    }
+    try {
+      const completion = await readDevicePairSetupCompletion({ setupId: params.setupId });
+      // Retention bookkeeping stays server-side; the wire shape matches the
+      // corresponding success or delivery-uncertain broadcast.
+      const result: DevicePairSetupStatusResult = completion
+        ? (() => {
+            const payload = {
+              setupId: completion.setupId,
+              deviceId: completion.deviceId,
+              ...(completion.deviceName ? { deviceName: completion.deviceName } : {}),
+              access: completion.access,
+              ts: completion.completedAtMs,
+            };
+            return completion.deliveryState === "confirmed"
+              ? { completion: payload }
+              : { deliveryUncertain: payload };
+          })()
+        : {};
+      respond(true, result, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }

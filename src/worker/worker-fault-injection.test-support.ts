@@ -63,6 +63,7 @@ const BUNDLE_ARTIFACT = {
   bundleHash: BUNDLE_HASH,
   openclawVersion: HANDSHAKE.openclawVersion,
   protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
+  tarballBytes: 1,
   tarballSha256: Array.from({ length: 64 }, () => "b").join(""),
   tarballPath: "/gateway/cache/worker-bundle.tgz",
 };

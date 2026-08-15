@@ -67,6 +67,7 @@ type ReadOnlyChannelPluginOptions = {
 
 type ReadOnlyChannelPluginResolution = {
   plugins: ChannelPlugin[];
+  manifestRecords: readonly PluginManifestRecord[];
   configuredChannelIds: string[];
   missingConfiguredChannelIds: string[];
   loadFailures: ReadOnlyChannelPluginLoadFailure[];
@@ -93,6 +94,7 @@ function cloneReadOnlyChannelPluginResolution(
 ): ReadOnlyChannelPluginResolution {
   return {
     plugins: [...resolution.plugins],
+    manifestRecords: [...resolution.manifestRecords],
     configuredChannelIds: [...resolution.configuredChannelIds],
     missingConfiguredChannelIds: [...resolution.missingConfiguredChannelIds],
     loadFailures: resolution.loadFailures.map((failure) => ({ ...failure })),
@@ -862,6 +864,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
   const plugins = [...byId.values()];
   const resolution = {
     plugins,
+    manifestRecords,
     configuredChannelIds,
     missingConfiguredChannelIds: configuredChannelIds.filter((channelId) => !byId.has(channelId)),
     loadFailures,

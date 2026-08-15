@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { App } from "@slack/bolt";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -30,7 +31,11 @@ export function createInboundSlackTestContext(params: {
     botToken: "token",
     app: params.app ?? ({ client: params.appClient ?? {} } as App),
     runtime: {} as RuntimeEnv,
-    channelRuntime: params.channelRuntime ?? createPluginRuntimeMock().channel,
+    channelRuntime:
+      params.channelRuntime ??
+      createPluginRuntimeMock({
+        channel: { inbound: { buildContext: buildChannelInboundEventContext } },
+      }).channel,
     botUserId: "B1",
     botId: "B1",
     identityHealth: { lifecycle: "ready", lastError: null },

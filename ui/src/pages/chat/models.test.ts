@@ -11,9 +11,14 @@ describe("loadModels", () => {
       ],
     }));
 
-    const models = await loadModels({ request } as unknown as GatewayBrowserClient);
+    const models = await loadModels({ request } as unknown as GatewayBrowserClient, {
+      agentId: "main",
+    });
 
-    expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
+    expect(request).toHaveBeenCalledWith("models.list", {
+      view: "configured",
+      agentId: "main",
+    });
     expect(models).toEqual([
       { id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed", provider: "minimax" },
     ]);
@@ -22,10 +27,14 @@ describe("loadModels", () => {
   it("requests only the prepared catalog for automatic reads", async () => {
     const request = vi.fn(async () => ({ models: [] }));
 
-    await loadModels({ request } as unknown as GatewayBrowserClient, { preparedOnly: true });
+    await loadModels({ request } as unknown as GatewayBrowserClient, {
+      agentId: "main",
+      preparedOnly: true,
+    });
 
     expect(request).toHaveBeenCalledWith("models.list", {
       view: "configured",
+      agentId: "main",
       preparedOnly: true,
     });
   });
@@ -36,8 +45,8 @@ describe("loadModels", () => {
     }));
     const client = { request } as unknown as GatewayBrowserClient;
 
-    const first = await loadModels(client);
-    const second = await loadModels(client);
+    const first = await loadModels(client, { agentId: "main" });
+    const second = await loadModels(client, { agentId: "main" });
 
     expect(request).toHaveBeenCalledTimes(1);
     expect(first).toBe(second);
@@ -77,9 +86,9 @@ describe("loadModels", () => {
       .mockResolvedValueOnce({ models: exact });
     const client = { request } as unknown as GatewayBrowserClient;
 
-    expect(await loadModels(client, { preparedOnly: true })).toEqual(prepared);
-    expect(await loadModels(client, { refresh: true })).toEqual(exact);
-    expect(await loadModels(client, { preparedOnly: true })).toEqual(exact);
+    expect(await loadModels(client, { agentId: "main", preparedOnly: true })).toEqual(prepared);
+    expect(await loadModels(client, { agentId: "main", refresh: true })).toEqual(exact);
+    expect(await loadModels(client, { agentId: "main", preparedOnly: true })).toEqual(exact);
     expect(request).toHaveBeenCalledTimes(2);
   });
 
@@ -99,13 +108,13 @@ describe("loadModels", () => {
       .mockImplementationOnce(async () => ({ models: fresh }));
     const client = { request } as unknown as GatewayBrowserClient;
 
-    const stalePromise = loadModels(client);
-    const freshModels = await loadModels(client, { refresh: true });
+    const stalePromise = loadModels(client, { agentId: "main" });
+    const freshModels = await loadModels(client, { agentId: "main", refresh: true });
     releaseStale?.();
     await stalePromise;
 
     expect(freshModels).toEqual(fresh);
-    expect(await loadModels(client)).toEqual(fresh);
+    expect(await loadModels(client, { agentId: "main" })).toEqual(fresh);
     expect(request).toHaveBeenCalledTimes(2);
   });
 

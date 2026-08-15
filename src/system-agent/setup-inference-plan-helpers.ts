@@ -189,7 +189,11 @@ export function parseRef(modelRef: string): { provider: string; model: string } 
     : { provider: modelRef.slice(0, slash), model: modelRef.slice(slash + 1) };
 }
 
-export function projectSetupTargetModelMetadata(config: OpenClawConfig, modelRef: string): unknown {
+export function projectSetupTargetModelMetadata(
+  config: OpenClawConfig,
+  modelRef: string,
+  agentId?: string,
+): unknown {
   const target = parseRef(modelRef);
   const canonicalKey = modelKey(target.provider, target.model);
   const keys = new Set(
@@ -208,7 +212,7 @@ export function projectSetupTargetModelMetadata(config: OpenClawConfig, modelRef
           : { exists: false },
       ]),
     );
-  const defaultAgentId = resolveDefaultAgentId(config);
+  const defaultAgentId = agentId ? normalizeAgentId(agentId) : resolveDefaultAgentId(config);
   const agent = listAgentEntries(config).find(
     (entry) => normalizeAgentId(entry.id) === defaultAgentId,
   );
@@ -272,6 +276,7 @@ export function prepareManualAuthForActivation(params: {
   modelRef: string;
   providerId: string;
   pluginId?: string;
+  agentId?: string;
 }): {
   config: OpenClawConfig;
   profiles: ProviderAuthResult["profiles"];
@@ -302,6 +307,7 @@ function copySelectedModelMetadata(params: {
   target: OpenClawConfig;
   prepared: OpenClawConfig;
   modelRef: string;
+  agentId?: string;
 }): void {
   const preparedDefaultModels = params.prepared.agents?.defaults?.models;
   if (preparedDefaultModels && Object.hasOwn(preparedDefaultModels, params.modelRef)) {
@@ -322,7 +328,9 @@ function copySelectedModelMetadata(params: {
     };
   }
 
-  const defaultAgentId = resolveDefaultAgentId(params.target);
+  const defaultAgentId = params.agentId
+    ? normalizeAgentId(params.agentId)
+    : resolveDefaultAgentId(params.target);
   const preparedAgent = listAgentEntries(params.prepared).find(
     (agent) => normalizeAgentId(agent.id) === defaultAgentId,
   );
@@ -376,6 +384,7 @@ export function projectManualInferenceConfig(params: {
   modelRef: string;
   providerId: string;
   pluginId?: string;
+  agentId?: string;
 }): OpenClawConfig {
   const config = structuredClone(params.baseConfig);
   if (params.selectedProfile && params.selectedProfileId) {
@@ -423,6 +432,7 @@ export function projectManualInferenceConfig(params: {
     target: config,
     prepared: params.preparedConfig,
     modelRef: params.modelRef,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   return config;
 }

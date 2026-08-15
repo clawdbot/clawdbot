@@ -427,9 +427,9 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/instances")).toBeNull();
   });
 
-  it("matches canonical route casing exactly", () => {
-    expect(routeIdFromPath("/CHAT")).toBeNull();
-    expect(routeIdFromPath("/Sessions")).toBeNull();
+  it("matches static routes case-insensitively like the uirouter path key", () => {
+    expect(routeIdFromPath("/CHAT")).toBe("chat");
+    expect(routeIdFromPath("/Sessions")).toBe("sessions");
   });
 });
 

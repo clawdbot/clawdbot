@@ -224,6 +224,46 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     expect(runBeforeAgentReplyForTurnMock).not.toHaveBeenCalled();
   });
 
+  it("runs a native control command on the existing session without turn side effects", async () => {
+    const bootstrap = vi.fn<NonNullable<ContextEngine["bootstrap"]>>(async () => ({
+      bootstrapped: true,
+    }));
+    const afterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
+    const context = buildPreparedContext(createContextEngine({ bootstrap, afterTurn }));
+    context.params.controlOperation = "compact";
+    context.params.allowEmptyAssistantReplyAsSilent = true;
+    executePreparedCliRunMock.mockResolvedValueOnce({
+      text: "",
+      rawText: "",
+      sessionId: "existing-external-cli-session",
+    });
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.meta.agentMeta?.sessionId).toBe("existing-external-cli-session");
+    expect(executePreparedCliRunMock).toHaveBeenCalledWith(
+      context,
+      "existing-external-cli-session",
+      undefined,
+    );
+    expect(getGlobalHookRunnerMock).not.toHaveBeenCalled();
+    expect(loadCliSessionHistoryMessagesMock).not.toHaveBeenCalled();
+    expect(loadCliSessionContextEngineMessagesMock).not.toHaveBeenCalled();
+    expect(bootstrap).not.toHaveBeenCalled();
+    expect(afterTurn).not.toHaveBeenCalled();
+  });
+
+  it("skips the top-level before-reply hook for native control commands", async () => {
+    const context = buildPreparedContext(createContextEngine());
+    context.params.controlOperation = "compact";
+    prepareCliRunContextMock.mockResolvedValue(context);
+
+    await runCliAgent(context.params);
+
+    expect(prepareCliRunContextMock).toHaveBeenCalledOnce();
+    expect(runBeforeAgentReplyForTurnMock).not.toHaveBeenCalled();
+  });
+
   it("finalizes successful CLI turns with the active context engine", async () => {
     const bootstrap = vi.fn<NonNullable<ContextEngine["bootstrap"]>>(async () => ({
       bootstrapped: true,

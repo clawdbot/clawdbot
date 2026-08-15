@@ -482,6 +482,15 @@ export async function setupWizardCommand(
     normalizedAuthChoice === opts.authChoice && flow === opts.flow
       ? opts
       : { ...opts, authChoice: normalizedAuthChoice, flow };
+  if (normalizedOpts.agentName !== undefined) {
+    const { validateFirstOnboardingAgentName } = await import("./onboard-agent.js");
+    const error = validateFirstOnboardingAgentName(normalizedOpts.agentName);
+    if (error) {
+      runtime.error(`Invalid --agent-name: ${error}`);
+      runtime.exit(1);
+      return;
+    }
+  }
   if (!validatePreflightOptions(normalizedOpts, runtime)) {
     return;
   }

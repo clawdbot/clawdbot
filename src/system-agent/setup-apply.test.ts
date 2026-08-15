@@ -118,7 +118,7 @@ vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
     resolveAgentEntry(config, agentId)?.agentDir ?? `/agents/${agentId}`,
 }));
 
-import { applySystemAgentModelSelection, applySystemAgentSetup } from "./setup-apply.js";
+import { applySystemAgentSetup } from "./setup-apply.js";
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -214,57 +214,6 @@ function setSetupCommitState(config: OpenClawConfig, initialSnapshot: ConfigSnap
   mocks.state.commitSnapshot = initialSnapshot;
 }
 
-describe("applySystemAgentModelSelection", () => {
-  it("clears stale harness pins in both model scopes for a native route", async () => {
-    const config = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-          },
-        },
-        entries: {
-          work: {
-            default: true,
-            model: "openai/gpt-5.5",
-            models: {
-              "openai/gpt-5.5": {
-                alias: "primary",
-                agentRuntime: { id: "codex" },
-              },
-            },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const result = await applySystemAgentModelSelection({
-      config,
-      model: "openai/gpt-5.5",
-    });
-
-    expect(result.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toBeUndefined();
-    expect(result.agents?.entries?.work?.models?.["openai/gpt-5.5"]).toEqual({ alias: "primary" });
-    expect(result.agents?.entries?.work?.model).toBe("openai/gpt-5.5");
-  });
-
-  it("pins the verified credential without creating a global visibility map", async () => {
-    const result = await applySystemAgentModelSelection({
-      config: {
-        agents: {
-          defaults: { model: "openai/gpt-5.5" },
-          entries: { main: { default: true } },
-        },
-      },
-      model: "openai/gpt-5.5",
-      authProfileId: "openai:verified",
-    });
-
-    expect(result.agents?.defaults?.model).toBe("openai/gpt-5.5@openai:verified");
-    expect(result.agents?.defaults?.models).toBeUndefined();
-  });
-});
-
 describe("applySystemAgentSetup transaction boundaries", () => {
   beforeEach(() => {
     vi.resetAllMocks();
@@ -278,18 +227,33 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     setSetupCommitState(structuredClone(config), snapshot("probe", config));
     mocks.state.commitPreviousHash = "probe";
     mocks.state.persistedConfig = undefined;
-    mocks.ensureOnboardingAgent.mockImplementation(async ({ config: current, name, workspace }) => {
-      const id = name === "Research Buddy" ? "research-buddy" : name.toLowerCase();
-      const next = {
-        ...current,
-        agents: {
-          ...current.agents,
-          entries: { [id]: { default: true, workspace, agentDir: `/agents/${id}` } },
-        },
-      };
-      mocks.state.persistedConfig = next;
-      return { config: next, agentId: id, bootstrapPending: true };
-    });
+    mocks.ensureOnboardingAgent.mockImplementation(
+      async ({ config: current, firstAgent, workspace }) => {
+        const name = firstAgent?.name ?? "main";
+        const id = name === "Research Buddy" ? "research-buddy" : name.toLowerCase();
+        const next = {
+          ...current,
+          agents: {
+            ...current.agents,
+            entries: { [id]: { default: true, workspace, agentDir: `/agents/${id}` } },
+          },
+        };
+        mocks.state.persistedConfig = next;
+        const createdSnapshot = snapshot("agent-create", next);
+        mocks.state.initialSnapshot = createdSnapshot;
+        mocks.state.commitConfig = next;
+        mocks.state.commitSnapshot = createdSnapshot;
+        mocks.state.commitPreviousHash = "agent-create";
+        mocks.events.push("agent-create");
+        return {
+          config: next,
+          agentId: id,
+          bootstrapPending: true,
+          createdAgent: true,
+          configHash: "agent-create",
+        };
+      },
+    );
     mocks.readSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
     mocks.readVerifiedSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
     mocks.readVerifiedSnapshotWithPluginMetadata.mockImplementation(async () => ({
@@ -304,6 +268,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       });
       mocks.events.push("commit");
       mocks.state.persistedConfig = result.nextConfig;
+      mocks.state.initialSnapshot = snapshot("persisted", result.nextConfig);
       return {
         nextConfig: result.nextConfig,
         path: "/tmp/openclaw.json",
@@ -391,7 +356,37 @@ describe("applySystemAgentSetup transaction boundaries", () => {
         entries: { main: { default: true } },
       },
     });
-    expect(mocks.events).toEqual(["commit", "workspace"]);
+    expect(mocks.events).toEqual(["agent-create", "commit", "workspace"]);
+  });
+
+  it("creates a named first agent while preserving the pre-roster verified route", async () => {
+    const source = { agents: { defaults: { model: "openai/gpt-5.5" } } } satisfies OpenClawConfig;
+    const runtimeConfig = {
+      agents: {
+        defaults: { model: "openai/gpt-5.5" },
+        entries: { main: { default: true, agentDir: "/agents/main" } },
+      },
+    } satisfies OpenClawConfig;
+    const absentRoster = snapshot("probe", source, runtimeConfig);
+    setSetupCommitState(runtimeConfig, absentRoster);
+    const expectedInferenceRoute = await projectDefaultInferenceRoute(runtimeConfig);
+    mocks.readVerifiedSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
+
+    await applySystemAgentSetup(
+      baseParams({
+        expectedConfigHash: "probe",
+        expectedAgentId: "main",
+        expectedAgentDir: "/agents/main",
+        expectedInferenceRoute,
+        firstAgent: { name: "Research Buddy" },
+      }),
+    );
+
+    expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ firstAgent: { name: "Research Buddy" } }),
+    );
+    expect(mocks.state.persistedConfig?.agents?.entries).toHaveProperty("research-buddy");
+    expect(mocks.state.persistedConfig?.agents?.entries).not.toHaveProperty("main");
   });
 
   it("does not mistake a proposal-created roster for an existing fleet", async () => {

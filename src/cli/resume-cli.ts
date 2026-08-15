@@ -2,6 +2,7 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { addTuiOptions } from "./tui-cli-options.js";
 
@@ -31,7 +32,7 @@ export function registerResumeCli(program: Command) {
         const { runResumeCommand } = await import("./resume-cli.runtime.js");
         await runResumeCommand(query, opts);
       } catch (error) {
-        defaultRuntime.error(String(error));
+        defaultRuntime.error(formatErrorMessage(error));
         defaultRuntime.exit(1);
       }
     });

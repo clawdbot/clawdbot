@@ -68,6 +68,8 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "voicewake.routing.changed": [READ_SCOPE],
   "device.pair.requested": [PAIRING_SCOPE],
   "device.pair.resolved": [PAIRING_SCOPE],
+  "device.pair.setup.completed": [PAIRING_SCOPE],
+  "device.pair.setup.deliveryUncertain": [PAIRING_SCOPE],
   "node.pair.requested": [PAIRING_SCOPE],
   "node.pair.resolved": [PAIRING_SCOPE],
   "node.presence": [READ_SCOPE],
@@ -227,7 +229,7 @@ export function createGatewayBroadcaster(params: {
     if (shouldLogWs()) {
       const logMeta: Record<string, unknown> = {
         event,
-        seq: isTargeted ? "targeted" : "per-client",
+        seq: "per-client",
         clients: params.clients.size,
         targets: targetConnIds ? targetConnIds.size : undefined,
         dropIfSlow: opts?.dropIfSlow,
@@ -310,9 +312,9 @@ export function createGatewayBroadcaster(params: {
         });
       }
       if (slow && opts?.dropIfSlow) {
-        if (!isTargeted) {
-          clientSeq.set(c, nextSeq);
-        }
+        // Consume the seq for the dropped frame so the client's gap detector
+        // sees the loss instead of a silently thinner stream.
+        clientSeq.set(c, nextSeq);
         continue;
       }
       if (slow) {
@@ -324,13 +326,12 @@ export function createGatewayBroadcaster(params: {
         continue;
       }
       try {
-        const eventSeq = isTargeted ? undefined : nextSeq;
-        if (!isTargeted) {
-          clientSeq.set(c, nextSeq);
-        }
+        // Targeted frames ride the same per-client sequence as fanout frames:
+        // an unstamped frame is invisible to the client's gap detector, so a
+        // drop between two targeted sends would go unnoticed forever.
+        clientSeq.set(c, nextSeq);
         const base = getFrameBase();
-        const seqFragment = eventSeq === undefined ? "" : `,"seq":${eventSeq}`;
-        const frame = `{"type":"event","event":${base.eventJSON}${base.payloadFragment}${seqFragment}${base.stateVersionFragment}}`;
+        const frame = `{"type":"event","event":${base.eventJSON}${base.payloadFragment},"seq":${nextSeq}${base.stateVersionFragment}}`;
         c.socket.send(frame);
       } catch {
         /* ignore */

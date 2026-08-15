@@ -8,6 +8,7 @@ import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../m
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { resolveSandboxContext } from "../../sandbox/context.js";
+import { resolveSessionPlacementSandbox } from "../../session-placement-admission.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -222,11 +223,18 @@ export async function dispatchEmbeddedRunAttempt(input: {
         })
       : undefined;
   const pluginSandbox = control.pluginHarnessOwnsTransport
-    ? await resolveSandboxContext({
+    ? ((await resolveSessionPlacementSandbox({
+        agentId: runtime.agentId,
+        config: params.config,
+        sessionId: runtime.sessionId,
+        sessionKey: runtime.sessionKey,
+        workspaceDir: runtime.workspaceDir,
+      })) ??
+      (await resolveSandboxContext({
         config: params.config,
         sessionKey: params.sandboxSessionKey ?? runtime.sessionKey ?? runtime.sessionId,
         workspaceDir: runtime.workspaceDir,
-      })
+      })))
     : undefined;
   if (!params.admittedRunContext) {
     throw new Error("embedded attempt reached dispatch without an admitted run context");
@@ -307,6 +315,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     skipPreparedUserTurnMessage: runtime.skipPreparedUserTurnMessage,
     currentInboundEventKind: params.currentInboundEventKind,
     currentInboundContext: params.currentInboundContext,
+    explicitSkillSelections: params.explicitSkillSelections,
     images: promptMedia.images,
     imageOrder: promptMedia.imageOrder,
     media: promptMedia.media,

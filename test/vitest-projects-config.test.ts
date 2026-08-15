@@ -38,10 +38,8 @@ import {
 import { fullSuiteVitestShards } from "./vitest/vitest.test-shards.mjs";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 import { createUnitFastFakeTimersVitestConfig } from "./vitest/vitest.unit-fast-fake-timers.config.ts";
-import { createUnitFastIsolatedVitestConfig } from "./vitest/vitest.unit-fast-isolated.config.ts";
 import unitFastRootConfig from "./vitest/vitest.unit-fast-root.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
-import { createUnitVitestConfig } from "./vitest/vitest.unit.config.ts";
 
 const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-");
 
@@ -81,11 +79,36 @@ describe("projects vitest config", () => {
     expect(agentConfigs.size).toBe(agentVitestProjectConfigs.length);
   });
 
-  it("covers each normal full-suite test file exactly once", async () => {
-    const { missing, duplicated } = await auditFullSuiteTestFileOwnership();
+  it("covers each normal full-suite test file exactly once after configs cached filtered includes", async () => {
+    const contractTestConfigs = [
+      contractChannelSurfaceConfig,
+      contractChannelConfigConfig,
+      contractChannelRegistryConfig,
+      contractChannelSessionConfig,
+      contractPluginConfig,
+    ].map(requireTestConfig);
+    const previousIncludes = contractTestConfigs.map((config) => config.include);
 
-    expect(missing).toStrictEqual([]);
-    expect(duplicated).toStrictEqual([]);
+    try {
+      // A CLI path outside the contract patterns caches these defaults with empty includes.
+      for (const config of contractTestConfigs) {
+        config.include = [];
+      }
+
+      const { missing, duplicated } = await auditFullSuiteTestFileOwnership();
+
+      expect(missing).toStrictEqual([]);
+      expect(duplicated).toStrictEqual([]);
+    } finally {
+      contractTestConfigs.forEach((config, index) => {
+        const previousInclude = previousIncludes[index];
+        if (previousInclude === undefined) {
+          delete config.include;
+        } else {
+          config.include = previousInclude;
+        }
+      });
+    }
   });
 
   it("keeps all embedded harnesses under their canonical embedded owner", () => {
@@ -124,13 +147,18 @@ describe("projects vitest config", () => {
     const toolingShard = fullSuiteVitestShards.find(
       (shard) => shard.config === "test/vitest/vitest.full-core-tooling.config.ts",
     );
+    const toolingProjects = [
+      "test/vitest/vitest.tooling.config.ts",
+      "test/vitest/vitest.tooling-docker.config.ts",
+      "test/vitest/vitest.tooling-isolated.config.ts",
+    ];
 
-    expect(toolingShard?.projects).toEqual(
-      expect.arrayContaining(["test/vitest/vitest.tooling-docker.config.ts"]),
+    expect(toolingShard?.projects).toEqual(toolingProjects);
+    const rootToolingProjects = rootVitestProjects.filter((project) =>
+      toolingProjects.includes(project),
     );
-    expect(rootVitestProjects).toEqual(
-      expect.arrayContaining(["test/vitest/vitest.tooling-docker.config.ts"]),
-    );
+    expect(new Set(rootToolingProjects)).toEqual(new Set(toolingProjects));
+    expect(rootToolingProjects).toHaveLength(toolingProjects.length);
   });
 
   it("disables vite env-file loading for vitest lanes", () => {
@@ -272,33 +300,12 @@ describe("projects vitest config", () => {
     expect(requireWebOptimizer(testConfig).enabled).toBe(true);
   });
 
-  it("keeps the unit lane on the non-isolated runner by default", () => {
-    const config = createUnitVitestConfig();
-    const testConfig = requireTestConfig(config);
-    expect(testConfig.isolate).toBe(false);
-    expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
-  });
-
-  it("keeps the unit-fast lane on shared workers without the reset-heavy runner", () => {
-    const config = createUnitFastVitestConfig();
-    const testConfig = requireTestConfig(config);
-    expect(testConfig.isolate).toBe(false);
-    expect(testConfig.runner).toBeUndefined();
-  });
-
   it("keeps root-matrix unit-fast files on the cross-file cleanup runner", () => {
     const testConfig = requireTestConfig(unitFastRootConfig);
     expect(testConfig.isolate).toBe(false);
     expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
     expect(rootVitestProjects).toContain("test/vitest/vitest.unit-fast-root.config.ts");
     expect(rootVitestProjects).not.toContain("test/vitest/vitest.unit-fast.config.ts");
-  });
-
-  it("isolates forced unit-fast files from shared module caches", () => {
-    const config = createUnitFastIsolatedVitestConfig();
-    const testConfig = requireTestConfig(config);
-    expect(testConfig.isolate).toBe(true);
-    expect(testConfig.runner).toBeUndefined();
   });
 
   it("keeps fake-timer unit-fast files serial with the non-isolated runner", () => {

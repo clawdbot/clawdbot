@@ -153,6 +153,8 @@ type ViewerFacepileElement = HTMLElement & {
   selfUserId?: string;
   selfInstanceId?: string;
   sessionKey?: string;
+  excludeUserId?: string;
+  maxVisible: number;
   variant: "session" | "footer";
   buildInfo: ControlUiBuildInfo;
   gatewayVersion: string | null;
@@ -272,6 +274,37 @@ it("keeps session facepiles as plain non-interactive avatar clusters", async () 
   });
   expect(facepile.querySelector("button.viewer-facepile-trigger")).toBeNull();
   expect(facepile.querySelectorAll("openclaw-tooltip")).toHaveLength(1);
+});
+
+it("excludes the session creator before choosing visible avatars and overflow", async () => {
+  const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
+  facepile.variant = "session";
+  facepile.sessionKey = "agent:main:active";
+  facepile.excludeUserId = "owner";
+  facepile.maxVisible = 2;
+  facepile.presencePayload = {
+    presence: ["owner", "alice", "bob", "carol"].map((id) => ({
+      instanceId: `${id}-instance`,
+      user: { id, name: id },
+      watchedSessions: ["agent:main:active"],
+    })),
+  };
+  document.body.append(facepile);
+
+  await vi.waitFor(async () => {
+    await facepile.updateComplete;
+    expect(
+      [...facepile.querySelectorAll("[data-viewer-id]")].map((avatar) =>
+        avatar.getAttribute("data-viewer-id"),
+      ),
+    ).toEqual(["alice", "bob"]);
+  });
+  expect(facepile.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count")).toBe("3");
+  expect(facepile.querySelector(".viewer-avatar--overflow")?.textContent?.trim()).toBe("+1");
+  expect(facepile.querySelector('[data-viewer-id="owner"]')).toBeNull();
+  expect(facepile.querySelector(".viewer-avatar--overflow")?.getAttribute("aria-label")).toBe(
+    "carol",
+  );
 });
 
 it("detects only other viewers watching the requested session", () => {

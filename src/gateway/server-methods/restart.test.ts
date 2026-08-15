@@ -174,6 +174,46 @@ describe("gateway restart handlers", () => {
     });
   });
 
+  it("schedules a safe restart only after matching the target lock owner", async () => {
+    mockScheduledRestart({ safe: false, summary: "restart deferred" });
+
+    const respond = await invokeRestartRequest({
+      reason: "operator",
+      safe: true,
+      skipDeferral: true,
+      target: {
+        pid: process.pid,
+        ownerId: "gateway-owner",
+        port: 18_789,
+      },
+    });
+
+    expectRestartRequest(true);
+    expect(requestGatewayRestartWithSignalAdmission).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, status: "scheduled" }),
+    );
+  });
+
+  it("rejects an invalid targeted safe mode without restarting", async () => {
+    const respond = await invokeRestartRequest({
+      safe: "true",
+      target: {
+        pid: process.pid,
+        ownerId: "gateway-owner",
+        port: 18_789,
+      },
+    });
+
+    expect(scheduleSafeGatewayRestart).not.toHaveBeenCalled();
+    expect(requestGatewayRestartWithSignalAdmission).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "INVALID_REQUEST",
+      message: "invalid safe targeted restart mode",
+    });
+  });
+
   it("rejects a targeted restart after lock ownership changes", async () => {
     readActiveGatewayLockIdentity.mockResolvedValue({
       pid: process.pid,

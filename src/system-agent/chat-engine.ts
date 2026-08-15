@@ -138,7 +138,12 @@ export class SystemAgentChatEngine {
   }
 
   seedHistory(turns: readonly SystemAgentAssistantTurn[]): void {
-    this.history.push(...turns.map((turn) => ({ ...turn })));
+    this.history.push(
+      ...turns.map((turn) => ({
+        ...turn,
+        text: turn.role === "user" ? redactSensitiveCommandText(turn.text) : turn.text,
+      })),
+    );
   }
 
   historyLength(): number {

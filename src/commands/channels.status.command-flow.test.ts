@@ -245,6 +245,20 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     });
   });
 
+  it("preserves gateway account text in JSON output", async () => {
+    const name = "Primary\u001B]0;channels-status-json\u0007🦞\r\nAccount";
+    const payload = {
+      channelAccounts: { discord: [{ accountId: "default", name }] },
+      channels: { discord: { name } },
+    };
+    mocks.callGateway.mockResolvedValue(payload);
+    const { runtime, logs } = createCapturingTestRuntime();
+
+    await channelsStatusCommand({ json: true, probe: false }, runtime as never);
+
+    expect(JSON.parse(logs.at(-1) ?? "{}")).toStrictEqual(payload);
+  });
+
   it("rejects malformed timeouts before gateway status requests", async () => {
     const { runtime } = createCapturingTestRuntime();
 

@@ -366,6 +366,7 @@ describe("secrets handlers", () => {
         createdAtMs: 1,
         updatedAtMs: 2,
         updatedBy: "Operator",
+        allowedHosts: ["api.example.com"],
         valuePreview: "malicious-leak",
       },
       {
@@ -388,7 +389,7 @@ describe("secrets handlers", () => {
     });
     expect(respond.mock.calls[0]?.[1]).toMatchObject({
       entries: [
-        { name: "SERVICE_API_KEY", kind: "secret" },
+        { name: "SERVICE_API_KEY", kind: "secret", allowedHosts: ["api.example.com"] },
         { name: "SERVICE_URL", kind: "env", value: "https://service.test" },
       ],
     });
@@ -417,7 +418,12 @@ describe("secrets handlers", () => {
     await invokeStoreMethod({
       handlers,
       method: "secrets.store.set",
-      requestParams: { name: "SERVICE_API_KEY", value: "new-value", kind: "secret" },
+      requestParams: {
+        name: "SERVICE_API_KEY",
+        value: "new-value",
+        kind: "secret",
+        allowedHosts: ["api.example.com"],
+      },
       respond: setRespond,
     });
     expect(storeMocks.writeEntry).toHaveBeenCalledWith({
@@ -425,6 +431,7 @@ describe("secrets handlers", () => {
       name: "SERVICE_API_KEY",
       value: "new-value",
       kind: "secret",
+      allowedHosts: ["api.example.com"],
       updatedBy: "Control UI",
     });
     expect(setRespond).toHaveBeenCalledWith(true, {

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 export const WORKER_BUNDLE_MANIFEST_VERSION = "openclaw-worker-bundle-v1";
 
-type WorkerBundleHashEntry = {
+export type WorkerBundleHashEntry = {
   path: string;
   mode: number;
   size: number;

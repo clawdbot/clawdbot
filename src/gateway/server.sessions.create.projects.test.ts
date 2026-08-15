@@ -11,12 +11,12 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { testState } from "./test-helpers.js";
 import {
   directSessionReq,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();

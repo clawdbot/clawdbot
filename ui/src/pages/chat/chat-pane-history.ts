@@ -17,7 +17,10 @@ import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
-import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
+import {
+  cloneChatAttachmentsForIndependentOwner,
+  replaceChatAttachmentsFromEditor,
+} from "./attachment-payload-store.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   loadChatHistory,
@@ -535,8 +538,14 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
     const scope = this.captureConnectionScope();
     const state = scope?.state;
     const client = scope?.client;
-    const draft = state?.chatMessage.trim();
-    if (!scope || !state || !client || !draft || !this.catalogSession?.canContinue) {
+    const draft = state?.chatMessage.trim() ?? "";
+    // Attachments count as composed content: an image-only continuation must
+    // send, not silently no-op while the send button looks live.
+    if (!scope || !state || !client || !this.catalogSession?.canContinue) {
+      return;
+    }
+    const attachments = cloneChatAttachmentsForIndependentOwner(state.chatAttachments);
+    if (!draft && attachments.length === 0) {
       return;
     }
     const sourceSessionKey = state.sessionKey;
@@ -573,7 +582,7 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
         return;
       }
       preparePaneSessionHandoff(this.context, this.paneId, result.sessionKey, {
-        attachments: [],
+        attachments,
         draft,
         send: true,
       });
