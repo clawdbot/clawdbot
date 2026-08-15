@@ -34,7 +34,7 @@ type ProviderProjectConfiguredModelRowContext = {
   model: ProviderRuntimeModel;
 };
 
-export type EmbeddingProviderSetupInspection = {
+type EmbeddingProviderSetupInspection = {
   provider: string;
   reason: string;
   requirement?: string;
