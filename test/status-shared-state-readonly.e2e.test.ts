@@ -1,6 +1,7 @@
+// Status shared-state E2E tests enforce the CLI/Gateway SQLite ownership boundary.
+
 import fs from "node:fs";
 import path from "node:path";
-// Status shared-state E2E tests enforce the CLI/Gateway SQLite ownership boundary.
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
@@ -35,21 +36,34 @@ function seedInspectableTask(db: DatabaseSync): void {
 }
 
 describe("status shared-state ownership", () => {
-  it("does not create shared state while inspecting a configured offline instance", async () => {
-    const instance = await createOpenClawTestInstance({ name: "status-read-only-absent-state" });
-    const databasePath = path.join(instance.stateDir, "state", "openclaw.sqlite");
-    try {
-      expect(fs.existsSync(databasePath)).toBe(false);
+  it.each([
+    { name: "text status", args: ["status"] },
+    { name: "JSON status", args: ["status", "--json"] },
+    { name: "all status", args: ["status", "--all"] },
+    { name: "channel probe", args: ["channels", "status", "--probe", "--json"] },
+  ])(
+    "does not create shared state during $name",
+    async ({ name, args }) => {
+      const instance = await createOpenClawTestInstance({
+        name: `status-read-only-${name.replaceAll(" ", "-")}`,
+      });
+      const databasePath = path.join(instance.stateDir, "state", "openclaw.sqlite");
+      try {
+        expect(fs.existsSync(databasePath)).toBe(false);
 
-      const status = await instance.cli(["status", "--json"]);
+        const status = await instance.cli(args);
 
-      expect(status.code, status.stderr).toBe(0);
-      expect(JSON.parse(status.stdout)).toMatchObject({ tasks: { total: 0 } });
-      expect(fs.existsSync(databasePath)).toBe(false);
-    } finally {
-      await instance.cleanup();
-    }
-  }, 120_000);
+        expect(status.code, status.stderr).toBe(0);
+        if (args[0] === "status" && args.includes("--json")) {
+          expect(JSON.parse(status.stdout)).toMatchObject({ tasks: { total: 0 } });
+        }
+        expect(fs.existsSync(databasePath)).toBe(false);
+      } finally {
+        await instance.cleanup();
+      }
+    },
+    120_000,
+  );
 
   it("reads committed tasks while the Gateway owns state and another writer is active", async () => {
     const instance = await createOpenClawTestInstance({ name: "status-read-only-live-gateway" });
