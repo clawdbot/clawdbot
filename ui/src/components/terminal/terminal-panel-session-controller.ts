@@ -4,14 +4,13 @@ import { t } from "../../i18n/index.ts";
 import {
   TerminalConnection,
   type TerminalGatewayClient,
-  TerminalOpenTimeoutError,
-  TerminalOpenUnusableSessionError,
   type TerminalSessionInfo,
 } from "./terminal-connection.ts";
 import {
   disposeTerminalController,
   replaceTerminalController,
 } from "./terminal-controller-lifecycle.ts";
+import { terminalOpenErrorText } from "./terminal-panel-chrome.ts";
 import {
   forceTerminalRender,
   shellBasename,
@@ -556,14 +555,7 @@ export class TerminalPanelSessionController
       if (!this.isTerminalOperationCurrent(operation)) {
         return false;
       }
-      this.host.terminalPanelErrorText =
-        error instanceof TerminalOpenTimeoutError
-          ? t("terminal.connectionTimedOut")
-          : error instanceof TerminalOpenUnusableSessionError
-            ? t("terminal.unavailable")
-            : error instanceof Error
-              ? error.message
-              : String(error);
+      this.host.terminalPanelErrorText = terminalOpenErrorText(error);
       return true;
     } finally {
       if (this.isTerminalOperationCurrent(operation)) {

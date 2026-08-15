@@ -18,7 +18,12 @@ import { i18n } from "../i18n/index.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../lib/sessions/route-navigation.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
-import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
+import {
+  createLazyElementSpec,
+  resetAppHostTestGlobals,
+  type ShellKeyboardState,
+  type TestOptionalCustomElement,
+} from "./app-host.test-support.ts";
 import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
 import "./app-host.ts";
 import type {
@@ -71,12 +76,6 @@ type I18nRecoveryWiring = {
 type ShellServerPreferencesState = {
   runtime: { context: ApplicationContext };
   reconcileServerUiPrefs: (runtimeConfig: ApplicationContext["runtimeConfig"]) => void;
-};
-
-type TestOptionalCustomElement = {
-  tagName: string;
-  label: string;
-  loadModule: () => Promise<unknown>;
 };
 
 type ShellLazySurfaceState = ShellKeyboardState & {
@@ -147,20 +146,6 @@ function createRosterRefreshContext(params: {
     ensureIdentity,
     setSelection,
     refreshConfig,
-  };
-}
-
-let lazyElementSequence = 0;
-
-function createLazyElementSpec(label: string): TestOptionalCustomElement {
-  lazyElementSequence += 1;
-  const tagName = `openclaw-app-host-lazy-${lazyElementSequence}`;
-  return {
-    tagName,
-    label,
-    loadModule: async () => {
-      customElements.define(tagName, class extends HTMLElement {});
-    },
   };
 }
 

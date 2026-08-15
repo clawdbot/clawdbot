@@ -27,6 +27,12 @@ import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
+  availableSidebarSlots,
+  companionRailTemplate,
+  discussionPanelTemplate,
+  embeddedSurfaceTemplates,
+} from "./chat-pane-embedded-panels.ts";
+import {
   createChatPaneSessionActionCallbacks,
   readChatPaneMutationAccess,
   renderChatPaneComposerControls,
@@ -607,11 +613,10 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       selectedAgent?.workspaceGit === true,
     );
     const chat = renderChat({ ...props, header: board.face === "dashboard" ? nothing : header });
-    const boardPrimary = this.renderBoardPrimary(board, chat);
     // Keep this root stable across board face changes so the guarded board runtime
     // remains connected while Chat is active.
     const primary = html`<div class="chat-pane-primary-column">
-      ${board.face === "dashboard" ? header : nothing}${boardPrimary}
+      ${board.face === "dashboard" ? header : nothing}${this.renderBoardPrimary(board, chat)}
     </div>`;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot);
@@ -619,59 +624,26 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       chat,
       workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),
       tasks: renderBackgroundTasksRail(backgroundTasks, { embedded: true }),
-      companion: html`<openclaw-chat-session-rail
-        embedded
-        .sessionKey=${state.sessionKey}
-        .digest=${observerDigest ?? null}
-        .running=${Boolean(observerRunId)}
-        .activeRunId=${observerRunId ?? null}
-        .startedAt=${selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined}
-        .lastReadAt=${selectedSession?.lastReadAt}
-        .planStatus=${state.planStatus ?? null}
-        .pullRequests=${this.sessionPullRequests}
-        .companion=${this.sessionCompanionThreads.view(state.sessionKey, currentAgentId)}
-        .connected=${state.connected}
-        .onSubmit=${(question: string) => void this.submitSessionCompanionQuestion(question)}
-        .onDraftChange=${(draft: string) =>
-          this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId)}
-        .onClear=${() => void this.clearSessionCompanion()}
-        .onVisibilityChange=${this.setSessionObserverVisibility}
-      ></openclaw-chat-session-rail>`,
-      ...(state.terminalAvailable
-        ? {
-            terminal: html`<openclaw-terminal-panel
-              embedded
-              .deferInitialRestore=${this.pendingPanelToggleRequests.has("terminal")}
-              .client=${state.connected ? state.client : null}
-              .available=${state.terminalAvailable}
-              .agentId=${currentAgentId}
-              .themeMode=${document.documentElement.dataset.theme === "light" ? "light" : "dark"}
-              .basePath=${state.basePath}
-            ></openclaw-terminal-panel>`,
-          }
-        : {}),
-      ...(state.browserPanelAvailable
-        ? {
-            browser: html`<openclaw-browser-panel
-              embedded
-              data-chat-autotype-exempt
-              .client=${state.connected ? state.client : null}
-              .available=${state.browserPanelAvailable}
-              .basePath=${state.basePath}
-              .authToken=${resolveAssistantAttachmentAuthToken(state)}
-            ></openclaw-browser-panel>`,
-          }
-        : {}),
-      ...(desktopAvailable
-        ? {
-            desktop: html`<openclaw-desktop-panel
-              embedded
-              data-chat-autotype-exempt
-              .client=${state.connected ? state.client : null}
-              .available=${desktopAvailable}
-            ></openclaw-desktop-panel>`,
-          }
-        : {}),
+      companion: companionRailTemplate({
+        state,
+        digest: observerDigest ?? null,
+        activeRunId: observerRunId ?? null,
+        startedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
+        lastReadAt: selectedSession?.lastReadAt,
+        pullRequests: this.sessionPullRequests,
+        companion: this.sessionCompanionThreads.view(state.sessionKey, currentAgentId),
+        onSubmit: (question) => void this.submitSessionCompanionQuestion(question),
+        onDraftChange: (draft) =>
+          this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId),
+        onClear: () => void this.clearSessionCompanion(),
+        onVisibilityChange: this.setSessionObserverVisibility,
+      }),
+      ...embeddedSurfaceTemplates({
+        state,
+        agentId: currentAgentId,
+        desktopAvailable,
+        deferTerminalRestore: this.pendingPanelToggleRequests.has("terminal"),
+      }),
       ...(state.sidebarContent
         ? {
             detail: renderChatDetailSlot({
@@ -685,18 +657,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
             }),
           }
         : {}),
-      ...(discussion
-        ? {
-            discussion: html`<openclaw-session-discussion
-              .sessionKey=${discussion.sessionKey}
-              .canOpen=${discussion.canOpen}
-              .sourceGeneration=${this.connectionGeneration}
-              .loadInfo=${discussion.loadInfo}
-              .openDiscussion=${discussion.openDiscussion}
-              .onStateChange=${discussion.onStateChange}
-            ></openclaw-session-discussion>`,
-          }
-        : {}),
+      ...discussionPanelTemplate(discussion, this.connectionGeneration),
     };
     const sidebarCallbacks: SidebarRegionCallbacks = {
       activatePanel: (panelId: string) => {
@@ -714,9 +675,9 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         closePanelSlot(slot);
       },
       openSlot: openPanelSlot,
-      reorderPanel: (panelId, targetPanelId, placement) =>
+      reorderPanel: (panelId, targetPanelId, position) =>
         state.updateSidebarLayout(
-          reorderPanel(state.sidebarLayout, panelId, targetPanelId, placement),
+          reorderPanel(state.sidebarLayout, panelId, targetPanelId, position),
         ),
       resizePanel: (columnId: string, size: number) => {
         this.commitSidebarPanelResize(sidebarLayout, columnId, size);
@@ -726,17 +687,12 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
         state.updateSidebarLayout(setSidebarExpanded(state.sidebarLayout, expanded)),
       setOpen: (open: boolean) => this.setChatSidePanelOpen(open),
     };
-    const availableSlots: SidebarSlotId[] = [
-      "detail",
-      ...(state.terminalAvailable ? (["terminal"] as const) : []),
-      ...(state.browserPanelAvailable ? (["browser"] as const) : []),
-      "workspace",
-      "companion",
-      "tasks",
-      ...(desktopAvailable ? (["desktop"] as const) : []),
-      ...(discussion ? (["discussion"] as const) : []),
-      ...(board.hasBoard ? (["chat"] as const) : []),
-    ];
+    const availableSlots = availableSidebarSlots({
+      state,
+      desktopAvailable,
+      hasDiscussion: discussion !== null,
+      hasBoard: board.hasBoard,
+    });
     const content = renderSidebarRegion({
       availableWidth: this.paneWidth,
       availableSlots,
