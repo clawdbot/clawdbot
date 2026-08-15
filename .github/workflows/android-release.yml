@@ -17,6 +17,10 @@ on:
       - '.github/workflows/android-release.yml' # 监听到当前 workflow 文件被修改就触发
       - 'apps/android/**'                     # 监听到 Android 源码被修改也触发
 
+concurrency: # 只自动取消旧的 push 构建，不取消手动发布。
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
 permissions:
   contents: write
 
@@ -37,13 +41,16 @@ jobs:
           ref: ${{ inputs.tag != '' && format('refs/tags/{0}', inputs.tag) || github.ref }}
           fetch-depth: 0
           persist-credentials: false
-          
+                
       - name: Resolve Release Version
         id: version
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          # 优先使用手动输入的 tag；如果没有输入，则读取仓库本身的 Android 版本号并拼上 'v'
-          if [[ -n "${{ inputs.tag }}" ]]; then
-            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+
+          if [[ -n "$INPUT_TAG" ]]; then
+            echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
           else
             pkg_ver="$(node -p 'require("./apps/android/version.json").version')"
             echo "tag=v${pkg_ver}" >> "$GITHUB_OUTPUT"
@@ -61,20 +68,32 @@ jobs:
       - name: 物化 signing keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
+          umask 077
       
-          signing_dir="apps/android/build/release-signing"
-          mkdir -p "$signing_dir"
+          signing_dir="$GITHUB_WORKSPACE/apps/android/build/release-signing"
+          keystore_path="$signing_dir/release.keystore"
       
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$signing_dir/release.keystore"
-          chmod 600 "$signing_dir/release.keystore"
+          mkdir -p "$signing_dir" "$HOME/.gradle"
+      
+          printf '%s' "$KEYSTORE_BASE64" |
+            base64 --decode > "$keystore_path"
+      
+          printf '%s\n' \
+            "OPENCLAW_ANDROID_STORE_FILE=$keystore_path" \
+            "OPENCLAW_ANDROID_STORE_PASSWORD=$STORE_PASSWORD" \
+            "OPENCLAW_ANDROID_KEY_ALIAS=$KEY_ALIAS" \
+            "OPENCLAW_ANDROID_KEY_PASSWORD=$KEY_PASSWORD" \
+            > "$HOME/.gradle/gradle.properties"
+      
+          chmod 600 \
+            "$keystore_path" \
+            "$HOME/.gradle/gradle.properties"
       - name: Build Android APK
-        env:
-          ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_STORE_FILE: ${{ github.workspace }}/apps/android/build/release-signing/release.keystore
-          ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
-          ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -87,6 +106,13 @@ jobs:
             -PopenclawBuildCommit="$build_commit" \
             -PopenclawBuildTimestamp="$build_timestamp" \
             :app:assembleThirdPartyRelease
+
+      
+      - name: 清理物化 signing files
+        if: ${{ always() }}
+        run: |
+          rm -rf apps/android/build/release-signing
+          rm -f "$HOME/.gradle/gradle.properties"
 
       - name: 收集 Android APK
         run: |
@@ -113,6 +139,10 @@ jobs:
           
           sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
           
+          if [[ -z "$sdk_root" ]]; then
+            echo "::error::ANDROID_SDK_ROOT 和 ANDROID_HOME 均为空"
+            exit 1
+          fi          
           mapfile -t apksigners < <(
             find "$sdk_root/build-tools" \
               -mindepth 2 \
@@ -131,7 +161,8 @@ jobs:
           apksigner_path="${apksigners[$((${#apksigners[@]} - 1))]}"
           
           echo "Using apksigner: $apksigner_path"
-          
+
+          # 注意这里只看有没有签名，没有固定签名
           "$apksigner_path" verify \
             --verbose \
             --print-certs \
@@ -178,9 +209,6 @@ jobs:
               --generate-notes \
               --repo "$GITHUB_REPOSITORY"
           fi
-      - name: Remove materialized signing files
-        if: ${{ always() }}
-        run: rm -rf apps/android/build/release-signing
 
       - name: Summary
         env:
