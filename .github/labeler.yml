@@ -1,3 +1,8 @@
+"plugin: planning-knowledge":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/planning-knowledge/**"
+
 "plugin: azure-speech":
   - changed-files:
       - any-glob-to-any-file:
