@@ -5,11 +5,7 @@ import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helper
 import { isTelegramMessageNotModifiedError } from "./network-errors.js";
 import type { TelegramQuestionCallback } from "./question-callback-data.js";
 import type { InputRichBlock } from "./rich-block-model.js";
-import {
-  buildTelegramRichBlocksPlan,
-  buildTelegramRichMarkdown,
-  getTelegramRichRawApi,
-} from "./rich-message.js";
+import { buildTelegramRichBlocksPlan, getTelegramRichRawApi } from "./rich-message.js";
 import { buildInlineKeyboard } from "./send.js";
 
 export type TelegramCallbackButton = {
@@ -26,7 +22,7 @@ export type TelegramCallbackButton = {
  * so odd characters in interpolated text can't corrupt formatting or be
  * silently swallowed by markdown link/emphasis parsing.
  */
-export type TelegramCallbackRichTextOverride = {
+type TelegramCallbackRichTextOverride = {
   blocks: InputRichBlock[];
 };
 
@@ -93,22 +89,24 @@ export function createTelegramCallbackMessageActions(params: {
     editParams?: Parameters<typeof bot.api.editMessageText>[3],
     richTextOverride?: TelegramCallbackRichTextOverride,
   ) => {
-    // Rich accounts author HTML confirmations (e.g. the /model picker) directly on the
-    // legacy funnel by default: the rich wire path is blocks-only and would re-escape
-    // caller HTML. See the contract note in rich-message.ts above TelegramInputRichMessage.
-    // A caller that supplies richTextOverride opts a specific parse_mode:"HTML" edit back
-    // into the rich funnel with hand-built blocks instead — required whenever that edit
+    // Rich routing is opt-in per call, not a richMessages-account-wide default: only a
+    // caller that supplies richTextOverride's hand-built blocks goes through the rich raw
+    // API. Every other caller (approval receipts, plugin respond.editMessage, the model
+    // picker's own intermediate pagination/list/error edits) stays on the legacy funnel and
+    // sends its text unparsed, exactly as it did before richMessages existed. Without this
+    // guard, `buildTelegramRichMarkdown(text)` used to run on arbitrary un-authored text for
+    // every rich account, silently reinterpreting incidental `*`/`_`/backtick/`[` characters
+    // as Markdown (#123886 follow-up finding). Opting in is required whenever an edit
     // targets a message that was itself sent as rich (e.g. the /model picker's final
     // confirmation), since a legacy-text edit there leaves the prior rich body's markup
     // visible underneath the new plain text instead of fully replacing it.
-    if (!richMessages || (editParams?.parse_mode === "HTML" && !richTextOverride)) {
+    if (!richMessages || !richTextOverride) {
       return await legacyEditCallbackMessage(text, editParams);
     }
     try {
-      const richMessage = richTextOverride
-        ? buildTelegramRichBlocksPlan(richTextOverride.blocks, { skipEntityDetection: true })
-            .richMessage
-        : buildTelegramRichMarkdown(text);
+      const richMessage = buildTelegramRichBlocksPlan(richTextOverride.blocks, {
+        skipEntityDetection: true,
+      }).richMessage;
       return await getTelegramRichRawApi(bot.api).editMessageText(
         withCallbackBusinessParams({
           chat_id: callbackMessage.chat.id,

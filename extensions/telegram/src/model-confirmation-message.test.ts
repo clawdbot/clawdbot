@@ -1,7 +1,7 @@
 // Confirmation-body builder for the /models picker's final selection edit.
 import { describe, expect, it } from "vitest";
 import { buildModelSelectionConfirmation } from "./model-confirmation-message.js";
-import { richTextToPlainString } from "./rich-block-model.js";
+import { inputRichBlocksToPlainText } from "./rich-block-model.js";
 
 describe("buildModelSelectionConfirmation", () => {
   it("renders a non-default selection with an escaped HTML body and a matching rich block", () => {
@@ -15,9 +15,7 @@ describe("buildModelSelectionConfirmation", () => {
     expect(confirmation.html).toBe(
       "\u{2705} Model changed to <b>openai/gpt-5.4</b>\n\nSession-only model selection. Runtime unchanged. Use /model openai/gpt-5.4 --runtime &lt;runtime&gt; -s to switch harnesses. The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.",
     );
-    const plain = confirmation.richBlocks
-      .map((block) => richTextToPlainString(block.text))
-      .join("\n");
+    const plain = inputRichBlocksToPlainText(confirmation.richBlocks);
     expect(plain).toBe(
       "\u{2705} Model changed to openai/gpt-5.4\n\nSession-only model selection. Runtime unchanged. Use /model openai/gpt-5.4 --runtime <runtime> -s to switch harnesses. The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.",
     );
@@ -35,9 +33,7 @@ describe("buildModelSelectionConfirmation", () => {
     });
 
     expect(confirmation.html).toContain("&lt;script&gt;&amp;model");
-    const plain = confirmation.richBlocks
-      .map((block) => richTextToPlainString(block.text))
-      .join("\n");
+    const plain = inputRichBlocksToPlainText(confirmation.richBlocks);
     expect(plain).toContain("openai/<script>&model");
   });
 
@@ -53,9 +49,7 @@ describe("buildModelSelectionConfirmation", () => {
     expect(confirmation.html).toBe(
       "\u{2705} Model reset to default\n\nSession model selection cleared. Compatible auth profile retained. Runtime reset to configured policy. New replies use the agent's configured default.",
     );
-    const plain = confirmation.richBlocks
-      .map((block) => richTextToPlainString(block.text))
-      .join("\n");
+    const plain = inputRichBlocksToPlainText(confirmation.richBlocks);
     expect(plain).toBe(confirmation.html);
   });
 });

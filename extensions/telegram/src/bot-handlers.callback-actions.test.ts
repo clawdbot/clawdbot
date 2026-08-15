@@ -8,7 +8,23 @@ const callbackMessage = {
   message_id: 222,
 } as unknown as Message;
 
-function buildBot(params: { rawEditMessageText?: ReturnType<typeof vi.fn> } = {}) {
+const helloBlocksOverride = { blocks: [{ type: "paragraph" as const, text: "hello" }] };
+
+// rich-message.ts's TelegramRichRawApi/editMessageText param type isn't exported (it's an
+// internal facade shape); mirror its call signature here so vi.fn infers a single-argument
+// mock instead of a zero-arg one, which is what makes `.mock.calls[0][0]` type-check.
+type RichEditMessageText = (params: Record<string, unknown>) => Promise<Message | true>;
+
+function requireValue<T>(value: T | undefined, label: string): T {
+  if (value === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
+function buildBot(
+  params: { rawEditMessageText?: ReturnType<typeof vi.fn<RichEditMessageText>> } = {},
+) {
   const editMessageText = vi.fn(async () => true as const);
   const api: Record<string, unknown> = { editMessageText };
   if (params.rawEditMessageText) {
@@ -31,7 +47,13 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
     expect(editMessageText).toHaveBeenCalledWith(111, 222, "hello", undefined);
   });
 
-  it("routes through the rich raw API when richMessages is enabled", async () => {
+  it("keeps plain-text edits with no richTextOverride on the legacy funnel even when richMessages is enabled", async () => {
+    // Regression for #123886's follow-up finding: richMessages must not make
+    // editCallbackMessage auto-markdown-parse arbitrary un-authored text (approval
+    // receipts, plugin respond.editMessage, the model picker's own intermediate
+    // pagination/list/error edits). Only an explicit richTextOverride opts into rich
+    // routing; everything else keeps sending its text unparsed, exactly like richMessages
+    // never existed.
     const rawEditMessageText = vi.fn(async () => true as const);
     const { bot, editMessageText } = buildBot({ rawEditMessageText });
     const actions = createTelegramCallbackMessageActions({
@@ -43,12 +65,8 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
 
     await actions.editCallbackMessage("**hello**");
 
-    expect(rawEditMessageText).toHaveBeenCalledOnce();
-    expect(rawEditMessageText.mock.calls[0][0]).toMatchObject({
-      chat_id: 111,
-      message_id: 222,
-    });
-    expect(editMessageText).not.toHaveBeenCalled();
+    expect(editMessageText).toHaveBeenCalledWith(111, 222, "**hello**", undefined);
+    expect(rawEditMessageText).not.toHaveBeenCalled();
   });
 
   it("keeps parse_mode HTML edits on the legacy funnel even when richMessages is enabled", async () => {
@@ -79,7 +97,7 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
       richMessages: true,
     });
 
-    await actions.editCallbackMessage("hello");
+    await actions.editCallbackMessage("hello", undefined, helloBlocksOverride);
 
     expect(rawEditMessageText).toHaveBeenCalledOnce();
     expect(editMessageText).toHaveBeenCalledWith(111, 222, "hello", undefined);
@@ -97,7 +115,9 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
       richMessages: true,
     });
 
-    await expect(actions.editCallbackMessage("hello")).rejects.toThrow("message is not modified");
+    await expect(
+      actions.editCallbackMessage("hello", undefined, helloBlocksOverride),
+    ).rejects.toThrow("message is not modified");
     expect(editMessageText).not.toHaveBeenCalled();
   });
 
@@ -110,7 +130,7 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
       richMessages: true,
     });
 
-    await actions.editCallbackMessage("hello");
+    await actions.editCallbackMessage("hello", undefined, helloBlocksOverride);
 
     expect(editMessageText).toHaveBeenCalledWith(111, 222, "hello", undefined);
   });
@@ -121,7 +141,7 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
     // back onto the rich funnel even though it authors HTML, since a
     // legacy-text edit there leaves the prior rich body's markup visible
     // underneath the new plain text instead of replacing it.
-    const rawEditMessageText = vi.fn(async () => true as const);
+    const rawEditMessageText = vi.fn<RichEditMessageText>(async () => true as const);
     const { bot, editMessageText } = buildBot({ rawEditMessageText });
     const actions = createTelegramCallbackMessageActions({
       bot,
@@ -137,7 +157,9 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
     );
 
     expect(rawEditMessageText).toHaveBeenCalledOnce();
-    expect(rawEditMessageText.mock.calls[0][0]).toMatchObject({
+    expect(
+      requireValue(rawEditMessageText.mock.calls.at(0), "rawEditMessageText call")[0],
+    ).toMatchObject({
       chat_id: 111,
       message_id: 222,
       rich_message: { blocks: [{ type: "paragraph", text: "hello" }] },
