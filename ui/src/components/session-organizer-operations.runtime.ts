@@ -276,6 +276,7 @@ export async function deleteSessionsBatch(
     confirmLabel: t("common.delete"),
     danger: true,
     skipPreference: sessionDeleteSkipPreference(scope),
+    signal: scope.signal,
   });
   // A reconnect or a replaced sessions capability can land while the modal is
   // open, so the captured scope is revalidated before any delete leaves here.
@@ -503,6 +504,7 @@ export async function stopCloudWorker(
     message: t("sessionsView.stopCloudWorkerConfirm", { session: session.label }),
     confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
     danger: true,
+    signal: scope.signal,
   });
   if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
@@ -546,6 +548,7 @@ export async function deleteSession(
     confirmLabel: t("common.delete"),
     danger: true,
     ...(options.offerSkip ? { skipPreference: sessionDeleteSkipPreference(scope) } : {}),
+    signal: scope.signal,
   });
   if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
@@ -597,6 +600,7 @@ export async function deleteSession(
           message: t("sessionsView.deletePreservedWorktreeConfirm", { branch: preserved.branch }),
           confirmLabel: t("common.remove"),
           danger: true,
+          signal: scope.signal,
         });
         // Cancel needs this guard too: the delete already landed, so a scope
         // retired while the modal was open must not drive the navigation below.

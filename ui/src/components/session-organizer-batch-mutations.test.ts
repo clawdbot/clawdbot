@@ -22,6 +22,7 @@ import { patchSessionRows } from "./session-organizer-batch-mutations.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
 import {
   deleteSession,
+  deleteSessionGroup,
   deleteSessionsBatch,
   stopCloudWorker,
 } from "./session-organizer-operations.runtime.ts";
@@ -48,6 +49,10 @@ function createHarness(
 ) {
   let current = params.current ?? true;
   let requestCount = 0;
+  // Mirrors SessionDataController's own controller: retiring the scope aborts
+  // it so a dialog wired to `scope.signal` dismisses itself for real, and
+  // renewing stands in for the next `beginSessionMutation()` after a reconnect.
+  let abortController = new AbortController();
   const request = vi.fn(async (_method: string, rawParams?: unknown, _options?: unknown) => {
     const patchParams = rawParams as SessionsPatchManyParams;
     const requestFailure = params.requestFailure;
@@ -88,6 +93,7 @@ function createHarness(
   const refreshTheme = vi.fn();
   const deleteMany = vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] }));
   const deleteOne = vi.fn(async () => ({ deleted: true }));
+  const groupsDelete = vi.fn(async () => "completed" as const);
   const scope = {
     epoch: 1,
     context: { agents: { state: { agentsList: null } }, theme: { refresh: refreshTheme } },
@@ -96,9 +102,11 @@ function createHarness(
       refreshReplacement,
       delete: deleteOne,
       deleteMany,
+      groupsDelete,
     } as unknown as SessionCapability,
     client,
     selectedAgentId: "main",
+    signal: abortController.signal,
   } as unknown as SidebarSessionMutationScope;
   const publishSessionMutationError = vi.fn();
   const pruneSidebarSessionEntry = vi.fn();
@@ -116,6 +124,7 @@ function createHarness(
   return {
     deleteMany,
     deleteOne,
+    groupsDelete,
     host,
     pruneSidebarSessionEntry,
     publishSessionMutationError,
@@ -126,6 +135,13 @@ function createHarness(
     // Stands in for a reconnect or agent switch landing while a confirm is open.
     retireScope: () => {
       current = false;
+      abortController.abort();
+    },
+    // Stands in for the next beginSessionMutation() a reconnect issues.
+    renewScope: () => {
+      current = true;
+      abortController = new AbortController();
+      scope.signal = abortController.signal;
     },
     scope,
   };
@@ -394,7 +410,7 @@ describe("patchSessionRows", () => {
 type OperationsHarness = ReturnType<typeof createHarness>;
 
 const destructiveHarness = {
-  methods: ["sessions.delete", "sessions.reclaim"],
+  methods: ["sessions.delete", "sessions.reclaim", "sessions.groups.delete"],
   scopes: ["operator.write", "operator.admin"],
 };
 
@@ -423,6 +439,11 @@ const destructiveOperations = [
     run: (harness: OperationsHarness) =>
       stopCloudWorker(harness.host, cloudWorkerRow(false), harness.scope),
     mutation: (harness: OperationsHarness) => harness.request,
+  },
+  {
+    name: "session-group delete",
+    run: (harness: OperationsHarness) => deleteSessionGroup(harness.host, "Group A", harness.scope),
+    mutation: (harness: OperationsHarness) => harness.groupsDelete,
   },
 ] as const;
 
@@ -469,17 +490,28 @@ describe("session organizer destructive confirmations", () => {
   });
 
   it.each(destructiveOperations)(
-    "abandons the $name when the connection is replaced while its confirm is open",
+    "aborts the $name confirm and releases the lock for a fresh one when the connection is replaced while it is open",
     async (operation) => {
       const harness = createHarness(destructiveHarness);
 
       const pending = operation.run(harness);
-      const actions = await waitForConfirmDialogActions();
+      await waitForConfirmDialogActions();
       harness.retireScope();
-      answerConfirmDialog(actions, "confirm");
       await pending;
 
       expect(operation.mutation(harness)).not.toHaveBeenCalled();
+      // The stale dialog must dismiss itself, not merely stop sending its request.
+      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+
+      // A fresh confirmation (the reconnect's own retry) must be able to open
+      // immediately; a stale dialog holding the shared lock would block it.
+      harness.renewScope();
+      const reopened = operation.run(harness);
+      const freshActions = await waitForConfirmDialogActions();
+      answerConfirmDialog(freshActions, "confirm");
+      await reopened;
+
+      expect(operation.mutation(harness)).toHaveBeenCalledOnce();
     },
   );
 

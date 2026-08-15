@@ -100,6 +100,7 @@ export async function deleteSessionGroup(
     message: t("sessionsView.deleteGroupConfirm"),
     confirmLabel: t("common.delete"),
     danger: true,
+    signal: scope.signal,
   });
   if (!confirmed) {
     return false;

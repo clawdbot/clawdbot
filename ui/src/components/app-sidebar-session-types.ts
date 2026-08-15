@@ -183,6 +183,11 @@ export type SidebarSessionMutationScope = {
   sessions: SessionCapability;
   client: GatewayBrowserClient;
   selectedAgentId: string;
+  // Owner-scoped abort signal for this epoch's destructive confirmations. A
+  // retired epoch aborts it so any open dialog dismisses itself instead of
+  // surviving a reconnect; scopes built outside SessionDataController may
+  // leave this unset and keep their own stale-guard behavior.
+  signal?: AbortSignal;
 };
 
 export type SidebarSessionMutationResult = "completed" | "failed" | "stale";
