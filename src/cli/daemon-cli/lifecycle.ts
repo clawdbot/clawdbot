@@ -75,6 +75,7 @@ import type { DaemonLifecycleOptions } from "./types.js";
 const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
 const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;
 const WINDOWS_POST_RESTART_HEALTH_TIMEOUT_MS = 180_000;
+type TargetedRestartAck = { ok: true; status: "emitted" | "coalesced"; pid: number };
 
 function postRestartHealthAttempts(): number {
   return process.platform === "win32"
@@ -117,7 +118,7 @@ async function resolveGatewayLifecycleContext(service = resolveGatewayService())
   const mergedEnv = mergeGatewayServiceEnv(process.env, command);
 
   const portFromArgs = parsePortFromArgs(command?.programArguments);
-  const config = await readBestEffortConfig().catch(() => undefined);
+  const config = await readBestEffortConfig({ observe: false }).catch(() => undefined);
   return {
     port: portFromArgs ?? resolveGatewayPort(config, mergedEnv),
     env: mergedEnv,
@@ -129,18 +130,18 @@ async function resolveGatewayLifecyclePort(service = resolveGatewayService()) {
 }
 
 function resolveGatewayPortFallback(): Promise<number> {
-  return readBestEffortConfig()
+  return readBestEffortConfig({ observe: false })
     .then((cfg) => resolveGatewayPort(cfg, process.env))
     .catch(() => resolveGatewayPort(undefined, process.env));
 }
 
 async function resolveExplicitGatewayConfigPort(): Promise<number | undefined> {
-  const cfg = await readBestEffortConfig().catch(() => undefined);
+  const cfg = await readBestEffortConfig({ observe: false }).catch(() => undefined);
   return cfg?.gateway?.port;
 }
 
 async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void> {
-  const cfg = await readBestEffortConfig().catch(() => undefined);
+  const cfg = await readBestEffortConfig({ observe: false }).catch(() => undefined);
   const tlsEnabled = Boolean(cfg?.gateway?.tls?.enabled);
   const scheme = tlsEnabled ? "wss" : "ws";
   const probe = await probeGateway({
@@ -306,15 +307,15 @@ async function signalGatewayRestart(
       `gateway lock identity does not match the verified listener on port ${port}; refusing an ambiguous restart`,
     );
   }
-  const usesTargetedWindowsRpc = isWindows && Boolean(previousLockIdentity?.ownerId);
-  const intentWritten = usesTargetedWindowsRpc
+  const usesTargetedRestartRpc = Boolean(previousLockIdentity?.ownerId);
+  const intentWritten = usesTargetedRestartRpc
     ? false
     : writeGatewayRestartIntentSync({
         targetPid: pid,
         reason: "gateway.restart",
         ...(params.restartIntent ? { intent: params.restartIntent } : {}),
       });
-  if (requiresTargetedDelivery && !usesTargetedWindowsRpc && !intentWritten) {
+  if (requiresTargetedDelivery && !usesTargetedRestartRpc && !intentWritten) {
     throw new Error("failed to persist the gateway restart intent");
   }
   try {
@@ -329,38 +330,37 @@ async function signalGatewayRestart(
         );
       }
     }
-    if (isWindows) {
-      if (previousLockIdentity?.ownerId) {
-        await callGatewayCli<{ ok: true; status: "emitted" | "coalesced"; pid: number }>({
-          method: "gateway.restart.request",
-          params: {
-            reason: "gateway.restart",
-            target: {
-              pid,
-              ownerId: previousLockIdentity.ownerId,
-              port,
-            },
-            ...(params.restartIntent ? { restartIntent: params.restartIntent } : {}),
+    if (usesTargetedRestartRpc && previousLockIdentity?.ownerId) {
+      const result = await callGatewayCli<TargetedRestartAck>({
+        method: "gateway.restart.request",
+        params: {
+          reason: "gateway.restart",
+          target: {
+            pid,
+            ownerId: previousLockIdentity.ownerId,
+            port,
           },
-          localPortOverride: port,
-          ignoreEnvUrlOverride: true,
-          timeoutMs: 10_000,
-        });
-      } else {
-        // Gateways started before lock owner IDs were introduced do not understand the
-        // targeted payload. The exact loopback port plus the revalidated legacy lock is
-        // the strongest available target; the PID-bound persisted intent carries options.
-        await callGatewayCli({
-          method: "gateway.restart.request",
-          params: {
-            reason: "gateway.restart",
-            skipDeferral: true,
-          },
-          localPortOverride: port,
-          ignoreEnvUrlOverride: true,
-          timeoutMs: 10_000,
-        });
-      }
+          ...(params.restartIntent ? { restartIntent: params.restartIntent } : {}),
+        },
+        localPortOverride: port,
+        ignoreEnvUrlOverride: true,
+        timeoutMs: 10_000,
+      });
+      if (result.pid !== pid) throw new Error("invalid restart acknowledgement");
+    } else if (isWindows) {
+      // Gateways started before lock owner IDs were introduced do not understand the
+      // targeted payload. The exact loopback port plus the revalidated legacy lock is
+      // the strongest available target; the PID-bound persisted intent carries options.
+      await callGatewayCli({
+        method: "gateway.restart.request",
+        params: {
+          reason: "gateway.restart",
+          skipDeferral: true,
+        },
+        localPortOverride: port,
+        ignoreEnvUrlOverride: true,
+        timeoutMs: 10_000,
+      });
     } else {
       signalVerifiedGatewayPidSync(pid, "SIGUSR1");
     }
@@ -373,7 +373,7 @@ async function signalGatewayRestart(
   appendGatewayLifecycleAudit({
     action: "restart",
     source: params.auditSource,
-    mode: isWindows ? "rpc" : "sigusr1",
+    mode: usesTargetedRestartRpc || isWindows ? "rpc" : "sigusr1",
     pid,
   });
   return {
@@ -409,11 +409,16 @@ async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promi
   const json = Boolean(opts.json);
   const { emit, fail } = createDaemonActionContext({ action: "restart", json });
   const restartIntent = resolveGatewayRestartIntentOptions(opts);
-  const configuredPort = await resolveExplicitGatewayConfigPort();
-  const port =
-    (await readActiveGatewayLockPort().catch(() => undefined)) ??
-    configuredPort ??
-    (await resolveGatewayPortFallback());
+  const lockIdentity = await readActiveGatewayLockIdentity().catch(() => undefined);
+  if (!lockIdentity?.ownerId) {
+    // Owner IDs and targeted restart semantics shipped together. Older Gateways
+    // ignore target fields, so fail before a candidate can mutate their state.
+    fail(
+      "Gateway restart failed: the active Gateway lock predates targeted restart ownership; update the running Gateway before retrying",
+    );
+    return false;
+  }
+  const port = lockIdentity.port;
 
   let signaled: Awaited<ReturnType<typeof signalGatewayRestart>>;
   try {
