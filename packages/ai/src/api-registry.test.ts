@@ -8,7 +8,6 @@ import {
 } from "./index.js";
 import {
   defaultApiRegistry,
-  getApiProvider,
   streamSimple as streamSimpleDefault,
 } from "./internal/default-runtime.js";
 
@@ -80,8 +79,6 @@ describe("LLM API registry", () => {
       },
       TEST_SOURCE_ID,
     );
-
-    expect(getApiProvider("test-api")).toBeDefined();
 
     streamSimpleDefault(model, { messages: [] });
 

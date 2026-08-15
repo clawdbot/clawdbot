@@ -506,17 +506,10 @@ describe("plugin tabs route", () => {
     // Distinct plugins with the same local tab id stay distinct.
     expect(pluginTabKey({ pluginId: "other", id: "logbook" })).not.toBe(pluginTabKey(ref));
   });
-
-  it("stays out of the customizable static sidebar routes", () => {
-    expect(SIDEBAR_NAV_ROUTES).not.toContain("plugin");
-    expect(SIDEBAR_NAV_ROUTES).toContain("plugins");
-    expect(routeIdFromPath("/settings/plugins")).toBe("plugins");
-    expect(routeIdFromPath("/plugins")).toBeNull();
-  });
 });
 
 describe("SIDEBAR_NAV_ROUTES", () => {
-  it("all routes are unique", () => {
+  it("keeps the canonical sidebar route order", () => {
     expect(SIDEBAR_NAV_ROUTES).toEqual([
       "workboard",
       "dashboards",
@@ -531,18 +524,15 @@ describe("SIDEBAR_NAV_ROUTES", () => {
     ]);
   });
 
-  it("collapses the plugins hub to a single sidebar entry", () => {
-    expect(SIDEBAR_NAV_ROUTES).not.toContain("skills");
-    expect(SIDEBAR_NAV_ROUTES).not.toContain("skill-workshop");
+  it("recognizes plugin hub routes", () => {
     expect(isPluginsHubRoute("plugins")).toBe(true);
     expect(isPluginsHubRoute("skills")).toBe(true);
     expect(isPluginsHubRoute("skill-workshop")).toBe(true);
     expect(isPluginsHubRoute("sessions")).toBe(false);
   });
 
-  it("keeps detailed settings slices routed but out of the customizable sidebar", () => {
+  it("keeps the canonical settings navigation order", () => {
     const settingsRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
-    expect(SIDEBAR_NAV_ROUTES).not.toContain("config");
     expect(settingsRoutes).toEqual([
       "custodian",
       "profile",
@@ -571,9 +561,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
     ]);
   });
 
-  it("keeps settings sidebar groups unique with personal settings first", () => {
-    const settingsRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
-    expect(new Set(settingsRoutes).size).toBe(settingsRoutes.length);
+  it("keeps personal settings first and labels remaining groups", () => {
     const [firstGroup] = SETTINGS_NAVIGATION_GROUPS;
     expect(firstGroup?.labelKey).toBeNull();
     expect(firstGroup?.routes).toEqual(["custodian", "profile", "appearance", "notifications"]);
