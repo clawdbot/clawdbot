@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
+  getDiagnosticSessionActivitySnapshot,
+  markDiagnosticArgumentChurnObservation,
+  markDiagnosticEmbeddedRunStarted,
+  resetDiagnosticRunActivityForTest,
+} from "../logging/diagnostic-run-activity.js";
+import {
   getDiagnosticSessionState,
   resetDiagnosticSessionStateForTest,
 } from "../logging/diagnostic-session-state.js";
@@ -31,6 +37,7 @@ function call(id: string, name: string, args: Record<string, unknown>) {
 
 describe("whole-batch tool-loop admission", () => {
   beforeEach(() => {
+    resetDiagnosticRunActivityForTest();
     resetDiagnosticSessionStateForTest();
     resetDiagnosticEventsForTest();
     resetAdjustedParamsByToolCallIdForTests();
@@ -161,6 +168,34 @@ describe("whole-batch tool-loop admission", () => {
     });
     expect(state.toolCallHistory).toHaveLength(1);
     expect(consumeBatchAdmittedToolCall(admitted.toolCall.id, ctx.runId)).toBe(false);
+  });
+
+  it("leaves an established churn lease intact until an admitted escape call completes", async () => {
+    markDiagnosticEmbeddedRunStarted({
+      sessionId: ctx.sessionId,
+      sessionKey: ctx.sessionKey,
+      runId: ctx.runId,
+    });
+    markDiagnosticArgumentChurnObservation({
+      sessionId: ctx.sessionId,
+      sessionKey: ctx.sessionKey,
+      runId: ctx.runId,
+      active: true,
+      now: 1,
+    });
+
+    const admitted = call("pending-read-escape", "read", { path: "/tmp/a" });
+    const admission = await admitToolCallBatch([admitted], ctx);
+    admission.commitReadyCalls?.([{ toolCallId: admitted.toolCall.id, args: admitted.args }]);
+
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: ctx.sessionId,
+        sessionKey: ctx.sessionKey,
+      }),
+    ).toMatchObject({
+      lastProgressReason: "tool_loop:argument_churn",
+    });
   });
 
   it("cleans an admitted marker when a run ends before the wrapped tool consumes it", async () => {

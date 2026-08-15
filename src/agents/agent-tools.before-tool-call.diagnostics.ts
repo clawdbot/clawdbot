@@ -639,12 +639,24 @@ export async function reconcileLoopCallExecutionParams(args: {
       cwd: args.ctx.cwd ?? args.ctx.workspaceDir,
       warningThreshold: resolveToolLoopWarningThreshold(),
     });
-    markDiagnosticArgumentChurnObservation({
-      sessionKey: args.ctx.sessionKey,
-      sessionId: args.ctx.sessionId,
-      runId: args.ctx.runId,
-      active: churn.active,
-    });
+    if (churn.active) {
+      markDiagnosticArgumentChurnObservation({
+        sessionKey: args.ctx.sessionKey,
+        sessionId: args.ctx.sessionId,
+        runId: args.ctx.runId,
+        active: true,
+      });
+    } else if (churn.executionParamsChanged) {
+      // A trusted rewrite to a novel execution variant is authoritative before
+      // the tool starts. Duplicate prepared/wrapped admission of unchanged
+      // params is not; its completed outcome owns any later clear.
+      markDiagnosticArgumentChurnObservation({
+        sessionKey: args.ctx.sessionKey,
+        sessionId: args.ctx.sessionId,
+        runId: args.ctx.runId,
+        active: false,
+      });
+    }
   } catch (err) {
     log.warn(
       `tool loop execution-param reconciliation failed: tool=${args.toolName} error=${String(err)}`,

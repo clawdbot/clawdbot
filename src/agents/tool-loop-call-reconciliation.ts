@@ -19,10 +19,20 @@ export function reconcileToolCallExecutionParams(
     cwd?: string;
     warningThreshold: number;
   },
-): ReturnType<typeof getToolArgumentChurnStreak> & { active: boolean } {
+): ReturnType<typeof getToolArgumentChurnStreak> & {
+  active: boolean;
+  matchedPendingCall: boolean;
+  executionParamsChanged: boolean;
+} {
   const history = state.toolCallHistory;
   if (!history) {
-    return { active: false, count: 0, variantCount: 0 };
+    return {
+      active: false,
+      count: 0,
+      variantCount: 0,
+      matchedPendingCall: false,
+      executionParamsChanged: false,
+    };
   }
 
   const runId = normalizeRunId(params.runId);
@@ -43,6 +53,7 @@ export function reconcileToolCallExecutionParams(
       continue;
     }
 
+    const executionParamsChanged = call.argsHash !== argsHash;
     call.argsHash = argsHash;
     call.mutationTargetHash = hashWriteMutationTarget(
       params.toolName,
@@ -55,9 +66,17 @@ export function reconcileToolCallExecutionParams(
     const churn = getToolArgumentChurnStreak(scopedHistory, call);
     return {
       active: churn.count >= params.warningThreshold,
+      matchedPendingCall: true,
+      executionParamsChanged,
       ...churn,
     };
   }
 
-  return { active: false, count: 0, variantCount: 0 };
+  return {
+    active: false,
+    count: 0,
+    variantCount: 0,
+    matchedPendingCall: false,
+    executionParamsChanged: false,
+  };
 }

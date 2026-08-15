@@ -242,12 +242,17 @@ export async function admitToolCallBatch(
         logToolLoopAction,
       });
     }
-    markDiagnosticArgumentChurnObservation({
-      sessionKey: ctx.sessionKey,
-      sessionId: ctx.sessionId,
-      runId: ctx.runId,
-      active: churn.active,
-    });
+    // Batch admission is advisory until the call completes. Do not let an
+    // inactive partial verdict clear a lease owned by an earlier completed
+    // mutation; recordLoopOutcome owns the authoritative clear.
+    if (churn.active) {
+      markDiagnosticArgumentChurnObservation({
+        sessionKey: ctx.sessionKey,
+        sessionId: ctx.sessionId,
+        runId: ctx.runId,
+        active: true,
+      });
+    }
     committedIds.add(readyCall.toolCallId);
   };
   return {

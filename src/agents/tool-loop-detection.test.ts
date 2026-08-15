@@ -852,7 +852,35 @@ describe("tool-loop-detection", () => {
         warningThreshold: 6,
       });
 
-      expect(reconciled).toEqual({ active: true, count: 6, variantCount: 2 });
+      expect(reconciled).toEqual({
+        active: true,
+        count: 6,
+        variantCount: 2,
+        matchedPendingCall: true,
+        executionParamsChanged: true,
+      });
+    });
+
+    it("reports unchanged prepared params without treating them as an escape", () => {
+      const state = createState();
+      const params = { path: "/tmp/draft.md", content: "same content" };
+      recordToolCall(state, "write", params, "prepared-call", undefined, { runId: "run-1" });
+
+      expect(
+        reconcileToolCallExecutionParams(state, {
+          toolName: "write",
+          toolParams: params,
+          toolCallId: "prepared-call",
+          runId: "run-1",
+          warningThreshold: 6,
+        }),
+      ).toEqual({
+        active: false,
+        count: 0,
+        variantCount: 0,
+        matchedPendingCall: true,
+        executionParamsChanged: false,
+      });
     });
 
     it("does not reconcile a completed loop veto as a pending call", () => {
@@ -877,7 +905,13 @@ describe("tool-loop-detection", () => {
           toolParams: { path: "/tmp/rewritten.md", content: "same content" },
           warningThreshold: 6,
         }),
-      ).toEqual({ active: false, count: 0, variantCount: 0 });
+      ).toEqual({
+        active: false,
+        count: 0,
+        variantCount: 0,
+        matchedPendingCall: true,
+        executionParamsChanged: true,
+      });
       expect(state.toolCallHistory[0]?.argsHash).not.toBe("pending-args");
       expect(state.toolCallHistory[1]?.argsHash).toBe("vetoed-args");
     });
