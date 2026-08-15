@@ -366,6 +366,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             vectorProviderIdentity,
             opts?.signal,
           ).catch((err: unknown) => {
+            opts?.signal?.throwIfAborted();
             log.warn(`memory search: vector query failed: ${formatErrorMessage(err)}`);
             return [];
           })
