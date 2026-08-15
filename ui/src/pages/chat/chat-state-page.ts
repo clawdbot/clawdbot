@@ -1,5 +1,3 @@
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { AgentsListResult } from "../../api/types.ts";
 import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
 import {
   dispatchCommandClientPresentation,
@@ -213,9 +211,6 @@ export function createPageState(
     selectedChatSessionArchived: false,
     agentsList: context.agents.state.agentsList,
     agentsSelectedId: context.agentSelection.state.selectedId,
-    onAgentsList: (agentsList: AgentsListResult, client: GatewayBrowserClient) => {
-      context.agents.adoptList(agentsList, client);
-    },
     refreshSessionsAfterChat: new Map<string, { sessionKey: string; agentId?: string }>(),
     pendingAbort: null,
     pendingSessionMessageReloadSessionKey: null,

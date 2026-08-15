@@ -123,6 +123,20 @@ describe("cua-computer recording actions", () => {
       await computer.act(JSON.stringify({ action: "start_recording" })),
     ) as { details: { resourceHandle: string } };
     await computer.act(JSON.stringify({ action: "stop_recording" }));
+    const escapedChild = path.join(nativeRecordingRoot, "escaped-child");
+    await fs.symlink(outside, escapedChild, "dir");
+    const callsBeforeChildEscape = active.callTool.mock.calls.length;
+    await expect(
+      computer.act(
+        JSON.stringify({
+          action: "replay_trajectory",
+          resourceHandle: started.details.resourceHandle,
+        }),
+      ),
+    ).rejects.toThrow("COMPUTER_INVALID_RESOURCE");
+    expect(active.callTool).toHaveBeenCalledTimes(callsBeforeChildEscape);
+    await fs.rm(escapedChild);
+
     await fs.rm(nativeRecordingRoot, { recursive: true });
     await fs.symlink(outside, nativeRecordingRoot, "dir");
     const callsBeforeReplay = active.callTool.mock.calls.length;

@@ -297,7 +297,7 @@ export type ChatState = {
   lastLocalTerminalReconcile?: { runId: string | null } | null;
   chatReplyTarget?: unknown;
   agentsError?: string | null;
-  onAgentsList?: (agentsList: AgentsListResult, client: GatewayBrowserClient) => void;
+  onAgentsList?: (agentsList: AgentsListResult, client: GatewayBrowserClient) => boolean;
   resetChatInputHistoryNavigation?: () => void;
   assistantAgentId?: string | null;
   agentsList?: ChatAgentsListSnapshot | null;
@@ -1519,9 +1519,11 @@ export function applyChatAgentsList(
   if (!agentsList || state.client !== client || !state.connected) {
     return;
   }
+  if (state.onAgentsList && !state.onAgentsList(agentsList, client)) {
+    return;
+  }
   state.agentsList = agentsList;
   state.agentsError = null;
-  state.onAgentsList?.(agentsList, client);
   const selectedId =
     typeof state.agentsSelectedId === "string" && state.agentsSelectedId.trim()
       ? normalizeAgentId(state.agentsSelectedId)

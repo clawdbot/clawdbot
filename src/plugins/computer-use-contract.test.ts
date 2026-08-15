@@ -173,6 +173,11 @@ describe("Computer Use wire contract", () => {
       { action: "start_recording", helperPath: "/tmp/ffmpeg" },
       { action: "replay_trajectory", dir: "../outside" },
       { action: "replay_trajectory", ffmpegPath: "/tmp/ffmpeg" },
+      { action: "get_window_state", windowRef: "window-1", session: "native-session" },
+      { action: "left_click", binaryPath: "/tmp/cua-driver" },
+      { action: "left_click", socketPath: "/tmp/cua.sock" },
+      { action: "left_click", driverArgs: ["--dangerously-bypass-approvals"] },
+      { providerTool: "click", arguments: { x: 1, y: 2 } },
       {
         action: "browser_set_input_files",
         browserRef: "browser-1",
@@ -312,7 +317,7 @@ describe("Computer Use provider registration", () => {
     expect(stopWatching).toHaveBeenCalledOnce();
   });
 
-  it("rejects cross-execution control and closes only the exact host execution", async () => {
+  it("refuses a second mutating execution and closes only the exact host execution", async () => {
     const firstId = "123e4567-e89b-42d3-a456-426614174000";
     const secondId = "223e4567-e89b-42d3-a456-426614174000";
     const commands: OpenClawPluginNodeHostCommand[] = [];

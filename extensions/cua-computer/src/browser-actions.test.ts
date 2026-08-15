@@ -321,6 +321,19 @@ describe("cua-computer browser actions", () => {
       elementRef: observed.details.elements[0]!.elementRef,
     };
 
+    const callsBeforeForgedRefs = first.callTool.mock.calls.length;
+    for (const forged of [
+      { ...staleAction, browserRef: "/tmp/native-browser-target" },
+      { ...staleAction, pageRef: "../native-page" },
+      { ...staleAction, observationId: "/tmp/native-observation" },
+      { ...staleAction, elementRef: "p7:0" },
+    ]) {
+      await expect(computer.act(JSON.stringify(forged))).rejects.toThrow(
+        "COMPUTER_STALE_OBSERVATION",
+      );
+    }
+    expect(first.callTool).toHaveBeenCalledTimes(callsBeforeForgedRefs);
+
     await computer.act(
       JSON.stringify({ action: "browser_navigate", browserRef, pageRef, url: "about:blank" }),
     );
