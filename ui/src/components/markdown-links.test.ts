@@ -1,5 +1,6 @@
 // Control UI tests cover markdown link rendering: autolinking, file links, and link marks.
 import { describe, expect, it } from "vitest";
+import { shortestFileLabels } from "./file-kind.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 function htmlFragment(html: string): HTMLElement {
@@ -422,6 +423,31 @@ describe("toSanitizedMarkdownHtml links", () => {
         "api/src/app.ts",
         "work\\app.ts",
       ]);
+    });
+
+    it("keeps labels correct and distinct across thousands of paths", () => {
+      // A model-controlled message can reference thousands of distinct files.
+      // The regression this guards against is quadratic label derivation, so
+      // this pairs an all-unique-basename set (no repeated suffix growth)
+      // with a colliding-basename set (forced suffix growth) at the same
+      // cardinality; both must resolve correctly, not just quickly.
+      const distinctPaths = Array.from(
+        { length: 4000 },
+        (_, i) => `src/pkg${i % 50}/mod${i}/file${i}.ts`,
+      );
+      const distinctLabels = shortestFileLabels(distinctPaths);
+      expect(distinctLabels.size).toBe(distinctPaths.length);
+      for (const path of distinctPaths) {
+        expect(distinctLabels.get(path)).toBe(path.slice(path.lastIndexOf("/") + 1));
+      }
+
+      const collidingPaths = Array.from({ length: 4000 }, (_, i) => `pkg${i}/shared/index.ts`);
+      const collidingLabels = shortestFileLabels(collidingPaths);
+      expect(collidingLabels.size).toBe(collidingPaths.length);
+      expect(new Set(collidingLabels.values()).size).toBe(collidingPaths.length);
+      for (const path of collidingPaths) {
+        expect(collidingLabels.get(path)).toBe(path);
+      }
     });
 
     it.each([
