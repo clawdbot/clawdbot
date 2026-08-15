@@ -92,7 +92,8 @@ function panelType(slot: SidebarSlotId): PanelType {
         icon: icons.terminal,
         shortcut: "Ctrl+`",
       };
-    case "workspace":
+    // Exhaustive over SidebarSlotId; "workspace" is the remaining member.
+    default:
       return {
         slot,
         label: t("chat.sidePanel.files"),

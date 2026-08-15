@@ -56,9 +56,14 @@ export const terminalPanelStyles = css`
   .tp-header .tabstrip-tab__icon {
     color: var(--muted, #8a919e);
   }
-  /* Same glyph system as the side panel rail. */
+  /* Same glyph system as the side panel rail. Positioned so the session
+     menu anchors to the header, not its mid-toolbar trigger: a
+     trigger-anchored menu wider than the icons spills past the panel's
+     left edge, and header anchoring makes 100% mean "panel width". */
   .tp-header {
     --rail-header-action-glyph-size: 15px;
+
+    position: relative;
   }
   .tp-header .tabstrip-tab__icon svg,
   .tp-header .tp-icon svg {
@@ -95,12 +100,6 @@ export const terminalPanelStyles = css`
     display: flex;
     align-items: center;
     gap: 2px;
-  }
-  /* The menu is positioned against the header, not the trigger: the trigger sits
-     mid-toolbar, so a trigger-anchored menu wider than the icons spills past the
-     panel's left edge. Header anchoring makes 100% mean "panel width". */
-  .tp-header {
-    position: relative;
   }
   .tp-session-picker {
     position: static;
