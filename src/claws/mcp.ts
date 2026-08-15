@@ -182,15 +182,13 @@ export async function installClawMcpServers(
     }) => ReturnType<typeof setConfiguredMcpServer>;
     listMcpServers?: typeof listConfiguredMcpServers;
     nowMs?: number;
-    withMcpLifecycleLease?: typeof withClawMcpLifecycleLease;
   } = {},
 ): Promise<PersistedClawMcpServerRef[]> {
   const setMcpServer = options.setMcpServer ?? setConfiguredMcpServer;
   const listMcpServers = options.listMcpServers ?? listConfiguredMcpServers;
-  const withMcpLifecycleLease = options.withMcpLifecycleLease ?? withClawMcpLifecycleLease;
   const refs: PersistedClawMcpServerRef[] = [];
   for (const action of plan.actions.filter((candidate) => candidate.kind === "mcpServer")) {
-    await withMcpLifecycleLease(action.id, options, async () => {
+    await withClawMcpLifecycleLease(action.id, options, async () => {
       const server = action.details ? mcpServerFromActionDetails(action.details) : undefined;
       if (!server) {
         throw new ClawMcpInstallError(

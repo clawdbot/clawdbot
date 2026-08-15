@@ -1,9 +1,9 @@
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { applyClawMcpUpdate } from "./mcp-update.js";
+import { applyClawMcpUpdate as applyClawMcpUpdateRaw } from "./mcp-update.js";
 import {
   CLAW_MCP_REF_SCHEMA_VERSION,
   digestClawMcpServer,
@@ -24,7 +24,17 @@ const remote: ClawMcpServer = {
 };
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let leaseEnv: NodeJS.ProcessEnv;
+
+beforeEach(() => {
+  leaseEnv = { OPENCLAW_STATE_DIR: join(tempDirs.make("openclaw-mcp-update-"), "state") };
+});
 afterEach(() => closeOpenClawStateDatabaseForTest());
+
+function applyClawMcpUpdate(...args: Parameters<typeof applyClawMcpUpdateRaw>) {
+  const [updatePlan, targetManifest, options] = args;
+  return applyClawMcpUpdateRaw(updatePlan, targetManifest, { env: leaseEnv, ...options });
+}
 
 function ref(name: string, server: ClawMcpServer): PersistedClawMcpServerRef {
   return {
@@ -81,14 +91,6 @@ function manifest(): ClawManifest {
     mcpServers: { docs: newDocs, remote },
     cronJobs: [],
   };
-}
-
-async function runWithoutMcpLease<T>(
-  _name: string,
-  _options: unknown,
-  run: () => Promise<T>,
-): Promise<T> {
-  return await run();
 }
 
 describe("applyClawMcpUpdate", () => {
@@ -149,7 +151,6 @@ describe("applyClawMcpUpdate", () => {
         unsetServer,
         upsertRef,
         deleteRef,
-        withMcpLifecycleLease: runWithoutMcpLease,
       },
     );
 
@@ -225,7 +226,6 @@ describe("applyClawMcpUpdate", () => {
         unsetServer,
         upsertRef,
         deleteRef,
-        withMcpLifecycleLease: runWithoutMcpLease,
       },
     );
 
@@ -257,7 +257,6 @@ describe("applyClawMcpUpdate", () => {
           readRefs: () => [previous],
           planRemoval: () => ({ action: "remove" }),
           deleteRef,
-          withMcpLifecycleLease: runWithoutMcpLease,
         },
       ),
     ).rejects.toThrow("no longer safely releasable");
@@ -428,7 +427,6 @@ describe("applyClawMcpUpdate", () => {
           readRefs: () => [previous],
           setServer: vi.fn().mockResolvedValue({ ok: false, path: "config", error: "changed" }),
           upsertRef,
-          withMcpLifecycleLease: runWithoutMcpLease,
         },
       ),
     ).rejects.toMatchObject({ partial: true });
@@ -461,7 +459,6 @@ describe("applyClawMcpUpdate", () => {
         }),
         unsetServer,
         upsertRef: vi.fn(),
-        withMcpLifecycleLease: runWithoutMcpLease,
       },
     );
 
@@ -496,7 +493,6 @@ describe("applyClawMcpUpdate", () => {
         }),
         unsetServer,
         upsertRef: vi.fn(),
-        withMcpLifecycleLease: runWithoutMcpLease,
       },
     );
 
@@ -524,7 +520,6 @@ describe("applyClawMcpUpdate", () => {
           sourceMcpServers: { remote },
           readRefs: () => [],
           setServer,
-          withMcpLifecycleLease: runWithoutMcpLease,
         },
       ),
     ).rejects.toThrow("was not claimed");

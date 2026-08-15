@@ -22,7 +22,6 @@ type RemoveMcpServerOptions = OpenClawStateDatabaseOptions & {
   listMcpServers?: typeof listConfiguredMcpServers;
   referencedCleanup?: ClawReferencedCleanup;
   unsetMcpServer?: typeof unsetConfiguredMcpServer;
-  withMcpLifecycleLease?: typeof withClawMcpLifecycleLease;
 };
 
 export async function removeClawMcpServers(params: {
@@ -46,11 +45,10 @@ export async function removeClawMcpServers(params: {
         params.options.sourceMcpServers ?? params.options.config?.mcp?.servers,
       );
   const unsetMcpServer = params.options.unsetMcpServer ?? unsetConfiguredMcpServer;
-  const withMcpLifecycleLease = params.options.withMcpLifecycleLease ?? withClawMcpLifecycleLease;
   const mcpServers: RemovedMcpServer[] = [];
   for (const server of params.servers) {
     let removalError: string | undefined;
-    await withMcpLifecycleLease(server.name, params.options, async () => {
+    await withClawMcpLifecycleLease(server.name, params.options, async () => {
       const currentRef = readClawMcpServerRefsByName(server.name, params.options).find(
         (candidate) => candidate.agentId === params.agentId,
       );

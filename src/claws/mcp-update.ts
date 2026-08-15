@@ -49,7 +49,6 @@ export async function applyClawMcpUpdate(
     ) => { action: "remove" | "release" };
     upsertRef?: typeof upsertClawMcpServerRef;
     deleteRef?: typeof deleteClawMcpServerRef;
-    withMcpLifecycleLease?: typeof withClawMcpLifecycleLease;
   },
 ): Promise<ClawMcpUpdateExecution> {
   const actions = updatePlan.actions.filter(
@@ -65,7 +64,6 @@ export async function applyClawMcpUpdate(
   const planRemoval = options.planRemoval ?? planClawMcpServerRemoval;
   const upsertRef = options.upsertRef ?? upsertClawMcpServerRef;
   const deleteRef = options.deleteRef ?? deleteClawMcpServerRef;
-  const withMcpLifecycleLease = options.withMcpLifecycleLease ?? withClawMcpLifecycleLease;
   const currentServers = normalizeConfiguredMcpServers(options.sourceMcpServers);
   const undo: Array<() => Promise<void>> = [];
   const appliedNames: string[] = [];
@@ -88,7 +86,7 @@ export async function applyClawMcpUpdate(
 
   try {
     for (const action of actions) {
-      await withMcpLifecycleLease(action.id, options, async () => {
+      await withClawMcpLifecycleLease(action.id, options, async () => {
         const name = action.id;
         const previousRef = readRefs(updatePlan.agentId, options).find(
           (candidate) => candidate.name === name,
@@ -119,7 +117,7 @@ export async function applyClawMcpUpdate(
           deleteRef(updatePlan.agentId, name, options);
           undo.push(
             async () =>
-              await withMcpLifecycleLease(name, options, async () => {
+              await withClawMcpLifecycleLease(name, options, async () => {
                 upsertRef(previousRef, options);
               }),
           );
@@ -151,7 +149,7 @@ export async function applyClawMcpUpdate(
           }
           undo.push(
             async () =>
-              await withMcpLifecycleLease(name, options, async () => {
+              await withClawMcpLifecycleLease(name, options, async () => {
                 const restored = await setServer({
                   name,
                   server: previousServer,
@@ -208,7 +206,7 @@ export async function applyClawMcpUpdate(
         }
         undo.push(
           async () =>
-            await withMcpLifecycleLease(name, options, async () => {
+            await withClawMcpLifecycleLease(name, options, async () => {
               const currentRefs = readRefsByName(name, options);
               const currentOwnRef = currentRefs.find(
                 (candidate) => candidate.agentId === updatePlan.agentId,

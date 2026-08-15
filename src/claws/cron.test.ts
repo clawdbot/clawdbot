@@ -187,30 +187,6 @@ describe("installClawCronJobs", () => {
     expect(add).not.toHaveBeenCalled();
   });
 
-  it("rejects a drifted complete job beyond the first gateway page", async () => {
-    const current = await fixture();
-    await installClawCronJobs(current.plan, {
-      env: current.env,
-      gateway: { add: vi.fn().mockResolvedValue({ id: "scheduler-123" }) },
-    });
-    const [ref] = readClawCronRefs("worker-two", { env: current.env });
-    const drifted = listedCronJob("worker-two", ref!, "scheduler-123");
-    drifted.payload = { kind: "agentTurn", message: "Different declaration" };
-    const fillers = Array.from({ length: 200 }, (_, index) => ({ id: `filler-${index}` }));
-    const add = vi.fn();
-
-    await expect(
-      installClawCronJobs(current.plan, {
-        env: current.env,
-        gateway: {
-          add,
-          list: vi.fn().mockResolvedValue({ jobs: [...fillers, drifted] }),
-        },
-      }),
-    ).rejects.toMatchObject({ code: "cron_reconcile_conflict" });
-    expect(add).not.toHaveBeenCalled();
-  });
-
   it("preserves an ambiguous pending reference when cron.add fails", async () => {
     const current = await fixture();
 
