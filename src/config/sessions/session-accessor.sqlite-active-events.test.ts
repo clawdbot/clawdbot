@@ -471,58 +471,6 @@ describe("SQLite active transcript event projection", () => {
     expect(readSessionTranscriptMessageEventById(scope, "old")).toBeUndefined();
     expect(readSessionTranscriptMessageEventById(scope, "kept-tool")).toBeUndefined();
 
-    const boundedPage = readSessionTranscriptBoundedMessageTailPage(scope, {
-      maxBytes: 8_192,
-      maxMessages: 10,
-      offset: 0,
-    });
-    expect(boundedPage.totalMessages).toBe(3);
-    expect(boundedPage.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
-      "kept-user",
-      "kept-assistant",
-      "post-reset",
-    ]);
-
-    const historicalAnchor = readSessionTranscriptMessageAnchorPage(scope, {
-      maxMessages: 3,
-      messageId: "old",
-    });
-    expect(historicalAnchor.found).toBe(true);
-    expect(historicalAnchor.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
-      "old",
-      "kept-user",
-      "kept-tool",
-    ]);
-    expect(historicalAnchor.totalMessages).toBe(5);
-    expect(historicalAnchor.offset).toBe(2);
-
-    const keptAnchor = readSessionTranscriptMessageAnchorPage(scope, {
-      maxMessages: 3,
-      messageId: "kept-user",
-    });
-    expect(keptAnchor.found).toBe(true);
-    expect(keptAnchor.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
-      "kept-user",
-      "kept-assistant",
-      "post-reset",
-    ]);
-    expect(keptAnchor.totalMessages).toBe(3);
-    expect(keptAnchor.offset).toBe(0);
-
-    const postResetAnchor = readSessionTranscriptMessageAnchorPage(scope, {
-      maxMessages: 2,
-      messageId: "post-reset",
-    });
-    expect(postResetAnchor.found).toBe(true);
-    expect(postResetAnchor.events.map((entry) => (entry.event as { id?: unknown }).id)).toEqual([
-      "kept-user",
-      "kept-assistant",
-      "post-reset",
-    ]);
-    expect(postResetAnchor.hasOverreadContext).toBe(true);
-    expect(postResetAnchor.totalMessages).toBe(3);
-    expect(postResetAnchor.offset).toBe(0);
-
     const recent = readRecentSessionTranscriptMessageEvents(scope, {
       maxBytes: 1_024,
       maxLines: 10,

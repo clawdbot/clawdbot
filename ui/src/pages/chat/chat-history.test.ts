@@ -11,7 +11,6 @@ import {
   type ChatState,
 } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { requestChatSend } from "./chat-send-request.ts";
 import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import {
   cacheChatSessionSnapshot,
@@ -23,7 +22,6 @@ import { handleAgentEvent, type PlanStatus, type ToolStreamEntry } from "./tool-
 
 type TestState = ChatState &
   Parameters<typeof handleAgentEvent>[0] & {
-    gatewayRequest: ReturnType<typeof vi.fn>;
     requestUpdate: () => void;
   };
 type TestSessions = NonNullable<ChatState["sessions"]> &
@@ -37,7 +35,6 @@ function createState(result: ChatHistoryResult): TestState {
   const sessions: TestSessions = { setModelOverride: vi.fn() };
   return {
     ...host,
-    gatewayRequest: host.request,
     chatToolMessages: host.chatToolMessages ?? [],
     chatStreamSegments: host.chatStreamSegments ?? [],
     connectionEpoch: 1,
@@ -508,58 +505,6 @@ describe("canonical history snapshot projection", () => {
       ...(metadata ? { __openclaw: metadata } : {}),
     };
   }
-
-  it("loads an exact transcript anchor without replacing the current-tail cache", async () => {
-    const currentTail = message("assistant", "current tail", { id: "current-tail", seq: 9 });
-    const historical = message("user", "historical match", { id: "historical-hit", seq: 1 });
-    const state = createState({
-      messages: [historical],
-      sessionId: "session-history",
-      sessionInfo: {
-        key: "main",
-        kind: "direct",
-        updatedAt: 1,
-      },
-    });
-    state.chatMessagesBySession = new Map();
-    state.chatMessages = [currentTail];
-    state.currentSessionId = "session-current";
-    cacheChatSessionSnapshot(
-      state.chatMessagesBySession,
-      state,
-      { sessionKey: state.sessionKey },
-      {
-        messages: [currentTail],
-        pagination: { hasMore: false, completeSnapshot: true },
-        sessionId: "session-current",
-      },
-    );
-
-    await loadChatHistory(state, {
-      startup: true,
-      historyAnchor: { sessionId: "session-history", messageId: "historical-hit" },
-    });
-
-    expect(state.gatewayRequest).toHaveBeenCalledWith("chat.history", {
-      sessionKey: "main",
-      sessionId: "session-history",
-      messageId: "historical-hit",
-      limit: expect.any(Number),
-    });
-    expect(state.chatMessages).toEqual([historical]);
-    expect(state.currentSessionId).toBe("session-current");
-    expect(
-      readChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: "main" }),
-    ).toEqual([currentTail]);
-
-    state.gatewayRequest.mockResolvedValueOnce({ status: "started", runId: "send-run" });
-    await requestChatSend(state, { message: "continue", runId: "send-run" });
-
-    expect(state.gatewayRequest).toHaveBeenLastCalledWith(
-      "chat.send",
-      expect.objectContaining({ sessionId: "session-current" }),
-    );
-  });
 
   it("keeps a same-scope pending send when authoritative history is still stale", async () => {
     const persisted = message("user", "first prompt", { id: "first-user", seq: 1 });

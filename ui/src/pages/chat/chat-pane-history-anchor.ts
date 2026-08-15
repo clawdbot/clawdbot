@@ -81,10 +81,21 @@ export abstract class ChatPaneHistoryAnchor extends ChatPaneSessionCreation {
     void anchorLoad.then(async (result) => {
       if (!result) {
         const failedRequestKey = pendingOwner.requestKey;
-        const recovery =
+        let recovery =
           state.chatHistoryAnchorFailedRequestKey === failedRequestKey
             ? pendingOwner.deferredRefresh?.promise
             : undefined;
+        if (
+          !recovery &&
+          this.ownsHistoryAnchorRefreshOwner(state, sessionKey, connectionGeneration) &&
+          this.historyAnchor?.sessionId === anchor.sessionId &&
+          this.historyAnchor.messageId === anchor.messageId &&
+          this.historyAnchorRequestKey === requestKey &&
+          this.historyAnchorAttemptGeneration === attemptGeneration
+        ) {
+          state.chatHistoryAnchorFailedRequestKey = failedRequestKey;
+          recovery = loadChatHistory(state, { deferBranches: true });
+        }
         if (!recovery) {
           this.releaseHistoryAnchorRequest(requestKey);
           return;

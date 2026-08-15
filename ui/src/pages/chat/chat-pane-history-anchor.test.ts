@@ -193,6 +193,53 @@ describe("chat pane history anchor", () => {
     expect(state.chatMessages).toEqual(currentResponse.messages);
   });
 
+  it("recovers current history when the initial anchor request fails", async () => {
+    const currentResponse = {
+      messages: [{ role: "assistant", content: [{ type: "text", text: "current tail" }] }],
+      sessionId: "session-current",
+    };
+    let resolveCurrent: (value: typeof currentResponse) => void = () => undefined;
+    const current = new Promise<typeof currentResponse>((resolve) => {
+      resolveCurrent = resolve;
+    });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("anchor unavailable"))
+      .mockReturnValueOnce(current);
+    const { pane, state } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: { setModelOverride: vi.fn() } as unknown as SessionCapability,
+    });
+    const anchorPane = pane as TestChatPane & {
+      historyAnchor?: { messageId: string; sessionId: string };
+      loadHistoryAnchorIfNeeded: () => void;
+      onHistoryAnchorConsumed: () => void;
+    };
+    anchorPane.active = true;
+    anchorPane.historyAnchor = { sessionId: "session-history", messageId: "historical-hit" };
+    anchorPane.onHistoryAnchorConsumed = vi.fn(() => {
+      anchorPane.historyAnchor = undefined;
+    });
+
+    anchorPane.loadHistoryAnchorIfNeeded();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+
+    anchorPane.loadHistoryAnchorIfNeeded();
+    await Promise.resolve();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(anchorPane.onHistoryAnchorConsumed).not.toHaveBeenCalled();
+
+    resolveCurrent(currentResponse);
+    await vi.waitFor(() => expect(anchorPane.onHistoryAnchorConsumed).toHaveBeenCalledOnce());
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.chatHistoryAnchorPending).toBeNull();
+    expect(state.chatHistoryAnchorActive).toBe(false);
+    expect(state.chatMessages).toEqual(currentResponse.messages);
+    expect(state.lastError).toBeNull();
+    expect(state.chatError).toBeNull();
+  });
+
   it("restores current history and reports an unavailable anchor", async () => {
     const currentResponse = {
       messages: [
