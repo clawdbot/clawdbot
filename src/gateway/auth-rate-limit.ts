@@ -68,6 +68,9 @@ export const AUTH_RATE_LIMIT_SCOPE_WATCH_CHALLENGE = "watch-challenge";
 // Public worker admission verifies a high-entropy dispatch credential, but
 // failures still need their own per-IP budget before store-backed retries.
 export const AUTH_RATE_LIMIT_SCOPE_WORKER_ADMISSION = "worker-admission";
+// Workspace transfers use a separate public-ingress budget so blob requests
+// cannot consume worker WebSocket admission capacity, or vice versa.
+export const AUTH_RATE_LIMIT_SCOPE_WORKER_TRANSFER = "worker-transfer";
 export const AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH = "hook-auth";
 const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
 const IDENTITY_RATE_LIMIT_KEY_PREFIX = "identity:";

@@ -46,6 +46,8 @@ import {
 } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import type { NodeWorkerBundleTransferHttpCallback } from "./worker-environments/node-worker-bundle-transfer-http.js";
+import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http.js";
 
 type GatewayPluginRequestHandler = (
   req: IncomingMessage,
@@ -120,6 +122,8 @@ export async function createGatewayHttpTransport(params: {
   getStartup?: StartupChecker;
   isTerminalEnabled: () => boolean;
   handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
+  handleNodeWorkerBundleTransferRequest?: NodeWorkerBundleTransferHttpCallback;
+  handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
   workerIngressEnabled?: boolean;
   desktopSessionRegistry?: DesktopSessionRegistry;
   nodeDesktopStreamBroker?: NodeDesktopStreamBroker;
@@ -293,6 +297,8 @@ export async function createGatewayHttpTransport(params: {
       getResolvedAuth: params.getResolvedAuth,
       rateLimiter: params.rateLimiter,
       joinRateLimiter: params.joinRateLimiter,
+      handleNodeWorkerBundleTransferRequest: params.handleNodeWorkerBundleTransferRequest,
+      handleNodeWorkspaceTransferRequest: params.handleNodeWorkspaceTransferRequest,
       getReadiness: params.getReadiness,
       getStartup: params.getStartup,
       getRuntimeConfig: loadRuntimeConfig,

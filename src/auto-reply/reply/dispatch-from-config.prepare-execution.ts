@@ -12,6 +12,7 @@ import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
+import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import type { ChooseDispatchRouteReadyState } from "./dispatch-from-config.choose-route.js";
 import {
   hasAskUserPayload,
@@ -363,14 +364,15 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         return await forwardItemEvent?.(payload);
       }
     : undefined;
-  // Let draft-rendering channels yield their ephemeral commentary lines while
-  // the durable verbose commentary lane is delivering the same content.
-  params.replyOptions?.onVerboseProgressVisibility?.(
-    () =>
-      deliverStandaloneCommentaryProgress &&
-      shouldSendVerboseProgressMessages() &&
-      !shouldSuppressProgressDelivery(),
-  );
+  const resolveVerboseProgressVisibility = () =>
+    deliverStandaloneCommentaryProgress &&
+    shouldSendVerboseProgressMessages() &&
+    !shouldSuppressProgressDelivery();
+  const { commentaryPayloadsEnabled } = resolveTurnCommentaryProgressOwner({
+    commentaryPayloadsEnabled: state.commentaryPayloadsEnabled,
+    options: params.replyOptions,
+    resolveVerboseProgressVisibility,
+  });
 
   const replyResolver =
     params.replyResolver ??
@@ -407,6 +409,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     deliverStandaloneCommentaryProgress,
     canForwardSuppressedSourceItemEvents,
     onItemEvent,
+    commentaryPayloadsEnabled,
     replyResolver,
     replyConfig,
     progressState,

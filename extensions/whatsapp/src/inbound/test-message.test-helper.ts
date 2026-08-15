@@ -62,6 +62,7 @@ export function createTestWhatsAppInboundAdmission(
   const kind = overrides.conversation?.kind ?? "direct";
 
   return {
+    channelIngress: overrides.channelIngress,
     accountId,
     isSelfChat: overrides.isSelfChat ?? false,
     account: {

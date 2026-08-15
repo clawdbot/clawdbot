@@ -10,6 +10,7 @@ import {
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import {
   findTaskByRunId,
@@ -18,6 +19,7 @@ import {
 } from "../../tasks/task-registry.js";
 import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { waitForAgentJob } from "../agent-turn/agent-job.js";
 import { dispatchAgentRunFromGateway } from "../agent-turn/agent-run-dispatch.js";
 import { createAgentTurnIo } from "../agent-turn/io.js";
 import { registerPluginSubagentRunFromGateway } from "./agent-task-tracking.js";
@@ -906,6 +908,55 @@ describe("gateway agent handler", () => {
         undefined,
         { runId: "agent-run-resolved-error" },
       );
+    });
+  });
+
+  it("projects a recorded failed dispatch outcome through agent.wait", async () => {
+    mocks.agentCommand.mockResolvedValueOnce(
+      recordAgentRunTerminalOutcome(
+        {
+          payloads: [{ text: "Device worker unavailable.", isError: true }],
+          meta: {},
+        },
+        "failed",
+      ),
+    );
+    const context = makeContext();
+    const respond = vi.fn();
+    const onSettled = vi.fn(() => true);
+    const runId = "agent-run-recorded-dispatch-failure";
+
+    dispatchAgentRunFromGateway({
+      ingressOpts: {
+        message: "run on the unavailable device",
+        sessionKey: "agent:main:main",
+        timeout: "600",
+        allowModelOverride: false,
+      },
+      runId,
+      dedupeKeys: [`agent:${runId}`],
+      abortController: new AbortController(),
+      cleanupAbortController: vi.fn(),
+      io: createAgentTurnIo(respond),
+      context,
+      taskTrackingMode: "none",
+      onSettled,
+    });
+
+    await waitForAssertion(() => {
+      expect(onSettled).toHaveBeenCalledWith({
+        terminalOutcome: expect.objectContaining({ status: "error", reason: "failed" }),
+        onRecovered: expect.any(Function),
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ runId, status: "error", summary: "failed" }),
+        undefined,
+        { runId },
+      );
+    });
+    await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+      status: "error",
     });
   });
 

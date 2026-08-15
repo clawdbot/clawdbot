@@ -1,3 +1,4 @@
+import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
@@ -196,6 +197,7 @@ export function normalizeLoadedFileEntry(entry: FileEntry): FileEntry {
     typeof message.content === "string"
   ) {
     message.content = [{ type: "text", text: message.content }];
+    stripCompactionReplayCheckpointInPlace(message);
   } else if (message.role === "toolResult" && isRecord(message.content)) {
     message.content = [message.content];
   }

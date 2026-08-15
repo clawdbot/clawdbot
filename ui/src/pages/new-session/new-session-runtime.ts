@@ -1,6 +1,7 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { PresenceEntry } from "../../api/types.ts";
 import type { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { clearChatModelSearchOnEscape } from "../chat/components/chat-model-picker.ts";
 
 const PLACE_TOPOLOGY_EVENTS = new Set([
   "config.changed",
@@ -57,6 +58,37 @@ export function closeSessionMenus(root: ParentNode) {
   for (const selector of ["wa-dropdown[open]", "wa-popover.new-session-page__picker-popover"]) {
     for (const menu of root.querySelectorAll<HTMLElement & { open: boolean }>(selector)) {
       menu.open = false;
+    }
+  }
+}
+
+export function handleSessionPickerEvent(root: ParentNode, event: Event) {
+  const pickers = root.querySelectorAll<HTMLDetailsElement>(".chat-controls__inline-select[open]");
+  if (pickers.length === 0) {
+    return;
+  }
+  if (event.type === "keydown") {
+    const keyEvent = event as KeyboardEvent;
+    clearChatModelSearchOnEscape(keyEvent);
+    if (keyEvent.defaultPrevented || keyEvent.key !== "Escape") {
+      return;
+    }
+    const picker =
+      [...pickers].find((candidate) => event.composedPath().includes(candidate)) ?? pickers[0];
+    if (!picker) {
+      return;
+    }
+    const restoreFocus = event.composedPath().includes(picker);
+    keyEvent.preventDefault();
+    picker.open = false;
+    if (restoreFocus) {
+      picker.querySelector<HTMLElement>("summary")?.focus();
+    }
+    return;
+  }
+  for (const picker of pickers) {
+    if (!event.composedPath().includes(picker)) {
+      picker.open = false;
     }
   }
 }

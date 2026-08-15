@@ -717,12 +717,12 @@ export class DraftSubmissionFlow {
   }
 
   private cloudRuntimeUnsupportedReason(): string | undefined {
-    const runtime = this.place.modelControl.resolveAgentRuntimeId({
+    const runtime = this.place.modelControl.resolveAgentRuntime({
       agent: this.place.selectedAgent(),
       context: this.read().context,
     });
-    return runtime && runtime !== "openclaw"
-      ? t("newSession.cloudRequiresOpenClawRuntime", { runtime })
+    return runtime?.cloudPlacementSupported === false
+      ? t("newSession.cloudRuntimeUnsupported", { runtime: runtime.id })
       : undefined;
   }
 

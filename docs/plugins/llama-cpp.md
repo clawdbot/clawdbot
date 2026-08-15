@@ -38,8 +38,9 @@ The default chat model remains:
 `hf:unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf`
 
 Gemma 4 E4B IT Q4_K_M is about 5.0 GB. OpenClaw offers that download only on
-machines with at least 16 GiB of RAM. The default context cap remains 8,192
-tokens. The bundled EmbeddingGemma model is about 0.3 GB.
+machines with at least 16 GiB of RAM. The default context cap is 65,536 tokens,
+which the full agent system prompt requires. The bundled EmbeddingGemma model is
+about 0.3 GB.
 
 Discovery is read-only. It reports a prepared choice only when the managed
 binary, server preset, and selected model already exist; it never installs or
@@ -76,11 +77,11 @@ Example model entry:
   reasoning: false,
   input: ["text"],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 8192,
+  contextWindow: 65536,
   maxTokens: 2048,
   params: {
     modelPath: "~/Models/my-model.Q4_K_M.gguf",
-    contextSize: 8192,
+    contextSize: 65536,
   },
   compat: { supportsTools: true },
 }

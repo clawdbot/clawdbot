@@ -17,6 +17,7 @@ import {
   sanitizeExecApprovalWarningText,
 } from "../../infra/exec-approval-command-display.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
+import { normalizeExecAsk, normalizeExecSecurity } from "../../infra/exec-approvals-core.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   normalizeExecApprovalUnavailableDecisions,
@@ -324,11 +325,21 @@ export function createExecApprovalHandlers(
         envKeys: envBinding.envKeys.length > 0 ? envBinding.envKeys : undefined,
         systemRunBinding: systemRunBinding?.binding ?? null,
         systemRunPlan: approvalContext.plan,
-        cwd: effectiveCwd ?? null,
+        // cwd/resolvedPath are display-only in the stored record (execution
+        // binds effectiveCwd via systemRunBinding above); sanitize like the
+        // command so bidi/invisible chars cannot spoof reviewer surfaces.
+        cwd: effectiveCwd ? sanitizeExecApprovalDisplayText(effectiveCwd) : null,
+        // nodeId/agentId/sessionKey stay raw: they are matched against the
+        // node registry and session routing, so escaping would break real
+        // lookups without display gain (hostile values match nothing).
         nodeId: host === "node" ? nodeId : null,
-        host: host || null,
-        security: p.security ?? null,
-        ask: p.ask ?? null,
+        // host is enum-gated ("node" checks); escape is identity for valid
+        // values and defuses invisible-char spoofing in reviewer meta rows.
+        host: host ? sanitizeExecApprovalDisplayText(host) : null,
+        // Closed enums: arbitrary strings become null instead of reaching
+        // reviewer surfaces; decision resolution already treats them as null.
+        security: normalizeExecSecurity(p.security) ?? null,
+        ask: normalizeExecAsk(p.ask) ?? null,
         warningText: warningText ? sanitizeExecApprovalWarningText(warningText) : null,
         commandAnalysis,
         commandSpans,
@@ -338,7 +349,7 @@ export function createExecApprovalHandlers(
           unavailableDecisions,
         }),
         agentId: effectiveAgentId ?? null,
-        resolvedPath: p.resolvedPath ?? null,
+        resolvedPath: p.resolvedPath ? sanitizeExecApprovalDisplayText(p.resolvedPath) : null,
         sessionKey: effectiveSessionKey ?? null,
         sessionId: trustedAgentRuntime ? null : (normalizeOptionalString(p.sessionId) ?? null),
         runId: requestRunId ?? null,

@@ -5,6 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
+import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import {
   confirmSqliteFileIntegrity,
   isTerminalSqliteIntegrityError,
@@ -262,6 +263,7 @@ export function openOpenClawAgentDatabase(
     cachedDatabases.set(pathname, database);
     return database;
   }
+  quarantineOrphanedSqliteSidecars(pathname);
   // Latched paths are quarantined; every fresh open fails fast here until
   // doctor repairs the file and clears the latch plus the persisted row.
   const terminalFailure = terminalOpenLatch.get(pathname);

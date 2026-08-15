@@ -1,5 +1,4 @@
 // Channel setup flow configures channels, auth, and workspace bindings.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listActiveChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
@@ -51,6 +50,7 @@ import {
   resolveCatalogChannelSelectionHint,
   resolveChannelSelectionNoteLines,
   resolveChannelSetupSelectionContributions,
+  resolveChannelSetupWorkspaceDir,
   resolveQuickstartDefault,
 } from "./channel-setup.status.js";
 
@@ -124,7 +124,7 @@ export async function setupChannels(
     ...options?.accountIds,
   };
   const scopedPluginsById = new Map<ChannelChoice, ChannelSetupPlugin>();
-  const resolveWorkspaceDir = () => resolveAgentWorkspaceDir(next, resolveDefaultAgentId(next));
+  const resolveWorkspaceDir = () => resolveChannelSetupWorkspaceDir(next);
   const rememberScopedPlugin = (plugin: ChannelSetupPlugin) => {
     const channel = plugin.id;
     scopedPluginsById.set(channel, plugin);

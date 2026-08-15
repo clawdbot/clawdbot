@@ -15,12 +15,15 @@ import type { ResolvedLineAccount } from "./types.js";
 import { createLineWebhookSpool, type LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
 
 const DEFAULT_MEDIA_MAX_MB = 10;
+type BuildChannelInboundContext =
+  typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
 
 interface LineBotOptions {
   channelAccessToken: string;
   channelSecret: string;
   accountId?: string;
   runtime?: RuntimeEnv;
+  buildContext?: BuildChannelInboundContext;
   config?: OpenClawConfig;
   mediaMaxMb?: number;
   onMessage?: (
@@ -68,6 +71,7 @@ export function createLineBot(opts: LineBotOptions): LineBot {
         cfg,
         account,
         runtime,
+        buildContext: opts.buildContext,
         mediaMaxBytes,
         processMessage,
         ...(control.turnAdoptionLifecycle

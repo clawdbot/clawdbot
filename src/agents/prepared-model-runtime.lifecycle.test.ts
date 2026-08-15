@@ -1,4 +1,6 @@
 import "./prepared-model-runtime.test-harness.js";
+import fsp from "node:fs/promises";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import {
@@ -238,23 +240,24 @@ describe("prepared model runtime snapshots", () => {
       gatewayLifecycle: true,
       defaultWorkspaceDir: "/tmp/gateway-launch-workspace",
     });
+    const workspaceDir = "/tmp/spawned-workspace";
+    const workspacePluginRoot = path.join(workspaceDir, ".openclaw", "extensions");
+    const statSpy = vi.spyOn(fsp, "stat");
 
-    const firstLease = await acquireAgentRunPreparedModelRuntime({
-      agentId: "default",
-      config,
-      agentDir: "/tmp/unused-agent",
-      inheritedAuthDir: "/tmp/unused-agent",
-      workspaceDir: "/tmp/spawned-workspace",
-    });
-    const secondLease = await acquireAgentRunPreparedModelRuntime({
-      agentId: "default",
-      config,
-      agentDir: "/tmp/unused-agent",
-      inheritedAuthDir: "/tmp/unused-agent",
-      workspaceDir: "/tmp/spawned-workspace",
-    });
+    const acquireDynamicLease = () =>
+      acquireAgentRunPreparedModelRuntime({
+        agentId: "default",
+        config,
+        agentDir: "/tmp/unused-agent",
+        inheritedAuthDir: "/tmp/unused-agent",
+        workspaceDir,
+      });
+    const [firstLease, secondLease] = await Promise.all([
+      acquireDynamicLease(),
+      acquireDynamicLease(),
+    ]);
 
-    expect(firstLease.snapshot.workspaceDir).toBe("/tmp/spawned-workspace");
+    expect(firstLease.snapshot.workspaceDir).toBe(workspaceDir);
     expect(secondLease.snapshot).toBe(firstLease.snapshot);
     firstLease.release();
     secondLease.release();
@@ -263,11 +266,15 @@ describe("prepared model runtime snapshots", () => {
       config,
       agentDir: "/tmp/unused-agent",
       inheritedAuthDir: "/tmp/unused-agent",
-      workspaceDir: "/tmp/spawned-workspace",
+      workspaceDir,
     });
     expect(retainedLease.snapshot).toBe(firstLease.snapshot);
     retainedLease.release();
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
+    expect(
+      statSpy.mock.calls.filter(([target]) => String(target) === workspacePluginRoot),
+    ).toHaveLength(1);
+    statSpy.mockRestore();
   });
 
   it("joins an in-flight dynamic owner publication", async () => {

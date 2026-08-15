@@ -443,15 +443,31 @@ export function shouldPreserveMaintenanceEntry(params: {
   );
 }
 
-function getSessionEntryMaintenanceEligibleKeys(
+function selectSessionEntryCapVictims(
   store: Record<string, SessionEntry>,
+  maxEntries: number,
   preserveKeys?: ReadonlySet<string>,
 ): string[] {
-  // Maintenance triggers and eviction must share this eligibility boundary.
-  // Preserved sessions remain outside the ordinary-session allowance.
-  return Object.keys(store).filter(
+  const keys = Object.keys(store);
+  const overflow = keys.length - Math.max(0, maxEntries);
+  if (overflow <= 0) {
+    return [];
+  }
+
+  // All persisted rows consume the cap, but protected rows are never victims. If protected rows
+  // alone exceed the cap, maintenance removes every eligible row and leaves the excess intact.
+  const eligibleKeys = keys.filter(
     (key) => !shouldPreserveMaintenanceEntry({ key, entry: store[key], preserveKeys }),
   );
+  const victimCount = Math.min(overflow, eligibleKeys.length);
+  if (victimCount === 0) {
+    return [];
+  }
+
+  // Sort newest first; entries without updatedAt go to the end and are removed first.
+  return eligibleKeys
+    .toSorted((a, b) => getEntryUpdatedAt(store[b]) - getEntryUpdatedAt(store[a]))
+    .slice(-victimCount);
 }
 
 export function getActiveSessionMaintenanceWarning(params: {
@@ -460,6 +476,7 @@ export function getActiveSessionMaintenanceWarning(params: {
   pruneAfterMs: number;
   maxEntries: number;
   nowMs?: number;
+  preserveKeys?: ReadonlySet<string>;
 }): SessionMaintenanceWarning | null {
   const activeSessionKey = params.activeSessionKey.trim();
   if (!activeSessionKey) {
@@ -469,20 +486,24 @@ export function getActiveSessionMaintenanceWarning(params: {
   if (!activeEntry) {
     return null;
   }
-  if (shouldPreserveMaintenanceEntry({ key: activeSessionKey, entry: activeEntry })) {
+  if (
+    shouldPreserveMaintenanceEntry({
+      key: activeSessionKey,
+      entry: activeEntry,
+      preserveKeys: params.preserveKeys,
+    })
+  ) {
     return null;
   }
   const now = params.nowMs ?? Date.now();
   const cutoffMs = now - params.pruneAfterMs;
   const wouldPrune = activeEntry.updatedAt != null ? activeEntry.updatedAt < cutoffMs : false;
   const keys = Object.keys(params.store);
-  const wouldCap = wouldCapActiveSession({
-    store: params.store,
-    keys,
-    activeEntry,
-    activeSessionKey,
-    maxEntries: params.maxEntries,
-  });
+  const wouldCap = selectSessionEntryCapVictims(
+    params.store,
+    params.maxEntries,
+    params.preserveKeys,
+  ).includes(activeSessionKey);
 
   if (!wouldPrune && !wouldCap) {
     return null;
@@ -499,47 +520,10 @@ export function getActiveSessionMaintenanceWarning(params: {
   };
 }
 
-function wouldCapActiveSession(params: {
-  store: Record<string, SessionEntry>;
-  keys: string[];
-  activeEntry: SessionEntry;
-  activeSessionKey: string;
-  maxEntries: number;
-}): boolean {
-  const eligibleKeys = params.keys.filter(
-    (key) => !shouldPreserveMaintenanceEntry({ key, entry: params.store[key] }),
-  );
-  if (eligibleKeys.length <= params.maxEntries) {
-    return false;
-  }
-  if (params.maxEntries <= 0) {
-    return true;
-  }
-
-  const activeUpdatedAt = getEntryUpdatedAt(params.activeEntry);
-  let newerOrTieBeforeActive = 0;
-  let seenActive = false;
-  for (const key of eligibleKeys) {
-    if (key === params.activeSessionKey) {
-      seenActive = true;
-      continue;
-    }
-    const entryUpdatedAt = getEntryUpdatedAt(params.store[key]);
-    if (entryUpdatedAt > activeUpdatedAt || (!seenActive && entryUpdatedAt === activeUpdatedAt)) {
-      newerOrTieBeforeActive++;
-      if (newerOrTieBeforeActive >= params.maxEntries) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
-
 /**
- * Cap eviction-eligible sessions to the N most recently updated entries.
- * Preserved sessions remain outside the quota.
- * Entries without `updatedAt` are sorted last (removed first when over limit).
+ * Cap the total store to N entries by removing the oldest eviction-eligible rows.
+ * Protected rows count toward the cap but are never removed, so a store whose protected rows
+ * alone exceed the cap remains above it until protection is released or rows are deleted.
  * Mutates `store` in-place.
  */
 export function capEntryCount(
@@ -551,20 +535,10 @@ export function capEntryCount(
     preserveKeys?: ReadonlySet<string>;
   } = {},
 ): number {
-  const keys = getSessionEntryMaintenanceEligibleKeys(store, opts.preserveKeys);
-  const retainedEligibleEntries = Math.max(0, maxEntries);
-  if (keys.length <= retainedEligibleEntries) {
+  const toRemove = selectSessionEntryCapVictims(store, maxEntries, opts.preserveKeys);
+  if (toRemove.length === 0) {
     return 0;
   }
-
-  // Sort by updatedAt descending; entries without updatedAt go to the end (removed first).
-  const sorted = keys.toSorted((a, b) => {
-    const aTime = getEntryUpdatedAt(store[a]);
-    const bTime = getEntryUpdatedAt(store[b]);
-    return bTime - aTime;
-  });
-
-  const toRemove = sorted.slice(retainedEligibleEntries);
   for (const key of toRemove) {
     const entry = store[key];
     if (entry) {

@@ -900,6 +900,12 @@ export const zh_CN = {
       outgoingWebhookPathKeep: "Outgoing webhook path 已设置（{value}）。保留？",
       outgoingWebhookPathPrompt: "Outgoing webhook path（可选）",
       outgoingWebhookPathTitle: "Synology Chat outgoing webhook path",
+      publicWebhookUrlHelp:
+        "使用在 Synology Chat 中配置的、可从外部访问的确切 HTTPS outgoing webhook 回调 URL。",
+      publicWebhookUrlKeep: "已配置公开附件 webhook URL。保留当前值？",
+      publicWebhookUrlPrompt: "公开附件 webhook URL（可选）",
+      publicWebhookUrlScope: "仅公开此 webhook 路由；OpenClaw 使用它提供短期附件下载。",
+      publicWebhookUrlTitle: "Synology Chat 公开附件路由",
       setupTitle: "Synology Chat webhook 设置",
       tokenEnvPrompt: "检测到 SYNOLOGY_CHAT_TOKEN。使用环境变量？",
       tokenInput: "输入 Synology Chat outgoing webhook token",

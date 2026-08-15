@@ -70,11 +70,18 @@ type GatewaySample = {
   sessionsList: TimedProbe;
 };
 
+type FreshConnectionProbe = {
+  error: string | null;
+  latencyMs: number;
+  ok: boolean;
+};
+
 type GatewayRpc = <T>(method: string, params: unknown, timeoutMs?: number) => Promise<T>;
 
 type BenchmarkRun = {
   controlUi: ControlUiProbe[];
   durationMs: number;
+  freshConnection: FreshConnectionProbe;
   probeWarmup: {
     durationMs: number;
     samples: GatewaySample[];
@@ -92,12 +99,15 @@ type CliOptions = {
   cpuProfDir?: string;
   entry: string;
   json: boolean;
+  maxControlMs?: number;
+  maxHandshakeMs?: number;
   output?: string;
   pluginCount: number;
   runs: number;
   timeoutMs: number;
   toolEvents: boolean;
   warmup: number;
+  workspaceFanout: boolean;
 };
 
 const DEFAULT_CADENCE_MS = 100;
@@ -119,12 +129,14 @@ const PROBE_WARMUP_TARGET_MS = 1_000;
 const PROBE_WARMUP_RETRY_DELAY_MS = 100;
 const GATEWAY_STDERR_TAIL_LINES = 20;
 const AGENT_WAIT_RPC_GRACE_MS = 5_000;
-const BOOLEAN_FLAGS = new Set(["--help", "-h", "--json", "--tool-events"]);
+const BOOLEAN_FLAGS = new Set(["--help", "-h", "--json", "--tool-events", "--workspace-fanout"]);
 const VALUE_FLAGS = new Set([
   "--cadence-ms",
   "--concurrency",
   "--cpu-prof-dir",
   "--entry",
+  "--max-control-ms",
+  "--max-handshake-ms",
   "--output",
   "--plugin-count",
   "--runs",
@@ -176,6 +188,22 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     cpuProfDir: resolveOutputPath(parseFlagValue(argv, "--cpu-prof-dir")),
     entry: resolveEntry(parseFlagValue(argv, "--entry"), DEFAULT_ENTRY),
     json: hasFlag(argv, "--json"),
+    maxControlMs: parseFlagValue(argv, "--max-control-ms")
+      ? parseBoundedPositiveInt(
+          parseFlagValue(argv, "--max-control-ms"),
+          2_000,
+          "--max-control-ms",
+          30_000,
+        )
+      : undefined,
+    maxHandshakeMs: parseFlagValue(argv, "--max-handshake-ms")
+      ? parseBoundedPositiveInt(
+          parseFlagValue(argv, "--max-handshake-ms"),
+          2_000,
+          "--max-handshake-ms",
+          30_000,
+        )
+      : undefined,
     output: resolveOutputPath(parseFlagValue(argv, "--output")),
     pluginCount: parseBoundedNonNegativeInt(
       parseFlagValue(argv, "--plugin-count"),
@@ -197,6 +225,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       "--warmup",
       MAX_WARMUP,
     ),
+    workspaceFanout: hasFlag(argv, "--workspace-fanout"),
   };
 }
 
@@ -217,6 +246,9 @@ Options:
   --entry <path>     Gateway CLI entry file (default: ${DEFAULT_ENTRY})
   --plugin-count <n> Configure synthetic plugins through plugins.load.paths (default: 0)
   --tool-events      Make every synthetic turn execute a tool before replying
+  --workspace-fanout Bind each turn to a distinct workspace
+  --max-control-ms   Fail when any load-phase health/control probe exceeds this bound
+  --max-handshake-ms Fail when a fresh authenticated connection exceeds this bound
   --output <path>    Write machine-readable JSON to a file
   --json             Emit machine-readable JSON
   --help, -h         Show this text
@@ -498,7 +530,7 @@ function buildConfig(
   return writeGatewayBenchConfig(root, config, { pluginFixtures });
 }
 
-async function connectGateway(port: number, deadlineAt: number) {
+async function connectGateway(port: number, deadlineAt: number, subscribeSessions = true) {
   let requestDeadlineAt = deadlineAt;
   const client = createGatewayWsClient({
     handshakeTimeoutMs: Math.min(8_000, requireRemainingMs(deadlineAt, "connecting WebSocket")),
@@ -547,7 +579,9 @@ async function connectGateway(port: number, deadlineAt: number) {
     scopes: ["operator.read", "operator.write", "operator.admin"],
     caps: [],
   });
-  await requestRpc("sessions.subscribe", {});
+  if (subscribeSessions) {
+    await requestRpc("sessions.subscribe", {});
+  }
   return {
     close: client.close,
     request: requestRpc,
@@ -562,16 +596,18 @@ async function runTurn(
   index: number,
   deadlineAt: number,
   toolEvents = false,
+  options?: { onStarted?: () => void; sessionKey?: string },
 ): Promise<void> {
   const requestedRunId = randomUUID();
   const started = await rpc<{ runId?: string; status?: string }>("agent", {
-    sessionKey: `agent:main:gateway-concurrency-${index + 1}`,
+    sessionKey: options?.sessionKey ?? `agent:main:gateway-concurrency-${index + 1}`,
     message: toolEvents
       ? `OPENCLAW_E2E_DRAFTPROOF benchmark tool stream ${index + 1}.`
       : `Reply with benchmark stream ${index + 1}.`,
     deliver: false,
     idempotencyKey: requestedRunId,
   });
+  options?.onStarted?.();
   if (started.status === "ok") {
     return;
   }
@@ -738,6 +774,7 @@ async function runGatewaySample(options: {
   cpuProfDir?: string;
   pluginCount: number;
   toolEvents: boolean;
+  workspaceFanout: boolean;
 }): Promise<BenchmarkRun> {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-gateway-concurrency-"));
   const [port, mockPort] = await Promise.all([getFreePort(), getFreePort()]);
@@ -820,6 +857,21 @@ async function runGatewaySample(options: {
     });
     const loadDeadlineAt = options.deadlineAt + probeWarmup.durationMs;
     client.setDeadlineAt(loadDeadlineAt);
+    const workspaceSessionKeys = options.workspaceFanout
+      ? await Promise.all(
+          Array.from({ length: options.concurrency }, async (_, index) => {
+            const workspaceDir = path.join(root, `workspace-${index + 1}`);
+            mkdirSync(workspaceDir, { recursive: true });
+            const sessionKey = `agent:main:gateway-concurrency-${index + 1}`;
+            await rpc("sessions.create", {
+              key: sessionKey,
+              agentId: "main",
+              cwd: workspaceDir,
+            });
+            return sessionKey;
+          }),
+        )
+      : [];
     // The benchmark compares runtime event work, so discard startup and lazy-import spans.
     writeFileSync(timelinePath, "");
 
@@ -827,13 +879,41 @@ async function runGatewaySample(options: {
     const readyz: ReadyProbe[] = [];
     const sessionsList: TimedProbe[] = [];
     let turnsDone = false;
+    let startedTurnCount = 0;
+    let resolveAllTurnsStarted!: () => void;
+    const allTurnsStarted = new Promise<void>((resolve) => {
+      resolveAllTurnsStarted = resolve;
+    });
     const turnsStartedAt = performance.now();
     const turns = Promise.all(
       Array.from({ length: options.concurrency }, (_, index) =>
-        runTurn(rpc, index, loadDeadlineAt, options.toolEvents),
+        runTurn(rpc, index, loadDeadlineAt, options.toolEvents, {
+          onStarted: () => {
+            startedTurnCount += 1;
+            if (startedTurnCount === options.concurrency) {
+              resolveAllTurnsStarted();
+            }
+          },
+          ...(workspaceSessionKeys[index] ? { sessionKey: workspaceSessionKeys[index] } : {}),
+        }),
       ),
     ).finally(() => {
       turnsDone = true;
+      resolveAllTurnsStarted();
+    });
+    const freshConnection = allTurnsStarted.then(async (): Promise<FreshConnectionProbe> => {
+      const startedAt = performance.now();
+      try {
+        const freshClient = await connectGateway(port, loadDeadlineAt, false);
+        freshClient.close();
+        return { error: null, latencyMs: performance.now() - startedAt, ok: true };
+      } catch (error) {
+        return {
+          error: describeProbeError(error),
+          latencyMs: performance.now() - startedAt,
+          ok: false,
+        };
+      }
     });
     const sampler = (async () => {
       for (;;) {
@@ -859,11 +939,13 @@ async function runGatewaySample(options: {
       }
     })();
     await Promise.all([turns, sampler]);
+    const freshConnectionResult = await freshConnection;
     const turnsDurationMs = performance.now() - turnsStartedAt;
 
     return {
       controlUi,
       durationMs: performance.now() - runStartedAt,
+      freshConnection: freshConnectionResult,
       probeWarmup,
       pluginMetadataScans: summarizePluginMetadataScans(readDiagnosticsTimelineSpans(timelinePath)),
       readyz,
@@ -877,6 +959,16 @@ async function runGatewaySample(options: {
   } finally {
     client?.close();
     if (gateway) {
+      if (options.cpuProfDir && gateway.exitCode === null && gateway.signalCode === null) {
+        // V8 flushes the main-isolate CPU profile on its normal interrupt path.
+        const profileFlushed = new Promise<void>((resolve) => {
+          gateway!.once("exit", () => {
+            resolve();
+          });
+        });
+        gateway.kill("SIGINT");
+        await Promise.race([profileFlushed, delay(2_000)]);
+      }
       await stopChild(gateway);
     }
     if (mockProvider) {
@@ -904,6 +996,8 @@ function summarizeRuns(runs: readonly BenchmarkRun[]) {
     eventLoopUtilization: summarizeNumbers(
       readyz.flatMap((sample) => (sample.utilization == null ? [] : [sample.utilization])),
     ),
+    freshConnectionFailedRuns: runs.filter((run) => !run.freshConnection.ok).length,
+    freshConnectionLatencyMs: summarizeNumbers(runs.map((run) => run.freshConnection.latencyMs)),
     pluginMetadataScanCount: runs.reduce((sum, run) => sum + run.pluginMetadataScans.count, 0),
     pluginMetadataScanTotalDurationMs: runs.reduce(
       (sum, run) => sum + run.pluginMetadataScans.totalDurationMs,
@@ -969,6 +1063,7 @@ async function main(): Promise<void> {
     runs,
     summary: summarizeRuns(runs),
     toolEvents: options.toolEvents,
+    workspaceFanout: options.workspaceFanout,
   };
   if (options.output) {
     mkdirSync(path.dirname(options.output), { recursive: true });
@@ -976,6 +1071,38 @@ async function main(): Promise<void> {
   }
   if (options.json || !options.output) {
     console.log(JSON.stringify(payload, null, 2));
+  }
+  if (options.maxHandshakeMs !== undefined) {
+    const violation = runs.find(
+      (run) => !run.freshConnection.ok || run.freshConnection.latencyMs > options.maxHandshakeMs!,
+    );
+    if (violation) {
+      throw new Error(
+        `fresh Gateway connection exceeded ${options.maxHandshakeMs}ms: ` +
+          `ok=${violation.freshConnection.ok} ` +
+          `latencyMs=${violation.freshConnection.latencyMs.toFixed(1)} ` +
+          `error=${violation.freshConnection.error ?? "none"}`,
+      );
+    }
+  }
+  if (options.maxControlMs !== undefined) {
+    const controlSamples: Array<{ name: string; sample: TimedProbe }> = [];
+    for (const run of runs) {
+      controlSamples.push(
+        ...run.readyz.map((sample) => ({ name: "readyz", sample })),
+        ...run.sessionsList.map((sample) => ({ name: "sessions.list", sample })),
+      );
+    }
+    const violation = controlSamples.find(
+      ({ sample }) => !sample.ok || sample.latencyMs > options.maxControlMs!,
+    );
+    if (violation) {
+      throw new Error(
+        `Gateway ${violation.name} probe exceeded ${options.maxControlMs}ms: ` +
+          `ok=${violation.sample.ok} latencyMs=${violation.sample.latencyMs.toFixed(1)} ` +
+          `error=${violation.sample.error ?? "none"}`,
+      );
+    }
   }
 }
 

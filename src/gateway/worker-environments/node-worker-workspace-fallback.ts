@@ -1,41 +1,15 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
-import type {
-  WorkerWorkspaceQuiescence,
-  WorkerWorkspaceReconcileRequest,
-  WorkerWorkspaceReconcileResult,
-  WorkerWorkspaceSyncRequest,
-  WorkerWorkspaceSyncResult,
-} from "./tunnel-contract.js";
+import type { WorkerWorkspaceSyncRequest, WorkerWorkspaceSyncResult } from "./tunnel-contract.js";
+import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
 const GIT_TIMEOUT_MS = 60_000;
 const COMMIT_PATTERN = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u;
+const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 const GIT_NONINTERACTIVE_ARGS = ["-c", "credential.helper=", "-c", "core.askPass="];
-
-type WorkerWorkspaceTransportPendingReason =
-  | "plain-workspace"
-  | "origin-unavailable"
-  | "credentialed-origin"
-  | "dirty-or-unpublished"
-  | "workspace-transfer-required"
-  | "changed-results";
-
-class WorkerWorkspaceTransportPendingError extends Error {
-  readonly code = "workspace-transport-pending";
-
-  constructor(
-    readonly operation: "sync" | "reconcile",
-    readonly reason: WorkerWorkspaceTransportPendingReason,
-  ) {
-    super(
-      `workspace transport pending (${operation}: ${reason}); ` +
-        "this launch-only fallback requires a clean published HTTP(S) Git checkout",
-    );
-    this.name = "WorkerWorkspaceTransportPendingError";
-  }
-}
+const workspaceSyncLog = createSubsystemLogger("gateway/worker-workspace");
 
 type WorkspaceExec = (params: {
   argv: string[];
@@ -45,18 +19,41 @@ type WorkspaceExec = (params: {
   transportRetry: "idempotent" | "never";
 }) => Promise<SpawnResult & { workspaceDir: string }>;
 
-type GitIdentity = {
-  commit: string;
-  origin: string;
-  root: string;
-  manifestRef: string;
-};
+type GitIdentity = { commit: string; origin: string; root: string };
+type OriginFallbackReason =
+  | "clone-failed"
+  | "checkout-failed"
+  | "inspection-failed"
+  | "manifest-capture-failed"
+  | "manifest-mismatch"
+  | "not-git-workspace"
+  | "not-repository-root"
+  | "origin-unavailable"
+  | "origin-unpublished"
+  | "workspace-dirty"
+  | "workspace-transfer-required";
 
-function pending(
-  operation: "sync" | "reconcile",
-  reason: WorkerWorkspaceTransportPendingReason,
-): never {
-  throw new WorkerWorkspaceTransportPendingError(operation, reason);
+type OriginInspection =
+  | { kind: "eligible"; identity: GitIdentity }
+  | { kind: "fallback"; reason: OriginFallbackReason };
+
+type OriginSyncOutcome =
+  | { kind: "synced"; result: WorkerWorkspaceSyncResult }
+  | { kind: "fallback"; reason: OriginFallbackReason };
+
+export function recordNodeSyncPath(
+  environmentId: string,
+  sessionId: string,
+  outcome: OriginSyncOutcome,
+  originStartedAt: number,
+): void {
+  workspaceSyncLog.info("worker workspace sync path selected", {
+    environmentId,
+    sessionId,
+    path: outcome.kind === "synced" ? "origin" : "gateway-push",
+    reason: outcome.kind === "synced" ? "published-origin" : outcome.reason,
+    originAttemptMs: performance.now() - originStartedAt,
+  });
 }
 
 async function localGit(root: string, args: string[]): Promise<string> {
@@ -88,16 +85,13 @@ function credentialFreeHttpOrigin(raw: string): string | undefined {
   } catch {
     return undefined;
   }
-  if (
-    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
-    parsed.username !== "" ||
-    parsed.password !== "" ||
-    parsed.search !== "" ||
-    parsed.hash !== ""
-  ) {
-    return undefined;
-  }
-  return parsed.href;
+  return (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+    parsed.username === "" &&
+    parsed.password === "" &&
+    parsed.search === "" &&
+    parsed.hash === ""
+    ? parsed.href
+    : undefined;
 }
 
 async function requiresWorkspaceTransfer(root: string): Promise<boolean> {
@@ -123,132 +117,65 @@ async function requiresWorkspaceTransfer(root: string): Promise<boolean> {
   }
 }
 
-async function inspectLocalGit(
-  localPath: string,
-  operation: "sync" | "reconcile",
-): Promise<GitIdentity> {
-  let canonicalPath: string;
+async function inspectEligibleOrigin(localPath: string): Promise<OriginInspection> {
   try {
-    canonicalPath = await fs.realpath(localPath);
-  } catch {
-    return pending(operation, "plain-workspace");
-  }
-  let root: string;
-  try {
-    root = await fs.realpath(await localGit(canonicalPath, ["rev-parse", "--show-toplevel"]));
-  } catch {
-    return pending(operation, "plain-workspace");
-  }
-  if (root !== canonicalPath) {
-    return pending(operation, "plain-workspace");
-  }
-  if (await requiresWorkspaceTransfer(root)) {
-    return pending(operation, "workspace-transfer-required");
-  }
-  const [status, commit, rawOrigin] = await Promise.all([
-    localGit(root, ["status", "--porcelain=v1", "--untracked-files=all"]),
-    localGit(root, ["rev-parse", "HEAD"]),
-    localGit(root, ["remote", "get-url", "origin"]).catch(() => ""),
-  ]);
-  if (status || !COMMIT_PATTERN.test(commit)) {
-    return pending(operation, "dirty-or-unpublished");
-  }
-  if (!rawOrigin) {
-    return pending(operation, "origin-unavailable");
-  }
-  const origin = credentialFreeHttpOrigin(rawOrigin);
-  if (!origin) {
-    let parsed: URL | undefined;
+    const canonicalPath = await fs.realpath(localPath);
+    let root: string;
     try {
-      parsed = new URL(rawOrigin);
+      root = await fs.realpath(await localGit(canonicalPath, ["rev-parse", "--show-toplevel"]));
     } catch {
-      // SCP-like and filesystem origins are intentionally outside this fallback.
+      return { kind: "fallback", reason: "not-git-workspace" };
     }
-    return pending(
-      operation,
-      parsed?.username || parsed?.password ? "credentialed-origin" : "origin-unavailable",
-    );
-  }
-  const refs = await localGit(root, ["ls-remote", "--heads", "--tags", "--", origin]).catch(
-    () => "",
-  );
-  const published = refs
-    .split("\n")
-    .some((line) => line.slice(0, commit.length) === commit && /\srefs\//u.test(line));
-  if (!published) {
-    return pending(operation, "dirty-or-unpublished");
-  }
-  const manifestRef = `sha256:${createHash("sha256").update(`${origin}\0${commit}`).digest("hex")}`;
-  return { commit, origin, root, manifestRef };
-}
-
-function requireSuccessfulNodeGit(result: SpawnResult, operation: "sync" | "reconcile"): void {
-  if (result.termination !== "exit" || result.code !== 0) {
-    pending(operation, operation === "sync" ? "origin-unavailable" : "changed-results");
-  }
-}
-
-async function inspectNodeGit(
-  exec: WorkspaceExec,
-  operation: "sync" | "reconcile",
-): Promise<{ commit: string; clean: boolean; workspaceDir: string }> {
-  const inspected = await exec({
-    argv: ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-    transportRetry: "idempotent",
-  });
-  requireSuccessfulNodeGit(inspected, operation);
-  const head = await exec({
-    argv: ["git", "rev-parse", "HEAD"],
-    transportRetry: "idempotent",
-  });
-  requireSuccessfulNodeGit(head, operation);
-  return {
-    commit: head.stdout.trim(),
-    clean: inspected.stdout.trim() === "",
-    workspaceDir: head.workspaceDir,
-  };
-}
-
-export function createNodeWorkerWorkspaceFallback(
-  exec: WorkspaceExec,
-  restore?: { localPath: string; manifestRef: string },
-) {
-  let accepted: GitIdentity | undefined;
-
-  const resolveAccepted = async (operation: "sync" | "reconcile"): Promise<GitIdentity> => {
-    if (accepted) {
-      return accepted;
+    if (root !== canonicalPath) {
+      return { kind: "fallback", reason: "not-repository-root" };
     }
-    if (!restore) {
-      return pending(operation, "changed-results");
+    if (await requiresWorkspaceTransfer(root)) {
+      return { kind: "fallback", reason: "workspace-transfer-required" };
     }
-    const identity = await inspectLocalGit(restore.localPath, operation);
-    if (identity.manifestRef !== restore.manifestRef) {
-      return pending(operation, "changed-results");
-    }
-    accepted = identity;
-    return identity;
-  };
-
-  const assertUnchanged = async (operation: "sync" | "reconcile") => {
-    const identity = await resolveAccepted(operation);
-    const [local, node] = await Promise.all([
-      inspectLocalGit(identity.root, operation),
-      inspectNodeGit(exec, operation),
+    const [status, commit, rawOrigin] = await Promise.all([
+      localGit(root, ["status", "--porcelain=v1", "--untracked-files=all"]),
+      localGit(root, ["rev-parse", "HEAD"]),
+      localGit(root, ["remote", "get-url", "origin"]).catch(() => ""),
     ]);
-    if (
-      local.manifestRef !== identity.manifestRef ||
-      !node.clean ||
-      node.commit !== identity.commit
-    ) {
-      return pending(operation, "changed-results");
+    if (status) {
+      return { kind: "fallback", reason: "workspace-dirty" };
     }
-    return { identity, node };
-  };
+    const origin = credentialFreeHttpOrigin(rawOrigin);
+    if (!COMMIT_PATTERN.test(commit) || !origin) {
+      return { kind: "fallback", reason: "origin-unavailable" };
+    }
+    let refs: string;
+    try {
+      refs = await localGit(root, ["ls-remote", "--heads", "--tags", "--", origin]);
+    } catch {
+      return { kind: "fallback", reason: "origin-unavailable" };
+    }
+    return refs
+      .split("\n")
+      .some((line) => line.slice(0, commit.length) === commit && /\srefs\//u.test(line))
+      ? { kind: "eligible", identity: { commit, origin, root } }
+      : { kind: "fallback", reason: "origin-unpublished" };
+  } catch {
+    return { kind: "fallback", reason: "inspection-failed" };
+  }
+}
 
+function succeeded(result: SpawnResult): boolean {
+  return result.termination === "exit" && result.code === 0;
+}
+
+/** Optional published-origin fast path; HTTPS transfer remains the canonical fallback. */
+export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
   return {
-    async syncWorkspace(request: WorkerWorkspaceSyncRequest): Promise<WorkerWorkspaceSyncResult> {
-      const identity = await inspectLocalGit(request.localPath, "sync");
+    async trySyncWorkspace(
+      request: WorkerWorkspaceSyncRequest,
+      expectedManifestRef: string,
+    ): Promise<OriginSyncOutcome> {
+      const inspection = await inspectEligibleOrigin(request.localPath);
+      if (inspection.kind === "fallback") {
+        return inspection;
+      }
+      const { identity } = inspection;
       const cloned = await exec({
         argv: [
           "git",
@@ -265,7 +192,9 @@ export function createNodeWorkerWorkspaceFallback(
         timeoutMs: GIT_TIMEOUT_MS,
         transportRetry: "never",
       });
-      requireSuccessfulNodeGit(cloned, "sync");
+      if (!succeeded(cloned)) {
+        return { kind: "fallback", reason: "clone-failed" };
+      }
       const checkedOut = await exec({
         argv: [
           "git",
@@ -278,59 +207,31 @@ export function createNodeWorkerWorkspaceFallback(
         timeoutMs: GIT_TIMEOUT_MS,
         transportRetry: "never",
       });
-      requireSuccessfulNodeGit(checkedOut, "sync");
-      const node = await inspectNodeGit(exec, "sync");
-      if (
-        !node.clean ||
-        node.commit !== identity.commit ||
-        checkedOut.workspaceDir !== node.workspaceDir
-      ) {
-        return pending("sync", "dirty-or-unpublished");
+      if (!succeeded(checkedOut) || checkedOut.workspaceDir !== cloned.workspaceDir) {
+        return { kind: "fallback", reason: "checkout-failed" };
       }
-      accepted = identity;
-      return {
-        mode: "git",
-        remoteWorkspaceDir: node.workspaceDir,
-        manifestRef: identity.manifestRef,
-      };
-    },
-
-    async quiesceWorkspace(remoteWorkspaceDir: string): Promise<WorkerWorkspaceQuiescence> {
-      const current = await assertUnchanged("reconcile");
-      if (current.node.workspaceDir !== remoteWorkspaceDir) {
-        return pending("reconcile", "changed-results");
+      const captured = await exec({
+        argv: [
+          "node",
+          "-e",
+          REMOTE_WORKSPACE_MANIFEST_JS,
+          checkedOut.workspaceDir,
+          identity.commit,
+          "eligible",
+        ],
+        timeoutMs: GIT_TIMEOUT_MS,
+        transportRetry: "idempotent",
+      });
+      const manifestRef = captured.stdout.trim();
+      if (!succeeded(captured) || !MANIFEST_REF_PATTERN.test(manifestRef)) {
+        return { kind: "fallback", reason: "manifest-capture-failed" };
+      }
+      if (manifestRef !== expectedManifestRef) {
+        return { kind: "fallback", reason: "manifest-mismatch" };
       }
       return {
-        assertActive: async () => {
-          await assertUnchanged("reconcile");
-        },
-        resume: async () => {},
-      };
-    },
-
-    async reconcileWorkspace(
-      request: WorkerWorkspaceReconcileRequest,
-    ): Promise<WorkerWorkspaceReconcileResult> {
-      const current = await assertUnchanged("reconcile");
-      if (
-        current.node.workspaceDir !== request.remoteWorkspaceDir ||
-        current.identity.manifestRef !== request.baseManifestRef
-      ) {
-        return pending("reconcile", "changed-results");
-      }
-      request.journal.commit(request.baseManifestRef);
-      return {
-        manifestRef: request.baseManifestRef,
-        changed: false,
-        verifyStable: async () => {
-          await assertUnchanged("reconcile");
-        },
-        verifyLocalStable: async () => {
-          const local = await inspectLocalGit(current.identity.root, "reconcile");
-          if (local.manifestRef !== current.identity.manifestRef) {
-            pending("reconcile", "changed-results");
-          }
-        },
+        kind: "synced",
+        result: { mode: "git", remoteWorkspaceDir: checkedOut.workspaceDir, manifestRef },
       };
     },
   };

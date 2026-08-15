@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSuiteTempRootTracker } from "./test-helpers/temp-dir.js";
 import {
   VERSION,
+  readBuildIdFromBuildInfoForModuleUrl,
   readVersionFromBuildInfoForModuleUrl,
   resolveCompatibilityHostVersion,
   readVersionFromPackageJsonForModuleUrl,
@@ -87,6 +88,19 @@ describe("version resolution", () => {
       expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBeNull();
       expect(readVersionFromBuildInfoForModuleUrl(moduleUrl)).toBe("4.5.6");
       expect(resolveVersionFromModuleUrl(moduleUrl)).toBe("4.5.6");
+    });
+  });
+
+  it("reads the bounded immutable build id from generated provenance", async () => {
+    await withVersionFixtureDir(async (root) => {
+      const moduleUrl = await ensureModuleFixture(root);
+      await writeJsonFixture(root, "build-info.json", { buildId: "build-a" });
+      expect(readBuildIdFromBuildInfoForModuleUrl(moduleUrl)).toBe("build-a");
+    });
+    await withVersionFixtureDir(async (root) => {
+      const moduleUrl = await ensureModuleFixture(root);
+      await writeJsonFixture(root, "build-info.json", { buildId: "x".repeat(97) });
+      expect(readBuildIdFromBuildInfoForModuleUrl(moduleUrl)).toBeNull();
     });
   });
 

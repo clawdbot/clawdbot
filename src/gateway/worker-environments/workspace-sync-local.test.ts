@@ -8,14 +8,73 @@ import {
   MAX_WORKSPACE_GIT_CANDIDATES,
   MAX_WORKSPACE_INVENTORY_ENTRIES,
 } from "./workspace-inventory-limits.js";
-import { createGitTransferList, runLocalCommandToFile } from "./workspace-sync-local.js";
+import {
+  createGitTransferList,
+  filterExistingGitTransferList,
+  runLocalCommandToFile,
+} from "./workspace-sync-local.js";
 import { preflightWorkerWorkspace } from "./workspace-sync-preflight.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
+
+function injectPositiveShortWrite(targetPath: string): () => boolean {
+  const originalOpen = fs.open.bind(fs);
+  let shortWriteObserved = false;
+  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    const handle = await originalOpen(...args);
+    if (
+      typeof args[0] !== "string" ||
+      path.resolve(args[0]) !== path.resolve(targetPath) ||
+      args[1] !== "wx"
+    ) {
+      return handle;
+    }
+
+    let injectShortWrite = true;
+    const injectedHandle = Object.create(handle) as typeof handle;
+    injectedHandle.close = handle.close.bind(handle);
+    injectedHandle.write = (async (
+      data: string | NodeJS.ArrayBufferView,
+      offsetOrPosition: number | null = null,
+      length?: number | null,
+      position?: number | null,
+    ) => {
+      const buffer =
+        typeof data === "string"
+          ? Buffer.from(data)
+          : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+      const offset = typeof data === "string" ? 0 : (offsetOrPosition ?? 0);
+      const requested =
+        typeof data === "string" ? buffer.length : (length ?? buffer.length - offset);
+      const filePosition = typeof data === "string" ? offsetOrPosition : position;
+      const writeLength = injectShortWrite ? Math.max(1, Math.floor(requested / 2)) : requested;
+      injectShortWrite = false;
+      shortWriteObserved ||= writeLength < requested;
+      return await handle.write(buffer, offset, writeLength, filePosition);
+    }) as typeof handle.write;
+    injectedHandle.writeFile = (async (data: string | NodeJS.ArrayBufferView) => {
+      const buffer =
+        typeof data === "string"
+          ? Buffer.from(data)
+          : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+      let offset = 0;
+      while (offset < buffer.length) {
+        const { bytesWritten } = await injectedHandle.write(buffer, offset, buffer.length - offset);
+        if (bytesWritten === 0) {
+          throw new Error("injected file write made no progress");
+        }
+        offset += bytesWritten;
+      }
+    }) as typeof handle.writeFile;
+    return injectedHandle;
+  });
+  return () => shortWriteObserved;
+}
 
 async function git(root: string, ...args: string[]): Promise<string> {
   const result = await runCommandWithTimeout(["git", "-C", root, ...args], {
@@ -41,6 +100,69 @@ async function waitForFile(filePath: string): Promise<void> {
 }
 
 describe("runLocalCommandToFile", () => {
+  it("fully persists bounded stdout after a positive short write", async () => {
+    const root = tempDirs.make("openclaw-workspace-command-short-write-");
+    const outputPath = path.join(root, "output");
+    const expected = Buffer.from("bounded workspace inventory output\n");
+    const shortWriteObserved = injectPositiveShortWrite(outputPath);
+
+    await runLocalCommandToFile({
+      argv: [process.execPath, "-e", "process.stdout.write(process.argv[1])", expected.toString()],
+      outputPath,
+      signal: new AbortController().signal,
+      timeoutMs: 10_000,
+      maxOutputBytes: expected.length,
+    });
+
+    expect(shortWriteObserved()).toBe(true);
+    await expect(fs.readFile(outputPath)).resolves.toEqual(expected);
+  });
+
+  it("fully persists a buffered Git transfer list after a positive short write", async () => {
+    const root = tempDirs.make("openclaw-workspace-list-short-write-");
+    const temporaryDirectory = `${root}-transfer`;
+    const outputPath = path.join(temporaryDirectory, "transfer-list");
+    await fs.mkdir(path.join(root, "nested"));
+    await Promise.all([
+      fs.writeFile(path.join(root, "alpha.txt"), "alpha"),
+      fs.writeFile(path.join(root, "nested", "beta.txt"), "beta"),
+    ]);
+    await git(root, "init", "--quiet");
+    const shortWriteObserved = injectPositiveShortWrite(outputPath);
+
+    await createGitTransferList({
+      gitRoot: root,
+      temporaryDirectory,
+      signal: new AbortController().signal,
+      timeoutMs: 10_000,
+    });
+
+    expect(shortWriteObserved()).toBe(true);
+    await expect(fs.readFile(outputPath)).resolves.toEqual(
+      Buffer.from("alpha.txt\0nested/beta.txt\0"),
+    );
+  });
+
+  it("fully persists a filtered Git transfer list after a positive short write", async () => {
+    const root = tempDirs.make("openclaw-workspace-filter-short-write-");
+    const preparedListPath = path.join(root, "prepared");
+    const outputPath = path.join(root, "filtered");
+    await fs.mkdir(path.join(root, "nested"));
+    await Promise.all([
+      fs.writeFile(path.join(root, "alpha.txt"), "alpha"),
+      fs.writeFile(path.join(root, "nested", "beta.txt"), "beta"),
+      fs.writeFile(preparedListPath, "alpha.txt\0missing.txt\0nested/beta.txt\0"),
+    ]);
+    const shortWriteObserved = injectPositiveShortWrite(outputPath);
+
+    await filterExistingGitTransferList({ gitRoot: root, preparedListPath, outputPath });
+
+    expect(shortWriteObserved()).toBe(true);
+    await expect(fs.readFile(outputPath)).resolves.toEqual(
+      Buffer.from("alpha.txt\0nested/beta.txt\0"),
+    );
+  });
+
   it("force-kills a command that ignores abort termination", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-sync-"));
     const outputPath = path.join(root, "output");
@@ -74,6 +196,22 @@ describe("runLocalCommandToFile", () => {
       await operation.catch(() => undefined);
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("stops a pack producer before it can exceed its output budget", async () => {
+    const root = tempDirs.make("openclaw-workspace-pack-limit-");
+    const outputPath = path.join(root, "pack");
+
+    await expect(
+      runLocalCommandToFile({
+        argv: [process.execPath, "-e", 'process.stdout.write("x".repeat(1024))'],
+        outputPath,
+        signal: new AbortController().signal,
+        timeoutMs: 10_000,
+        maxOutputBytes: 16,
+      }),
+    ).rejects.toThrow("pack exceeds the 16 byte limit");
+    await expect(fs.stat(outputPath)).resolves.toMatchObject({ size: 0 });
   });
 
   it("omits derived artifacts from outbound Git file lists", async () => {

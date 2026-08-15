@@ -166,6 +166,8 @@ describe("registerStatusHealthSessionsCommands", () => {
       "--all",
       "--deep",
       "--usage",
+      "--agent",
+      "beta",
       "--debug",
       "--timeout",
       "5000",
@@ -177,6 +179,7 @@ describe("registerStatusHealthSessionsCommands", () => {
       all: true,
       deep: true,
       usage: true,
+      agent: "beta",
       timeoutMs: 5000,
       verbose: true,
     });

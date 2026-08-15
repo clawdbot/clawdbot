@@ -669,6 +669,7 @@ describe("session accessor seam", () => {
       Surface: "webchat",
       ChatType: "direct",
       From: "webchat:user-1",
+      SenderId: "webchat:user-1",
       To: "webchat:agent",
       SessionKey: sessionKey,
       OriginatingTo: "webchat:user-1",
@@ -691,7 +692,7 @@ describe("session accessor seam", () => {
     await recordInboundSessionMeta({
       storePath,
       sessionKey,
-      ctx: { ...ctx, From: "webchat:different-sender" },
+      ctx: { ...ctx, From: "webchat:different-route", SenderId: "webchat:different-sender" },
     });
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(creationStamp);
 
@@ -719,6 +720,23 @@ describe("session accessor seam", () => {
       createdActor: { type: "human", id: "profile-ada" },
       createdAt: expect.any(Number),
     });
+
+    const senderlessKey = "agent:main:webchat:dm:senderless";
+    const senderless = await recordInboundSessionMeta({
+      storePath,
+      sessionKey: senderlessKey,
+      ctx: {
+        ...ctx,
+        SessionKey: senderlessKey,
+        From: "webchat:room-route",
+        SenderId: undefined,
+      },
+    });
+    expect(senderless).toMatchObject({
+      createdVia: "channel",
+      createdAt: expect.any(Number),
+    });
+    expect(senderless?.createdActor).toBeUndefined();
   });
 
   it("does not create sessions when inbound meta recording opts out of upsert", async () => {
@@ -786,6 +804,32 @@ describe("session accessor seam", () => {
 
     expect(routed).toBeNull();
     expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+  });
+
+  it("stamps last-route creation from the participant, never the conversation route", async () => {
+    const participantKey = "agent:main:webchat:dm:route-participant";
+    const participant = await updateSessionLastRoute({
+      storePath,
+      sessionKey: participantKey,
+      channel: "webchat",
+      to: "webchat:room-1",
+      ctx: { From: "webchat:room-1", SenderId: "webchat:person-1" },
+    });
+    expect(participant).toMatchObject({
+      createdVia: "channel",
+      createdActor: { type: "human", id: "webchat:person-1" },
+    });
+
+    const senderlessKey = "agent:main:webchat:dm:route-senderless";
+    const senderless = await updateSessionLastRoute({
+      storePath,
+      sessionKey: senderlessKey,
+      channel: "webchat",
+      to: "webchat:room-2",
+      ctx: { From: "webchat:room-2" },
+    });
+    expect(senderless?.createdVia).toBe("channel");
+    expect(senderless?.createdActor).toBeUndefined();
   });
 
   it("rejects alias targets and keeps canonical lifecycle mutations explicit", async () => {

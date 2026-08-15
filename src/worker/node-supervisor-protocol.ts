@@ -8,6 +8,8 @@ const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const NODE_WORKER_SUPERVISOR_CANCEL_REQUEST_MAX_BYTES = 4 * 1024;
 const NODE_WORKER_RESULT_JSON_MAX_BYTES = 64 * 1024;
 const NODE_WORKER_ERROR_TEXT_MAX_BYTES = 4 * 1024;
+const NODE_WORKER_CONNECTION_FAILURE_CAUSE_MAX_BYTES = 64 * 1024;
+export const NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE = "openclaw-worker-connection-failure-v1";
 
 export type NodeWorkerLaunchInput = {
   launchId: string;
@@ -46,6 +48,11 @@ export type NodeWorkerSupervisorReceipt =
   | NodeWorkerSupervisorActiveReceipt
   | NodeWorkerSupervisorCompletedReceipt
   | NodeWorkerSupervisorErrorReceipt;
+
+export type NodeWorkerConnectionFailureMessage = {
+  type: typeof NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE;
+  cause: string | null;
+};
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return (
@@ -264,6 +271,26 @@ function isBoundedErrorText(value: unknown): value is string {
     Buffer.byteLength(value, "utf8") <= NODE_WORKER_ERROR_TEXT_MAX_BYTES &&
     !/[\r\n]/u.test(value)
   );
+}
+
+export function parseNodeWorkerConnectionFailureMessage(
+  value: unknown,
+): NodeWorkerConnectionFailureMessage | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["type", "cause"]) ||
+    value.type !== NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE ||
+    (value.cause !== null &&
+      (typeof value.cause !== "string" ||
+        value.cause.length === 0 ||
+        Buffer.byteLength(value.cause, "utf8") > NODE_WORKER_CONNECTION_FAILURE_CAUSE_MAX_BYTES))
+  ) {
+    return null;
+  }
+  return {
+    type: NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
+    cause: value.cause,
+  };
 }
 
 export function parseNodeWorkerSupervisorReceipt(
