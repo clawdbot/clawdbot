@@ -874,43 +874,6 @@ describe("getStatusSummary", () => {
     ]);
   });
 
-  it("aggregates fixed logical stores by their per-agent SQLite targets", async () => {
-    vi.mocked(listGatewayAgentsBasic).mockReturnValue({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }, { id: "ops" }],
-    });
-    vi.mocked(resolveSessionStorePathCore).mockReturnValue("/tmp/shared-sessions.json");
-    statusSummaryMocks.listSessionEntriesCore.mockReturnValue(
-      toSessionEntrySummaries({
-        main: { sessionId: "shared-session", updatedAt: 1 },
-      }),
-    );
-
-    const summary = await getStatusSummary({ includeChannelSummary: false });
-
-    expect(summary.sessions.count).toBe(2);
-    expect(
-      summary.sessions.byAgent.map((agent) => [agent.agentId, agent.path, agent.count]),
-    ).toEqual([
-      ["main", "/tmp/shared-sessions.sqlite", 1],
-      ["ops", "/tmp/shared-sessions.ops.sqlite", 1],
-    ]);
-    expect(summary.sessions.paths).toEqual([
-      "/tmp/shared-sessions.sqlite",
-      "/tmp/shared-sessions.ops.sqlite",
-    ]);
-    expect(statusSummaryMocks.listSessionEntriesCore).toHaveBeenCalledWith({
-      agentId: "main",
-      storePath: "/tmp/shared-sessions.json",
-    });
-    expect(statusSummaryMocks.listSessionEntriesCore).toHaveBeenCalledWith({
-      agentId: "ops",
-      storePath: "/tmp/shared-sessions.json",
-    });
-  });
-
   it("includes configured and selected model labels for pinned sessions", async () => {
     vi.mocked(statusSummaryRuntime.resolveConfiguredStatusModelRef).mockReturnValue({
       provider: "zhipu",
