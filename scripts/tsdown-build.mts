@@ -51,6 +51,11 @@ const CGROUP_MEMORY_LIMIT_PATHS = [
   "/sys/fs/cgroup/memory.max",
   "/sys/fs/cgroup/memory/memory.limit_in_bytes",
 ];
+const CGROUP_V2_MOUNT_PATH = "/sys/fs/cgroup";
+const PROC_SELF_CGROUP_PATH = "/proc/self/cgroup";
+// memory.high throttles reclaim rather than failing allocation, so a heap sized
+// above it stalls the build instead of OOM-ing; both bounds cap the build heap.
+const CGROUP_V2_MEMORY_LIMIT_FILES = ["memory.max", "memory.high"];
 const PROC_MEMINFO_PATH = "/proc/meminfo";
 const tsdownStdio = () => ["ignore", "pipe", "pipe"] satisfies ["ignore", "pipe", "pipe"];
 // Build descendants get a short cleanup window; a timed-out build must not hold CI for seconds.
@@ -79,6 +84,7 @@ type MemoryLimitParams = {
   platform?: string;
   procMeminfoPath?: string;
   procMemTotalBytes?: number;
+  procSelfCgroupPath?: string;
 };
 
 type TsdownBuildParams = MemoryLimitParams & {
@@ -476,6 +482,32 @@ function parseCgroupMemoryLimitBytes(value: string) {
   return Number(parsed);
 }
 
+// A systemd slice budget lives on the process's own cgroup, never on the v2 root,
+// so probing only the root misses every limit outside a namespaced container.
+function resolveOwnCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
+  const fsImpl = params.fs ?? fs;
+  let rawCgroup: string;
+  try {
+    rawCgroup = fsImpl.readFileSync(params.procSelfCgroupPath ?? PROC_SELF_CGROUP_PATH, "utf8");
+  } catch {
+    return [];
+  }
+
+  const unifiedLine = rawCgroup.split("\n").find((line) => line.startsWith("0::"));
+  if (!unifiedLine) {
+    return [];
+  }
+
+  const segments = unifiedLine.slice(3).split("/").filter(Boolean);
+  const paths: string[] = [];
+  for (let depth = segments.length; depth >= 0; depth -= 1) {
+    for (const limitFile of CGROUP_V2_MEMORY_LIMIT_FILES) {
+      paths.push(path.join(CGROUP_V2_MOUNT_PATH, ...segments.slice(0, depth), limitFile));
+    }
+  }
+  return paths;
+}
+
 function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
   const configuredLimit = params.cgroupMemoryLimitBytes;
   if (configuredLimit && Number.isFinite(configuredLimit) && configuredLimit > 0) {
@@ -483,19 +515,24 @@ function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
   }
 
   const fsImpl = params.fs ?? fs;
-  const paths = params.cgroupMemoryLimitPaths ?? CGROUP_MEMORY_LIMIT_PATHS;
+  const paths = params.cgroupMemoryLimitPaths ?? [
+    ...resolveOwnCgroupMemoryLimitPaths(params),
+    ...CGROUP_MEMORY_LIMIT_PATHS,
+  ];
+  // An ancestor may bound the leaf, so the tightest limit in the chain wins.
+  let tightestLimitBytes: number | null = null;
   for (const limitPath of paths) {
     try {
       const limitBytes = parseCgroupMemoryLimitBytes(fsImpl.readFileSync(limitPath, "utf8"));
-      if (limitBytes !== null) {
-        return limitBytes;
+      if (limitBytes !== null && (tightestLimitBytes === null || limitBytes < tightestLimitBytes)) {
+        tightestLimitBytes = limitBytes;
       }
     } catch {
       // Missing cgroup files are expected outside Linux containers.
     }
   }
 
-  return null;
+  return tightestLimitBytes;
 }
 
 function parseProcMemTotalBytes(value: string) {

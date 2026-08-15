@@ -388,6 +388,34 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=6400");
   });
 
+  it("caps the tsdown heap using the process's own cgroup slice budget", () => {
+    const slicePath = "/user.slice/user-999.slice/user@999.service";
+    // Only the ancestor slice carries a budget; the leaf unit and the v2 root
+    // are unlimited, which is what a systemd-managed build actually looks like.
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", `0::${slicePath}/app.slice/openclaw-main-update.service\n`],
+      [`/sys/fs/cgroup${slicePath}/memory.high`, `${5 * 1024 * 1024 * 1024}\n`],
+    ]);
+
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      fs: {
+        readFileSync(filePath: string) {
+          const contents = cgroupFiles.get(filePath);
+          if (contents === undefined) {
+            throw new Error(`ENOENT: ${filePath}`);
+          }
+          return contents;
+        },
+      },
+    });
+
+    // 5 GiB slice budget minus the 768 MiB build headroom.
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+  });
+
   it("clamps explicit tsdown heap settings to the container memory limit", () => {
     const result = resolveTsdownBuildInvocation({
       nodeExecPath: "/usr/bin/node",
