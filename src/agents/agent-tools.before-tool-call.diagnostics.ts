@@ -12,6 +12,7 @@ import {
   emitTrustedSkillUsedDiagnosticEvent,
   emitTrustedSecurityEvent,
   type DiagnosticEventPrivateData,
+  type DiagnosticToolLoopEvent,
   type DiagnosticToolParamsSummary,
   type DiagnosticToolSource,
   type DiagnosticToolTerminalReason,
@@ -577,6 +578,38 @@ export function shouldEmitLoopWarning(
   return true;
 }
 
+type ToolLoopWarning = Pick<
+  DiagnosticToolLoopEvent,
+  "detector" | "count" | "message" | "pairedToolName"
+> & { warningKey?: string };
+
+export function emitLoopWarning(args: {
+  ctx: HookContext;
+  sessionState: SessionState;
+  toolName: string;
+  warning: ToolLoopWarning;
+  logToolLoopAction: typeof import("../logging/diagnostic.js").logToolLoopAction;
+}): boolean {
+  const baseWarningKey = args.warning.warningKey ?? `${args.warning.detector}:${args.toolName}`;
+  const warningKey = args.ctx.runId ? `${args.ctx.runId}:${baseWarningKey}` : baseWarningKey;
+  if (!shouldEmitLoopWarning(args.sessionState, warningKey, args.warning.count)) {
+    return false;
+  }
+  log.warn(`Loop warning for ${args.toolName}: ${args.warning.message}`);
+  args.logToolLoopAction({
+    sessionKey: args.ctx.sessionKey,
+    sessionId: args.ctx.sessionId,
+    toolName: args.toolName,
+    level: "warning",
+    action: "warn",
+    detector: args.warning.detector,
+    count: args.warning.count,
+    message: args.warning.message,
+    ...(args.warning.pairedToolName ? { pairedToolName: args.warning.pairedToolName } : {}),
+  });
+  return true;
+}
+
 /** Reconcile loop liveness with the final post-policy arguments before execution. */
 export async function reconcileLoopCallExecutionParams(args: {
   ctx?: HookContext;
@@ -636,10 +669,13 @@ export async function recordLoopOutcome(args: {
   let recordedOutcome: ToolOutcomeObservation | undefined;
   try {
     const {
+      buildArgumentChurnWarning,
       getToolArgumentChurnStreak,
       getDiagnosticSessionState,
+      logToolLoopAction,
       markDiagnosticArgumentChurnObservation,
       recordToolCallOutcome,
+      resolveToolLoopWarningThreshold,
     } = await loadBeforeToolCallRuntime();
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
@@ -655,14 +691,29 @@ export async function recordLoopOutcome(args: {
       ...(args.ctx.runId && { runId: args.ctx.runId }),
       cwd: args.ctx.cwd ?? args.ctx.workspaceDir,
     });
+    const churn = record
+      ? getToolArgumentChurnStreak(
+          (sessionState.toolCallHistory ?? []).filter(
+            (call) => call.runId === record.runId && call !== record,
+          ),
+          record,
+        )
+      : { count: 0, variantCount: 0 };
+    const warningThreshold = resolveToolLoopWarningThreshold();
+    const writeMutationAtWarning =
+      churn.kind === "write_mutation" && churn.count >= warningThreshold;
     const churnContinues =
-      record !== undefined &&
-      getToolArgumentChurnStreak(
-        (sessionState.toolCallHistory ?? []).filter(
-          (call) => call.runId === record.runId && call !== record,
-        ),
-        record,
-      ).count > 0;
+      churn.count > 0 && (churn.kind !== "write_mutation" || writeMutationAtWarning);
+    if (record && writeMutationAtWarning) {
+      const warning = buildArgumentChurnWarning(record.toolName, churn);
+      emitLoopWarning({
+        ctx: args.ctx,
+        sessionState,
+        toolName: record.toolName,
+        warning,
+        logToolLoopAction,
+      });
+    }
     markDiagnosticArgumentChurnObservation({
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx.sessionId,

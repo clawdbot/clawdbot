@@ -6,8 +6,8 @@ import type {
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import {
   beforeToolCallLog as log,
+  emitLoopWarning,
   loadBeforeToolCallRuntime,
-  shouldEmitLoopWarning,
 } from "./agent-tools.before-tool-call.diagnostics.js";
 import {
   recordBatchAdmittedToolCall,
@@ -83,22 +83,7 @@ async function evaluateToolLoopCall(
       reason: result.message,
     };
   }
-  const baseWarningKey = result.warningKey ?? `${result.detector}:${toolName}`;
-  const warningKey = ctx.runId ? `${ctx.runId}:${baseWarningKey}` : baseWarningKey;
-  if (shouldEmitLoopWarning(sessionState, warningKey, result.count)) {
-    log.warn(`Loop warning for ${toolName}: ${result.message}`);
-    logToolLoopAction({
-      sessionKey: ctx.sessionKey,
-      sessionId: ctx.sessionId,
-      toolName,
-      level: "warning",
-      action: "warn",
-      detector: result.detector,
-      count: result.count,
-      message: result.message,
-      pairedToolName: result.pairedToolName,
-    });
-  }
+  emitLoopWarning({ ctx, sessionState, toolName, warning: result, logToolLoopAction });
   return undefined;
 }
 
@@ -142,7 +127,9 @@ export async function admitToolCallBatch(
     return {};
   }
   const {
+    buildArgumentChurnWarning,
     getDiagnosticSessionState,
+    logToolLoopAction,
     markDiagnosticArgumentChurnObservation,
     reconcileToolCallExecutionParams,
     recordToolCall,
@@ -246,6 +233,15 @@ export async function admitToolCallBatch(
       cwd: ctx.cwd ?? ctx.workspaceDir,
       warningThreshold,
     });
+    if (churn.active && churn.kind === "write_mutation") {
+      emitLoopWarning({
+        ctx,
+        sessionState,
+        toolName: admitted.toolName,
+        warning: buildArgumentChurnWarning(admitted.toolName, churn),
+        logToolLoopAction,
+      });
+    }
     markDiagnosticArgumentChurnObservation({
       sessionKey: ctx.sessionKey,
       sessionId: ctx.sessionId,

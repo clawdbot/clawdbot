@@ -19,7 +19,7 @@ export function reconcileToolCallExecutionParams(
     cwd?: string;
     warningThreshold: number;
   },
-): { active: boolean; count: number; variantCount: number } {
+): ReturnType<typeof getToolArgumentChurnStreak> & { active: boolean } {
   const history = state.toolCallHistory;
   if (!history) {
     return { active: false, count: 0, variantCount: 0 };

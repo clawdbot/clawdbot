@@ -48,6 +48,7 @@ import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { beforeToolCallRuntime } from "./agent-tools.before-tool-call.runtime.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { createReadTool, createWriteTool } from "./sessions/index.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
@@ -539,6 +540,41 @@ describe("before_tool_call loop detection behavior", () => {
     });
   });
 
+  it("does not activate changed-write liveness below the warning threshold", async () => {
+    const sessionId = "same-target-write-below-threshold-session";
+    const runId = "same-target-write-below-threshold-run";
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "write complete" }],
+      details: { changed: true },
+    });
+    const loopDetectionContext = {
+      ...enabledLoopDetectionContext,
+      cwd: "/tmp",
+      sessionId,
+      runId,
+    };
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey: "main", runId });
+    const writeTool = createWrappedTool("write", execute, loopDetectionContext);
+    const markChurn = vi.spyOn(beforeToolCallRuntime, "markDiagnosticArgumentChurnObservation");
+
+    try {
+      for (let index = 0; index < TOOL_LOOP_WARNING_THRESHOLD; index += 1) {
+        await expectUnblockedToolExecution(writeTool, `same-target-write-below-${index}`, {
+          path: "draft.md",
+          content: `synthetic revision ${index}`,
+        });
+      }
+
+      expect(
+        markChurn.mock.calls
+          .map(([observation]) => observation)
+          .filter((observation) => observation.existingOnly),
+      ).not.toContainEqual(expect.objectContaining({ active: true }));
+    } finally {
+      markChurn.mockRestore();
+    }
+  });
+
   it("warns on same-target changed-write churn while preserving execution and read escape", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-same-target-churn-"));
     const sessionId = "same-target-write-churn-session";
@@ -572,6 +608,7 @@ describe("before_tool_call loop detection behavior", () => {
           path: "notes/../draft.md",
           content: "synthetic next revision",
         });
+        expect(emitted).toHaveLength(1);
         expect(emitted.at(-1)).toMatchObject({
           type: "tool.loop",
           level: "warning",
