@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../infra/system-events.js", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => mocks.systemEvent(...args),
+  enqueueSystemEventRaw: (...args: unknown[]) => mocks.systemEvent(...args),
 }));
 
 vi.mock("./directive-handling.impl.js", () => ({

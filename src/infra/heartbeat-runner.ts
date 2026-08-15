@@ -6,9 +6,9 @@ import {
 } from "../routing/session-key.js";
 import type { HeartbeatRunOptions } from "./heartbeat-runner-execution.js";
 import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
-import { runHeartbeatOnce as runSplitHeartbeatOnce } from "./heartbeat-runner-run.js";
+import { runHeartbeatOnceCore as runSplitHeartbeatOnce } from "./heartbeat-runner-run.js";
 import {
-  startHeartbeatRunner as startSplitHeartbeatRunner,
+  startHeartbeatRunnerScheduled as startSplitHeartbeatRunner,
   type HeartbeatRunner,
 } from "./heartbeat-runner-scheduler.js";
 import {

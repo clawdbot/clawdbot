@@ -11,7 +11,7 @@ import {
 } from "../infra/heartbeat-runner.test-utils.js";
 import {
   consumeSelectedSystemEventEntries,
-  enqueueSystemEventEntry,
+  enqueueSystemEventEntryRaw as enqueueSystemEventEntry,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
 import { getQueueSize } from "../process/command-queue.js";

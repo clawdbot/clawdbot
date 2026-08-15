@@ -288,7 +288,7 @@ vi.mock("../../infra/heartbeat-wake.js", () => ({
 }));
 
 vi.mock("../../infra/system-events.js", () => ({
-  enqueueSystemEvent: (text: string, options: unknown) => {
+  enqueueSystemEventRaw: (text: string, options: unknown) => {
     systemEvents.push({ text, options });
   },
 }));

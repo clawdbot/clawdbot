@@ -266,23 +266,26 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           log.warn("Failed to persist background task for subagent run", { runId });
         }
       } catch (error) {
-        if (registerParams.taskRowOwnership !== "required") {
-          log.warn("Failed to create background task for subagent run", { runId, error });
-        } else {
-          // Direct dispatch suppressed Gateway's CLI fallback. Persist the rollback before
-          // asking the caller to abort; if that write fails, memory must match durable state.
-          rollbackRegistration();
-          try {
-            this.options.persistOrThrow(...registeredRunIds);
-          } catch (rollbackError) {
+        // Default and required ownership both fail closed. gateway_best_effort is
+        // excluded by the outer guard. Dual persist failure surfaces both errors.
+        rollbackRegistration();
+        try {
+          this.options.persistOrThrow(...registeredRunIds);
+        } catch (rollbackError) {
+          if (registerParams.taskRowOwnership === "required") {
             restoreDurableRegistration();
             // Durable state still owns this registration. Keep reconciliation active so
             // caller cleanup can terminalize it instead of leaving a phantom run.
             activateRegistrationLifecycle();
-            throw rollbackError;
           }
-          throw error;
+          const aggregateError = new AggregateError(
+            [error, rollbackError],
+            `Subagent task registration and rollback persistence both failed: ${runId}`,
+          );
+          aggregateError.cause = error;
+          throw aggregateError;
         }
+        throw error;
       }
     }
     // Wait through Gateway RPC; the in-process lifecycle listener is the embedded fallback.

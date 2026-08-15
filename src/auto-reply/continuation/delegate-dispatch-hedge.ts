@@ -1,4 +1,4 @@
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import type {

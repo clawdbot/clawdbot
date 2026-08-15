@@ -438,7 +438,7 @@ vi.mock("../channels/message/runtime.js", () => ({
 }));
 
 vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEvent: mocks.enqueueSystemEvent,
+  enqueueSystemEventRaw: mocks.enqueueSystemEvent,
 }));
 
 vi.mock("../infra/heartbeat-wake.js", async () => {
@@ -447,7 +447,7 @@ vi.mock("../infra/heartbeat-wake.js", async () => {
   );
   return {
     ...actual,
-    requestHeartbeat: mocks.requestHeartbeat,
+    requestHeartbeatRaw: mocks.requestHeartbeat,
   };
 });
 

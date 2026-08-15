@@ -75,7 +75,7 @@ async function invokeHeartbeatAgentRun(
   }
 }
 
-export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<HeartbeatRunResult> {
+export async function runHeartbeatOnceCore(opts: HeartbeatRunOptions): Promise<HeartbeatRunResult> {
   const wake = await resolveHeartbeatWakeStage(opts);
   if (wake.kind === "skipped") {
     return { status: "skipped", reason: wake.reason };

@@ -15,7 +15,7 @@ import { recordInboundSession } from "../channels/session.js";
 import { dispatchAssembledChannelTurn } from "../channels/turn/lifecycle.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { toErrorObject } from "../infra/errors.js";
-import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+import { requestHeartbeatRaw as requestHeartbeat } from "../infra/heartbeat-wake.js";
 import {
   markSessionDeliveryAttemptStarted,
   markSessionDeliverySettlement,
@@ -24,7 +24,7 @@ import {
   SessionDeliverySafeRetryError,
   type QueuedSessionDelivery,
 } from "../infra/session-delivery-queue-storage.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -111,7 +111,7 @@ function resolveQueuedSessionDeliveryContext(entry: QueuedSessionDelivery):
   return entry.deliveryContext;
 }
 
-export async function deliverQueuedSessionDelivery(params: {
+export async function deliverQueuedSessionDeliveryCore(params: {
   deps: CliDeps;
   entry: QueuedSessionDelivery;
   stateDir?: string;

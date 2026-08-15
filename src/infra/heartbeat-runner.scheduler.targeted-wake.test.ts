@@ -15,7 +15,10 @@ import {
   useFakeHeartbeatTime,
   wake,
 } from "./heartbeat-runner.scheduler.test-support.js";
-import { markTrustedContinuationHeartbeatWake, requestHeartbeat } from "./heartbeat-wake.js";
+import {
+  markTrustedContinuationHeartbeatWake,
+  requestHeartbeatRaw as requestHeartbeat,
+} from "./heartbeat-wake.js";
 
 describe("startHeartbeatRunner targeted wakes", () => {
   afterEach(() => {

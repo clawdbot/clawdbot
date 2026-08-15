@@ -23,10 +23,10 @@ vi.mock("../../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: mocks.runCronIsolatedAgentTurn,
 }));
 vi.mock("../../infra/heartbeat-wake.js", () => ({
-  requestHeartbeat: mocks.requestHeartbeat,
+  requestHeartbeatRaw: mocks.requestHeartbeat,
 }));
 vi.mock("../../infra/system-events.js", () => ({
-  enqueueSystemEvent: mocks.enqueueSystemEvent,
+  enqueueSystemEventRaw: mocks.enqueueSystemEvent,
 }));
 
 const { createGatewayHooksRequestHandler } = await import("./hooks.js");

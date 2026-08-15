@@ -18,7 +18,7 @@ import {
   assertStagedPostCompactionFinalizationComplete,
   finalizeStagedPostCompactionDelegates,
   listRecoverableStagedPostCompactionDelegates,
-  requeueAwaitingNextCompactionDelegates as requeueAwaitingNextCompactionDelegateRows,
+  requeueAwaitingNextCompactionDelegatesRaw as requeueAwaitingNextCompactionDelegateRows,
 } from "./delegate-store-post-compaction.js";
 import {
   classifyRecoverablePendingDelegates,

@@ -19,7 +19,7 @@ import {
   withTempHeartbeatSandbox,
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
-import { enqueueSystemEvent, peekSystemEvents } from "./system-events.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent, peekSystemEvents } from "./system-events.js";
 
 installHeartbeatRunnerTestRuntime();
 

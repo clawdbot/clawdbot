@@ -1,5 +1,5 @@
 import { emitContinuationDisabledSpan } from "../../infra/continuation-tracer.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { ContinuationSignalExtraction } from "../continuation/signal.js";
 

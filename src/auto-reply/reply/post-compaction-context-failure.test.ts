@@ -27,7 +27,7 @@ vi.mock("./post-compaction-context.js", () => ({
 }));
 
 vi.mock("../../infra/system-events.js", () => ({
-  enqueueSystemEvent: vi.fn(),
+  enqueueSystemEventRaw: vi.fn(),
 }));
 
 describe("post-compaction context failure logging", () => {

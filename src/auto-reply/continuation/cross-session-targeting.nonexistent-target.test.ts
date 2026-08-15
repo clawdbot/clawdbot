@@ -7,7 +7,7 @@ import {
   loadPendingSessionDeliveries,
 } from "../../infra/session-delivery-queue-storage.js";
 import {
-  enqueueSystemEvent,
+  enqueueSystemEventRaw as enqueueSystemEvent,
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
@@ -152,7 +152,7 @@ describe("nonexistent-target-session: return target resolution (targeting.ts)", 
 });
 
 describe("nonexistent-target-session: delivery resilience (targeting.ts)", () => {
-  type EnqueueSystemEvent = typeof import("../../infra/system-events.js").enqueueSystemEvent;
+  type EnqueueSystemEvent = typeof import("../../infra/system-events.js").enqueueSystemEventRaw;
 
   afterEach(() => {
     resetSystemEventsForTest();

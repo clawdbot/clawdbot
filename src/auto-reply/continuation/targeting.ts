@@ -16,7 +16,7 @@ import type {
   QueuedSessionDeliveryPayload,
   SessionDeliveryContext,
 } from "../../infra/session-delivery-queue-storage.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-events.js";
 import {
   CONTINUATION_DELEGATE_FANOUT_MODES,
   hasCrossSessionDelegateTargeting,

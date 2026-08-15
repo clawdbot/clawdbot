@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
 import { computeNextHeartbeatPhaseDueMs, resolveHeartbeatPhaseMs } from "./heartbeat-schedule.js";
-import { requestHeartbeat } from "./heartbeat-wake.js";
+import { requestHeartbeatRaw as requestHeartbeat } from "./heartbeat-wake.js";
 
 describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
   type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];

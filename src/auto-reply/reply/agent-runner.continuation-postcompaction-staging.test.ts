@@ -141,7 +141,7 @@ vi.mock("../../infra/system-events.js", async (importOriginal) => {
   const original = await importOriginal<Record<string, unknown>>();
   return {
     ...original,
-    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+    enqueueSystemEventRaw: (...args: unknown[]) => enqueueSystemEventMock(...args),
   };
 });
 

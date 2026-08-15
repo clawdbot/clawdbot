@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { isWithinActiveHours } from "../../../../src/infra/heartbeat-active-hours.js";
 import { startHeartbeatRunner } from "../../../../src/infra/heartbeat-runner.js";
-import { requestHeartbeat } from "../../../../src/infra/heartbeat-wake.js";
+import { requestHeartbeatRaw as requestHeartbeat } from "../../../../src/infra/heartbeat-wake.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;

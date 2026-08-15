@@ -10,7 +10,7 @@ import {
   parseParentSessionIdFromCheckpointFileName,
 } from "../config/sessions/artifacts.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
-import { discoverAllSessions as discoverAllSessionsFromReporting } from "./session-cost-usage-reporting.js";
+import { discoverAllSessionsReporting as discoverAllSessionsFromReporting } from "./session-cost-usage-reporting.js";
 import type { DiscoveredSession } from "./session-cost-usage.types.js";
 
 export {

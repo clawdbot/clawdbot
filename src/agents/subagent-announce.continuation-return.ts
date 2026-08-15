@@ -11,7 +11,7 @@ import {
   requestHeartbeatNow,
 } from "../infra/heartbeat-wake.js";
 import type { DelegateArtifactDeliveryReceipt } from "../infra/session-delivery-queue-storage.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
 import { markDelegateArtifactDeliveryUnavailable } from "./delegate-artifacts.js";

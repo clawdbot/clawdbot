@@ -15,7 +15,7 @@ import {
   loadPendingSessionDeliveries,
 } from "../../infra/session-delivery-queue-storage.js";
 import {
-  enqueueSystemEvent,
+  enqueueSystemEventRaw as enqueueSystemEvent,
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
@@ -29,7 +29,7 @@ import {
 const validTraceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
 
 describe("continuation cross-session targeting", () => {
-  type EnqueueSystemEvent = typeof import("../../infra/system-events.js").enqueueSystemEvent;
+  type EnqueueSystemEvent = typeof import("../../infra/system-events.js").enqueueSystemEventRaw;
 
   afterEach(() => {
     resetContinuationTracer();

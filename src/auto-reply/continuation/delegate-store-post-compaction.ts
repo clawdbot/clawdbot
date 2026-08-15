@@ -75,7 +75,7 @@ export function requeueReleasedPostCompactionTaskFlowDelegate(
   return result.applied;
 }
 
-export function requeueAwaitingNextCompactionDelegates(options: {
+export function requeueAwaitingNextCompactionDelegatesRaw(options: {
   runningUpdatedAtOrBefore: number;
 }): number {
   let requeued = 0;

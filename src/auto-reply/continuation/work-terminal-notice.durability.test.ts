@@ -22,7 +22,7 @@ import {
 } from "../../infra/session-delivery-queue-storage.js";
 import {
   drainSystemEventEntries,
-  enqueueSystemEvent,
+  enqueueSystemEventRaw as enqueueSystemEvent,
   peekSystemEvents,
 } from "../../infra/system-events.js";
 import {

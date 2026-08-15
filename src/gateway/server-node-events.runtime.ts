@@ -10,14 +10,14 @@ export { getRuntimeConfig } from "../config/io.js";
 export { resolveSystemMainSessionTarget } from "../config/sessions/main-session.js";
 export { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 export { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
-export { requestHeartbeat } from "../infra/heartbeat-wake.js";
+export { requestHeartbeatRaw as requestHeartbeat } from "../infra/heartbeat-wake.js";
 export { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 export { resolveOutboundTarget } from "../infra/outbound/targets.js";
 export {
   ApnsRegistrationPairingChangedError,
   registerApnsRegistration,
 } from "../infra/push-apns.js";
-export { enqueueSystemEvent } from "../infra/system-events.js";
+export { enqueueSystemEventRaw as enqueueSystemEvent } from "../infra/system-events.js";
 export { withSystemEventOwner } from "../infra/system-event-ownership.js";
 export { deleteMediaBuffer } from "../media/store.js";
 export { normalizeMainKey } from "../routing/session-key.js";

@@ -6,7 +6,7 @@ import {
 } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import {
-  enqueueSystemEvent,
+  enqueueSystemEventRaw as enqueueSystemEvent,
   peekSystemEvents,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";

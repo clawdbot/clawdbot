@@ -2,7 +2,7 @@
 
 import type { SubagentRunLiveness } from "../../agents/subagents/registry/subagent-run-liveness.js";
 import { emitContinuationWorkSpan } from "../../infra/continuation-tracer.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { clampDelayMs, resolveContinuationRuntimeConfig } from "./config.js";

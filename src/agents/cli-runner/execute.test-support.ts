@@ -1,8 +1,8 @@
 /** Test doubles and setup for CLI execution supervisor and event seams. */
 import type { Mock } from "vitest";
 import { vi } from "vitest";
-import type { requestHeartbeat } from "../../infra/heartbeat-wake.js";
-import type { enqueueSystemEvent } from "../../infra/system-events.js";
+import type { requestHeartbeatRaw as requestHeartbeat } from "../../infra/heartbeat-wake.js";
+import type { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-events.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { executeDeps } from "./execute-deps.js";
 export { buildCliExecLogLine } from "./execute-logging.js";

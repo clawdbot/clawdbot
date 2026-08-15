@@ -15,7 +15,7 @@ import {
   getHeartbeatWakeAbortSignal,
   HEARTBEAT_SKIP_PREEMPTED,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-  requestHeartbeat,
+  requestHeartbeatRaw as requestHeartbeat,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
 

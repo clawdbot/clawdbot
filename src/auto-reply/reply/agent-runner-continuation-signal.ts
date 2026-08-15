@@ -6,7 +6,7 @@ import {
   startContinuationDelegateSpan,
 } from "../../infra/continuation-tracer.js";
 import { generateChainId } from "../../infra/secure-random.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveLiveContinuationRuntimeConfig } from "../continuation/config.js";
 import { stagePostCompactionDelegate } from "../continuation/delegate-store-post-compaction.js";

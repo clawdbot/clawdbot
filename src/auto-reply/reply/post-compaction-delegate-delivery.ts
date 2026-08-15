@@ -31,7 +31,7 @@ import {
   type QueuedSessionDelivery,
   type SessionDeliveryContext,
 } from "../../infra/session-delivery-queue-storage.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveContinuationRuntimeConfig } from "../continuation/config.js";
 import {

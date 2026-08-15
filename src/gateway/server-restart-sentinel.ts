@@ -9,7 +9,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+import { requestHeartbeatRaw as requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
   clearRestartSentinelIfRevision,
@@ -34,7 +34,7 @@ import {
   type SessionDeliveryRoute,
 } from "../infra/session-delivery-queue-storage.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "../infra/system-events.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-control-plane-sentinel.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
@@ -46,7 +46,7 @@ import {
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
 import {
-  deliverQueuedSessionDelivery as deliverQueuedSessionDeliveryCore,
+  deliverQueuedSessionDeliveryCore,
   isRestartContinuationBusyRetry,
 } from "./server-restart-sentinel-delivery.js";
 import {

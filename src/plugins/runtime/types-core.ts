@@ -16,7 +16,7 @@ import type {
 import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-tasks.types.js";
 
 type RuntimeRequestHeartbeatOptions = Parameters<
-  typeof import("../../infra/heartbeat-wake.js").requestHeartbeat
+  typeof import("../../infra/heartbeat-wake.js").requestHeartbeatRaw
 >[0];
 
 type RuntimeRequestHeartbeatNowOptions = Omit<RuntimeRequestHeartbeatOptions, "source" | "intent"> &
@@ -380,8 +380,8 @@ export type PluginRuntimeCore = {
     };
   };
   system: {
-    enqueueSystemEvent: typeof import("../../infra/system-events.js").enqueueSystemEvent;
-    requestHeartbeat: typeof import("../../infra/heartbeat-wake.js").requestHeartbeat;
+    enqueueSystemEvent: typeof import("../../infra/system-events.js").enqueueSystemEventRaw;
+    requestHeartbeat: typeof import("../../infra/heartbeat-wake.js").requestHeartbeatRaw;
     /**
      * @deprecated Use `requestHeartbeat({ source, intent, reason })` so wake producers declare
      * scheduler intent explicitly.

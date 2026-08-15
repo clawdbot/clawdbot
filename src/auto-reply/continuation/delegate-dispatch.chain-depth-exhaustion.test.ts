@@ -48,7 +48,7 @@ vi.mock("../../agents/subagents/spawn/subagent-spawn.js", () => ({
 }));
 
 vi.mock("../../infra/system-events.js", () => ({
-  enqueueSystemEvent: (text: string, options: unknown) => enqueueSystemEventMock(text, options),
+  enqueueSystemEventRaw: (text: string, options: unknown) => enqueueSystemEventMock(text, options),
 }));
 
 vi.mock("../../logging/subsystem.js", () => {

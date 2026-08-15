@@ -305,8 +305,8 @@ export {
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
 import {
-  enqueueSystemEvent as enqueueSystemEventInternal,
-  enqueueSystemEventEntry as enqueueSystemEventEntryInternal,
+  enqueueSystemEventRaw as enqueueSystemEventInternal,
+  enqueueSystemEventEntryRaw as enqueueSystemEventEntryInternal,
 } from "../infra/system-events.js";
 
 /**

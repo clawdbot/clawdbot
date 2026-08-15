@@ -1,5 +1,5 @@
 // Heartbeat event and visibility helpers without the broad infra-runtime barrel.
-import { requestHeartbeat as requestHeartbeatInternal } from "../infra/heartbeat-wake.js";
+import { requestHeartbeatRaw as requestHeartbeatInternal } from "../infra/heartbeat-wake.js";
 
 type RequestHeartbeatOptions = Parameters<typeof requestHeartbeatInternal>[0];
 

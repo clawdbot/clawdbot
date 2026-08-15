@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState, type OpenClawConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
-import { requestHeartbeat } from "./heartbeat-wake.js";
+import { requestHeartbeatRaw as requestHeartbeat } from "./heartbeat-wake.js";
 
 describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
   type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];

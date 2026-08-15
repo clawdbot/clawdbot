@@ -9,7 +9,7 @@ import {
 import { selectAgentSystemEvents } from "../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
-  enqueueSystemEventEntry,
+  enqueueSystemEventEntryRaw as enqueueSystemEventEntry,
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
@@ -23,7 +23,7 @@ const randomMock = vi.hoisted(() => vi.fn(() => 0));
 
 vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/heartbeat-wake.js")>()),
-  requestHeartbeat: requestHeartbeatMock,
+  requestHeartbeatRaw: requestHeartbeatMock,
 }));
 vi.mock("../infra/secure-random.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/secure-random.js")>()),

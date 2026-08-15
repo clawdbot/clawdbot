@@ -20,7 +20,7 @@ import { resolveAgentIdFromSessionKey, resolveSessionStorePathCore } from "../co
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveContinuationTraceparent } from "../infra/continuation-tracer.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "../infra/system-events.js";
 import { defaultRuntime } from "../runtime.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { removeUnacceptedDelegateArtifactPolicy } from "./delegate-artifacts.js";

@@ -191,7 +191,7 @@ function applyContextKeyPolicy(entry: SessionQueue, incomingContextKey: string |
   }
 }
 
-export function enqueueSystemEventEntry(
+export function enqueueSystemEventEntryRaw(
   text: string,
   options: SystemEventOptions,
 ): SystemEvent | null {
@@ -286,8 +286,8 @@ function enqueueOwnedSystemEventEntry(
   return cloneSystemEvent(event);
 }
 
-export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
-  return enqueueSystemEventEntry(text, options) !== null;
+export function enqueueSystemEventRaw(text: string, options: SystemEventOptions) {
+  return enqueueSystemEventEntryRaw(text, options) !== null;
 }
 
 /** Enqueues one occurrence and returns one-use removal ownership for its UUID. */

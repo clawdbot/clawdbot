@@ -1,5 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { enqueueSystemEvent } from "../infra/system-events.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "../infra/system-events.js";
 
 const BOARD_EVENT_MAX_BYTES = 8 * 1024;
 const BOARD_NOTICE_MAX_CHARS = 500;

@@ -684,7 +684,7 @@ export function setHeartbeatWakeHandler(next: HeartbeatWakeHandler | null): () =
   };
 }
 
-export function requestHeartbeat(opts: {
+export function requestHeartbeatRaw(opts: {
   source: HeartbeatWakeSource;
   intent: HeartbeatWakeIntent;
   reason?: string;
@@ -737,11 +737,11 @@ export function requestHeartbeatNow(opts?: {
     sessionKey: opts?.sessionKey,
     parentRunId: opts?.parentRunId,
     heartbeat: opts?.heartbeat,
-  } satisfies Parameters<typeof requestHeartbeat>[0];
+  } satisfies Parameters<typeof requestHeartbeatRaw>[0];
   if (opts && hasTrustedContinuationHeartbeatWake(opts)) {
     markTrustedContinuationRoutingCarrier(request);
   }
-  requestHeartbeat(request);
+  requestHeartbeatRaw(request);
 }
 
 export function resetHeartbeatWakeStateForTests() {

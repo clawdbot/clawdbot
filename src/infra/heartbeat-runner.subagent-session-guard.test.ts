@@ -9,7 +9,7 @@ import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harne
 import { withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 import { markTrustedContinuationHeartbeatWake } from "./heartbeat-wake.js";
 import {
-  enqueueSystemEvent,
+  enqueueSystemEventRaw as enqueueSystemEvent,
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "./system-events.js";

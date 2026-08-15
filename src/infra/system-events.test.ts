@@ -23,8 +23,8 @@ import {
   consumeSelectedSystemEventEntries,
   consumeSystemEventEntries,
   drainSystemEventEntries,
-  enqueueSystemEvent,
-  enqueueSystemEventEntry,
+  enqueueSystemEventRaw as enqueueSystemEvent,
+  enqueueSystemEventEntryRaw as enqueueSystemEventEntry,
   enqueueSystemEventWithReceipt,
   hasSystemEvents,
   isSystemEventContextChanged,
@@ -566,7 +566,7 @@ describe("system events (session routing)", () => {
     const key = "agent:main:test-duplicate-module";
 
     first.resetSystemEventsForTest();
-    second.enqueueSystemEvent("Node connected", { sessionKey: key, contextKey: "build:123" });
+    second.enqueueSystemEventRaw("Node connected", { sessionKey: key, contextKey: "build:123" });
 
     const entries = first.peekSystemEventEntries(key);
     expect(entries).toHaveLength(1);
@@ -620,19 +620,19 @@ describe("system events (session routing)", () => {
 
     firstEvents.resetSystemEventsForTest();
     expect(
-      secondEvents.enqueueSystemEvent(
+      secondEvents.enqueueSystemEventRaw(
         "Hook finished",
         firstOwnership.withSystemEventOwner({ ...options }, "alpha"),
       ),
     ).toBe(true);
     expect(
-      firstEvents.enqueueSystemEvent(
+      firstEvents.enqueueSystemEventRaw(
         "Hook finished",
         secondOwnership.withSystemEventOwner({ ...options }, "alpha"),
       ),
     ).toBe(false);
     expect(
-      firstEvents.enqueueSystemEvent(
+      firstEvents.enqueueSystemEventRaw(
         "Hook finished",
         secondOwnership.withSystemEventOwner({ ...options }, "beta"),
       ),

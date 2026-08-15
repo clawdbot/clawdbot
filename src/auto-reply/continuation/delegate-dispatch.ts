@@ -28,7 +28,7 @@ import {
   startContinuationDelegateSpan,
 } from "../../infra/continuation-tracer.js";
 import { generateChainId } from "../../infra/secure-random.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
 import { partitionKnownAcceptedDelegateChildren } from "./delegate-dispatch-accepted-children.js";

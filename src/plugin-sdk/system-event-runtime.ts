@@ -1,7 +1,7 @@
 // Narrow system event enqueue/peek helper surface without the broad infra-runtime barrel.
 
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
-import { enqueueSystemEvent as enqueueSystemEventInternal } from "../infra/system-events.js";
+import { enqueueSystemEventRaw as enqueueSystemEventInternal } from "../infra/system-events.js";
 
 type RoutedSystemEventOptions = Omit<
   NonNullable<Parameters<typeof enqueueSystemEventInternal>[1]>,

@@ -6,7 +6,7 @@ import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-events.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
@@ -46,7 +46,7 @@ vi.mock("../../gateway/session-patch-hooks.js", () => ({
 }));
 
 vi.mock("../../infra/system-events.js", () => ({
-  enqueueSystemEvent: vi.fn(),
+  enqueueSystemEventRaw: vi.fn(),
 }));
 
 vi.mock("./queue.js", () => ({

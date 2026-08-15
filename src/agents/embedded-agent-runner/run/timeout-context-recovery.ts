@@ -1,5 +1,5 @@
 import { requireSessionKeyOrSkip } from "../../../infra/session-keys.js";
-import { enqueueSystemEvent } from "../../../infra/system-events.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../../infra/system-events.js";
 import { deriveContextPromptTokens, normalizeUsage } from "../../usage.js";
 import { runPostCompactionSideEffects } from "../compaction-hooks.js";
 import { log } from "../logger.js";

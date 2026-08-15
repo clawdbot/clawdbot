@@ -2,7 +2,7 @@
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
-import { requestHeartbeat } from "./heartbeat-wake.js";
+import { requestHeartbeatRaw as requestHeartbeat } from "./heartbeat-wake.js";
 
 type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
 type MockRunOnce = RunOnce & { mock: { calls: unknown[][] } };

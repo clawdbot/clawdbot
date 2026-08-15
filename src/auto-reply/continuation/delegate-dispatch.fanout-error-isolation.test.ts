@@ -41,7 +41,7 @@ vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (impo
 }));
 
 vi.mock("../../infra/system-events.js", () => ({
-  enqueueSystemEvent: (text: string, options: unknown) => enqueueSystemEventMock(text, options),
+  enqueueSystemEventRaw: (text: string, options: unknown) => enqueueSystemEventMock(text, options),
 }));
 
 vi.mock("../../logging/subsystem.js", () => {

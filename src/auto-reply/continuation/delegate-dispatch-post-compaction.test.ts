@@ -34,7 +34,7 @@ vi.mock("../../logging/subsystem.js", () => ({
 
 // Mock enqueueSystemEvent to capture system events
 vi.mock("../../infra/system-events.js", () => ({
-  enqueueSystemEvent: mockState.enqueueSystemEvent,
+  enqueueSystemEventRaw: mockState.enqueueSystemEvent,
 }));
 
 import { dispatchStagedPostCompactionDelegates } from "./post-compaction-staged-dispatch.js";

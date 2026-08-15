@@ -1,6 +1,6 @@
 // Runtime system helpers expose host system operations to activated plugin runtimes.
-import { requestHeartbeat as requestHeartbeatInternal } from "../../infra/heartbeat-wake.js";
-import { enqueueSystemEvent as enqueueSystemEventInternal } from "../../infra/system-events.js";
+import { requestHeartbeatRaw as requestHeartbeatInternal } from "../../infra/heartbeat-wake.js";
+import { enqueueSystemEventRaw as enqueueSystemEventInternal } from "../../infra/system-events.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { formatNativeDependencyHint } from "./native-deps.js";

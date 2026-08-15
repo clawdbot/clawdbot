@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../infra/heartbeat-wake.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/heartbeat-wake.js")>()),
-  requestHeartbeat: mocks.requestHeartbeat,
+  requestHeartbeatRaw: mocks.requestHeartbeat,
 }));
 
 vi.mock("../session-utils.js", async (importOriginal) => ({

@@ -18,7 +18,7 @@
  */
 
 import type { SessionEntry } from "../../config/sessions.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const log = createSubsystemLogger("continuation/context-pressure");

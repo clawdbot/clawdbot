@@ -10,7 +10,10 @@ import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/ha
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
-import { enqueueSystemEvent, peekSystemEvents } from "../infra/system-events.js";
+import {
+  enqueueSystemEventRaw as enqueueSystemEvent,
+  peekSystemEvents,
+} from "../infra/system-events.js";
 import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,

@@ -9,7 +9,7 @@ import {
 import {
   consumeSelectedSystemEventEntries,
   drainSystemEventEntries,
-  enqueueSystemEventEntry,
+  enqueueSystemEventEntryRaw as enqueueSystemEventEntry,
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";

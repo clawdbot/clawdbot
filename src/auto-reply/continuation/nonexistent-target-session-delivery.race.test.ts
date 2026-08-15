@@ -33,7 +33,7 @@ import type { QueuedSessionDeliveryPayload } from "../../infra/session-delivery-
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { enqueueContinuationReturnDeliveries } from "./targeting.js";
 
-type EnqueueSystemEvent = typeof import("../../infra/system-events.js").enqueueSystemEvent;
+type EnqueueSystemEvent = typeof import("../../infra/system-events.js").enqueueSystemEventRaw;
 
 const NEVER_EXISTED = "agent:main:never-existed-session-key";
 const DELETED_BEFORE = "agent:main:deleted-before-dispatch";

@@ -3,7 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { requireSessionKeyOrSkip } from "../../../infra/session-keys.js";
-import { enqueueSystemEvent } from "../../../infra/system-events.js";
+import { enqueueSystemEventRaw as enqueueSystemEvent } from "../../../infra/system-events.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../../agent-compaction-constants.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";

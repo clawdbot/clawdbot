@@ -172,7 +172,7 @@ vi.mock("../auto-reply/continuation/config.js", () => ({
 // module-resolution time via vi.mock, so the dynamic import yields the
 // mock implementation.
 vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEvent: (text: string, options?: unknown) => enqueueSystemEventMock(text, options),
+  enqueueSystemEventRaw: (text: string, options?: unknown) => enqueueSystemEventMock(text, options),
 }));
 
 vi.mock("../infra/heartbeat-wake.js", () => ({

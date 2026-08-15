@@ -7,7 +7,10 @@ import {
   type OpenClawConfig,
 } from "../../config/config.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
-import { requestHeartbeat, setHeartbeatWakeHandler } from "../../infra/heartbeat-wake.js";
+import {
+  requestHeartbeatRaw as requestHeartbeat,
+  setHeartbeatWakeHandler,
+} from "../../infra/heartbeat-wake.js";
 import * as execModule from "../../process/exec.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { VERSION } from "../../version.js";
