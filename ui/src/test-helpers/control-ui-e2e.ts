@@ -2743,15 +2743,15 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
         ),
       };
     });
-  } catch (error) {
-    captureErrors.push(`page.evaluate: ${String(error)}`);
+  } catch (evaluateError) {
+    captureErrors.push(`page.evaluate: ${String(evaluateError)}`);
   }
   let screenshotWritten = false;
   try {
     await page.screenshot({ fullPage: true, path: screenshotPath });
     screenshotWritten = true;
-  } catch (error) {
-    captureErrors.push(`page.screenshot: ${String(error)}`);
+  } catch (screenshotError) {
+    captureErrors.push(`page.screenshot: ${String(screenshotError)}`);
   }
   const report = {
     schemaVersion: 2,
