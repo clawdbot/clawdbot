@@ -2,13 +2,15 @@
 import { computeBackoffMs } from "./delivery-recovery.shared.js";
 import {
   drainPendingSessionDeliveries,
-  loadPendingSessionDeliveries,
-  loadPendingSessionDelivery,
   type DeliverSessionDeliveryFn,
-  type QueuedSessionDelivery,
   type SessionDeliveryRecoveryLogger,
   type SettleSessionDeliveryFn,
-} from "./session-delivery-queue.js";
+} from "./session-delivery-queue-recovery.js";
+import {
+  loadPendingSessionDeliveries,
+  loadPendingSessionDelivery,
+  type QueuedSessionDelivery,
+} from "./session-delivery-queue-storage.js";
 
 type SessionDeliveryRuntime = {
   deliver: DeliverSessionDeliveryFn;

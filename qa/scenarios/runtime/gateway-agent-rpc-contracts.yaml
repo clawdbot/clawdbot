@@ -19,7 +19,7 @@ scenario:
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
     - src/gateway/server-methods/agent.ts
-    - src/gateway/server-methods/agent-delivery-phase.ts
+    - src/gateway/agent-turn/agent-delivery-phase.ts
     - src/gateway/server.agent.rpc-contracts.test.ts
   execution:
     kind: vitest

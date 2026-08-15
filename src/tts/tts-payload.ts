@@ -26,7 +26,7 @@ import {
   resolveTtsSettingsSnapshot,
   type ResolvedTtsConfig,
 } from "./tts-settings.js";
-import { textToSpeech, type TtsAudioPersistence } from "./tts-synthesis.js";
+import { textToSpeechCore, type TtsAudioPersistence } from "./tts-synthesis.js";
 
 let lastTtsAttempt: TtsStatusEntry | undefined;
 
@@ -79,7 +79,7 @@ function hasLegacyFinalMediaDirective(text: string): boolean {
   return /(?:^|\n)\s*MEDIA\s*:/i.test(text);
 }
 
-export async function maybeApplyTtsToPayload(
+export async function maybeApplyTtsToPayloadCore(
   params: {
     payload: ReplyPayload;
     cfg: OpenClawConfig;
@@ -217,7 +217,7 @@ export async function maybeApplyTtsToPayload(
   }
 
   const ttsStart = Date.now();
-  const result = await textToSpeech(
+  const result = await textToSpeechCore(
     {
       text: textForAudio,
       cfg,

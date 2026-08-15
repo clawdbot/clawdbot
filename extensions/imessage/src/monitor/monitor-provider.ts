@@ -1,7 +1,7 @@
 // Imessage provider module implements model/runtime integration.
-import path from "node:path";
 import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelInboundDebouncer,
@@ -26,7 +26,7 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
-import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
+import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit, type GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
@@ -46,17 +46,18 @@ import {
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
 import { iMessageApprovalControlBindings } from "../approval-control-binding-window.js";
+import type { IMessageApprovalGatewayRuntime } from "../approval-gateway-types.js";
 import { maybeResolveIMessageApprovalPollVote } from "../approval-polls.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
 import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
-import type { IMessageApprovalGatewayRuntime } from "../approval-resolver.js";
 import { buildIMessageApprovalConversationKeyForInbound } from "../approval-target-keys.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
-import { resolveIMessageHomeDir } from "../cli-path.js";
+import { resolveIMessageChatDbLookupPath } from "../cli-path.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "../client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
 import {
@@ -72,6 +73,7 @@ import {
   hasIMessageQuestionReactionTarget,
   maybeResolveIMessageQuestionReaction,
 } from "../question-reactions.js";
+import { resolveIMessageRemoteHost } from "../remote-host.js";
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
@@ -112,8 +114,7 @@ import {
   loadIMessageRecoveryCursor,
   resolveIMessageRecoveryCursorDbIdentity,
 } from "./recovery-cursor.js";
-import { detectRemoteHostFromCliPath } from "./remote-host.js";
-import { normalizeAllowList, resolveRuntime } from "./runtime.js";
+import { resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessageAttachment, IMessagePayload, MonitorIMessageOpts } from "./types.js";
 import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
@@ -197,14 +198,6 @@ function formatIMessageInboundMediaBody(params: {
   });
 }
 
-function resolveLocalMessagesDbPath(dbPath: string): string {
-  if (!dbPath.startsWith("~")) {
-    return dbPath;
-  }
-  const home = resolveIMessageHomeDir();
-  return home ? path.join(home, dbPath.slice(1).replace(/^\/+/, "")) : dbPath;
-}
-
 // Local chat.db path to read MAX(ROWID) from for the startup since_rowid. Only
 // available when the gateway can read the DB directly (no remote bridge). On a
 // remote `cliPath`, returns undefined and the startup window relies on imsg's
@@ -214,23 +207,10 @@ function resolveIMessageWatchSourceDbPath(params: {
   dbPath?: string;
   remoteHost?: string;
 }): string | undefined {
-  if (params.remoteHost) {
-    return undefined;
-  }
-  const configured = params.dbPath?.trim();
-  if (configured) {
-    return configured;
-  }
-  const cliPath = params.cliPath.trim();
-  if (cliPath !== "imsg" && path.basename(cliPath) !== "imsg") {
-    return undefined;
-  }
-  const home = resolveIMessageHomeDir();
-  return home ? path.join(home, "Library", "Messages", "chat.db") : undefined;
+  return resolveIMessageChatDbLookupPath(params);
 }
 
 async function resolveIMessageStartupRowidWatermark(dbPath: string): Promise<number | null> {
-  const resolvedDbPath = resolveLocalMessagesDbPath(dbPath);
   let database:
     | {
         close: () => void;
@@ -238,7 +218,7 @@ async function resolveIMessageStartupRowidWatermark(dbPath: string): Promise<num
       }
     | undefined;
   try {
-    database = openNodeSqliteDatabase(resolvedDbPath, { readOnly: true });
+    database = openNodeSqliteDatabase(dbPath, { readOnly: true });
     const row = database.prepare("SELECT MAX(ROWID) AS maxRowid FROM message").get() as
       | { maxRowid?: unknown }
       | undefined;
@@ -393,9 +373,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const selfChatCache = createSelfChatCache();
   const loopRateLimiter = createLoopRateLimiter();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
-  const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
+  const allowFrom = normalizeStringEntries(opts.allowFrom ?? imessageCfg.allowFrom);
   const configuredGroupAllowFrom = opts.groupAllowFrom ?? imessageCfg.groupAllowFrom;
-  const groupAllowFrom = normalizeAllowList(
+  const groupAllowFrom = normalizeStringEntries(
     configuredGroupAllowFrom ??
       (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0 ? imessageCfg.allowFrom : []),
   );
@@ -441,25 +421,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     accountId: accountInfo.accountId,
   });
 
-  // Resolve remoteHost: explicit config, or auto-detect from SSH wrapper script.
-  // Accept only a safe host token to avoid option/argument injection into SCP.
-  const configuredRemoteHost = normalizeScpRemoteHost(imessageCfg.remoteHost);
-  if (imessageCfg.remoteHost && !configuredRemoteHost) {
-    logVerbose("imessage: ignoring unsafe channels.imessage.remoteHost value");
-  }
-
-  let remoteHost = configuredRemoteHost;
-  if (!remoteHost && cliPath && cliPath !== "imsg") {
-    const detected = await detectRemoteHostFromCliPath(cliPath);
-    const normalizedDetected = normalizeScpRemoteHost(detected);
-    if (detected && !normalizedDetected) {
-      logVerbose("imessage: ignoring unsafe auto-detected remoteHost from cliPath");
-    }
-    remoteHost = normalizedDetected;
-    if (remoteHost) {
-      logVerbose(`imessage: detected remoteHost=${remoteHost} from cliPath`);
-    }
-  }
+  const remoteHost = await resolveIMessageRemoteHost({
+    cliPath,
+    remoteHost: imessageCfg.remoteHost,
+  });
   let staleBacklogSuppressed = 0;
   const loggedThrottledDropDiagnostics = createIMessageThrottledDropDiagnosticCache();
 
@@ -732,7 +697,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   function resolveIMessageInboundBodyText(message: IMessagePayload) {
     // Native poll balloons carry only a 0xFFFD placeholder in `text`; render the
     // decoded poll (question/options/votes) so the agent sees the actual poll.
-    const pollBody = message.poll ? renderIMessagePollBody(message.poll, message.sender) : null;
+    const pollBody = message.poll
+      ? renderIMessagePollBody(message.poll, message.sender, {
+          preferOptionId: Boolean(remoteHost),
+        })
+      : null;
     const messageText = (pollBody ?? message.text ?? "").trim();
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
@@ -827,12 +796,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     if (decision.kind === "drop") {
       // Record echo/reflection drops so the rate limiter can detect sustained loops.
       // Only loop-related drop reasons feed the counter; policy/mention/empty drops
-      // are normal and should not escalate.
+      // are normal and should not escalate. "from me" is excluded: every own-send
+      // (agent replies, multi-chunk sends, operator phone traffic) produces a
+      // from-me row, so counting it lets a normal outbound burst trip the limiter
+      // and silently suppress the next legitimate inbound message.
       const isLoopDrop =
         decision.reason === "echo" ||
         decision.reason === "self-chat echo" ||
-        decision.reason === "reflected assistant content" ||
-        decision.reason === "from me";
+        decision.reason === "reflected assistant content";
       if (isLoopDrop) {
         loopRateLimiter.record(rateLimitKey);
       }
@@ -868,7 +839,17 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     // remaining messages as a safety net against amplification that slips
     // through the primary guards.
     if (decision.kind === "dispatch" && loopRateLimiter.isRateLimited(rateLimitKey)) {
-      logVerbose(`imessage: rate-limited conversation ${conversationKey} (echo loop detected)`);
+      // A tripped limiter silently eats real user messages — surface it at
+      // default log level (once per conversation) instead of verbose-only.
+      if (!loggedThrottledDropDiagnostics.check(`${rateLimitKey}:rate-limited`)) {
+        const conversationKind = chatId != null ? "group" : "dm";
+        const diagnosticConversationKey = `${conversationKind}:${redactIdentifier(conversationKey)}`;
+        runtime.log?.(
+          warn(
+            `[imessage:${accountInfo.accountId}] Suppressing inbound from ${diagnosticConversationKey}: echo loop detected (rate limiter tripped)`,
+          ),
+        );
+      }
       return;
     }
 
@@ -976,6 +957,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       const earlyDirectTypingStarted = sendIMessageTyping(earlyDirectTypingTarget, true, {
         cfg,
         accountId: accountInfo.accountId,
+        cliPath,
+        dbPath,
+        remoteHost,
       }).then(
         () => true,
         (err: unknown) => {
@@ -1003,6 +987,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             await sendIMessageTyping(earlyDirectTypingTarget, false, {
               cfg,
               accountId: accountInfo.accountId,
+              cliPath,
+              dbPath,
+              remoteHost,
             });
           })
           .catch((err: unknown) => {
@@ -1069,6 +1056,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       historyLimit,
       groupHistories,
       dmHistory,
+      buildContext: (opts.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
+        .buildContext,
       media: {
         facts: mediaAttachments,
       },
@@ -1100,6 +1089,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       void markIMessageChatRead(typingTarget, {
         cfg,
         accountId: accountInfo.accountId,
+        cliPath,
+        dbPath,
+        remoteHost,
       }).catch((err: unknown) => {
         runtime.error?.(`imessage: mark read failed: ${String(err)}`);
       });
@@ -1118,6 +1110,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
                   cfg,
                   accountId: accountInfo.accountId,
                   client: getActiveClient(),
+                  cliPath,
+                  dbPath,
+                  remoteHost,
                 });
               },
               stop: async () => {
@@ -1125,6 +1120,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
                   cfg,
                   accountId: accountInfo.accountId,
                   client: getActiveClient(),
+                  cliPath,
+                  dbPath,
+                  remoteHost,
                 });
               },
               // Keep the native typing bubble alive through long tool chains.
@@ -1214,11 +1212,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           // instead of falling back to a durable iMessage bubble.
           onToolResult: async () => {
             await directTypingController?.startTypingLoop();
+            return false;
           },
           ...(supportsTyping
             ? {
                 onToolStart: async () => {
                   await directTypingController?.startTypingLoop();
+                  return false;
                 },
               }
             : {}),
@@ -1477,7 +1477,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     abortSignal: opts.abortSignal,
     runtime,
     check: async () => {
-      const probe = await probeIMessage(probeTimeoutMs, { cliPath, dbPath, runtime });
+      const probe = await probeIMessage(probeTimeoutMs, {
+        cliPath,
+        dbPath,
+        remoteHost,
+        runtime,
+      });
       if (probe.ok) {
         return { ok: true };
       }
@@ -1496,6 +1501,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     await createIMessageRpcClient({
       cliPath,
       dbPath,
+      remoteHost,
       runtime,
       onNotification: (msg) => {
         if (msg.method === "message") {

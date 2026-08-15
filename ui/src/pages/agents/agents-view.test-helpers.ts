@@ -21,7 +21,7 @@ export function createAgentViewTestProps(
     agentsList: {
       defaultId: "alpha",
       mainKey: "main",
-      scope: "workspace",
+      scope: "per-sender",
       agents: [{ id: "alpha", name: "Alpha" } as never, { id: "beta", name: "Beta" } as never],
     },
     selectedAgentId: "beta",

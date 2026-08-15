@@ -197,11 +197,15 @@ describe("codex plugin", () => {
     expect(migrationRegistration?.id).toBe("codex");
     expect(migrationRegistration?.label).toBe("Codex");
     expect(registerTool).toHaveBeenCalledWith(expect.any(Function), { name: "codex_threads" });
+    expect(registerTool).toHaveBeenCalledWith(expect.any(Function), { name: "codex_plugins" });
     expect(registerTool).not.toHaveBeenCalledWith(expect.any(Function), {
       names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES],
     });
     expect(registerToolMetadata).toHaveBeenCalledWith(
       expect.objectContaining({ toolName: "codex_threads", risk: "high" }),
+    );
+    expect(registerToolMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "codex_plugins", risk: "low" }),
     );
     expect(inboundClaimRegistration?.[0]).toBe("inbound_claim");
     expect(typeof inboundClaimRegistration?.[1]).toBe("function");
@@ -852,7 +856,6 @@ describe("codex plugin", () => {
     expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(
       { prompt: "hello" },
       {
-        agentHarnessCodingToolsFactory: undefined,
         bindingStore: testCodexAppServerBindingStore,
         pluginConfig: { appServer: {} },
         nativeHookRelay: { enabled: true },
@@ -918,7 +921,6 @@ describe("codex plugin", () => {
     expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(
       { prompt: "calendar" },
       {
-        agentHarnessCodingToolsFactory: expect.any(Function),
         bindingStore: expect.any(Object),
         pluginConfig: liveConfig.plugins.entries.codex.config,
         nativeHookRelay: { enabled: true },

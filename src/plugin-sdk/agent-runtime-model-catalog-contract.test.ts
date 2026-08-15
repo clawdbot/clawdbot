@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   getPreparedModelCatalogSnapshot: (...args: unknown[]) => mocks.getSnapshot(...args),
   loadPreparedModelCatalog: (...args: unknown[]) => mocks.loadCatalog(...args),
 }));

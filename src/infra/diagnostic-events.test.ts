@@ -23,6 +23,7 @@ import {
   type DiagnosticEventPrivateData,
   type DiagnosticEventPayload,
 } from "./diagnostic-events.js";
+import { isCoreSemanticRunProgressDiagnosticMetadata } from "./diagnostic-semantic-run-progress.js";
 import {
   createDiagnosticTraceContext,
   formatDiagnosticTraceparent,
@@ -363,22 +364,27 @@ describe("diagnostic-events", () => {
     expect(formatPropagatedDiagnosticTraceparent(diagnosticTrace)).toBeUndefined();
   });
 
-  it("shares diagnostic state across duplicate module instances", async () => {
-    const events: string[] = [];
-    onDiagnosticEvent((event) => {
-      events.push(event.type);
+  it("shares semantic provenance across duplicate module instances", async () => {
+    const events: Array<{ coreSemantic: boolean; type: string }> = [];
+    onInternalDiagnosticEvent((event, metadata) => {
+      events.push({
+        coreSemantic: isCoreSemanticRunProgressDiagnosticMetadata(metadata),
+        type: event.type,
+      });
     });
 
     vi.resetModules();
-    const duplicateModule = (await import(
-      /* @vite-ignore */ new URL("./diagnostic-events.ts?duplicate", import.meta.url).href
-    )) as typeof import("./diagnostic-events.js");
-    duplicateModule.emitDiagnosticEvent({
-      type: "message.queued",
-      source: "plugin",
+    const duplicateSemanticProgress = await import(
+      /* @vite-ignore */ new URL("./diagnostic-semantic-run-progress.ts?duplicate", import.meta.url)
+        .href
+    );
+    duplicateSemanticProgress.emitCoreSemanticRunProgressDiagnosticEvent({
+      runId: "duplicate-semantic-run",
+      reason: "model_call:semantic_result",
     });
+    await waitForDiagnosticEventsDrained();
 
-    expect(events).toEqual(["message.queued"]);
+    expect(events).toEqual([{ coreSemantic: true, type: "run.progress" }]);
   });
 
   it("does not expose mutable diagnostic state on the obsolete global symbol", async () => {

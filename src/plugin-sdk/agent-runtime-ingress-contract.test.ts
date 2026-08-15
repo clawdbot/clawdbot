@@ -7,13 +7,13 @@ const optionalRunIdCaller: PublicIngressOptions = {
   sessionKey: "agent:main:plugin-session",
   allowModelOverride: false,
 };
-const privateExecutionCorrelationIsHidden: "executionAttribution" extends keyof PublicIngressOptions
+const privateRecoveryCorrelationIsHidden: "executionIdentityAdmission" extends keyof PublicIngressOptions
   ? false
   : true = true;
 
 describe("public agent ingress correlation contract", () => {
   it("keeps runId optional and private execution recovery state unavailable", () => {
     expect(optionalRunIdCaller).not.toHaveProperty("runId");
-    expect(privateExecutionCorrelationIsHidden).toBe(true);
+    expect(privateRecoveryCorrelationIsHidden).toBe(true);
   });
 });

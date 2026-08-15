@@ -89,6 +89,7 @@ describe("splitMediaFromOutput", () => {
     ],
     ["/tmp/render,final.png", "MEDIA:/tmp/render,final.png"],
     ["/tmp/generated.png", "MEDIA:FILE:///tmp/generated.png"],
+    ["/tmp/generated.png", "MEDIA:FILE:/tmp/generated.png"],
     ["/tmp/generated.png", "MEDIA:file:///tmp/generated.png"],
     ["/Users/pete/My File.png", "MEDIA:FILE:///Users/pete/My File.png"],
     ["/Users/pete/My File.png", "MEDIA:file:///Users/pete/My File.png"],

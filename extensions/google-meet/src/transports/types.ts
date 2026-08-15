@@ -93,6 +93,9 @@ export type GoogleMeetChromeHealth = MeetingBrowserHealth<
   providerConnected?: boolean;
   realtimeReady?: boolean;
   audioInputActive?: boolean;
+  audioInputRouted?: boolean;
+  audioInputDeviceLabel?: string;
+  audioInputRouteError?: string;
   audioOutputActive?: boolean;
   audioOutputRouted?: boolean;
   audioOutputDeviceLabel?: string;
@@ -131,7 +134,7 @@ export type GoogleMeetSession = MeetingSessionRecord<
 > & {
   /** Canonical agent owner and shared fields retain their byte-compatible wire names. */
   chrome?: {
-    audioBackend: "blackhole-2ch";
+    audioBackend?: "blackhole-2ch" | "pipewire-pulse";
     launched: boolean;
     nodeId?: string;
     browserProfile?: string;

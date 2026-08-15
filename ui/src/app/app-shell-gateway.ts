@@ -29,6 +29,7 @@ export type StoredOutboxScopeHost = {
 };
 
 export type OutboxStoreRuntime = {
+  listStoredDraftScopes: (state: StoredOutboxScopeHost) => ReadonlySet<string>;
   summarizeStoredChatOutboxes: (state: StoredOutboxScopeHost) => {
     countsByScope: ReadonlyMap<string, number>;
     total: number;

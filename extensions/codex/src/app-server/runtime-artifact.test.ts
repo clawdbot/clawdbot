@@ -75,6 +75,20 @@ describe("Codex app-server runtime artifact", () => {
     });
   });
 
+  it("attests the sanitized environment when the host injects a runtime loader path", async () => {
+    await withTempDir("openclaw-codex-runtime-sanitized-env-", async (root) => {
+      const command = path.join(root, "codex");
+      await fs.writeFile(command, "native-v1");
+      const options = startOptions(command, {
+        env: { NODE_PATH: "/ambient/node_modules", LD_PRELOAD: "/ambient/inject.so" },
+      });
+
+      await expect(captureBinding({ options })).resolves.toMatchObject({
+        binding: { id: expect.stringMatching(/^codex-app-server:v1:/u) },
+      });
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "resolves relative launch paths and shebang targets from the spawn cwd",
     async () => {

@@ -18,7 +18,7 @@ import {
 import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import {
@@ -91,6 +91,16 @@ function qmdFileLockMigration() {
   );
   if (!migration) {
     throw new Error("expected memory-core QMD file-lock migration");
+  }
+  return migration;
+}
+
+function qmdWorkspaceMigration() {
+  const migration = stateMigrations.find(
+    (entry) => entry.id === "memory-core-qmd-workspace-retired",
+  );
+  if (!migration) {
+    throw new Error("expected memory-core retired QMD workspace migration");
   }
   return migration;
 }
@@ -2554,6 +2564,61 @@ describe("memory-core doctor dreaming migration", () => {
     ]);
     await expect(fs.access(legacyPath)).rejects.toThrow();
     await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+  });
+
+  it("removes retired QMD workspace homes without following model or home symlinks", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const qmdHome = path.join(stateDir, "agents", "main", "qmd");
+    const canonicalAgentFile = path.join(
+      stateDir,
+      "agents",
+      "main",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    const invalidAgentQmdHome = path.join(stateDir, "agents", "main!", "qmd");
+    const externalModels = path.join(rootDir, "shared-qmd-models");
+    const symlinkHomeTarget = path.join(rootDir, "symlink-qmd-home-target");
+    const symlinkHome = path.join(stateDir, "agents", "other", "qmd");
+    for (const filePath of [
+      path.join(qmdHome, "xdg-cache", "qmd", "index.sqlite"),
+      path.join(qmdHome, "xdg-config", "qmd", "index.yml"),
+      path.join(qmdHome, "sessions", "session.md"),
+      canonicalAgentFile,
+      path.join(invalidAgentQmdHome, "index.sqlite"),
+      path.join(externalModels, "model.bin"),
+      path.join(symlinkHomeTarget, "index.sqlite"),
+    ]) {
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, "derived", "utf8");
+    }
+    await fs.symlink(externalModels, path.join(qmdHome, "xdg-cache", "qmd", "models"));
+    await fs.mkdir(path.dirname(symlinkHome), { recursive: true });
+    await fs.symlink(symlinkHomeTarget, symlinkHome);
+
+    const migration = qmdWorkspaceMigration();
+    expect(migration.doctorOnly).toBe(true);
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toEqual({
+      preview: [
+        `- Retired Memory Core QMD workspace: ${qmdHome} -> remove derived index, config, cache, and session-export artifacts`,
+      ],
+    });
+    await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
+      changes: [`Removed retired Memory Core QMD workspace: ${qmdHome}`],
+      warnings: [],
+    });
+
+    await expect(fs.access(qmdHome)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(canonicalAgentFile)).resolves.toBeUndefined();
+    await expect(fs.access(invalidAgentQmdHome)).resolves.toBeUndefined();
+    await expect(fs.access(path.join(externalModels, "model.bin"))).resolves.toBeUndefined();
+    expect((await fs.lstat(symlinkHome)).isSymbolicLink()).toBe(true);
+    await expect(fs.access(path.join(symlinkHomeTarget, "index.sqlite"))).resolves.toBeUndefined();
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
+    await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
   });
 
   it("removes only exact stale QMD lock sidecars and is idempotent", async () => {

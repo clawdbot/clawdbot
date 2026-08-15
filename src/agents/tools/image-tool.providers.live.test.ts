@@ -3,7 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
+import { coerceErrorMessage as formatLiveError, expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ModelApi } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -18,7 +18,7 @@ import {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isServerErrorMessage,
-} from "../embedded-agent-helpers/failover-matches.js";
+} from "../failover/classify.js";
 import { isLiveTestEnabled } from "../live-test-helpers.js";
 import { isLiveAuthDrift } from "../live-test-provider-drift.test-support.js";
 import { createImageTool } from "./image-tool.js";
@@ -108,10 +108,6 @@ function readJpegDimensions(buffer: Buffer): { width: number; height: number } {
     offset += segmentLength;
   }
   throw new Error("JPEG dimensions not found");
-}
-
-function formatLiveError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function isSkippableLiveError(error: unknown): boolean {

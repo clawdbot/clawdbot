@@ -45,6 +45,10 @@ export type UserTurnInput = {
   } | null;
   timestamp?: number;
   idempotencyKey?: string;
+  /** Durable transcript message reference used to render and hydrate replies. */
+  replyToId?: string;
+  /** Bounded display fallback for replies whose target is outside loaded history. */
+  replyToPreview?: { text: string; senderLabel?: string | null } | null;
   senderIsOwner?: boolean;
   provenance?: InputProvenance;
   /** Durable participant attribution. Callers must opt in at the product boundary. */
@@ -154,6 +158,7 @@ export type UserTurnTranscriptRecorder = {
   replaceTextBeforePersistence?: (text: string) => void;
   getPersistedMessage?: () => PersistedUserTurnMessage | undefined;
   getAdmissionReceipt: () => UserTurnTranscriptAdmissionReceipt | undefined;
+  setAdmissionHandler?: (handler: (admission: UserTurnTranscriptAdmissionReceipt) => void) => void;
   markSentToProvider?: () => void;
   markRuntimePersistencePending: (pending: Promise<void>) => void;
   markRuntimePersisted: (

@@ -2,27 +2,28 @@
 // Gateway callers need canonical per-agent keys even when stores are split by `{agentId}`.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { listAgentEntries, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listAgentEntries } from "../../agents/agent-scope.js";
 import {
   resolveSessionStoreKey,
   resolveStoredSessionKeyForAgentStore,
 } from "../../gateway/session-store-key.js";
 import {
   isIncognitoSessionKey,
-  LEGACY_IMPLICIT_AGENT_ID,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { listOpenIncognitoAgentDatabases } from "../../state/openclaw-agent-db.js";
+import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { resolveStorePath } from "./paths.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import {
   countSessionEntryRowsReadOnly,
-  listSessionEntries,
+  listSessionEntriesCore,
   listSessionEntriesReadOnly,
 } from "./session-accessor.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
@@ -66,13 +67,33 @@ function resolveCombinedStorePath(paths: string[], storeConfig?: string): string
       : "(multiple)";
 }
 
+function resolveCombinedDatabasePath(
+  targets: Array<{ agentId: string; storePath: string }>,
+  defaultAgentId: string,
+): string {
+  const paths = [
+    ...new Set(
+      targets.map(
+        (target) =>
+          resolveSqliteTargetFromSessionStorePath(target.storePath, {
+            agentId: target.agentId,
+            defaultAgentId,
+          }).path,
+      ),
+    ),
+  ];
+  return paths.length === 1 ? expectDefined(paths[0], "database path at 0") : "(multiple)";
+}
+
 function loadGatewayStoreEntries(params: {
   agentId: string;
   includeOpenDatabases?: boolean;
   projection: GatewaySessionEntryProjection;
   storePath: string;
 }) {
-  const listEntries = params.includeOpenDatabases ? listSessionEntries : listSessionEntriesReadOnly;
+  const listEntries = params.includeOpenDatabases
+    ? listSessionEntriesCore
+    : listSessionEntriesReadOnly;
   return listEntries({
     agentId: params.agentId,
     clone: false,
@@ -158,11 +179,11 @@ function resolveGatewaySessionStoreTargets(
 ): ResolvedGatewaySessionStoreTargets {
   const storeConfig = cfg.session?.store;
   const diagnostics: string[] = [];
-  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
   const requestedAgentId =
     typeof opts.agentId === "string" && opts.agentId.trim()
       ? normalizeAgentId(opts.agentId)
       : undefined;
+  const defaultAgentId = normalizeAgentId(resolveSessionStoreCompatibilityAgentId(cfg));
   const configuredAgentIds =
     opts.configuredAgentsOnly === true && !requestedAgentId
       ? new Set(listConfiguredSessionStoreAgentIds(cfg))
@@ -183,14 +204,13 @@ function resolveGatewaySessionStoreTargets(
         ...listAgentEntries(cfg).map((entry) => normalizeAgentId(entry.id)),
         ...listKnownSessionStoreAgentIds(cfg),
         defaultAgentId,
-        LEGACY_IMPLICIT_AGENT_ID,
         ...(requestedAgentId ? [requestedAgentId] : []),
       ]),
     ];
     const durableTargets = dedupeSessionStoreTargetsBySqliteTarget(
       ownerIds.map((agentId) => ({
         agentId,
-        storePath: resolveStorePath(storeConfig, { agentId }),
+        storePath: resolveSessionStorePathCore(storeConfig, { agentId }),
       })),
       {
         defaultAgentId,
@@ -229,13 +249,12 @@ export function canPrewarmCombinedSessionStoresForGateway(
   cfg: OpenClawConfig,
   params: { agentIds: readonly string[]; maxRows: number },
 ): boolean {
-  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
   let totalRows = 0;
   for (const agentId of params.agentIds) {
     const resolved = resolveGatewaySessionStoreTargets(cfg, { agentId });
     const projectionTargets = dedupeSessionStoreTargetsBySqliteTarget(
       [...resolved.durableTargets, ...resolved.incognitoTargets],
-      { defaultAgentId },
+      { defaultAgentId: resolved.defaultAgentId },
     );
     for (const target of projectionTargets) {
       totalRows += countSessionEntryRowsReadOnly(target);
@@ -248,7 +267,7 @@ export function canPrewarmCombinedSessionStoresForGateway(
 }
 
 /** Loads and canonicalizes session entries for gateway views across one or more agent stores. */
-export function loadCombinedSessionStoreForGateway(
+export function loadCombinedSessionStoreForGatewayCore(
   cfg: OpenClawConfig,
   opts: GatewaySessionStoreOptions = {},
 ): {
@@ -302,7 +321,7 @@ export function loadCombinedSessionStoreForGateway(
         });
       }
     }
-    const durableStorePath = resolveStorePath(storeConfig, { agentId: defaultAgentId });
+    const durableStorePath = resolveCombinedDatabasePath(durableTargets, defaultAgentId);
     const incognitoStorePaths = mergeOpenIncognitoStores({
       cfg,
       combined,
@@ -359,7 +378,7 @@ export function loadCombinedSessionStoreForGateway(
   });
 
   const durableStorePaths = durableTargets.map((target) => target.storePath);
-  const durableStorePath = resolveCombinedStorePath(durableStorePaths, storeConfig);
+  const durableStorePath = resolveCombinedDatabasePath(durableTargets, defaultAgentId);
   const storePath = resolveCombinedStorePath(
     [...durableStorePaths, ...incognitoStorePaths],
     storeConfig,

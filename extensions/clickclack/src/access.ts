@@ -1,3 +1,4 @@
+import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-inbound";
 /**
  * Maps ClickClack senders and conversations onto the shared channel ingress
  * allowlist/command authorization contract.
@@ -7,13 +8,14 @@ import {
   type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeAgentId,
   type ResolvedAgentRoute,
   type RoutePeer,
 } from "openclaw/plugin-sdk/routing";
 import { resolveClickClackDiscussionRoute } from "./discussions/routing.js";
-import { resolveClickClackGroupPolicy } from "./group-policy.js";
+import { resolveClickClackBotPolicy, resolveClickClackGroupPolicy } from "./group-policy.js";
 import { resolveClickClackMentionFacts } from "./mention-facts.js";
 import { getClickClackRuntime } from "./runtime.js";
 import { buildClickClackTarget } from "./target.js";
@@ -51,6 +53,18 @@ type ClickClackPreparedInboundRoute = {
   discussionRoute?: ClickClackDiscussionRoute;
   revoked: boolean;
 };
+
+function resolveClickClackBotLoopConversationId(params: {
+  message: ClickClackMessage;
+  isDirect: boolean;
+}): string {
+  if (params.message.parent_message_id && params.message.thread_root_id) {
+    return params.message.thread_root_id;
+  }
+  return params.isDirect
+    ? (params.message.direct_conversation_id ?? params.message.author_id)
+    : (params.message.channel_id ?? params.message.thread_root_id ?? params.message.author_id);
+}
 
 function resolveAccountAgentRoute(params: {
   cfg: OpenClawConfig;
@@ -164,7 +178,9 @@ export type ClickClackInboundAccess = {
     wasMentioned: boolean;
     hasAnyMention?: boolean;
   };
+  botLoopProtection?: ChannelBotLoopProtectionFacts;
   preparedRoute: ClickClackPreparedInboundRoute;
+  channelIngress?: Awaited<ReturnType<typeof resolveStableChannelMessageIngress>>;
 };
 
 /**
@@ -198,6 +214,64 @@ export async function resolveClickClackInboundAccess(params: {
     agentId: preparedRoute.route.agentId,
     channelId: params.message.channel_id,
   });
+  if (params.message.kind !== undefined && params.message.kind !== "message") {
+    return {
+      shouldDispatch: false,
+      commandAuthorized: false,
+      requireMention: effectiveGroupPolicy.requireMention,
+      mentionFacts,
+      preparedRoute,
+    };
+  }
+  const effectiveBotPolicy = resolveClickClackBotPolicy({
+    account: params.account,
+    channelId: params.message.channel_id,
+  });
+  // Older ClickClack servers may omit author classification. Preserve the
+  // legacy ingress path for those responses and apply bot-only policy only to
+  // messages positively classified as bot-authored.
+  const isBotAuthor = params.message.author?.kind === "bot";
+  // The account's default allowFrom is wildcarded for human traffic. Bot
+  // admission is a separate opt-in boundary, so wildcard authorization must
+  // not implicitly trust every bot in the workspace.
+  const ingressAllowFrom = isBotAuthor
+    ? params.account.allowFrom.filter((entry) => normalizeClickClackUserId(entry) !== "*")
+    : params.account.allowFrom;
+  const botMentionAllowed =
+    !isBotAuthor ||
+    effectiveBotPolicy.allowBots === true ||
+    (effectiveBotPolicy.allowBots === "mentions" &&
+      (preparedRoute.isDirect || mentionFacts.wasMentioned));
+  if (!botMentionAllowed) {
+    return {
+      shouldDispatch: false,
+      commandAuthorized: false,
+      requireMention: effectiveGroupPolicy.requireMention,
+      mentionFacts,
+      preparedRoute,
+    };
+  }
+  const botLoopNowMs = parseDateStringTimestampMs(params.message.created_at);
+  const botLoopProtection =
+    isBotAuthor && params.message.author_id !== params.account.botUserId && params.account.botUserId
+      ? {
+          // Keep reciprocal ClickClack accounts in one loop-guard namespace.
+          // The workspace is the shared boundary; account IDs would let the
+          // same conversation evade the budget by alternating receivers.
+          scopeId: params.account.workspace,
+          conversationId: resolveClickClackBotLoopConversationId({
+            message: params.message,
+            isDirect: preparedRoute.isDirect,
+          }),
+          senderId: params.message.author_id,
+          receiverId: params.account.botUserId,
+          eventId: params.message.id,
+          ...(botLoopNowMs !== undefined ? { nowMs: botLoopNowMs } : {}),
+          config: effectiveBotPolicy.botLoopProtection,
+          defaultsConfig: cfg.channels?.defaults?.botLoopProtection,
+          defaultEnabled: true,
+        }
+      : undefined;
   const allowTextCommands =
     params.account.replyMode === "agent" &&
     runtime.channel.commands.shouldHandleTextCommands({
@@ -218,7 +292,13 @@ export async function resolveClickClackInboundAccess(params: {
         ? (params.message.direct_conversation_id ?? params.message.author_id)
         : (params.message.channel_id ?? params.message.thread_root_id),
     },
-    allowFrom: params.account.allowFrom,
+    contextBinding: {
+      agentId: preparedRoute.route.agentId,
+      sessionKey: preparedRoute.route.sessionKey,
+      messageId: params.message.id,
+      inboundEventKind: "user_request",
+    },
+    allowFrom: ingressAllowFrom,
     dmPolicy: "allowlist",
     groupPolicy: "allowlist",
     mentionFacts,
@@ -243,6 +323,8 @@ export async function resolveClickClackInboundAccess(params: {
       : resolved.senderAccess.allowed,
     requireMention: effectiveGroupPolicy.requireMention,
     mentionFacts,
+    botLoopProtection,
     preparedRoute,
+    channelIngress: resolved,
   };
 }

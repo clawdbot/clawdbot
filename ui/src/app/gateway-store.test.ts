@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type {
   GatewayBrowserClient,
   GatewayBrowserClientOptions,
@@ -10,6 +11,14 @@ import { resolveAvatar, setAvatarGatewayOrigin } from "../lib/identity-avatar.ts
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { loadSettings } from "./settings.ts";
+
+const { scheduleStaleChunkReloadMock } = vi.hoisted(() => ({
+  scheduleStaleChunkReloadMock: vi.fn(async () => true),
+}));
+
+vi.mock("./stale-chunk-reload.ts", () => ({
+  scheduleStaleChunkReload: scheduleStaleChunkReloadMock,
+}));
 
 vi.mock("../build-info.ts", () => ({
   CONTROL_UI_BUILD_INFO: {
@@ -22,6 +31,16 @@ vi.mock("../build-info.ts", () => ({
     release: false,
     buildId: "test",
   },
+  controlUiBuildDiffersFrom: (identity: {
+    version?: string | null;
+    buildId?: string | null;
+    controlUiBuildSource?: "bundled" | "configured";
+  }) =>
+    identity.controlUiBuildSource === "configured"
+      ? false
+      : identity.buildId
+        ? identity.buildId !== "test"
+        : Boolean(identity.version && identity.version !== "2026.7.19"),
 }));
 
 const HELLO: GatewayHelloOk = {
@@ -101,6 +120,7 @@ function createStore(
 
 describe("createApplicationGateway connection phase", () => {
   beforeEach(() => {
+    scheduleStaleChunkReloadMock.mockClear();
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
@@ -110,6 +130,7 @@ describe("createApplicationGateway connection phase", () => {
       hostname: "127.0.0.1",
       origin: "http://127.0.0.1:18789",
       pathname: "/",
+      href: "http://127.0.0.1:18789/",
     } as Location);
   });
 
@@ -142,6 +163,7 @@ describe("createApplicationGateway connection phase", () => {
 
     expect(current().started).toBe(1);
     expect(current().opts.clientVersion).toBe("2026.7.19");
+    expect(current().opts.clientBuildId).toBe("test");
     expect(gateway.snapshot.phase).toBe("connecting");
 
     current().opts.onHello?.(HELLO);
@@ -152,6 +174,98 @@ describe("createApplicationGateway connection phase", () => {
 
     current().opts.onClose?.({ code: 4008, reason: "connect failed", willRetry: false });
     expect(gateway.snapshot.phase).toBe("offline");
+  });
+
+  it("keeps legacy version fallback on reconnect instead of first admission", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    const legacyHello = {
+      ...HELLO,
+      server: { version: "2026.7.20", connId: "legacy-conn" },
+    };
+
+    current().opts.onHello?.(legacyHello);
+    expect(gateway.snapshot.phase).toBe("connected");
+
+    current().opts.onClose?.({ code: 1006, reason: "restarting", willRetry: true });
+    current().opts.onHello?.(legacyHello);
+    expect(gateway.snapshot.phase).toBe("reconnecting");
+  });
+
+  it("does not compare a separately hosted Control UI with a remote gateway build", () => {
+    const settings = { ...loadSettings(), gatewayUrl: "wss://remote.example/ws" };
+    const { gateway, current } = createStore({ settings });
+    gateway.start();
+
+    current().opts.onHello?.({
+      ...HELLO,
+      server: { version: "2026.7.19", buildId: "remote-build", connId: "conn-1" },
+    });
+
+    expect(gateway.snapshot.phase).toBe("connected");
+  });
+
+  it("does not compare a configured same-origin Control UI with the gateway package", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onHello?.({
+      ...HELLO,
+      server: {
+        version: "2026.7.20",
+        controlUiBuildSource: "configured",
+        connId: "conn-1",
+      },
+    });
+
+    expect(gateway.snapshot.phase).toBe("connected");
+  });
+
+  it.each([
+    {
+      name: "missing-token auth detail",
+      outerCode: "INVALID_REQUEST",
+      detailCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
+      message: "token missing",
+    },
+    {
+      name: "pairing-required detail",
+      outerCode: "NOT_PAIRED",
+      detailCode: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+      message: "device is not approved",
+    },
+  ])("preserves the structured $name in the login snapshot", (fixture) => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: fixture.outerCode,
+        message: fixture.message,
+        details: { code: fixture.detailCode },
+      },
+      willRetry: false,
+    });
+
+    expect(gateway.snapshot.lastError).toBe(fixture.message);
+    expect(gateway.snapshot.lastErrorCode).toBe(fixture.detailCode);
+  });
+
+  it("preserves an outer code when a transport failure has no structured detail", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({
+      code: 1006,
+      reason: "websocket error",
+      error: { code: "UNAVAILABLE", message: "WebSocket connection failed" },
+      willRetry: false,
+    });
+
+    expect(gateway.snapshot.lastError).toBe("WebSocket connection failed");
+    expect(gateway.snapshot.lastErrorCode).toBe("UNAVAILABLE");
   });
 
   it("does not invent an assistant agent id before the gateway advertises one", () => {

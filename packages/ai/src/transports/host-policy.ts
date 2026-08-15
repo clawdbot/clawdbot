@@ -59,6 +59,7 @@ export function transformTransportMessages(
   options?: {
     normalizeSameModelToolCallIds?: boolean;
     preserveCrossModelToolCallThoughtSignature?: boolean;
+    preserveUnframedToolResults?: boolean;
   },
 ): Context["messages"] {
   return getAiTransportHost().transformTransportMessages(

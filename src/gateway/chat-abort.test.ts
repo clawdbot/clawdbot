@@ -8,7 +8,6 @@ import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   abortChatRunById,
   abortChatRunsForProvider,
-  abortTrackedChatRunById,
   boundInFlightRunSnapshotForChatHistory,
   isChatStopCommandText,
   registerChatAbortController,
@@ -594,7 +593,7 @@ describe("abortChatRunById", () => {
       name: "preserves default-agent global delivery through tracked maintenance aborts",
       runId: "run-tracked-global",
       createEntry: () => ({ ...createActiveEntry("global"), agentId: "main" }),
-      abort: abortTrackedChatRunById,
+      abort: abortChatRunById,
     },
   ]) {
     it(testCase.name, () => {
@@ -606,6 +605,8 @@ describe("abortChatRunById", () => {
       expect(result).toEqual({ aborted: true });
       const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
       expect(payload.agentId).toBe("main");
+      const delivery = { sessionKeys: ["agent:main:global", "global"] };
+      expect(ops.broadcast).toHaveBeenCalledWith("chat", payload, delivery);
       expect(ops.nodeSendToSession).toHaveBeenCalledWith("agent:main:global", "chat", payload);
       expect(ops.nodeSendToSession).toHaveBeenCalledWith("global", "chat", payload);
     });
@@ -684,7 +685,7 @@ describe("abortChatRunsForProvider", () => {
       authProviderId: "openrouter",
     });
     const result = abortChatRunsForProvider(ops, {
-      cfg: {},
+      cfg: { agents: { list: [{ id: "main" }, { id: "writer" }] } },
       providerId: "openrouter",
       stopReason: "auth-revoked",
     });
@@ -712,7 +713,7 @@ describe("abortChatRunsForProvider", () => {
     ops.chatAbortControllers.set("run-main", mainEntry);
 
     const result = abortChatRunsForProvider(ops, {
-      cfg: { agents: { list: [{ id: "main", default: true }, { id: "writer" }] } },
+      cfg: { agents: { list: [{ id: "main" }, { id: "writer" }] } },
       providerId: "openrouter",
       agentId: "writer",
       stopReason: "auth-revoked",

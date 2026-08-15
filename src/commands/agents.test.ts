@@ -19,7 +19,7 @@ function requireAgentSummary(
 }
 
 describe("agents helpers", () => {
-  it("buildAgentSummaries includes default + configured agents", () => {
+  it("buildAgentSummaries includes configured agents without inventing a fleet default", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -29,7 +29,6 @@ describe("agents helpers", () => {
         entries: {
           main: {},
           work: {
-            default: true,
             name: "Work",
             workspace: "/work-ws",
             agentDir: "/state/agents/work/agent",
@@ -59,7 +58,8 @@ describe("agents helpers", () => {
     expect(work.workspace).toBe(path.resolve("/work-ws"));
     expect(work.agentDir).toBe(path.resolve("/state/agents/work/agent"));
     expect(work.bindings).toBe(1);
-    expect(work.isDefault).toBe(true);
+    expect(main.isDefault).toBe(false);
+    expect(work.isDefault).toBe(false);
   });
 
   it("buildAgentSummaries renders local avatars and omits absent avatars", () => {
@@ -69,7 +69,7 @@ describe("agents helpers", () => {
       const cfg: OpenClawConfig = {
         agents: {
           entries: {
-            main: { default: true, workspace },
+            main: { workspace },
             work: { workspace, identity: { avatar: "avatar.png" } },
           },
         },
@@ -106,10 +106,23 @@ describe("agents helpers", () => {
     expect(work?.model).toBe("anthropic/claude");
   });
 
-  it("applyAgentConfig marks the first roster entry as default", () => {
+  it("applyAgentConfig leaves a first roster entry trivially sole", () => {
     const next = applyAgentConfig({}, { agentId: "work", name: "Work" });
 
-    expect(next.agents?.entries).toEqual({ work: { name: "Work", default: true } });
+    expect(next.agents?.entries).toEqual({ work: { name: "Work" } });
+    expect(requireAgentSummary(buildAgentSummaries(next), "work").isDefault).toBe(true);
+  });
+
+  it("preserves the sole agent as the ambient system owner when adding a second agent", () => {
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+
+    const next = applyAgentConfig(cfg, { agentId: "helper", name: "Helper" });
+
+    expect(next.agents).toMatchObject({
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: "main" } },
+      entries: { main: {}, helper: { name: "Helper" } },
+    });
   });
 
   it("applyAgentConfig clears a model override", () => {
@@ -117,7 +130,7 @@ describe("agents helpers", () => {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.6-luna" } },
         entries: {
-          work: { default: true, workspace: "/work-ws", model: "anthropic/claude" },
+          work: { workspace: "/work-ws", model: "anthropic/claude" },
         },
       },
     };
@@ -421,9 +434,13 @@ describe("agents helpers", () => {
   it("pruneAgentConfig removes agent, bindings, and allowlist entries", () => {
     const cfg: OpenClawConfig = {
       agents: {
-        defaults: { subagents: { allowAgents: ["work", "home"] } },
+        defaults: {
+          heartbeat: { agentId: "work", every: "5m" },
+          systemAgent: { agentId: "WORK" },
+          subagents: { allowAgents: ["work", "home"] },
+        },
         entries: {
-          work: { default: true, workspace: "/work-ws" },
+          work: { workspace: "/work-ws" },
           home: {
             workspace: "/home-ws",
             subagents: { allowAgents: ["WORK", "home"] },
@@ -437,6 +454,7 @@ describe("agents helpers", () => {
       tools: {
         agentToAgent: { enabled: true, allow: ["work", "home"] },
       },
+      talk: { agentId: "work", provider: "test-provider" },
     };
 
     const result = pruneAgentConfig(cfg, "work");
@@ -447,8 +465,48 @@ describe("agents helpers", () => {
     ]);
     expect(result.config.tools?.agentToAgent?.allow).toEqual(["home"]);
     expect(result.config.agents?.defaults?.subagents?.allowAgents).toEqual(["home"]);
+    expect(result.config.agents?.defaults?.heartbeat).toEqual({ every: "5m" });
+    expect(result.config.agents?.defaults?.systemAgent).toBeUndefined();
+    expect(result.config.talk).toEqual({ provider: "test-provider" });
     expect(result.config.agents?.entries?.home?.subagents?.allowAgents).toEqual(["home"]);
     expect(result.removedBindings).toBe(1);
     expect(result.removedAllow).toBe(1);
+    expect(result.clearedOwnerRefs).toEqual([
+      "agents.defaults.heartbeat.agentId",
+      "agents.defaults.systemAgent.agentId",
+      "talk.agentId",
+    ]);
+  });
+
+  it("pruneAgentConfig pins a survivor's workspace before the roster becomes sole", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { workspace: "/srv/fleet" },
+        entries: { ops: {}, research: {} },
+      },
+    };
+
+    const result = pruneAgentConfig(cfg, "ops");
+
+    expect(result.config.agents?.entries).toEqual({
+      research: { workspace: "/srv/fleet/research" },
+    });
+  });
+
+  it("removes ambient heartbeat policy when its owner leaves a surviving fleet", () => {
+    const result = pruneAgentConfig(
+      {
+        agents: {
+          ownership: "explicit",
+          defaults: { heartbeat: { agentId: "ops", every: "5m" } },
+          entries: { ops: {}, research: {}, writer: {} },
+        },
+      },
+      "ops",
+    );
+
+    expect(result.config.agents?.defaults?.heartbeat).toBeUndefined();
+    expect(result.clearedOwnerRefs).toContain("agents.defaults.heartbeat");
   });
 });

@@ -47,6 +47,7 @@ const upsertAuthProfile = vi.hoisted(() => vi.fn(() => ({ version: 1, profiles: 
 vi.mock("../agents/auth-profiles.js", () => ({
   upsertAuthProfile,
   upsertAuthProfileWithLock: upsertAuthProfile,
+  upsertAuthProfileWithLockOrThrow: upsertAuthProfile,
 }));
 
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "default"));

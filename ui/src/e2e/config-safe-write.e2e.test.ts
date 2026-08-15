@@ -129,13 +129,16 @@ suite.define(() => {
         });
 
         expect((await page.goto(`${suite.server.baseUrl}settings/labs`))?.status()).toBe(200);
+        const labsLink = page.locator('.settings-sidebar__item[href="/settings/labs"]');
+        await expect.poll(() => labsLink.getAttribute("aria-current")).toBe("page");
         const codeModeRow = settingsRow(page, "Code Mode");
-        await codeModeRow.getByRole("switch", { name: "Code Mode", exact: true }).waitFor();
+        const codeModeSwitch = codeModeRow.getByRole("switch", { name: "Code Mode", exact: true });
+        await codeModeSwitch.waitFor();
         await expect.poll(() => codeModeRow.textContent()).toContain("Default: Enabled");
 
         const configGetsBeforePatch = (await gateway.getRequests("config.get")).length;
         await gateway.deferNext("config.patch");
-        await codeModeRow.getByRole("button", { name: "Reset to default" }).click();
+        await codeModeRow.locator("wa-switch").click();
         const patchParams = mutationParams(await gateway.waitForRequest("config.patch"));
         expect(patchParams.baseHash).toBe("snapshot-1");
         expect(patchParams.sessionKey).toBe("main");
@@ -151,14 +154,18 @@ suite.define(() => {
         });
         await expect
           .poll(async () => (await gateway.getRequests("config.get")).length)
-          .toBeGreaterThan(configGetsBeforePatch);
+          .toBe(configGetsBeforePatch + 1);
         await expect.poll(() => codeModeRow.textContent()).toContain("Using default: Enabled");
+        await expect.poll(() => labsLink.getAttribute("aria-current")).toBe("page");
+        await capture(page, "00-labs-canonical-refresh.png");
 
         expect(
           (
             await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`)
           )?.status(),
         ).toBe(200);
+        const advancedLink = page.locator('.settings-sidebar__item[href="/settings/advanced"]');
+        await expect.poll(() => advancedLink.getAttribute("aria-current")).toBe("page");
         const endpoint = page.getByRole("textbox", { name: "Endpoint", exact: true });
         await expect.poll(() => endpoint.inputValue()).toBe("local-api");
 

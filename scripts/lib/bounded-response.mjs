@@ -1,4 +1,13 @@
 // Reads response bodies with byte limits, abort handling, and timeout cancellation.
+/**
+ * @typedef {object} BoundedResponseOptions
+ * @property {((message: string) => Error)=} createTooLargeError
+ * @property {((label: string, maxBytes: number) => string)=} formatTooLargeMessage
+ * @property {AbortSignal=} signal
+ * @property {Promise<never>=} timeoutPromise
+ */
+
+/** @param {string} label @param {number} maxBytes */
 function defaultTooLargeMessage(label, maxBytes) {
   return `${label} response body exceeded ${maxBytes} bytes`;
 }
@@ -7,6 +16,7 @@ function defaultTooLargeError(message) {
   return new Error(message);
 }
 
+/** @param {string} message @returns {Error & { code: "ETOOBIG" }} */
 export function createBoundedResponseTooLargeError(message) {
   return Object.assign(new Error(message), { code: "ETOOBIG" });
 }
@@ -19,10 +29,19 @@ function cancelReaderSoon(reader) {
 
 function parseContentLengthHeader(headers) {
   const raw = headers.get("content-length");
-  if (!raw || !/^\d+$/u.test(raw)) {
+  if (!raw) {
     return undefined;
   }
-  const parsed = Number(raw);
+  // This is post-framing early rejection, not framing validation.
+  const values = raw.split(",").map((value) => value.trim());
+  if (values.some((value) => !/^\d+$/u.test(value))) {
+    return undefined;
+  }
+  const canonical = values.map((value) => value.replace(/^0+(?=\d)/u, ""));
+  if (canonical.some((value) => value !== canonical[0])) {
+    return undefined;
+  }
+  const parsed = Number(canonical[0]);
   return Number.isSafeInteger(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 
@@ -81,7 +100,13 @@ async function readResponseChunkWithTimeout(reader, label, signal, timeoutPromis
   }
 }
 
-/** Read response bytes while enforcing max bytes before and during streaming. */
+/**
+ * Read response bytes while enforcing max bytes before and during streaming.
+ * @param {Response} response
+ * @param {string} label
+ * @param {number} maxBytes
+ * @param {BoundedResponseOptions} [options]
+ */
 export async function readBoundedResponseBytes(response, label, maxBytes, options = {}) {
   const formatTooLargeMessage = options.formatTooLargeMessage ?? defaultTooLargeMessage;
   const createTooLargeError = options.createTooLargeError ?? defaultTooLargeError;
@@ -133,13 +158,19 @@ export async function readBoundedResponseBytes(response, label, maxBytes, option
   return Buffer.concat(chunks, totalBytes);
 }
 
-/** Read response text while enforcing max bytes before and during streaming. */
+/**
+ * Read response text while enforcing max bytes before and during streaming.
+ * @param {Response} response
+ * @param {string} label
+ * @param {number} maxBytes
+ * @param {BoundedResponseOptions} [options]
+ */
 export async function readBoundedResponseText(response, label, maxBytes, options = {}) {
   const bytes = await readBoundedResponseBytes(response, label, maxBytes, options);
   return new TextDecoder().decode(bytes);
 }
 
-function toLintErrorObject(value, fallbackMessage) {
+export function toLintErrorObject(value, fallbackMessage) {
   if (value instanceof Error) {
     return value;
   }

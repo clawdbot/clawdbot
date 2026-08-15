@@ -115,8 +115,13 @@ suite.define(() => {
     await page.getByText("OpenCode release review", { exact: true }).click();
     await expect.poll(() => page.getByText("OpenCode transcript loaded").count()).toBe(1);
     await page.getByText("Pi architecture notes", { exact: true }).click();
-    await expect.poll(() => page.getByText("Pi transcript loaded").count()).toBe(1);
-    expect(await page.locator(".agent-chat__composer-combobox > textarea").isDisabled()).toBe(true);
+    const piPane = page
+      .locator("openclaw-chat-pane.chat-pane-cache__pane--visible")
+      .filter({ hasText: "Pi transcript loaded" });
+    await piPane.getByText("Pi transcript loaded").waitFor();
+    expect(await piPane.locator(".agent-chat__composer-combobox > textarea").isDisabled()).toBe(
+      true,
+    );
     expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(2);
 
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();

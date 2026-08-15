@@ -12,8 +12,7 @@ import {
   validatePollParams,
   validateSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
+import { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
@@ -78,8 +77,10 @@ import { resolveGatewayConversationReadOrigin } from "../conversation-read-origi
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
+import { hasActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import {
   resolveGatewayInflightRequest as resolveIdempotentGatewayRequest,
   runGatewayInflightWork,
@@ -215,6 +216,7 @@ function resolveTrustedMessageActionToolContext(params: {
       sourceReplySessionKey: string | undefined;
       sourceReplyFinal: boolean | undefined;
       sourceReplyToolCallId: string | undefined;
+      runtimeAgentId: string | undefined;
     }
   | { ok: false; error: ReturnType<typeof errorShape> } {
   // Current-turn metadata can relax channel read policy. It must come from the
@@ -231,6 +233,7 @@ function resolveTrustedMessageActionToolContext(params: {
       sourceReplySessionKey: undefined,
       sourceReplyFinal: undefined,
       sourceReplyToolCallId: undefined,
+      runtimeAgentId: undefined,
     };
   }
   if (Date.now() >= messageActionContext.expiresAtMs) {
@@ -259,8 +262,8 @@ function resolveTrustedMessageActionToolContext(params: {
     (sessionAgentId && normalizeAgentId(sessionAgentId) !== identityAgentId) ||
     (messageActionContext.sessionId && requestSessionId !== messageActionContext.sessionId) ||
     (sourceReplySessionKey &&
-      (!sourceReplySessionAgentId ||
-        normalizeAgentId(sourceReplySessionAgentId) !== identityAgentId))
+      sourceReplySessionAgentId &&
+      normalizeAgentId(sourceReplySessionAgentId) !== identityAgentId)
   ) {
     return {
       ok: false,
@@ -279,6 +282,7 @@ function resolveTrustedMessageActionToolContext(params: {
     sourceReplySessionKey,
     sourceReplyFinal: messageActionContext.sourceReplyFinal,
     sourceReplyToolCallId: messageActionContext.sourceReplyToolCallId,
+    runtimeAgentId: identityAgentId,
   };
 }
 
@@ -528,12 +532,14 @@ async function withMessageOperationRoute<
   bindingAccountIds: readonly unknown[];
   routeAccountIds: (binding: MessageOperationRouteBinding | undefined) => readonly unknown[];
   conflictMessage: string;
+  authorize?: () => boolean;
   resolveChannel: (requestChannel: unknown) => Promise<T | undefined>;
   work: (
     route: T & {
       accountId: string | undefined;
       idem: string;
       dedupeKey: string;
+      authorize: () => boolean;
     },
   ) => Promise<InflightResult>;
 }): Promise<void> {
@@ -611,6 +617,16 @@ async function withMessageOperationRoute<
       await inflight.done;
       return;
     }
+    // Routing and attachment preparation may yield while the admitted run
+    // closes. Revalidate before any provider-visible message side effect.
+    if (params.authorize && !params.authorize()) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "agent runtime authority is no longer active"),
+      );
+      return;
+    }
     retainMessageOperationRouteBinding({
       context: params.context,
       binding,
@@ -622,6 +638,7 @@ async function withMessageOperationRoute<
         accountId: accountRoute.accountId,
         idem: inflight.idem,
         dedupeKey: inflight.dedupeKey,
+        authorize: params.authorize ?? (() => true),
       })
       .finally(() => {
         refreshMessageOperationRouteBinding({
@@ -831,6 +848,20 @@ function createGatewayInflightUnavailableFailure(params: {
   });
 }
 
+function createGatewayInflightAuthorityFailure(params: {
+  context: GatewayRequestContext;
+  dedupeKey: string;
+  channel: string;
+}): InflightResult {
+  return createGatewayInflightResult({
+    ...params,
+    result: {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "agent runtime authority is no longer active"),
+    },
+  });
+}
+
 async function mirrorDeliveredSourceReplyToTranscriptBestEffort(params: {
   context: GatewayRequestContext;
   mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0];
@@ -921,6 +952,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         binding?.reservedRoute?.accountId,
       ],
       conflictMessage: "message.action accountId does not match params.accountId",
+      authorize: () => hasActiveAgentRuntimeAuthority(client, context),
       resolveChannel: async (requestChannel) => {
         const resolved = await resolveRequestedChannel({
           requestChannel,
@@ -948,12 +980,25 @@ export const sendHandlers: GatewayRequestHandlers = {
         }
         return { cfg, channel, plugin };
       },
-      work: async ({ cfg, channel, accountId, dedupeKey }) => {
+      work: async ({ cfg, channel, accountId, dedupeKey, authorize }) => {
         try {
           const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
-          const agentId =
-            normalizeOptionalString(request.agentId) ??
-            (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
+          const requestedAgentId =
+            normalizeOptionalString(request.agentId) ?? trustedContext.runtimeAgentId;
+          const sessionOwner = sessionKey
+            ? resolveRequestedSessionAgentId(cfg, sessionKey, requestedAgentId)
+            : undefined;
+          if (sessionOwner && !sessionOwner.ok) {
+            return { ok: false, error: sessionOwner.error, meta: { channel } };
+          }
+          const agentId = sessionOwner?.agentId ?? requestedAgentId;
+          const sourceReplySessionKey = trustedContext.sourceReplySessionKey;
+          const sourceReplyOwner = sourceReplySessionKey
+            ? resolveRequestedSessionAgentId(cfg, sourceReplySessionKey, agentId)
+            : undefined;
+          if (sourceReplyOwner && !sourceReplyOwner.ok) {
+            return { ok: false, error: sourceReplyOwner.error, meta: { channel } };
+          }
           if (accountId) {
             request.params.accountId = accountId;
           }
@@ -999,7 +1044,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             cfg,
             accountId,
             currentAccountId: trustedContext.requesterAccountId,
-            sessionKey: trustedContext.sourceReplySessionKey ?? sessionKey,
+            sessionKey: sourceReplySessionKey ?? sessionKey,
             sessionId: trustedContext.sessionId,
             agentId,
             toolContext: trustedContext.toolContext,
@@ -1009,10 +1054,25 @@ export const sendHandlers: GatewayRequestHandlers = {
               ? { sourceReplyFinal: trustedContext.sourceReplyFinal }
               : {}),
           };
-          const terminalDeliveryReceipt =
+          const terminalDeliveryStart =
             trustedContext.sourceReplyFinal === true
               ? await beginTerminalSourceReplyDelivery(sourceReplyMirror)
               : undefined;
+          if (terminalDeliveryStart && "outcome" in terminalDeliveryStart) {
+            return createGatewayInflightSuccess({
+              context,
+              dedupeKey,
+              payload: terminalDeliveryStart.result,
+              channel,
+            });
+          }
+          const terminalDeliveryReceipt = terminalDeliveryStart;
+          // Attachment and receipt preparation can outlive the admitted run.
+          // Close the receipt and stop before the provider-owned action boundary.
+          if (!authorize()) {
+            await cancelTerminalSourceReplyDelivery(terminalDeliveryReceipt);
+            return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
+          }
           const gatewayClientScopes = client?.connect?.scopes ?? [];
           const handled = await dispatchChannelMessageAction({
             channel,
@@ -1135,6 +1195,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       bindingAccountIds: [request.accountId],
       routeAccountIds: (binding) => [requestedAccountId, binding?.reservedRoute?.accountId],
       conflictMessage: "send account selections do not match",
+      authorize: () => hasActiveAgentRuntimeAuthority(client, context),
       resolveChannel: async (requestChannel) => {
         const resolved = await resolveInternalDeliveryChannel(requestChannel, context);
         if (resolved.kind !== "ready") {
@@ -1154,7 +1215,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         }
         return { cfg, channel, plugin };
       },
-      work: async ({ cfg, channel, accountId, idem, dedupeKey }) => {
+      work: async ({ cfg, channel, accountId, idem, dedupeKey, authorize }) => {
         try {
           const resolvedTarget = resolveGatewayOutboundTarget({
             channel,
@@ -1182,11 +1243,29 @@ export const sendHandlers: GatewayRequestHandlers = {
           const providedSessionKey =
             normalizeSessionKeyPreservingOpaquePeerIds(request.sessionKey) || undefined;
           const explicitAgentId = normalizeOptionalString(request.agentId);
-          const sessionAgentId = providedSessionKey
-            ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })
+          const sessionOwner = providedSessionKey
+            ? resolveRequestedSessionAgentId(cfg, providedSessionKey, explicitAgentId)
             : undefined;
-          const defaultAgentId = resolveSessionAgentId({ config: cfg });
-          const effectiveAgentId = explicitAgentId ?? sessionAgentId ?? defaultAgentId;
+          if (sessionOwner && !sessionOwner.ok) {
+            return { ok: false, error: sessionOwner.error, meta: { channel } };
+          }
+          const sessionAgentId = sessionOwner?.agentId;
+          const implicitAgent =
+            !explicitAgentId && !sessionAgentId
+              ? resolveRequestedSessionAgentId(cfg, "main")
+              : undefined;
+          if (implicitAgent && !implicitAgent.ok) {
+            return { ok: false, error: implicitAgent.error, meta: { channel } };
+          }
+          const effectiveAgentId =
+            explicitAgentId ?? sessionAgentId ?? (implicitAgent?.ok ? implicitAgent.agentId : null);
+          if (!effectiveAgentId) {
+            return {
+              ok: false,
+              error: errorShape(ErrorCodes.INVALID_REQUEST, "agent selection is required"),
+              meta: { channel },
+            };
+          }
           const sendArgs: Record<string, unknown> = {
             mediaUrl,
             mediaUrls,
@@ -1287,7 +1366,12 @@ export const sendHandlers: GatewayRequestHandlers = {
             sessionKey: outboundSessionKey,
             conversationType: outboundRoute?.chatType,
           });
-          const send = await sendDurableMessageBatch({
+          // Target, attachment, route, and session preparation may all yield.
+          // The durable provider handoff is the final authority commit point.
+          if (!authorize()) {
+            return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
+          }
+          const send = await sendDurableMessageBatchCore({
             cfg,
             channel,
             to: deliveryTarget,
@@ -1362,6 +1446,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       bindingAccountIds: [request.accountId],
       routeAccountIds: (binding) => [request.accountId, binding?.reservedRoute?.accountId],
       conflictMessage: "poll account selections do not match",
+      authorize: () => hasActiveAgentRuntimeAuthority(client, context),
       resolveChannel: async (requestChannel) => {
         const resolved = await resolveRequestedChannel({
           requestChannel,
@@ -1411,7 +1496,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         }
         return { cfg, channel, plugin, outbound, sendPoll: outbound.sendPoll };
       },
-      work: async ({ cfg, channel, accountId, idem, dedupeKey, outbound, sendPoll }) => {
+      work: async ({ cfg, channel, accountId, idem, dedupeKey, authorize, outbound, sendPoll }) => {
         const poll = {
           question: request.question,
           options: request.options,
@@ -1433,6 +1518,9 @@ export const sendHandlers: GatewayRequestHandlers = {
           const normalized = outbound.pollMaxOptions
             ? normalizePollInput(poll, { maxOptions: outbound.pollMaxOptions })
             : normalizePollInput(poll);
+          if (!authorize()) {
+            return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
+          }
           const result = await sendPoll({
             cfg,
             to: resolvedTarget.to,

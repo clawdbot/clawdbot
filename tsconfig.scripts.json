@@ -1,6 +1,8 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    // Lifecycle hooks and compatibility shims must stay executable by plain Node.
+    "allowJs": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "tsBuildInfoFile": ".artifacts/tsgo-cache/scripts.tsbuildinfo"

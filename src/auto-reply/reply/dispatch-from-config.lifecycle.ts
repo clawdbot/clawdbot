@@ -178,7 +178,8 @@ export function createDispatchReplyOperationCoordinator(params: {
       phase === "dispatch" &&
       replyTurnKind === "visible" &&
       params.replyOptions?.turnAdoptionLifecycle !== undefined &&
-      activeReplyOperation !== undefined;
+      activeReplyOperation !== undefined &&
+      activeReplyOperation.turnKind !== "heartbeat";
     if (allowGatewayQueueResolution) {
       // Gateway turns need to reach getReplyFromConfig while the owner is active;
       // that layer applies the session's steer/followup/collect/drop policy.
@@ -371,6 +372,7 @@ export function createDispatchReplyOperationCoordinator(params: {
   const getQueuedFollowupAbortSignal = () =>
     dispatchReplyOperation?.abortSignal ?? params.replyOptions?.abortSignal;
   let observedReplyDelivery = false;
+  let agentRunTerminalOutcome: "completed" | "failed" | undefined;
   const markObservedReplyDelivery = async () => {
     if (observedReplyDelivery) {
       return;
@@ -378,17 +380,13 @@ export function createDispatchReplyOperationCoordinator(params: {
     observedReplyDelivery = true;
     await params.replyOptions?.onObservedReplyDelivery?.();
   };
-  const getReplyOptions = () => {
+  const getReplyOptions = (): DispatchFromConfigParams["replyOptions"] => {
     const abortSignal = getDispatchAbortSignal();
-    const onAgentRunStart = params.messageAuditTerminal
-      ? (runId: string) => {
-          params.messageAuditTerminal?.observeRunId(runId);
-          params.replyOptions?.onAgentRunStart?.(runId);
-        }
-      : undefined;
-    if (!abortSignal && !onAgentRunStart) {
-      return params.replyOptions;
-    }
+    const onAgentRunStart = (runId: string) => {
+      agentRunTerminalOutcome = "completed";
+      params.messageAuditTerminal?.observeRunId(runId);
+      params.replyOptions?.onAgentRunStart?.(runId);
+    };
     return {
       ...params.replyOptions,
       ...(abortSignal
@@ -397,7 +395,7 @@ export function createDispatchReplyOperationCoordinator(params: {
             queuedFollowupAbortSignal: getQueuedFollowupAbortSignal(),
           }
         : {}),
-      ...(onAgentRunStart ? { onAgentRunStart } : {}),
+      onAgentRunStart,
       ...(dispatchReplyOperation ? { replyOperation: dispatchReplyOperation } : {}),
     };
   };
@@ -413,7 +411,10 @@ export function createDispatchReplyOperationCoordinator(params: {
     }
   };
 
-  const failDispatchReplyOperation = (error: unknown) => {
+  const failDispatchReplyOperation = (error: unknown, terminalOutcome?: "failed") => {
+    if (terminalOutcome === "failed" && agentRunTerminalOutcome === "completed") {
+      agentRunTerminalOutcome = "failed";
+    }
     const completionBarrier = waitForDispatchLifecycleWorkAndDelivery();
     void releasePreDispatchLifecycleAdmission(() => waitForReplyDispatcherIdle(params.dispatcher));
     if (!dispatchReplyOperation) {
@@ -454,6 +455,7 @@ export function createDispatchReplyOperationCoordinator(params: {
     turnLedger,
     ensureDispatchReplyOperation,
     failDispatchReplyOperation,
+    getAgentRunTerminalOutcome: () => agentRunTerminalOutcome,
     getDispatchAbortOperation: () => dispatchAbortOperation,
     getDispatchAbortSignal,
     getDispatchReplyOperation: () => dispatchReplyOperation,

@@ -5,6 +5,7 @@ import type {
   AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildAssistantMessage,
   hasOwnKeys,
@@ -177,7 +178,7 @@ export function attachEventBridge(
     if (!projection) {
       return;
     }
-    const source = readString(event.data.source);
+    const source = readNonEmptyString(event.data.source);
     const transformedContent =
       typeof event.data.transformedContent === "string" ? event.data.transformedContent : undefined;
     const openClawMeta = projectSdkUserMetadata(event.data.attachments, source);
@@ -229,7 +230,7 @@ export function attachEventBridge(
     if (!isRootSessionEvent(event)) {
       return;
     }
-    const messageId = readString(event.data.messageId) ?? "assistant-message";
+    const messageId = readNonEmptyString(event.data.messageId) ?? "assistant-message";
     const delta = event.data.deltaContent;
     if (!delta) {
       return;
@@ -266,7 +267,7 @@ export function attachEventBridge(
     if (!isRootSessionEvent(event)) {
       return;
     }
-    const reasoningId = readString(event.data.reasoningId) ?? "assistant-reasoning";
+    const reasoningId = readNonEmptyString(event.data.reasoningId) ?? "assistant-reasoning";
     const delta = event.data.deltaContent;
     if (!delta) {
       return;
@@ -311,7 +312,7 @@ export function attachEventBridge(
       return;
     }
     usage = normalizeCopilotUsage(event.data);
-    const apiCallId = readString(event.data.apiCallId);
+    const apiCallId = readNonEmptyString(event.data.apiCallId);
     if (apiCallId && usage) {
       usageByApiCallId.set(apiCallId, usage);
     }
@@ -350,7 +351,7 @@ export function attachEventBridge(
       toolMetas[toolMetaIndex] = {
         ...(meta ? { meta } : {}),
         toolName,
-        ...(event.data.success ? {} : { isError: true }),
+        isError: !event.data.success,
       };
     }
     const projection = options.transcriptProjection;
@@ -664,7 +665,7 @@ export function attachEventBridge(
       transcriptAssistantTexts: [event.data.content ?? ""],
       ...(transcriptReasoningText ? { transcriptReasoningText } : {}),
     };
-    const apiCallId = readString(event.data.apiCallId);
+    const apiCallId = readNonEmptyString(event.data.apiCallId);
     if (!apiCallId) {
       if (projectedAssistantMessageIdsWithoutApiCall.has(event.data.messageId)) {
         options.transcriptProjection?.journal.markReplayIncomplete();
@@ -967,10 +968,6 @@ function splitPlanText(text: string | undefined): string[] {
     .split(/\r?\n/)
     .map((line) => line.trim().replace(/^[-*]\s+/, ""))
     .filter((line) => line.length > 0);
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function registerListener<K extends SessionEventType>(

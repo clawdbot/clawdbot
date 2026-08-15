@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { resolve, sep } from "node:path";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { ClawAddPlan } from "./types.js";
@@ -74,7 +75,7 @@ export async function applyClawWorkspaceUpdate(
       try {
         await revert();
       } catch (error) {
-        failures.push(error instanceof Error ? error.message : String(error));
+        failures.push(coerceErrorMessage(error));
       }
     }
     if (failures.length > 0) {
@@ -194,7 +195,7 @@ export async function applyClawWorkspaceUpdate(
       await rollback();
     } catch (rollbackError) {
       throw new ClawWorkspaceUpdateError(
-        `${error instanceof Error ? error.message : String(error)}; rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+        `${coerceErrorMessage(error)}; rollback failed: ${coerceErrorMessage(rollbackError)}`,
         true,
       );
     }

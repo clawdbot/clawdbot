@@ -12,6 +12,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   SessionCatalogHost,
+  SessionCatalogEntrySnapshot,
   SessionCatalogProvider,
   SessionCatalogSession,
   SessionCatalogTerminalPlan,
@@ -37,7 +38,7 @@ import {
   readLocalPiTranscriptPage,
   type PiSessionPage,
 } from "./pi-session-catalog.js";
-import { piSessionStoreAvailable } from "./pi-session-paths.js";
+import { piSessionStore, piSessionStoreAvailable } from "./pi-session-paths.js";
 import { checkPiUpstreamActivity, linkContinuedPiSession } from "./pi-session-upstream-activity.js";
 
 const LOCAL_HOST_ID = "gateway";
@@ -147,6 +148,21 @@ function setCatalogCapabilities(
   return page;
 }
 
+function projectPiAdoptedSessions(
+  page: PiSessionPage,
+  adopted: ReadonlyMap<string, string>,
+): PiSessionPage {
+  return {
+    ...page,
+    sessions: page.sessions.map((session) => {
+      const sessionKey = adopted.get(
+        sessionCatalogAdoptedSourceKey(LOCAL_HOST_ID, session.threadId),
+      );
+      return sessionKey ? { ...session, sessionKey } : session;
+    }),
+  };
+}
+
 async function listPiNodeHost(
   runtime: PluginRuntime,
   query: Parameters<SessionCatalogProvider["list"]>[0],
@@ -246,9 +262,18 @@ async function listPiHosts(
 ): Promise<SessionCatalogHost[]> {
   const runtime = api.runtime;
   const canContinue = resolvePiContinuationAvailability(api).available;
+  const adopted = query.sessionEntries
+    ? listAdoptedPiSessions(api, query.sessionEntries)
+    : new Map<string, string>();
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
   const hosts: SessionCatalogHost[] = [];
-  if ((!requested || requested.has(LOCAL_HOST_ID)) && piSessionStoreAvailable(process.env)) {
+  const wantsLocal = !requested || requested.has(LOCAL_HOST_ID);
+  const localStore = wantsLocal ? piSessionStore(process.env) : undefined;
+  if (
+    localStore &&
+    (query.allowProcessHomeFallback !== false || !localStore.usesProcessHomeFallback) &&
+    piSessionStoreAvailable(process.env, localStore)
+  ) {
     try {
       hosts.push({
         hostId: LOCAL_HOST_ID,
@@ -260,15 +285,18 @@ async function listPiHosts(
           ...(query.search ? { searchTerm: query.search } : {}),
           cursor: query.cursors?.[LOCAL_HOST_ID],
         }).then((page) =>
-          setCatalogCapabilities(page, {
-            canContinue,
-            canOpenTerminal:
-              resolveNodeHostExecutable("pi", {
-                env: process.env,
-                pathEnv: process.env.PATH ?? "",
-                strategy: "fallback",
-              }) !== undefined,
-          }),
+          projectPiAdoptedSessions(
+            setCatalogCapabilities(page, {
+              canContinue,
+              canOpenTerminal:
+                resolveNodeHostExecutable("pi", {
+                  env: process.env,
+                  pathEnv: process.env.PATH ?? "",
+                  strategy: "fallback",
+                }) !== undefined,
+            }),
+            adopted,
+          ),
         )),
       });
     } catch {
@@ -332,11 +360,15 @@ function resolvePiContinuationAvailability(
   return executable ? { available: true } : { available: false, message: "Pi CLI is unavailable" };
 }
 
-function listAdoptedPiSessions(api: OpenClawPluginApi): Map<string, string> {
+function listAdoptedPiSessions(
+  api: OpenClawPluginApi,
+  sessionEntries?: SessionCatalogEntrySnapshot,
+): Map<string, string> {
   return listAdoptedSessionCatalogSessions({
     config: currentPiCatalogConfig(api),
     pluginId: api.id,
     runtime: api.runtime,
+    sessionEntries,
     sourceFromEntry: (entry) => {
       const acpx = isRecord(entry.pluginExtensions?.acpx) ? entry.pluginExtensions.acpx : undefined;
       const marker = acpx && isRecord(acpx.piSessionCatalog) ? acpx.piSessionCatalog : undefined;
@@ -507,6 +539,7 @@ async function readPiTranscript(
     throw new Error("cursor is invalid");
   }
   if (request.hostId === LOCAL_HOST_ID) {
+    assertPiLocalAccess(request.hostId, request.allowProcessHomeFallback);
     return await readLocalPiTranscriptPage({
       threadId: request.threadId,
       ...(request.limit ? { limit: request.limit } : {}),
@@ -542,6 +575,16 @@ async function readPiTranscript(
     hostId: request.hostId,
     label: nodeLabel(node),
   };
+}
+
+function assertPiLocalAccess(hostId: string, allowProcessHomeFallback?: boolean): void {
+  if (
+    hostId === LOCAL_HOST_ID &&
+    allowProcessHomeFallback === false &&
+    piSessionStore(process.env).usesProcessHomeFallback
+  ) {
+    throw new PiCatalogParamsError("local Pi sessions are unavailable in isolated state");
+  }
 }
 
 export async function listPiSessions(paramsJSON?: string | null): Promise<string> {
@@ -587,10 +630,23 @@ export function createPiSessionCatalogRuntime(api: OpenClawPluginApi) {
   return {
     list: async (query) => await listPiHosts(api, query),
     read: async (request) => await readPiTranscript(api.runtime, request),
-    continueSession: async (request) =>
-      await continuePiSession(api, request.hostId, request.threadId),
-    checkUpstreamActivity: checkPiUpstreamActivity,
-    openTerminal: async (request) => await openPiTerminal({ runtime: api.runtime, ...request }),
+    continueSession: async (request) => {
+      assertPiLocalAccess(request.hostId, request.allowProcessHomeFallback);
+      return await continuePiSession(api, request.hostId, request.threadId);
+    },
+    checkUpstreamActivity: (probes, policy) =>
+      checkPiUpstreamActivity(
+        probes.filter(
+          (probe) =>
+            probe.hostId !== LOCAL_HOST_ID ||
+            policy?.allowProcessHomeFallback !== false ||
+            !piSessionStore(process.env).usesProcessHomeFallback,
+        ),
+      ),
+    openTerminal: async (request) => {
+      assertPiLocalAccess(request.hostId, request.allowProcessHomeFallback);
+      return await openPiTerminal({ runtime: api.runtime, ...request });
+    },
   } satisfies Pick<
     SessionCatalogProvider,
     "list" | "read" | "continueSession" | "checkUpstreamActivity" | "openTerminal"

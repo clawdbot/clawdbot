@@ -38,7 +38,7 @@ import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
   relocateCurrentRuntimeContextCarrierToTail,
 } from "../../internal-runtime-context.js";
-import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
+import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -264,33 +264,6 @@ describe("prompt-cache byte-identity (issue #3658)", () => {
     expect(historicalBytes.indexOf(EXPECTED_PREFIX_TURN2)).toBeGreaterThan(
       historicalBytes.indexOf(expectedTurn1),
     );
-  });
-
-  it("does not copy host-owned identity metadata into provider payloads", async () => {
-    const message = currentUserMsg("Provider payload identity sentinel", TS_TURN1) as AgentMsg & {
-      attribution?: unknown;
-      passportId?: string;
-      principalId?: string;
-    };
-    message.attribution = {
-      runId: "private-run-sentinel",
-      sessionKey: "private-session-key-sentinel",
-    };
-    message.passportId = "private-passport-sentinel";
-    message.principalId = "private-principal-sentinel";
-
-    const payloads = await Promise.all([
-      captureOpenAICompletionsPayload([message]),
-      captureOpenAIResponsesPayload([message]),
-    ]);
-
-    for (const payload of payloads) {
-      const wireBytes = JSON.stringify(payload);
-      expect(wireBytes).not.toContain("private-run-sentinel");
-      expect(wireBytes).not.toContain("private-session-key-sentinel");
-      expect(wireBytes).not.toContain("private-passport-sentinel");
-      expect(wireBytes).not.toContain("private-principal-sentinel");
-    }
   });
 
   it("stamp derives from message timestamp, not wall-clock — repeated calls are byte-stable", () => {

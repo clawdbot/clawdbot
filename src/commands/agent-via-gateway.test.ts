@@ -11,6 +11,8 @@ import {
   hasExecutionIdentityAdmissionSink,
 } from "../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { acquireGatewayLock, type GatewayLockOptions } from "../infra/gateway-lock.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
@@ -71,6 +73,7 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
         timeoutSeconds: 600,
         ...overrides?.agents?.defaults,
       },
+      ...(overrides?.agents?.ownership ? { ownership: overrides.agents.ownership } : {}),
       ...(overrides?.agents?.list ? { list: overrides.agents.list } : {}),
     },
     session: {
@@ -100,16 +103,37 @@ async function withTempStore(
   }
 }
 
-function mockGatewaySuccessReply(text = "hello") {
-  callGateway.mockResolvedValue({
+function gatewaySuccessReply(text: string) {
+  return {
     runId: "idem-1",
     status: "ok",
-    result: {
-      payloads: [{ text }],
-      meta: { stub: true },
-    },
+    result: { payloads: [{ text }], meta: { stub: true } },
+  };
+}
+
+function mockGatewaySuccessReply(text = "hello") {
+  callGateway.mockResolvedValue(gatewaySuccessReply(text));
+}
+
+function mockRemoteGatewayRoster(ownership: "sole" | "legacy" | "explicit", agents = ["ops"]) {
+  callGateway.mockImplementation(async (requestValue) => {
+    const request = requireRecord(requestValue, "gateway request");
+    return request.method === "agents.list"
+      ? {
+          defaultId: "ops",
+          ownership,
+          selectionRequired: ownership === "explicit",
+          mainKey: "remote-main",
+          scope: "per-sender",
+          agents: agents.map((id) => ({ id })),
+        }
+      : gatewaySuccessReply("remote");
   });
 }
+
+const remoteGatewayConfig = {
+  gateway: { mode: "remote" as const, remote: { url: "wss://gateway.example" } },
+};
 
 function mockLocalAgentReply(text = "local") {
   agentCommand.mockImplementationOnce(async (_opts, rt) => {
@@ -119,6 +143,23 @@ function mockLocalAgentReply(text = "local") {
       meta: { durationMs: 1, agentMeta: { sessionId: "s", provider: "p", model: "m" } },
     } as unknown as Awaited<ReturnType<typeof AgentCommand>>;
   });
+}
+
+function createLocalGatewayLockOptions(
+  stateDir: string,
+  overrides: Partial<GatewayLockOptions> = {},
+): GatewayLockOptions {
+  return {
+    allowInTests: true,
+    env: {
+      ...process.env,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      OPENCLAW_STATE_DIR: stateDir,
+    },
+    lockDir: path.join(stateDir, "gateway-locks"),
+    timeoutMs: 100,
+    ...overrides,
+  };
 }
 
 function requireFirstCallArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
@@ -413,16 +454,277 @@ describe("agentCliCommand", () => {
       vi.stubEnv("OPENCLAW_GATEWAY_URL", gatewayUrl);
     }
     await withTempStore(async () => {
-      mockGatewaySuccessReply();
+      mockRemoteGatewayRoster("sole");
 
       await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
 
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      const request = requireRecord(callGateway.mock.calls[1]?.[0], "gateway request");
       expect(request.clientName).toBe("cli");
       expect(request.mode).toBe("cli");
       expect(request).not.toHaveProperty("scopes");
     }, overrides);
+  });
+
+  it("uses the explicit remote selection and session-id contract", async () => {
+    mockRemoteGatewayRoster("explicit", ["ops", "research"]);
+    await withTempStore(async () => {
+      await expect(agentCliCommand({ message: "hi" }, runtime)).rejects.toMatchObject({
+        code: "AGENT_SELECTION_REQUIRED",
+        agentIds: ["ops", "research"],
+      });
+      expect(callGateway).toHaveBeenCalledOnce();
+    }, remoteGatewayConfig);
+
+    mockRemoteGatewayRoster("explicit", ["ops", "research"]);
+    await withTempStore(async () => {
+      await agentCliCommand({ message: "hi", sessionId: "remote-session" }, runtime);
+      const request = requireRecord(callGateway.mock.calls.at(-1)?.[0], "agent request");
+      expect(request.params).toMatchObject({
+        agentId: undefined,
+        sessionId: "remote-session",
+        sessionKey: undefined,
+      });
+      expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
+    }, remoteGatewayConfig);
+  });
+
+  it("skips remote roster loading for an explicit agent", async () => {
+    mockRemoteGatewayRoster("explicit", ["ops", "research"]);
+
+    await withTempStore(async () => {
+      await agentCliCommand({ message: "hi", agent: "ops" }, runtime);
+
+      const methods = callGateway.mock.calls.map(
+        ([requestValue]) => requireRecord(requestValue, "gateway request").method,
+      );
+      expect(methods).toEqual(["agent"]);
+    }, remoteGatewayConfig);
+  });
+
+  it.each([
+    { ownership: "sole" as const, agents: ["ops"] },
+    { ownership: "legacy" as const, agents: ["ops", "research"] },
+  ])(
+    "delegates a remote $ownership sentinel owner to the gateway",
+    async ({ ownership, agents }) => {
+      mockRemoteGatewayRoster(ownership, agents);
+      await withTempStore(async () => {
+        await agentCliCommand({ message: "hi", sessionKey: "global" }, runtime);
+
+        expect(callGateway).toHaveBeenCalledOnce();
+        const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "agent request");
+        expect(request.params).toMatchObject({ agentId: undefined, sessionKey: "global" });
+      }, remoteGatewayConfig);
+    },
+  );
+
+  it.each(["global", "work"])(
+    "delegates remote bare session key %s ownership to the gateway",
+    async (sessionKey) => {
+      mockRemoteGatewayRoster("explicit", ["ops", "research"]);
+      await withTempStore(
+        async () => {
+          await agentCliCommand({ message: "hi", sessionKey }, runtime);
+
+          expect(callGateway).toHaveBeenCalledOnce();
+          const request = requireRecord(
+            requireFirstCallArg(callGateway, "gateway"),
+            "agent request",
+          );
+          expect(request.method).toBe("agent");
+          expect(request.params).toMatchObject({ agentId: undefined, sessionKey });
+          expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
+        },
+        {
+          ...remoteGatewayConfig,
+          agents: {
+            ownership: "explicit",
+            list: [{ id: "ops" }, { id: "research" }],
+          },
+        },
+      );
+    },
+  );
+
+  it("forwards a remote bare key unchanged with an explicit agent", async () => {
+    await withTempStore(async () => {
+      await agentCliCommand({ message: "hi", agent: "ops", sessionKey: "incident-42" }, runtime);
+
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "agent request");
+      expect(request.params).toMatchObject({ agentId: "ops", sessionKey: "incident-42" });
+      expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
+    }, remoteGatewayConfig);
+  });
+
+  it("still resolves a remote recipient through the remote roster", async () => {
+    mockRemoteGatewayRoster("explicit", ["ops", "research"]);
+    await withTempStore(async () => {
+      await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toMatchObject({
+        code: "AGENT_SELECTION_REQUIRED",
+      });
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(requireRecord(requireFirstCallArg(callGateway, "gateway"), "request").method).toBe(
+        "agents.list",
+      );
+    }, remoteGatewayConfig);
+  });
+
+  it("dispatches a bare retained-owner turn to the scoped main session", async () => {
+    await withTempStore(
+      async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand({ message: "hi" }, runtime);
+
+        const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "agent request");
+        expect(request.params).toMatchObject({
+          agentId: undefined,
+          sessionKey: "agent:ops:work",
+        });
+      },
+      {
+        agents: { list: [{ id: "ops", default: true }, { id: "research" }] },
+        session: { mainKey: "work", scope: "per-sender" },
+      },
+    );
+  });
+
+  it("dispatches a bare retained-owner turn to the local gateway global session", async () => {
+    await withTempStore(
+      async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand({ message: "hi" }, runtime);
+
+        const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "agent request");
+        expect(request.params).toMatchObject({
+          agentId: undefined,
+          sessionKey: undefined,
+        });
+      },
+      {
+        agents: { list: [{ id: "ops", default: true }, { id: "research" }] },
+        session: { scope: "global" },
+      },
+    );
+  });
+
+  it("dispatches an implicit global turn through its persisted fixed-store owner", async () => {
+    await withTempStore(
+      async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand({ message: "hi" }, runtime);
+
+        const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "agent request");
+        expect(request.params).toMatchObject({
+          agentId: undefined,
+          sessionKey: "global",
+        });
+      },
+      {
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          list: [{ id: "ops" }, { id: "research" }],
+        },
+        session: { scope: "global" },
+      },
+    );
+  });
+
+  it("dispatches a retained-owner global session through --local", async () => {
+    await withTempStore(
+      async () => {
+        const cfg = retainLegacyDefaultAgentId(
+          {
+            ...loadRuntimeConfig(),
+            agents: {
+              ...loadRuntimeConfig().agents,
+              ownership: "explicit",
+              list: [{ id: "ops" }, { id: "research" }],
+            },
+          },
+          "ops",
+        );
+        loadRuntimeConfig.mockReturnValue(cfg);
+        mockLocalAgentReply();
+
+        await agentCliCommand({ message: "hi", local: true, sessionKey: "global" }, runtime);
+
+        expect(agentCommand).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "ops", sessionKey: "global" }),
+          runtime,
+          undefined,
+        );
+      },
+      {
+        agents: { list: [{ id: "ops" }, { id: "research" }] },
+        session: { scope: "global" },
+      },
+    );
+  });
+
+  it("uses the local global session through --local despite remote gateway settings", async () => {
+    await withTempStore(
+      async () => {
+        vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://gateway.example.test");
+        const cfg = retainLegacyDefaultAgentId(
+          {
+            ...loadRuntimeConfig(),
+            gateway: { mode: "remote" },
+            agents: {
+              ...loadRuntimeConfig().agents,
+              ownership: "explicit",
+              list: [{ id: "ops" }, { id: "research" }],
+            },
+          },
+          "ops",
+        );
+        loadRuntimeConfig.mockReturnValue(cfg);
+        mockLocalAgentReply();
+
+        await agentCliCommand({ message: "hi", local: true }, runtime);
+
+        expect(agentCommand).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "ops" }),
+          runtime,
+          undefined,
+        );
+        expect(requireFirstCallArg(agentCommand, "embedded agent")).not.toHaveProperty(
+          "sessionKey",
+        );
+      },
+      {
+        agents: { list: [{ id: "ops" }, { id: "research" }] },
+        session: { scope: "global" },
+      },
+    );
+  });
+
+  it("keeps an ownerless explicit global session fail-closed through --local", async () => {
+    await withTempStore(
+      async () => {
+        loadRuntimeConfig.mockReturnValue({
+          ...loadRuntimeConfig(),
+          agents: {
+            ...loadRuntimeConfig().agents,
+            ownership: "explicit",
+            list: [{ id: "ops" }, { id: "research" }],
+          },
+        });
+
+        await expect(
+          agentCliCommand({ message: "hi", local: true, sessionKey: "global" }, runtime),
+        ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
+        expect(agentCommand).not.toHaveBeenCalled();
+      },
+      {
+        agents: { list: [{ id: "ops" }, { id: "research" }] },
+        session: { scope: "global" },
+      },
+    );
   });
 
   it("reads a UTF-8 message file for gateway dispatch", async () => {
@@ -461,6 +763,81 @@ describe("agentCliCommand", () => {
       );
       expect(opts.message).toBe(messageBody);
       expect(opts).not.toHaveProperty("messageFile");
+    });
+  });
+
+  it("refuses --local before embedded startup when a live Gateway owns the state directory", async () => {
+    await withTempStore(async ({ dir }) => {
+      const lockOptions = createLocalGatewayLockOptions(dir, {
+        readProcessStartTime: () => 123_456,
+      });
+      const gatewayLock = await acquireGatewayLock({
+        ...lockOptions,
+        port: 28789,
+      });
+      expect(gatewayLock).not.toBeNull();
+      if (!gatewayLock) {
+        throw new Error("Expected live Gateway fixture lock");
+      }
+
+      try {
+        await expect(
+          agentCliCommand({ message: "hi", to: "+1555", local: true, json: true }, jsonRuntime, {
+            localGatewayLockOptions: lockOptions,
+          }),
+        ).rejects.toThrow(
+          `A Gateway is running for this state directory (pid ${process.pid}, port 28789). Run without --local to use it, or stop the Gateway first (openclaw gateway stop).`,
+        );
+        expect(agentCommand).not.toHaveBeenCalled();
+        expect(startOneShotDiagnosticsExporters).not.toHaveBeenCalled();
+        expect(jsonRuntime.writeJson).not.toHaveBeenCalled();
+      } finally {
+        await gatewayLock.release();
+      }
+    });
+  });
+
+  it("holds one agent-embedded state lock for the run and rejects a concurrent --local run", async () => {
+    await withTempStore(async ({ dir }) => {
+      const lockOptions = createLocalGatewayLockOptions(dir);
+      let finishFirstRun: ((value: Awaited<ReturnType<typeof AgentCommand>>) => void) | undefined;
+      agentCommand.mockImplementationOnce(
+        async () =>
+          await new Promise<Awaited<ReturnType<typeof AgentCommand>>>((resolve) => {
+            finishFirstRun = resolve;
+          }),
+      );
+
+      const firstRun = agentCliCommand({ message: "first", to: "+1555", local: true }, runtime, {
+        localGatewayLockOptions: lockOptions,
+      });
+      await waitForAgentCommandCall();
+
+      const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
+      const payload = JSON.parse(fs.readFileSync(stateLockPath, "utf8")) as {
+        pid?: number;
+        role?: string;
+      };
+      expect(payload).toMatchObject({ pid: process.pid, role: "agent-embedded" });
+
+      await expect(
+        agentCliCommand({ message: "second", to: "+1555", local: true }, runtime, {
+          localGatewayLockOptions: { ...lockOptions, pollIntervalMs: 2, timeoutMs: 15 },
+        }),
+      ).rejects.toThrow(
+        `another embedded OpenClaw state writer is active (pid ${process.pid}); lock timeout after 15ms`,
+      );
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+
+      if (!finishFirstRun) {
+        throw new Error("Expected first embedded run to start");
+      }
+      finishFirstRun({
+        payloads: [{ text: "done" }],
+        meta: { durationMs: 1 },
+      } as Awaited<ReturnType<typeof AgentCommand>>);
+      await firstRun;
+      expect(fs.existsSync(stateLockPath)).toBe(false);
     });
   });
 
@@ -909,6 +1286,30 @@ describe("agentCliCommand", () => {
     );
   });
 
+  it("dispatches a restart-shaped fixed-store sentinel under its persisted owner", async () => {
+    await withTempStore(
+      async () => {
+        mockLocalAgentReply();
+
+        await agentCliCommand({ message: "hi", local: true, sessionKey: "global" }, runtime);
+
+        expect(agentCommand).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "ops", sessionKey: "global" }),
+          runtime,
+          undefined,
+        );
+      },
+      {
+        session: { store: "/tmp/restart-shared.sqlite" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          list: [{ id: "ops" }, { id: "research" }],
+        },
+      },
+    );
+  });
+
   it("preserves unscoped unknown session keys when no agent is requested", async () => {
     await withTempStore(
       async () => {
@@ -1004,6 +1405,7 @@ describe("agentCliCommand", () => {
               status: "accepted",
               runId: "run-signal",
               sessionKey: "agent:main:explicit:reset-run",
+              agentId: "main",
             });
             return await new Promise((_, reject) => {
               signal?.addEventListener(
@@ -1042,6 +1444,7 @@ describe("agentCliCommand", () => {
         expect(sameConnectionAbort?.params).toEqual({
           sessionKey: "agent:main:explicit:reset-run",
           runId: "run-signal",
+          agentId: "main",
         });
       });
     },
@@ -1537,9 +1940,13 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("passes SIGTERM abort signals into local agent runs", async () => {
-    await withTempStore(async () => {
+  it.each([
+    ["SIGTERM", 143],
+    ["SIGINT", 130],
+  ] as const)("releases the local state lock after %s aborts the run", async (signal, exitCode) => {
+    await withTempStore(async ({ dir }) => {
       const signals = createSignalProcess();
+      const lockOptions = createLocalGatewayLockOptions(dir);
       agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
         expect(opts.abortSignal).toBeInstanceOf(AbortSignal);
         return await new Promise((_, reject) => {
@@ -1557,13 +1964,17 @@ describe("agentCliCommand", () => {
 
       const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
         process: signals.processLike,
+        localGatewayLockOptions: lockOptions,
       });
       await waitForAgentCommandCall();
-      signals.emit("SIGTERM");
+      const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
+      expect(fs.existsSync(stateLockPath)).toBe(true);
+      signals.emit(signal);
 
       await run;
+      expect(fs.existsSync(stateLockPath)).toBe(false);
       expect(callGateway).not.toHaveBeenCalled();
-      expect(runtime.exit).toHaveBeenCalledWith(143);
+      expect(runtime.exit).toHaveBeenCalledWith(exitCode);
       expect(signals.listenerCount("SIGTERM")).toBe(0);
       expect(signals.listenerCount("SIGINT")).toBe(0);
     });

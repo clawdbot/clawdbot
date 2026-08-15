@@ -8,6 +8,18 @@ import { Type } from "typebox";
 import { optionalStringEnum } from "./schema/typebox.js";
 
 const EXEC_TOOL_HOST_VALUES = ["auto", "sandbox", "gateway", "node"] as const;
+const PROCESS_TOOL_ACTIONS = [
+  "list",
+  "poll",
+  "log",
+  "write",
+  "send-keys",
+  "submit",
+  "paste",
+  "kill",
+  "clear",
+  "remove",
+] as const;
 
 /** Parameters accepted by the exec tool. */
 export const execSchema = Type.Object({
@@ -24,9 +36,9 @@ export const execSchema = Type.Object({
     }),
   ),
   background: Type.Optional(Type.Boolean({ description: "Run in background immediately" })),
-  timeout: Type.Optional(
+  timeoutSeconds: Type.Optional(
     Type.Number({
-      description: "Timeout in seconds; kills process on expiry.",
+      description: "Timeout in seconds.",
     }),
   ),
   pty: Type.Optional(
@@ -65,7 +77,7 @@ export const nodeExecSchema = Type.Object({
   command: execSchema.properties.command,
   workdir: execSchema.properties.workdir,
   env: execSchema.properties.env,
-  timeout: execSchema.properties.timeout,
+  timeoutSeconds: execSchema.properties.timeoutSeconds,
   host: optionalStringEnum(["node"] as const, {
     description: "Exec target. Only node is available on this tool surface.",
   }),
@@ -75,6 +87,7 @@ export const nodeExecSchema = Type.Object({
 /** Parameters accepted by the process-control tool. */
 export const processSchema = Type.Object({
   action: Type.String({
+    enum: [...PROCESS_TOOL_ACTIONS],
     description: "Process action (list|poll|log|write|send-keys|submit|paste|kill|clear|remove)",
   }),
   sessionId: Type.Optional(Type.String({ description: "Session id for actions other than list" })),

@@ -14,7 +14,7 @@ import {
   listMissingPluginNpmRuntimeHostExports,
   listPublishablePluginPackageDirs,
   resolvePluginNpmRuntimeBuildPlan,
-} from "../scripts/lib/plugin-npm-runtime-build.mjs";
+} from "../scripts/lib/plugin-npm-runtime-build.mts";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -93,33 +93,13 @@ describe("plugin npm runtime build planning", () => {
       expectDistRelativePaths(plan.runtimeBuildOutputs);
       expect(plan.packageFiles).toContain("dist/**");
       expect(plan.packagePeerMetadata.peerDependencies.openclaw).toBe(
-        plan.packageJson.openclaw.compat.pluginApi,
+        plan.packageJson.openclaw?.compat?.pluginApi,
       );
       expect(plan.packagePeerMetadata.peerDependenciesMeta.openclaw.optional).toBe(true);
     }
   });
 
-  it("includes top-level public runtime surfaces and root-build-excluded plugins", () => {
-    const qqbotPlan = resolvePluginNpmRuntimeBuildPlan({
-      repoRoot,
-      packageDir: path.join(repoRoot, "extensions", "qqbot"),
-    });
-    const qqbotRuntimePlan = expectPluginNpmRuntimeBuildPlan(qqbotPlan);
-    expect(qqbotRuntimePlan.entry).toEqual({
-      api: path.join(repoRoot, "extensions", "qqbot", "api.ts"),
-      "channel-entry-api": path.join(repoRoot, "extensions", "qqbot", "channel-entry-api.ts"),
-      "channel-plugin-api": path.join(repoRoot, "extensions", "qqbot", "channel-plugin-api.ts"),
-      "doctor-contract-api": path.join(repoRoot, "extensions", "qqbot", "doctor-contract-api.ts"),
-      index: path.join(repoRoot, "extensions", "qqbot", "index.ts"),
-      "runtime-api": path.join(repoRoot, "extensions", "qqbot", "runtime-api.ts"),
-      "secret-contract-api": path.join(repoRoot, "extensions", "qqbot", "secret-contract-api.ts"),
-      "setup-entry": path.join(repoRoot, "extensions", "qqbot", "setup-entry.ts"),
-      "setup-plugin-api": path.join(repoRoot, "extensions", "qqbot", "setup-plugin-api.ts"),
-      "tools-api": path.join(repoRoot, "extensions", "qqbot", "tools-api.ts"),
-    });
-    expect(qqbotRuntimePlan.runtimeExtensions).toEqual(["./dist/index.js"]);
-    expect(qqbotRuntimePlan.runtimeSetupEntry).toBe("./dist/setup-entry.js");
-
+  it("includes top-level public runtime surfaces", () => {
     const diffsPlan = resolvePluginNpmRuntimeBuildPlan({
       repoRoot,
       packageDir: path.join(repoRoot, "extensions", "diffs"),
@@ -240,19 +220,43 @@ describe("plugin npm runtime build planning", () => {
     expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
   });
 
-  it.each(["codex", "copilot"])(
-    "keeps published %s runtime imports resolvable from the host package",
-    async (pluginId) => {
-      const result = await buildPluginNpmRuntime({
+  it("plans the Zalo public setup API with its lazy package surface", () => {
+    const packageDir = path.join(repoRoot, "extensions", "zalo");
+    const plan = expectPluginNpmRuntimeBuildPlan(
+      resolvePluginNpmRuntimeBuildPlan({
         repoRoot,
-        packageDir: `extensions/${pluginId}`,
-        logLevel: "silent",
-      });
-      const plan = expectPluginNpmRuntimeBuildPlan(result);
+        packageDir,
+      }),
+    );
+    expect(plan.entry["setup-api"]).toBe(path.join(packageDir, "setup-api.ts"));
+    expect(plan.entry["setup-surface"]).toBe(path.join(packageDir, "setup-surface.ts"));
+    expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
+    expect(plan.runtimeBuildOutputs).toContain("./dist/setup-surface.js");
+    expect(plan.runtimeBuildOutputs).not.toContain("./dist/src/setup-surface.js");
+    expect(plan.packageFiles).toContain("dist/**");
+  });
 
-      expect(listMissingPluginNpmRuntimeHostExports(plan)).toEqual([]);
-    },
-  );
+  it("keeps published Codex runtime imports resolvable from the host package", async () => {
+    const result = await buildPluginNpmRuntime({
+      repoRoot,
+      packageDir: "extensions/codex",
+      logLevel: "silent",
+    });
+    const plan = expectPluginNpmRuntimeBuildPlan(result);
+
+    expect(listMissingPluginNpmRuntimeHostExports(plan)).toEqual([]);
+  });
+
+  it("keeps published llama.cpp runtime imports resolvable from the host package", async () => {
+    const result = await buildPluginNpmRuntime({
+      repoRoot,
+      packageDir: "extensions/llama-cpp",
+      logLevel: "silent",
+    });
+    const plan = expectPluginNpmRuntimeBuildPlan(result);
+
+    expect(listMissingPluginNpmRuntimeHostExports(plan)).toEqual([]);
+  });
 
   it("detects unresolved side-effect host imports in built plugin runtimes", () => {
     const outDir = tempDirs.make("openclaw-plugin-runtime-host-import-");
@@ -275,45 +279,6 @@ describe("plugin npm runtime build planning", () => {
     expect(listMissingPluginNpmRuntimeHostExports({ ...plan, outDir })).toEqual([
       "openclaw/plugin-sdk/not-exported",
       "openclaw/plugin-sdk/not-exported-from-require",
-    ]);
-  });
-
-  it("allows private harness authority imports only for their official package owners", () => {
-    const outDir = tempDirs.make("openclaw-plugin-runtime-private-owner-import-");
-    writeFileSync(
-      path.join(outDir, "index.js"),
-      [
-        'import "openclaw/plugin-sdk/agent-harness-tool-authority-runtime";',
-        'import "openclaw/plugin-sdk/not-owner-restricted";',
-        "",
-      ].join("\n"),
-    );
-    const plan = expectPluginNpmRuntimeBuildPlan(
-      resolvePluginNpmRuntimeBuildPlan({
-        repoRoot,
-        packageDir: path.join(repoRoot, "extensions", "codex"),
-      }),
-    );
-
-    expect(listMissingPluginNpmRuntimeHostExports({ ...plan, outDir })).toEqual([
-      "openclaw/plugin-sdk/not-owner-restricted",
-    ]);
-    expect(
-      listMissingPluginNpmRuntimeHostExports({
-        ...plan,
-        outDir,
-        packageJson: { ...plan.packageJson, name: "@openclaw/copilot" },
-      }),
-    ).toEqual(["openclaw/plugin-sdk/not-owner-restricted"]);
-    expect(
-      listMissingPluginNpmRuntimeHostExports({
-        ...plan,
-        outDir,
-        packageJson: { ...plan.packageJson, name: "@openclaw/demo" },
-      }),
-    ).toEqual([
-      "openclaw/plugin-sdk/agent-harness-tool-authority-runtime",
-      "openclaw/plugin-sdk/not-owner-restricted",
     ]);
   });
 

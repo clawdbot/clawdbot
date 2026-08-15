@@ -111,6 +111,12 @@ describe("tsdown config", () => {
     const rootDir = process.cwd();
     const watchedPaths: string[] = [];
     const plugin = createStateSchemaInlinePlugin(rootDir);
+    let cacheKeyGenerator: ((context: { id: string }) => string | undefined) | undefined;
+    plugin.configureVitest({
+      experimental_defineCacheKeyGenerator: (generator) => {
+        cacheKeyGenerator = generator;
+      },
+    });
     const result = plugin.load.call(
       { addWatchFile: (filePath: string) => watchedPaths.push(filePath) },
       path.resolve(rootDir, schema.modulePath),
@@ -126,34 +132,10 @@ describe("tsdown config", () => {
     expect(JSON.parse(match?.[1] ?? "null")).toBe(canonicalSql);
     expect(schema.sourceValue).toBe(canonicalSql);
     expect(watchedPaths).toEqual([schemaPath]);
-  });
-
-  it("includes canonical schema bytes in the Vitest filesystem cache key", () => {
-    const rootDir = process.cwd();
-    const plugin = createStateSchemaInlinePlugin(rootDir, { vitestFsModuleCache: true });
-    let cacheKeyGenerator:
-      | ((context: { id: string; sourceCode: string; environment: unknown }) => unknown)
-      | undefined;
-    plugin.configureVitest?.({
-      experimental_defineCacheKeyGenerator(callback) {
-        cacheKeyGenerator = callback;
-      },
-    });
-
-    expect(
-      cacheKeyGenerator?.({
-        id: path.resolve(rootDir, "src/state/openclaw-state-schema.ts"),
-        sourceCode: "",
-        environment: {},
-      }),
-    ).toBe(readFileSync(path.resolve(rootDir, "src/state/openclaw-state-schema.sql"), "utf8"));
-    expect(
-      cacheKeyGenerator?.({
-        id: path.resolve(rootDir, "src/state/openclaw-state-db.ts"),
-        sourceCode: "",
-        environment: {},
-      }),
-    ).toBeUndefined();
+    expect(cacheKeyGenerator?.({ id: path.resolve(rootDir, schema.modulePath) })).toBe(
+      canonicalSql,
+    );
+    expect(cacheKeyGenerator?.({ id: path.resolve(rootDir, "src/index.ts") })).toBeUndefined();
   });
 
   it("installs schema inlining only on the unified runtime graph", () => {
@@ -256,6 +238,14 @@ describe("tsdown config", () => {
     );
   });
 
+  it("keeps Gateway plugin reload targets behind one stable dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)["gateway/plugin-channel-reload-targets"]).toBe(
+      "src/gateway/plugin-channel-reload-targets.ts",
+    );
+  });
+
   it("keeps PI model discovery synthetic auth refs behind one stable runtime dist entry", () => {
     const distGraph = requireUnifiedDistGraph();
     const importSpecifiers = [
@@ -322,7 +312,6 @@ describe("tsdown config", () => {
       expect(neverBundle("@vitest/expect")).toBe(true);
       expect(neverBundle("jimp")).toBe(true);
       expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
-      expect(neverBundle("qrcode-terminal/lib/main.js")).toBe(true);
       expect(neverBundle("sharp")).toBe(true);
       expect(neverBundle("vitest")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
@@ -337,7 +326,6 @@ describe("tsdown config", () => {
         "@vitest/expect",
         "jimp",
         "matrix-js-sdk",
-        "qrcode-terminal",
         "sharp",
         "vitest",
       ]) {
@@ -349,7 +337,6 @@ describe("tsdown config", () => {
     }
     const externalize = external;
     expect(externalize("jimp", undefined, false)).toBe(true);
-    expect(externalize("qrcode-terminal/lib/main.js", undefined, false)).toBe(true);
     expect(externalize("sharp", undefined, false)).toBe(true);
   });
 

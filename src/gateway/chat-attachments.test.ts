@@ -156,7 +156,7 @@ afterEach(() => {
 });
 
 describe("persistInboundImagesForTranscript", () => {
-  it("preserves mixed image order and appends non-image offloads", async () => {
+  it("preserves original mixed-media order in claim-only transcript facts", async () => {
     saveMediaBufferMock.mockResolvedValueOnce({
       id: "inline",
       path: "/media/inbound/inline.jpg",
@@ -164,39 +164,103 @@ describe("persistInboundImagesForTranscript", () => {
       contentType: "image/jpeg",
     });
 
-    const saved = await persistInboundImagesForTranscript({
-      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg" }],
-      imageOrder: ["offloaded", "inline"],
+    const result = await persistInboundImagesForTranscript({
+      images: [
+        {
+          type: "image",
+          data: "aGVsbG8=",
+          mimeType: "image/jpeg",
+          sourceIndex: 1,
+        },
+      ],
       offloadedRefs: [
         {
-          mediaRef: "media://inbound/offloaded",
-          id: "offloaded",
-          path: "/media/inbound/offloaded.png",
-          kind: "image",
-          mimeType: "image/png",
-          label: "offloaded.png",
-          sizeBytes: 2_100_000,
-        },
-        {
-          mediaRef: "media://inbound/report",
-          id: "report",
-          path: "/media/inbound/report.pdf",
-          kind: "document",
-          mimeType: "application/pdf",
-          label: "report.pdf",
+          mediaRef: "https://signed.example/private-video",
+          id: "video",
+          path: "/media/inbound/video.mp4",
+          kind: "video",
+          mimeType: "video/mp4",
+          label: "video.mp4",
           sizeBytes: 100,
+          durationMs: 2_000,
+          sourceIndex: 0,
         },
       ],
       log: { warn: vi.fn() },
       logContext: "test",
     });
 
-    expect(saved.map((entry) => entry.path)).toEqual([
-      "/media/inbound/offloaded.png",
-      "/media/inbound/inline.jpg",
-      "/media/inbound/report.pdf",
+    expect(result.entries.map((entry) => entry.sourceIndex)).toEqual([0, 1]);
+    expect(result.entries.map((entry) => entry.fact)).toEqual([
+      {
+        url: "media://inbound/video",
+        contentType: "video/mp4",
+        kind: "video",
+        fileName: "video.mp4",
+        sizeBytes: 100,
+        durationMs: 2_000,
+        hydrationSuppressed: true,
+      },
+      {
+        url: "media://inbound/inline",
+        contentType: "image/jpeg",
+        kind: "image",
+        sizeBytes: 5,
+      },
     ]);
+    expect(result.omission).toBe("none");
+    const durable = JSON.stringify(result.entries.map((entry) => entry.fact));
+    expect(durable).not.toContain("/media/");
+    expect(durable).not.toContain("signed.example");
+    expect(durable).not.toContain("sourceIndex");
   });
+
+  it("reports an inline image whose durable managed save fails", async () => {
+    saveMediaBufferMock.mockRejectedValueOnce(new Error("disk unavailable"));
+    const warn = vi.fn();
+
+    const result = await persistInboundImagesForTranscript({
+      images: [
+        {
+          type: "image",
+          data: "aGVsbG8=",
+          mimeType: "image/jpeg",
+          sourceIndex: 0,
+        },
+      ],
+      offloadedRefs: [],
+      log: { warn },
+      logContext: "test",
+    });
+
+    expect(result).toEqual({ entries: [], omission: "inline-image-save-failed" });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("disk unavailable"));
+  });
+
+  it.each(["nested/id", String.raw`nested\id`, "bad\0id", ".", "..", "claim?sig", "claim#part"])(
+    "rejects an unsafe saved media id %j before projecting a durable claim",
+    async (id) => {
+      await expect(
+        persistInboundImagesForTranscript({
+          images: [],
+          offloadedRefs: [
+            {
+              mediaRef: "https://signed.example/private",
+              id,
+              path: "/media/inbound/private",
+              kind: "video",
+              mimeType: "video/mp4",
+              label: "private.mp4",
+              sizeBytes: 10,
+              sourceIndex: 0,
+            },
+          ],
+          log: { warn: vi.fn() },
+          logContext: "test",
+        }),
+      ).rejects.toThrow();
+    },
+  );
 });
 
 describe("parseMessageWithAttachments", () => {
@@ -289,8 +353,10 @@ describe("parseMessageWithAttachments", () => {
   it("keeps image inline and offloads non-image side by side", async () => {
     const { parsed } = await parseWithWarnings("x", [pngAttachment(), pdfAttachment()]);
     expectSingleInlinePng(parsed);
+    expect(parsed.images[0]?.sourceIndex).toBe(0);
     expect(parsed.offloadedRefs).toHaveLength(1);
     expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/pdf");
+    expect(parsed.offloadedRefs[0]?.sourceIndex).toBe(1);
     expect(parsed.imageOrder).toEqual(["inline"]);
   });
 

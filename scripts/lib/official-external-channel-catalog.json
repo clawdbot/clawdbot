@@ -2,7 +2,7 @@
   "entries": [
     {
       "name": "@openclaw/buzz",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "Connect OpenClaw agents to Buzz rooms",
       "source": "official",
       "kind": "channel",
@@ -298,7 +298,10 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use BUZZ_PRIVATE_KEY with the supplied relay URL"
-                }
+                },
+                "envVars": [
+                  "BUZZ_PRIVATE_KEY"
+                ]
               }
             ]
           }
@@ -313,7 +316,7 @@
     },
     {
       "name": "@openclaw/clickclack",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw ClickClack channel plugin",
       "source": "official",
       "kind": "channel",
@@ -334,6 +337,38 @@
                 "requireMention": {
                   "type": "boolean"
                 },
+                "allowBots": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "string",
+                      "const": "mentions"
+                    }
+                  ]
+                },
+                "botLoopProtection": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "maxEventsPerWindow": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0
+                    },
+                    "windowSeconds": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0
+                    },
+                    "cooldownSeconds": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0
+                    }
+                  }
+                },
                 "mentionPatterns": {
                   "type": "array",
                   "items": {
@@ -348,6 +383,38 @@
                     "properties": {
                       "requireMention": {
                         "type": "boolean"
+                      },
+                      "allowBots": {
+                        "anyOf": [
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "string",
+                            "const": "mentions"
+                          }
+                        ]
+                      },
+                      "botLoopProtection": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean"
+                          },
+                          "maxEventsPerWindow": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0
+                          },
+                          "windowSeconds": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0
+                          },
+                          "cooldownSeconds": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0
+                          }
+                        }
                       },
                       "mentionPatterns": {
                         "type": "array",
@@ -367,6 +434,38 @@
                       "requireMention": {
                         "type": "boolean"
                       },
+                      "allowBots": {
+                        "anyOf": [
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "string",
+                            "const": "mentions"
+                          }
+                        ]
+                      },
+                      "botLoopProtection": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean"
+                          },
+                          "maxEventsPerWindow": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0
+                          },
+                          "windowSeconds": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0
+                          },
+                          "cooldownSeconds": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0
+                          }
+                        }
+                      },
                       "mentionPatterns": {
                         "type": "array",
                         "items": {
@@ -381,6 +480,38 @@
                           "properties": {
                             "requireMention": {
                               "type": "boolean"
+                            },
+                            "allowBots": {
+                              "anyOf": [
+                                {
+                                  "type": "boolean"
+                                },
+                                {
+                                  "type": "string",
+                                  "const": "mentions"
+                                }
+                              ]
+                            },
+                            "botLoopProtection": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "enabled": {
+                                  "type": "boolean"
+                                },
+                                "maxEventsPerWindow": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0
+                                },
+                                "windowSeconds": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0
+                                },
+                                "cooldownSeconds": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0
+                                }
+                              }
                             },
                             "mentionPatterns": {
                               "type": "array",
@@ -496,7 +627,10 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use CLICKCLACK_BOT_TOKEN"
-                }
+                },
+                "envVars": [
+                  "CLICKCLACK_BOT_TOKEN"
+                ]
               }
             ]
           }
@@ -512,7 +646,7 @@
     },
     {
       "name": "@openclaw/discord",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw Discord channel plugin for channels, DMs, commands, and app events.",
       "source": "official",
       "kind": "channel",
@@ -564,7 +698,10 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use DISCORD_BOT_TOKEN"
-                }
+                },
+                "envVars": [
+                  "DISCORD_BOT_TOKEN"
+                ]
               }
             ]
           },
@@ -589,7 +726,7 @@
     },
     {
       "name": "@openclaw/feishu",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw Feishu/Lark channel plugin for chats and workplace tools (community maintained by @m1heng).",
       "source": "official",
       "kind": "channel",
@@ -647,7 +784,7 @@
     },
     {
       "name": "@openclaw/googlechat",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw Google Chat channel plugin for spaces and direct messages.",
       "source": "official",
       "kind": "channel",
@@ -746,7 +883,12 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use Google Chat environment credentials"
-                }
+                },
+                "envVars": [
+                  "GOOGLE_CHAT_SERVICE_ACCOUNT",
+                  "GOOGLE_CHAT_SERVICE_ACCOUNT_FILE"
+                ],
+                "envVarMode": "any"
               }
             ]
           }
@@ -760,7 +902,7 @@
     },
     {
       "name": "@openclaw/imessage",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw iMessage channel plugin using imsg on a signed-in Mac",
       "source": "official",
       "kind": "channel",
@@ -833,7 +975,7 @@
     },
     {
       "name": "@openclaw/irc",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw IRC channel plugin",
       "source": "official",
       "kind": "channel",
@@ -931,7 +1073,11 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use IRC environment configuration"
-                }
+                },
+                "envVars": [
+                  "IRC_HOST",
+                  "IRC_NICK"
+                ]
               }
             ]
           }
@@ -947,7 +1093,7 @@
     },
     {
       "name": "@openclaw/line",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw LINE channel plugin for LINE Bot API chats.",
       "source": "official",
       "kind": "channel",
@@ -1024,7 +1170,11 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use LINE environment credentials"
-                }
+                },
+                "envVars": [
+                  "LINE_CHANNEL_ACCESS_TOKEN",
+                  "LINE_CHANNEL_SECRET"
+                ]
               }
             ]
           }
@@ -1038,7 +1188,7 @@
     },
     {
       "name": "@openclaw/matrix",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw Matrix channel plugin for rooms and direct messages.",
       "source": "official",
       "kind": "channel",
@@ -1180,7 +1330,7 @@
     },
     {
       "name": "@openclaw/mattermost",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw Mattermost channel plugin",
       "source": "official",
       "kind": "channel",
@@ -1235,7 +1385,11 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use Mattermost environment credentials"
-                }
+                },
+                "envVars": [
+                  "MATTERMOST_BOT_TOKEN",
+                  "MATTERMOST_URL"
+                ]
               }
             ]
           }
@@ -1251,7 +1405,7 @@
     },
     {
       "name": "@openclaw/msteams",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw Microsoft Teams channel plugin for bot conversations.",
       "source": "official",
       "kind": "channel",
@@ -1295,7 +1449,7 @@
     },
     {
       "name": "@openclaw/nextcloud-talk",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw Nextcloud Talk channel plugin for conversations.",
       "source": "official",
       "kind": "channel",
@@ -1390,7 +1544,10 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use Nextcloud Talk environment credentials"
-                }
+                },
+                "envVars": [
+                  "NEXTCLOUD_TALK_BOT_SECRET"
+                ]
               }
             ]
           }
@@ -1404,7 +1561,7 @@
     },
     {
       "name": "@openclaw/nostr",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw Nostr channel plugin for NIP-04 encrypted direct messages.",
       "source": "official",
       "kind": "channel",
@@ -1450,7 +1607,10 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use NOSTR_PRIVATE_KEY"
-                }
+                },
+                "envVars": [
+                  "NOSTR_PRIVATE_KEY"
+                ]
               }
             ]
           }
@@ -1548,79 +1708,163 @@
       }
     },
     {
-      "name": "@openclaw/qqbot",
-      "version": "2026.7.2",
-      "description": "OpenClaw QQ Bot channel plugin for group and direct-message workflows.",
-      "source": "official",
+      "name": "@tencent-connect/openclaw-qqbot",
+      "description": "OpenClaw QQ Bot channel plugin by the Tencent Connect team.",
+      "source": "external",
       "kind": "channel",
       "openclaw": {
+        "plugin": {
+          "id": "openclaw-qqbot",
+          "label": "QQ Bot"
+        },
         "contracts": {
           "tools": [
-            "qqbot_channel_api",
+            "qqbot_platform_api",
             "qqbot_remind"
           ]
         },
         "channel": {
           "id": "qqbot",
-          "configuredState": {
-            "env": {
-              "anyOf": [
-                "QQBOT_APP_ID",
-                "QQBOT_CLIENT_SECRET"
-              ]
-            }
-          },
-          "approvalFlags": [
-            "native"
-          ],
           "label": "QQ Bot",
           "selectionLabel": "QQ Bot (Official API)",
           "detailLabel": "QQ Bot",
           "docsPath": "/channels/qqbot",
           "docsLabel": "qqbot",
           "blurb": "connect to QQ via official QQ Bot API with group chat and direct message support.",
-          "systemImage": "bubble.left.and.bubble.right",
-          "setup": {
-            "fields": [
-              {
-                "key": "token",
-                "kind": "string",
-                "sensitive": true,
-                "cli": {
-                  "flags": "--token <appId:secret>",
-                  "description": "QQBot app id and client secret"
+          "envVars": [
+            "QQBOT_APP_ID",
+            "QQBOT_CLIENT_SECRET"
+          ],
+          "approvalFlags": [
+            "native"
+          ],
+          "doctorCapabilities": {
+            "openDmRequiresAllowFromWildcard": false
+          },
+          "systemImage": "bubble.left.and.bubble.right"
+        },
+        "channelSecrets": {
+          "fields": [
+            {
+              "field": "clientSecret",
+              "activationField": "appId",
+              "activationEnv": "QQBOT_APP_ID"
+            }
+          ]
+        },
+        "channelHostConfig": {
+          "docsSource": "official",
+          "compatibilityMigration": "qqbot.tencent-2.0-compatibility",
+          "schemaAllOf": [
+            {
+              "not": {
+                "required": [
+                  "defaultAccount"
+                ]
+              },
+              "properties": {
+                "allowFrom": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "allOf": [
+                      {
+                        "not": {
+                          "const": "*"
+                        }
+                      },
+                      {
+                        "anyOf": [
+                          {
+                            "const": "openclaw:approval-disabled"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^[^a-z]*$"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "accounts": {
+                  "type": "object",
+                  "not": {
+                    "required": [
+                      "default"
+                    ]
+                  },
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "allowFrom": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                          "allOf": [
+                            {
+                              "not": {
+                                "const": "*"
+                              }
+                            },
+                            {
+                              "anyOf": [
+                                {
+                                  "const": "openclaw:approval-disabled"
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^[^a-z]*$"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "required": [
+                      "allowFrom"
+                    ]
+                  }
                 }
               },
-              {
-                "key": "tokenFile",
-                "kind": "string",
-                "sensitive": true,
-                "cli": {
-                  "flags": "--token-file <path>",
-                  "description": "QQBot client secret file"
-                }
-              },
-              {
-                "key": "useEnv",
-                "kind": "boolean",
-                "cli": {
-                  "flags": "--use-env",
-                  "description": "Use QQBOT environment credentials"
+              "required": [
+                "allowFrom"
+              ]
+            }
+          ]
+        },
+        "channelConfigs": {
+          "qqbot": {
+            "label": "QQ Bot",
+            "description": "QQ Bot API conversation channel.",
+            "preferOver": [
+              "qqbot"
+            ],
+            "schema": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "appId": {
+                  "type": "string"
+                },
+                "clientSecret": {
+                  "type": "string"
                 }
               }
-            ]
+            }
           }
         },
         "install": {
-          "npmSpec": "@openclaw/qqbot",
+          "npmSpec": "@tencent-connect/openclaw-qqbot@2.0.1",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.4.10"
+          "expectedIntegrity": "sha512-2010PaCummeQaxerLtaGfQ/5HChiXaW/KpTERid7V/1zyTs46S2ACi0hgZQ1SB7tH0t1InWr8tzVBJV/pLss3Q=="
         }
       }
     },
     {
       "name": "@openclaw/raft",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw Raft channel plugin for Raft CLI wake bridges.",
       "source": "official",
       "kind": "channel",
@@ -1706,7 +1950,7 @@
     },
     {
       "name": "@openclaw/signal",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw Signal channel plugin",
       "source": "official",
       "kind": "channel",
@@ -1792,7 +2036,7 @@
     },
     {
       "name": "@openclaw/slack",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw Slack channel plugin for channels, DMs, commands, and app events.",
       "source": "official",
       "kind": "channel",
@@ -1907,7 +2151,10 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use Slack environment credentials"
-                }
+                },
+                "envVars": [
+                  "SLACK_BOT_TOKEN"
+                ]
               }
             ]
           }
@@ -1922,7 +2169,7 @@
     },
     {
       "name": "@openclaw/sms",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw SMS/MMS channel plugin for Twilio messages.",
       "source": "official",
       "kind": "channel",
@@ -2047,7 +2294,7 @@
     },
     {
       "name": "@openclaw/synology-chat",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "Synology Chat channel plugin for OpenClaw channels and direct messages.",
       "source": "official",
       "kind": "channel",
@@ -2086,9 +2333,19 @@
               {
                 "key": "url",
                 "kind": "string",
+                "sensitive": true,
                 "cli": {
                   "flags": "--url <url>",
                   "description": "Synology Chat webhook URL"
+                }
+              },
+              {
+                "key": "webhookUrl",
+                "kind": "string",
+                "sensitive": true,
+                "cli": {
+                  "flags": "--webhook-url <url>",
+                  "description": "Public HTTPS Synology Chat callback URL used for attachments"
                 }
               },
               {
@@ -2105,7 +2362,10 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use Synology Chat environment credentials"
-                }
+                },
+                "envVars": [
+                  "SYNOLOGY_CHAT_TOKEN"
+                ]
               }
             ]
           }
@@ -2119,7 +2379,7 @@
     },
     {
       "name": "@openclaw/tlon",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw Tlon/Urbit channel plugin for chat workflows.",
       "source": "official",
       "kind": "channel",
@@ -2213,7 +2473,7 @@
     },
     {
       "name": "@openclaw/twitch",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw Twitch channel plugin for chat and moderation workflows.",
       "source": "official",
       "kind": "channel",
@@ -2294,7 +2554,7 @@
     },
     {
       "name": "@openclaw/whatsapp",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw WhatsApp channel plugin for WhatsApp Web chats.",
       "source": "official",
       "kind": "channel",
@@ -2393,7 +2653,7 @@
     },
     {
       "name": "@openclaw/zalo",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw Zalo channel plugin for bot and webhook chats.",
       "source": "official",
       "kind": "channel",
@@ -2444,7 +2704,10 @@
                 "cli": {
                   "flags": "--use-env",
                   "description": "Use ZALO_BOT_TOKEN"
-                }
+                },
+                "envVars": [
+                  "ZALO_BOT_TOKEN"
+                ]
               }
             ]
           }
@@ -2458,7 +2721,7 @@
     },
     {
       "name": "@openclaw/zalouser",
-      "version": "2026.7.2",
+      "version": "2026.8.1",
       "description": "OpenClaw Zalo Personal Account plugin via native zca-js integration.",
       "source": "official",
       "kind": "channel",

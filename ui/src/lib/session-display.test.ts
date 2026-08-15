@@ -9,13 +9,13 @@ import {
 describe("resolveSessionDisplayName", () => {
   it("uses the same friendly main-thread name for every agent", () => {
     for (const key of ["main", "agent:main:main", "agent:research:main", "agent:ops-team:main"]) {
-      expect(resolveSessionDisplayName(key)).toBe("Main Thread");
+      expect(resolveSessionDisplayName(key)).toBe("Main Session");
     }
 
     expect(resolveSessionDisplayName("agent:research:main", { displayName: "Research desk" })).toBe(
       "Research desk",
     );
-    expect(resolveSessionDisplayName("agent:research:dashboard:main")).toBe("New thread");
+    expect(resolveSessionDisplayName("agent:research:dashboard:main")).toBe("New session");
     expect(resolveSessionDisplayName("agent:research:main:thread")).toBe("main:thread");
   });
 
@@ -47,14 +47,14 @@ describe("resolveSessionDisplayName", () => {
   it("falls back to a friendly name for dashboard sessions instead of the uuid key", () => {
     const key = "agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d";
 
-    expect(resolveSessionDisplayName(key)).toBe("New thread");
+    expect(resolveSessionDisplayName(key)).toBe("New session");
     expect(
       resolveSessionDisplayName(key, {
         label: undefined,
         displayName: undefined,
         derivedTitle: undefined,
       }),
-    ).toBe("New thread");
+    ).toBe("New session");
   });
 
   it("names unnamed work sessions after their checkout", () => {

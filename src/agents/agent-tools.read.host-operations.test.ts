@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
@@ -91,29 +92,20 @@ async function expectMissingPath(operation: Promise<unknown>) {
 }
 
 describe("host tool tilde expansion (non-workspace mode)", () => {
-  const tempDirs: string[] = [];
-
-  const createTempDir = async (prefix: string, parent = osHome()) => {
-    const dir = await fs.mkdtemp(path.join(parent, prefix));
-    tempDirs.push(dir);
-    return dir;
-  };
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   beforeEach(() => {
     mocks.editOps = undefined;
     mocks.writeOps = undefined;
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     mocks.editOps = undefined;
     mocks.writeOps = undefined;
-    while (tempDirs.length > 0) {
-      await fs.rm(tempDirs.pop()!, { recursive: true, force: true });
-    }
   });
 
   it("edit readFile expands ~ to the OS home directory", async () => {
-    const dir = await createTempDir("openclaw-tilde-test-edit-");
+    const dir = tempDirs.make("openclaw-tilde-test-edit-", osHome());
     const testFile = path.join(dir, "test.txt");
     await fs.writeFile(testFile, "hello", "utf8");
 
@@ -124,7 +116,7 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
   });
 
   it("edit access expands ~ to the OS home directory", async () => {
-    const dir = await createTempDir("openclaw-tilde-test-edit-");
+    const dir = tempDirs.make("openclaw-tilde-test-edit-", osHome());
     const testFile = path.join(dir, "test.txt");
     await fs.writeFile(testFile, "hello", "utf8");
 
@@ -134,7 +126,7 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
   });
 
   it("write writeFile expands ~ to the OS home directory", async () => {
-    const dir = await createTempDir("openclaw-tilde-test-write-");
+    const dir = tempDirs.make("openclaw-tilde-test-write-", osHome());
     const testFile = path.join(dir, "tilde-write-test.txt");
 
     createHostWorkspaceWriteTool(dir, { workspaceOnly: false });
@@ -144,7 +136,7 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
   });
 
   it("write mkdir expands ~ to the OS home directory", async () => {
-    const dir = await createTempDir("openclaw-tilde-test-mkdir-");
+    const dir = tempDirs.make("openclaw-tilde-test-mkdir-", osHome());
     const newDir = path.join(dir, "subdir");
 
     createHostWorkspaceWriteTool(dir, { workspaceOnly: false });
@@ -153,9 +145,27 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
     expect((await fs.stat(newDir)).isDirectory()).toBe(true);
   });
 
+  it.runIf(process.platform === "win32")(
+    "keeps host write and edit operations on the same Windows-style home path",
+    async () => {
+      const dir = tempDirs.make("openclaw-tilde-test-win32-", osHome());
+      const testFile = path.join(dir, "same-path.txt");
+      const modelPath = toTildePath(testFile);
+
+      createHostWorkspaceWriteTool(dir, { workspaceOnly: false });
+      await readWriteOps().writeFile(modelPath, "before");
+
+      createHostWorkspaceEditTool(dir, { workspaceOnly: false });
+      expect((await readEditOps().readFile(modelPath)).toString("utf8")).toBe("before");
+      await readEditOps().writeFile(modelPath, "after");
+
+      expect(await fs.readFile(testFile, "utf8")).toBe("after");
+    },
+  );
+
   it("ignores OPENCLAW_HOME for write operations", async () => {
-    const openclawHome = await createTempDir("openclaw-home-override-", os.tmpdir());
-    const dir = await createTempDir("openclaw-tilde-test-write-");
+    const openclawHome = tempDirs.make("openclaw-home-override-", os.tmpdir());
+    const dir = tempDirs.make("openclaw-tilde-test-write-", osHome());
     const testFile = path.join(dir, "os-home-write.txt");
 
     await withEnvAsync({ OPENCLAW_HOME: openclawHome }, async () => {
@@ -168,8 +178,8 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
   });
 
   it("ignores OPENCLAW_HOME for mkdir operations", async () => {
-    const openclawHome = await createTempDir("openclaw-home-override-", os.tmpdir());
-    const dir = await createTempDir("openclaw-tilde-test-mkdir-");
+    const openclawHome = tempDirs.make("openclaw-home-override-", os.tmpdir());
+    const dir = tempDirs.make("openclaw-tilde-test-mkdir-", osHome());
     const newDir = path.join(dir, "os-home-subdir");
 
     await withEnvAsync({ OPENCLAW_HOME: openclawHome }, async () => {
@@ -182,8 +192,8 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
   });
 
   it("ignores OPENCLAW_HOME for readFile operations", async () => {
-    const openclawHome = await createTempDir("openclaw-home-override-", os.tmpdir());
-    const dir = await createTempDir("openclaw-tilde-test-edit-");
+    const openclawHome = tempDirs.make("openclaw-home-override-", os.tmpdir());
+    const dir = tempDirs.make("openclaw-tilde-test-edit-", osHome());
     const testFile = path.join(dir, "os-home-read.txt");
     await fs.writeFile(testFile, "OS home content", "utf8");
 
@@ -197,8 +207,8 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
   });
 
   it("ignores OPENCLAW_HOME for access operations", async () => {
-    const openclawHome = await createTempDir("openclaw-home-override-", os.tmpdir());
-    const dir = await createTempDir("openclaw-tilde-test-edit-");
+    const openclawHome = tempDirs.make("openclaw-home-override-", os.tmpdir());
+    const dir = tempDirs.make("openclaw-tilde-test-edit-", osHome());
     const testFile = path.join(dir, "os-home-access.txt");
     await fs.writeFile(testFile, "exists", "utf8");
 

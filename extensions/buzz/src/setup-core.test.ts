@@ -7,7 +7,20 @@ describe("buzzSetupContract", () => {
     vi.unstubAllEnvs();
   });
 
-  it("removes a stored private key when switching to BUZZ_PRIVATE_KEY", () => {
+  it("validates and applies BUZZ_PRIVATE_KEY setup without storing the key", () => {
+    expect(buzzSetupContract.metadata.fields.find((field) => field.key === "useEnv")).toMatchObject(
+      {
+        kind: "boolean",
+        envVars: ["BUZZ_PRIVATE_KEY"],
+      },
+    );
+    expect(
+      buzzSetupContract.validateInput?.({
+        cfg: {},
+        accountId: "default",
+        input: { relayUrl: "wss://buzz.example.com", useEnv: true },
+      }),
+    ).toBeNull();
     vi.stubEnv("BUZZ_PRIVATE_KEY", "22".repeat(32));
     const cfg = {
       channels: {
@@ -29,21 +42,6 @@ describe("buzzSetupContract", () => {
       enabled: true,
       relayUrl: "wss://buzz.example.com",
     });
-  });
-
-  it("rejects --use-env when BUZZ_PRIVATE_KEY is unset", () => {
-    vi.stubEnv("BUZZ_PRIVATE_KEY", "");
-    if (!buzzSetupContract.validateInput) {
-      throw new Error("Expected buzzSetupContract.validateInput to be defined");
-    }
-
-    expect(
-      buzzSetupContract.validateInput({
-        cfg: {} as OpenClawConfig,
-        accountId: "default",
-        input: { relayUrl: "wss://buzz.example.com", useEnv: true },
-      }),
-    ).toBe("BUZZ_PRIVATE_KEY is not set.");
   });
 
   it("clears an identity-bound auth tag when changing the private key", () => {

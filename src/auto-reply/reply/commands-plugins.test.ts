@@ -75,7 +75,7 @@ vi.mock("../../infra/archive.js", () => ({
   resolveArchiveKind: vi.fn(() => null),
 }));
 
-vi.mock("../../infra/clawhub.js", () => ({
+vi.mock("../../infra/clawhub-spec.js", () => ({
   parseClawHubPluginSpec: vi.fn(() => null),
 }));
 

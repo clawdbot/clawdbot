@@ -53,41 +53,13 @@ const CLI_RUN_QUEUE = new KeyedAsyncQueue();
 const CLI_IMAGE_SWEEP_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const sweptCliImageRoots = new Set<string>();
 
-export function isClaudeCliProvider(providerId: string): boolean {
+export function isClaudeCliBackendId(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === "claude-cli";
 }
 
 /** Enqueues a CLI run under a backend/session key to prevent unsafe overlap. */
 export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
   return CLI_RUN_QUEUE.enqueue(key, task);
-}
-
-/**
- * Hashes the (account, agent, auth-profile, session) tuple to a stable owner key
- * shared between the CLI run queue (`resolveCliRunQueueKey`) and the Claude live
- * session map (`buildClaudeLiveKey`). The two paths must agree byte-for-byte
- * within a single process so a fresh queued turn picks up the same live session
- * the registry already holds; the golden-hash test below pins the encoding.
- */
-export function buildClaudeOwnerKey(input: {
-  agentAccountId?: string;
-  agentId?: string;
-  authProfileId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-}): string {
-  return crypto
-    .createHash("sha256")
-    .update(
-      JSON.stringify({
-        agentAccountId: input.agentAccountId,
-        agentId: input.agentId,
-        authProfileId: input.authProfileId,
-        sessionId: input.sessionId,
-        sessionKey: input.sessionKey,
-      }),
-    )
-    .digest("hex");
 }
 
 /** Resolves the serialization key for a CLI backend run. */
@@ -101,11 +73,11 @@ export function resolveCliRunQueueKey(params: {
   ownerKey?: string;
 }): string {
   const requiresLiveSessionSerialization =
-    isClaudeCliProvider(params.backendId) && params.liveSession === "claude-stdio";
+    isClaudeCliBackendId(params.backendId) && params.liveSession === "claude-stdio";
   if (params.serialize === false && !requiresLiveSessionSerialization) {
     return `${params.backendId}:${params.runId}`;
   }
-  if (isClaudeCliProvider(params.backendId)) {
+  if (isClaudeCliBackendId(params.backendId)) {
     const ownerKey = params.ownerKey?.trim();
     if (requiresLiveSessionSerialization && ownerKey) {
       return `${params.backendId}:owner:${ownerKey}`;
@@ -416,6 +388,7 @@ export async function prepareCliPromptImagePayload(params: {
   prompt: string;
   imagePrompt?: string;
   workspaceDir: string;
+  localRoots?: readonly string[];
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   media?: MediaFact[];
@@ -439,6 +412,7 @@ export async function prepareCliPromptImagePayload(params: {
         existingImages: params.images,
         imageOrder: params.imageOrder,
         maxBytes: MAX_IMAGE_BYTES,
+        localRoots: params.localRoots,
       })
     : undefined;
   if (imageResult?.failedMediaCount) {

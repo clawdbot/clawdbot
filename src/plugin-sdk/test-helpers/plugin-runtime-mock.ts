@@ -1,4 +1,5 @@
 // Plugin runtime mock helpers build minimal runtime doubles for plugin SDK tests.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import type { InboundDebounceCreateParams } from "../../auto-reply/inbound-debounce.js";
 import { normalizeInboundTextNewlines } from "../../auto-reply/reply/inbound-text.js";
@@ -11,7 +12,7 @@ import {
 import { createChannelReplyPipeline } from "../../channels/message/reply-pipeline.js";
 import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
 import { createChannelRuntimeContextRegistry } from "../../plugins/runtime/channel-runtime-contexts.js";
-import { resolveSessionCatalogCreateTarget } from "../../plugins/runtime/runtime-agent-session-catalog.js";
+import { resolveAgentCatalogCreateTarget } from "../../plugins/runtime/runtime-agent-session-catalog.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import {
   implicitMentionKindWhen,
@@ -56,10 +57,6 @@ type ChannelStructuredContextResolution =
   | { kind: "absent" }
   | { kind: "present"; entries: ChannelStructuredContextEntries };
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function mergeDeep<T>(base: T, overrides: DeepPartial<T>): T {
   const result: Record<string, unknown> = { ...(base as Record<string, unknown>) };
   for (const [key, overrideValue] of Object.entries(overrides as Record<string, unknown>)) {
@@ -67,7 +64,7 @@ function mergeDeep<T>(base: T, overrides: DeepPartial<T>): T {
       continue;
     }
     const baseValue = result[key];
-    if (isObject(baseValue) && isObject(overrideValue)) {
+    if (isRecord(baseValue) && isRecord(overrideValue)) {
       result[key] = mergeDeep(baseValue, overrideValue);
       continue;
     }
@@ -529,7 +526,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         name: "test-agent",
       })) as unknown as PluginRuntime["agent"]["resolveAgentIdentity"],
       resolveSessionCatalogCreateTarget: vi.fn(
-        resolveSessionCatalogCreateTarget,
+        resolveAgentCatalogCreateTarget,
       ) as unknown as PluginRuntime["agent"]["resolveSessionCatalogCreateTarget"],
       resolveThinkingDefault: vi.fn(
         () => "off",
@@ -965,10 +962,6 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       openSyncKeyedStore: vi.fn(() => {
         throw new Error("openSyncKeyedStore mock is not configured");
       }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"],
-      withLease: vi.fn(
-        async (_options, run) =>
-          await run({ signal: new AbortController().signal, assertOwned: vi.fn() }),
-      ),
       openChannelIngressQueue: vi.fn(() => {
         throw new Error("openChannelIngressQueue mock is not configured");
       }) as unknown as PluginRuntime["state"]["openChannelIngressQueue"],

@@ -96,23 +96,6 @@
   }
 }
 
-/* ---- Sleeping eyes overlay ---- */
-
-.dreams__eyes {
-  animation: dreams-blink 6s ease-in-out infinite;
-}
-
-@keyframes dreams-blink {
-  0%,
-  90%,
-  100% {
-    opacity: 1;
-  }
-  95% {
-    opacity: 0;
-  }
-}
-
 /* ---- Floating Z's ---- */
 
 .dreams__z {
@@ -201,14 +184,6 @@
   pointer-events: none;
 }
 
-.dreams__bubble-label {
-  font-size: 12px; /* was 11px */
-  color: var(--accent-muted);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-weight: 600;
-}
-
 .dreams__bubble-text {
   font-size: 16px;
   color: var(--accent);
@@ -248,7 +223,7 @@
   width: 64px;
   height: 64px;
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #fef3c7, #fbbf24);
+  background: radial-gradient(circle at 35% 35%, var(--moon-highlight), var(--moon-base));
   box-shadow:
     0 0 40px rgba(251, 191, 36, 0.2),
     0 0 80px rgba(251, 191, 36, 0.08);
@@ -1112,7 +1087,7 @@
 
 /* ---- Responsive ---- */
 
-@media (max-width: 880px) {
+@media (max-width: 900px) {
   .dreams {
     min-height: calc(100vh - 96px);
   }

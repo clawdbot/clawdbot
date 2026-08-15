@@ -6,6 +6,7 @@ import { registerModelsCli } from "./models-cli.js";
 import { isCommandJsonOutputMode } from "./program/json-mode.js";
 
 const mocks = vi.hoisted(() => ({
+  modelsListCommand: vi.fn().mockResolvedValue(undefined),
   modelsStatusCommand: vi.fn().mockResolvedValue(undefined),
   modelsSetCommand: vi.fn().mockResolvedValue(undefined),
   modelsSetImageCommand: vi.fn().mockResolvedValue(undefined),
@@ -33,7 +34,7 @@ const {
 } = mocks;
 
 vi.mock("../commands/models/list.list-command.js", () => ({
-  modelsListCommand: mocks.noopAsync,
+  modelsListCommand: mocks.modelsListCommand,
 }));
 vi.mock("../commands/models/list.status-command.js", () => ({
   modelsStatusCommand: mocks.modelsStatusCommand,
@@ -85,6 +86,7 @@ vi.mock("../commands/models/set-image.js", () => ({
 
 describe("models cli", () => {
   beforeEach(() => {
+    mocks.modelsListCommand.mockClear();
     modelsAuthAddCommand.mockClear();
     modelsAuthListCommand.mockClear();
     modelsAuthLoginCommand.mockClear();
@@ -151,6 +153,24 @@ describe("models cli", () => {
     expect(detected).toBe(true);
   });
 
+  it("does not apply the parent status alias to a child action", async () => {
+    const program = createProgram();
+    let detected = true;
+    program.hook("preAction", (_command, actionCommand) => {
+      detected = isCommandJsonOutputMode(actionCommand, process.argv);
+    });
+
+    const originalArgv = process.argv;
+    process.argv = ["node", "openclaw", "models", "--status-json", "list"];
+    try {
+      await program.parseAsync(["models", "--status-json", "list"], { from: "user" });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(detected).toBe(false);
+  });
+
   it("forwards bare --json to the default status report", async () => {
     await runModelsCommand(["models", "--json"]);
 
@@ -183,6 +203,14 @@ describe("models cli", () => {
   ])("passes --agent to models status ($label)", async ({ args }) => {
     await runModelsCommand(args);
     expectCommandOptions(modelsStatusCommand, { agent: "poe" });
+  });
+
+  it.each([
+    { label: "list flag", args: ["models", "list", "--agent", "poe"] },
+    { label: "parent flag", args: ["models", "--agent", "poe", "list"] },
+  ])("passes --agent to models list ($label)", async ({ args }) => {
+    await runModelsCommand(args);
+    expectCommandOptions(mocks.modelsListCommand, { agent: "poe" });
   });
 
   it.each([

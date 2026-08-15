@@ -12,6 +12,7 @@ import {
   resolveActiveReplyRunSessionId,
   type ReplyBackendQueueMessageOptions,
   type ReplyBackendQueueMessageResult,
+  type ReplyBackendMessageInjection,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   isAgentEventLifecycleGenerationCurrent,
@@ -28,10 +29,22 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 export type EmbeddedAgentQueueHandle = {
   kind?: "embedded";
   runId?: string;
+  /** Exact authority of the concrete provider/model attempt behind this handle. */
+  toolAuthorityFingerprint?: string;
+  /** Atomically consumes one plain-text answer for this run's pending user-input request. */
+  claimPendingUserInputAnswer?: (
+    text: string,
+    options?: EmbeddedAgentQueueMessageOptions,
+  ) => Promise<boolean>;
+  /** Cancels this run's pending user-input request before an image is queued as a later turn. */
+  cancelPendingUserInput?: (resolvedBy: string) => Promise<boolean>;
+  /** Exact heartbeat owner retained after its reply-operation registration clears. */
+  readonly preemptByVisibleTurn?: () => boolean;
   queueMessage: (
     text: string,
     options?: EmbeddedAgentQueueMessageOptions,
   ) => Promise<void | EmbeddedAgentQueueMessageResult>;
+  messageInjection?: ReplyBackendMessageInjection;
   isStreaming: () => boolean;
   isStopped?: () => boolean;
   /** True after this handle has accepted an abort, even while cleanup retains it. */
@@ -59,6 +72,7 @@ export type ActiveEmbeddedRunSnapshot = {
 
 export type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
+  handle?: EmbeddedAgentQueueHandle;
   timer?: NodeJS.Timeout;
 };
 

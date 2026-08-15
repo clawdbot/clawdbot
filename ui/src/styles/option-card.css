@@ -48,14 +48,12 @@
   transition:
     border-color var(--duration-fast) var(--ease-out),
     background var(--duration-fast) var(--ease-out),
-    box-shadow var(--duration-fast) var(--ease-out),
-    transform var(--duration-fast) var(--ease-out);
+    box-shadow var(--duration-fast) var(--ease-out);
 }
 
 .option-card__choice:hover:not(:disabled) {
   border-color: var(--border-strong);
   background: var(--bg-hover);
-  transform: translateY(-1px);
 }
 
 .option-card__choice:focus-visible {
@@ -65,6 +63,14 @@
 
 .option-card__choice--recommended,
 .option-card__choice--selected {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+/* Hover must not swap the accent tint for the neutral one; the mismatched
+   layers read as the card overlapping itself. */
+.option-card__choice--recommended:hover:not(:disabled),
+.option-card__choice--selected:hover:not(:disabled) {
   border-color: var(--accent);
   background: var(--accent-subtle);
 }
@@ -112,7 +118,7 @@
   color: var(--text);
 }
 
-@media (max-width: 700px) {
+@media (max-width: 768px) {
   .option-card__choices {
     grid-template-columns: 1fr;
   }

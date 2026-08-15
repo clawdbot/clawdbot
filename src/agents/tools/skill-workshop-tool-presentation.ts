@@ -1,8 +1,15 @@
+import { stableStringify } from "@openclaw/normalization-core";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
+  SkillProposalEvaluation,
   SkillProposalManifestEntry,
   SkillProposalReadResult,
   SkillProposalStatus,
 } from "../../skills/workshop/types.js";
+
+const SKILL_PROPOSAL_EVALUATION_MAX_CHARS = 999;
+const EVALUATION_TRUNCATION_MARKER =
+  "\n[truncated: evaluator details exceed the model projection limit]";
 
 export function listProposalEntries(params: {
   proposals: readonly SkillProposalManifestEntry[];
@@ -68,6 +75,24 @@ export function formatProposalList(proposals: readonly SkillProposalManifestEntr
     .join("\n");
 }
 
+export function formatProposalEvaluation(
+  evaluation: SkillProposalEvaluation,
+  proposalId?: string,
+): string {
+  const heading = proposalId
+    ? `Evaluated skill proposal ${proposalId} with ${evaluation.outcomes.length} evaluator result(s).`
+    : `Evaluation: ${evaluation.outcomes.length} result(s), ${evaluation.trigger}, ${evaluation.completedAt}`;
+  const counts = { pass: 0, revise: 0, block: 0, none: 0, error: 0, skipped: 0 };
+  for (const outcome of evaluation.outcomes) {
+    counts[outcome.status === "completed" ? (outcome.result.decision ?? "none") : outcome.status]++;
+  }
+  const outcomes = stableStringify(evaluation.outcomes);
+  const text = `${heading}\nDecisions: pass=${counts.pass}, revise=${counts.revise}, block=${counts.block}, none=${counts.none}; errors=${counts.error}; skipped=${counts.skipped}.\nOutcomes: ${outcomes}`;
+  return text.length > SKILL_PROPOSAL_EVALUATION_MAX_CHARS
+    ? `${truncateUtf16Safe(text, SKILL_PROPOSAL_EVALUATION_MAX_CHARS - EVALUATION_TRUNCATION_MARKER.length)}${EVALUATION_TRUNCATION_MARKER}`
+    : text;
+}
+
 export function formatProposalInspect(proposal: SkillProposalReadResult): string {
   const supportFiles =
     proposal.supportFiles && proposal.supportFiles.length > 0
@@ -78,24 +103,7 @@ export function formatProposalInspect(proposal: SkillProposalReadResult): string
         ]
       : [];
   const evaluation = proposal.record.evaluation;
-  const evaluationLines = evaluation
-    ? [
-        "",
-        `Evaluation: ${evaluation.outcomes.length} result(s), ${evaluation.trigger}, ${evaluation.completedAt}`,
-        ...evaluation.outcomes.map((outcome) => {
-          const label = `${outcome.pluginId}/${outcome.evaluatorId}`;
-          if (outcome.status === "error") {
-            return `- ${label}: error - ${outcome.error}`;
-          }
-          if (outcome.status === "skipped") {
-            return `- ${label}: skipped`;
-          }
-          const decision = outcome.result.decision ? `, ${outcome.result.decision}` : "";
-          const summary = outcome.result.summary ? ` - ${outcome.result.summary}` : "";
-          return `- ${label}: completed${decision}${summary}`;
-        }),
-      ]
-    : [];
+  const evaluationLines = evaluation ? [formatProposalEvaluation(evaluation)] : [];
   return [
     `Proposal: ${proposal.record.id}`,
     `Status: ${proposal.record.status}`,

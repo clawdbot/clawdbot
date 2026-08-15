@@ -1,6 +1,7 @@
 // Control UI view renders dreaming screen content.
 import "../../../styles/lobster-pet.css";
 import { expectDefined } from "@openclaw/normalization-core";
+import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { renderHubTabs } from "../../../components/hub-tabs.ts";
@@ -72,8 +73,7 @@ function parseDiaryEntries(raw: string): DiaryEntry[] {
 }
 
 function parseDiaryTimestamp(date: string): number | null {
-  const parsed = Date.parse(date);
-  return Number.isFinite(parsed) ? parsed : null;
+  return parseDateStringTimestampMs(date) ?? null;
 }
 
 function formatDiaryChipLabel(date: string): string {
@@ -443,8 +443,8 @@ function formatRange(path: string, startLine: number, endLine: number): string {
 }
 
 function formatCompactDateTime(value: string): string {
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) {
+  const parsed = parseDateStringTimestampMs(value);
+  if (parsed === undefined) {
     return value;
   }
   return new Date(parsed).toLocaleString([], {
@@ -684,11 +684,7 @@ function renderDiarySubtabExplainer(activeDiarySubTab: DreamingViewState["active
 }
 
 function parseSortableTimestamp(value?: string): number {
-  if (!value) {
-    return Number.NEGATIVE_INFINITY;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+  return parseDateStringTimestampMs(value) ?? Number.NEGATIVE_INFINITY;
 }
 
 function compareWaitingEntryByRecency(a: DreamingEntry, b: DreamingEntry): number {

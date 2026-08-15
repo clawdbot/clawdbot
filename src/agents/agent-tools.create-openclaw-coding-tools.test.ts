@@ -32,11 +32,6 @@ import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { isPluginToolAllowed } from "../plugins/tool-grant-allowlist.js";
-import { createAgentExecutionAttribution } from "./agent-execution-attribution.js";
-import {
-  createOpenClawCodingToolsForAgentHarness,
-  createOpenClawCodingToolsForAgentHarnessSideQuestion,
-} from "./agent-tools-internal.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
@@ -48,8 +43,11 @@ import {
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
-import { bindEmbeddedAttemptExecutionAttribution } from "./embedded-agent-runner/run/attempt-execution-attribution.js";
-import { bindAgentHarnessSideQuestionExecutionAttribution } from "./harness/side-question-execution-attribution.js";
+import {
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapabilityResolver,
+} from "./cron-creator-authority-context.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { expectReadWriteEditTools } from "./test-helpers/agent-tools-fs-helpers.js";
@@ -57,7 +55,7 @@ import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandb
 import { stubTool } from "./test-helpers/fast-tool-stubs.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { buildEmptyExplicitToolAllowlistError } from "./tool-allowlist-guard.js";
-import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "./tool-policy.js";
+import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolPolicyName } from "./tool-policy.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -65,6 +63,7 @@ const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
   "base64",
 );
+const avifHeaderBuffer = Buffer.from("00000018667479706176696600000000617669666d696631", "hex");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set(["minContains", "maxContains"]);
 function collectActionValues(schema: unknown, values: Set<string>): void {
@@ -128,8 +127,8 @@ function expectNoSubagentControlTools(tools: ReturnType<typeof createOpenClawCod
 }
 
 function applyRuntimeToolsAllow<T extends { name: string }>(tools: T[], toolsAllow: string[]) {
-  const allowSet = new Set(toolsAllow.map((name) => normalizeToolName(name)));
-  return tools.filter((tool) => allowSet.has(normalizeToolName(tool.name)));
+  const allowSet = new Set(toolsAllow.map((name) => normalizeToolPolicyName(name)));
+  return tools.filter((tool) => allowSet.has(normalizeToolPolicyName(tool.name)));
 }
 
 type OpenClawCodingTool = ReturnType<typeof createOpenClawCodingTools>[number];
@@ -300,153 +299,110 @@ describe("createOpenClawCodingTools", () => {
     );
   });
 
-  it("does not accept host-owned attribution through the public tool builder", async () => {
-    const beforeToolCall = vi.fn();
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
-    );
-    const tmpDir = tempDirs.make("openclaw-hook-attribution-");
-    await fs.writeFile(path.join(tmpDir, "note.txt"), "hello");
-    const forgedAttribution = createAgentExecutionAttribution({
+  it("binds configured MCP cron authority only to the exact admitted run", async () => {
+    const resolve = vi.fn().mockResolvedValue({
+      tools: ["read", { name: "mcp_todoist_add_task", pluginId: "todoist" }],
+      provenance: { version: 1, source: "final-executable-surface" },
+    });
+    let releaseRun: (() => void) | undefined;
+    const holdRun = new Promise<void>((resolveHold) => {
+      releaseRun = resolveHold;
+    });
+    let retainedResolver: (() => Promise<unknown>) | undefined;
+
+    vi.mocked(createOpenClawTools).mockClear();
+    const forgedTools = runWithCronCreatorAuthorityCapabilityResolver({
+      capability: undefined,
       runId: "forged-run",
-      lifecycleGeneration: "forged-generation",
-      sessionKey: "forged-session",
-      sessionId: "forged-session-id",
-      agentId: "forged-agent",
+      resolve,
+      run: () => createOpenClawCodingTools({ runId: "forged-run", senderIsOwner: false }),
     });
-    const tools = createOpenClawCodingTools({
-      workspaceDir: tmpDir,
-      runId: "public-run",
-      sessionKey: "public-session",
-      sessionId: "public-session-id",
-      agentId: "public-agent",
-      attribution: forgedAttribution,
-    } as never);
+    expect(toolNameList(forgedTools)).not.toContain("automations");
+    expect(
+      vi.mocked(createOpenClawTools).mock.lastCall?.[0]?.resolveCronCreatorToolAuthority,
+    ).toBeUndefined();
 
-    await requireToolExecute(requireTool(tools, "read"))("tool-public-attribution", {
-      path: "note.txt",
+    const capability = createCronCreatorAuthorityCapability("admitted-run")!;
+    const activeRun = runWithCronCreatorAuthorityCapability(capability, async () => {
+      const wrongRunTools = runWithCronCreatorAuthorityCapabilityResolver({
+        capability,
+        runId: "other-run",
+        resolve,
+        run: () => createOpenClawCodingTools({ runId: "admitted-run", senderIsOwner: false }),
+      });
+      expect(toolNameList(wrongRunTools)).not.toContain("automations");
+      expect(
+        vi.mocked(createOpenClawTools).mock.lastCall?.[0]?.resolveCronCreatorToolAuthority,
+      ).toBeUndefined();
+
+      const admittedTools = runWithCronCreatorAuthorityCapabilityResolver({
+        capability,
+        runId: "admitted-run",
+        resolve,
+        run: () => createOpenClawCodingTools({ runId: "admitted-run", senderIsOwner: false }),
+      });
+      const admittedToolNames = toolNameList(admittedTools);
+      expect(admittedToolNames).toContain("automations");
+      expect(admittedToolNames).not.toContain("gateway");
+      expect(admittedToolNames).not.toContain("nodes");
+      expect(admittedToolNames).not.toContain("openclaw");
+      retainedResolver =
+        vi.mocked(createOpenClawTools).mock.lastCall?.[0]?.resolveCronCreatorToolAuthority;
+      expect(retainedResolver).toEqual(expect.any(Function));
+      await expect(retainedResolver!()).resolves.toMatchObject({
+        provenance: { source: "final-executable-surface" },
+      });
+      await holdRun;
     });
 
-    expect(beforeToolCall.mock.calls[0]?.[1]).toMatchObject({
-      runId: "public-run",
-      sessionKey: "public-session",
-      sessionId: "public-session-id",
-      agentId: "public-agent",
-    });
-    expect(beforeToolCall.mock.calls[0]?.[1]).not.toHaveProperty("lifecycleGeneration");
+    releaseRun?.();
+    await activeRun;
+    await expect(retainedResolver!()).rejects.toThrow(
+      "Configured MCP cron authority is no longer active for this run",
+    );
+    expect(
+      toolNameList(createOpenClawCodingTools({ runId: "admitted-run", senderIsOwner: false })),
+    ).not.toContain("automations");
+    expect(resolve).toHaveBeenCalledTimes(1);
   });
 
-  it("binds exact host attribution for a core-admitted harness attempt", async () => {
-    const beforeToolCall = vi.fn();
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+  it("drops senderless Automations retention when exact authority aborts or errors", async () => {
+    const resolve = async () => ({
+      tools: ["read"],
+      provenance: { version: 1 as const, source: "final-executable-surface" as const },
+    });
+    const buildTools = (capability: ReturnType<typeof createCronCreatorAuthorityCapability>) =>
+      runWithCronCreatorAuthorityCapabilityResolver({
+        capability,
+        runId: "lifecycle-run",
+        resolve,
+        run: () => createOpenClawCodingTools({ runId: "lifecycle-run", senderIsOwner: false }),
+      });
+
+    const abortController = new AbortController();
+    const abortedCapability = createCronCreatorAuthorityCapability("lifecycle-run")!;
+    await runWithCronCreatorAuthorityCapability(
+      abortedCapability,
+      async () => {
+        expect(toolNameList(buildTools(abortedCapability))).toContain("automations");
+        abortController.abort(new Error("run cancelled"));
+        expect(toolNameList(buildTools(abortedCapability))).not.toContain("automations");
+      },
+      abortController.signal,
     );
-    const tmpDir = tempDirs.make("openclaw-harness-attribution-");
-    await fs.writeFile(path.join(tmpDir, "note.txt"), "hello");
-    const attribution = createAgentExecutionAttribution({
-      runId: "admitted-run",
-      lifecycleGeneration: "admitted-generation",
-      sessionKey: "admitted-session",
-      sessionId: "admitted-session-id",
-      agentId: "admitted-agent",
-    });
-    const attempt = {} as Parameters<typeof bindEmbeddedAttemptExecutionAttribution>[0];
-    bindEmbeddedAttemptExecutionAttribution(attempt, attribution);
+    expect(abortedCapability.active).toBe(false);
 
-    const tools = createOpenClawCodingToolsForAgentHarness(attempt, {
-      workspaceDir: tmpDir,
-      runId: "flat-run",
-      sessionKey: "flat-session",
-      sessionId: "flat-session-id",
-      agentId: "flat-agent",
-    });
-    await requireToolExecute(requireTool(tools, "read"))("tool-harness-attribution", {
-      path: "note.txt",
-    });
-
-    expect(beforeToolCall.mock.calls[0]?.[1]).toMatchObject({
-      runId: attribution.runId,
-      sessionKey: attribution.sessionKey,
-      sessionId: attribution.sessionId,
-      agentId: attribution.agentId,
-    });
-    expect(beforeToolCall.mock.calls[0]?.[1]).not.toHaveProperty("executionId");
-    expect(beforeToolCall.mock.calls[0]?.[1]).not.toHaveProperty("contextId");
-    expect(beforeToolCall.mock.calls[0]?.[1]).not.toHaveProperty("attribution");
-
-    beforeToolCall.mockClear();
-    const unboundTools = createOpenClawCodingToolsForAgentHarness(
-      {} as Parameters<typeof bindEmbeddedAttemptExecutionAttribution>[0],
-      {
-        workspaceDir: tmpDir,
-        runId: "unbound-run",
-        sessionKey: "unbound-session",
-        attribution,
-      } as never,
-    );
-    await requireToolExecute(requireTool(unboundTools, "read"))("tool-unbound-attribution", {
-      path: "note.txt",
-    });
-    expect(beforeToolCall.mock.calls[0]?.[1]).toMatchObject({
-      runId: "unbound-run",
-      sessionKey: "unbound-session",
-    });
-    expect(beforeToolCall.mock.calls[0]?.[1]).not.toHaveProperty("lifecycleGeneration");
-  });
-
-  it("binds exact host attribution for the admitted side-question request only", async () => {
-    const beforeToolCall = vi.fn();
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
-    );
-    const tmpDir = tempDirs.make("openclaw-side-question-attribution-");
-    await fs.writeFile(path.join(tmpDir, "note.txt"), "hello");
-    const attribution = createAgentExecutionAttribution({
-      runId: "side-run",
-      lifecycleGeneration: "side-generation",
-      sessionKey: "side-session",
-      sessionId: "side-session-id",
-      agentId: "side-agent",
-    });
-    const sideQuestion = bindAgentHarnessSideQuestionExecutionAttribution(
-      {} as Parameters<typeof bindAgentHarnessSideQuestionExecutionAttribution>[0],
-      attribution,
-    );
-
-    const tools = createOpenClawCodingToolsForAgentHarnessSideQuestion(sideQuestion, {
-      workspaceDir: tmpDir,
-      runId: "flat-run",
-      sessionKey: "flat-session",
-      sessionId: "flat-session-id",
-      agentId: "flat-agent",
-    });
-    await requireToolExecute(requireTool(tools, "read"))("tool-side-attribution", {
-      path: "note.txt",
-    });
-
-    expect(beforeToolCall.mock.calls[0]?.[1]).toMatchObject({
-      runId: attribution.runId,
-      sessionKey: attribution.sessionKey,
-      sessionId: attribution.sessionId,
-      agentId: attribution.agentId,
-    });
-    expect(sideQuestion).not.toHaveProperty("attribution");
-
-    beforeToolCall.mockClear();
-    const cloneTools = createOpenClawCodingToolsForAgentHarnessSideQuestion({ ...sideQuestion }, {
-      workspaceDir: tmpDir,
-      runId: "clone-run",
-      sessionKey: "clone-session",
-      attribution,
-    } as never);
-    await requireToolExecute(requireTool(cloneTools, "read"))("tool-side-clone", {
-      path: "note.txt",
-    });
-    expect(beforeToolCall.mock.calls[0]?.[1]).toMatchObject({
-      runId: "clone-run",
-      sessionKey: "clone-session",
-    });
-    expect(beforeToolCall.mock.calls[0]?.[1]).not.toHaveProperty("lifecycleGeneration");
+    const failedCapability = createCronCreatorAuthorityCapability("lifecycle-run")!;
+    await expect(
+      runWithCronCreatorAuthorityCapability(failedCapability, async () => {
+        expect(toolNameList(buildTools(failedCapability))).toContain("automations");
+        throw new Error("run failed");
+      }),
+    ).rejects.toThrow("run failed");
+    expect(failedCapability.active).toBe(false);
+    expect(
+      toolNameList(createOpenClawCodingTools({ runId: "lifecycle-run", senderIsOwner: false })),
+    ).not.toContain("automations");
   });
 
   it("re-wraps existing before_tool_call hooks once with the current context", async () => {
@@ -2783,6 +2739,39 @@ describe("createOpenClawCodingTools read behavior", () => {
     expect(readFile).not.toHaveBeenCalled();
   });
 
+  it("resolves Unicode-equivalent filenames through sandbox operations", async () => {
+    const tmpDir = tempDirs.make("openclaw-sbx-unicode-");
+    const storedName = "re\u0301sume\u0301 3.04\u202fPM d\u2019accord.txt";
+    await fs.writeFile(path.join(tmpDir, storedName), "sandbox match");
+    const readTool = createSandboxedReadTool({
+      root: tmpDir,
+      bridge: createHostSandboxFsBridge(tmpDir),
+    });
+
+    const result = await readTool.execute("sandbox-unicode", {
+      path: "r\u00e9sum\u00e9 3.04 PM d'accord.txt",
+    });
+
+    expect(extractToolText(result)).toContain("Resolved filename");
+    expect(extractToolText(result)).toContain("sandbox match");
+  });
+
+  it("classifies sandbox AVIF reads from the already-read buffer", async () => {
+    const tmpDir = tempDirs.make("openclaw-sbx-avif-");
+    await fs.writeFile(path.join(tmpDir, "photo.bin"), avifHeaderBuffer);
+    const hostBridge = createHostSandboxFsBridge(tmpDir);
+    const readFile = vi.fn(hostBridge.readFile.bind(hostBridge));
+    const readTool = createSandboxedReadTool({
+      root: tmpDir,
+      bridge: { ...hostBridge, readFile },
+    });
+
+    const result = await readTool.execute("sandbox-avif", { path: "photo.bin" });
+
+    expect(extractToolText(result)).toContain("Read image file [image/avif]");
+    expect(readFile).toHaveBeenCalledTimes(1);
+  });
+
   it("auto-pages read output across chunks when context window budget allows", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-autopage-"));
     const filePath = path.join(tmpDir, "big.txt");
@@ -2851,7 +2840,7 @@ describe("createOpenClawCodingTools read behavior", () => {
     }
   });
 
-  it("returns empty content for explicit offsets beyond EOF", async () => {
+  it("describes explicit offsets beyond EOF", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-offset-eof-"));
     await fs.writeFile(path.join(tmpDir, "notes.txt"), "one\ntwo\nthree", "utf8");
     try {
@@ -2865,13 +2854,15 @@ describe("createOpenClawCodingTools read behavior", () => {
         limit: 10,
       });
 
-      expect(extractToolText(result)).toBe("");
+      expect(extractToolText(result)).toBe(
+        "Offset 99 is beyond end of file (3 lines total). Retry with offset <= 3.",
+      );
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
 
-  it("returns empty content for adaptive offsets beyond EOF", async () => {
+  it("ignores a trailing newline when describing offsets beyond EOF", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-offset-adaptive-"));
     await fs.writeFile(path.join(tmpDir, "notes.txt"), "one\ntwo\nthree\n", "utf8");
     try {
@@ -2884,13 +2875,15 @@ describe("createOpenClawCodingTools read behavior", () => {
         offset: 99,
       });
 
-      expect(extractToolText(result)).toBe("");
+      expect(extractToolText(result)).toBe(
+        "Offset 99 is beyond end of file (3 lines total). Retry with offset <= 3.",
+      );
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
 
-  it("returns already-read adaptive content when pagination reaches EOF", async () => {
+  it("stops adaptive pagination when the current page reaches EOF", async () => {
     const readResult: AgentToolResult<unknown> = {
       content: [
         {
@@ -2902,14 +2895,12 @@ describe("createOpenClawCodingTools read behavior", () => {
         truncation: {
           truncated: true,
           outputLines: 1,
+          totalLines: 1,
           firstLineExceedsLimit: false,
         },
       },
     };
-    const execute = vi
-      .fn()
-      .mockResolvedValueOnce(readResult)
-      .mockRejectedValueOnce(new Error("Offset 2 is beyond end of file (1 lines total)"));
+    const execute = vi.fn().mockResolvedValue(readResult);
     const readTool = createOpenClawReadTool({
       name: "read",
       label: "read",
@@ -2927,7 +2918,7 @@ describe("createOpenClawCodingTools read behavior", () => {
     });
 
     expect(extractToolText(result)).toBe("one");
-    expect(execute).toHaveBeenCalledTimes(2);
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it("keeps unrelated read failures loud", async () => {

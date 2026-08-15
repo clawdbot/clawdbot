@@ -1,4 +1,5 @@
 // ACPX tests cover register plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { runtimeRegistry } = vi.hoisted(() => ({
@@ -76,14 +77,6 @@ function restoreEnv(): void {
   } else {
     process.env.OPENCLAW_SKIP_ACPX_RUNTIME = previousSkipRuntime;
   }
-}
-
-function createDeferred() {
-  let resolve: () => void = () => {};
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 function createServiceContext() {
@@ -185,8 +178,8 @@ describe("acpx register runtime service", () => {
 
   it("rejects stale publication after stop invalidates the deferred backend", async () => {
     delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME;
-    const startEntered = createDeferred();
-    const releasePublication = createDeferred();
+    const startEntered = createDeferred<void>();
+    const releasePublication = createDeferred<void>();
     realServiceStartMock.mockImplementationOnce(async (_ctx, backendLifecycle) => {
       startEntered.resolve();
       await releasePublication.promise;
@@ -236,8 +229,8 @@ describe("acpx register runtime service", () => {
 
   it("keeps a successor generation registered when old cleanup finishes late", async () => {
     delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME;
-    const published = createDeferred();
-    const releaseProbe = createDeferred();
+    const published = createDeferred<void>();
+    const releaseProbe = createDeferred<void>();
     realServiceStartMock.mockImplementationOnce(async (_ctx, backendLifecycle) => {
       if (!backendLifecycle) {
         throw new Error("expected outer backend lifecycle");

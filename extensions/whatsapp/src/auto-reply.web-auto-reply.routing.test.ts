@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installWebAutoReplyUnitTestHooks, makeSessionStore } from "./auto-reply.test-harness.js";
 import { buildMentionConfig } from "./auto-reply/mentions.js";
-import { createEchoTracker } from "./auto-reply/monitor/echo.js";
 import { createWebOnMessageHandler } from "./auto-reply/monitor/on-message.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 
@@ -60,7 +59,6 @@ function createHandlerForTest(opts: { cfg: OpenClawConfig; replyResolver: unknow
     groupHistoryLimit: 3,
     groupHistories: new Map(),
     groupMemberNames: new Map(),
-    echoTracker: createEchoTracker({ maxItems: 10 }),
     backgroundTasks,
     replyResolver: opts.replyResolver as Parameters<
       typeof createWebOnMessageHandler

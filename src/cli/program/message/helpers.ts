@@ -1,3 +1,7 @@
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 // Shared helpers for message CLI actions: common flags, plugin preload, numeric validation, and stop hooks.
 import type { Command } from "commander";
 import { getChannelPlugin } from "../../../channels/plugins/index.js";
@@ -9,11 +13,8 @@ import { resolveMessageSecretScope } from "../../../cli/message-secret-scope.js"
 import { messageCommand } from "../../../commands/message.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { danger, setVerbose } from "../../../globals.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import { CHANNEL_TARGET_DESCRIPTION } from "../../../infra/outbound/channel-target.js";
-import {
-  parseStrictNonNegativeInteger,
-  parseStrictPositiveInteger,
-} from "../../../infra/parse-finite-number.js";
 import { withActivatedPluginIds } from "../../../plugins/activation-context.js";
 import {
   resolveConfiguredChannelPluginIds,
@@ -84,7 +85,8 @@ async function runPluginStopHooks(): Promise<void> {
   const hookRun = runGlobalGatewayStopSafely({
     event: { reason: "cli message action complete" },
     ctx: {},
-    onError: (err) => defaultRuntime.error(danger(`gateway_stop hook failed: ${String(err)}`)),
+    onError: (err) =>
+      defaultRuntime.error(danger(`gateway_stop hook failed: ${formatErrorMessage(err)}`)),
   });
   const bounded = new Promise<"timeout">((resolve) => {
     timeout = setTimeout(() => resolve("timeout"), GATEWAY_STOP_TIMEOUT_MS);
@@ -210,7 +212,7 @@ export function createMessageCliHelpers(
       },
       (err) => {
         failed = true;
-        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.error(danger(formatErrorMessage(err)));
       },
     );
     // Outbound actions may start plugin-side resources; run bounded stop hooks even after failure.

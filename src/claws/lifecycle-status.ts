@@ -1,8 +1,14 @@
+import { stableStringify } from "@openclaw/normalization-core";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  inspectBundlePluginArtifact,
+  inspectNativePluginArtifact,
+  PLUGIN_ARTIFACT_ADAPTER_IDENTITY,
+} from "../plugins/install-artifact-inspection.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { readClawCronRefs, type PersistedClawCronRef } from "./cron.js";
 import { digestClawAgentConfig } from "./lifecycle-config-removal.js";
@@ -30,8 +36,9 @@ import {
   readClawInstallRecords,
   readClawPackageRefs,
   type PersistedClawInstall,
+  type PersistedClawPackageRef,
 } from "./provenance.js";
-import { CLAW_OUTPUT_STABILITY } from "./types.js";
+import { CLAW_OUTPUT_STABILITY, type ClawPackagePreflight } from "./types.js";
 import { readClawWorkspaceFiles } from "./workspace.js";
 
 const CLAW_STATUS_SCHEMA_VERSION = "openclaw.clawStatus.v1" as const;
@@ -40,6 +47,89 @@ type ClawMcpServerStatus = PersistedClawMcpServerRef & {
   state: "present" | "modified" | "missing" | "pending" | "failed";
 };
 
+export type ClawPackageStatus = ClawPackageInspection & {
+  extensionCompatibility?: {
+    state: "compatible" | "drifted" | "unavailable";
+    detectedFormat?: NonNullable<ClawPackageInspection["extension"]>["detectedFormat"];
+    mapped: string[];
+    unavailable: string[];
+    adapterIdentity?: string;
+    message?: string;
+  };
+};
+
+async function inspectClawPackageCompatibility(params: {
+  install: PersistedClawInstall;
+  packageRef: PersistedClawPackageRef;
+  packageDeps?: PackageRemovalDeps;
+  packagePreflight?: ClawPackagePreflight;
+}): Promise<ClawPackageStatus> {
+  const inspected: ClawPackageStatus = await inspectClawPackage(
+    params.install,
+    params.packageRef,
+    params.packageDeps,
+  );
+  if (!params.packageRef.extension || inspected.state !== "present") {
+    return inspected;
+  }
+  let current: {
+    detectedFormat: NonNullable<ClawPackageInspection["extension"]>["detectedFormat"];
+    mapped: string[];
+    unavailable: string[];
+    adapterIdentity: string;
+  };
+  if (params.packagePreflight) {
+    const preflight = await params.packagePreflight(params.packageRef, params.install.workspace);
+    if (!preflight.ok) {
+      inspected.extensionCompatibility = {
+        state: "unavailable",
+        mapped: [],
+        unavailable: [],
+        message: preflight.message ?? "Canonical extension inspection is unavailable.",
+      };
+      return inspected;
+    }
+    current = {
+      detectedFormat: preflight.detectedFormat!,
+      mapped: preflight.mapped ?? [],
+      unavailable: preflight.unavailable ?? [],
+      adapterIdentity: preflight.adapterIdentity!,
+    };
+  } else {
+    // Status and doctor stay offline. Artifact identity was verified above, so the
+    // current adapter can recompute compatibility from persisted capability inventory.
+    // Update planning supplies packagePreflight and reports unavailable inspection.
+    const recorded = params.packageRef.extension;
+    const artifact =
+      recorded.detectedFormat === "openclaw"
+        ? inspectNativePluginArtifact()
+        : inspectBundlePluginArtifact({
+            format: recorded.detectedFormat,
+            capabilities: [...recorded.mapped, ...recorded.unavailable],
+          });
+    current = {
+      detectedFormat: recorded.detectedFormat,
+      mapped: artifact.mapped,
+      unavailable: artifact.unavailable,
+      adapterIdentity: PLUGIN_ARTIFACT_ADAPTER_IDENTITY,
+    };
+  }
+  const recorded = {
+    detectedFormat: params.packageRef.extension.detectedFormat,
+    mapped: params.packageRef.extension.mapped,
+    unavailable: params.packageRef.extension.unavailable,
+    adapterIdentity: params.packageRef.extension.adapterIdentity,
+  };
+  inspected.extensionCompatibility = {
+    state: stableStringify(current) === stableStringify(recorded) ? "compatible" : "drifted",
+    detectedFormat: current.detectedFormat,
+    mapped: current.mapped,
+    unavailable: current.unavailable,
+    adapterIdentity: current.adapterIdentity,
+  };
+  return inspected;
+}
+
 export type ClawStatusRecord = {
   install: PersistedClawInstall;
   orphaned?: boolean;
@@ -47,7 +137,7 @@ export type ClawStatusRecord = {
   bootstrapState: ClawBootstrapStatus["state"];
   bootstrap: ClawBootstrapStatus;
   workspaceFiles: ClawManagedFileStatus[];
-  packages: ClawPackageInspection[];
+  packages: ClawPackageStatus[];
   mcpServers: ClawMcpServerStatus[];
   cronJobs: PersistedClawCronRef[];
 };
@@ -66,6 +156,7 @@ type ClawStatusResult = {
     packageRefs: number;
     missingPackages: number;
     driftedPackages: number;
+    unavailableExtensions: number;
     incompletePackages: number;
     mcpServerRefs: number;
     driftedMcpServers: number;
@@ -99,6 +190,7 @@ export async function readClawStatus(
     sourceMcpServers?: Record<string, Record<string, unknown>>;
     listMcpServers?: typeof listConfiguredMcpServers;
     packageDeps?: PackageRemovalDeps;
+    packagePreflight?: ClawPackagePreflight;
   } = {},
 ): Promise<ClawStatusResult> {
   const config = options.config ?? getRuntimeConfig();
@@ -145,6 +237,7 @@ export async function readClawStatus(
     (install) => !target || install.agentId === target || install.claw.name === target,
   );
   const records: ClawStatusRecord[] = [];
+  const packagePreflight = options.packagePreflight;
   for (const install of installs) {
     const agent = listAgentEntries(config).find((candidate) => candidate.id === install.agentId);
     const packageRefs = allPackageRefs.filter(
@@ -172,8 +265,14 @@ export async function readClawStatus(
       bootstrap,
       workspaceFiles: await Promise.all(workspaceFiles.map(inspectClawWorkspaceFile)),
       packages: await Promise.all(
-        packageRefs.map((packageRef) =>
-          inspectClawPackage(install, packageRef, options.packageDeps),
+        packageRefs.map(
+          async (packageRef) =>
+            await inspectClawPackageCompatibility({
+              install,
+              packageRef,
+              packageDeps: options.packageDeps,
+              packagePreflight,
+            }),
         ),
       ),
       mcpServers: (options.readOnly
@@ -202,7 +301,15 @@ export async function readClawStatus(
         .filter((pkg) => pkg.state === "missing").length,
       driftedPackages: records
         .flatMap((record) => record.packages)
-        .filter((pkg) => pkg.state === "modified" || pkg.state === "ambiguous").length,
+        .filter(
+          (pkg) =>
+            pkg.state === "modified" ||
+            pkg.state === "ambiguous" ||
+            pkg.extensionCompatibility?.state === "drifted",
+        ).length,
+      unavailableExtensions: records
+        .flatMap((record) => record.packages)
+        .filter((pkg) => pkg.extensionCompatibility?.state === "unavailable").length,
       incompletePackages: records
         .flatMap((record) => record.packages)
         .filter((pkg) => pkg.state === "incomplete").length,

@@ -48,6 +48,25 @@ describe("buildCommandOutputFromToolResultEvent", () => {
     expect(buildFromCliResult({ isError: false, result: "alpha" })?.status).toBe("completed");
   });
 
+  it("projects a safe terminal state from a namespaced command-bearing result", () => {
+    const built = buildCommandOutputFromToolResultEvent({
+      stream: "tool",
+      data: {
+        phase: "result",
+        name: "server.exec",
+        toolCallId: "call-1",
+        commandBearing: true,
+        isError: false,
+      },
+    });
+
+    expect(built).toMatchObject({
+      name: "server.exec",
+      status: "completed",
+      toolCallId: "call-1",
+    });
+  });
+
   it("prefers an explicit status and structured fields when present", () => {
     const built = buildCommandOutputFromToolResultEvent({
       stream: "tool",

@@ -4,15 +4,13 @@ import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-run
 import {
   archiveLegacyStateSource,
   type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  verifyChain,
-  verifyChainSegment,
-  type AuditEntry,
-  type ReviewRequest,
-  type SignedReceipt,
-} from "../protocol/index.js";
+// Import from defining modules, not the protocol barrel: index.js re-exports
+// guard-adapters, whose provider-http graph doctor enumeration must not cold-load.
+import { verifyChain, verifyChainSegment, type AuditEntry } from "../protocol/audit.js";
+import type { ReviewRequest } from "../protocol/pipeline.js";
+import type { SignedReceipt } from "../protocol/receipts.js";
 import {
   legacyReefFileExists,
   REEF_DURABLE_LEGACY_FILENAMES,

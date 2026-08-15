@@ -276,6 +276,36 @@ describe("sendMessageSlack file upload with user IDs", () => {
     vi.restoreAllMocks();
   });
 
+  it("disables image optimization for forced-media uploads", async () => {
+    await sendUpload(client, {
+      mediaUrl: "/tmp/original.png",
+      forceDocument: true,
+    });
+
+    expect(loadOutboundMediaFromUrlMock).toHaveBeenCalledWith(
+      "/tmp/original.png",
+      expect.objectContaining({ optimizeImages: false }),
+    );
+  });
+
+  it.each([
+    ["absent", undefined],
+    ["false", false],
+  ] as const)(
+    "keeps default image optimization when forced-media intent is %s",
+    async (_name, forceDocument) => {
+      await sendUpload(client, {
+        mediaUrl: "/tmp/optimized.png",
+        ...(forceDocument !== undefined ? { forceDocument } : {}),
+      });
+
+      const loadOptions = loadOutboundMediaFromUrlMock.mock.calls[0]?.[1] as
+        | { optimizeImages?: boolean }
+        | undefined;
+      expect(loadOptions?.optimizeImages).toBeUndefined();
+    },
+  );
+
   it.each([
     {
       name: "resolves bare user ID to DM channel before completing upload",

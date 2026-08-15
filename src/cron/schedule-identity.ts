@@ -1,4 +1,8 @@
 /** Builds stable identities for cron scheduling inputs. */
+import {
+  asSafeIntegerInRange,
+  parseStrictFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseCronPacingBounds } from "./pacing.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
@@ -9,16 +13,16 @@ type CronScheduleIdentityInput = { schedule?: unknown; enabled?: unknown } & Rec
   unknown
 >;
 
-function readString(record: Record<string, unknown>, key: string): string | undefined {
-  return normalizeOptionalString(record[key]);
-}
-
-function readNumber(record: Record<string, unknown>, key: string): number | undefined {
+function readScheduleTime(record: Record<string, unknown>, key: string): number | undefined {
   return coerceFiniteScheduleNumber(record[key]);
 }
 
-function readStaggerMs(record: Record<string, unknown>): number | undefined {
-  return normalizeCronStaggerMs(record.staggerMs);
+function readScheduleInteger(record: Record<string, unknown>, key: string): number | undefined {
+  const parsed = parseStrictFiniteNumber(record[key]);
+  return asSafeIntegerInRange(parsed, {
+    min: Number.MIN_SAFE_INTEGER,
+    max: Number.MAX_SAFE_INTEGER,
+  });
 }
 
 function schedulePayloadFromRecord(schedule: Record<string, unknown>):
@@ -36,13 +40,13 @@ function schedulePayloadFromRecord(schedule: Record<string, unknown>):
       maxBatchBytes?: number;
     }
   | undefined {
-  const rawKind = readString(schedule, "kind")?.toLowerCase();
-  const expr = readString(schedule, "expr");
-  const at = readString(schedule, "at");
-  const everyMs = readNumber(schedule, "everyMs");
-  const anchorMs = readNumber(schedule, "anchorMs");
-  const tz = readString(schedule, "tz");
-  const staggerMs = readStaggerMs(schedule);
+  const rawKind = normalizeOptionalString(schedule.kind)?.toLowerCase();
+  const expr = normalizeOptionalString(schedule.expr);
+  const at = normalizeOptionalString(schedule.at);
+  const everyMs = readScheduleTime(schedule, "everyMs");
+  const anchorMs = readScheduleTime(schedule, "anchorMs");
+  const tz = normalizeOptionalString(schedule.tz);
+  const staggerMs = normalizeCronStaggerMs(schedule.staggerMs);
   const kind =
     // Infer legacy shorthand schedule shapes when kind is missing so timer
     // identity remains stable across old persisted jobs and normalized jobs.
@@ -70,8 +74,10 @@ function schedulePayloadFromRecord(schedule: Record<string, unknown>):
     return { kind: "cron", expr, tz, staggerMs };
   }
   if (kind === "on-exit") {
-    const command = readString(schedule, "command");
-    return command ? { kind: "on-exit", command, cwd: readString(schedule, "cwd") } : undefined;
+    const command = normalizeOptionalString(schedule.command);
+    return command
+      ? { kind: "on-exit", command, cwd: normalizeOptionalString(schedule.cwd) }
+      : undefined;
   }
   if (kind === "stream") {
     const command = schedule.command;
@@ -82,25 +88,16 @@ function schedulePayloadFromRecord(schedule: Record<string, unknown>):
     ) {
       return undefined;
     }
-    const mode = readString(schedule, "mode");
+    const mode = normalizeOptionalString(schedule.mode);
     return {
       kind: "stream",
       command: [...command],
-      cwd: readString(schedule, "cwd"),
+      cwd: normalizeOptionalString(schedule.cwd),
       mode: mode === "line" || mode === "match" ? mode : undefined,
       match: typeof schedule.match === "string" ? schedule.match : undefined,
-      batchMs: readNumber(schedule, "batchMs"),
-      maxBatchBytes: readNumber(schedule, "maxBatchBytes"),
+      batchMs: readScheduleInteger(schedule, "batchMs"),
+      maxBatchBytes: readScheduleInteger(schedule, "maxBatchBytes"),
     };
-  }
-  return undefined;
-}
-
-function resolveSchedulePayload(
-  job: CronScheduleIdentityInput,
-): ReturnType<typeof schedulePayloadFromRecord> {
-  if (job.schedule && typeof job.schedule === "object" && !Array.isArray(job.schedule)) {
-    return schedulePayloadFromRecord(job.schedule as Record<string, unknown>);
   }
   return undefined;
 }
@@ -126,7 +123,10 @@ function resolvePacingPayload(
 
 /** Builds a stable scheduling identity for deciding whether stored timer state is still valid. */
 export function tryCronScheduleIdentity(job: CronScheduleIdentityInput): string | undefined {
-  const schedule = resolveSchedulePayload(job);
+  const schedule =
+    job.schedule && typeof job.schedule === "object" && !Array.isArray(job.schedule)
+      ? schedulePayloadFromRecord(job.schedule as Record<string, unknown>)
+      : undefined;
   const pacing = resolvePacingPayload(job);
   if (!schedule || pacing === null) {
     return undefined;
@@ -147,9 +147,5 @@ export function cronSchedulingInputsEqual(
 ): boolean {
   const previousIdentity = tryCronScheduleIdentity(previous);
   const nextIdentity = tryCronScheduleIdentity(next);
-  return (
-    previousIdentity !== undefined &&
-    nextIdentity !== undefined &&
-    previousIdentity === nextIdentity
-  );
+  return previousIdentity !== undefined && previousIdentity === nextIdentity;
 }

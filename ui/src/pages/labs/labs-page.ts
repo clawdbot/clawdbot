@@ -5,7 +5,6 @@ import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import {
   renderDocsLink,
-  renderSettingsDefaultState,
   renderSettingsPage,
   renderSettingsRow,
   renderSettingsSection,
@@ -13,7 +12,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
+import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -90,10 +89,6 @@ class LabsPage extends OpenClawLightDomElement {
       });
       if (!patched) {
         this.saveError = runtimeConfig.state.lastError ?? t("labsPage.saveFailed");
-        return;
-      }
-      if (this.context.runtimeConfig === runtimeConfig) {
-        await runtimeConfig.refresh();
       }
     } catch (error) {
       this.saveError = String(error);
@@ -117,39 +112,26 @@ class LabsPage extends OpenClawLightDomElement {
     );
   }
 
-  private resetFeature(feature: LabFeature) {
-    const config = this.editableConfig();
-    const featureState = resolveLabFeatureState(config, feature);
-    const resetPatch = labFeatureResetPatch(config, feature);
-    if (!resetPatch) {
-      return;
-    }
-    void this.updateFeature(feature, featureState.defaultEnabled, resetPatch);
-  }
-
   private renderFeature(feature: LabFeature) {
     const title = feature.title();
     const featureState = resolveLabFeatureState(this.editableConfig(), feature);
     const canToggle = this.canToggle();
-    const defaultState = renderSettingsDefaultState({
-      value: featureState.defaultEnabled ? t("common.enabled") : t("common.disabled"),
-      overridden: featureState.overridden,
-      disabled: !canToggle,
-      onReset: () => this.resetFeature(feature),
-    });
+    const defaultDescription = t(
+      featureState.overridden ? "configForm.defaultValue" : "configForm.usingDefault",
+      { value: featureState.defaultEnabled ? t("common.enabled") : t("common.disabled") },
+    );
     const description = html`
       ${feature.description()}
       <a href=${feature.docsUrl} target=${EXTERNAL_LINK_TARGET} rel=${buildExternalLinkRel()}
         >${t("labsPage.documentation")}</a
       >${feature.restartHint ? html` <span>${feature.restartHint()}</span>` : nothing}
-      <span>${defaultState.description}</span>
+      <span>${defaultDescription}</span>
     `;
     return renderSettingsToggleRow({
       title,
       description,
       checked: this.featureEnabled(feature),
       disabled: !canToggle,
-      actions: defaultState.action,
       onChange: (enabled) => this.setFeatureEnabled(feature, enabled),
     });
   }

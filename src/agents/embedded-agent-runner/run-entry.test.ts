@@ -780,6 +780,7 @@ describe("runEmbeddedAgentEntry", () => {
       expected: { disposition: "empty" },
     },
   ])("records the producer-owned terminal snapshot for $name", async ({ name, meta, expected }) => {
+    const runId = `terminal-${name}`;
     state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       outcome: "completed" as const,
       result: await params.run(params.provider, params.model),
@@ -790,7 +791,7 @@ describe("runEmbeddedAgentEntry", () => {
     const { runEmbeddedAgentEntry } = await import("./run-entry.js");
     const result = await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "provider", model: "model" },
-      identity: { runId: `terminal-${name}`, agentId: "main", sessionId: "session-1" },
+      identity: { runId, agentId: "main", sessionId: "session-1" },
       harness: {
         workspaceDir: "/tmp/workspace",
         preparation: { kind: "direct" },
@@ -800,10 +801,35 @@ describe("runEmbeddedAgentEntry", () => {
       sessionOverride: { kind: "preserve" },
       runCandidate: async (provider, model) => ({
         ...makeResult({ provider, model }),
-        meta: { ...makeResult({ provider, model }).meta, ...meta },
+        meta: {
+          ...makeResult({ provider, model }).meta,
+          ...meta,
+          agentMeta: Object.assign(
+            {
+              sessionId: "session-1",
+              provider,
+              model,
+            },
+            {
+              terminalReceipt: {
+                runId,
+                sessionId: "session-1",
+                turnId: "turn-1",
+                requested: { provider, model },
+                effective: { provider, model, responseModel: model },
+                successfulToolNames: ["read"],
+                rerouted: false,
+              },
+            },
+          ),
+        },
       }),
     });
 
     expect(result.terminal.metadata.terminalReply).toEqual(expected);
+    expect(result.terminal.metadata.terminalReceipt).toMatchObject({
+      runId,
+      terminalDisposition: expected.disposition === "visible" ? "visible" : "not-visible",
+    });
   });
 });

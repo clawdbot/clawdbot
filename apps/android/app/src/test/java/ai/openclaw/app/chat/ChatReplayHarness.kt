@@ -22,6 +22,7 @@ internal fun CoroutineScope.createChatController(
   recordModelRecent: (String) -> Unit = {},
   onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
   onOfflineDefaultAgentRestored: (String) -> Unit = {},
+  onAssistantReplyFinalized: (owner: ChatComposerOwner, runId: String, text: String) -> Unit = { _, _, _ -> },
   requestGateway: suspend (method: String, paramsJson: String?) -> String = { _, _ -> "{}" },
 ): ChatController {
   val scopedRequest =
@@ -49,6 +50,7 @@ internal fun CoroutineScope.createChatController(
     recordModelRecent = recordModelRecent,
     onSessionDeleted = onSessionDeleted,
     onOfflineDefaultAgentRestored = onOfflineDefaultAgentRestored,
+    onAssistantReplyFinalized = onAssistantReplyFinalized,
   )
 }
 

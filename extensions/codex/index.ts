@@ -2,10 +2,6 @@
  * Bundled Codex plugin entry: app-server harness, media understanding,
  * migration provider, CLI-session commands, and binding hooks.
  */
-import {
-  createOpenClawCodingToolsForAgentHarness,
-  createOpenClawCodingToolsForAgentHarnessSideQuestion,
-} from "openclaw/plugin-sdk/agent-harness-tool-authority-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import {
@@ -30,6 +26,7 @@ import type { CodexPluginsConfigBlock } from "./src/command-plugins-management.j
 import { createCodexCommand } from "./src/commands.js";
 import { codexConversationBindingRuntime } from "./src/conversation-binding.js";
 import { buildCodexMigrationProvider } from "./src/migration/provider.js";
+import { createCodexPluginsTool } from "./src/native-plugin-tool.js";
 import { createCodexThreadsTool } from "./src/native-thread-tool.js";
 import {
   createCodexCliSessionNodeHostCommands,
@@ -137,9 +134,13 @@ export default definePluginEntry({
         api,
         bindingStore,
         control: sessionCatalogControl,
+        getPluginConfig: resolveCurrentPluginConfig,
         getRuntimeConfig: resolveCurrentConfig,
       });
-      for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl)) {
+      for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl, {
+        getPluginConfig: resolveCurrentPluginConfig,
+        getRuntimeConfig: resolveCurrentConfig,
+      })) {
         api.registerNodeHostCommand(command);
       }
     }
@@ -170,10 +171,6 @@ export default definePluginEntry({
       createCodexAppServerAgentHarness({
         bindingStore,
         sessionCatalogControl,
-        toolAuthority: {
-          createForAttempt: createOpenClawCodingToolsForAgentHarness,
-          createForSideQuestion: createOpenClawCodingToolsForAgentHarnessSideQuestion,
-        },
         resolveConfig: resolveCurrentConfig,
         resolvePluginConfig: resolveCurrentPluginConfig,
         runtime: api.runtime,
@@ -202,6 +199,22 @@ export default definePluginEntry({
       description: "Manage native Codex threads in the shared user Codex home.",
       risk: "high",
       tags: ["codex", "sessions"],
+    });
+    api.registerTool(
+      (context) =>
+        createCodexPluginsTool({
+          bindingStore,
+          context,
+          getPluginConfig: resolveCurrentPluginConfig,
+        }),
+      { name: "codex_plugins" },
+    );
+    api.registerToolMetadata({
+      toolName: "codex_plugins",
+      displayName: "Codex Plugins",
+      description: "Discover available Codex plugins without installing or enabling them.",
+      risk: "low",
+      tags: ["codex", "plugins", "discovery"],
     });
     for (const command of createCodexCliSessionNodeHostCommands()) {
       api.registerNodeHostCommand(command);
@@ -337,15 +350,21 @@ export default definePluginEntry({
         return;
       }
       const config = resolveCurrentConfig();
-      const { sessionBindingIdentity } = await import("./src/app-server/session-binding.js");
-      await bindingStore.retireSessionGeneration(
-        sessionBindingIdentity({
+      const [{ sessionBindingIdentity }, { retireCodexAppServerSessionGeneration }] =
+        await Promise.all([
+          import("./src/app-server/session-binding.js"),
+          import("./src/app-server/session-retirement.js"),
+        ]);
+      await retireCodexAppServerSessionGeneration({
+        bindingStore,
+        identity: sessionBindingIdentity({
           sessionId: event.sessionId,
           ...(sessionKey ? { sessionKey } : {}),
           ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
           ...(config ? { config } : {}),
         }),
-      );
+        mode: "retire",
+      });
     });
   },
 });

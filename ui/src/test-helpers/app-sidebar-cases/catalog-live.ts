@@ -157,18 +157,19 @@ describe("AppSidebar session catalog pagination", () => {
     await sidebar.updateComplete;
 
     const button = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-catalog-new");
-    expect(button?.getAttribute("aria-label")).toBe("New thread — Claude Code");
+    expect(button?.getAttribute("aria-label")).toBe("New session — Claude Code");
     button?.click();
 
     expect(onOpenNewSession).toHaveBeenCalledWith("research", { catalogId: "claude" });
   });
 
   it.each([
-    { id: "claude", label: "Claude Code" },
-    { id: "codex", label: "Codex" },
-    { id: "opencode", label: "OpenCode" },
-    { id: "pi", label: "Pi" },
-  ])("groups $label catalog rows by their owning host", async ({ id, label }) => {
+    { id: "claude", label: "Claude Code", branded: true },
+    { id: "codex", label: "Codex", branded: true },
+    { id: "opencode", label: "OpenCode", branded: true },
+    { id: "pi", label: "Pi", branded: true },
+    { id: "custom", label: "Custom", branded: false },
+  ])("groups $label catalog rows by their owning host", async ({ id, label, branded }) => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
     sidebar.sessionData.sessionCatalogs = [
@@ -227,11 +228,10 @@ describe("AppSidebar session catalog pagination", () => {
     await sidebar.updateComplete;
 
     const section = sidebar.querySelector(`[data-session-section="catalog:${id}"]`);
-    expect(
-      section
-        ?.querySelector(".sidebar-session-catalog-provider-icon")
-        ?.getAttribute("data-provider-icon"),
-    ).toBe(id);
+    const lead = section?.querySelector(".sidebar-session-group-toggle__lead");
+    expect(lead?.querySelector(".sidebar-session-group-toggle__icon")).not.toBeNull();
+    const providerIcon = lead?.querySelector(".sidebar-session-catalog-provider-icon");
+    expect(providerIcon?.getAttribute("data-provider-icon")).toBe(branded ? id : undefined);
     const hostGroups = section?.querySelectorAll<HTMLElement>("[data-session-catalog-host]");
     expect(Array.from(hostGroups ?? []).map((host) => host.dataset.sessionCatalogHost)).toEqual([
       "gateway:local",

@@ -6,7 +6,7 @@ struct HostEnvOverrideDiagnostics: Equatable {
 }
 
 enum HostEnvSanitizer {
-    /// Generated from src/infra/host-env-security-policy.json via scripts/generate-host-env-security-policy-swift.mjs.
+    /// Generated from src/infra/host-env-security-policy.json via scripts/generate-host-env-security-policy-swift.mts.
     /// Parity is validated by src/infra/host-env-security.policy-parity.test.ts.
     private static let blockedInheritedKeys = HostEnvSecurityPolicy.blockedInheritedKeys
     private static let blockedInheritedPrefixes = HostEnvSecurityPolicy.blockedInheritedPrefixes

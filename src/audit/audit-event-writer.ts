@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../config/paths.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
@@ -21,18 +22,14 @@ type AuditWriterMessage =
   | { type: "maintenance-error"; error: string }
   | { type: "stopped" };
 
-type AuditWriterWorkMessage =
-  | { type: "record-event"; input: AuditEventInput }
-  | { type: "record-execution-identity"; work: ExecutionIdentityAdmissionWork };
-
-type AuditWriterCommand = AuditWriterWorkMessage | { type: "stop" };
-
 export type AuditEventWriter = {
   ready: Promise<void>;
   record: (input: AuditEventInput) => boolean;
   /** Reports only queue acceptance; persistence succeeds or fails asynchronously. */
   recordExecutionIdentity: (work: ExecutionIdentityAdmissionWork) => boolean;
-  stop: (finalInputs?: readonly AuditEventInput[]) => Promise<void>;
+  /** For decision owners without a native durable record; approvals must not use this path. */
+  recordExecutionDecision: (receipt: DecisionReceiptV1) => boolean;
+  stop: () => Promise<void>;
 };
 
 function formatAuditWriterError(error: unknown): string {
@@ -79,6 +76,7 @@ export function createAuditEventWriter(
       ready: Promise.resolve(),
       record: () => false,
       recordExecutionIdentity: () => false,
+      recordExecutionDecision: () => false,
       stop: async () => {},
     };
   }
@@ -113,13 +111,13 @@ export function createAuditEventWriter(
   const fail = (error: unknown) => {
     options.onError?.(formatAuditWriterError(error));
   };
-  const postToWorker = (message: AuditWriterCommand) => {
-    // Node Worker.postMessage is not the browser Window API and has no targetOrigin.
-    // oxlint-disable-next-line unicorn/require-post-message-target-origin
-    worker.postMessage(message);
-  };
 
-  const enqueue = (message: AuditWriterWorkMessage): boolean => {
+  const enqueue = (
+    message:
+      | { type: "record-event"; input: AuditEventInput }
+      | { type: "record-execution-identity"; work: ExecutionIdentityAdmissionWork }
+      | { type: "record-execution-decision"; receipt: DecisionReceiptV1 },
+  ): boolean => {
     if (stopped || unavailable || pending >= maxPending) {
       if (!stopped) {
         fail(
@@ -132,12 +130,18 @@ export function createAuditEventWriter(
     }
     pending += 1;
     try {
-      postToWorker(message);
+      // Node Worker.postMessage is not the browser Window API and has no targetOrigin.
+      // oxlint-disable-next-line unicorn/require-post-message-target-origin
+      worker.postMessage(message);
       return true;
     } catch (error) {
       pending -= 1;
-      if (message.type === "record-execution-identity") {
-        fail("audit execution identity envelope could not be queued");
+      if (message.type !== "record-event") {
+        fail(
+          message.type === "record-execution-identity"
+            ? "audit execution identity envelope could not be queued"
+            : "audit execution decision receipt could not be queued",
+        );
       } else {
         unavailable = true;
         void worker.terminate();
@@ -145,9 +149,6 @@ export function createAuditEventWriter(
       }
       return false;
     }
-  };
-  const postFinalRecord = (input: AuditEventInput) => {
-    postToWorker({ type: "record-event", input });
   };
 
   worker.on("message", (message: AuditWriterMessage) => {
@@ -190,26 +191,14 @@ export function createAuditEventWriter(
     ready,
     record: (input) => enqueue({ type: "record-event", input }),
     recordExecutionIdentity: (work) => enqueue({ type: "record-execution-identity", work }),
-    stop: async (finalInputs = []) => {
+    recordExecutionDecision: (receipt) => enqueue({ type: "record-execution-decision", receipt }),
+    stop: async () => {
       if (stopped) {
         return;
       }
       stopped = true;
       if (unavailable) {
         return;
-      }
-      for (const input of finalInputs) {
-        pending += 1;
-        try {
-          // Shutdown records bypass the live queue cap but retain worker message
-          // ordering, so the following stop drains them before exit.
-          postFinalRecord(input);
-        } catch (error) {
-          pending -= 1;
-          unavailable = true;
-          fail(error);
-          return;
-        }
       }
       await new Promise<void>((resolve) => {
         resolveStop = resolve;
@@ -219,7 +208,9 @@ export function createAuditEventWriter(
           finishStop();
         }, AUDIT_WRITER_SHUTDOWN_TIMEOUT_MS);
         try {
-          postToWorker({ type: "stop" });
+          // Node Worker.postMessage is not the browser Window API and has no targetOrigin.
+          // oxlint-disable-next-line unicorn/require-post-message-target-origin
+          worker.postMessage({ type: "stop" });
         } catch (error) {
           fail(error);
           finishStop();

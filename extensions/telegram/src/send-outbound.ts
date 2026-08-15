@@ -116,6 +116,7 @@ export async function prepareTelegramOutbound<T extends string | number | undefi
   const threadSpec = params.thread
     ? resolveTelegramSendThreadSpec({
         targetMessageThreadId: target.messageThreadId,
+        targetDirectMessagesTopicId: target.directMessagesTopicId,
         messageThreadId: params.thread.messageThreadId,
         chatType: target.chatType,
       })
@@ -169,9 +170,12 @@ export async function finalizeTelegramOutbound(params: {
   onDeliveryResult?: TelegramSendOpts["onDeliveryResult"];
   beforeActivity?: (result: { messageId: string; chatId: string }) => void;
 }): Promise<TelegramSendResult> {
-  const { cfg, account } = params.context;
+  const { cfg, account, ownerAgentId } = params.context;
   const messageId = resolveTelegramMessageIdOrThrow(params.result, params.resultContext);
-  recordSentMessage(params.prepared.chatId, messageId, cfg);
+  recordSentMessage(params.prepared.chatId, messageId, cfg, {
+    accountId: account.accountId,
+    agentId: ownerAgentId,
+  });
   const resultIds = await reportTelegramProviderDelivery({
     message: params.result,
     messageId,
@@ -184,6 +188,7 @@ export async function finalizeTelegramOutbound(params: {
   );
   const recorded = await recordOutboundMessageForPromptContext({
     cfg,
+    ownerAgentId,
     account,
     botUserId: params.botUserId,
     chatId: params.prepared.chatId,

@@ -26,6 +26,7 @@ export const AUDIT_INBOUND_MESSAGE_COMPLETED_REASONS = [
   "before_dispatch_handled",
   "acp_dispatch_completed",
   "acp_dispatch_empty",
+  "active_run_injected",
 ] as const;
 
 export type AuditInboundMessageCompletedReasonCode =
@@ -57,8 +58,6 @@ export type AuditOutboundMessageSuppressedReasonCode =
 type AuditEventInputBase = {
   /** Stable trusted-source identity used only for local replay deduplication. */
   sourceId: string;
-  /** Shipped generation-less identity adopted by the first versioned replay. */
-  legacySourceId?: string;
   sourceSequence: number;
   occurredAt: number;
 };

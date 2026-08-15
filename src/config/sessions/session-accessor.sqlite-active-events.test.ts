@@ -11,7 +11,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
   readRecentSessionTranscriptMessageEvents,
-  readSessionTranscriptActiveLeafEvents,
+  readSessionTranscriptActivePathEntryRelation,
   readSessionTranscriptActiveStats,
   readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptMessageAnchorPage,
@@ -26,6 +26,7 @@ import {
   reconcileSessionTranscriptIndexes,
   startSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcile,
+  waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
 
 const queuedSessionWrite = vi.hoisted(() => vi.fn());
@@ -112,9 +113,8 @@ describe("SQLite active transcript event projection", () => {
       "root",
       "active",
     ]);
-    expect(readSessionTranscriptActiveLeafEvents(scope)).toEqual([
-      expect.objectContaining({ id: "active" }),
-    ]);
+    expect(readSessionTranscriptActivePathEntryRelation(scope, "active")).toBe("exact");
+    expect(readSessionTranscriptActivePathEntryRelation(scope, "root")).toBe("ancestor");
     expect(page.events.map((entry) => entry.seq)).toEqual([1, 2]);
     expect(page.totalMessages).toBe(2);
     expect(
@@ -342,11 +342,38 @@ describe("SQLite active transcript event projection", () => {
         maxMessages: 1,
       }).activeLeafEntryId,
     ).toBe("newer-compaction");
-    expect(readSessionTranscriptActiveLeafEvents(scope)).toEqual([
-      expect.objectContaining({ id: "newer-compaction" }),
-    ]);
+    expect(readSessionTranscriptActivePathEntryRelation(scope, "newer-compaction")).toBe("exact");
+    expect(readSessionTranscriptActivePathEntryRelation(scope, "post-reset")).toBe("ancestor");
     expect(readSessionTranscriptMessageEventCount(scope)).toBe(5);
     expect(readSessionTranscriptMessageEventById(scope, "old")).toBeDefined();
+  });
+
+  it("fails closed when the latest indexed reset payload is malformed", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "old", parentId: null, message: { role: "user", content: "old" } },
+        {
+          eventId: "kept",
+          parentId: "old",
+          message: { role: "assistant", content: "kept" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset-boundary",
+      parentId: "kept",
+      timestamp: "2026-08-12T00:00:00.000Z",
+      reason: "new",
+      firstKeptEntryId: "kept",
+    });
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+    database.db
+      .prepare("UPDATE transcript_events SET event_json = '{' WHERE session_id = ? AND seq = 3")
+      .run(scope.sessionId);
+
+    expect(() => readSessionTranscriptMessageEventCount(scope)).toThrow();
   });
 
   it("recomputes a cached reset window after a branch-changing message", async () => {
@@ -453,6 +480,50 @@ describe("SQLite active transcript event projection", () => {
         .all(),
     ).toEqual([]);
   });
+
+  it("resolves one session before unrelated projection repair completes", async () => {
+    const secondScope = { ...scope, sessionId: "session-slow", sessionKey: "agent:main:slow" };
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "target", parentId: null, message: { role: "user", content: "target" } },
+      ],
+      touchSessionEntry: false,
+    });
+    await persistSessionTranscriptTurn(secondScope, {
+      messages: Array.from({ length: 5_000 }, (_, index) => ({
+        eventId: `slow-${index}`,
+        parentId: index === 0 ? null : `slow-${index - 1}`,
+        message: { role: "toolResult", content: "slow" },
+      })),
+      touchSessionEntry: false,
+    });
+    const databaseOptions = { agentId: scope.agentId, env: scope.env };
+    const database = openOpenClawAgentDatabase(databaseOptions);
+    const markDirty = database.db.prepare(
+      "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+    );
+    markDirty.run(scope.sessionId);
+    markDirty.run(secondScope.sessionId);
+
+    startSessionTranscriptIndexReconcile({
+      ...databaseOptions,
+      preferredSessionId: scope.sessionId,
+    });
+    let allReconciled = false;
+    const allReconciliation = waitForSessionTranscriptIndexReconcile(databaseOptions).then(() => {
+      allReconciled = true;
+    });
+
+    await waitForSessionTranscriptProjection(scope);
+
+    expect(allReconciled).toBe(false);
+    expect(
+      database.db
+        .prepare("SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?")
+        .get(scope.sessionId),
+    ).toEqual({ needs_rebuild: 0 });
+    await allReconciliation;
+  }, 30_000);
 
   it("keeps projection state and rows on one snapshot during a concurrent append", async () => {
     await persistSessionTranscriptTurn(scope, {

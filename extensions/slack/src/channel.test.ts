@@ -1,8 +1,10 @@
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 // Slack tests cover channel plugin behavior.
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "./channel.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import * as probeModule from "./probe.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -15,13 +17,17 @@ const { resolveSlackDmChannelIdMock, sendMessageSlackMock } = vi.hoisted(() => (
   resolveSlackDmChannelIdMock: vi.fn(),
   sendMessageSlackMock: vi.fn(),
 }));
-const { assistantThreadsSetStatusMock, conversationsInfoMock, conversationsOpenMock } = vi.hoisted(
-  () => ({
-    assistantThreadsSetStatusMock: vi.fn(),
-    conversationsInfoMock: vi.fn(),
-    conversationsOpenMock: vi.fn(),
-  }),
-);
+const {
+  assistantThreadsSetStatusMock,
+  conversationsInfoMock,
+  conversationsOpenMock,
+  getSlackWriteClientMock,
+} = vi.hoisted(() => ({
+  assistantThreadsSetStatusMock: vi.fn(),
+  conversationsInfoMock: vi.fn(),
+  conversationsOpenMock: vi.fn(),
+  getSlackWriteClientMock: vi.fn(),
+}));
 
 vi.mock("./action-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./action-runtime.js")>("./action-runtime.js");
@@ -52,7 +58,7 @@ vi.mock("./client.js", async () => {
   return {
     ...actual,
     createSlackReadClient: vi.fn(createClient),
-    createSlackWebClient: vi.fn(createClient),
+    getSlackWriteClient: getSlackWriteClientMock.mockImplementation(createClient),
   };
 });
 
@@ -66,6 +72,7 @@ beforeEach(async () => {
   assistantThreadsSetStatusMock.mockResolvedValue({ ok: true });
   conversationsInfoMock.mockReset();
   conversationsOpenMock.mockReset();
+  getSlackWriteClientMock.mockClear();
   setSlackRuntime({
     channel: {
       slack: {
@@ -94,6 +101,14 @@ function requireSlackHandleAction() {
     throw new Error("slack actions.handleAction unavailable");
   }
   return handleAction;
+}
+
+function requireSlackPrepareSendPayload() {
+  const prepareSendPayload = slackPlugin.actions?.prepareSendPayload;
+  if (!prepareSendPayload) {
+    throw new Error("slack actions.prepareSendPayload unavailable");
+  }
+  return prepareSendPayload;
 }
 
 function requireSlackSendText() {
@@ -142,10 +157,6 @@ function requireSlackListPeers() {
     throw new Error("slack directory.listPeers unavailable");
   }
   return listPeers;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
@@ -202,6 +213,45 @@ function findSchemaEntry(
 }
 
 describe("slackPlugin actions", () => {
+  it("keeps a bare current Grid send on the workspace-aware Slack action path", async () => {
+    const prepareSendPayload = requireSlackPrepareSendPayload();
+    const payload = { text: "hello" };
+
+    const prepared = await prepareSendPayload({
+      ctx: {
+        action: "send",
+        channel: "slack",
+        cfg: {},
+        params: {},
+        toolContext: {
+          currentChannelId: "team:T123:channel:C123",
+          currentChannelProvider: "slack",
+        },
+      },
+      to: "channel:C123",
+      payload,
+    } as never);
+
+    expect(prepared).toBeNull();
+  });
+
+  it("keeps qualified and cross-channel sends on the core Slack delivery path", async () => {
+    const prepareSendPayload = requireSlackPrepareSendPayload();
+    const payload = { text: "hello" };
+    const ctx = {
+      action: "send",
+      channel: "slack",
+      cfg: {},
+      params: {},
+      toolContext: { currentChannelId: "team:T123:channel:C123" },
+    };
+
+    expect(prepareSendPayload({ ctx, to: "team:T123:channel:C123", payload } as never)).toBe(
+      payload,
+    );
+    expect(prepareSendPayload({ ctx, to: "channel:C999", payload } as never)).toBe(payload);
+  });
+
   it("prefers session lookup for announce target routing", () => {
     expect(slackPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
   });
@@ -331,23 +381,42 @@ describe("slackPlugin actions", () => {
     });
   });
 
-  it("rejects enterprise pairing notifications before resolving a send token", async () => {
+  it("workspace-qualifies Enterprise pairing approvals and notifications", async () => {
+    const pairing = slackPlugin.pairing;
+    if (!pairing?.resolveApprovalStoreEntry || !pairing.notifyApproval) {
+      throw new Error("Slack pairing adapter unavailable");
+    }
+    expect(
+      pairing.resolveApprovalStoreEntry({
+        id: "team:T12345678:user:U12345678",
+        meta: { senderId: "U12345678", teamId: "T12345678" },
+      }),
+    ).toBe("team:T12345678:user:U12345678");
+
     const cfg = {
       channels: {
         slack: {
-          enterpriseOrgInstall: true,
+          accounts: {
+            org: { botToken: "xoxb-org" },
+          },
         },
       },
     } as OpenClawConfig;
-    const notify = slackPlugin.pairing?.notifyApproval;
-    if (!notify) {
-      throw new Error("slack pairing notify unavailable");
-    }
+    await pairing.notifyApproval({
+      cfg,
+      id: "team:T12345678:user:U12345678",
+      accountId: "org",
+      meta: { senderId: "U12345678", teamId: "T12345678" },
+    });
 
-    await expect(notify({ cfg, id: "U12345678" })).rejects.toThrow(
-      "unsupported_enterprise_slack_delivery",
+    expect(requireMockCallArgValue(sendMessageSlackMock, 0, 0)).toBe(
+      "team:T12345678:user:U12345678",
     );
-    expect(sendMessageSlackMock).not.toHaveBeenCalled();
+    expectRecordFields(requireMockCallArg(sendMessageSlackMock, 0, 2), "send options", {
+      accountId: "org",
+      cfg,
+      token: "xoxb-org",
+    });
   });
 
   it("exposes Slack-native message id and file id schema hints", () => {
@@ -682,6 +751,34 @@ describe("slackPlugin status", () => {
     });
   });
 
+  it("matches the workspace-qualified session identity produced by Enterprise ingress", async () => {
+    const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
+    if (!resolveRoute) {
+      throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
+    }
+
+    const channelRoute = await resolveRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "main",
+      target: "team:T123:channel:C456",
+    });
+    const dmRoute = await resolveRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "main",
+      accountId: "default",
+      target: "team:T123:user:U456",
+    });
+
+    expectRecordFields(channelRoute, "Enterprise Slack channel route", {
+      baseSessionKey: "agent:main:slack:channel:team:t123:channel:c456",
+      to: "team:T123:channel:C456",
+    });
+    expectRecordFields(dmRoute, "Enterprise Slack DM route", {
+      baseSessionKey: "agent:main:main:account:default:team:t123",
+      to: "team:T123:user:U456",
+    });
+  });
+
   it("routes a folded bare W user id as a direct session", async () => {
     const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
     if (!resolveRoute) {
@@ -993,20 +1090,73 @@ describe("slackPlugin outbound", () => {
     expect(result).toEqual({ channel: "slack", messageId: "m-text" });
   });
 
-  it("rejects enterprise outbound before resolving the injected sender", async () => {
-    const sendSlack = vi.fn().mockResolvedValue({ messageId: "should-not-send" });
+  it("sends messages when the existing target carries the workspace", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-enterprise" });
     const sendText = requireSlackSendText();
 
-    await expect(
-      sendText({
-        cfg: { channels: { slack: { enterpriseOrgInstall: true } } },
-        to: "C123",
-        text: "hello",
-        accountId: "default",
-        deps: { sendSlack },
-      }),
-    ).rejects.toThrow("unsupported_enterprise_slack_delivery");
-    expect(sendSlack).not.toHaveBeenCalled();
+    const result = await sendText({
+      cfg,
+      to: "team:T123:channel:C456",
+      text: "hello",
+      accountId: "default",
+      deps: { sendSlack },
+    });
+
+    expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("team:T123:channel:C456");
+    expect(result).toEqual({ channel: "slack", messageId: "m-enterprise" });
+  });
+
+  it("rejects a bare Enterprise target before invoking an injected sender", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "should-not-send" });
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      await expect(
+        requireSlackSendText()({
+          cfg,
+          to: "C456",
+          text: "hello",
+          accountId: "default",
+          deps: { sendSlack },
+        }),
+      ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+      expect(sendSlack).not.toHaveBeenCalled();
+    } finally {
+      installationState.release();
+    }
+  });
+
+  it("rejects bare deferred Enterprise messages and admits workspace-qualified targets", () => {
+    const admit = slackPlugin.message?.durableFinal?.admitDeferredDelivery;
+    if (!admit) {
+      throw new Error("slack deferred-delivery admission unavailable");
+    }
+    const base = {
+      cfg,
+      accountId: "default",
+      kind: "text" as const,
+      queueId: "q1",
+      payloads: [{ text: "hello" }],
+    };
+
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      expect(admit({ ...base, to: "channel:C456" } as never)).toEqual({
+        status: "permanent_rejection",
+        reason: expect.stringContaining("unsupported_enterprise_slack_delivery"),
+      });
+      expect(admit({ ...base, to: "team:T123:channel:C456" } as never)).toEqual({
+        status: "allowed",
+      });
+    } finally {
+      installationState.release();
+    }
+    const workspaceState = registerSlackInstallationState("default", "workspace");
+    try {
+      expect(admit({ ...base, to: "channel:C456" } as never)).toEqual({ status: "allowed" });
+    } finally {
+      workspaceState.release();
+    }
+    expect(admit({ ...base, to: "channel:C456" } as never)).toEqual({ status: "allowed" });
   });
 
   it("forwards agent identity through the registered text sender", async () => {
@@ -1143,6 +1293,21 @@ describe("slackPlugin outbound", () => {
       thread_ts: "1712345678.123456",
       status: "",
     });
+  });
+
+  it("uses the workspace-partitioned write-client cache for Grid assistant status", async () => {
+    const target = {
+      cfg: { channels: { slack: { botToken: "xoxb-test" } } },
+      to: "team:T123:channel:C456",
+      accountId: "default",
+      threadId: "1712345678.123456",
+    };
+
+    await requireSlackHeartbeatSendTyping()(target);
+    await requireSlackHeartbeatClearTyping()(target);
+
+    expect(getSlackWriteClientMock).toHaveBeenNthCalledWith(1, "xoxb-test", { teamId: "T123" });
+    expect(getSlackWriteClientMock).toHaveBeenNthCalledWith(2, "xoxb-test", { teamId: "T123" });
   });
 
   it("resolves user targets to concrete DM channels for assistant status", async () => {
@@ -1361,6 +1526,27 @@ describe("slackPlugin outbound", () => {
       onPlatformSendDispatch,
     });
     expect(result).toEqual({ channel: "slack", messageId: "m-media-local" });
+  });
+
+  it("preserves workspace-qualified media delivery", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-grid-media" });
+    const sendMedia = requireSlackSendMedia();
+
+    const result = await sendMedia({
+      cfg,
+      to: "team:T123:channel:C999",
+      text: "attachment",
+      mediaUrl: "/tmp/workspace/report.txt",
+      mediaLocalRoots: ["/tmp/workspace"],
+      accountId: "default",
+      deps: { sendSlack },
+    });
+
+    expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("team:T123:channel:C999");
+    expectRecordFields(requireMockCallArg(sendSlack, 0, 2), "send options", {
+      mediaUrl: "/tmp/workspace/report.txt",
+    });
+    expect(result).toEqual({ channel: "slack", messageId: "m-grid-media" });
   });
 
   it("sends block payload media first, then the final block message", async () => {

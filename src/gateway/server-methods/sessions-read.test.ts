@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
+import { resolveSessionStorePathCore as resolveStorePath } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import {
@@ -99,13 +100,29 @@ test("agents.list reads published model facts without starting provider discover
   expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
 });
 
+test("agents.list returns the roster when optional prepared model facts are unavailable", async () => {
+  await setAgentsConfig({ ownership: "explicit", entries: { ops: {}, research: {} } });
+  const readPreparedGatewayModelCatalog = vi.fn(async () => {
+    throw new Error("prepared model catalog requires an explicit owner");
+  });
+
+  await expect(listAgentIdsViaRpc(false, { readPreparedGatewayModelCatalog })).resolves.toEqual([
+    "ops",
+    "research",
+  ]);
+
+  expect(readPreparedGatewayModelCatalog).toHaveBeenCalledOnce();
+});
+
 beforeEach(async () => {
+  testState.agentConfig = undefined;
   testState.sessionStorePath = undefined;
   testState.sessionConfig = undefined;
   await setAgentsConfig(undefined);
 });
 
 afterEach(() => {
+  testState.agentConfig = undefined;
   testState.sessionStorePath = undefined;
   testState.sessionConfig = undefined;
   closeOpenClawAgentDatabasesForTest();
@@ -149,6 +166,45 @@ test("unknown-agent session reads return missing results without provisioning an
 
   expectAgentStoreAbsent(UNKNOWN_AGENT_ID);
   expect(await listAgentIdsViaRpc()).toEqual(["main"]);
+});
+
+test("bare ownerless reads fail closed without blocking scoped preview siblings", async () => {
+  await setAgentsConfig({ ownership: "explicit", entries: { ops: {}, research: {} } });
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  expect(getRuntimeConfig().agents).toMatchObject({
+    ownership: "explicit",
+    entries: { ops: {}, research: {} },
+  });
+  const sessionKey = "agent:ops:preview-valid";
+  const sessionId = "session-ops-preview-valid";
+  const storePath = resolveStorePath(undefined, { agentId: "ops" });
+  await replaceSessionEntry(
+    { agentId: "ops", sessionKey, storePath },
+    { sessionId, updatedAt: 42 },
+  );
+  await seedLinearSessionTranscript({
+    agentId: "ops",
+    contents: ["scoped preview remains readable"],
+    sessionId,
+    sessionKey,
+    storePath,
+  });
+
+  const described = await directSessionReq<{ session: unknown }>("sessions.describe", {
+    key: "global",
+  });
+  expect(described).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: expect.stringContaining("has no explicit owner") },
+  });
+
+  const preview = await directSessionReq<{
+    previews: Array<{ key: string; status: string; items: unknown[] }>;
+  }>("sessions.preview", { keys: ["global", sessionKey] });
+  expect(preview).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: expect.stringContaining("has no explicit owner") },
+  });
 });
 
 test("sessions.describe reads a pre-existing store after its agent is removed from config", async () => {

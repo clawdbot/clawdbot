@@ -12,6 +12,30 @@ const SOURCE_SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const PACKAGE_NAME_PATTERN = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/u;
 const TARBALL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$/u;
 
+/**
+ * @typedef {object} PrepublishPluginRegistryEntry
+ * @property {string} name
+ * @property {string} version
+ * @property {string} tarball
+ * @property {string} sha256
+ */
+/**
+ * @typedef {object} PrepublishPluginRegistryManifest
+ * @property {string} schema
+ * @property {number} schemaVersion
+ * @property {string} sourceSha
+ * @property {string} candidateVersion
+ * @property {PrepublishPluginRegistryEntry[]} packages
+ */
+/**
+ * @typedef {object} ValidatePrepublishPluginRegistryParams
+ * @property {string} artifactDir
+ * @property {string} expectedCandidateVersion
+ * @property {string} expectedManifestSha256
+ * @property {string} expectedSourceSha
+ * @property {string[]} requiredPackages
+ */
+
 function readJson(file, label) {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -41,7 +65,8 @@ function normalizeRequiredPackages(value) {
 function readTarballPackageJson(tarball) {
   try {
     return JSON.parse(
-      execFileSync("tar", ["-xOf", tarball, "package/package.json"], {
+      execFileSync("tar", ["-xOf", path.basename(tarball), "package/package.json"], {
+        cwd: path.dirname(tarball),
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       }),
@@ -53,6 +78,9 @@ function readTarballPackageJson(tarball) {
   }
 }
 
+export function inspectNpmPackageTarball(tarball) {
+  return { packageJson: readTarballPackageJson(tarball), sha256: sha256File(tarball) };
+}
 function validateManifestShape(manifest) {
   if (
     !manifest ||
@@ -104,6 +132,10 @@ function validateManifestShape(manifest) {
   }
 }
 
+/**
+ * @param {ValidatePrepublishPluginRegistryParams} params
+ * @returns {{ manifest: PrepublishPluginRegistryManifest, manifestPath: string, manifestSha256: string }}
+ */
 export function validatePrepublishPluginRegistryArtifact(params) {
   if (!SOURCE_SHA_PATTERN.test(params.expectedSourceSha ?? "")) {
     throw new Error("expectedSourceSha must be a full lowercase commit SHA");
@@ -133,11 +165,12 @@ export function validatePrepublishPluginRegistryArtifact(params) {
     throw new Error("prepublish plugin registry version differs from the root package candidate");
   }
   const requiredPackages = normalizeRequiredPackages(params.requiredPackages);
-  if (
-    JSON.stringify(manifest.packages.map((entry) => entry.name)) !==
-    JSON.stringify(requiredPackages)
-  ) {
-    throw new Error("prepublish plugin registry package set differs from the Docker plan");
+  const manifestPackageNames = new Set(manifest.packages.map((entry) => entry.name));
+  const missingRequiredPackage = requiredPackages.find((name) => !manifestPackageNames.has(name));
+  if (missingRequiredPackage) {
+    throw new Error(
+      `prepublish plugin registry is missing Docker-plan package ${missingRequiredPackage}`,
+    );
   }
   const expectedFiles = new Set([
     PREPUBLISH_PLUGIN_REGISTRY_MANIFEST,

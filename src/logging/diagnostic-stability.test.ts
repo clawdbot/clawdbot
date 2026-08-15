@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   emitDiagnosticEvent,
+  emitTrustedDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
@@ -857,6 +858,30 @@ describe("diagnostic stability recorder", () => {
     });
   });
 
+  it("records sanitized trusted model request instrumentation", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitTrustedDiagnosticEvent({
+      type: "model.call.started",
+      runId: "private-run-id",
+      callId: "private-call-id",
+      sessionKey: "private-session-key",
+      provider: "openai",
+      model: "gpt-5.4",
+      observationUnit: "request",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(getDiagnosticStabilitySnapshot({ type: "model.call.started" }).events).toEqual([
+      expect.objectContaining({
+        type: "model.call.started",
+        provider: "openai",
+        model: "gpt-5.4",
+      }),
+    ]);
+    expect(JSON.stringify(getDiagnosticStabilitySnapshot())).not.toContain("private-");
+  });
+
   it("keeps async queue drop summaries after drained queued events for sinceSeq polling", async () => {
     startDiagnosticStabilityRecorder();
 
@@ -976,6 +1001,46 @@ describe("diagnostic stability recorder", () => {
     );
     expect(() => normalizeDiagnosticStabilityQuery({ sinceSeq: -1 })).toThrow(
       "sinceSeq must be a non-negative integer",
+    );
+  });
+
+  it("rejects non-decimal stability query integer strings", () => {
+    for (const malformed of ["0x2", "1e2", "+5", " 5 "]) {
+      expect(() => normalizeDiagnosticStabilityQuery({ limit: malformed })).toThrow(
+        "limit must be a non-negative integer",
+      );
+      expect(() => normalizeDiagnosticStabilityQuery({ sinceSeq: malformed })).toThrow(
+        "sinceSeq must be a non-negative integer",
+      );
+    }
+    expect(normalizeDiagnosticStabilityQuery({ sinceSeq: "0" }).sinceSeq).toBe(0);
+    expect(normalizeDiagnosticStabilityQuery({ limit: "42" }).limit).toBe(42);
+    expect(normalizeDiagnosticStabilityQuery({ limit: 7 }).limit).toBe(7);
+  });
+
+  it("rejects unsafe integers for stability query limit and sinceSeq", () => {
+    const safe = Number.MAX_SAFE_INTEGER;
+    const unsafe = safe + 1;
+    // sinceSeq has no upper bound: safe integers are accepted, unsafe rejected.
+    expect(normalizeDiagnosticStabilityQuery({ sinceSeq: safe }).sinceSeq).toBe(safe);
+    expect(() => normalizeDiagnosticStabilityQuery({ sinceSeq: unsafe })).toThrow(
+      "sinceSeq must be a non-negative integer",
+    );
+    expect(normalizeDiagnosticStabilityQuery({ sinceSeq: String(safe) }).sinceSeq).toBe(safe);
+    expect(() => normalizeDiagnosticStabilityQuery({ sinceSeq: String(unsafe) })).toThrow(
+      "sinceSeq must be a non-negative integer",
+    );
+    // limit is additionally capped at 1000: a safe but out-of-range value hits
+    // the range error, while an unsafe integer is rejected by the integer gate
+    // first, identically for numeric and string input.
+    expect(() => normalizeDiagnosticStabilityQuery({ limit: safe })).toThrow(
+      "limit must be between 1 and 1000",
+    );
+    expect(() => normalizeDiagnosticStabilityQuery({ limit: unsafe })).toThrow(
+      "limit must be a non-negative integer",
+    );
+    expect(() => normalizeDiagnosticStabilityQuery({ limit: String(unsafe) })).toThrow(
+      "limit must be a non-negative integer",
     );
   });
 });

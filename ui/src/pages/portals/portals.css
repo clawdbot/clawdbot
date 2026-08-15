@@ -1,0 +1,215 @@
+.portals-layout {
+  display: grid;
+  grid-template-columns: minmax(210px, 260px) minmax(0, 1fr);
+  gap: var(--space-4);
+  min-height: min(720px, calc(100vh - 190px));
+}
+
+.portals-rail {
+  min-width: 0;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 76%, transparent);
+}
+
+.portals-rail__item {
+  width: 100%;
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: var(--cursor-action);
+}
+
+.portals-rail__item:hover,
+.portals-rail__item:focus-visible {
+  background: var(--bg-hover);
+}
+
+.portals-rail__item.active {
+  background: var(--accent-subtle);
+}
+
+.portals-rail__title {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 0.86rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.portals-rail__port,
+.portals-rail__description {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.35;
+}
+
+.portals-rail__description {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.portals-preview {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.portals-preview__header {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.portals-preview__url {
+  min-width: 0;
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+  text-decoration: none;
+}
+
+.portals-preview__url:hover,
+.portals-preview__url:focus-visible {
+  color: var(--text);
+}
+
+.portals-preview__url span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.portals-preview__url svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.portals-preview__close {
+  opacity: 0.42;
+  transition: opacity 120ms ease;
+}
+
+.portals-preview:hover .portals-preview__close,
+.portals-preview__close:focus-visible {
+  opacity: 1;
+}
+
+.portals-preview__error {
+  margin: 10px;
+}
+
+.portals-preview__state {
+  flex: 1;
+  min-height: 480px;
+}
+
+.portals-preview__notice {
+  min-height: 480px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--space-3);
+  padding: var(--space-6);
+  color: var(--muted);
+  text-align: center;
+}
+
+.portals-preview__notice-title {
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 650;
+}
+
+.portals-preview__notice p {
+  max-width: 560px;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.portals-preview__notice-url {
+  max-width: min(680px, 100%);
+  overflow-wrap: anywhere;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+  user-select: all;
+}
+
+.portals-preview__frame {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 480px;
+  border: 0;
+  background: white;
+}
+
+.portals-empty {
+  min-height: min(620px, calc(100vh - 190px));
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--space-3);
+  padding: var(--space-6) var(--space-4);
+  color: var(--muted);
+  text-align: center;
+}
+
+.portals-empty__title {
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 650;
+}
+
+.portals-empty__prompts {
+  display: grid;
+  gap: 5px;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+}
+
+.portals-empty__note {
+  margin-top: var(--space-2);
+  color: var(--warn);
+  font-size: var(--control-ui-text-sm);
+}
+
+@media (max-width: 768px) {
+  .portals-layout {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: auto;
+  }
+
+  .portals-rail {
+    max-height: 190px;
+  }
+
+  .portals-preview {
+    min-height: 560px;
+  }
+}

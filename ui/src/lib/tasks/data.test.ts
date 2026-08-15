@@ -322,13 +322,20 @@ describe("tasks page data", () => {
       sourceId: "source-1",
     };
 
-    expect(normalizeTasksListResult({ tasks: [wireTask] })?.[0]).toEqual({
-      ...wireTask,
-      id: "task-1",
-      taskId: "task-1",
+    expect(normalizeTasksListResult({ tasks: [wireTask], nextCursor: "page-2" })).toEqual({
+      nextCursor: "page-2",
+      tasks: [
+        {
+          ...wireTask,
+          id: "task-1",
+          taskId: "task-1",
+        },
+      ],
     });
     expect(normalizeTasksGetResult({ task: wireTask })?.taskId).toBe("task-1");
     expect(normalizeTasksListResult({ tasks: [{ ...wireTask, updatedAt: false }] })).toBeNull();
+    expect(normalizeTasksListResult({ tasks: [wireTask], nextCursor: 2 })).toBeNull();
+    expect(normalizeTasksListResult({ tasks: "not-a-page" })).toBeNull();
   });
 
   it("merges upserts, applies deletes, and requests refetches for restored events", () => {

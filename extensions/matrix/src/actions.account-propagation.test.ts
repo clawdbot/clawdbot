@@ -130,6 +130,7 @@ describe("matrixMessageActions account propagation", () => {
       createContext({
         action: "permissions",
         accountId: "ops",
+        senderIsOwner: true,
         params: {
           operation: "verification-list",
         },
@@ -141,6 +142,25 @@ describe("matrixMessageActions account propagation", () => {
     expect(call.input.accountId).toBe("ops");
     expect(call.cfg).toBeTypeOf("object");
     expect(call.options).toMatchObject({ mediaLocalRoots: undefined });
+  });
+
+  it("rejects verification actions without sender owner context", async () => {
+    await expect(
+      matrixMessageActions.handleAction?.(
+        createContext({
+          action: "permissions",
+          accountId: "ops",
+          senderIsOwner: false,
+          params: {
+            operation: "verification-bootstrap",
+            forceResetCrossSigning: true,
+            recoveryKey: "test-recovery-key",
+          },
+        }),
+      ),
+    ).rejects.toThrow("Matrix verification actions require owner access.");
+
+    expect(mocks.handleMatrixAction).not.toHaveBeenCalled();
   });
 
   it("forwards accountId for self-profile updates", async () => {

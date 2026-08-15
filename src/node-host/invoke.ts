@@ -43,8 +43,10 @@ import {
 } from "../infra/node-commands.js";
 import { logWarn } from "../logger.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import type { NodeHostClient } from "./client.js";
+import { invokeNodeDesktopStream } from "./desktop-stream-command.js";
 import {
   handleClaudeCliNodeInvoke,
   type NodeHostInvokeRuntime,
@@ -66,6 +68,10 @@ import type {
 } from "./invoke-types.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
+import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
+import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-commands.js";
+import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
+import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-host.js";
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
@@ -81,6 +87,12 @@ const MCP_ERROR_MESSAGE_MAX_CHARS = 1_024;
 
 const OUTPUT_EVENT_TAIL = 20_000;
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+type NodeHostPrivateInvokeRuntime = NodeHostInvokeRuntime & {
+  workerBundleInstaller?: NodeWorkerBundleInstallerControl;
+  workerSupervisor?: NodeWorkerSupervisorControl;
+  workerWorkspace?: NodeWorkerWorkspaceRuntime;
+};
 
 const execHostEnforced =
   normalizeLowercaseStringOrEmpty(process.env.OPENCLAW_NODE_EXEC_HOST ?? "") === "app";
@@ -131,29 +143,6 @@ function resolveNodeSkillCwdParam<T extends { cwd?: unknown }>(params: T, nodeId
   // the same canonical node-local directory instead of trusting a URI at exec time.
   const resolved = resolveNodeHostedSkillDirectory(params.cwd, nodeId);
   return resolved ? { ...params, cwd: resolved } : params;
-}
-
-function bindNodeInvokeSessionKey<
-  T extends {
-    sessionKey?: unknown;
-    systemRunPlan?: SystemRunParams["systemRunPlan"];
-  },
->(params: T, frame: NodeInvokeRequestPayload): T {
-  if (!Object.hasOwn(frame, "sessionKey")) {
-    return params;
-  }
-  const sessionKey = frame.sessionKey ?? null;
-  // The Gateway envelope owns run correlation. Nested command params are
-  // caller-controlled and must not mint or retain a different session binding.
-  const systemRunPlan =
-    params.systemRunPlan === undefined || params.systemRunPlan === null
-      ? params.systemRunPlan
-      : { ...params.systemRunPlan, sessionKey: sessionKey ?? null };
-  return {
-    ...params,
-    sessionKey,
-    ...(systemRunPlan !== undefined ? { systemRunPlan } : {}),
-  };
 }
 
 function buildEnvOverrideRejectionMessage(params: {
@@ -595,7 +584,7 @@ export async function handleInvoke(
   client: NodeHostClient,
   skillBins: SkillBinsProvider,
   mcpManager?: NodeHostMcpManager,
-  runtime: NodeHostInvokeRuntime = {},
+  runtime: NodeHostPrivateInvokeRuntime = {},
 ) {
   const invocationClient = createNodeHostInvocationClient(client, runtime.signal);
   try {
@@ -623,9 +612,32 @@ async function dispatchInvoke(
   client: NodeHostClient,
   skillBins: SkillBinsProvider,
   mcpManager?: NodeHostMcpManager,
-  runtime: NodeHostInvokeRuntime = {},
+  runtime: NodeHostPrivateInvokeRuntime = {},
 ) {
   const command = frame.command ?? "";
+  const workerSupervisorResult = await invokeNodeWorkerSupervisorCommand({
+    command,
+    paramsJSON: frame.paramsJSON,
+    bundleInstaller: runtime.workerBundleInstaller,
+    supervisor: runtime.workerSupervisor,
+    workspace: runtime.workerWorkspace,
+    gatewayUrl: runtime.gatewayUrl,
+    gatewayTlsFingerprint: runtime.gatewayTlsFingerprint,
+    signal: runtime.signal,
+  });
+  if (workerSupervisorResult.handled) {
+    if (workerSupervisorResult.ok) {
+      await sendJsonPayloadResult(client, frame, workerSupervisorResult.payload);
+    } else {
+      await sendErrorResult(
+        client,
+        frame,
+        workerSupervisorResult.code,
+        workerSupervisorResult.message,
+      );
+    }
+    return;
+  }
   if (command === NODE_DEVICE_APPS_COMMAND) {
     const result = await invokeDeviceApps({
       paramsJSON: frame.paramsJSON,
@@ -637,6 +649,27 @@ async function dispatchInvoke(
       await sendJsonPayloadResult(client, frame, result.payload);
     } else {
       await sendErrorResult(client, frame, result.code, result.message);
+    }
+    return;
+  }
+  if (command === NODE_DESKTOP_STREAM_COMMAND) {
+    try {
+      await invokeNodeDesktopStream({
+        paramsJSON: frame.paramsJSON,
+        gatewayUrl: runtime.gatewayUrl,
+        gatewayTlsFingerprint: runtime.gatewayTlsFingerprint,
+        config: runtime.desktopHostConfig,
+        signal: runtime.signal,
+        emitStatus: runtime.emitProgress,
+      });
+      await sendJsonPayloadResult(client, frame, { status: "closed" });
+    } catch (error) {
+      await sendErrorResult(
+        client,
+        frame,
+        "UNAVAILABLE",
+        error instanceof Error ? error.message : "desktop stream unavailable",
+      );
     }
     return;
   }
@@ -769,12 +802,11 @@ async function dispatchInvoke(
   }
   try {
     const { pluginCommandIo: io, pluginCommandContext: context } = runtime;
-    const hasSessionKeyEnvelope = Object.hasOwn(frame, "sessionKey");
     const invokeContext =
-      context && (hasSessionKeyEnvelope || runtime.signal)
+      context && (frame.sessionKey || runtime.signal)
         ? {
             ...context,
-            ...(hasSessionKeyEnvelope ? { sessionKey: frame.sessionKey ?? undefined } : {}),
+            ...(frame.sessionKey ? { sessionKey: frame.sessionKey } : {}),
             ...(runtime.signal ? { signal: runtime.signal } : {}),
           }
         : context;
@@ -790,12 +822,9 @@ async function dispatchInvoke(
 
   if (command === "system.run.prepare") {
     try {
-      const params = bindNodeInvokeSessionKey(
-        resolveNodeSkillCwdParam(
-          decodeParams<SystemRunPrepareParams>(frame.paramsJSON),
-          frame.nodeId,
-        ),
-        frame,
+      const params = resolveNodeSkillCwdParam(
+        decodeParams<SystemRunPrepareParams>(frame.paramsJSON),
+        frame.nodeId,
       );
       const prepared = buildSystemRunApprovalPlan(params);
       if (!prepared.ok) {
@@ -852,9 +881,9 @@ async function dispatchInvoke(
 
   let params: SystemRunParams;
   try {
-    params = bindNodeInvokeSessionKey(
-      resolveNodeSkillCwdParam(decodeParams<SystemRunParams>(frame.paramsJSON), frame.nodeId),
-      frame,
+    params = resolveNodeSkillCwdParam(
+      decodeParams<SystemRunParams>(frame.paramsJSON),
+      frame.nodeId,
     );
   } catch (err) {
     await sendInvalidRequestResult(client, frame, err);

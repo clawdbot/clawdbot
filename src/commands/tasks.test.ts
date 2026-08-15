@@ -209,7 +209,9 @@ describe("tasks commands", () => {
       });
 
       const limitedRuntime = createRuntime();
+      const auditStartedAt = Date.now();
       await tasksAuditCommand({ json: true, limit: 1 }, limitedRuntime);
+      const auditFinishedAt = Date.now();
 
       const limitedPayload = readFirstJsonLog(limitedRuntime) as { findings: unknown[] };
       const [limitedFinding] = limitedPayload.findings as Array<{ ageMs?: number }>;
@@ -224,8 +226,8 @@ describe("tasks commands", () => {
         token: runningFlow.flowId,
         flow: jsonRoundTrip(runningFlow),
       });
-      expect(limitedFinding?.ageMs).toBeGreaterThanOrEqual(45 * 60_000);
-      expect(limitedFinding?.ageMs).toBeLessThan(45 * 60_000 + 1_000);
+      expect(limitedFinding?.ageMs).toBeGreaterThanOrEqual(auditStartedAt - runningFlow.updatedAt);
+      expect(limitedFinding?.ageMs).toBeLessThanOrEqual(auditFinishedAt - runningFlow.updatedAt);
     });
   });
 

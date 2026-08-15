@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveDefaultAgentWorkspaceDir } from "../../src/agents/workspace-default.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { hasActiveStartupMigrationLease } from "../../src/infra/startup-migration-checkpoint.js";
 import {
@@ -35,6 +36,7 @@ describe("Doctor plugin index persistence built CLI proof", () => {
       startTimeoutMs: 90_000,
     });
     instances.push(instance);
+    const workspaceDir = resolveDefaultAgentWorkspaceDir(instance.env);
 
     const config = JSON.parse(fs.readFileSync(instance.configPath, "utf8")) as OpenClawConfig;
     const pluginId = "legacy-doctor-index";
@@ -73,6 +75,7 @@ describe("Doctor plugin index persistence built CLI proof", () => {
       config,
       env: instance.env,
       stateDir: instance.stateDir,
+      workspaceDir,
     });
     const legacyIndex = {
       ...current.index,
@@ -101,6 +104,7 @@ describe("Doctor plugin index persistence built CLI proof", () => {
       config,
       env: instance.env,
       stateDir: instance.stateDir,
+      workspaceDir,
       allowCurrent: false,
     });
     expect(reread.registrySource, instance.logs()).toBe("persisted");

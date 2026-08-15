@@ -15,8 +15,10 @@ describe("SessionRowSchema", () => {
         avatarUrl: "/api/users/profile-ada/avatar?v=7",
       },
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+      icon: "🦞",
       visibility: "suggest",
       sharingRole: "owner",
+      restartRecoveryStatus: "tombstoned",
     };
     const roundTripped = structuredClone(row);
 
@@ -27,8 +29,10 @@ describe("SessionRowSchema", () => {
       activeLeafEntryId: "leaf-rendered",
       createdActor: { avatarUrl: "/api/users/profile-ada/avatar?v=7" },
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+      icon: "🦞",
       visibility: "suggest",
       sharingRole: "owner",
+      restartRecoveryStatus: "tombstoned",
     });
   });
 });

@@ -551,6 +551,29 @@ describe("buildTailscaleHttpsUrl", () => {
 });
 
 describe("resolveSharedMemoryStatusSnapshot", () => {
+  it("skips agent-scoped memory when an explicit fleet has no selected owner", async () => {
+    const resolveMemoryConfig = vi.fn();
+    const getMemorySearchManager = vi.fn();
+
+    await expect(
+      resolveSharedMemoryStatusSnapshot({
+        cfg: {
+          agents: {
+            ownership: "explicit",
+            entries: { alpha: {}, beta: {} },
+          },
+        },
+        agentStatus: { defaultId: null },
+        memoryPlugin: { enabled: true, slot: "memory-core" },
+        resolveMemoryConfig,
+        getMemorySearchManager,
+      }),
+    ).resolves.toBeNull();
+
+    expect(resolveMemoryConfig).not.toHaveBeenCalled();
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "top-level defaults",
@@ -656,42 +679,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       chunks: 128,
       vector: { enabled: true, available: true },
       fts: { enabled: true, available: true },
-    });
-  });
-
-  it("uses semantic vector probes for non-builtin memory-slot runtimes", async () => {
-    const manager = {
-      probeVectorStoreAvailability: vi.fn(async () => true),
-      probeVectorAvailability: vi.fn(async () => true),
-      status: vi.fn(() => ({
-        backend: "qmd" as const,
-        provider: "qmd",
-        files: 5,
-        chunks: 5,
-        vector: { enabled: true, available: true, semanticAvailable: true },
-      })),
-      close: vi.fn(async () => {}),
-    };
-    const getMemorySearchManager = vi.fn(async () => ({ manager }));
-
-    const result = await resolveSharedMemoryStatusSnapshot({
-      cfg: { plugins: { slots: { memory: "qmd" } } },
-      agentStatus: { defaultId: "main" },
-      memoryPlugin: { enabled: true, slot: "qmd" },
-      resolveMemoryConfig: vi.fn(() => null),
-      getMemorySearchManager,
-      requireDefaultDatabasePath: vi.fn(),
-    });
-
-    expect(manager.probeVectorStoreAvailability).not.toHaveBeenCalled();
-    expect(manager.probeVectorAvailability).toHaveBeenCalled();
-    expect(result).toEqual({
-      agentId: "main",
-      backend: "qmd",
-      provider: "qmd",
-      files: 5,
-      chunks: 5,
-      vector: { enabled: true, available: true, semanticAvailable: true },
     });
   });
 

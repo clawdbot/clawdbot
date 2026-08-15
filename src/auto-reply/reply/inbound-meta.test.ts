@@ -436,6 +436,7 @@ describe("buildInboundUserContextPrefix", () => {
     const entry = createGoalSessionEntry("active");
     entry.totalTokens = 10;
     entry.totalTokensFresh = true;
+    entry.totalTokensVersion = 1;
     entry.goal = { ...entry.goal!, tokenBudget: 10 };
 
     expect(buildInboundUserContextPrefix({} as TemplateContext, undefined, entry)).toBe("");

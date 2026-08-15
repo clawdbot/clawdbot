@@ -528,8 +528,8 @@ describe("registerChannelsCli", () => {
     mockProcessPlatform("win32");
     process.argv = [
       "C:\\Program Files\\nodejs\\node.exe",
-      "C:\\repo\\openclaw.js",
       "C:\\Program Files\\nodejs\\node.exe",
+      "C:\\repo\\openclaw.js",
       "channels",
       "add",
       "--channel",
