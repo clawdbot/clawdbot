@@ -10,7 +10,7 @@ import {
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { withProgress } from "../cli/progress.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
-import { readRestartSentinel } from "../infra/restart-sentinel.js";
+import { readRestartSentinelReadOnly } from "../infra/restart-sentinel.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { assertStatusUsageAgentScope, runStatusJsonCommand } from "./status-json-command.ts";
@@ -319,7 +319,7 @@ export async function statusCommand(
     nodeOnlyGateway,
   });
   const updateRestartValue = formatUpdateRestartStatusValue(
-    (await readRestartSentinel().catch(() => null))?.payload,
+    (await readRestartSentinelReadOnly().catch(() => null))?.payload,
     {
       ok,
       warn,

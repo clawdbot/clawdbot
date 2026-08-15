@@ -135,7 +135,11 @@ async function findCatalogEligibleThread(
 }
 
 export function createCodexTerminalNodeHostCommand(
-  control: CodexSessionCatalogControl,
+  bindRequest: (paramsJSON?: string | null) => {
+    agentId: string;
+    control: CodexSessionCatalogControl;
+    paramsJSON: string;
+  },
   configSources: CodexTerminalConfigSources,
 ): OpenClawPluginNodeHostCommand {
   return {
@@ -155,7 +159,8 @@ export function createCodexTerminalNodeHostCommand(
       if (!io) {
         throw new Error("Codex terminal command requires duplex transport");
       }
-      const resume = decodeNodePtyResumeParams(paramsJSON, (value) => {
+      const request = bindRequest(paramsJSON);
+      const resume = decodeNodePtyResumeParams(request.paramsJSON, (value) => {
         if (
           typeof value !== "string" ||
           !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value)
@@ -164,7 +169,7 @@ export function createCodexTerminalNodeHostCommand(
         }
         return value;
       });
-      const record = await requireCatalogEligibleThread(control, resume.threadId);
+      const record = await requireCatalogEligibleThread(request.control, resume.threadId);
       const resolution = resolveNodeHostExecutable("codex", {
         env: process.env,
         pathEnv: process.env.PATH ?? process.env.Path ?? "",
@@ -179,7 +184,12 @@ export function createCodexTerminalNodeHostCommand(
             file: resolution.executable,
             args: ["resume", resume.threadId],
             cwd: record.cwd,
-            env: { CODEX_HOME: resolveCodexCatalogTerminalHome(configSources) },
+            env: {
+              CODEX_HOME: resolveCodexCatalogTerminalHome({
+                ...configSources,
+                agentId: request.agentId,
+              }),
+            },
             cols: resume.cols,
             rows: resume.rows,
           },
@@ -191,6 +201,7 @@ export function createCodexTerminalNodeHostCommand(
 }
 
 async function resolveNodeCatalogEligibleThread(params: {
+  agentId: string;
   runtime: PluginRuntime;
   nodeId: string;
   threadId: string;
@@ -203,6 +214,7 @@ async function resolveNodeCatalogEligibleThread(params: {
       nodeId: params.nodeId,
       command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
       params: {
+        agentId: params.agentId,
         limit: CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
         ...(cursor ? { cursor } : {}),
       },
@@ -276,6 +288,7 @@ export async function openCodexCatalogTerminal(
     throw new CatalogParamsError("paired-node Codex terminal is unavailable");
   }
   const record = await resolveNodeCatalogEligibleThread({
+    agentId: params.agentId,
     runtime: params.api.runtime,
     nodeId,
     threadId: params.threadId,
@@ -285,7 +298,7 @@ export async function openCodexCatalogTerminal(
     kind: "node",
     nodeId,
     command: CODEX_TERMINAL_RESUME_COMMAND,
-    paramsJSON: JSON.stringify({ threadId: params.threadId }),
+    paramsJSON: JSON.stringify({ agentId: params.agentId, threadId: params.threadId }),
     ...(record.cwd ? { cwd: record.cwd } : {}),
     title,
   };

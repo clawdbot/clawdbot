@@ -753,6 +753,7 @@ vi.mock("../daemon/node-service.js", () => ({
 }));
 vi.mock("../node-host/config.js", () => ({
   loadNodeHostConfig: mocks.loadNodeHostConfig,
+  loadNodeHostConfigReadOnly: mocks.loadNodeHostConfig,
 }));
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
   getInspectableTaskRegistrySummary: mocks.getInspectableTaskRegistrySummary,
