@@ -1,10 +1,11 @@
 /**
  * Builds the /models picker's final selection confirmation body in both
- * representations the callback funnel can send: legacy HTML text (used when
- * richMessages is disabled, or as a fallback) and hand-built rich blocks
- * (used when richMessages is enabled, since the picker's provider/model-list
- * edits already went through the rich funnel and this confirmation edits
- * that same rich-sent message — see the call site's #123886 note).
+ * representations the callback funnel can send: legacy HTML text (used by
+ * every other picker step, and as this confirmation's fallback) and
+ * hand-built rich blocks (used only by this terminal confirmation, which
+ * explicitly opts into the rich funnel via richTextOverride so the edit
+ * replaces the picker's rich-sent body instead of leaving it visible
+ * underneath — see the call site's #123886 note).
  */
 import { boldRichText, paragraphBlock, type InputRichBlock } from "./rich-block-model.js";
 

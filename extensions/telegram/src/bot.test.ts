@@ -2867,10 +2867,11 @@ describe("createTelegramBot", () => {
   });
 
   it("routes the final model selection confirmation through the rich edit funnel when richMessages is enabled", async () => {
-    // Regression for #123886: the picker's provider/model-list edits already went
-    // through the rich funnel when richMessages is enabled, but the final confirmation
-    // stayed HTML-only. Editing a rich-sent message through the legacy text API leaves
-    // the message's prior rich body visible underneath the new plain text instead of
+    // Regression for #123886: the picker's provider/model-list edits stay on the
+    // legacy HTML funnel (no richTextOverride supplied), same as every other
+    // callback step. Only this terminal confirmation opts into the rich funnel.
+    // Editing a rich-sent message through the legacy text API leaves the
+    // message's prior rich body visible underneath the new plain text instead of
     // replacing it, so this edit must land on editMessageTextSpy via the rich raw path
     // (see the harness's `raw.editMessageText` wiring), not the legacy parse_mode HTML
     // path with no rich_message payload.
