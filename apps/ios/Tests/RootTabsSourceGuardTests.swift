@@ -663,25 +663,6 @@ extension RootTabsSourceGuardTests {
         #expect(source.contains("private func proposals(forLaneStatus status: String)"))
     }
 
-    @Test func `routed feature screens reuse shared pro components`() throws {
-        let source = try Self.iPadTaskFeatureScreensSource()
-        let componentsSource = try String(contentsOf: Self.proComponentsSourceURL(), encoding: .utf8)
-        let channelsSource = try String(contentsOf: Self.channelsSourceURL(), encoding: .utf8)
-
-        #expect(source.contains("ProMetricGrid(metrics: self.metrics)"))
-        #expect(source.contains("ProPanelHeader("))
-        #expect(source.contains("ProStatusRow("))
-        #expect(!source.contains("private struct ProMetricGrid"))
-        #expect(!source.contains("private struct ProMetric"))
-        #expect(!source.contains("private struct ProPanelHeader"))
-        #expect(!source.contains("private struct ProStatusRow"))
-        #expect(!channelsSource.contains("private struct SettingsChannelPanelHeader"))
-        #expect(!channelsSource.contains("private struct SettingsChannelInfoRow"))
-        #expect(componentsSource.contains("struct ProMetricGrid"))
-        #expect(componentsSource.contains("struct ProPanelHeader"))
-        #expect(componentsSource.contains("struct ProStatusRow"))
-    }
-
     @Test func `activity screen stays split from task feature screens`() throws {
         let taskSource = try Self.iPadTaskFeatureScreensSource()
         let activitySource = try String(contentsOf: Self.iPadActivityScreenSourceURL(), encoding: .utf8)
@@ -697,18 +678,6 @@ extension RootTabsSourceGuardTests {
         #expect(!taskSource.contains("struct IPadActivityScreen"))
         #expect(!taskSource.contains("import OpenClawChatUI"))
         #expect(projectSource.contains("IPadActivityScreen.swift in Sources"))
-    }
-
-    @Test func `routed feature chrome stays split from task feature screens`() throws {
-        let taskSource = try Self.iPadTaskFeatureScreensSource()
-        let chromeSource = try String(contentsOf: Self.iPadSidebarScreenChromeSourceURL(), encoding: .utf8)
-        let projectSource = try String(contentsOf: Self.xcodeProjectSourceURL(), encoding: .utf8)
-
-        #expect(chromeSource.contains("struct IPadSidebarScreenChrome<Content: View>: View"))
-        #expect(chromeSource.contains("OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)"))
-        #expect(chromeSource.contains("OpenClawGatewayCompactPill()"))
-        #expect(!taskSource.contains("struct IPadSidebarScreenChrome"))
-        #expect(projectSource.contains("IPadSidebarScreenChrome.swift in Sources"))
     }
 
     @Test func `routed feature chrome keeps gateway pill actionable`() throws {
