@@ -171,9 +171,25 @@ export function applyAgentConfig(
       entries: toAgentEntriesRecord(nextList),
     },
   };
-  return list.length === 1 && nextList.length > 1
-    ? pinLegacyInheritedAuthOwnerForRosterTransition(cfg, nextConfig)
-    : nextConfig;
+  if (list.length !== 1 || nextList.length <= 1) {
+    return nextConfig;
+  }
+  const priorSystemAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+  const transitionedConfig =
+    priorSystemAgentId &&
+    !normalizeOptionalString(nextConfig.agents?.defaults?.systemAgent?.agentId)
+      ? {
+          ...nextConfig,
+          agents: {
+            ...nextConfig.agents,
+            defaults: {
+              ...nextConfig.agents?.defaults,
+              systemAgent: { agentId: priorSystemAgentId },
+            },
+          },
+        }
+      : nextConfig;
+  return pinLegacyInheritedAuthOwnerForRosterTransition(cfg, transitionedConfig);
 }
 
 /** Remove an agent and any config references that route or allow traffic to it. */
