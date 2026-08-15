@@ -138,6 +138,8 @@ gh workflow run openclaw-performance.yml \
   -f fail_on_regression=true
 ```
 
+- `fail_on_regression` follows Full Release Validation's profile gate: `true`
+  for stable, `false` for beta.
 - Do not wait for full release validation to start this early perf signal.
 - Compare available Kova, gateway startup, and CLI startup metrics with earlier
   release evidence or clawgrit reports before publish/closeout.
