@@ -6,6 +6,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { CLAUDE_CLI_PROVIDER } from "./cli-session-history.claude.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 // Synthetic single-text assistant aggregates persisted for CLI backends carry
@@ -108,8 +109,19 @@ function resolveCliAssistantAggregateText(message: unknown): string | undefined 
   if (!message || typeof message !== "object") {
     return undefined;
   }
-  const record = message as { role?: unknown; idempotencyKey?: unknown };
+  const record = message as {
+    role?: unknown;
+    idempotencyKey?: unknown;
+    provider?: unknown;
+  };
   if (readStringValue(record.role) !== "assistant") {
+    return undefined;
+  }
+  // The cli-assistant idempotency prefix is shared by every CLI backend, but
+  // this merger imports only Claude CLI history. Require the aggregate's
+  // provider to match the imported source so a same-text aggregate from
+  // another CLI backend is never deleted as if it were the imported turn.
+  if (readStringValue(record.provider) !== CLAUDE_CLI_PROVIDER) {
     return undefined;
   }
   const idempotencyKey = normalizeOptionalString(record.idempotencyKey);

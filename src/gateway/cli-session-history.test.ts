@@ -912,6 +912,7 @@ describe("cli session history", () => {
       {
         role: "assistant",
         content: [{ type: "text", text: "Only available locally." }],
+        provider: "claude-cli",
         idempotencyKey: "cli-assistant:run-1",
         timestamp: Date.parse("2026-03-26T16:29:56.000Z"),
       },
@@ -942,12 +943,14 @@ describe("cli session history", () => {
       {
         role: "assistant",
         content: [{ type: "text", text: "Same answer." }],
+        provider: "claude-cli",
         idempotencyKey: "cli-assistant:run-1",
         timestamp: Date.parse("2026-03-26T16:29:56.000Z"),
       },
       {
         role: "assistant",
         content: [{ type: "text", text: "Same answer." }],
+        provider: "claude-cli",
         idempotencyKey: "cli-assistant:run-2",
         // More than the 5-minute dedupe window apart: a genuinely repeated turn.
         timestamp: Date.parse("2026-03-26T16:36:56.000Z"),
@@ -971,7 +974,9 @@ describe("cli session history", () => {
     // One aggregate is covered by the single imported block; the surplus copy
     // of the genuinely repeated turn survives as fallback history.
     expect(
-      merged.filter((message) => readRecord(message).idempotencyKey?.startsWith("cli-assistant:")),
+      merged.filter((message) =>
+        String(readRecord(message).idempotencyKey ?? "").startsWith("cli-assistant:"),
+      ),
     ).toHaveLength(1);
   });
 
@@ -980,6 +985,7 @@ describe("cli session history", () => {
       {
         role: "assistant",
         content: [{ type: "text", text: "OK" }],
+        provider: "claude-cli",
         idempotencyKey: "cli-assistant:run-1",
         timestamp: Date.parse("2026-03-26T16:29:56.000Z"),
       },
@@ -1013,6 +1019,37 @@ describe("cli session history", () => {
       merged.filter((message) => readRecord(message).idempotencyKey === "cli-assistant:run-1"),
     ).toHaveLength(1);
     expect(merged.filter((message) => readRecord(message).role === "assistant")).toHaveLength(2);
+  });
+
+  it("keeps a same-text cli-assistant aggregate from another CLI provider", () => {
+    const localMessages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Same answer." }],
+        provider: "openai",
+        idempotencyKey: "cli-assistant:run-1",
+        timestamp: Date.parse("2026-03-26T16:29:56.000Z"),
+      },
+    ];
+    const importedMessages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Same answer." }],
+        timestamp: Date.parse("2026-03-26T16:29:55.500Z"),
+        __openclaw: {
+          importedFrom: "claude-cli",
+          externalId: "assistant-1",
+          cliSessionId: "session-1",
+        },
+      },
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+    // The aggregate was written by a different CLI backend, so it is not a
+    // redundant copy of the imported Claude CLI turn and must survive.
+    expect(
+      merged.filter((message) => readRecord(message).idempotencyKey === "cli-assistant:run-1"),
+    ).toHaveLength(1);
   });
 
   it("replaces a cli-assistant aggregate with its own imported turn through the real file-backed import", async () => {
@@ -1060,7 +1097,7 @@ describe("cli session history", () => {
       expect(messages).toHaveLength(3);
       expect(
         messages.some((message) =>
-          readRecord(message).idempotencyKey?.startsWith("cli-assistant:"),
+          String(readRecord(message).idempotencyKey ?? "").startsWith("cli-assistant:"),
         ),
       ).toBe(false);
       const importedAssistantBlocks = messages.filter((message) => {
