@@ -131,9 +131,10 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
 
       let stdout = "";
       let stderr = "";
+      let error: Error | undefined;
       const stdoutDecoder = new StringDecoder("utf8");
       const stderrDecoder = new StringDecoder("utf8");
-      // Output pipes may fail independently; child close/error remains authoritative.
+      // Pipe errors are incidental; close owns completion after any recorded spawn error.
       const ignoreOutputStreamError = () => {};
       child.stdout.on("error", ignoreOutputStreamError);
       child.stderr.on("error", ignoreOutputStreamError);
@@ -160,15 +161,14 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
             deps.chatLog.addSystem(`[local] ${lineLocal}`);
           }
         }
-        deps.chatLog.addSystem(`[local] exit ${code ?? "?"}${signal ? ` (signal ${signal})` : ""}`);
+        const status = error ? `error: ${formatTuiErrorMessage(error)}` : `exit ${code ?? "?"}`;
+        deps.chatLog.addSystem(`[local] ${status}${signal ? ` (signal ${signal})` : ""}`);
         deps.tui.requestRender();
         resolve();
       });
 
       child.on("error", (err) => {
-        deps.chatLog.addSystem(`[local] error: ${formatTuiErrorMessage(err)}`);
-        deps.tui.requestRender();
-        resolve();
+        error = err;
       });
     });
   };

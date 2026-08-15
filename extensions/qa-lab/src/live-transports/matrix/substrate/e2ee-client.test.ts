@@ -5,42 +5,204 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   MATRIX_QA_E2EE_SYNC_FILTER,
+  createMatrixQaE2eeClientLifecycle,
   createMatrixQaE2eeObservedEventRecorder,
   prepareMatrixQaE2eeStorage,
-  runMatrixQaE2eeClientOperation,
 } from "./e2ee-client-internals.js";
 import { findMatrixQaObservedEventMatch, type MatrixQaObservedEvent } from "./events.js";
 
 const testing = {
   MATRIX_QA_E2EE_SYNC_FILTER,
+  createMatrixQaE2eeClientLifecycle,
   createMatrixQaE2eeObservedEventRecorder,
   findMatrixQaObservedEventMatch,
   prepareMatrixQaE2eeStorage,
-  runMatrixQaE2eeClientOperation,
 };
 
 describe("matrix qa e2ee client storage", () => {
-  it("stops a disposable client when an E2EE operation exceeds its scenario timeout", async () => {
+  function createLifecycleFixture(options?: {
+    drain?: () => Promise<void>;
+    shutdownTimeoutMs?: number;
+  }) {
+    const calls: string[] = [];
+    const lifecycle = testing.createMatrixQaE2eeClientLifecycle({
+      detachListeners: vi.fn(() => calls.push("detach")),
+      drainPendingDecryptions: vi.fn(async () => {
+        calls.push("drain");
+        await options?.drain?.();
+      }),
+      shutdownTimeoutMs: options?.shutdownTimeoutMs ?? 500,
+      stopAndPersist: vi.fn(async () => {
+        calls.push("stop-and-persist");
+      }),
+      stopWithoutPersist: vi.fn(() => calls.push("stop-and-discard")),
+    });
+    return { calls, lifecycle };
+  }
+
+  it("drains decryptions before stopping the SDK and persisting", async () => {
+    const { calls, lifecycle } = createLifecycleFixture();
+
+    await lifecycle.stop();
+
+    expect(calls).toEqual(["detach", "drain", "stop-and-persist"]);
+  });
+
+  it("shares one stop promise across concurrent and repeated shutdown requests", async () => {
+    const { calls, lifecycle } = createLifecycleFixture();
+
+    const first = lifecycle.stop();
+    const second = lifecycle.stop();
+    await Promise.all([first, second]);
+    const third = lifecycle.stop();
+    const run = vi.fn(async () => "sent");
+
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+    await expect(
+      lifecycle.runOperation({
+        label: "Matrix E2EE text send",
+        run,
+        timeoutMs: 100,
+      }),
+    ).rejects.toThrow("shutdown has started");
+    expect(run).not.toHaveBeenCalled();
+    expect(calls).toEqual(["detach", "drain", "stop-and-persist"]);
+  });
+
+  it("gives an active operation a bounded grace period before draining and stopping", async () => {
     vi.useFakeTimers();
     try {
-      const stop = vi.fn();
-      const operation = testing.runMatrixQaE2eeClientOperation({
+      const { calls, lifecycle } = createLifecycleFixture();
+      let finishOperation: ((value: string) => void) | undefined;
+      const operation = lifecycle.runOperation({
+        label: "Matrix E2EE text send",
+        run: () =>
+          new Promise<string>((resolve) => {
+            calls.push("operation");
+            finishOperation = resolve;
+          }),
+        timeoutMs: 1_000,
+      });
+
+      const stop = lifecycle.stop();
+      expect(calls).toEqual(["operation", "detach"]);
+      finishOperation?.("sent");
+      await operation;
+      await stop;
+
+      expect(calls).toEqual(["operation", "detach", "drain", "stop-and-persist"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("discards without persisting when active operation grace expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const { calls, lifecycle } = createLifecycleFixture({
+        shutdownTimeoutMs: 100,
+      });
+      void lifecycle.runOperation({
         label: "Matrix E2EE text send",
         run: () =>
           new Promise<string>(() => {
-            // Intentionally pending so the timeout owns settlement.
+            calls.push("operation");
           }),
-        stop,
-        timeoutMs: 150_000,
+        timeoutMs: 1_000,
       });
-      const rejection = expect(operation).rejects.toThrow(
-        "Matrix E2EE text send timed out after 150000ms",
+      const stop = lifecycle.stop();
+      const rejection = expect(stop).rejects.toThrow(
+        "shutdown failed while waiting for active Matrix SDK operations",
       );
 
-      await vi.advanceTimersByTimeAsync(150_000);
+      await vi.advanceTimersByTimeAsync(100);
 
       await rejection;
-      expect(stop).toHaveBeenCalledOnce();
+      expect(calls).toEqual(["operation", "detach", "stop-and-discard"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("discards without persisting when pending decryptions exceed the shutdown deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const { calls, lifecycle } = createLifecycleFixture({
+        drain: () =>
+          new Promise<void>(() => {
+            // Intentionally pending so the shutdown deadline owns settlement.
+          }),
+        shutdownTimeoutMs: 100,
+      });
+      const stop = lifecycle.stop();
+      const rejection = expect(stop).rejects.toThrow(
+        "shutdown failed while draining pending Matrix decryptions",
+      );
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      await rejection;
+      expect(calls).toEqual(["detach", "drain", "stop-and-discard"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("requests lifecycle shutdown on operation timeout instead of directly discarding", async () => {
+    vi.useFakeTimers();
+    try {
+      const { calls, lifecycle } = createLifecycleFixture({
+        shutdownTimeoutMs: 100,
+      });
+      const operation = lifecycle.runOperation({
+        label: "Matrix E2EE text send",
+        run: () =>
+          new Promise<string>(() => {
+            calls.push("operation");
+          }),
+        timeoutMs: 50,
+      });
+      const rejection = expect(operation).rejects.toThrow(
+        "Matrix E2EE text send timed out after 50ms",
+      );
+
+      await vi.advanceTimersByTimeAsync(50);
+
+      await rejection;
+      expect(calls).toEqual(["operation", "detach"]);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(calls).toEqual(["operation", "detach", "stop-and-discard"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("observes a tracked operation that rejects after shutdown has discarded state", async () => {
+    vi.useFakeTimers();
+    try {
+      const { lifecycle } = createLifecycleFixture({
+        shutdownTimeoutMs: 50,
+      });
+      let rejectOperation: ((error: Error) => void) | undefined;
+      const operation = lifecycle.runOperation({
+        label: "Matrix E2EE text send",
+        run: () =>
+          new Promise<string>((_resolve, reject) => {
+            rejectOperation = reject;
+          }),
+        timeoutMs: 1_000,
+      });
+      const operationRejection = expect(operation).rejects.toThrow("late send failure");
+      const stop = lifecycle.stop();
+      const stopRejection = expect(stop).rejects.toThrow(
+        "shutdown failed while waiting for active Matrix SDK operations",
+      );
+
+      await vi.advanceTimersByTimeAsync(50);
+      await stopRejection;
+      rejectOperation?.(new Error("late send failure"));
+      await operationRejection;
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();

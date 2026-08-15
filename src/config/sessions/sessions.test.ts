@@ -6,7 +6,7 @@ import { withTempDirSync } from "../../test-helpers/temp-dir.js";
 import type { SessionConfig } from "../types.base.js";
 import { resolveSessionWorkStartError } from "./lifecycle.js";
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPathInDir,
   validateSessionId,
@@ -81,6 +81,97 @@ it("normalizes boolean-only pending delivery as transport-only", () => {
   });
 });
 
+it("normalizes exact pending-final delivery owners", () => {
+  expect(
+    normalizePersistedSessionEntryShape({
+      sessionId: "session-1",
+      updatedAt: 42,
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "durable reply",
+        createdAt: 41,
+        intentId: "intent-1",
+        deliveries: [
+          { id: "delivery-prepared", state: "prepared" },
+          { id: "delivery-delivered", state: "delivered" },
+          { id: "", state: "queued" },
+          { id: "delivery-invalid", state: "invalid" },
+        ],
+      },
+    }),
+  ).toMatchObject({
+    pendingFinalDelivery: {
+      intentId: "intent-1",
+      deliveries: [
+        { id: "delivery-prepared", state: "prepared" },
+        { id: "delivery-delivered", state: "delivered" },
+      ],
+    },
+  });
+});
+
+it("normalizes and preserves the durable assistant transcript repair backlog", () => {
+  expect(
+    normalizePersistedSessionEntryShape({
+      sessionId: "session-1",
+      updatedAt: 42,
+      pendingTranscriptRepair: [
+        {
+          id: "repair-1",
+          text: "recoverable assistant final",
+          provider: "openai",
+          model: "gpt-5.5",
+          createdAt: 42,
+        },
+        {
+          id: "repair-2",
+          text: "second recoverable assistant final",
+          createdAt: 43,
+        },
+      ],
+    }),
+  ).toMatchObject({
+    pendingTranscriptRepair: [
+      {
+        id: "repair-1",
+        text: "recoverable assistant final",
+        provider: "openai",
+        model: "gpt-5.5",
+        createdAt: 42,
+      },
+      {
+        id: "repair-2",
+        text: "second recoverable assistant final",
+        createdAt: 43,
+      },
+    ],
+  });
+});
+
+it("drops a non-array assistant transcript repair value", () => {
+  expect(
+    normalizePersistedSessionEntryShape({
+      sessionId: "session-1",
+      updatedAt: 42,
+      pendingTranscriptRepair: {
+        id: "repair-1",
+        text: "recoverable assistant final",
+        createdAt: 42,
+      },
+    }),
+  ).not.toHaveProperty("pendingTranscriptRepair");
+});
+
+it("drops malformed assistant transcript repair records", () => {
+  expect(
+    normalizePersistedSessionEntryShape({
+      sessionId: "session-1",
+      updatedAt: 42,
+      pendingTranscriptRepair: [{ kind: "transport-only" }],
+    }),
+  ).not.toHaveProperty("pendingTranscriptRepair");
+});
+
 describe("session path safety", () => {
   it("rejects unsafe session IDs", () => {
     const unsafeSessionIds = [
@@ -105,7 +196,7 @@ describe("session path safety", () => {
   it("falls back to derived path when sessionFile is outside known agent sessions dirs", () => {
     const sessionsDir = "/tmp/openclaw/agents/main/sessions";
 
-    const resolved = resolveSessionFilePath(
+    const resolved = resolveSessionFilePathCore(
       "sess-1",
       { sessionFile: "/tmp/openclaw/agents/work/not-sessions/abc-123.jsonl" },
       { sessionsDir },
@@ -132,7 +223,11 @@ describe("session path safety", () => {
       fs.symlinkSync(realRoot, aliasRoot, "dir");
       const viaAlias = path.join(aliasRoot, "agents", "main", "sessions", "sess-1.jsonl");
       fs.writeFileSync(path.join(sessionsDir, "sess-1.jsonl"), "");
-      const resolved = resolveSessionFilePath("sess-1", { sessionFile: viaAlias }, { sessionsDir });
+      const resolved = resolveSessionFilePathCore(
+        "sess-1",
+        { sessionFile: viaAlias },
+        { sessionsDir },
+      );
       expect(fs.realpathSync(resolved)).toBe(
         fs.realpathSync(path.join(sessionsDir, "sess-1.jsonl")),
       );
@@ -153,7 +248,7 @@ describe("session path safety", () => {
       const symlinkPath = path.join(sessionsDir, "escaped.jsonl");
       fs.symlinkSync(outsideFile, symlinkPath, "file");
 
-      const resolved = resolveSessionFilePath(
+      const resolved = resolveSessionFilePathCore(
         "sess-1",
         { sessionFile: symlinkPath },
         { sessionsDir },

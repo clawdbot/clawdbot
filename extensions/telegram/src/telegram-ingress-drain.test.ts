@@ -12,11 +12,11 @@ import {
 } from "./bot-processing-outcome.js";
 import { createTelegramIngressMonitor } from "./telegram-ingress-drain.js";
 import { resolveTelegramIngressNonRetryableFailure } from "./telegram-ingress-non-retryable.js";
-import { telegramSpooledUpdateLaneKey } from "./telegram-ingress-spool.js";
 import {
   TelegramIngressPayloadError,
   type TelegramSpooledUpdatePayload,
 } from "./telegram-ingress-spool.payload.js";
+import { telegramSpooledUpdateLaneKey } from "./telegram-ingress-spool.test-support.js";
 
 async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-ingress-drain-"));

@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SmsDeliveryRecorder } from "./delivery-observations.js";
 import type { ResolvedSmsAccount } from "./types.js";
 import { createSmsWebhookHandler } from "./webhook.js";
 
@@ -93,6 +94,29 @@ function createRequest(
   return req;
 }
 
+function configureRequest(req: IncomingMessage): IncomingMessage {
+  req.method = "POST";
+  req.headers = {};
+  Object.defineProperty(req, "socket", {
+    value: { remoteAddress: "127.0.0.1" },
+  });
+  return req;
+}
+
+function createFailingRequest(error?: Error): IncomingMessage {
+  return configureRequest(
+    new Readable({
+      read() {
+        this.destroy(error);
+      },
+    }) as IncomingMessage,
+  );
+}
+
+function createPendingRequest(): IncomingMessage {
+  return configureRequest(new Readable({ read() {} }) as IncomingMessage);
+}
+
 type TestResponse = ServerResponse & {
   body?: string;
   setHeaderMock: ReturnType<typeof vi.fn>;
@@ -135,6 +159,49 @@ function createSignedSmsPayload(
   };
 }
 
+function createSignedDeliveryPayload(params: {
+  messageSid: string;
+  status: string;
+  account?: ResolvedSmsAccount;
+  accountSid?: string;
+}): { body: string; signature: string; form: Record<string, string> } {
+  const account = params.account ?? createAccount();
+  const form = {
+    AccountSid: params.accountSid ?? account.accountSid,
+    From: account.fromNumber,
+    To: "+15551234567",
+    MessageSid: params.messageSid,
+    MessageStatus: params.status,
+  };
+  const body = new URLSearchParams(form).toString();
+  return {
+    body,
+    form,
+    signature: computeTestTwilioSignature({
+      url: account.publicWebhookUrl,
+      authToken: account.authToken,
+      form,
+    }),
+  };
+}
+
+function createDeliveryRecorder(
+  record = vi.fn<SmsDeliveryRecorder["record"]>(async ({ account, form }) => ({
+    duplicate: false,
+    record: {
+      accountId: account.accountId,
+      accountSidHash: "account-sid-hash",
+      messageSid: form.MessageSid ?? form.SmsSid ?? form.SmsMessageSid ?? "",
+      status: form.MessageStatus ?? form.SmsStatus ?? "",
+      firstObservedAt: 1,
+      lastObservedAt: 1,
+      observations: [],
+    },
+  })),
+): SmsDeliveryRecorder & { record: typeof record } {
+  return { record };
+}
+
 function createMessageSid(index: number): string {
   return `SM${index.toString(16).padStart(32, "0")}`;
 }
@@ -162,6 +229,332 @@ describe("createSmsWebhookHandler", () => {
     expect(res.statusCode).toBe(200);
     expect(res.setHeaderMock).toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
     expect(enqueueSmsIngress).toHaveBeenCalledWith(parseTestTwilioForm(body));
+  });
+
+  it("returns terminal HTTP 413 for an oversized callback body", async () => {
+    const delivery = createDeliveryRecorder();
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      ingress: createIngress(),
+      delivery,
+    });
+    const res = createResponse();
+
+    await handler(
+      createRequest("x", "unused", {
+        headers: { "content-length": String(32 * 1024 + 1) },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(413);
+    expect(res.body).toBe("Payload too large");
+    expect(delivery.record).not.toHaveBeenCalled();
+    expect(enqueueSmsIngress).not.toHaveBeenCalled();
+  });
+
+  it("rethrows request body timeouts for Gateway-owned retry responses", async () => {
+    vi.useFakeTimers();
+    try {
+      const handler = createSmsWebhookHandler({
+        cfg: {},
+        account: createAccount(),
+        ingress: createIngress(),
+      });
+      const res = createResponse();
+      const handling = handler(createPendingRequest(), res);
+      const expected = expect(handling).rejects.toMatchObject({
+        code: "REQUEST_BODY_TIMEOUT",
+      });
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expected;
+
+      expect(res.endMock).not.toHaveBeenCalled();
+      expect(enqueueSmsIngress).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rethrows unexpected request read failures for Gateway-owned retry responses", async () => {
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      ingress: createIngress(),
+    });
+    const res = createResponse();
+
+    await expect(handler(createFailingRequest(new Error("read failed")), res)).rejects.toThrow(
+      "read failed",
+    );
+    expect(res.endMock).not.toHaveBeenCalled();
+    expect(enqueueSmsIngress).not.toHaveBeenCalled();
+  });
+
+  it("rethrows a closed request body for Gateway-owned retry responses", async () => {
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      ingress: createIngress(),
+    });
+    const res = createResponse();
+
+    await expect(handler(createFailingRequest(), res)).rejects.toMatchObject({
+      code: "CONNECTION_CLOSED",
+    });
+    expect(res.endMock).not.toHaveBeenCalled();
+    expect(enqueueSmsIngress).not.toHaveBeenCalled();
+  });
+
+  it("persists signed delivery callbacks without dispatching them as inbound messages", async () => {
+    const payload = createSignedDeliveryPayload({
+      messageSid: createMessageSid(20),
+      status: "delivered",
+    });
+    const delivery = createDeliveryRecorder();
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      ingress: createIngress(),
+      delivery,
+    });
+    const res = createResponse();
+
+    await handler(createRequest(payload.body, payload.signature), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.setHeaderMock).toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
+    expect(delivery.record).toHaveBeenCalledWith({
+      account: expect.objectContaining({ accountId: activeAccountId }),
+      form: payload.form,
+    });
+    expect(enqueueSmsIngress).not.toHaveBeenCalled();
+  });
+
+  it("accepts legacy SmsSid and SmsStatus delivery callbacks", async () => {
+    const account = createAccount();
+    const form = {
+      AccountSid: account.accountSid,
+      From: account.fromNumber,
+      To: "+15551234567",
+      SmsSid: createMessageSid(23),
+      SmsStatus: "delivered",
+    };
+    const body = new URLSearchParams(form).toString();
+    const signature = computeTestTwilioSignature({
+      url: account.publicWebhookUrl,
+      authToken: account.authToken,
+      form,
+    });
+    const delivery = createDeliveryRecorder();
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account,
+      ingress: createIngress(),
+      delivery,
+    });
+    const res = createResponse();
+
+    await handler(createRequest(body, signature), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(delivery.record).toHaveBeenCalledWith({ account, form });
+    expect(enqueueSmsIngress).not.toHaveBeenCalled();
+  });
+
+  it.each(["receiving", "received"])(
+    "keeps legacy inbound SmsStatus=%s on the durable ingress path",
+    async (status) => {
+      const account = createAccount();
+      const form = {
+        AccountSid: account.accountSid,
+        From: "+15551234567",
+        To: account.fromNumber,
+        Body: "hello",
+        SmsSid: createMessageSid(status === "receiving" ? 24 : 25),
+        SmsStatus: status,
+      };
+      const body = new URLSearchParams(form).toString();
+      const signature = computeTestTwilioSignature({
+        url: account.publicWebhookUrl,
+        authToken: account.authToken,
+        form,
+      });
+      const delivery = createDeliveryRecorder();
+      const handler = createSmsWebhookHandler({
+        cfg: {},
+        account,
+        ingress: createIngress(),
+        delivery,
+      });
+      const res = createResponse();
+
+      await handler(createRequest(body, signature), res);
+
+      expect(res.statusCode).toBe(200);
+      expect(delivery.record).not.toHaveBeenCalled();
+      expect(enqueueSmsIngress).toHaveBeenCalledWith(form);
+    },
+  );
+
+  it("rejects an invalid signature before delivery persistence", async () => {
+    const payload = createSignedDeliveryPayload({
+      messageSid: createMessageSid(26),
+      status: "delivered",
+    });
+    const delivery = createDeliveryRecorder();
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      ingress: createIngress(),
+      delivery,
+    });
+    const res = createResponse();
+
+    await handler(createRequest(payload.body, "invalid-signature"), res);
+
+    expect(res.statusCode).toBe(403);
+    expect(delivery.record).not.toHaveBeenCalled();
+    expect(enqueueSmsIngress).not.toHaveBeenCalled();
+  });
+
+  it("does not acknowledge a delivery callback until durable persistence succeeds", async () => {
+    const payload = createSignedDeliveryPayload({
+      messageSid: createMessageSid(21),
+      status: "sent",
+    });
+    const delivery = createDeliveryRecorder(
+      vi.fn<SmsDeliveryRecorder["record"]>(async () => {
+        throw new Error("sqlite unavailable");
+      }),
+    );
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      ingress: createIngress(),
+      delivery,
+    });
+    const res = createResponse();
+
+    await expect(handler(createRequest(payload.body, payload.signature), res)).rejects.toThrow(
+      "sqlite unavailable",
+    );
+    expect(res.endMock).not.toHaveBeenCalled();
+    expect(res.setHeaderMock).not.toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
+    expect(enqueueSmsIngress).not.toHaveBeenCalled();
+  });
+
+  it("waits for the durable delivery commit before returning HTTP 200", async () => {
+    const account = createAccount();
+    const payload = createSignedDeliveryPayload({
+      account,
+      messageSid: createMessageSid(22),
+      status: "sent",
+    });
+    let releaseCommit: (() => void) | undefined;
+    const delivery = createDeliveryRecorder(
+      vi.fn<SmsDeliveryRecorder["record"]>(async ({ form }) => {
+        await new Promise<void>((resolve) => {
+          releaseCommit = resolve;
+        });
+        return {
+          duplicate: false,
+          record: {
+            accountId: account.accountId,
+            accountSidHash: "account-sid-hash",
+            messageSid: form.MessageSid ?? "",
+            status: form.MessageStatus ?? "",
+            firstObservedAt: 1,
+            lastObservedAt: 1,
+            observations: [],
+          },
+        };
+      }),
+    );
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account,
+      ingress: createIngress(),
+      delivery,
+    });
+    const res = createResponse();
+
+    const pending = handler(createRequest(payload.body, payload.signature), res);
+    await vi.waitFor(() => expect(delivery.record).toHaveBeenCalledOnce());
+    expect(res.endMock).not.toHaveBeenCalled();
+    expect(res.setHeaderMock).not.toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
+
+    if (!releaseCommit) {
+      throw new Error("expected pending SMS delivery commit");
+    }
+    releaseCommit();
+    await pending;
+
+    expect(res.statusCode).toBe(200);
+    expect(res.setHeaderMock).toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
+    expect(res.endMock).toHaveBeenCalledOnce();
+  });
+
+  it("acknowledges but does not store a signed delivery callback for another account", async () => {
+    const payload = createSignedDeliveryPayload({
+      messageSid: createMessageSid(22),
+      status: "failed",
+      accountSid: "AC-other",
+    });
+    const delivery = createDeliveryRecorder();
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      ingress: createIngress(),
+      delivery,
+    });
+    const res = createResponse();
+
+    await handler(createRequest(payload.body, payload.signature), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(delivery.record).not.toHaveBeenCalled();
+    expect(enqueueSmsIngress).not.toHaveBeenCalled();
+    expect(res.setHeaderMock).not.toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["empty", ""],
+    ["whitespace", "   "],
+    ["padded", " AC123 "],
+  ])("acknowledges but does not store a delivery callback with %s AccountSid", async (_, sid) => {
+    const account = createAccount();
+    const form: Record<string, string> = {
+      MessageSid: createMessageSid(27),
+      MessageStatus: "failed",
+    };
+    if (sid !== undefined) {
+      form.AccountSid = sid;
+    }
+    const body = new URLSearchParams(form).toString();
+    const signature = computeTestTwilioSignature({
+      url: account.publicWebhookUrl,
+      authToken: account.authToken,
+      form,
+    });
+    const delivery = createDeliveryRecorder();
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account,
+      ingress: createIngress(),
+      delivery,
+    });
+    const res = createResponse();
+
+    await handler(createRequest(body, signature), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(delivery.record).not.toHaveBeenCalled();
+    expect(enqueueSmsIngress).not.toHaveBeenCalled();
+    expect(res.setHeaderMock).not.toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
   });
 
   it("does not acknowledge when the durable enqueue fails", async () => {
@@ -409,12 +802,15 @@ describe("createSmsWebhookHandler", () => {
     expect(defaultRes.statusCode).toBe(200);
   });
 
-  it("meters the validated dispatch quota per sender, not per shared egress address", async () => {
+  it("meters inbound dispatch per sender without throttling signed delivery callbacks", async () => {
     const warn = vi.fn();
+    const account = createAccount();
+    const delivery = createDeliveryRecorder();
     const handler = createSmsWebhookHandler({
       cfg: {},
-      account: createAccount(),
+      account,
       ingress: createIngress(),
+      delivery,
       log: { warn },
     });
 
@@ -457,13 +853,28 @@ describe("createSmsWebhookHandler", () => {
     );
     expect(stillLimitedRes.statusCode).toBe(429);
     expect(enqueueSmsIngress).toHaveBeenCalledTimes(31);
+
+    const status = createSignedDeliveryPayload({
+      account,
+      messageSid: createMessageSid(533),
+      status: "delivered",
+    });
+    const statusRes = createResponse();
+    await handler(createRequest(status.body, status.signature), statusRes);
+
+    expect(statusRes.statusCode).toBe(200);
+    expect(delivery.record).toHaveBeenCalledOnce();
+    expect(enqueueSmsIngress).toHaveBeenCalledTimes(31);
   });
 
-  it("bounds aggregate validated callback fan-out across distinct senders", async () => {
+  it("bounds aggregate inbound fan-out without throttling signed delivery callbacks", async () => {
+    const account = createAccount();
+    const delivery = createDeliveryRecorder();
     const handler = createSmsWebhookHandler({
       cfg: {},
-      account: createAccount(),
+      account,
       ingress: createIngress(),
+      delivery,
     });
 
     for (let i = 0; i < 300; i += 1) {
@@ -483,6 +894,18 @@ describe("createSmsWebhookHandler", () => {
     await handler(createRequest(overAggregate.body, overAggregate.signature), overAggregateRes);
 
     expect(overAggregateRes.statusCode).toBe(429);
+    expect(enqueueSmsIngress).toHaveBeenCalledTimes(300);
+
+    const status = createSignedDeliveryPayload({
+      account,
+      messageSid: createMessageSid(1_201),
+      status: "delivered",
+    });
+    const statusRes = createResponse();
+    await handler(createRequest(status.body, status.signature), statusRes);
+
+    expect(statusRes.statusCode).toBe(200);
+    expect(delivery.record).toHaveBeenCalledOnce();
     expect(enqueueSmsIngress).toHaveBeenCalledTimes(300);
   });
 
@@ -584,5 +1007,62 @@ describe("createSmsWebhookHandler", () => {
 
     expect(overBudgetRes.statusCode).toBe(429);
     expect(enqueueSmsIngress).toHaveBeenCalledTimes(30);
+  });
+
+  it("rate limits unsigned delivery callbacks by client address before persistence", async () => {
+    const account = createAccount({ dangerouslyDisableSignatureValidation: true });
+    const delivery = createDeliveryRecorder();
+    const handler = createSmsWebhookHandler({
+      cfg: { gateway: { trustedProxies: ["127.0.0.1"] } },
+      account,
+      ingress: createIngress(),
+      delivery,
+    });
+
+    for (let i = 0; i < 30; i += 1) {
+      const payload = createSignedDeliveryPayload({
+        account,
+        messageSid: createMessageSid(1_300 + i),
+        status: "sent",
+      });
+      const res = createResponse();
+      await handler(
+        createRequest(payload.body, "unused-signature", {
+          headers: { "x-forwarded-for": "203.0.113.40" },
+        }),
+        res,
+      );
+      expect(res.statusCode).toBe(200);
+    }
+
+    const overBudget = createSignedDeliveryPayload({
+      account,
+      messageSid: createMessageSid(1_330),
+      status: "delivered",
+    });
+    const overBudgetRes = createResponse();
+    await handler(
+      createRequest(overBudget.body, "unused-signature", {
+        headers: { "x-forwarded-for": "203.0.113.40" },
+      }),
+      overBudgetRes,
+    );
+    expect(overBudgetRes.statusCode).toBe(429);
+    expect(delivery.record).toHaveBeenCalledTimes(30);
+
+    const otherAddress = createSignedDeliveryPayload({
+      account,
+      messageSid: createMessageSid(1_331),
+      status: "delivered",
+    });
+    const otherAddressRes = createResponse();
+    await handler(
+      createRequest(otherAddress.body, "unused-signature", {
+        headers: { "x-forwarded-for": "203.0.113.41" },
+      }),
+      otherAddressRes,
+    );
+    expect(otherAddressRes.statusCode).toBe(200);
+    expect(delivery.record).toHaveBeenCalledTimes(31);
   });
 });

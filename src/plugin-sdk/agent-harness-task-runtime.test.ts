@@ -2,7 +2,7 @@
  * Tests agent harness task runtime scope, persistence, and completion delivery.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { deliverSubagentAnnouncement } from "../agents/subagent-announce-delivery.js";
+import { deliverSubagentAnnouncement } from "../agents/subagents/announce/subagent-announce-delivery.js";
 import { createAgentHarnessTaskRuntimeScope } from "../tasks/agent-harness-task-runtime-scope.js";
 import { createRunningTaskRun, finalizeTaskRunByRunId } from "../tasks/detached-task-runtime.js";
 import { listTaskRecords } from "../tasks/runtime-internal.js";
@@ -12,8 +12,11 @@ import {
   isDurableAgentHarnessCompletionDelivery,
 } from "./agent-harness-task-runtime.js";
 
-vi.mock("../agents/subagent-announce-delivery.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/subagent-announce-delivery.js")>();
+vi.mock("../agents/subagents/announce/subagent-announce-delivery.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../agents/subagents/announce/subagent-announce-delivery.js")
+    >();
   return {
     ...actual,
     deliverSubagentAnnouncement: vi.fn(async () => ({ delivered: true, path: "steered" })),

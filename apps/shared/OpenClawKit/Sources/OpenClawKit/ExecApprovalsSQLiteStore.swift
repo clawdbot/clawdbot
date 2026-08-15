@@ -193,8 +193,6 @@ public struct ExecApprovalsSQLiteMutation<Value> {
 public enum ExecApprovalsSQLiteStore {
     public static let configKey = "current"
     public static let locator = "state/openclaw.sqlite#exec_approvals_config"
-    static let mutationLeaseScope = "exec-approvals"
-    static let mutationLeaseKey = "mutation"
     private static let busyTimeoutMilliseconds: Int32 = 30000
 
     public static func databaseURL(stateDirectoryURL: URL) -> URL {
@@ -234,9 +232,13 @@ public enum ExecApprovalsSQLiteStore {
         let database = try self.openDatabase(stateDirectoryURL: stateDirectoryURL)
         return try database.withImmediateTransaction {
             try database.ensureCanonicalTable(.execApprovalsConfig)
-            let mutation = try body(self.readRecord(database))
+            let current = try self.readRecord(database)
+            let mutation = try body(current)
             if let document = mutation.documentToWrite {
-                try self.assertMutationNotFenced(database)
+                try self.assertMutationNotFenced(
+                    database,
+                    current: current?.document,
+                    next: document)
                 try self.writeRecord(
                     database,
                     document: document,
@@ -342,26 +344,44 @@ public enum ExecApprovalsSQLiteStore {
     }
 
     private static func assertMutationNotFenced(
-        _ database: OpenClawNativeStateSQLite) throws
+        _ database: OpenClawNativeStateSQLite,
+        current: ExecApprovalsDocument?,
+        next: ExecApprovalsDocument) throws
     {
         let table = try database.prepare(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'state_leases'")
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_deletion_journal'")
         guard try table.step() == .row else { return }
 
-        let statement = try database.prepare("""
-        SELECT owner FROM state_leases
-        WHERE scope = ? AND lease_key = ? AND expires_at > ?
-        LIMIT 1
-        """)
-        try statement.bindText(self.mutationLeaseScope, at: 1)
-        try statement.bindText(self.mutationLeaseKey, at: 2)
-        try statement.bindInt64(Int64(Date().timeIntervalSince1970 * 1000), at: 3)
-        // Expired rows intentionally do not fence writers: TTL expiry is the
-        // crash-release path when the deleting process cannot remove its lease.
-        guard try statement.step() != .row else {
-            throw OpenClawNativeStateError(
-                "Exec approvals cannot be changed while agent deletion is in progress; retry.")
+        let currentAgents = current.map { self.projectionDocument($0).agents ?? [:] } ?? [:]
+        let nextAgents = self.projectionDocument(next).agents ?? [:]
+        for agentID in Set(currentAgents.keys).union(nextAgents.keys)
+            where currentAgents[agentID] != nextAgents[agentID]
+        {
+            let statement = try database.prepare(
+                "SELECT 1 FROM agent_deletion_journal WHERE agent_id = ? LIMIT 1")
+            try statement.bindText(self.normalizedAgentID(agentID), at: 1)
+            if try statement.step() == .row {
+                throw OpenClawNativeStateError(
+                    "Exec approvals cannot be changed while agent deletion is in progress; retry.")
+            }
         }
+    }
+
+    private static func normalizedAgentID(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "main" }
+        let normalized = trimmed.lowercased()
+        if trimmed.range(
+            of: "^[a-z0-9][a-z0-9_-]{0,63}$",
+            options: [.regularExpression, .caseInsensitive]) != nil
+        {
+            return normalized
+        }
+        let replaced = normalized.replacingOccurrences(
+            of: "[^a-z0-9_-]+", with: "-", options: .regularExpression)
+        let stripped = replaced.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        let truncated = String(stripped.prefix(64))
+        return truncated.isEmpty ? "main" : truncated
     }
 
     private static func projectionDocument(

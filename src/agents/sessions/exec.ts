@@ -2,8 +2,8 @@
  * Shared command execution utilities for extensions and custom tools.
  */
 
-import { StringDecoder } from "node:string_decoder";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { createWindowsOutputDecoder } from "../../infra/windows-encoding.js";
 import { releaseChildProcessOutputAfterExit } from "../../process/child-process.js";
 import { spawnCommand } from "../../process/exec.js";
 import { killProcessTree } from "../../process/kill-tree.js";
@@ -42,9 +42,10 @@ type OutputCapture = {
   text: string;
   truncatedChars: number;
 };
+type OutputDecoder = ReturnType<typeof createWindowsOutputDecoder>;
 
-function decodeCapturedOutput(decoder: StringDecoder, chunk: Buffer | string): string {
-  return Buffer.isBuffer(chunk) ? decoder.write(chunk) : `${decoder.end()}${chunk}`;
+function decodeCapturedOutput(decoder: OutputDecoder, chunk: Buffer | string): string {
+  return Buffer.isBuffer(chunk) ? decoder.decode(chunk) : `${decoder.flush()}${chunk}`;
 }
 
 function clampMaxOutputChars(value: number | undefined): number {
@@ -100,8 +101,8 @@ export async function execCommand(
 
     let stdout: OutputCapture = { text: "", truncatedChars: 0 };
     let stderr: OutputCapture = { text: "", truncatedChars: 0 };
-    const stdoutDecoder = new StringDecoder("utf8");
-    const stderrDecoder = new StringDecoder("utf8");
+    const stdoutDecoder = createWindowsOutputDecoder({ preserveUtf8Bom: true });
+    const stderrDecoder = createWindowsOutputDecoder({ preserveUtf8Bom: true });
     let killed = false;
     let timeoutId: NodeJS.Timeout | undefined;
     let forceKillTimer: NodeJS.Timeout | undefined;
@@ -130,12 +131,12 @@ export async function execCommand(
         options.signal.removeEventListener("abort", killProcess);
       }
       const stdoutBeforeFlush = stdout.truncatedChars;
-      stdout = appendCapturedOutput(stdout, stdoutDecoder.end(), maxOutputChars, truncateOutput);
+      stdout = appendCapturedOutput(stdout, stdoutDecoder.flush(), maxOutputChars, truncateOutput);
       if (!truncateOutput && stdout.truncatedChars > stdoutBeforeFlush && !outputLimitExceeded) {
         outputLimitExceeded = "stdout";
       }
       const stderrBeforeFlush = stderr.truncatedChars;
-      stderr = appendCapturedOutput(stderr, stderrDecoder.end(), maxOutputChars, truncateOutput);
+      stderr = appendCapturedOutput(stderr, stderrDecoder.flush(), maxOutputChars, truncateOutput);
       if (!truncateOutput && stderr.truncatedChars > stderrBeforeFlush && !outputLimitExceeded) {
         outputLimitExceeded = "stderr";
       }

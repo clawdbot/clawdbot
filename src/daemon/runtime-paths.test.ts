@@ -245,22 +245,34 @@ describe("resolvePreferredNodePath", () => {
     expect(execFile).toHaveBeenCalledTimes(1);
   });
 
-  it("skips system node when it is too old", async () => {
+  it.each([
+    {
+      reason: "its version is unsupported",
+      runtime: nodeRuntime("22.22.2", null),
+    },
+    {
+      reason: "its SQLite version is unsafe",
+      runtime: nodeRuntime("24.17.0", "3.51.2"),
+    },
+  ])("returns undefined from Bun when the only system Node $reason", async ({ runtime }) => {
     mockNodePathPresent(darwinNode);
-
-    // Node 22.22.2 is below minimum 22.22.3
-    const execFile = vi.fn().mockResolvedValue(nodeRuntime("22.22.2", null));
+    const execFile = vi.fn().mockResolvedValue(runtime);
 
     const result = await resolvePreferredNodePath({
       env: {},
       runtime: "node",
       platform: "darwin",
       execFile,
-      execPath: "",
+      execPath: "/Users/test/.bun/bin/bun",
     });
 
     expect(result).toBeUndefined();
     expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFile).toHaveBeenCalledWith(
+      darwinNode,
+      ["-e", expect.stringContaining("SELECT sqlite_version() AS version")],
+      { encoding: "utf8", timeoutMs: 5_000 },
+    );
   });
 
   it("keeps a safe version-manager runtime when system SQLite is unsafe", async () => {

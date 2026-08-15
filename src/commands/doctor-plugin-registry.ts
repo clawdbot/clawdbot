@@ -5,16 +5,20 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
-import { saveJsonFile } from "../infra/json-file.js";
+import { writeJsonTarget } from "../infra/json-file.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import type { BundledPluginSource } from "../plugins/bundled-sources.js";
 import {
   loadInstalledPluginIndexInstallRecords,
+  loadInstalledPluginIndexInstallRecordsSync,
+  removePluginInstallRecordFromRecords,
   type InstalledPluginIndexRecordStoreOptions,
 } from "../plugins/installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
+import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { refreshPluginRegistry } from "../plugins/plugin-registry.js";
 import {
   listStaleLocalBundledPluginInstallRecords,
@@ -30,12 +34,13 @@ import {
   type StaleManagedNpmInstallGenerationIssue,
 } from "./doctor-plugin-generations.js";
 import {
-  listManagedPluginNpmRoots,
+  resolveDoctorPluginNpmRoots,
   listPluginOpenClawHostLinkIssues,
   maybeRepairPluginOpenClawHostLinks,
 } from "./doctor-plugin-host-links.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
+  InvalidPluginInstallRecordStateError,
   migratePluginRegistryForInstall,
   preflightPluginRegistryInstallMigration,
   type PluginRegistryInstallMigrationParams,
@@ -47,12 +52,22 @@ type PluginRegistryDoctorRepairParams = Omit<PluginRegistryInstallMigrationParam
     prompter: Pick<DoctorPrompter, "shouldRepair">;
   };
 
+type PluginRegistryDoctorRepairResult = {
+  config: OpenClawConfig;
+  pluginInventoryChanged?: true;
+};
+
 type StaleManagedNpmBundledPlugin = {
   pluginId: string;
   packageName: string;
   packageDir: string;
   npmRoot: string;
   version?: string;
+};
+
+type StaleManagedNpmBundledPluginRepairResult = {
+  installRecords: Record<string, PluginInstallRecord>;
+  removedPluginIds: string[];
 };
 
 type PluginRegistryHealthIssue =
@@ -147,7 +162,7 @@ function listStaleManagedNpmBundledPlugins(
   );
   const stale: StaleManagedNpmBundledPlugin[] = [];
 
-  for (const npmRoot of listManagedPluginNpmRoots(params)) {
+  for (const npmRoot of resolveDoctorPluginNpmRoots(params)) {
     const npmPackageJsonPath = path.join(npmRoot, "package.json");
     const dependencies = readStringMap(readJsonObject(npmPackageJsonPath)?.dependencies);
     for (const packageName of Object.keys(dependencies).toSorted((left, right) =>
@@ -234,7 +249,7 @@ function removeManagedNpmDependency(params: {
           ...packageJson,
           dependencies,
         };
-  saveJsonFile(npmPackageJsonPath, nextPackageJson);
+  writeJsonTarget(npmPackageJsonPath, nextPackageJson);
   removeManagedNpmPackageLockDependency(params);
   fs.rmSync(params.packageDir, { recursive: true, force: true });
   const scopeDir = path.dirname(params.packageDir);
@@ -281,17 +296,19 @@ function removeManagedNpmPackageLockDependency(params: {
   }
 
   if (changed) {
-    saveJsonFile(packageLockPath, packageLock);
+    writeJsonTarget(packageLockPath, packageLock);
   }
 }
 
 /** Removes managed npm packages that shadow current bundled plugins when repair is enabled. */
 export function maybeRepairStaleManagedNpmBundledPlugins(
-  params: PluginRegistryDoctorRepairParams,
-): boolean {
+  params: PluginRegistryDoctorRepairParams & {
+    installRecords?: Record<string, PluginInstallRecord>;
+  },
+): StaleManagedNpmBundledPluginRepairResult | null {
   const stale = listStaleManagedNpmBundledPlugins(params);
   if (stale.length === 0) {
-    return false;
+    return null;
   }
 
   if (!params.prompter.shouldRepair) {
@@ -306,9 +323,18 @@ export function maybeRepairStaleManagedNpmBundledPlugins(
       ].join("\n"),
       "Plugin registry",
     );
-    return false;
+    return null;
   }
 
+  // Capture one authoritative record baseline before deleting the payload. Later readers recover
+  // managed records from disk, so package-only cleanup can otherwise resurrect the same install.
+  let installRecords = params.installRecords ?? loadInstalledPluginIndexInstallRecordsSync(params);
+  const removedPluginIds = [...new Set(stale.map((plugin) => plugin.pluginId))].toSorted(
+    (left, right) => left.localeCompare(right),
+  );
+  for (const pluginId of removedPluginIds) {
+    installRecords = removePluginInstallRecordFromRecords(installRecords, pluginId);
+  }
   for (const plugin of stale) {
     removeManagedNpmDependency(plugin);
   }
@@ -322,7 +348,7 @@ export function maybeRepairStaleManagedNpmBundledPlugins(
     ].join("\n"),
     "Plugin registry",
   );
-  return true;
+  return { installRecords, removedPluginIds };
 }
 
 /** Removes local install records that shadow current bundled plugin sources. */
@@ -359,10 +385,11 @@ async function maybeRepairStaleLocalBundledPluginInstallRecords(
 async function loadInstallRecordsWithoutPluginIds(
   params: PluginRegistryDoctorRepairParams,
   pluginIds: readonly string[],
+  baselineRecords?: Record<string, PluginInstallRecord>,
 ) {
-  const records = await loadInstalledPluginIndexInstallRecords(params);
+  let records = baselineRecords ?? (await loadInstalledPluginIndexInstallRecords(params));
   for (const pluginId of pluginIds) {
-    delete records[pluginId];
+    records = removePluginInstallRecordFromRecords(records, pluginId);
   }
   return records;
 }
@@ -577,17 +604,23 @@ function assertNeverPluginRegistryIssue(issue: never): never {
  */
 export async function maybeRepairPluginRegistryState(
   params: PluginRegistryDoctorRepairParams,
-): Promise<OpenClawConfig> {
-  const preflight = preflightPluginRegistryInstallMigration(params);
+): Promise<PluginRegistryDoctorRepairResult> {
+  let preflight: ReturnType<typeof preflightPluginRegistryInstallMigration>;
+  try {
+    preflight = preflightPluginRegistryInstallMigration(params);
+  } catch (error) {
+    if (!(error instanceof InvalidPluginInstallRecordStateError)) {
+      throw error;
+    }
+    note(error.message, "Plugin registry");
+    return { config: params.config };
+  }
 
   const migrationParams = {
     ...params,
     config: params.config,
   };
-  const staleManagedNpmBundledPluginIds = listStaleManagedNpmBundledPlugins(params).map(
-    (plugin) => plugin.pluginId,
-  );
-  const removedStaleManagedNpmBundledPlugins = maybeRepairStaleManagedNpmBundledPlugins(params);
+  const staleManagedNpmBundledPluginRepair = maybeRepairStaleManagedNpmBundledPlugins(params);
   const removedStaleLocalBundledPluginIds =
     await maybeRepairStaleLocalBundledPluginInstallRecords(params);
   const retiredStaleManagedNpmInstallGenerations =
@@ -595,7 +628,7 @@ export async function maybeRepairPluginRegistryState(
   const repairedPluginOpenClawHostLinks = await maybeRepairPluginOpenClawHostLinks(params);
   const stalePluginIdsToRemove = [
     ...new Set([
-      ...(removedStaleManagedNpmBundledPlugins ? staleManagedNpmBundledPluginIds : []),
+      ...(staleManagedNpmBundledPluginRepair?.removedPluginIds ?? []),
       ...removedStaleLocalBundledPluginIds,
     ]),
   ];
@@ -611,7 +644,7 @@ export async function maybeRepairPluginRegistryState(
         "Plugin registry",
       );
     }
-    return params.config;
+    return { config: params.config };
   }
 
   if (preflight.action === "migrate") {
@@ -622,6 +655,7 @@ export async function maybeRepairPluginRegistryState(
             installRecords: await loadInstallRecordsWithoutPluginIds(
               params,
               stalePluginIdsToRemove,
+              staleManagedNpmBundledPluginRepair?.installRecords,
             ),
           }
         : {}),
@@ -634,12 +668,15 @@ export async function maybeRepairPluginRegistryState(
         "Plugin registry",
       );
     }
-    return params.config;
+    return {
+      config: params.config,
+      ...(result.migrated ? { pluginInventoryChanged: true as const } : {}),
+    };
   }
 
   if (
     preflight.action === "skip-existing" ||
-    removedStaleManagedNpmBundledPlugins ||
+    staleManagedNpmBundledPluginRepair ||
     removedStaleLocalBundledPluginIds.length > 0 ||
     retiredStaleManagedNpmInstallGenerations ||
     repairedPluginOpenClawHostLinks
@@ -652,6 +689,7 @@ export async function maybeRepairPluginRegistryState(
             installRecords: await loadInstallRecordsWithoutPluginIds(
               params,
               stalePluginIdsToRemove,
+              staleManagedNpmBundledPluginRepair?.installRecords,
             ),
           }
         : {}),
@@ -662,7 +700,16 @@ export async function maybeRepairPluginRegistryState(
       `Plugin registry refreshed: ${enabled}/${total} enabled plugins indexed.`,
       "Plugin registry",
     );
+    const indexChanged =
+      resolveInstalledManifestRegistryIndexFingerprint(preflight.current) !==
+      resolveInstalledManifestRegistryIndexFingerprint(index);
+    return {
+      config: params.config,
+      ...(indexChanged || repairedPluginOpenClawHostLinks
+        ? { pluginInventoryChanged: true as const }
+        : {}),
+    };
   }
 
-  return params.config;
+  return { config: params.config };
 }

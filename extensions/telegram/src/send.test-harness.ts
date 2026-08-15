@@ -35,6 +35,7 @@ const { botApi, botRawApi, botConfigUseSpy, botCtorSpy } = vi.hoisted(() => ({
     editMessageCaption: vi.fn(),
     editMessageText: vi.fn(),
     editMessageReplyMarkup: vi.fn(),
+    getChatMember: vi.fn(),
     pinChatMessage: vi.fn(),
     sendChatAction: vi.fn(),
     sendMessage: vi.fn(),

@@ -8,14 +8,14 @@ import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
   isValidFileSecretRefId,
+  SECRET_PROVIDER_ALIAS_PATTERN,
 } from "../secrets/ref-contract.js";
 import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS, MODEL_THINKING_FORMATS } from "./types.models.js";
+import { ENV_SECRET_REF_ID_RE } from "./types.secrets.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-const ENV_SECRET_REF_ID_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/;
-const SECRET_PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
@@ -41,7 +41,7 @@ const EnvSecretRefSchema = z
     id: z
       .string()
       .regex(
-        ENV_SECRET_REF_ID_PATTERN,
+        ENV_SECRET_REF_ID_RE,
         'Env secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (example: "OPENAI_API_KEY").',
       ),
   })
@@ -78,11 +78,30 @@ const ExecSecretRefSchema = z
   })
   .strict();
 
+const StoreSecretRefSchema = z
+  .object({
+    source: z.literal("store"),
+    provider: z
+      .string()
+      .regex(
+        SECRET_PROVIDER_ALIAS_PATTERN,
+        'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
+      ),
+    id: z
+      .string()
+      .regex(
+        ENV_SECRET_REF_ID_RE,
+        'Store secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (example: "OPENAI_API_KEY").',
+      ),
+  })
+  .strict();
+
 /** Config-level secret reference schema shared by model/provider/plugin credential fields. */
 export const SecretRefSchema = z.discriminatedUnion("source", [
   EnvSecretRefSchema,
   FileSecretRefSchema,
   ExecSecretRefSchema,
+  StoreSecretRefSchema,
 ]);
 
 /** Accepts either legacy inline secret strings or structured secret references. */
@@ -101,7 +120,7 @@ export const SsrFPolicyConfigSchema = z
 const SecretsEnvProviderSchema = z
   .object({
     source: z.literal("env"),
-    allowlist: z.array(z.string().regex(ENV_SECRET_REF_ID_PATTERN)).max(256).optional(),
+    allowlist: z.array(z.string().regex(ENV_SECRET_REF_ID_RE)).max(256).optional(),
   })
   .strict();
 
@@ -142,7 +161,7 @@ const SecretsManualExecProviderSchema = z
       .optional(),
     jsonOnly: z.boolean().optional(),
     env: z.record(z.string(), z.string()).optional(),
-    passEnv: z.array(z.string().regex(ENV_SECRET_REF_ID_PATTERN)).max(128).optional(),
+    passEnv: z.array(z.string().regex(ENV_SECRET_REF_ID_RE)).max(128).optional(),
     trustedDirs: z
       .array(
         z
@@ -172,16 +191,26 @@ const SecretsExecProviderSchema = z.union([
   SecretsPluginIntegrationExecProviderSchema,
 ]);
 
-/** Schema for one configured env/file/exec secret provider entry. */
+const SecretsStoreProviderSchema = z.object({ source: z.literal("store") }).strict();
+
+/** Schema for one configured env/file/exec/store secret provider entry. */
 export const SecretProviderSchema = z.union([
   SecretsEnvProviderSchema,
   SecretsFileProviderSchema,
   SecretsExecProviderSchema,
+  SecretsStoreProviderSchema,
 ]);
 
 /** Schema for the top-level `secrets` config block. */
 export const SecretsConfigSchema = z
   .object({
+    egressProxy: z
+      .object({
+        enabled: z.boolean().optional(),
+        bypassHosts: z.array(z.string().trim().min(1)).max(256).optional(),
+      })
+      .strict()
+      .optional(),
     providers: z
       .object({
         // Keep this as a record so users can define multiple named providers per source.
@@ -193,6 +222,7 @@ export const SecretsConfigSchema = z
         env: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
         file: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
         exec: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
+        store: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
       })
       .strict()
       .optional(),

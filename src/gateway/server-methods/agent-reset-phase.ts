@@ -10,10 +10,10 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { AGENT_SESSION_RESET_COMMAND_RE } from "../agent-command-policy.js";
+import { setGatewayDedupeEntries } from "../agent-turn/agent-dedupe.js";
+import { clientHasAdminScope } from "../agent-turn/agent-handler-helpers.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { formatForLog } from "../ws-log.js";
-import { setGatewayDedupeEntries } from "./agent-dedupe.js";
-import { clientHasAdminScope } from "./agent-handler-helpers.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import {
   buildBareSessionResetResponse,
@@ -93,9 +93,7 @@ export async function runAgentResetPhase(params: {
   try {
     resetResult = await runSessionResetFromAgent({
       key: params.requestedSessionKey,
-      ...(params.requestedSessionKey === "global" && params.agentId
-        ? { agentId: params.agentId }
-        : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       reason: resetReason,
       creation: resolveAgentRunSessionCreation(params.client),
       assertCurrent: () => assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration),
@@ -184,7 +182,7 @@ export async function runAgentResetPhase(params: {
     params.respond(true, responsePayload, undefined, { runId: params.runId });
     emitSessionsChanged(params.context, {
       sessionKey: resetResult.key,
-      ...(resetResult.key === "global" && params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       reason: resetReason,
     });
     return { ...next, stop: true, accepted: true };

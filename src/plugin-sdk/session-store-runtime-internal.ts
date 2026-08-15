@@ -1,4 +1,4 @@
-import { MAIN_SESSION_RECOVERY_CLEAR_PATCH } from "../agents/main-session-recovery-clear.js";
+import { MAIN_SESSION_RECOVERY_CLEAR_PATCH } from "../agents/main-session-recovery/main-session-recovery-clear.js";
 import type { SessionAccessScope } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 
@@ -26,7 +26,11 @@ export function toSessionAccessScope(params: SessionStoreReadParams): SessionAcc
 }
 
 export function projectPluginSessionEntry(entry: InternalSessionEntry): SessionEntry {
-  const { mainRestartRecovery: _mainRestartRecovery, ...publicEntry } = entry;
+  const {
+    activeWriterRunId: _activeWriterRunId,
+    mainRestartRecovery: _mainRestartRecovery,
+    ...publicEntry
+  } = entry;
   return {
     ...publicEntry,
     ...(entry.restartRecoveryRuns
@@ -38,7 +42,11 @@ export function projectPluginSessionEntry(entry: InternalSessionEntry): SessionE
 export function projectPluginSessionEntryPatch(
   patch: Partial<InternalSessionEntry>,
 ): Partial<SessionEntry> {
-  const { mainRestartRecovery: _mainRestartRecovery, ...publicPatch } = patch;
+  const {
+    activeWriterRunId: _activeWriterRunId,
+    mainRestartRecovery: _mainRestartRecovery,
+    ...publicPatch
+  } = patch;
   return publicPatch;
 }
 
@@ -65,6 +73,7 @@ export function activeRecoveryFieldsForSameSession(
     return undefined;
   }
   return {
+    activeWriterRunId: existingEntry.activeWriterRunId,
     abortedLastRun: existingEntry.abortedLastRun,
     restartRecoveryRuns: existingEntry.restartRecoveryRuns,
     mainRestartRecovery: existingEntry.mainRestartRecovery,

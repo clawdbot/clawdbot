@@ -246,6 +246,16 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("cdp=https://browserless.example.com/?token=***");
   });
 
+  it("masks resource-scoped hosted-media bearer query tokens", () => {
+    const id = "a".repeat(24);
+    const token = "b".repeat(48);
+    const input = `GET https://gateway.example.com/webhooks/sms?safe=value&__openclaw_mms_token_${id}=${token}`;
+    const output = redactSensitiveText(input, { mode: "tools" });
+
+    expect(output).toContain(`safe=value&__openclaw_mms_token_${id}=`);
+    expect(output).not.toContain(token);
+  });
+
   it("masks standalone lowercase token assignments in diagnostic output", () => {
     const input = "matrix access_token=abcdef1234567890ghij next";
     const output = redactSensitiveText(input, { mode: "tools" });
@@ -1805,11 +1815,14 @@ describe("redactSensitiveText", () => {
       },
     }`);
 
-    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () =>
+    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () => {
       expect(redactSensitiveText("ticket internal-12345 should hide")).toBe(
         "ticket *** should hide",
-      ),
-    );
+      );
+      expect(redactSecrets({ detail: "ticket internal-12345 should hide" })).toEqual({
+        detail: "ticket *** should hide",
+      });
+    });
   });
 
   it("redacts built-in query parameters after the default prefilter", () => {

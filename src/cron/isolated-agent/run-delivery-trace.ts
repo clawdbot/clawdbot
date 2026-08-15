@@ -1,3 +1,5 @@
+import { resolveStaticSessionMcpServerNames } from "../../agents/agent-bundle-mcp-runtime-config.js";
+import { resolveCodexMcpToolOverridesForAgent } from "../../agents/cli-runner/bundle-mcp-codex.js";
 /** Delivery planning, prompt policy, and delivery trace construction for cron runs. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
@@ -11,6 +13,7 @@ import {
   type CronDeliveryPlan,
 } from "../delivery-plan.js";
 import {
+  createCronRunDiagnosticsFromError,
   createCronRunDiagnosticsFromMissingWebSearchProvider,
   toolsAllowRequestsWebSearch,
 } from "../run-diagnostics.js";
@@ -21,6 +24,7 @@ import type {
   CronDeliveryTraceTarget,
   CronJob,
   CronRunDiagnostics,
+  CronToolsAllowProvenance,
 } from "../types.js";
 import { logWarn } from "./run.runtime.js";
 import { resolveCronSourceDeliveryPlan } from "./source-delivery-plan.js";
@@ -40,14 +44,6 @@ export async function loadCronDeliveryRuntime() {
 
 async function loadCodexNativeWebSearch() {
   return await codexNativeWebSearchLoader.load();
-}
-
-async function loadWebToolRuntimeContext() {
-  return await webToolRuntimeContextLoader.load();
-}
-
-async function loadWebSearchRuntime() {
-  return await webSearchRuntimeLoader.load();
 }
 
 type CronDeliveryRuntime = typeof import("./run-delivery.runtime.js");
@@ -161,14 +157,37 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
   modelApi?: string;
   agentId?: string;
   agentDir?: string;
+  workspaceDir: string;
   sessionKey?: string;
   agentPayload: Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
+  agentRuntime?: string;
+  toolsAllowProvenance?: CronToolsAllowProvenance;
 }): Promise<CronRunDiagnostics | undefined> {
   const toolsAllow = params.agentPayload?.toolsAllow;
-  if (
-    params.agentPayload?.toolsAllowIsDefault === true ||
-    !toolsAllowRequestsWebSearch(toolsAllow)
-  ) {
+  if (params.agentPayload?.toolsAllowIsDefault === true) {
+    const hasEnabledStaticMcp =
+      resolveStaticSessionMcpServerNames({
+        workspaceDir: params.workspaceDir,
+        cfg: params.cfg,
+        toolOverrides: resolveCodexMcpToolOverridesForAgent(params.cfg, {
+          agentId: params.agentId,
+          toolOverrides: undefined,
+        }),
+      }).length > 0;
+    if (
+      params.agentRuntime === "codex" &&
+      hasEnabledStaticMcp &&
+      params.toolsAllowProvenance?.source !== "final-executable-surface"
+    ) {
+      return createCronRunDiagnosticsFromError(
+        "cron-preflight",
+        `This automation's inherited tool cap predates final configured-MCP capture, so it continues with its stored finite tools and may omit MCP capabilities. Reauthorize in place with an exact explicit cap: openclaw automations edit ${params.jobId} --tools <tool,...>.`,
+        { severity: "warn" },
+      );
+    }
+    return undefined;
+  }
+  if (!toolsAllowRequestsWebSearch(toolsAllow)) {
     return undefined;
   }
   try {
@@ -186,14 +205,14 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
     ) {
       return undefined;
     }
-    const { resolveWebSearchToolRuntimeContext } = await loadWebToolRuntimeContext();
+    const { resolveWebSearchToolRuntimeContext } = await webToolRuntimeContextLoader.load();
     const { config, preferRuntimeProviders, runtimeWebSearch } = resolveWebSearchToolRuntimeContext(
       {
         config: params.cfg,
         lateBindRuntimeConfig: true,
       },
     );
-    const { hasUsableWebSearchProvider } = await loadWebSearchRuntime();
+    const { hasUsableWebSearchProvider } = await webSearchRuntimeLoader.load();
     const hasWebSearchProvider = hasUsableWebSearchProvider({
       config,
       agentDir: params.agentDir,

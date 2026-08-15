@@ -24,6 +24,7 @@ type OriginCheckResult =
 type BrowserOriginPolicy = {
   requestHost?: string;
   origin?: string;
+  fetchSite?: string;
   allowedOrigins?: string[];
   allowHostHeaderOriginFallback?: boolean;
 };
@@ -40,6 +41,7 @@ export function resolveBrowserOriginPolicy(params: {
   return {
     requestHost: headerValue(params.req.headers.host),
     origin: headerValue(params.req.headers.origin),
+    fetchSite: headerValue(params.req.headers["sec-fetch-site"]),
     allowedOrigins: params.cfg?.gateway?.controlUi?.allowedOrigins,
     allowHostHeaderOriginFallback:
       params.cfg?.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
@@ -74,6 +76,16 @@ function parseOrigin(
   } catch {
     return null;
   }
+}
+
+/** Whether a browser document was loaded from the Gateway's advertised HTTP host. */
+export function isGatewayHostBrowserOrigin(params: {
+  requestHost?: string;
+  origin?: string;
+}): boolean {
+  const parsedOrigin = parseOrigin(params.origin);
+  const requestHost = normalizeHostHeader(params.requestHost);
+  return Boolean(parsedOrigin && requestHost && parsedOrigin.host === requestHost);
 }
 
 /** Return a canonical Chrome extension origin for pairing-bound authorization. */

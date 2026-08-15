@@ -177,7 +177,8 @@ describe("Code Mode restart-safe replay", () => {
       ),
     );
     expect(failed.status).toBe("failed");
-    expect(failed.error).toContain("cannot call side-effecting tools");
+    expect(failed.error).toContain("not proven replay-safe");
+    expect(failed.error).toContain("audited read, grep, or find tools");
     expect(targetTool.execute).not.toHaveBeenCalled();
   });
 
@@ -217,7 +218,7 @@ describe("Code Mode restart-safe replay", () => {
       bridgeDispatchStarted: true,
       replaySafe: true,
     });
-    expect(failed.error).toContain("cannot call side-effecting tools");
+    expect(failed.error).toContain("not proven replay-safe");
     expect(readTool.execute).toHaveBeenCalledTimes(1);
     expect(writeTool.execute).not.toHaveBeenCalled();
   });
@@ -262,7 +263,7 @@ describe("Code Mode restart-safe replay", () => {
       ),
     );
     expect(failed.status).toBe("failed");
-    expect(failed.error).toContain("cannot call side-effecting tools");
+    expect(failed.error).toContain("not proven replay-safe");
     expect(targetTool.execute).not.toHaveBeenCalled();
   });
 });

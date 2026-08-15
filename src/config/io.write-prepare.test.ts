@@ -5,6 +5,8 @@ import { applyUnsetPathsForWrite } from "./config-path-mutation.js";
 import { restoreEnvRefsFromMap, resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
 import { formatConfigValidationFailure } from "./io.write-errors.js";
 import { resolvePersistCandidateForWrite } from "./io.write-prepare.js";
+import { tryResolveLegacyCompatibilityAgentId } from "./legacy.default-agent-owner.js";
+import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { createMergePatch } from "./merge-patch.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -677,6 +679,29 @@ describe("config io write prepare", () => {
       safe: { mode: "cloud" },
       collision: null,
     });
+  });
+
+  it("preserves an untouched legacy owner marker across a partial unrelated write", () => {
+    const authored = {
+      agents: { entries: { ops: {}, research: { default: true } } },
+      gateway: { port: 18789 },
+    };
+    const migrated = migratePersistedImplicitMainRoster(authored).config as OpenClawConfig;
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: migrated,
+      sourceConfig: migrated,
+      sourceConfigBeforeMigrations: authored,
+      rootAuthoredConfig: authored,
+      nextConfig: { gateway: { port: 19001 } },
+      preserveLegacyAgentRoster: true,
+      explicitSetPaths: [["gateway", "port"]],
+      explicitSetValueSource: { gateway: { port: 19001 } },
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.entries?.research?.default).toBe(true);
+    const reloaded = migratePersistedImplicitMainRoster(persisted).config as OpenClawConfig;
+    expect(tryResolveLegacyCompatibilityAgentId(reloaded)).toBe("research");
   });
 
   it("rejects duplicate normalized ids before canonicalizing a legacy roster", () => {

@@ -1,3 +1,4 @@
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 // Nostr tests cover channel.lifecycle plugin behavior.
 import {
   createStartAccountContext,
@@ -30,6 +31,19 @@ function createMockBus() {
   };
 }
 
+function bindChannelRuntime(
+  context: Parameters<typeof startNostrGatewayAccount>[0],
+): Parameters<typeof startNostrGatewayAccount>[0] {
+  context.channelRuntime = {
+    inbound: { buildContext: buildChannelInboundEventContext },
+  } as never;
+  return context;
+}
+
+const startAccountWithChannelRuntime: typeof startNostrGatewayAccount = async (context) => {
+  await startNostrGatewayAccount(bindChannelRuntime(context));
+};
+
 describe("nostr gateway lifecycle", () => {
   beforeEach(() => {
     setNostrRuntime(createPluginRuntimeMock());
@@ -44,7 +58,7 @@ describe("nostr gateway lifecycle", () => {
     mocks.startNostrBus.mockResolvedValueOnce(bus as never);
 
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
-      startAccount: startNostrGatewayAccount,
+      startAccount: startAccountWithChannelRuntime,
       account: buildResolvedNostrAccount(),
     });
 
@@ -62,7 +76,7 @@ describe("nostr gateway lifecycle", () => {
     mocks.startNostrBus.mockResolvedValueOnce(bus as never);
 
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
-      startAccount: startNostrGatewayAccount,
+      startAccount: startAccountWithChannelRuntime,
       account: buildResolvedNostrAccount(),
     });
 
@@ -85,10 +99,12 @@ describe("nostr gateway lifecycle", () => {
     abort.abort();
 
     await startNostrGatewayAccount(
-      createStartAccountContext({
-        account: buildResolvedNostrAccount(),
-        abortSignal: abort.signal,
-      }),
+      bindChannelRuntime(
+        createStartAccountContext({
+          account: buildResolvedNostrAccount(),
+          abortSignal: abort.signal,
+        }),
+      ),
     );
 
     expect(mocks.startNostrBus).toHaveBeenCalledOnce();
@@ -100,7 +116,9 @@ describe("nostr gateway lifecycle", () => {
     mocks.startNostrBus.mockResolvedValueOnce(bus as never);
     const abort = new AbortController();
     const account = buildResolvedNostrAccount({ relays: ["wss://relay.example.com"] });
-    const context = createStartAccountContext({ account, abortSignal: abort.signal });
+    const context = bindChannelRuntime(
+      createStartAccountContext({ account, abortSignal: abort.signal }),
+    );
 
     const task = startNostrGatewayAccount(context);
     await vi.waitFor(() => expect(mocks.startNostrBus).toHaveBeenCalledOnce());
@@ -118,11 +136,13 @@ describe("nostr gateway lifecycle", () => {
     mocks.startNostrBus.mockResolvedValueOnce(bus as never);
     const abort = new AbortController();
     const statusEvents: Array<Record<string, unknown>> = [];
-    const context = createStartAccountContext({
-      account: buildResolvedNostrAccount(),
-      abortSignal: abort.signal,
-      statusPatchSink: (patch) => statusEvents.push(patch as Record<string, unknown>),
-    });
+    const context = bindChannelRuntime(
+      createStartAccountContext({
+        account: buildResolvedNostrAccount(),
+        abortSignal: abort.signal,
+        statusPatchSink: (patch) => statusEvents.push(patch as Record<string, unknown>),
+      }),
+    );
 
     const task = startNostrGatewayAccount(context);
     await vi.waitFor(() => expect(mocks.startNostrBus).toHaveBeenCalledOnce());
@@ -133,8 +153,11 @@ describe("nostr gateway lifecycle", () => {
 
     options?.onConnect?.("wss://relay-one.example/");
     expect(statusEvents.at(-1)).toMatchObject({
+      running: true,
       lifecycle: "ready",
       connected: true,
+      lastConnectedAt: expect.any(Number),
+      lastError: null,
       terminalDisconnect: undefined,
     });
     options?.onConnect?.("wss://relay-two.example/");

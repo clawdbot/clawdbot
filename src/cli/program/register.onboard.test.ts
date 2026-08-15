@@ -177,6 +177,11 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions().skipBootstrap).toBe(true);
   });
 
+  it("forwards --agent-name to onboarding", async () => {
+    await runCli(["onboard", "--agent-name", "robby"]);
+    expect(setupWizardOptions().agentName).toBe("robby");
+  });
+
   it("forwards explicit --tailscale-reset-on-exit", async () => {
     await runCli(["onboard", "--tailscale-reset-on-exit"]);
     expect(setupWizardOptions().tailscaleResetOnExit).toBe(true);
@@ -208,6 +213,12 @@ describe("registerOnboardCommand", () => {
     await runCli(["onboard", "--tui"]);
 
     expect(setupWizardOptions().tui).toBe(true);
+  });
+
+  it("forwards --skip-ui to guided onboarding", async () => {
+    await runCli(["onboard", "--skip-ui"]);
+
+    expect(setupWizardOptions().skipUi).toBe(true);
   });
 
   it("rejects conflicting custom model input capabilities", async () => {

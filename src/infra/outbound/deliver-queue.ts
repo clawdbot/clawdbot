@@ -14,14 +14,21 @@ import {
   stageAndEnqueueOutboundDelivery,
 } from "./deliver-queue-admission.js";
 import { deliverOutboundPayloadsWithQueueCleanup } from "./deliver-queue-execute.js";
+import { createQueuedDeliveryOwner } from "./deliver-queue-state.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
+import { markDurableDeliveryQueued } from "./delivery-completion.js";
+import { startDeliveryProducerLease } from "./delivery-queue-lease.js";
+import {
+  claimReusableDeliveryPlatformSendAttempt,
+  renewDeliveryPlatformSendLease,
+} from "./delivery-queue-platform-lease.js";
 import {
   StableDeliveryPreparationLostError,
   withStableDeliveryPreparation,
   type StableDeliveryPreparationOwner,
 } from "./delivery-queue-preparation.js";
+import { withActiveDeliveryClaim } from "./delivery-queue-recovery.js";
 import { findDeliveryIntentOwner, loadPendingDelivery } from "./delivery-queue-storage.js";
-import { claimDeliveryPlatformSendAttempt, withActiveDeliveryClaim } from "./delivery-queue.js";
 import { createMessageSentEmitter } from "./message-sent-hook.js";
 import { emitOutboundAuditTerminals, uniformOutboundAuditTerminals } from "./outbound-audit.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
@@ -60,6 +67,46 @@ export async function runOutboundDeliveryInternal(
   return await runOutboundDeliveryWithQueue(params, false);
 }
 
+async function deliverWithProducerLease(
+  params: DeliverOutboundPayloadsParams,
+  queueId: string | null,
+  auditStartedAt: number,
+  producerClaimId?: string,
+): Promise<OutboundDeliveryResult[]> {
+  if (params.deliveryProducerLeaseRequired !== true) {
+    return await deliverOutboundPayloadsWithQueueCleanup(
+      params,
+      queueId,
+      auditStartedAt,
+      producerClaimId,
+    );
+  }
+  const platformQueueId = queueId ?? params.deliveryQueueId;
+  if (!platformQueueId || !producerClaimId) {
+    throw new Error("Delivery producer lease requires an exact queue owner");
+  }
+  const stateDir = queueId ? undefined : params.deliveryQueueStateDir;
+  const lease = await startDeliveryProducerLease({
+    id: platformQueueId,
+    renew: async () =>
+      await renewDeliveryPlatformSendLease(platformQueueId, stateDir, producerClaimId),
+  });
+  const abortSignal = params.abortSignal
+    ? AbortSignal.any([params.abortSignal, lease.signal])
+    : lease.signal;
+  try {
+    return await deliverOutboundPayloadsWithQueueCleanup(
+      { ...params, abortSignal },
+      queueId,
+      auditStartedAt,
+      producerClaimId,
+      lease.signal,
+    );
+  } finally {
+    lease.stop();
+  }
+}
+
 async function runOutboundDeliveryWithQueue(
   params: DeliverOutboundPayloadsParams,
   stableIntentClaimHeld: boolean,
@@ -90,13 +137,16 @@ async function runOutboundDeliveryWithQueue(
     );
   }
   if (params.deferredDeliveryAdmissionPassed !== true) {
-    const admission = resolveDeferredDeliveryAdmission({
-      cfg: params.cfg,
-      channel,
-      to,
-      accountId: params.accountId,
-      phase: "live",
-    });
+    const admission = resolveDeferredDeliveryAdmission(
+      {
+        cfg: params.cfg,
+        channel,
+        to,
+        accountId: params.accountId,
+        phase: "live",
+      },
+      { agentId: params.session?.agentId },
+    );
     if (admission.status === "permanent_rejection") {
       emitPreQueueFailure();
       throw new Error(admission.reason);
@@ -178,6 +228,7 @@ async function runOutboundDeliveryWithQueue(
     delete requirements.messageSendingHooks;
     const support = await resolveOutboundDurableFinalDeliverySupport({
       cfg: params.cfg,
+      agentId: params.session?.agentId,
       channel,
       requirements,
     });
@@ -210,13 +261,12 @@ async function runOutboundDeliveryWithQueue(
   const queued =
     params.skipQueue || (preparedPayloads.length === 0 && !shouldPersistSuppressedIntent)
       ? null
-      : await stageAndEnqueueOutboundDelivery(
-          deliveryParams,
-          preparedBatch,
-          stablePreparationOwner
+      : await stageAndEnqueueOutboundDelivery(deliveryParams, preparedBatch, {
+          claimForLiveDelivery: true,
+          ...(stablePreparationOwner
             ? { getStablePreparation: stablePreparationOwner.current }
-            : undefined,
-        ).catch((err: unknown) => {
+            : {}),
+        }).catch((err: unknown) => {
           if (queuePolicy === "required" || err instanceof StableDeliveryPreparationLostError) {
             emitPreQueueFailure();
             throw err;
@@ -227,6 +277,20 @@ async function runOutboundDeliveryWithQueue(
   const queueId = queued?.id ?? null;
   if (queued?.created && stablePreparationOwner) {
     stablePreparationOwner.markPublished();
+  }
+  if (queueId && params.deliveryCompletion) {
+    const completion = await markDurableDeliveryQueued(
+      params.deliveryCompletion,
+      queueId,
+      queued?.created ? "prepared" : undefined,
+    );
+    if (completion.state !== "queued") {
+      await createQueuedDeliveryOwner({
+        queueId,
+        expectedPlatformSendAttemptId: queued?.producerClaimId,
+      }).ack({ suppressCompletionReceipt: true });
+      return [];
+    }
   }
   if (queueId) {
     params.onDeliveryIntent?.({
@@ -239,7 +303,7 @@ async function runOutboundDeliveryWithQueue(
   }
 
   if (!queueId) {
-    return await deliverOutboundPayloadsWithQueueCleanup(
+    return await deliverWithProducerLease(
       deliveryParams,
       null,
       auditStartedAt,
@@ -251,21 +315,33 @@ async function runOutboundDeliveryWithQueue(
     throw new Error(`Stable delivery intent is already queued: ${queueId}`);
   }
   const deliverClaimedIntent = async (): Promise<OutboundDeliveryResult[]> => {
-    const producerClaimId = params.reusePendingDeliveryIntent
-      ? await claimDeliveryPlatformSendAttempt(queueId)
-      : undefined;
-    if (params.reusePendingDeliveryIntent && !producerClaimId) {
-      throw new Error(`Stable delivery intent is already queued: ${queueId}`);
+    const producerClaimId =
+      queued?.producerClaimId ??
+      (params.reusePendingDeliveryIntent
+        ? await claimReusableDeliveryPlatformSendAttempt(queueId)
+        : undefined);
+    if (!producerClaimId) {
+      throw new Error(
+        queued?.created
+          ? `Delivery platform claim was lost: ${queueId}`
+          : `Stable delivery intent is already queued: ${queueId}`,
+      );
     }
-    let claimedDeliveryParams = deliveryParams;
+    let claimedDeliveryParams: DeliverOutboundPayloadsParams = {
+      ...deliveryParams,
+      deliveryProducerLeaseRequired: true,
+    };
     if (queued?.created !== true) {
       const queuedEntry = await loadPendingDelivery(queueId);
       if (!queuedEntry || queuedEntry.producerClaimId !== producerClaimId) {
-        throw new Error(`Stable delivery platform claim was lost: ${queueId}`);
+        throw new Error(`Delivery platform claim was lost: ${queueId}`);
       }
-      claimedDeliveryParams = restoreQueuedDeliveryCustody(deliveryParams, queuedEntry);
+      claimedDeliveryParams = {
+        ...restoreQueuedDeliveryCustody(deliveryParams, queuedEntry),
+        deliveryProducerLeaseRequired: true,
+      };
     }
-    return deliverOutboundPayloadsWithQueueCleanup(
+    return deliverWithProducerLease(
       claimedDeliveryParams,
       queueId,
       auditStartedAt,

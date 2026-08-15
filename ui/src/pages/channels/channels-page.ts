@@ -1,7 +1,6 @@
 import { consume } from "@lit/context";
 import { html } from "lit";
 import { state } from "lit/decorators.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   ChannelsPairingListResult,
   ChannelsPairingRequest,
@@ -16,6 +15,11 @@ import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
+import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
+import {
+  GatewayPageController,
+  type GatewayPageChange,
+} from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -23,6 +27,7 @@ import { importNostrProfile, parseValidationErrors, putNostrProfile } from "./no
 import { createNostrProfileFormState } from "./view.nostr-profile-form.ts";
 import { renderChannels } from "./view.ts";
 import type { ChannelPairingPrompt } from "./view.types.ts";
+import { runWhatsAppLogoutConfirmation } from "./whatsapp-logout.ts";
 import { ChannelWizardHost } from "./wizard-host.ts";
 
 type NostrProfileFormState = ReturnType<typeof createNostrProfileFormState> | null;
@@ -31,10 +36,9 @@ const CHANNEL_PAIRING_POLL_INTERVAL_MS = 30_000;
 const CHANNELS_DOCS_URL = "https://docs.openclaw.ai/channels";
 
 type NostrOperation = {
-  generation: number;
+  scope: GatewayConnectionScope;
   gateway: ApplicationContext["gateway"];
   channels: ApplicationContext["channels"];
-  client: GatewayBrowserClient;
   formAccountId: string | null;
   accountId: string;
   headers: Record<string, string>;
@@ -83,13 +87,13 @@ class ChannelsPage extends OpenClawLightDomElement {
   });
 
   private schemaLoadStarted = false;
-  private gatewaySource?: ApplicationContext["gateway"];
   private channelsSource?: ApplicationContext["channels"];
-  private gatewayClient: GatewayBrowserClient | null = null;
-  private gatewayConnected = false;
   private gatewayPairingAuthSignature: string | null = null;
-  private hasGatewaySnapshot = false;
-  private nostrOperationGeneration = 0;
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    onIdentityChange: () => this.clearNostrForm(),
+    onSnapshot: (change) => this.handleGatewaySnapshot(change),
+  });
   private readonly pairingPolling = new PollController(
     this,
     CHANNEL_PAIRING_POLL_INTERVAL_MS,
@@ -140,20 +144,6 @@ class ChannelsPage extends OpenClawLightDomElement {
         };
       },
     )
-    .effect(
-      () => this.context?.gateway,
-      (gateway) => {
-        const sourceChanged = this.gatewaySource !== undefined && this.gatewaySource !== gateway;
-        this.gatewaySource = gateway;
-        this.applyGatewaySnapshot(gateway.snapshot, sourceChanged);
-        return gateway.subscribe((snapshot) => {
-          if (this.gatewaySource !== gateway) {
-            return;
-          }
-          this.applyGatewaySnapshot(snapshot, false);
-        });
-      },
-    )
     // The advanced tier is one global display pref; theme republishes every
     // appearance setting, so this keeps the channel forms in sync with the
     // toggle on the config pages.
@@ -165,26 +155,17 @@ class ChannelsPage extends OpenClawLightDomElement {
       },
     );
 
-  private applyGatewaySnapshot(
-    snapshot: ApplicationContext["gateway"]["snapshot"],
-    sourceChanged: boolean,
-  ) {
-    const clientChanged = this.hasGatewaySnapshot && this.gatewayClient !== snapshot.client;
-    const connectionChanged =
-      this.hasGatewaySnapshot && this.gatewayConnected !== (snapshot.phase === "connected");
+  private handleGatewaySnapshot(change: GatewayPageChange) {
+    const snapshot = change.snapshot;
     const pairingAccess = hasOperatorPairingAccess(snapshot.hello?.auth ?? null);
     const pairingAuthSignature = resolveChannelPairingAuthSignature(snapshot);
     const pairingAuthChanged =
-      this.hasGatewaySnapshot && this.gatewayPairingAuthSignature !== pairingAuthSignature;
-    if (!this.hasGatewaySnapshot || sourceChanged || clientChanged || connectionChanged) {
-      this.nostrOperationGeneration += 1;
-    }
-    if (sourceChanged || clientChanged || snapshot.phase !== "connected") {
+      !change.initial && this.gatewayPairingAuthSignature !== pairingAuthSignature;
+    if (change.identityChanged || snapshot.phase !== "connected") {
       this.clearNostrForm();
     }
     if (
-      sourceChanged ||
-      clientChanged ||
+      change.identityChanged ||
       pairingAuthChanged ||
       snapshot.phase !== "connected" ||
       !pairingAccess
@@ -194,15 +175,15 @@ class ChannelsPage extends OpenClawLightDomElement {
       this.pairingAccountFilter = null;
       this.pairingNotice = null;
     }
-    this.hasGatewaySnapshot = true;
-    this.gatewayClient = snapshot.client;
-    this.gatewayConnected = snapshot.phase === "connected";
     this.gatewayPairingAuthSignature = pairingAuthSignature;
     this.syncPairingPolling(snapshot);
     if (snapshot.phase === "connected" && snapshot.client) {
-      this.ensureInitialData();
+      if (!change.initial) {
+        this.ensureInitialData();
+      }
       if (
-        (sourceChanged || clientChanged || connectionChanged || pairingAuthChanged) &&
+        !change.initial &&
+        (change.identityChanged || change.connectionChanged || pairingAuthChanged) &&
         pairingAccess
       ) {
         void this.context.channels.refreshPairing();
@@ -256,12 +237,8 @@ class ChannelsPage extends OpenClawLightDomElement {
   override disconnectedCallback() {
     this.wizardHost.cancelOnDisconnect();
     this.selectedChannel = null;
-    this.gatewaySource = undefined;
     this.channelsSource = undefined;
-    this.gatewayClient = null;
-    this.gatewayConnected = false;
     this.gatewayPairingAuthSignature = null;
-    this.hasGatewaySnapshot = false;
     this.pairingPrompt = null;
     this.pairingChannelFilter = null;
     this.pairingAccountFilter = null;
@@ -307,6 +284,23 @@ class ChannelsPage extends OpenClawLightDomElement {
     await context.channels.refresh(true);
   }
 
+  private async confirmWhatsAppLogout() {
+    const context = this.context;
+    const channels = context.channels;
+    const scope = this.gateway.capture();
+    if (!scope || this.channelsSource !== channels) {
+      return;
+    }
+    await runWhatsAppLogoutConfirmation({
+      channels,
+      getWizardAccountId: () => this.wizardHost.whatsappAccountId,
+      isCurrent: () =>
+        this.gateway.isCurrent(scope) &&
+        this.context === context &&
+        this.channelsSource === channels,
+    });
+  }
+
   private resolveNostrAccountId(): string {
     const accounts = this.context?.channels.state.channelsSnapshot?.channelAccounts?.nostr ?? [];
     return this.nostrProfileAccountId ?? accounts[0]?.accountId ?? "default";
@@ -327,30 +321,31 @@ class ChannelsPage extends OpenClawLightDomElement {
   }
 
   private invalidateNostrForm() {
-    this.nostrOperationGeneration += 1;
+    this.gateway.invalidate();
     this.clearNostrForm();
   }
 
   private beginNostrOperation(): NostrOperation | null {
-    const gateway = this.context.gateway;
+    const gateway = this.gateway.gateway;
     const channels = this.context.channels;
-    const client = gateway.snapshot.client;
+    let scope = this.gateway.capture();
     if (
-      !this.isConnected ||
-      this.gatewaySource !== gateway ||
+      !gateway ||
+      !scope ||
       this.channelsSource !== channels ||
-      gateway.snapshot.phase !== "connected" ||
-      !client
+      this.context.gateway !== gateway
     ) {
       return null;
     }
-    const generation = this.nostrOperationGeneration + 1;
-    this.nostrOperationGeneration = generation;
+    this.gateway.invalidate();
+    scope = this.gateway.capture();
+    if (!scope) {
+      return null;
+    }
     return {
-      generation,
+      scope,
       gateway,
       channels,
-      client,
       formAccountId: this.nostrProfileAccountId,
       accountId: this.resolveNostrAccountId(),
       headers: this.buildGatewayHttpHeaders(gateway),
@@ -361,13 +356,11 @@ class ChannelsPage extends OpenClawLightDomElement {
     const form = this.nostrProfileFormState;
     if (
       !form ||
-      !this.isConnected ||
-      this.nostrOperationGeneration !== operation.generation ||
+      !this.gateway.isCurrent(operation.scope) ||
       this.nostrProfileAccountId !== operation.formAccountId ||
       this.context.gateway !== operation.gateway ||
       this.context.channels !== operation.channels ||
-      operation.gateway.snapshot.client !== operation.client ||
-      operation.gateway.snapshot.phase !== "connected"
+      operation.gateway.snapshot.client !== operation.scope.client
     ) {
       return null;
     }
@@ -375,7 +368,7 @@ class ChannelsPage extends OpenClawLightDomElement {
   }
 
   private editNostrProfile(accountId: string, profile: NostrProfile | null) {
-    this.nostrOperationGeneration += 1;
+    this.gateway.invalidate();
     this.nostrProfileAccountId = accountId;
     this.nostrProfileFormState = createNostrProfileFormState(profile ?? undefined);
   }
@@ -700,6 +693,8 @@ class ChannelsPage extends OpenClawLightDomElement {
           selectedChannel: this.selectedChannel,
           wizard: this.wizardHost.state,
           wizardMultiselect: this.wizardHost.multiselect,
+          wizardTextValue: this.wizardHost.textValue,
+          wizardSecretVisible: this.wizardHost.secretVisible,
           setupBlockedByDirtyConfig: this.wizardHost.blockedByDirtyConfig,
           onShowDetail: (channelId) => {
             this.selectedChannel = channelId;
@@ -710,6 +705,8 @@ class ChannelsPage extends OpenClawLightDomElement {
           onStartSetup: (channelId) => this.wizardHost.startSetup(channelId),
           onWizardAnswer: (value) => this.wizardHost.answer(value),
           onWizardToggleMultiselect: (value) => this.wizardHost.toggleMultiselect(value),
+          onWizardTextInput: (value) => this.wizardHost.setTextValue(value),
+          onWizardToggleSecretVisibility: () => this.wizardHost.toggleSecretVisibility(),
           onWizardClose: () => this.wizardHost.close(),
           onRefresh: (probe) => void context.channels.refresh(probe),
           onPairingRefresh: () => void context.channels.refreshPairing(),
@@ -727,8 +724,7 @@ class ChannelsPage extends OpenClawLightDomElement {
             void context.channels.startWhatsApp(force, this.wizardHost.whatsappAccountId),
           onWhatsAppWait: () =>
             void context.channels.waitWhatsApp(this.wizardHost.whatsappAccountId),
-          onWhatsAppLogout: () =>
-            void context.channels.logoutWhatsApp(this.wizardHost.whatsappAccountId),
+          onWhatsAppLogout: () => void this.confirmWhatsAppLogout(),
           onShowAdvancedSettings: (enabled) => this.setShowAdvancedSettings(enabled),
           onConfigPatch: (path, value) => context.runtimeConfig.patchForm(path, value),
           onConfigSave: () => void this.saveChannelConfig(),

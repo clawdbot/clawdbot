@@ -7,7 +7,7 @@ import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { detectAssistantTranscriptRoleHeaderText } from "../shared/text/assistant-transcript-role-headers.js";
 import { detectToolCallShapedText } from "../shared/text/tool-call-shaped-text.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 
 // Detect provider/model bugs where a reply serializes a tool call as plain
 // assistant text instead of emitting a structured invocation block.
@@ -51,9 +51,9 @@ function isRegisteredToolName(
   if (!toolName || !registeredToolNames) {
     return undefined;
   }
-  const normalized = normalizeToolName(toolName);
+  const normalized = normalizeToolPolicyName(toolName);
   for (const registeredToolName of registeredToolNames) {
-    if (normalizeToolName(registeredToolName) === normalized) {
+    if (normalizeToolPolicyName(registeredToolName) === normalized) {
       return true;
     }
   }

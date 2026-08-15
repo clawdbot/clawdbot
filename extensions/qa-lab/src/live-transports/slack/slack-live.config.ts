@@ -1,7 +1,7 @@
 // QA Lab Slack credentials, instrumentation, and channel config.
 import type { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNonArrayRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   type SlackQaRuntimeEnv,
   type SlackQaConfigOverrides,
@@ -52,9 +52,7 @@ export function parseSlackQaCredentialPayload(payload: unknown): SlackQaRuntimeE
 }
 
 export function asPlainRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
+  return asNonArrayRecord(value);
 }
 
 type SlackQaPostMessageAttempt = {

@@ -39,6 +39,51 @@ import memoryPlugin, {
 import { createLanceDbRuntimeLoader } from "./lancedb-runtime.test-support.js";
 import { installTmpDirHarness } from "./test-helpers.js";
 
+const moduleMocks = vi.hoisted(() => ({
+  createOpenAiClient: vi.fn<(...args: unknown[]) => object>(),
+  ensureGlobalUndiciEnvProxyDispatcher: vi.fn<() => void>(),
+  loadLanceDbModule: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    ensureGlobalUndiciEnvProxyDispatcher: () => {
+      if (moduleMocks.ensureGlobalUndiciEnvProxyDispatcher.getMockImplementation()) {
+        return moduleMocks.ensureGlobalUndiciEnvProxyDispatcher();
+      }
+      return actual.ensureGlobalUndiciEnvProxyDispatcher();
+    },
+  };
+});
+
+vi.mock("openai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openai")>();
+  return {
+    ...actual,
+    default: function MockableOpenAI(...args: ConstructorParameters<typeof actual.default>) {
+      if (moduleMocks.createOpenAiClient.getMockImplementation()) {
+        return moduleMocks.createOpenAiClient(...args);
+      }
+      return Reflect.construct(actual.default, args);
+    },
+  };
+});
+
+vi.mock("./lancedb-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./lancedb-runtime.js")>();
+  return {
+    ...actual,
+    loadLanceDbModule: (...args: Parameters<typeof actual.loadLanceDbModule>) => {
+      if (moduleMocks.loadLanceDbModule.getMockImplementation()) {
+        return moduleMocks.loadLanceDbModule(...args);
+      }
+      return actual.loadLanceDbModule(...args);
+    },
+  };
+});
+
 // Provenance marker OpenClaw appends to every injected inbound-context header.
 // Detectors key on this marker, not label text. Keep byte-identical with
 // src/auto-reply/reply/inbound-context-marker.ts (extensions cannot import core).
@@ -195,10 +240,10 @@ function firstAddedMemory(add: ReturnType<typeof vi.fn>) {
 }
 
 async function withMockedOpenAiMemoryPlugin<T>(params: {
-  ensureGlobalUndiciEnvProxyDispatcher: ReturnType<typeof vi.fn>;
+  ensureGlobalUndiciEnvProxyDispatcher: () => void;
   embeddingsCreate?: ReturnType<typeof vi.fn>;
   openAiPost?: ReturnType<typeof vi.fn>;
-  loadLanceDbModule: ReturnType<typeof vi.fn>;
+  loadLanceDbModule: (...args: unknown[]) => Promise<unknown>;
   run: (dynamicMemoryPlugin: typeof memoryPlugin) => Promise<T>;
 }): Promise<T> {
   const post =
@@ -210,27 +255,20 @@ async function withMockedOpenAiMemoryPlugin<T>(params: {
       return invokeEmbeddingCreate(params.embeddingsCreate, opts.body);
     });
 
-  vi.resetModules();
-  vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
-    ensureGlobalUndiciEnvProxyDispatcher: params.ensureGlobalUndiciEnvProxyDispatcher,
-  }));
-  vi.doMock("openai", () => ({
-    default: class MockOpenAI {
-      post = post;
-    },
-  }));
-  vi.doMock("./lancedb-runtime.js", () => ({
-    loadLanceDbModule: params.loadLanceDbModule,
-  }));
+  moduleMocks.ensureGlobalUndiciEnvProxyDispatcher.mockImplementation(() => {
+    params.ensureGlobalUndiciEnvProxyDispatcher();
+  });
+  moduleMocks.createOpenAiClient.mockImplementation(() => ({ post }));
+  moduleMocks.loadLanceDbModule.mockImplementation(async (...args) => {
+    return await params.loadLanceDbModule(...args);
+  });
 
   try {
-    const { default: dynamicMemoryPlugin } = await import("./index.js");
-    return await params.run(dynamicMemoryPlugin);
+    return await params.run(memoryPlugin);
   } finally {
-    vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-    vi.doUnmock("openai");
-    vi.doUnmock("./lancedb-runtime.js");
-    vi.resetModules();
+    moduleMocks.ensureGlobalUndiciEnvProxyDispatcher.mockReset();
+    moduleMocks.createOpenAiClient.mockReset();
+    moduleMocks.loadLanceDbModule.mockReset();
   }
 }
 
@@ -575,7 +613,10 @@ describe("memory plugin e2e", () => {
     }));
 
     vi.resetModules();
-    vi.doMock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
+    vi.doMock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importOriginal) => ({
+      ...(await importOriginal<
+        typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")
+      >()),
       getMemoryEmbeddingProvider,
     }));
     vi.doMock("openai", () => ({
@@ -686,6 +727,207 @@ describe("memory plugin e2e", () => {
       vi.doUnmock("./lancedb-runtime.js");
       vi.resetModules();
     }
+  });
+
+  test("keeps provider auth agent-scoped across memory tools and automatic hooks", async () => {
+    const requests: Array<{ agentDir: string; text: string }> = [];
+    const closeProvider = vi.fn(async () => {});
+    const createProvider = vi.fn(async (options: { agentDir?: string; model?: string }) => {
+      const agentDir = options.agentDir ?? "unscoped";
+      return {
+        provider: {
+          id: "openai",
+          model: options.model ?? "text-embedding-3-small",
+          embedQuery: vi.fn(async (text: string) => {
+            requests.push({ agentDir, text });
+            return [0.1, 0.2, 0.3];
+          }),
+          embedBatch: vi.fn(async () => [[0.1, 0.2, 0.3]]),
+          close: closeProvider,
+        },
+      };
+    });
+    const getMemoryEmbeddingProvider = vi.fn(() => ({ id: "openai", create: createProvider }));
+    const toArray = vi.fn(async () => []);
+    const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(vi.fn(() => ({ toArray }))));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        close: vi.fn(),
+        openTable: vi.fn(async () => ({
+          schema: createAgentScopedSchemaMock(),
+          vectorSearch,
+          countRows: vi.fn(async () => 0),
+          add: vi.fn(async () => undefined),
+          delete: vi.fn(async () => undefined),
+          close: vi.fn(),
+        })),
+      })),
+    }));
+    const pluginConfig = {
+      embedding: { provider: "openai", model: "text-embedding-3-small" },
+      dbPath: getDbPath(),
+      autoCapture: true,
+      autoRecall: true,
+    };
+    const config = {
+      agents: { list: [{ id: "main", default: true }, { id: "private" }] },
+      plugins: { entries: { "memory-lancedb": { enabled: true, config: pluginConfig } } },
+    };
+    const registerTool = vi.fn();
+    const registerService = vi.fn();
+    const on = vi.fn();
+    let stop: (() => Promise<void>) | undefined;
+
+    vi.resetModules();
+    vi.doMock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importOriginal) => ({
+      ...(await importOriginal<
+        typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")
+      >()),
+      getMemoryEmbeddingProvider,
+    }));
+    vi.doMock("openai", () => ({
+      default: function UnexpectedOpenAI() {
+        throw new Error("operator did not configure a globally shared OpenAI key");
+      },
+    }));
+    vi.doMock("./lancedb-runtime.js", () => ({ loadLanceDbModule }));
+
+    try {
+      const { default: dynamicMemoryPlugin } = await import("./index.js");
+      registerTestPlugin(
+        dynamicMemoryPlugin,
+        createMemoryPluginApi(getDbPath(), {
+          config,
+          pluginConfig,
+          runtime: {
+            config: { current: () => config },
+            agent: {
+              resolveAgentDir: (_config: unknown, agentId: string) => `/tmp/agent-${agentId}`,
+            },
+          },
+          registerTool,
+          registerService,
+          on,
+        }),
+      );
+      stop = firstObjectArg(registerService as unknown as MockCallSource, "service").stop as
+        | (() => Promise<void>)
+        | undefined;
+      const tool = (name: string, agentId: string) => {
+        const factory = registerTool.mock.calls.find(([, options]) => options?.name === name)?.[0];
+        const materialized = materializeRegisteredTool(factory, { agentId, config });
+        if (!materialized) {
+          throw new Error(`expected ${name} for ${agentId}`);
+        }
+        return materialized;
+      };
+
+      await Promise.all([
+        tool("memory_recall", " PRIVATE ").execute("private-recall", {
+          query: "private recall secret",
+        }),
+        tool("memory_recall", "main").execute("main-recall", { query: "main recall fact" }),
+      ]);
+      await tool("memory_store", "private").execute("private-store", {
+        text: "private durable memory",
+      });
+      await tool("memory_forget", "private").execute("private-forget", {
+        query: "private forget secret",
+      });
+      await hookHandler(on, "before_prompt_build")?.(
+        { prompt: "private automatic recall secret", messages: [] },
+        { agentId: "private" },
+      );
+      await hookHandler(on, "agent_end")?.(
+        {
+          success: true,
+          messages: [{ role: "user", content: "I prefer my private automatic capture secret." }],
+        },
+        { agentId: "private", sessionKey: "agent:private:main" },
+      );
+
+      expect(createProvider).toHaveBeenCalledTimes(2);
+      expect(requests).toEqual(
+        expect.arrayContaining([
+          { agentDir: "/tmp/agent-private", text: "private recall secret" },
+          { agentDir: "/tmp/agent-main", text: "main recall fact" },
+          { agentDir: "/tmp/agent-private", text: "private durable memory" },
+          { agentDir: "/tmp/agent-private", text: "private forget secret" },
+          { agentDir: "/tmp/agent-private", text: "private automatic recall secret" },
+          {
+            agentDir: "/tmp/agent-private",
+            text: "I prefer my private automatic capture secret.",
+          },
+        ]),
+      );
+      expect(
+        requests.every(
+          ({ agentDir, text }) => !text.includes("private") || agentDir.endsWith("-private"),
+        ),
+      ).toBe(true);
+    } finally {
+      await stop?.();
+      vi.doUnmock("openclaw/plugin-sdk/memory-core-host-engine-embeddings");
+      vi.doUnmock("openai");
+      vi.doUnmock("./lancedb-runtime.js");
+      vi.resetModules();
+    }
+
+    expect(closeProvider).toHaveBeenCalledTimes(2);
+  });
+
+  test("keeps an explicit operator-owned OpenAI embedding key shared across agents", async () => {
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const toArray = vi.fn(async () => []);
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          schema: createAgentScopedSchemaMock(),
+          vectorSearch: vi.fn(() => createAgentScopedVectorQuery(vi.fn(() => ({ toArray })))),
+          countRows: vi.fn(async () => 0),
+          add: vi.fn(async () => undefined),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
+      embeddingsCreate,
+      loadLanceDbModule,
+      run: async (dynamicMemoryPlugin) => {
+        const registerTool = vi.fn();
+        registerTestPlugin(
+          dynamicMemoryPlugin,
+          createMemoryPluginApi(getDbPath(), { registerTool }),
+        );
+        const factory = registerTool.mock.calls.find(
+          ([, options]) => options?.name === "memory_recall",
+        )?.[0];
+
+        await Promise.all([
+          materializeRegisteredTool(factory, { agentId: "private" }).execute("private", {
+            query: "private shared-key query",
+          }),
+          materializeRegisteredTool(factory, { agentId: "main" }).execute("main", {
+            query: "main shared-key query",
+          }),
+        ]);
+
+        expect(embeddingsCreate).toHaveBeenCalledWith({
+          model: "text-embedding-3-small",
+          input: "private shared-key query",
+        });
+        expect(embeddingsCreate).toHaveBeenCalledWith({
+          model: "text-embedding-3-small",
+          input: "main shared-key query",
+        });
+      },
+    });
   });
 
   test("normalizes memory_recall limit before querying LanceDB", async () => {

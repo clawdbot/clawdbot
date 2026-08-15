@@ -2,6 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, type TemplateResult } from "lit";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
+import { formatRelativeTimestamp } from "../lib/format.ts";
 
 const BRANCH_DISPLAY_LENGTH = 14;
 
@@ -25,28 +26,37 @@ export function formatBuildChipText(info: ControlUiBuildInfo): string | null {
   return `${branch}${commit}`;
 }
 
+function formatNonReleaseGitIdentity(info: ControlUiBuildInfo): string | null {
+  if (info.release) {
+    return null;
+  }
+  const compactBuild = formatBuildChipText(info);
+  if (!compactBuild) {
+    return null;
+  }
+  return info.branch && info.branch !== "main" ? compactBuild : `git@${compactBuild}`;
+}
+
+export function formatSidebarBuildSubtitle(info: ControlUiBuildInfo): string | null {
+  const gitIdentity = formatNonReleaseGitIdentity(info);
+  if (!gitIdentity) {
+    return null;
+  }
+  const commitAt = info.commitAt ? Date.parse(info.commitAt) : Number.NaN;
+  return Number.isFinite(commitAt)
+    ? `${gitIdentity} · ${formatRelativeTimestamp(commitAt)}`
+    : gitIdentity;
+}
+
 export function formatSettingsBuildLabel(
   info: ControlUiBuildInfo,
   gatewayVersion: string | null,
 ): string | null {
   const version = info.version ?? gatewayVersion;
-  const commit = info.commit;
-  if (!commit) {
+  const gitIdentity = formatNonReleaseGitIdentity(info);
+  if (!gitIdentity) {
     return version;
   }
-  const compactBuild = formatBuildChipText(info);
-  if (!compactBuild) {
-    return version;
-  }
-
-  if (info.release) {
-    return version;
-  }
-
-  const gitIdentity =
-    info.branch && info.branch !== "main"
-      ? compactBuild
-      : `git@${commit.slice(0, 7)}${info.dirty === true ? "*" : ""}`;
   return [version, gitIdentity].filter((value): value is string => Boolean(value)).join(" · ");
 }
 

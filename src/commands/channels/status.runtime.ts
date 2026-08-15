@@ -13,6 +13,7 @@ import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { formatPhoneNumberForCli } from "../../infra/phone-number-presentation.js";
 import { listConfiguredAnnounceChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { requireValidConfig } from "../config-validation.js";
 import {
   appendBaseUrlBit,
   appendEnabledConfiguredLinkedBits,
@@ -20,7 +21,6 @@ import {
   appendTokenSourceBits,
   buildChannelAccountLine,
   type ChatChannel,
-  requireValidConfigSnapshot,
 } from "./shared.js";
 import { formatConfigChannelsStatusLines } from "./status-config-format.js";
 import type { ChannelsStatusOptions } from "./status.js";
@@ -75,6 +75,20 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
   const eventLoopLine = formatEventLoopBits(payload.eventLoop);
   if (eventLoopLine) {
     lines.push(theme.warn(`Gateway event loop degraded ${eventLoopLine}`));
+  }
+  const statusWarnings = Array.isArray(payload.warnings)
+    ? payload.warnings
+        .filter(
+          (warning): warning is string => typeof warning === "string" && warning.trim().length > 0,
+        )
+        .slice(0, 50)
+    : [];
+  if (payload.partial === true || statusWarnings.length > 0) {
+    lines.push(theme.warn("Channel status is partial:"));
+    for (const warning of statusWarnings) {
+      lines.push(`- ${warning.slice(0, 500)}`);
+    }
+    lines.push("");
   }
   const channelLabels =
     payload.channelLabels && typeof payload.channelLabels === "object"
@@ -217,7 +231,7 @@ export async function renderChannelsStatusFallback(params: {
   runtime.error(
     `${gatewayAuthUnavailable ? "Gateway auth unavailable" : "Gateway not reachable"}: ${safeError}`,
   );
-  const cfg = await requireValidConfigSnapshot(runtime);
+  const cfg = await requireValidConfig(runtime);
   if (!cfg) {
     return;
   }

@@ -2,7 +2,10 @@ import path from "node:path";
 // Extracts provider public artifacts from plugin metadata.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
-import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
+import {
+  loadPluginManifestRegistryCore,
+  type PluginManifestRegistry,
+} from "./manifest-registry.js";
 import {
   resolveDirectBundledProviderPolicySurface,
   resolveTrustedExternalProviderPolicySurface,
@@ -23,7 +26,7 @@ function resolveBundledProviderPolicyPlugin(
     return null;
   }
 
-  const registry = options.manifestRegistry ?? loadPluginManifestRegistry();
+  const registry = options.manifestRegistry ?? loadPluginManifestRegistryCore();
   for (const plugin of registry.plugins.toSorted((left, right) =>
     left.id.localeCompare(right.id),
   )) {

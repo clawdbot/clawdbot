@@ -6,6 +6,7 @@ import {
   readOpenedLocalAgentAvatarDataUrl,
   type OpenedLocalAgentAvatarFile,
 } from "../agents/identity-avatar-file.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 
 type AvatarDataUrlCacheEntry = {
   ctimeMs: number;
@@ -59,13 +60,7 @@ export function createGatewayAvatarDataUrlCache(params?: {
         size: opened.stat.size,
         dataUrl,
       });
-      while (entries.size > maxEntries) {
-        const oldestPath = entries.keys().next().value;
-        if (oldestPath === undefined) {
-          break;
-        }
-        entries.delete(oldestPath);
-      }
+      pruneMapToMaxSize(entries, maxEntries);
       return dataUrl;
     },
   };

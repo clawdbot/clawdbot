@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { getLogger, resetLogger, setLoggerOverride } from "../logging.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { testApi } from "./logger.js";
+import { testApi } from "./logger.test-support.js";
 
 const logPathTracker = createSuiteLogPathTracker("openclaw-log-ts-");
 

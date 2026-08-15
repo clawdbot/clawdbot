@@ -2,11 +2,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isRecord } from "../../../../packages/normalization-core/src/record-coerce.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
-} from "../../../../packages/normalization-core/src/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 import { coerceFiniteScheduleNumber } from "../../../cron/schedule-number.js";
 import { normalizeCronStaggerMs } from "../../../cron/stagger.js";
 import type {
@@ -332,11 +332,11 @@ function parseCronStateFile(raw: string): {
   }
 }
 
-function readString(record: Record<string, unknown>, key: string): string | undefined {
+function readScheduleString(record: Record<string, unknown>, key: string): string | undefined {
   return normalizeOptionalString(record[key]);
 }
 
-function readNumber(record: Record<string, unknown>, key: string): number | undefined {
+function readScheduleNumber(record: Record<string, unknown>, key: string): number | undefined {
   return coerceFiniteScheduleNumber(record[key]);
 }
 
@@ -347,13 +347,13 @@ function legacySchedulePayloadFromRecord(
   | { kind: "every"; everyMs: number; anchorMs?: number }
   | { kind: "cron"; expr: string; tz?: string; staggerMs?: number }
   | undefined {
-  const rawKind = readString(schedule, "kind")?.toLowerCase();
-  const expr = readString(schedule, "expr") ?? readString(schedule, "cron");
-  const at = readString(schedule, "at");
-  const atMs = readNumber(schedule, "atMs");
-  const everyMs = readNumber(schedule, "everyMs");
-  const anchorMs = readNumber(schedule, "anchorMs");
-  const tz = readString(schedule, "tz");
+  const rawKind = readScheduleString(schedule, "kind")?.toLowerCase();
+  const expr = readScheduleString(schedule, "expr") ?? readScheduleString(schedule, "cron");
+  const at = readScheduleString(schedule, "at");
+  const atMs = readScheduleNumber(schedule, "atMs");
+  const everyMs = readScheduleNumber(schedule, "everyMs");
+  const anchorMs = readScheduleNumber(schedule, "anchorMs");
+  const tz = readScheduleString(schedule, "tz");
   const staggerMs = normalizeCronStaggerMs(schedule.staggerMs);
   const kind =
     rawKind === "at" || rawKind === "every" || rawKind === "cron"

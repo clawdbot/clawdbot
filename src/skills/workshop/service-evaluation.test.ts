@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginHookSkillProposalEvaluateEvent } from "../../plugins/hook-types.js";
 import {
   createOpenClawTestState,
@@ -36,18 +36,25 @@ import { prepareSkillProposalSupportFiles } from "./store.js";
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 
-beforeEach(async () => {
+beforeAll(async () => {
   testState = await createOpenClawTestState({
     layout: "state-only",
     prefix: "openclaw-skill-evaluation-state-",
   });
+});
+
+beforeEach(() => {
+  testState.applyEnv();
   hookMocks.evaluate.mockReset();
   hookMocks.hasEvaluators = true;
 });
 
 afterEach(async () => {
-  await testState.cleanup();
   await tempDirs.cleanup();
+});
+
+afterAll(async () => {
+  await testState.cleanup();
 });
 
 describe("Skill Workshop proposal evaluation", () => {
@@ -116,6 +123,7 @@ describe("Skill Workshop proposal evaluation", () => {
     });
     const hookEvent = hookMocks.evaluate.mock.calls[0]?.[0] as PluginHookSkillProposalEvaluateEvent;
     expect(hookEvent).toMatchObject({
+      correlationId: "optimization-run-1",
       proposal: {
         id: proposal.record.id,
         revision: "v1",

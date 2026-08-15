@@ -1,6 +1,8 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { ChannelGatewayContext } from "../runtime-api.js";
 import { sendBuzzTextOneShot, startBuzzBus, type BuzzBus } from "./buzz-bus.js";
@@ -58,6 +60,8 @@ function resolveBuzzProfileName(params: {
 }
 
 export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<ResolvedBuzzAccount>) {
+  const channelRuntime = ctx.channelRuntime as PluginRuntime["channel"] | undefined;
+  const buildContext = channelRuntime?.inbound.buildContext;
   const account = resolveBuzzAccount({
     cfg: ctx.cfg,
     accountId: ctx.account.accountId,
@@ -102,7 +106,14 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
           if (!isConfiguredBuzzChannel(configuredChannelIds, message.channelId)) {
             return;
           }
-          await handleBuzzInbound({ account, cfg: ctx.cfg, bus: sessionBus, message, signal });
+          await handleBuzzInbound({
+            account,
+            cfg: ctx.cfg,
+            bus: sessionBus,
+            message,
+            signal,
+            buildContext,
+          });
         },
         onMessageError: (error) => {
           ctx.log?.error?.(`[${account.accountId}] Buzz message failed: ${error.message}`);
@@ -138,16 +149,15 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
       ctx.invalidateDirectoryCache?.();
       connectedAt = Date.now();
       activeBuses.set(account.accountId, bus);
-      ctx.setStatus({
-        accountId: account.accountId,
-        running: true,
-        lifecycle: "ready",
-        configured: true,
-        enabled: account.enabled,
-        baseUrl: account.relayUrl,
-        publicKey: bus.publicKey,
-        lastError: null,
-      });
+      ctx.setStatus(
+        channelReadyPatch({
+          accountId: account.accountId,
+          configured: true,
+          enabled: account.enabled,
+          baseUrl: account.relayUrl,
+          publicKey: bus.publicKey,
+        }),
+      );
       ctx.log?.info?.(
         `[${account.accountId}] Buzz connected to ${account.relayUrl} for ${bus.directory.activeRoomIds().length} channel(s)`,
       );

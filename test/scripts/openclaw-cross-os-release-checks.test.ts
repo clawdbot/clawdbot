@@ -1,6 +1,7 @@
 // Openclaw Cross Os Release Checks tests cover openclaw cross os release checks script behavior.
 import { spawn } from "node:child_process";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -41,6 +42,7 @@ import {
   buildDiscordSmokeGuildsConfig,
   buildRealUpdateEnv,
   dashboardHtmlMarkerStatus,
+  type GatewayHandle,
   CROSS_OS_FETCH_BODY_MAX_CHARS,
   CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
@@ -82,6 +84,7 @@ import {
   resolveInstalledPackageRootFromCliPath,
   resolveNpmPackTarballFileName,
   resolveNpmDebugLogDirs,
+  restartManualGatewayForDiscordSmoke,
   resolveManagedGatewayInstallerEnv,
   resolvePackDestinationTarball,
   resolvePackageCandidatePackCommand,
@@ -108,9 +111,10 @@ import {
   verifyDevUpdateStatus,
   verifyPackagedUpgradeUpdateResult,
   verifyWindowsPackagedUpgradeFallbackInstall,
+  waitForGatewayWithStartupMigrationRestart,
   writePackageDistInventoryForCandidate,
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
-import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
+import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -179,6 +183,47 @@ async function withTempDirAsync<T>(prefix: string, run: (dir: string) => Promise
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+function createGatewayHandleFixture(params: {
+  dir: string;
+  name: string;
+  beforeLaunch?: string;
+  afterLaunch?: string;
+  appendOnWaitForClose?: string;
+  appendOnClose?: string;
+  exited: boolean;
+}) {
+  const logPath = join(params.dir, `${params.name}.log`);
+  const beforeLaunch = params.beforeLaunch ?? "";
+  writeFileSync(logPath, beforeLaunch);
+  if (params.afterLaunch) {
+    appendFileSync(logPath, params.afterLaunch);
+  }
+  const state = { closeCalls: 0, waitForCloseCalls: 0, order: [] as string[] };
+  const handle: GatewayHandle = {
+    child: {
+      exitCode: params.exited ? 1 : null,
+      signalCode: null,
+    } as GatewayHandle["child"],
+    closeLog: async () => {
+      state.closeCalls += 1;
+      state.order.push("closeLog");
+      if (params.appendOnClose) {
+        appendFileSync(logPath, params.appendOnClose);
+      }
+    },
+    launchLogOffset: Buffer.byteLength(beforeLaunch),
+    logPath,
+    waitForClose: async () => {
+      state.waitForCloseCalls += 1;
+      state.order.push("waitForClose");
+      if (params.appendOnWaitForClose) {
+        appendFileSync(logPath, params.appendOnWaitForClose);
+      }
+    },
+  };
+  return { handle, state };
 }
 
 describe("scripts/openclaw-cross-os-release-checks", () => {
@@ -473,6 +518,232 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ).toEqual(["gateway", "status"]);
   });
 
+  it("restarts an exited manual gateway once after the exact startup migration refusal", async () => {
+    await withTempDirAsync("openclaw-cross-os-gateway-restart-", async (dir) => {
+      const refusal =
+        "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready.";
+      const first = createGatewayHandleFixture({
+        dir,
+        name: "first",
+        appendOnWaitForClose: refusal,
+        exited: true,
+      });
+      const second = createGatewayHandleFixture({
+        dir,
+        name: "second",
+        exited: false,
+      });
+      const holder = { current: first.handle as GatewayHandle | null };
+      const firstError = new Error("first gateway exited");
+      let restartCalls = 0;
+
+      await waitForGatewayWithStartupMigrationRestart({
+        gatewayHolder: holder,
+        restartGateway: async () => {
+          restartCalls += 1;
+          return second.handle;
+        },
+        waitUntilReady: async (gateway) => {
+          if (gateway === first.handle) {
+            throw firstError;
+          }
+        },
+      });
+
+      expect(restartCalls).toBe(1);
+      expect(first.state.waitForCloseCalls).toBe(1);
+      expect(first.state.closeCalls).toBe(1);
+      expect(first.state.order).toEqual(["waitForClose", "closeLog"]);
+      expect(holder.current).toBe(second.handle);
+    });
+  });
+
+  it.each([
+    {
+      name: "generic child exit",
+      beforeLaunch: "",
+      afterLaunch: "gateway crashed before binding\n",
+    },
+    {
+      name: "paraphrased refusal",
+      beforeLaunch: "",
+      afterLaunch:
+        "OpenClaw plugin migration inputs changed during startup convergence: refusing to report the gateway ready.\n",
+    },
+    {
+      name: "stale refusal from an earlier launch",
+      beforeLaunch:
+        "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready.\n",
+      afterLaunch: "gateway crashed before binding\n",
+    },
+  ])("does not restart after $name", async ({ beforeLaunch, afterLaunch }) => {
+    await withTempDirAsync("openclaw-cross-os-gateway-no-restart-", async (dir) => {
+      const gateway = createGatewayHandleFixture({
+        dir,
+        name: "gateway",
+        beforeLaunch,
+        afterLaunch,
+        exited: true,
+      });
+      const holder = { current: gateway.handle as GatewayHandle | null };
+      const startupError = new Error("gateway exited");
+      let restartCalls = 0;
+
+      await expect(
+        waitForGatewayWithStartupMigrationRestart({
+          gatewayHolder: holder,
+          restartGateway: async () => {
+            restartCalls += 1;
+            return gateway.handle;
+          },
+          waitUntilReady: async () => {
+            throw startupError;
+          },
+        }),
+      ).rejects.toBe(startupError);
+
+      expect(restartCalls).toBe(0);
+      expect(gateway.state.waitForCloseCalls).toBe(1);
+      expect(gateway.state.closeCalls).toBe(1);
+      expect(holder.current).toBe(gateway.handle);
+    });
+  });
+
+  it("does not restart a live gateway after a readiness failure", async () => {
+    await withTempDirAsync("openclaw-cross-os-gateway-live-", async (dir) => {
+      const gateway = createGatewayHandleFixture({
+        dir,
+        name: "gateway",
+        afterLaunch:
+          "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready.\n",
+        exited: false,
+      });
+      const holder = { current: gateway.handle as GatewayHandle | null };
+      const readinessError = new Error("gateway readiness timed out");
+      let restartCalls = 0;
+
+      await expect(
+        waitForGatewayWithStartupMigrationRestart({
+          gatewayHolder: holder,
+          restartGateway: async () => {
+            restartCalls += 1;
+            return gateway.handle;
+          },
+          waitUntilReady: async () => {
+            throw readinessError;
+          },
+        }),
+      ).rejects.toBe(readinessError);
+
+      expect(restartCalls).toBe(0);
+      expect(gateway.state.waitForCloseCalls).toBe(0);
+      expect(gateway.state.closeCalls).toBe(0);
+    });
+  });
+
+  it("fails after a second startup migration refusal without looping", async () => {
+    await withTempDirAsync("openclaw-cross-os-gateway-second-refusal-", async (dir) => {
+      const refusal =
+        "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready.\n";
+      const first = createGatewayHandleFixture({
+        dir,
+        name: "first",
+        afterLaunch: refusal,
+        exited: true,
+      });
+      const second = createGatewayHandleFixture({
+        dir,
+        name: "second",
+        afterLaunch: refusal,
+        exited: true,
+      });
+      const holder = { current: first.handle as GatewayHandle | null };
+      const secondError = new Error("second gateway exited");
+      let restartCalls = 0;
+
+      await expect(
+        waitForGatewayWithStartupMigrationRestart({
+          gatewayHolder: holder,
+          restartGateway: async () => {
+            restartCalls += 1;
+            return second.handle;
+          },
+          waitUntilReady: async (gateway) => {
+            if (gateway === first.handle) {
+              throw new Error("first gateway exited");
+            }
+            throw secondError;
+          },
+        }),
+      ).rejects.toBe(secondError);
+
+      expect(restartCalls).toBe(1);
+      expect(first.state.waitForCloseCalls).toBe(1);
+      expect(first.state.closeCalls).toBe(1);
+      expect(second.state.waitForCloseCalls).toBe(1);
+      expect(second.state.closeCalls).toBe(1);
+      expect(holder.current).toBe(second.handle);
+    });
+  });
+
+  it("routes the Discord manual relaunch through the bounded retry wait", async () => {
+    await withTempDirAsync("openclaw-cross-os-discord-gateway-", async (dir) => {
+      const previous = createGatewayHandleFixture({
+        dir,
+        name: "previous",
+        exited: false,
+      });
+      const started = createGatewayHandleFixture({
+        dir,
+        name: "started",
+        exited: false,
+      });
+      const lane = {
+        name: "installer-fresh",
+        rootDir: dir,
+        prefixDir: join(dir, "prefix"),
+        homeDir: join(dir, "home"),
+        stateDir: join(dir, "state"),
+        appDataDir: join(dir, "app-data"),
+        gatewayPort: 18_789,
+        phaseTimings: [],
+      };
+      const gatewayHolder = { current: previous.handle as GatewayHandle | null };
+      const gatewayLogPath = join(dir, "discord-gateway.log");
+      const statusLogPath = join(dir, "discord-status.log");
+      const calls: Array<{ name: string; params: unknown }> = [];
+
+      await restartManualGatewayForDiscordSmoke({
+        lane,
+        cliPath: join(dir, "openclaw"),
+        env: { OPENCLAW_HOME: lane.homeDir },
+        gatewayHolder,
+        gatewayLogPath,
+        statusLogPath,
+        operations: {
+          stopGateway: async (gateway) => {
+            calls.push({ name: "stop", params: gateway });
+          },
+          startGateway: async (params) => {
+            calls.push({ name: "start", params });
+            return started.handle;
+          },
+          waitForGateway: async (params) => {
+            calls.push({ name: "wait", params });
+          },
+        },
+      });
+
+      expect(gatewayHolder.current).toBe(started.handle);
+      expect(calls.map((call) => call.name)).toEqual(["stop", "start", "wait"]);
+      expect(calls[2]?.params).toMatchObject({
+        gatewayHolder,
+        gatewayLogPath,
+        logPath: statusLogPath,
+      });
+    });
+  });
+
   it("gives the Windows packaged updater wrapper enough headroom for OpenClaw timeout output", () => {
     expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS).toBeLessThanOrEqual(10 * 60);
     expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS).toBeGreaterThan(
@@ -695,6 +966,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       })?.model,
     ).toBe("openai/gpt-5.4-nano");
     expect(resolveProviderConfig("openai", {})?.model).toBe("openai/gpt-5.6-luna");
+    expect(resolveProviderConfig("openai", {})?.requiredCompanionPackages).toEqual([
+      "@openclaw/codex",
+    ]);
+    expect(resolveProviderConfig("anthropic", {})?.requiredCompanionPackages).toEqual([]);
+    expect(resolveProviderConfig("minimax", {})?.requiredCompanionPackages).toEqual([]);
   });
 
   it("keeps release cross-OS OpenAI smoke on GPT-5.6 Luna", () => {

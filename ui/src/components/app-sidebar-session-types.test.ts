@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   loadStoredHiddenSessionCatalogIds,
   loadStoredSidebarSessionStatusFilter,
-  storeHiddenSessionCatalogIds,
+  setStoredSessionCatalogHidden,
   storeSidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 
@@ -58,9 +58,13 @@ describe("sidebar session status preference", () => {
 });
 
 describe("hidden session catalog preference", () => {
-  it("round-trips catalog ids", () => {
-    storeHiddenSessionCatalogIds(new Set(["codex", "claude"]));
+  it("round-trips catalog ids and reverses one hide at a time", () => {
+    setStoredSessionCatalogHidden("codex", true);
+    setStoredSessionCatalogHidden("claude", true);
     expect([...loadStoredHiddenSessionCatalogIds()]).toEqual(["codex", "claude"]);
+
+    setStoredSessionCatalogHidden("codex", false);
+    expect([...loadStoredHiddenSessionCatalogIds()]).toEqual(["claude"]);
   });
 
   it.each(["not-json", JSON.stringify({ catalog: "codex" })])(

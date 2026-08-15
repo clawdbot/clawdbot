@@ -7,13 +7,10 @@ import { isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
 import { isRecord } from "../utils.js";
 import { normalizeAgentPromptSurfaceKind } from "./agent-prompt-surface-kind.js";
+import { getPluginCommandExecutionCount } from "./command-execution-lock.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import type { PluginRegistry } from "./registry-types.js";
-import {
-  getActivePluginGatewayCommandRegistry,
-  getPluginRegistrationContext,
-  requireActivePluginRegistry,
-} from "./runtime.js";
+import { getPluginRegistrationContext, requireActivePluginRegistry } from "./runtime.js";
 import {
   AGENT_PROMPT_SURFACE_KINDS,
   type AgentPromptGuidance,
@@ -32,6 +29,11 @@ import {
  */
 let reservedCommands: Set<string> | undefined;
 let agentPromptSurfaces: Set<string> | undefined;
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && actual.every((key) => keys.includes(key));
+}
 
 function getReservedCommands(): Set<string> {
   reservedCommands ??= new Set([
@@ -167,6 +169,26 @@ function validatePluginCommandDefinition(
         : "Command requiredScopes contains unknown operator scope";
     }
   }
+  if (command.clientPresentation !== undefined) {
+    if (!isRecord(command.clientPresentation)) {
+      return "Command clientPresentation must be an object";
+    }
+    if (!hasExactKeys(command.clientPresentation, ["when", "action"])) {
+      return "Command clientPresentation must contain only when and action";
+    }
+    if (command.clientPresentation.when !== "no-arguments") {
+      return 'Command clientPresentation when must be "no-arguments"';
+    }
+    if (!isRecord(command.clientPresentation.action)) {
+      return "Command clientPresentation action must be an object";
+    }
+    if (!hasExactKeys(command.clientPresentation.action, ["kind"])) {
+      return "Command clientPresentation action must contain only kind";
+    }
+    if (command.clientPresentation.action.kind !== "device-pairing") {
+      return "Command clientPresentation action kind is not supported";
+    }
+  }
   if (
     command.exposeSenderIsOwner !== undefined &&
     typeof command.exposeSenderIsOwner !== "boolean"
@@ -285,7 +307,7 @@ function normalizeAgentPromptGuidance(
   });
 }
 
-export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinition): string[] {
+function listPluginInvocationKeys(command: OpenClawPluginCommandDefinition): string[] {
   const keys = new Set<string>();
   const push = (value: string | undefined) => {
     const normalized = normalizeOptionalLowercaseString(value);
@@ -305,19 +327,6 @@ export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinitio
   return [...keys];
 }
 
-export function pluginCommandSupportsChannel(
-  command: OpenClawPluginCommandDefinition,
-  channel?: string,
-): boolean {
-  if (!command.channels || command.channels.length === 0 || !channel) {
-    return true;
-  }
-  const normalizedChannel = normalizeLowercaseStringOrEmpty(channel);
-  return command.channels.some(
-    (entry) => normalizeLowercaseStringOrEmpty(entry) === normalizedChannel,
-  );
-}
-
 export function registerPluginCommand(
   pluginId: string,
   command: OpenClawPluginCommandDefinition,
@@ -330,7 +339,7 @@ export function registerPluginCommand(
 ): CommandRegistrationResult {
   const context = getPluginRegistrationContext();
   return registerPluginCommandInRegistry(
-    context?.registry ?? getActivePluginGatewayCommandRegistry() ?? requireActivePluginRegistry(),
+    context?.registry ?? requireActivePluginRegistry(),
     context?.pluginId ?? pluginId,
     command,
     opts,
@@ -344,7 +353,7 @@ export function registerPluginCommandInRegistry(
   opts?: Parameters<typeof registerPluginCommand>[2],
 ): CommandRegistrationResult {
   // Prevent registration while commands are being processed
-  if (registry.commandRegistryLocked) {
+  if (getPluginCommandExecutionCount(registry) > 0) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }
   if (command.ownership === "reserved") {
@@ -371,6 +380,14 @@ export function registerPluginCommandInRegistry(
       : {}),
     ...(command.agentPromptGuidance
       ? { agentPromptGuidance: normalizeAgentPromptGuidance(command.agentPromptGuidance) }
+      : {}),
+    ...(command.clientPresentation
+      ? {
+          clientPresentation: {
+            when: "no-arguments" as const,
+            action: { kind: "device-pairing" as const },
+          },
+        }
       : {}),
   };
   const invocationKeys = listPluginInvocationKeys(normalizedCommand);

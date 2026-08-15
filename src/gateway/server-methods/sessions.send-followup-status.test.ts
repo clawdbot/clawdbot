@@ -5,14 +5,16 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { errorShape, ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-accessor.js";
-import { createDeferred } from "../../test-utils/deferred.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const loadSessionEntryMock = vi.fn();
+const loadGatewaySessionEntryReadOnlyMock = vi.fn();
 const readSessionMessageCountAsyncMock = vi.fn();
 const loadGatewaySessionRowMock = vi.fn();
+const resolveDeletedAgentIdFromSessionKeyMock = vi.fn();
 const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
 const replaceSubagentRunAfterSteerMock = vi.fn();
 const chatSendMock = vi.fn();
@@ -45,14 +47,14 @@ vi.mock("../../auto-reply/reply/queue/cleanup.js", async () => {
   };
 });
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
-  return {
-    ...actual,
-    loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
-    loadGatewaySessionRow: (...args: unknown[]) => loadGatewaySessionRowMock(...args),
-  };
-});
+vi.mock("../session-utils.js", () => ({
+  loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
+  loadGatewaySessionEntryReadOnly: (...args: unknown[]) =>
+    loadGatewaySessionEntryReadOnlyMock(...args),
+  loadGatewaySessionRow: (...args: unknown[]) => loadGatewaySessionRowMock(...args),
+  resolveDeletedAgentIdFromSessionKey: (...args: unknown[]) =>
+    resolveDeletedAgentIdFromSessionKeyMock(...args),
+}));
 
 vi.mock("../session-transcript-readers.js", async () => {
   const actual = await vi.importActual<typeof import("../session-transcript-readers.js")>(
@@ -64,10 +66,10 @@ vi.mock("../session-transcript-readers.js", async () => {
   };
 });
 
-vi.mock("../../agents/subagent-registry-read.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/subagent-registry-read.js")>(
-    "../../agents/subagent-registry-read.js",
-  );
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../agents/subagents/registry/subagent-registry-read.js")
+  >("../../agents/subagents/registry/subagent-registry-read.js");
   return {
     ...actual,
     getLatestSubagentRunByChildSessionKey: (...args: unknown[]) =>
@@ -75,7 +77,7 @@ vi.mock("../../agents/subagent-registry-read.js", async () => {
   };
 });
 
-vi.mock("../session-subagent-reactivation.runtime.js", () => ({
+vi.mock("../../agents/subagents/registry/subagent-registry-runtime.js", () => ({
   replaceSubagentRunAfterSteer: (...args: unknown[]) => replaceSubagentRunAfterSteerMock(...args),
 }));
 
@@ -85,8 +87,8 @@ vi.mock("./chat.js", () => ({
   },
 }));
 
-vi.mock("./chat-send-handler.js", () => ({
-  handleChatSend: (...args: unknown[]) => chatSendWithAdmissionOwnedMock(...args),
+vi.mock("./chat-send-external-entry.js", () => ({
+  handleDirectExternalChatSend: (...args: unknown[]) => chatSendWithAdmissionOwnedMock(...args),
 }));
 
 vi.mock("./chat-abort-handler.js", () => ({
@@ -94,7 +96,7 @@ vi.mock("./chat-abort-handler.js", () => ({
     handleChatAbortRequestWithLifecycleMock(...args),
 }));
 
-import { sessionsHandlers } from "./sessions.js";
+import { sessionMessagingHandlers } from "./sessions-messaging.js";
 
 function createRequestContext(overrides: Record<string, unknown> = {}): GatewayRequestContext {
   return {
@@ -112,8 +114,10 @@ function createRequestContext(overrides: Record<string, unknown> = {}): GatewayR
 describe("sessions.send completed subagent follow-up status", () => {
   beforeEach(() => {
     loadSessionEntryMock.mockReset();
+    loadGatewaySessionEntryReadOnlyMock.mockReset();
     readSessionMessageCountAsyncMock.mockReset().mockResolvedValue(0);
     loadGatewaySessionRowMock.mockReset();
+    resolveDeletedAgentIdFromSessionKeyMock.mockReset().mockReturnValue(null);
     getLatestSubagentRunByChildSessionKeyMock.mockReset();
     replaceSubagentRunAfterSteerMock.mockReset();
     chatSendMock.mockReset();
@@ -136,6 +140,37 @@ describe("sessions.send completed subagent follow-up status", () => {
         },
       );
   });
+
+  for (const method of ["sessions.send", "sessions.steer"] as const) {
+    it(`${method} rejects keys belonging to a deleted agent`, async () => {
+      const orphanKey = "agent:deleted-agent:main";
+      loadSessionEntryMock.mockReturnValue({
+        cfg: {},
+        canonicalKey: orphanKey,
+        storePath: "/tmp/sessions.json",
+        entry: { sessionId: "sess-orphan" },
+      });
+      resolveDeletedAgentIdFromSessionKeyMock.mockReturnValue("deleted-agent");
+
+      const respondMock = vi.fn();
+      await expectDefined(
+        sessionMessagingHandlers[method],
+        "sessionMessagingHandlers[method] test invariant",
+      )({
+        req: { id: "req-deleted-agent" } as never,
+        params: { key: orphanKey, message: "hi" },
+        respond: respondMock as unknown as RespondFn,
+        context: createRequestContext(),
+        client: null,
+        isWebchatConnect: () => false,
+      });
+
+      expect(respondMock).toHaveBeenCalledWith(false, undefined, {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: 'Agent "deleted-agent" no longer exists in configuration',
+      });
+    });
+  }
 
   it("reactivates completed subagent sessions before broadcasting sessions.changed", async () => {
     const childSessionKey = "agent:main:subagent:followup";
@@ -183,8 +218,8 @@ describe("sessions.send completed subagent follow-up status", () => {
     });
 
     await expectDefined(
-      sessionsHandlers["sessions.send"],
-      'sessionsHandlers["sessions.send"] test invariant',
+      sessionMessagingHandlers["sessions.send"],
+      'sessionMessagingHandlers["sessions.send"] test invariant',
     )({
       req: { id: "req-1" } as never,
       params: {
@@ -231,8 +266,8 @@ describe("sessions.send completed subagent follow-up status", () => {
 
       const respondMock = vi.fn();
       await expectDefined(
-        sessionsHandlers[method],
-        "sessionsHandlers[method] test invariant",
+        sessionMessagingHandlers[method],
+        "sessionMessagingHandlers[method] test invariant",
       )({
         req: { id: "req-rebuilding" } as never,
         params: {
@@ -277,8 +312,8 @@ describe("sessions.send completed subagent follow-up status", () => {
 
     const respondMock = vi.fn();
     await expectDefined(
-      sessionsHandlers["sessions.steer"],
-      'sessionsHandlers["sessions.steer"] test invariant',
+      sessionMessagingHandlers["sessions.steer"],
+      'sessionMessagingHandlers["sessions.steer"] test invariant',
     )({
       req: { id: "req-steer" } as never,
       params: {
@@ -318,8 +353,8 @@ describe("sessions.send completed subagent follow-up status", () => {
 
     const respondMock = vi.fn();
     await expectDefined(
-      sessionsHandlers["sessions.steer"],
-      'sessionsHandlers["sessions.steer"] test invariant',
+      sessionMessagingHandlers["sessions.steer"],
+      'sessionMessagingHandlers["sessions.steer"] test invariant',
     )({
       req: { id: "req-raced" } as never,
       params: {
@@ -361,8 +396,8 @@ describe("sessions.send completed subagent follow-up status", () => {
 
     const respondMock = vi.fn();
     await expectDefined(
-      sessionsHandlers["sessions.steer"],
-      'sessionsHandlers["sessions.steer"] test invariant',
+      sessionMessagingHandlers["sessions.steer"],
+      'sessionMessagingHandlers["sessions.steer"] test invariant',
     )({
       req: { id: "req-rebuild-after-interrupt" } as never,
       params: {
@@ -407,8 +442,8 @@ describe("sessions.send completed subagent follow-up status", () => {
 
     const respondMock = vi.fn();
     await expectDefined(
-      sessionsHandlers["sessions.steer"],
-      'sessionsHandlers["sessions.steer"] test invariant',
+      sessionMessagingHandlers["sessions.steer"],
+      'sessionMessagingHandlers["sessions.steer"] test invariant',
     )({
       req: { id: "req-steer-replay" } as never,
       params: {
@@ -449,8 +484,8 @@ describe("sessions.send completed subagent follow-up status", () => {
 
     const respondMock = vi.fn();
     await expectDefined(
-      sessionsHandlers["sessions.steer"],
-      'sessionsHandlers["sessions.steer"] test invariant',
+      sessionMessagingHandlers["sessions.steer"],
+      'sessionMessagingHandlers["sessions.steer"] test invariant',
     )({
       req: { id: "req-steer-fresh" } as never,
       params: {
@@ -493,8 +528,8 @@ describe("sessions.send completed subagent follow-up status", () => {
 
     const respondMock = vi.fn();
     await expectDefined(
-      sessionsHandlers["sessions.steer"],
-      'sessionsHandlers["sessions.steer"] test invariant',
+      sessionMessagingHandlers["sessions.steer"],
+      'sessionMessagingHandlers["sessions.steer"] test invariant',
     )({
       req: { id: "req-steer-inflight" } as never,
       params: {
@@ -558,8 +593,8 @@ describe("sessions.send completed subagent follow-up status", () => {
     const secondRespond = vi.fn();
     const invoke = (reqId: string, respond: ReturnType<typeof vi.fn>) =>
       expectDefined(
-        sessionsHandlers["sessions.steer"],
-        'sessionsHandlers["sessions.steer"] test invariant',
+        sessionMessagingHandlers["sessions.steer"],
+        'sessionMessagingHandlers["sessions.steer"] test invariant',
       )({
         req: { id: reqId } as never,
         params: {
@@ -643,8 +678,8 @@ describe("sessions.send completed subagent follow-up status", () => {
     const secondRespond = vi.fn();
     const invoke = (reqId: string, respond: ReturnType<typeof vi.fn>) =>
       expectDefined(
-        sessionsHandlers["sessions.steer"],
-        'sessionsHandlers["sessions.steer"] test invariant',
+        sessionMessagingHandlers["sessions.steer"],
+        'sessionMessagingHandlers["sessions.steer"] test invariant',
       )({
         req: { id: reqId } as never,
         params: {
@@ -695,8 +730,8 @@ describe("sessions.send completed subagent follow-up status", () => {
       const context = createRequestContext({ getRuntimeConfig: () => cfg });
 
       await expectDefined(
-        sessionsHandlers[method],
-        "sessionsHandlers[method] test invariant",
+        sessionMessagingHandlers[method],
+        "sessionMessagingHandlers[method] test invariant",
       )({
         req: { id: "req-1" } as never,
         params: {

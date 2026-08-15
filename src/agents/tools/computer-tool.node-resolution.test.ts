@@ -23,7 +23,7 @@ vi.mock("./gateway.js", async (importOriginal) => {
   return { ...actual, callGatewayTool: callGatewayToolMock };
 });
 
-vi.mock("../utils/sleep.js", () => ({ sleep: sleepMock }));
+vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
 
 const { createComputerTool } = await import("./computer-tool.js");
 
@@ -82,7 +82,11 @@ describe("createComputerTool node resolution", () => {
         commands: ["computer.act", "screen.snapshot"],
       },
     ]);
-    callGatewayToolMock.mockResolvedValue(screenshotPayload());
+    callGatewayToolMock.mockImplementation(async (_method, _opts, body) =>
+      (body as { command?: string }).command === "computer.act"
+        ? { payload: { ok: true } }
+        : screenshotPayload(),
+    );
     const tool = createComputerTool({ modelHasVision: true });
 
     await expect(tool.execute("call", { action: "type", text: "hello" })).resolves.toBeDefined();

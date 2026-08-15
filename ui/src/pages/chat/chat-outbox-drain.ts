@@ -2,11 +2,17 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
-import { isUiGlobalSessionKey } from "../../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  isUiGlobalSessionKey,
+} from "../../lib/sessions/session-key.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import {
+  captureChatCommandTarget,
   confirmConversationResetForCurrentSession,
   dispatchChatSlashCommand,
+  readChatResetTargetAccess,
+  type ChatCommandTarget,
   type ChatCommandResetOptions,
 } from "./chat-commands.ts";
 import { loadChatHistory, type ChatHistoryResult, type ChatState } from "./chat-history.ts";
@@ -24,6 +30,7 @@ import {
   type StoredChatOutbox,
   type StoredChatOutboxScope,
 } from "./composer-persistence.ts";
+import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
 import { isChatBusy } from "./run-lifecycle.ts";
 import {
   chatMessagesContainQueuedSend,
@@ -43,6 +50,7 @@ export type QueuedChatSendOptions = {
   restoreDraft?: boolean;
   routingSessionKey?: string;
   storageMode?: QueuedChatStorageMode;
+  target?: ChatCommandTarget;
 };
 
 export type ChatOutboxDrainDependencies = {
@@ -225,10 +233,27 @@ async function reconcileStoredChatOutboxHead(
   if (!client || !host.connected) {
     return "blocked";
   }
+  // A never-attempted head cannot be in server history, so its reconcile only
+  // needs the active-run answer — which the event that woke this drain already
+  // recorded into the session row. Skipping the 1000-message chat.history here
+  // stops one full-history RPC per transcript event while a run streams.
+  // Attempted items keep the fetch: delivered-detection must retire their
+  // bubbles even mid-run, and a missing row falls through conservatively.
+  const neverAttempted =
+    (item.sendAttempts ?? 0) === 0 && item.sendRequestStartedAtMs === undefined;
+  if (neverAttempted) {
+    const row = host.sessions.state.result?.sessions.find((session) =>
+      areUiSessionKeysEquivalent(session.key, outbox.sessionKey),
+    );
+    if (row && isSessionRunActive(row)) {
+      return "blocked";
+    }
+  }
   const historyArgs = [host, outbox, item, client, connectionEpoch, dependencies] as const;
   const history = await readCurrentStoredChatHistory(...historyArgs);
-  if (history === "blocked" || history === "continue") {
-    return history;
+  // Keyed unknown sends reach history only for exact proof; absence stays blocked.
+  if (history === "blocked" || history === "continue" || item.sendState === "unconfirmed") {
+    return history === "continue" ? "continue" : "blocked";
   }
   if (visibleSessionMatches(host, outbox.sessionKey, outbox.agentId) && isChatBusy(host)) {
     return "blocked";
@@ -280,8 +305,12 @@ async function drainStoredChatOutbox(
       return "empty";
     }
     if (
-      item.sendState === "unconfirmed" ||
-      (item.sendState === "waiting-model" && !lane.pendingOptions.has(item.id))
+      (item.sendState === "unconfirmed" && (!item.sendRunId || item.localCommandName)) ||
+      (item.sendState === "waiting-model" && !lane.pendingOptions.has(item.id)) ||
+      // An open edit owns this row: sending the superseded text would deliver a
+      // message the operator is visibly rewriting. The queue behind it waits,
+      // which is the same contract the row's held position promises.
+      isQueuedMessageBeingEdited(host, item.id)
     ) {
       syncVisibleChatQueueProjection(host);
       return "blocked";
@@ -301,25 +330,27 @@ async function drainStoredChatOutbox(
       }
       syncVisibleChatQueueProjection(host);
       if (item.localCommandName === "reset") {
-        const resetText = item.localCommandArgs ? `/reset ${item.localCommandArgs}` : "/reset";
-        const convertResetToMessage = (sendState?: ChatQueueItem["sendState"]) =>
-          updateQueuedMessageForSession(host, outbox.sessionKey, item.id, (entry) => ({
-            ...entry,
-            localCommandArgs: undefined,
-            localCommandName: undefined,
-            refreshSessions: true,
-            text: resetText,
-            ...(sendState ? { sendState } : {}),
-          }));
+        if ((item.sendAttempts ?? 0) > 0 || item.sendRequestStartedAtMs !== undefined) {
+          setCommandState("unconfirmed", UNCONFIRMED_CHAT_SEND_ERROR);
+          return "blocked";
+        }
+        const resetTarget = captureChatCommandTarget(host);
+        if (!resetTarget) {
+          setCommandState("failed", "The Gateway connection changed. Retry the command.");
+          return "blocked";
+        }
+        const initialAccess = readChatResetTargetAccess(host, resetTarget);
+        if (!initialAccess.allowed) {
+          setCommandState("failed", initialAccess.reason);
+          dependencies.setChatError(host, initialAccess.reason);
+          return "blocked";
+        }
         const confirmation = await confirmConversationResetForCurrentSession(host, {
           sessionKey: outbox.sessionKey,
           ...(outbox.agentId ? { agentId: outbox.agentId } : {}),
         });
         if (confirmation === "deferred") {
-          const approvedDuringRun =
-            visibleSessionMatches(host, outbox.sessionKey, outbox.agentId) && host.chatRunId;
-          const deferCommand = approvedDuringRun ? convertResetToMessage : setCommandState;
-          deferCommand("waiting-idle");
+          setCommandState("waiting-idle");
           return "blocked";
         }
         if (confirmation === "cancelled") {
@@ -328,7 +359,25 @@ async function drainStoredChatOutbox(
           }
           continue;
         }
-        if (!convertResetToMessage()) {
+        const currentAccess = readChatResetTargetAccess(host, resetTarget);
+        if (!currentAccess.allowed) {
+          setCommandState("failed", currentAccess.reason);
+          dependencies.setChatError(host, currentAccess.reason);
+          return "blocked";
+        }
+        lane.pendingOptions.set(item.id, {
+          ...lane.pendingOptions.get(item.id),
+          target: resetTarget,
+        });
+        const result = await dependencies.sendQueuedChatMessage(
+          host,
+          item.id,
+          lane.pendingOptions.get(item.id),
+          outbox.sessionKey,
+        );
+        lane.outcomes.set(item.id, result);
+        lane.pendingOptions.delete(item.id);
+        if (result !== "sent") {
           return "blocked";
         }
         continue;

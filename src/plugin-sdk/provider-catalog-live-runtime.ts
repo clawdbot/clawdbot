@@ -1,5 +1,6 @@
+import { normalizeOptionalString as readLiveModelCatalogString } from "../../packages/normalization-core/src/string-coerce.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
-import { readResponseWithLimit } from "../infra/http-body.js";
+import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import type {
   ProviderCatalogContext,
@@ -8,7 +9,10 @@ import type {
 } from "../plugins/types.js";
 import {
   buildOpenAICompatibleLiveModels,
+  readLiveModelCatalogBooleanField,
+  readLiveModelCatalogPositiveSafeIntegerField,
   readLiveModelCatalogRecord,
+  readLiveModelCatalogStringField,
 } from "./provider-catalog-live-normalize.internal.js";
 import {
   buildSingleProviderApiKeyCatalog,
@@ -32,6 +36,11 @@ export type LiveModelCatalogHeaderContext = {
 };
 
 export { clearLiveCatalogCacheForTests };
+export {
+  readLiveModelCatalogBooleanField,
+  readLiveModelCatalogPositiveSafeIntegerField,
+  readLiveModelCatalogStringField,
+};
 
 export type FetchLiveProviderModelIdsParams = {
   providerId: string;
@@ -198,12 +207,6 @@ function buildHeaders(
   return headers;
 }
 
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
-}
-
 async function readLiveModelCatalogJson(response: Response, timeoutMs: number): Promise<unknown> {
   const buffer = await readResponseWithLimit(response, LIVE_MODEL_CATALOG_BODY_MAX_BYTES, {
     chunkTimeoutMs: timeoutMs,
@@ -213,10 +216,6 @@ async function readLiveModelCatalogJson(response: Response, timeoutMs: number): 
       new Error(`Live model catalog response stalled: no data received for ${chunkTimeoutMs}ms`),
   });
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer));
-}
-
-function readLiveModelCatalogString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function readLiveModelCatalogNextUrl(body: unknown): string | undefined {

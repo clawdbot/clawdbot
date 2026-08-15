@@ -1,14 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveControlUiDistIndexHealth } from "./control-ui-assets.js";
-import { trimLogTail } from "./restart-sentinel.js";
 import type { UpdateChannel } from "./update-channels.js";
 import {
   managerInstallArgs,
   managerScriptArgs,
   resolveUpdateBuildManager,
 } from "./update-package-manager.js";
-import { MAX_LOG_CHARS } from "./update-runner-command.js";
+import { runStep } from "./update-runner-command.js";
 import {
   resolveBuildEnv,
   resolveInstallEnv,
@@ -46,22 +45,18 @@ export async function rebuildRolledBackGitRuntime(params: {
   steps: UpdateStepResult[];
 }): Promise<GitRuntimeRecovery> {
   const appendStep = async (name: string, argv: string[], env?: NodeJS.ProcessEnv) => {
-    const started = Date.now();
-    const result = await params.runCommand(argv, {
+    const result = await runStep({
+      runCommand: params.runCommand,
+      name,
+      argv,
       cwd: params.gitRoot,
       timeoutMs: params.timeoutMs,
       env,
+      stepIndex: 0,
+      totalSteps: 1,
+      results: params.steps,
     });
-    params.steps.push({
-      name,
-      command: argv.join(" "),
-      cwd: params.gitRoot,
-      durationMs: Date.now() - started,
-      exitCode: result.code,
-      stdoutTail: trimLogTail(result.stdout, MAX_LOG_CHARS),
-      stderrTail: trimLogTail(result.stderr, MAX_LOG_CHARS),
-    });
-    return result.code === 0;
+    return result.exitCode === 0;
   };
   const appendFailure = (reason: RecoveryReason, detail: string): GitRuntimeRecovery => {
     params.steps.push({

@@ -14,7 +14,7 @@ import {
   synthesizeVoiceModelCatalogEntries,
   type VoiceModelCapabilities,
   type VoiceModelProvider,
-} from "../../packages/speech-core/voice-models.js";
+} from "../tts/voice-models.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { projectProviderCatalogResultToUnifiedTextRows } from "./provider-catalog-unified-text.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";

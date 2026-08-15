@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
+import { renewDeliveryPlatformSendLease } from "./delivery-queue-platform-lease.js";
 import {
   ackDelivery,
   claimDeliveryPlatformSendAttempt,
@@ -93,7 +94,7 @@ describe("delivery-queue storage", () => {
         if (!firstAttemptId) {
           throw new Error("test invariant: first platform owner must claim the durable row");
         }
-        const lostClaim = `Stable delivery platform claim was lost: ${id}`;
+        const lostClaim = `Delivery platform claim was lost: ${id}`;
         // Admission snapshots taken before ownership must CAS the unclaimed
         // state; a producer that claimed meanwhile retains its media and row.
         await expect(
@@ -104,8 +105,6 @@ describe("delivery-queue storage", () => {
           failPendingDelivery(
             {
               id,
-              expectedStatus: "pending",
-              lastError: "stale preclaim admission",
               entry: unclaimedSnapshot,
             },
             stateDir,
@@ -475,6 +474,52 @@ describe("delivery-queue storage", () => {
       expect(entry.retryCount).toBe(0);
     });
 
+    it("preserves and renews the exact explicit owner after an ambiguous platform outcome", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2026-08-02T10:00:00.000Z"));
+        const stateDir = tmpDir();
+        const id = "cron-direct-delivery:v1:unknown-owner-lease";
+        await enqueueDeliveryOnce(
+          {
+            channel: "forum",
+            to: "123",
+            payloads: [{ text: "test" }],
+            completionRetention: {
+              idPrefix: "cron-direct-delivery:v1:",
+              maxAgeMs: 24 * 60 * 60_000,
+              maxEntries: 2_000,
+            },
+            requiresProducerClaim: true,
+          },
+          id,
+          stateDir,
+        );
+        const claimId = await claimDeliveryPlatformSendAttempt(id, stateDir);
+        if (!claimId) {
+          throw new Error("test invariant: explicit producer must own the stable row");
+        }
+        await markDeliveryPlatformSendAttemptStarted(id, stateDir, undefined, claimId);
+        const started = readQueuedEntry(stateDir, id);
+        const originalExpiry = started.availableAt;
+        vi.setSystemTime(Date.now() + 1_000);
+
+        await markDeliveryPlatformOutcomeUnknown(id, stateDir, claimId);
+
+        expect(readQueuedEntry(stateDir, id)).toMatchObject({
+          recoveryState: "unknown_after_send",
+          platformSendAttemptId: claimId,
+          availableAt: originalExpiry,
+        });
+        await expect(renewDeliveryPlatformSendLease(id, stateDir, claimId)).resolves.toBe(
+          Date.now() + 30_000,
+        );
+        expect(readQueuedEntry(stateDir, id).availableAt).toBe(Date.now() + 30_000);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("refreshes the attempt timestamp immediately before provider I/O", async () => {
       const id = await enqueueTextDelivery(
         {
@@ -500,6 +545,25 @@ describe("delivery-queue storage", () => {
       expect(entry.recoveryState).toBe("send_attempt_started");
     });
 
+    it("keeps ambiguous post-send evidence across a later unclaimed batch dispatch", async () => {
+      const id = await enqueueTextDelivery(
+        {
+          channel: "forum",
+          to: "123",
+          payloads: [{ text: "test" }],
+        },
+        tmpDir(),
+      );
+
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+      await markDeliveryPlatformOutcomeUnknown(id, tmpDir());
+      await markDeliveryPlatformSendDispatched(id, tmpDir());
+
+      // Downgrading to send_attempt_started would let recovery replay the whole
+      // batch as not_sent and duplicate the payload that already reached the platform.
+      expect(readQueuedEntry(tmpDir(), id).recoveryState).toBe("unknown_after_send");
+    });
+
     it("increments retryCount, records attempt time, and sets lastError", async () => {
       const id = await enqueueTextDelivery(
         {
@@ -517,6 +581,27 @@ describe("delivery-queue storage", () => {
       expect(typeof entry.lastAttemptAt).toBe("number");
       expect((entry.lastAttemptAt as number) > 0).toBe(true);
       expect(entry.lastError).toBe("connection refused");
+    });
+
+    it("releases a settled live owner while retaining retryable custody", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "forum",
+        to: "123",
+        payloads: [{ text: "test" }],
+        requiresProducerClaim: true,
+      });
+      const claimId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
+      expect(claimId).toEqual(expect.any(String));
+
+      await failDelivery(id, "provider failed", tmpDir(), claimId);
+
+      expect(readQueuedEntry(tmpDir(), id)).toMatchObject({
+        retryCount: 1,
+        lastError: "provider failed",
+      });
+      expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("availableAt");
+      expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("producerClaimId");
+      expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("recoveryState");
     });
 
     it("keeps post-send failure evidence while recording the retry failure", async () => {
@@ -554,7 +639,7 @@ describe("delivery-queue storage", () => {
   });
 
   describe("failPendingDelivery", () => {
-    it("atomically writes the failed status and immutable reason into row and entry JSON", async () => {
+    it("deletes a rejected random delivery without retaining private detail", async () => {
       const id = await enqueueTextDelivery({
         channel: "slack",
         to: "C123",
@@ -570,8 +655,6 @@ describe("delivery-queue storage", () => {
         failPendingDelivery(
           {
             id,
-            expectedStatus: "pending",
-            lastError: "unsupported_enterprise_slack_delivery",
             entry,
           },
           tmpDir(),
@@ -579,8 +662,80 @@ describe("delivery-queue storage", () => {
       ).resolves.toEqual({ status: "failed" });
 
       expect(await loadPendingDelivery(id, tmpDir())).toBeNull();
-      expect(readStatus(id)).toBe("failed");
-      expect(readQueuedEntry(tmpDir(), id).lastError).toBe("unsupported_enterprise_slack_delivery");
+      expect(readStatus(id)).toBeUndefined();
+    });
+
+    it("deletes a rejected random delivery under its transient live claim", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "slack",
+        to: "C123",
+        payloads: [{ text: "private live payload" }],
+      });
+      const claimId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
+      if (!claimId) {
+        throw new Error("test invariant: random live delivery must acquire its transient claim");
+      }
+      const claimed = await loadPendingDelivery(id, tmpDir());
+      if (!claimed) {
+        throw new Error("test invariant: claimed random delivery must remain pending");
+      }
+
+      await expect(failPendingDelivery({ id, entry: claimed }, tmpDir())).resolves.toEqual({
+        status: "failed",
+      });
+
+      expect(readStatus(id)).toBeUndefined();
+    });
+
+    it("terminalizes a rejected stable row under its exact crash claim", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(1_000);
+        const artifact = path.join(
+          tmpDir(),
+          "delivery-queue-media",
+          "00000000-0000-4000-8000-000000000091.ogg",
+        );
+        await fs.mkdir(path.dirname(artifact), { recursive: true });
+        await fs.writeFile(artifact, "private rejected media");
+        const id = "stable-rejected-after-crash-claim";
+        await enqueueDeliveryOnce(
+          {
+            channel: "directchat",
+            to: "+1555",
+            payloads: [{ mediaUrl: artifact, audioAsVoice: true }],
+            requiresProducerClaim: true,
+          },
+          id,
+          tmpDir(),
+        );
+        const claimId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
+        if (!claimId) {
+          throw new Error("test invariant: stable rejection must own a producer claim");
+        }
+        vi.setSystemTime(60_000);
+        const claimed = await loadPendingDelivery(id, tmpDir());
+        if (!claimed) {
+          throw new Error("test invariant: claimed delivery must remain pending");
+        }
+
+        await expect(failPendingDelivery({ id, entry: claimed }, tmpDir())).resolves.toEqual({
+          status: "failed",
+        });
+
+        expect(readStatus(id)).toBe("failed");
+        expect(readQueuedEntry(tmpDir(), id)).toEqual({
+          id,
+          enqueuedAt: 60_000,
+          failedAt: 60_000,
+          retryCount: 0,
+          completionRetention: "permanent",
+          recoveryState: "completed_permanent",
+        });
+        await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("returns a typed no-op when a status race already moved the row", async () => {
@@ -599,19 +754,17 @@ describe("delivery-queue storage", () => {
         failPendingDelivery(
           {
             id,
-            expectedStatus: "pending",
-            lastError: "unsupported_enterprise_slack_delivery",
             entry,
           },
           tmpDir(),
         ),
       ).resolves.toEqual({ status: "not_pending" });
-      expect(readQueuedEntry(tmpDir(), id).lastError).toBeUndefined();
+      expect(readStatus(id)).toBeUndefined();
     });
   });
 
   describe("moveToFailed", () => {
-    it("moves entry to failed/ subdirectory", async () => {
+    it("deletes a failed random delivery", async () => {
       const id = await enqueueTextDelivery(
         {
           channel: "workspace",
@@ -624,16 +777,18 @@ describe("delivery-queue storage", () => {
       await moveToFailed(id, tmpDir());
 
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-      expect(readStatus(id)).toBe("failed");
+      expect(readStatus(id)).toBeUndefined();
     });
 
-    it("does not remove failed entries when a stale ack arrives", async () => {
-      const id = await enqueueTextDelivery(
+    it("retains a minimal stable fence that later producers cannot replace", async () => {
+      const id = "stable-failed-delivery";
+      await enqueueDeliveryOnce(
         {
           channel: "workspace",
           to: "#general",
-          payloads: [{ text: "hi" }],
+          payloads: [{ text: "private stable payload" }],
         },
+        id,
         tmpDir(),
       );
 
@@ -641,6 +796,21 @@ describe("delivery-queue storage", () => {
       await ackDelivery(id, tmpDir());
 
       expect(readStatus(id)).toBe("failed");
+      expect(readQueuedEntry(tmpDir(), id)).toEqual({
+        id,
+        enqueuedAt: expect.any(Number),
+        failedAt: expect.any(Number),
+        retryCount: 0,
+        completionRetention: "permanent",
+        recoveryState: "completed_permanent",
+      });
+      await expect(
+        enqueueDeliveryOnce(
+          { channel: "workspace", to: "#general", payloads: [{ text: "replacement" }] },
+          id,
+          tmpDir(),
+        ),
+      ).resolves.toEqual({ id, created: false });
     });
   });
 
@@ -654,14 +824,10 @@ describe("delivery-queue storage", () => {
       await expect(fs.stat(acked.artifact)).resolves.toBeDefined();
     });
 
-    it("releases artifacts after every terminal queue transition", async () => {
+    it("releases artifacts after ack and guarded failure transitions", async () => {
       const acked = await enqueueSpoolDelivery("1");
       await ackDelivery(acked.id, tmpDir());
       await expect(fs.stat(acked.artifact)).rejects.toThrow();
-
-      const moved = await enqueueSpoolDelivery("2");
-      await moveToFailed(moved.id, tmpDir());
-      await expect(fs.stat(moved.artifact)).rejects.toThrow();
 
       const guarded = await enqueueSpoolDelivery("3");
       const entry = await loadPendingDelivery(guarded.id, tmpDir());
@@ -671,8 +837,6 @@ describe("delivery-queue storage", () => {
       await failPendingDelivery(
         {
           id: guarded.id,
-          expectedStatus: "pending",
-          lastError: "terminal failure",
           entry,
         },
         tmpDir(),

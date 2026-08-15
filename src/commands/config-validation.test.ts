@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { createCompatibilityNotice } from "../plugins/status.test-fixtures.js";
-import { requireValidConfigSnapshot } from "./config-validation.js";
+import { requireValidConfig } from "./config-validation.js";
 
 const { readConfigFileSnapshot, buildPluginCompatibilitySnapshotNotices } = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -21,7 +21,7 @@ vi.mock("../plugins/status.js", () => ({
     `${notice.pluginId} ${notice.message}`,
 }));
 
-describe("requireValidConfigSnapshot", () => {
+describe("requireValidConfig", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -62,7 +62,7 @@ describe("requireValidConfigSnapshot", () => {
     createValidSnapshot();
     const runtime = createRuntime();
 
-    const config = await requireValidConfigSnapshot(runtime);
+    const config = await requireValidConfig(runtime);
 
     expect(config).toEqual({ plugins: {} });
     expect(runtime.error).not.toHaveBeenCalled();
@@ -75,9 +75,9 @@ describe("requireValidConfigSnapshot", () => {
     createValidSnapshot();
     const runtime = createRuntime();
 
-    await expect(
-      requireValidConfigSnapshot(runtime, { skipPluginValidation: true }),
-    ).resolves.toEqual({ plugins: {} });
+    await expect(requireValidConfig(runtime, { skipPluginValidation: true })).resolves.toEqual({
+      plugins: {},
+    });
 
     expect(readConfigFileSnapshot).toHaveBeenCalledWith({ skipPluginValidation: true });
   });
@@ -86,7 +86,7 @@ describe("requireValidConfigSnapshot", () => {
     createValidSnapshot();
     const runtime = createRuntime();
 
-    const config = await requireValidConfigSnapshot(runtime, {
+    const config = await requireValidConfig(runtime, {
       includeCompatibilityAdvisory: true,
     });
 
@@ -111,7 +111,7 @@ describe("requireValidConfigSnapshot", () => {
     });
     const runtime = createRuntime();
 
-    const config = await requireValidConfigSnapshot(runtime, {
+    const config = await requireValidConfig(runtime, {
       includeCompatibilityAdvisory: true,
     });
 
@@ -143,7 +143,7 @@ describe("requireValidConfigSnapshot", () => {
     });
     const runtime = createRuntime();
 
-    const config = await requireValidConfigSnapshot(runtime);
+    const config = await requireValidConfig(runtime);
 
     expect(config).toBeNull();
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("plugin not found"));
@@ -164,7 +164,7 @@ describe("requireValidConfigSnapshot", () => {
     });
     const runtime = createRuntime();
 
-    const config = await requireValidConfigSnapshot(runtime);
+    const config = await requireValidConfig(runtime);
 
     expect(config).toBeNull();
     expect(runtime.error).toHaveBeenCalledWith("Fix: openclaw doctor --fix");

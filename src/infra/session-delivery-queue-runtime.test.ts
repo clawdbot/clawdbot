@@ -1,7 +1,8 @@
 // Covers same-process scheduling for durable session delivery retries.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { drainPendingSessionDeliveries } from "./session-delivery-queue-recovery.js";
 import {
   schedulePendingSessionDeliveries,
   scheduleSessionDelivery,
@@ -9,13 +10,12 @@ import {
 } from "./session-delivery-queue-runtime.js";
 import { testing } from "./session-delivery-queue-runtime.test-support.js";
 import {
-  drainPendingSessionDeliveries,
   enqueueClaimedSessionDelivery,
   enqueueSessionDelivery,
   loadPendingSessionDelivery,
   loadPendingSessionDeliveries,
   releaseSessionDeliveryClaim,
-} from "./session-delivery-queue.js";
+} from "./session-delivery-queue-storage.js";
 
 const logger = {
   info: vi.fn(),
@@ -34,7 +34,7 @@ afterEach(() => {
 describe("session delivery queue runtime", () => {
   it("drains a newly scheduled durable entry", async () => {
     vi.useFakeTimers();
-    await withTempDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
         const id = await enqueueSessionDelivery({
           kind: "agentTurn",
@@ -59,7 +59,7 @@ describe("session delivery queue runtime", () => {
 
   it("retries a transient initial queue lookup failure", async () => {
     vi.useFakeTimers();
-    await withTempDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
         const id = await enqueueSessionDelivery({
           kind: "agentTurn",
@@ -90,7 +90,7 @@ describe("session delivery queue runtime", () => {
   it("holds a claimed entry until release then rearms it immediately", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-15T00:00:00.000Z"));
-    await withTempDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
         const { id } = await enqueueClaimedSessionDelivery(
           {
@@ -121,7 +121,7 @@ describe("session delivery queue runtime", () => {
 
   it("coalesces duplicate schedules while the same entry is draining", async () => {
     vi.useFakeTimers();
-    await withTempDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
         const id = await enqueueSessionDelivery({
           kind: "agentTurn",
@@ -157,7 +157,7 @@ describe("session delivery queue runtime", () => {
 
   it("retries a failed agent turn after durable backoff", async () => {
     vi.useFakeTimers();
-    await withTempDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
         const id = await enqueueSessionDelivery({
           kind: "agentTurn",
@@ -190,7 +190,7 @@ describe("session delivery queue runtime", () => {
   it("rearms a pending entry after a transient reload failure", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-15T00:00:00.000Z"));
-    await withTempDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
         const id = await enqueueSessionDelivery({
           kind: "agentTurn",
@@ -225,7 +225,7 @@ describe("session delivery queue runtime", () => {
 
   it("backs off after a drain-level failure leaves retry metadata unchanged", async () => {
     vi.useFakeTimers();
-    await withTempDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
         const id = await enqueueSessionDelivery({
           kind: "agentTurn",
@@ -256,7 +256,7 @@ describe("session delivery queue runtime", () => {
 
   it("backs off after a no-op drain leaves an immediately due row pending", async () => {
     vi.useFakeTimers();
-    await withTempDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
         const id = await enqueueSessionDelivery({
           kind: "agentTurn",
@@ -286,7 +286,7 @@ describe("session delivery queue runtime", () => {
 
   it("reschedules pending entries after the runtime owner restarts", async () => {
     vi.useFakeTimers();
-    await withTempDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
         await enqueueSessionDelivery({
           kind: "agentTurn",
@@ -312,7 +312,7 @@ describe("session delivery queue runtime", () => {
 
   it("retries a transient startup pending-entry scan failure", async () => {
     vi.useFakeTimers();
-    await withTempDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
+    await withTestDir({ prefix: "openclaw-session-delivery-runtime-" }, async (tempDir) => {
       await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
         await enqueueSessionDelivery({
           kind: "agentTurn",

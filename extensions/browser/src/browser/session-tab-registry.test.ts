@@ -90,6 +90,32 @@ describe("session tab registry", () => {
     );
   });
 
+  it("coalesces overlapping lifecycle and sweep cleanup for one volatile target", async () => {
+    trackSessionBrowserTab({
+      sessionKey: "agent:main:main",
+      targetId: "shared-tab",
+      baseUrl: "http://127.0.0.1:9222",
+      profile: "openclaw",
+      now: 1_000,
+    });
+    let finishClose!: () => void;
+    const closeGate = new Promise<void>((resolve) => {
+      finishClose = resolve;
+    });
+    const closeTab = vi.fn(async () => await closeGate);
+
+    const lifecycle = closeTrackedBrowserTabsForSessions({
+      sessionKeys: ["agent:main:main"],
+      closeTab,
+    });
+    const sweep = sweepTrackedBrowserTabs({ now: 10_000, idleMs: 1, closeTab });
+    finishClose();
+    const results = await Promise.all([lifecycle, sweep]);
+
+    expect(closeTab).toHaveBeenCalledOnce();
+    expect(results.reduce((total, closed) => total + closed, 0)).toBe(1);
+  });
+
   it("untracks a specific tab and never adopts unknown user tabs", async () => {
     trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "tab-a" });
     trackSessionBrowserTab({ sessionKey: "agent:main:main", targetId: "tab-b" });

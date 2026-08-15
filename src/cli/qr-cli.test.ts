@@ -17,9 +17,10 @@ const mocks = vi.hoisted(() => ({
     diagnostics: [] as string[],
   })),
   renderTerminal: vi.fn(async () => "ASCII-QR"),
-  issueDeviceBootstrapToken: vi.fn(async () => ({
+  issueDevicePairSetupBootstrapToken: vi.fn(async () => ({
     token: "bootstrap-123",
     expiresAtMs: 123,
+    setupId: "setup-123",
   })),
 }));
 const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
@@ -45,13 +46,13 @@ vi.mock("./command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
 }));
 vi.mock("../infra/device-bootstrap.js", () => ({
-  issueDeviceBootstrapToken: mocks.issueDeviceBootstrapToken,
+  issueDevicePairSetupBootstrapToken: mocks.issueDevicePairSetupBootstrapToken,
 }));
 const loadConfig = mocks.loadConfig;
 const runCommandWithTimeout = mocks.runCommandWithTimeout;
 const resolveCommandSecretRefsViaGateway = mocks.resolveCommandSecretRefsViaGateway;
 const renderTerminal = mocks.renderTerminal;
-const issueDeviceBootstrapToken = mocks.issueDeviceBootstrapToken;
+const issueDevicePairSetupBootstrapToken = mocks.issueDevicePairSetupBootstrapToken;
 
 const { registerQrCli } = await import("./qr-cli.js");
 
@@ -159,6 +160,7 @@ describe("registerQrCli", () => {
     const expected = encodePairingSetupCode({
       url,
       bootstrapToken: "bootstrap-123",
+      expiresAtMs: 123,
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
   }
@@ -209,11 +211,12 @@ describe("registerQrCli", () => {
     const expected = encodePairingSetupCode({
       url: "ws://127.0.0.1:18789",
       bootstrapToken: "bootstrap-123",
+      expiresAtMs: 123,
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
     expect(renderTerminal).not.toHaveBeenCalled();
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
-    expect(issueDeviceBootstrapToken).toHaveBeenCalledWith(
+    expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
       expect.objectContaining({ profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE }),
     );
   });
@@ -229,7 +232,7 @@ describe("registerQrCli", () => {
 
     await runQr(["--setup-code-only", "--limited"]);
 
-    expect(issueDeviceBootstrapToken).toHaveBeenCalledWith(
+    expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
       expect.objectContaining({
         profile: {
           roles: ["node", "operator"],
@@ -256,7 +259,7 @@ describe("registerQrCli", () => {
 
     await runQr(["--setup-code-only", "--voice-node"]);
 
-    expect(issueDeviceBootstrapToken).toHaveBeenCalledWith(
+    expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
       expect.objectContaining({ profile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE }),
     );
   });
@@ -271,9 +274,7 @@ describe("registerQrCli", () => {
     });
 
     await expect(runQr(["--setup-code-only", "--limited", "--voice-node"])).rejects.toThrow("exit");
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Error: Use either --limited or --voice-node, not both.",
-    );
+    expect(runtime.error).toHaveBeenCalledWith("Use either --limited or --voice-node, not both.");
   });
 
   it("renders ASCII QR by default", async () => {
@@ -287,7 +288,12 @@ describe("registerQrCli", () => {
 
     await runQr([]);
 
-    expect(renderTerminal).toHaveBeenCalledTimes(1);
+    const expected = encodePairingSetupCode({
+      url: "ws://127.0.0.1:18789",
+      bootstrapToken: "bootstrap-123",
+      expiresAtMs: 123,
+    });
+    expect(renderTerminal).toHaveBeenCalledWith(expected, { small: true });
     const output = runtimeLog.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
     expect(output).toContain("Pairing QR");
     expect(output).toContain("ASCII-QR");
@@ -325,7 +331,7 @@ describe("registerQrCli", () => {
     await runQr(["--setup-code-only"]);
 
     expectLoggedSetupCode("ws://192.168.1.8:18789");
-    expect(issueDeviceBootstrapToken).toHaveBeenCalledWith(
+    expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
       expect.objectContaining({ profile: PAIRING_SETUP_BOOTSTRAP_PROFILE }),
     );
     expectLimitedTransportWarning();
@@ -342,7 +348,7 @@ describe("registerQrCli", () => {
     await runQr(["--setup-code-only", "--url", "ws://10.0.2.2:18789"]);
 
     expectLoggedSetupCode("ws://10.0.2.2:18789");
-    expect(issueDeviceBootstrapToken).toHaveBeenCalledWith(
+    expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
       expect.objectContaining({ profile: PAIRING_SETUP_BOOTSTRAP_PROFILE }),
     );
     expectLimitedTransportWarning();
@@ -491,6 +497,7 @@ describe("registerQrCli", () => {
     const expected = encodePairingSetupCode({
       url: "wss://remote.example.com:444",
       bootstrapToken: "bootstrap-123",
+      expiresAtMs: 123,
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
     const request = resolveCommandSecretRefsViaGateway.mock.calls[0]?.[0] as
@@ -553,6 +560,7 @@ describe("registerQrCli", () => {
     const expected = encodePairingSetupCode({
       url: "wss://remote.example.com:444",
       bootstrapToken: "bootstrap-123",
+      expiresAtMs: 123,
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
   });

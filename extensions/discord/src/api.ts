@@ -1,5 +1,6 @@
 // Discord API module exposes the plugin public contract.
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -69,7 +70,7 @@ function formatRetryAfterSeconds(value: number | undefined): string | undefined 
   return `${rounded}s`;
 }
 
-function formatDiscordApiErrorText(text: string, response: Response): string | undefined {
+function formatDiscordApiErrorTextUntrusted(text: string, response: Response): string | undefined {
   const trimmed = text.trim();
   if (!trimmed) {
     return undefined;
@@ -97,6 +98,13 @@ function formatDiscordApiErrorText(text: string, response: Response): string | u
     parseDiscordRetryAfterBodySeconds(payload.retry_after),
   );
   return retryAfter ? `${message} (retry after ${retryAfter})` : message;
+}
+
+function formatDiscordApiErrorText(text: string, response: Response): string | undefined {
+  const detail = formatDiscordApiErrorTextUntrusted(text, response);
+  // Keep the final error boundary shared by JSON and text responses redacted;
+  // upstreams can reflect the request Authorization value through either shape.
+  return detail ? redactToolPayloadText(detail) : detail;
 }
 
 export class DiscordApiError extends Error {

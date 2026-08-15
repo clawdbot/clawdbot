@@ -1,22 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
-import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
+import { readPreparedServerMethodModelCatalog } from "./optional-model-catalog.js";
 import type { GatewayRequestContext } from "./types.js";
 
-describe("loadOptionalServerMethodModelCatalog", () => {
-  it("forwards the requested agent to the catalog owner", async () => {
+describe("readPreparedServerMethodModelCatalog", () => {
+  it("reads published startup facts without starting catalog discovery", async () => {
     const entries = [{ id: "work-only", name: "Work Model", provider: "work-provider" }];
-    const loadGatewayModelCatalog = vi.fn(async () => entries);
+    const loadGatewayModelCatalog = vi.fn();
+    const readPreparedGatewayModelCatalog = vi.fn(async () => entries);
     const context = {
       loadGatewayModelCatalog,
-      logGateway: { debug: vi.fn() },
+      readPreparedGatewayModelCatalog,
     } as unknown as GatewayRequestContext;
 
-    await expect(
-      loadOptionalServerMethodModelCatalog(context, "sessions.list", {
-        loadParams: { agentId: "work" },
-      }),
-    ).resolves.toEqual(entries);
+    await expect(readPreparedServerMethodModelCatalog(context, { agentId: "work" })).resolves.toBe(
+      entries,
+    );
 
-    expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "work" });
+    expect(readPreparedGatewayModelCatalog).toHaveBeenCalledWith({ agentId: "work" });
+    expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
   });
 });

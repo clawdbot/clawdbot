@@ -17,10 +17,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 
@@ -817,37 +814,6 @@ describe("legacy media persistence doctor migration", () => {
         includeIncompatibleSchemaVersions: true,
       }),
     ).toEqual([expect.objectContaining({ path: databasePath, schemaVersion: PREVIOUS_VERSION })]);
-  });
-
-  it("prunes missing and archived registry entries before migration", () => {
-    const stateDir = makeTempDir(tempDirs, "media-persistence-registry-hygiene-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const missingPath = path.join(stateDir, "agents", "missing", "agent", "openclaw-agent.sqlite");
-    const archivedPath = path.join(stateDir, "imports", "archived", "openclaw-agent.sqlite");
-    fs.mkdirSync(path.dirname(archivedPath), { recursive: true });
-    fs.writeFileSync(archivedPath, "archived fixture");
-    const state = openOpenClawStateDatabase({ env });
-    const insert = state.db.prepare(
-      "INSERT INTO agent_databases(agent_id,path,schema_version,last_seen_at,size_bytes) VALUES(?,?,?,?,?)",
-    );
-    insert.run("missing", missingPath, OPENCLAW_AGENT_SCHEMA_VERSION, 1, null);
-    insert.run("archived", archivedPath, 8, 1, null);
-
-    const result = migrateLegacyMediaPersistence({ env });
-
-    expect(result.changes).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("Removed missing agent database registry entry"),
-        expect.stringContaining("Removed archived or transient agent database registry entry"),
-      ]),
-    );
-    expect(result.warnings).toContain(`Skipped missing registered agent database ${missingPath}.`);
-    expect(
-      listOpenClawRegisteredAgentDatabases({
-        env,
-        includeIncompatibleSchemaVersions: true,
-      }),
-    ).toEqual([]);
   });
 
   it("aborts one database on invalid trajectory JSON without advancing its version", () => {

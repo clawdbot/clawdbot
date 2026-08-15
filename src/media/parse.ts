@@ -34,7 +34,7 @@ type SplitMediaFromOutputOptions = {
   extractMediaDirectives?: boolean;
 };
 
-const FILE_URL_PREFIX_RE = /^file:\/\//i;
+const FILE_URL_PREFIX_RE = /^file:(?:\/\/)?/i;
 
 /** Converts file URLs into plain local paths before downstream media validation. */
 function normalizeMediaSource(src: string): string {
@@ -647,7 +647,6 @@ export function splitMediaFromOutput(
           media.splice(mediaStartIndex, media.length - mediaStartIndex, fallback);
           hasValidMedia = true;
           foundMediaToken = true;
-          validCount = 1;
           invalidParts.length = 0;
         }
       }
@@ -658,7 +657,6 @@ export function splitMediaFromOutput(
           media.splice(mediaStartIndex, media.length - mediaStartIndex, spacedFallback);
           hasValidMedia = true;
           foundMediaToken = true;
-          validCount = 1;
           invalidParts.length = 0;
         }
       }
@@ -679,7 +677,7 @@ export function splitMediaFromOutput(
           lineSegments.push({ type: "text", text: beforeText });
         }
         pieces.length = 0;
-        for (const url of media.slice(mediaStartIndex, mediaStartIndex + validCount)) {
+        for (const url of media.slice(mediaStartIndex)) {
           lineSegments.push({ type: "media", url });
         }
         if (invalidParts.length > 0) {

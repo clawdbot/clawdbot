@@ -27,9 +27,9 @@
     <string name="stop_speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Arrêter de parler"</string>
     <string name="speak_reply" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Lire la dernière réponse"</string>
     <string name="speaking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"En train de parler"</string>
-    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Écoute en cours"</string>
+    <string name="listening" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Écoute"</string>
     <string name="connecting" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Connexion en cours"</string>
-    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Réflexion en cours"</string>
+    <string name="thinking" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Réflexion"</string>
     <string name="typing" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Saisie en cours"</string>
     <string name="sending" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Envoi en cours"</string>
     <string name="agent_working" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"L’agent travaille"</string>

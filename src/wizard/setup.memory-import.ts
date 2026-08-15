@@ -51,6 +51,7 @@ async function showSkipHint(prompter: WizardPrompter): Promise<void> {
 
 export async function runSetupMemoryImportStep(params: {
   config: OpenClawConfig;
+  agentId?: string;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   /** Recheck host authority at the copy boundary; onboarding intentionally omits this hook. */
@@ -58,7 +59,7 @@ export async function runSetupMemoryImportStep(params: {
   /** Observe completed provider attempts without changing onboarding behavior. */
   onProviderOutcome?: (outcome: MemoryImportProviderOutcome) => void;
 }): Promise<SetupMemoryImportOutcome> {
-  const agentId = resolveDefaultAgentId(params.config);
+  const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const providers = listMemoryMigrationProviders(params.config);
   if (providers.length === 0) {
     return { status: "nothing-to-import", providers: [] };

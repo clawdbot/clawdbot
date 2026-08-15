@@ -10,6 +10,7 @@ import {
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { runReefChannelLifecycle } from "./channel-lifecycle.js";
 import {
   ReefChannelConfigSchema,
@@ -267,6 +268,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           return;
         }
         await dispatchInboundDirectDm({
+          channelIngress: "unsupported",
           cfg: ctx.cfg,
           channel: "reef",
           channelLabel: "Reef",
@@ -324,6 +326,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           let resendText = "";
           let dispatchFailure: Error | undefined;
           await dispatchInboundDirectDm({
+            channelIngress: "unsupported",
             cfg: ctx.cfg,
             channel: "reef",
             channelLabel: "Reef",
@@ -438,14 +441,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
             }
             ctx.setStatus(
               state === "connected"
-                ? {
-                    accountId: "default",
-                    running: true,
-                    connected: true,
-                    lifecycle: "ready",
-                    lastConnectedAt: Date.now(),
-                    lastError: null,
-                  }
+                ? channelReadyPatch({ accountId: "default" })
                 : {
                     accountId: "default",
                     running: true,

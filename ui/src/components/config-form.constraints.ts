@@ -3,6 +3,8 @@ import {
   isJsonSchemaValueValid,
   jsonSchemaValuesEqual,
 } from "@openclaw/normalization-core/json-schema";
+import { asFiniteNumber as finiteNumber } from "@openclaw/normalization-core/number-coercion";
+import { arrayItemSchema, collectAllOfSchemas, combinedSchema } from "./config-form.array-items.ts";
 import { decimalRational } from "./config-form.numeric.ts";
 import { schemaType, type JsonSchema } from "./config-form.shared.ts";
 
@@ -15,10 +17,6 @@ export function isSupportedConfigValueValid(schema: JsonSchema, value: unknown):
 function ownPropertySchema(schema: JsonSchema, key: string): JsonSchema | undefined {
   const properties = schema.properties;
   return properties && Object.hasOwn(properties, key) ? properties[key] : undefined;
-}
-
-function finiteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function decimalPlaces(value: number): number {
@@ -112,27 +110,6 @@ type EffectiveNumericBound = {
   value?: number;
   exclusive: boolean;
 };
-
-function collectAllOfSchemas(schema: JsonSchema): JsonSchema[] {
-  const result: JsonSchema[] = [];
-  const pending = [schema];
-  const seen = new Set<JsonSchema>();
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (!current || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    result.push(current);
-    for (let index = (current.allOf?.length ?? 0) - 1; index >= 0; index -= 1) {
-      const entry = current.allOf?.[index];
-      if (entry) {
-        pending.push(entry);
-      }
-    }
-  }
-  return result;
-}
 
 function effectiveNumericBound(
   schemas: JsonSchema[],
@@ -242,16 +219,6 @@ export function objectPropertyKeys(schema: JsonSchema): string[] {
   );
 }
 
-function combinedSchema(candidates: JsonSchema[]): JsonSchema | undefined {
-  const base = candidates.find((candidate) => schemaType(candidate) !== undefined) ?? candidates[0];
-  return !base || candidates.length === 1
-    ? base
-    : {
-        ...base,
-        allOf: [...(base.allOf ?? []), ...candidates.filter((candidate) => candidate !== base)],
-      };
-}
-
 export function objectAdditionalPropertiesSchema(
   schema: JsonSchema,
 ): JsonSchema | false | undefined {
@@ -322,25 +289,6 @@ export function objectPropertySchema(schema: JsonSchema, key: string): JsonSchem
       .map((entry) => ownPropertySchema(entry, key))
       .filter((property): property is JsonSchema => property !== undefined),
   );
-}
-
-export function arrayItemSchema(schema: JsonSchema, index: number): JsonSchema | undefined {
-  const candidates: JsonSchema[] = [];
-  for (const entry of collectAllOfSchemas(schema)) {
-    if (Array.isArray(entry.items)) {
-      const item =
-        entry.items[index] ??
-        (entry.additionalItems && typeof entry.additionalItems === "object"
-          ? entry.additionalItems
-          : undefined);
-      if (item) {
-        candidates.push(item);
-      }
-    } else if (entry.items) {
-      candidates.push(entry.items);
-    }
-  }
-  return combinedSchema(candidates);
 }
 
 export function arrayConstraintCandidates(

@@ -28,6 +28,7 @@ describe("gateway role policy", () => {
     expect(isRoleAuthorizedForMethod("node", "plugin.surface.refresh")).toBe(false);
     expect(isRoleAuthorizedForMethod("node", "node.pluginTools.update")).toBe(true);
     expect(isRoleAuthorizedForMethod("node", "node.skills.update")).toBe(true);
+    expect(isRoleAuthorizedForMethod("node", "node.runnerInventory.update")).toBe(true);
     expect(isRoleAuthorizedForMethod("node", "node.pending.drain")).toBe(true);
     expect(isRoleAuthorizedForMethod("node", "system-event")).toBe(false);
     expect(isRoleAuthorizedForMethod("node", "status")).toBe(false);
@@ -37,6 +38,7 @@ describe("gateway role policy", () => {
     expect(isRoleAuthorizedForMethod("operator", "node.pluginSurface.refresh")).toBe(false);
     expect(isRoleAuthorizedForMethod("operator", "node.pluginTools.update")).toBe(false);
     expect(isRoleAuthorizedForMethod("operator", "node.skills.update")).toBe(false);
+    expect(isRoleAuthorizedForMethod("operator", "node.runnerInventory.update")).toBe(false);
     expect(isRoleAuthorizedForMethod("operator", "node.pending.drain")).toBe(false);
     expect(isRoleAuthorizedForMethod("operator", "node.event")).toBe(false);
   });

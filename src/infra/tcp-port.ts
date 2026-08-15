@@ -1,5 +1,5 @@
 // Parses strict TCP port inputs for config and CLI surfaces.
-import { parseStrictPositiveInteger } from "./parse-finite-number.js";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 
 // TCP port parsing is strict because config and CLI inputs both use this helper.
 export const MAX_TCP_PORT = 65_535;

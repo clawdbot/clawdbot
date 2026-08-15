@@ -70,11 +70,11 @@ struct DashboardGatewayCatalogTests {
         #expect(entries[0].name == "127.0.0.1")
     }
 
-    @Test @MainActor func `catalog maps only connected control state to healthy`() {
+    @Test @MainActor func `catalog maps live control health`() {
         #expect(DashboardGatewayCatalog.primaryHealth(for: .connected) == .ok)
         #expect(DashboardGatewayCatalog.primaryHealth(for: .disconnected) == .unknown)
         #expect(DashboardGatewayCatalog.primaryHealth(for: .connecting) == .unknown)
-        #expect(DashboardGatewayCatalog.primaryHealth(for: .degraded("offline")) == .unknown)
+        #expect(DashboardGatewayCatalog.primaryHealth(for: .degraded("offline")) == .error)
     }
 
     @Test func `local catalog does not deduplicate a retained remote profile`() throws {
@@ -142,7 +142,15 @@ struct DashboardGatewaysBridgeTests {
         #expect(controller._testTLSParams == params)
         #expect(DashboardWindowController.isExpectedTLSAuthority(
             host: "gateway.example",
+            port: 0,
+            dashboardURL: url))
+        #expect(DashboardWindowController.isExpectedTLSAuthority(
+            host: "gateway.example",
             port: 443,
+            dashboardURL: url))
+        #expect(!DashboardWindowController.isExpectedTLSAuthority(
+            host: "gateway.example",
+            port: 8443,
             dashboardURL: url))
         #expect(!DashboardWindowController.isExpectedTLSAuthority(
             host: "other.example",
@@ -173,6 +181,42 @@ struct DashboardGatewaysBridgeTests {
 @Suite(.serialized)
 @MainActor
 struct DashboardManagerGatewayTargetTests {
+    @Test func `background configuration keeps the gateway profile registry cold`() async {
+        var catalogReads = 0
+        let manager = DashboardManager._testMake(
+            observeGatewayChanges: true,
+            automaticGatewayProfileRefreshEnabled: false,
+            gatewayEntriesProvider: {
+                catalogReads += 1
+                return []
+            })
+
+        manager.configure(updater: DashboardGatewayTestUpdater())
+        NotificationCenter.default.post(name: MacGatewayProfileStore.didChangeNotification, object: nil)
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+
+        #expect(catalogReads == 0)
+        #expect(manager._testGatewayRefreshObserverCount() == 0)
+    }
+
+    @Test func `interactive configuration retains the gateway profile refresh`() async {
+        var catalogReads = 0
+        let manager = DashboardManager._testMake(
+            gatewayEntriesProvider: {
+                catalogReads += 1
+                return []
+            })
+
+        manager.configure(updater: DashboardGatewayTestUpdater())
+        for _ in 0..<20 where catalogReads == 0 {
+            await Task.yield()
+        }
+
+        #expect(catalogReads == 1)
+    }
+
     @Test func `primary window configuration retains resolved TLS policy`() async throws {
         let state = AppStateStore.shared
         let originalMode = state.connectionMode

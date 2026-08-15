@@ -11,7 +11,7 @@ import {
   type DiagnosticSecurityEvent,
 } from "../infra/diagnostic-events.js";
 import { collectMinimalProfileOverrideFindings } from "./audit-extra.sync.js";
-import { runSecurityAudit } from "./audit.js";
+import { runSecurityAuditCore } from "./audit.js";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
 
 const execFileAsync = promisify(execFile);
@@ -96,7 +96,7 @@ describe("security audit config basics", () => {
         "utf8",
       );
 
-      const report = await runSecurityAudit({
+      const report = await runSecurityAuditCore({
         config: {
           agents: {
             list: [
@@ -144,7 +144,7 @@ describe("security audit config basics", () => {
         Buffer.alloc(16 * 1024 * 1024 + 1, 0x20),
       );
 
-      const report = await runSecurityAudit({
+      const report = await runSecurityAuditCore({
         config: {
           agents: {
             list: [
@@ -182,7 +182,7 @@ describe("security audit config basics", () => {
   it("does not flag mcporter registry inspection when the registry is missing", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-mcporter-missing-"));
     try {
-      const report = await runSecurityAudit({
+      const report = await runSecurityAuditCore({
         config: {
           agents: {
             list: [
@@ -220,7 +220,7 @@ describe("security audit config basics", () => {
         "utf8",
       );
 
-      const report = await runSecurityAudit({
+      const report = await runSecurityAuditCore({
         config: {
           agents: {
             list: [
@@ -258,7 +258,7 @@ describe("security audit config basics", () => {
         "utf8",
       );
 
-      const report = await runSecurityAudit({
+      const report = await runSecurityAuditCore({
         config: { agents: { list: [{ id: "main", default: true }] } },
         sourceConfig: {},
         env: { OPENCLAW_STATE_DIR: stateDir },
@@ -284,7 +284,7 @@ describe("security audit config basics", () => {
         recursive: true,
       });
 
-      const report = await runSecurityAudit({
+      const report = await runSecurityAuditCore({
         config: {
           agents: {
             list: [
@@ -323,7 +323,7 @@ describe("security audit config basics", () => {
         await fs.mkdir(configDir, { recursive: true });
         await execFileAsync("mkfifo", [path.join(configDir, "mcporter.json")]);
 
-        const report = await runSecurityAudit({
+        const report = await runSecurityAuditCore({
           config: {
             agents: {
               list: [
@@ -369,7 +369,7 @@ describe("security audit config basics", () => {
       );
       await fs.symlink(targetPath, path.join(configDir, "mcporter.json"));
 
-      const report = await runSecurityAudit({
+      const report = await runSecurityAuditCore({
         config: {
           agents: {
             list: [
@@ -411,7 +411,7 @@ describe("security audit config basics", () => {
       await fs.writeFile(targetPath, Buffer.alloc(16 * 1024 * 1024 + 1, 0x20));
       await fs.symlink(targetPath, path.join(configDir, "mcporter.json"));
 
-      const report = await runSecurityAudit({
+      const report = await runSecurityAuditCore({
         config: {
           agents: {
             list: [
@@ -442,7 +442,7 @@ describe("security audit config basics", () => {
   it("does not flag per-agent skill allowlists when matching agents deny exec", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-mcporter-deny-"));
     try {
-      const report = await runSecurityAudit({
+      const report = await runSecurityAuditCore({
         config: {
           mcp: {
             servers: {
@@ -473,7 +473,7 @@ describe("security audit config basics", () => {
   it("audits inherited defaults independently of the default agent override", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-mcp-defaults-"));
     try {
-      const report = await runSecurityAudit({
+      const report = await runSecurityAuditCore({
         config: {
           mcp: {
             servers: {
@@ -513,7 +513,7 @@ describe("security audit config basics", () => {
   });
 
   it("suppresses configured accepted findings from the active audit report", async () => {
-    const report = await runSecurityAudit({
+    const report = await runSecurityAuditCore({
       config: {
         agents: { list: [{ id: "main", default: true }] },
         security: {
@@ -555,7 +555,7 @@ describe("security audit config basics", () => {
   });
 
   it("keeps unrelated dangerous flags active when one dangerous flag is suppressed", async () => {
-    const report = await runSecurityAudit({
+    const report = await runSecurityAuditCore({
       config: {
         agents: { entries: { main: { default: true } } },
         hooks: { gmail: { allowUnsafeExternalContent: true } },
@@ -605,9 +605,9 @@ describe("security audit config basics", () => {
     resetDiagnosticEventsForTest();
     const captured = captureSecurityEvents();
 
-    let report: Awaited<ReturnType<typeof runSecurityAudit>>;
+    let report: Awaited<ReturnType<typeof runSecurityAuditCore>>;
     try {
-      report = await runSecurityAudit({
+      report = await runSecurityAuditCore({
         config: { agents: { entries: { main: { default: true } } } },
         sourceConfig: {},
         env: {},

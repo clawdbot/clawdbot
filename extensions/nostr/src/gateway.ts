@@ -10,11 +10,13 @@ import {
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   chunkTextForOutbound,
   sanitizeAssistantVisibleText,
   stripMarkdown,
 } from "openclaw/plugin-sdk/text-chunking";
+import type { PluginRuntime } from "../runtime-api.js";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "./channel-api.js";
 import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
 import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
@@ -32,7 +34,6 @@ type NostrOutboundAdapter = Pick<
   sendText: NonNullable<ChannelOutboundAdapter["sendText"]>;
   sanitizeText: NonNullable<ChannelOutboundAdapter["sanitizeText"]>;
 };
-
 const activeBuses = new Map<string, NostrBusHandle>();
 const metricsSnapshots = new Map<string, MetricsSnapshot>();
 const ACCESS_GROUP_PREFIX = "accessGroup:";
@@ -97,6 +98,10 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
   if (!account.configured) {
     throw new Error("Nostr private key not configured");
   }
+  const channelRuntime = ctx.channelRuntime as PluginRuntime["channel"] | undefined;
+  if (!channelRuntime?.inbound?.buildContext) {
+    throw new Error("Nostr requires its registered channel runtime context builder");
+  }
 
   const runtime = getNostrRuntime();
   const pairing = createChannelPairingController({
@@ -104,7 +109,11 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
     channel: "nostr",
     accountId: account.accountId,
   });
-  const resolveInboundAccess = async (senderPubkey: string, rawBody: string) =>
+  const resolveInboundAccess = async (
+    senderPubkey: string,
+    rawBody: string,
+    contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
+  ) =>
     await resolveStableChannelMessageIngress({
       channelId: "nostr",
       accountId: account.accountId,
@@ -116,6 +125,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
         kind: "direct",
         id: senderPubkey,
       },
+      contextBinding,
       dmPolicy: account.config.dmPolicy ?? "pairing",
       allowFrom: account.config.allowFrom,
       command: runtime.channel.commands.shouldComputeCommandAuthorized(rawBody, ctx.cfg)
@@ -180,6 +190,16 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
 
           const { dispatchInboundDirectDm } = await import("./inbound-direct-dm-runtime.js");
           await dispatchInboundDirectDm({
+            channelRuntime,
+            resolveChannelIngress: async (contextBinding) => {
+              const exactAccess = await resolveInboundAccess(senderPubkey, text, contextBinding);
+              if (!exactAccess.senderAccess.allowed) {
+                throw new Error(
+                  `Nostr sender authorization changed before dispatch (${senderPubkey})`,
+                );
+              }
+              return exactAccess;
+            },
             cfg: ctx.cfg,
             channel: "nostr",
             channelLabel: "Nostr",
@@ -242,14 +262,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
           connectedRelays.add(normalizeRelayLifecycleKey(relay));
           // Treat >=1 connected relay as ready. This favors partial availability over quorum
           // fidelity; circuit-breaker health stays private to nostr-bus, so ready is not all-relays.
-          ctx.setStatus({
-            accountId: account.accountId,
-            connected: true,
-            lifecycle: "ready",
-            lastConnectedAt: Date.now(),
-            lastError: null,
-            terminalDisconnect: undefined,
-          });
+          ctx.setStatus(channelReadyPatch({ accountId: account.accountId }));
           ctx.log?.debug?.(`[${account.accountId}] Connected to relay: ${relay}`);
         },
         onDisconnect: (relay) => {

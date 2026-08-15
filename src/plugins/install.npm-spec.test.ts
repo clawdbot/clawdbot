@@ -16,7 +16,7 @@ import {
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
 } from "./managed-npm-retention.js";
-import { createSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
+import { createSyncSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 
 const runCommandWithTimeoutMock = vi.fn();
 const resolveOpenClawPackageRootSyncMock = vi.fn();
@@ -37,7 +37,7 @@ const { installPluginFromNpmPackArchive, installPluginFromNpmSpec, PLUGIN_INSTAL
 const { classifyNpmManagedOverrideCompatibilityError } =
   await import("./install-managed-npm-state.js");
 
-const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install-npm-spec");
+const suiteTempRootTracker = createSyncSuiteTempRootTracker("openclaw-plugin-install-npm-spec");
 let previousNpmGlobalConfig: string | undefined;
 let npmGlobalConfigPath: string;
 let npmPackArchiveInstallCase: {
@@ -222,6 +222,7 @@ function writeInstalledNpmPlugin(params: {
   packageName: string;
   version: string;
   pluginId?: string;
+  legacyPluginIds?: string[];
   indexJs?: string;
   extraDistFiles?: Record<string, string>;
   dependency?: { name: string; version: string };
@@ -253,6 +254,7 @@ function writeInstalledNpmPlugin(params: {
     JSON.stringify({
       id: params.pluginId ?? params.packageName,
       name: params.pluginId ?? params.packageName,
+      ...(params.legacyPluginIds ? { legacyPluginIds: params.legacyPluginIds } : {}),
       configSchema: { type: "object" },
     }),
     "utf-8",
@@ -300,6 +302,7 @@ type MockNpmPackage = {
   version: string;
   npmRoot: string;
   pluginId?: string;
+  legacyPluginIds?: string[];
   integrity?: string;
   shasum?: string;
   indexJs?: string;
@@ -1504,7 +1507,6 @@ describe("installPluginFromNpmSpec", () => {
       omitInstalledIntegrity: true,
       npmRoot,
       expectedDependencySpec: "1.0.0",
-      hoistedDependency: { name: "plain-crypto-js", version: "1.0.0" },
     };
     mockNpmViewAndInstallMany([
       fixture,
@@ -1519,6 +1521,7 @@ describe("installPluginFromNpmSpec", () => {
       throw new Error("expected npm mock implementation");
     }
     let managedInstallAttempts = 0;
+    const outsideDependencyDir = suiteTempRootTracker.makeTempDir();
     runCommandWithTimeoutMock.mockImplementation(async (argv, options) => {
       if (
         isManagedNpmInstallCommand(argv) &&
@@ -1530,7 +1533,19 @@ describe("installPluginFromNpmSpec", () => {
           fixture.omitInstalledIntegrity = false;
         }
       }
-      return await delegate(argv, options);
+      const commandResult = await delegate(argv, options);
+      if (
+        managedInstallAttempts === 2 &&
+        isManagedNpmInstallCommand(argv) &&
+        options?.cwd === npmProjectRoot
+      ) {
+        fs.symlinkSync(
+          outsideDependencyDir,
+          path.join(npmProjectRoot, "node_modules", "outside-dependency"),
+          "junction",
+        );
+      }
+      return commandResult;
     });
     let mutatedPeerAfterQuarantine = false;
     const addPeerAfterQuarantine = () => {
@@ -1565,7 +1580,8 @@ describe("installPluginFromNpmSpec", () => {
     if (result.ok) {
       return;
     }
-    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED);
+    expect(result.error).toContain("installed dependency scan found package outside install root");
     expect(managedInstallAttempts).toBe(2);
     expect(mutatedPeerAfterQuarantine).toBe(true);
     const quarantineParent = path.join(npmProjectRoot, "_openclaw-quarantined-npm-projects");
@@ -2008,7 +2024,7 @@ describe("installPluginFromNpmSpec", () => {
     expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
   });
 
-  it("blocks npm installs with denied hoisted transitive dependencies", async () => {
+  it("allows npm installs with formerly denied hoisted transitive dependencies", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
 
@@ -2027,14 +2043,7 @@ describe("installPluginFromNpmSpec", () => {
       logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result.error).toContain('blocked dependencies "plain-crypto-js" as package name');
-      expect(result.error.replaceAll("\\", "/")).toContain(
-        "node_modules/plain-crypto-js/package.json",
-      );
-    }
+    expect(result.ok).toBe(true);
   });
 
   it.runIf(process.platform !== "win32")(
@@ -3369,6 +3378,89 @@ describe("installPluginFromNpmSpec", () => {
       });
     },
   );
+
+  it("accepts a trusted manifest-declared plugin id replacement during update", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    mockNpmViewAndInstall({
+      spec: "@openclaw/fish-audio-speech@2026.8.1-beta.0",
+      packageName: "@openclaw/fish-audio-speech",
+      version: "2026.8.1-beta.0",
+      pluginId: "fish-audio-speech",
+      legacyPluginIds: ["fish-audio"],
+      npmRoot,
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/fish-audio-speech@2026.8.1-beta.0",
+      npmDir: npmRoot,
+      mode: "update",
+      expectedPluginId: "fish-audio",
+      expectedReplacementPluginId: "fish-audio-speech",
+      trustedSourceLinkedOfficialInstall: true,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.pluginId).toBe("fish-audio-speech");
+    }
+  });
+
+  it.each([
+    {
+      name: "untrusted source",
+      mode: "update" as const,
+      trustedSourceLinkedOfficialInstall: false,
+      expectedReplacementPluginId: "fish-audio-speech",
+      legacyPluginIds: ["fish-audio"],
+    },
+    {
+      name: "different catalog replacement",
+      mode: "update" as const,
+      trustedSourceLinkedOfficialInstall: true,
+      expectedReplacementPluginId: "different-plugin",
+      legacyPluginIds: ["fish-audio"],
+    },
+    {
+      name: "fresh install",
+      mode: "install" as const,
+      trustedSourceLinkedOfficialInstall: true,
+      expectedReplacementPluginId: "fish-audio-speech",
+      legacyPluginIds: ["fish-audio"],
+    },
+    {
+      name: "manifest without the legacy id",
+      mode: "update" as const,
+      trustedSourceLinkedOfficialInstall: true,
+      expectedReplacementPluginId: "fish-audio-speech",
+      legacyPluginIds: undefined,
+    },
+  ])("rejects a manifest id replacement for a $name", async (testCase) => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    mockNpmViewAndInstall({
+      spec: "@openclaw/fish-audio-speech@2026.8.1-beta.0",
+      packageName: "@openclaw/fish-audio-speech",
+      version: "2026.8.1-beta.0",
+      pluginId: "fish-audio-speech",
+      legacyPluginIds: testCase.legacyPluginIds,
+      npmRoot,
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/fish-audio-speech@2026.8.1-beta.0",
+      npmDir: npmRoot,
+      mode: testCase.mode,
+      expectedPluginId: "fish-audio",
+      expectedReplacementPluginId: testCase.expectedReplacementPluginId,
+      trustedSourceLinkedOfficialInstall: testCase.trustedSourceLinkedOfficialInstall,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.PLUGIN_ID_MISMATCH);
+    }
+  });
 
   it("rejects non-registry npm specs", async () => {
     const result = await installPluginFromNpmSpec({ spec: "github:evil/evil" });

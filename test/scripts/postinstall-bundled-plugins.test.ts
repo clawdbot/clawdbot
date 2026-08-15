@@ -68,6 +68,50 @@ async function writeBaileysMediaFile(packageRoot: string, text: string) {
 }
 
 describe("bundled plugin postinstall", () => {
+  it("resolves TypeScript from NODE_PATH during external modules-dir installs", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-postinstall-node-path-");
+    const scriptRoot = path.join(packageRoot, "scripts");
+    const externalModulesDir = path.join(packageRoot, "external-node-modules");
+    await fs.mkdir(path.join(scriptRoot, "lib"), { recursive: true });
+    await fs.mkdir(externalModulesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      '{"name":"openclaw","type":"module","version":"2026.7.2"}\n',
+    );
+    for (const relativePath of [
+      "scripts/postinstall-bundled-plugins.mjs",
+      "scripts/lib/package-dist-imports.mjs",
+      "scripts/lib/guard-inventory-utils.mjs",
+    ]) {
+      await fs.copyFile(
+        fileURLToPath(new URL(`../../${relativePath}`, import.meta.url)),
+        path.join(packageRoot, relativePath),
+      );
+    }
+    await fs.symlink(
+      fileURLToPath(new URL("../../node_modules/typescript", import.meta.url)),
+      path.join(externalModulesDir, "typescript"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(scriptRoot, "postinstall-bundled-plugins.mjs")],
+      {
+        cwd: packageRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_PATH: [externalModulesDir, process.env.NODE_PATH]
+            .filter(Boolean)
+            .join(path.delimiter),
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   it("recognizes direct invocation through symlinked temp prefixes", () => {
     const realpathSync = vi.fn((value: string) =>
       value.replace(/^\/var\/folders\//u, "/private/var/folders/"),

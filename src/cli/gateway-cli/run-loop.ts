@@ -684,8 +684,8 @@ export async function runGatewayLoop(params: {
               activeRestartSessionKeysAtDrainStart = collectActiveRestartSessionKeys();
               activeRestartSessionIdsAtDrainStart = collectActiveRestartSessionIds();
 
-              // Best-effort abort for compacting runs so long compaction operations
-              // don't hold session write locks across restart boundaries.
+              // Best-effort abort for compacting runs so transcript settlement does
+              // not remain pending across restart boundaries.
               if (activeRuns > 0) {
                 await markActiveMainSessionsForRestart("gateway restart drain");
                 abortEmbeddedAgentRun(undefined, { mode: "compacting", reason: "restart" });

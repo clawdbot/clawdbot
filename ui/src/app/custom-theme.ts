@@ -1,6 +1,7 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { asNullableRecord as readThemeRecord } from "@openclaw/normalization-core/record-coerce";
 // Control UI module implements custom theme behavior.
-import { normalizeOptionalString } from "../lib/string-coerce.ts";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 const TWEAKCN_HOSTS = new Set(["tweakcn.com", "www.tweakcn.com"]);
 const THEME_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -100,12 +101,6 @@ export type ImportedCustomTheme = {
 // Shape checks are intentionally shallow: normalizeStoredTokenMap and
 // resolveModeVar re-validate every token (presence, length, safe CSS) and
 // throw on anything off, so no schema library is needed at this boundary.
-function readThemeRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 type TweakcnThemeResolution = {
   sourceUrl: string;
   fetchUrl: string;

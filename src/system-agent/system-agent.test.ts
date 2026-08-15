@@ -1,20 +1,40 @@
 // OpenClaw tests cover main rescue and audit command behavior.
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentCommandDeps } from "./operations.js";
 import type { SystemAgentOverview } from "./overview.js";
 import { runSystemAgent, type RunSystemAgentOptions } from "./system-agent.js";
-import {
-  createSystemAgentTestRuntime,
-  createSystemAgentVerifiedInferenceTestFixture,
-} from "./system-agent.test-helpers.js";
+import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
+import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
+import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
+
+const inferenceMocks = vi.hoisted(() => ({
+  sharedVerifiedInference: undefined as SystemAgentVerifiedInferenceBinding | undefined,
+}));
 
 vi.mock("../plugins/providers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/providers.js")>()),
   resolveOwningPluginIdsForModelRefs: vi.fn(() => []),
   resolveOwningPluginIdsForProviderRef: vi.fn(() => []),
 }));
+
+vi.mock("./verified-inference.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./verified-inference.js")>();
+  return {
+    ...actual,
+    resolveSystemAgentVerifiedInferenceRoute: (
+      ...args: Parameters<typeof actual.resolveSystemAgentVerifiedInferenceRoute>
+    ) => {
+      // Ordinary runner cases share one immutable verified fixture. Distinct
+      // bindings still use the real resolver for route and apply-boundary drift.
+      if (args[0] === inferenceMocks.sharedVerifiedInference) {
+        return Promise.resolve(args[0].execution);
+      }
+      return actual.resolveSystemAgentVerifiedInferenceRoute(...args);
+    },
+  };
+});
 
 const overview: SystemAgentOverview = {
   defaultAgentId: "main",
@@ -71,10 +91,22 @@ function configSnapshot(config: OpenClawConfig) {
   };
 }
 
-async function createVerifiedRunOptions(deps: SystemAgentCommandDeps = {}) {
-  const fixture = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
+let sharedVerifiedFixture: Awaited<
+  ReturnType<typeof createSystemAgentVerifiedInferenceTestFixture>
+>;
+
+beforeAll(async () => {
+  sharedVerifiedFixture = await createSystemAgentVerifiedInferenceTestFixture(verifiedConfig);
+  inferenceMocks.sharedVerifiedInference = sharedVerifiedFixture.binding;
+});
+
+function createVerifiedRunOptions(
+  deps: SystemAgentCommandDeps = {},
+  options: { revalidate?: boolean } = {},
+) {
+  const fixture = sharedVerifiedFixture;
   return {
-    verifiedInference: fixture.binding,
+    verifiedInference: options.revalidate ? { ...fixture.binding } : fixture.binding,
     deps: {
       ...fixture.deps,
       readConfigFileSnapshot: vi.fn(async () => configSnapshot(verifiedConfig)) as never,
@@ -123,7 +155,7 @@ describe("runSystemAgent", () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     let runGatewayRestartCalls = 0;
     let onReadyCalls = 0;
-    const verified = await createVerifiedRunOptions({
+    const verified = createVerifiedRunOptions({
       runGatewayRestart: async () => {
         runGatewayRestartCalls += 1;
       },
@@ -156,6 +188,38 @@ describe("runSystemAgent", () => {
     );
   });
 
+  it.each([
+    "config set gateway.auth.token=very-secret",
+    "config set gateway.auth.token=very-secret please",
+    String.raw`config set gateway.auth.token\ very-secret please`,
+    "config set gateway.auth.tokenabcDEF123 please",
+    "config set gateway.auth.token_abcDEF123 please",
+    "config set gateway.auth.token$abcDEF123 please",
+    "config set-ref gateway.auth.tokenabcDEF123 env GATEWAY_TOKEN",
+    'config set gateway.auth["token:very-secret"] please',
+  ])(
+    "keeps malformed config write %s away from the one-shot assistant planner",
+    async (message) => {
+      const { runtime, lines } = createSystemAgentTestRuntime();
+      const planWithAssistant = vi.fn(async () => ({ command: "restart gateway" }));
+
+      await runSystemAgent(
+        {
+          ...createVerifiedRunOptions(),
+          message,
+          planWithAssistant,
+          ...systemAgentOverviewDeps,
+        },
+        runtime,
+      );
+
+      expect(planWithAssistant).not.toHaveBeenCalled();
+      expect(lines.join("\n")).toContain("Invalid config path");
+      expect(lines.join("\n")).not.toContain("very-secret");
+      expect(lines.join("\n")).not.toContain("abcDEF123");
+    },
+  );
+
   it("does not apply a one-shot plan after the verified route changes", async () => {
     const { runtime } = createSystemAgentTestRuntime();
     const changedConfig = {
@@ -166,10 +230,13 @@ describe("runSystemAgent", () => {
       .mockResolvedValueOnce(configSnapshot(verifiedConfig))
       .mockResolvedValue(configSnapshot(changedConfig));
     const runGatewayRestart = vi.fn(async () => {});
-    const verified = await createVerifiedRunOptions({
-      readConfigFileSnapshot: readConfigFileSnapshot as never,
-      runGatewayRestart,
-    });
+    const verified = createVerifiedRunOptions(
+      {
+        readConfigFileSnapshot: readConfigFileSnapshot as never,
+        runGatewayRestart,
+      },
+      { revalidate: true },
+    );
 
     await expect(
       runSystemAgent(
@@ -195,12 +262,16 @@ describe("runSystemAgent", () => {
       .fn()
       .mockResolvedValueOnce(configSnapshot(verifiedConfig))
       .mockResolvedValueOnce(configSnapshot(verifiedConfig))
+      .mockResolvedValueOnce(configSnapshot(verifiedConfig))
       .mockResolvedValue(configSnapshot(changedConfig));
     const runGatewayRestart = vi.fn(async () => {});
-    const verified = await createVerifiedRunOptions({
-      readConfigFileSnapshot: readConfigFileSnapshot as never,
-      runGatewayRestart,
-    });
+    const verified = createVerifiedRunOptions(
+      {
+        readConfigFileSnapshot: readConfigFileSnapshot as never,
+        runGatewayRestart,
+      },
+      { revalidate: true },
+    );
 
     await expect(
       runSystemAgent(
@@ -215,7 +286,7 @@ describe("runSystemAgent", () => {
       ),
     ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
 
-    expect(readConfigFileSnapshot).toHaveBeenCalledTimes(3);
+    expect(readConfigFileSnapshot).toHaveBeenCalledTimes(4);
     expect(runGatewayRestart).not.toHaveBeenCalled();
   });
 
@@ -223,7 +294,7 @@ describe("runSystemAgent", () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     let plannerCalls = 0;
     let onReadyCalls = 0;
-    const verified = await createVerifiedRunOptions();
+    const verified = createVerifiedRunOptions();
 
     await runSystemAgent(
       {
@@ -248,7 +319,7 @@ describe("runSystemAgent", () => {
 
   it("prints an explicit one-shot overview exactly once", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
-    const verified = await createVerifiedRunOptions();
+    const verified = createVerifiedRunOptions();
 
     await runSystemAgent(
       {
@@ -268,7 +339,7 @@ describe("runSystemAgent", () => {
     { name: "invalid command", plan: { command: "invent a new operation" } },
   ])("fails a fuzzy one-shot when inference returns $name", async ({ plan }) => {
     const { runtime } = createSystemAgentTestRuntime();
-    const verified = await createVerifiedRunOptions();
+    const verified = createVerifiedRunOptions();
 
     await expect(
       runSystemAgent(
@@ -285,7 +356,7 @@ describe("runSystemAgent", () => {
 
   it("prints a valid reply-only one-shot plan", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
-    const verified = await createVerifiedRunOptions();
+    const verified = createVerifiedRunOptions();
 
     await runSystemAgent(
       {
@@ -306,9 +377,12 @@ describe("runSystemAgent", () => {
       agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
     } satisfies OpenClawConfig;
     let currentConfig: OpenClawConfig = verifiedConfig;
-    const verified = await createVerifiedRunOptions({
-      readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
-    });
+    const verified = createVerifiedRunOptions(
+      {
+        readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
+      },
+      { revalidate: true },
+    );
 
     await expect(
       runSystemAgent(
@@ -331,7 +405,7 @@ describe("runSystemAgent", () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     let runInteractiveTuiCalls = 0;
     let onReadyCalls = 0;
-    const verified = await createVerifiedRunOptions();
+    const verified = createVerifiedRunOptions();
 
     await runSystemAgent(
       {
@@ -357,7 +431,7 @@ describe("runSystemAgent", () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     let loadOverviewCalls = 0;
     let runInteractiveTuiCalls = 0;
-    const verified = await createVerifiedRunOptions();
+    const verified = createVerifiedRunOptions();
 
     await runSystemAgent(
       {
@@ -396,7 +470,7 @@ describe("runSystemAgent", () => {
   ])("exits non-zero when $name", async ({ input, output, interactive }) => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     let runInteractiveTuiCalls = 0;
-    const verified = await createVerifiedRunOptions();
+    const verified = createVerifiedRunOptions();
 
     await expect(
       runSystemAgent(

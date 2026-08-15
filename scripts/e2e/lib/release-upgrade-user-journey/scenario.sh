@@ -50,7 +50,11 @@ candidate_version="$(
 if [ -n "${OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC:-}" ]; then
   BASELINE_SPEC="$OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC"
 else
-  BASELINE_SPEC="$(node scripts/lib/release-upgrade-baseline.mjs --candidate-version "$candidate_version")"
+  BASELINE_SPEC="$(
+    openclaw_e2e_run_script_entrypoint \
+      scripts/lib/release-upgrade-baseline \
+      --candidate-version "$candidate_version"
+  )"
 fi
 
 mock_pid=""

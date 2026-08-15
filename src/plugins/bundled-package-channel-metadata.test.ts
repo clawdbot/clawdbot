@@ -10,7 +10,7 @@ vi.mock("./bundled-dir.js", () => ({
 }));
 
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
-import { findBundledPackageChannelMetadata } from "./bundled-package-channel-metadata.js";
+import { listBundledPackageChannelMetadata } from "./bundled-package-channel-metadata.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
 const tempDirs: string[] = [];
@@ -72,7 +72,7 @@ describe("bundled package channel metadata", () => {
     );
     useBundledPluginsDir(extensionsRoot);
 
-    const matrix = findBundledPackageChannelMetadata("matrix");
+    const matrix = listBundledPackageChannelMetadata().find((channel) => channel.id === "matrix");
 
     expect(matrix?.doctorCapabilities).toEqual({
       dmAllowFromMode: "nestedOnly",
@@ -107,7 +107,9 @@ describe("bundled package channel metadata", () => {
       "export default {};\n",
       "utf8",
     );
-    expect(findBundledPackageChannelMetadata("matrix")?.label).toBe("Before");
+    expect(
+      listBundledPackageChannelMetadata().find((channel) => channel.id === "matrix")?.label,
+    ).toBe("Before");
 
     writeJsonFile(packagePath, {
       name: "@openclaw/matrix",
@@ -120,6 +122,8 @@ describe("bundled package channel metadata", () => {
     });
 
     clearPluginMetadataLifecycleCaches();
-    expect(findBundledPackageChannelMetadata("matrix")?.label).toBe("After");
+    expect(
+      listBundledPackageChannelMetadata().find((channel) => channel.id === "matrix")?.label,
+    ).toBe("After");
   });
 });

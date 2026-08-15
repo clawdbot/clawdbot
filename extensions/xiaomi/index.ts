@@ -16,7 +16,7 @@ import {
   normalizeApiKeyInput,
   normalizeOptionalSecretInput,
   type SecretInput,
-  upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -41,8 +41,6 @@ import {
 import { buildXiaomiSpeechProvider } from "./speech-provider.js";
 import { createMiMoThinkingWrapper } from "./stream.js";
 import { resolveMiMoThinkingProfile } from "./thinking.js";
-
-type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 
 const PAYG_FLAG_NAME = "--xiaomi-api-key";
 const PAYG_OPTION_KEY = "xiaomiApiKey";
@@ -118,15 +116,6 @@ async function resolveXiaomiCatalog(params: {
       discoveryApiKey: auth.discoveryApiKey,
     }),
   };
-}
-
-async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
-  const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
-  }
 }
 
 function buildXiaomiKeyMismatchMessage(params: {

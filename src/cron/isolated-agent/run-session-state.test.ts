@@ -20,6 +20,7 @@ import {
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
   resolveCronLifecycleRevisionIdentity,
+  syncCronSessionLiveSelection,
   type MutableCronSession,
 } from "./run-session-state.js";
 
@@ -64,6 +65,66 @@ function makeGuardedPersistSessionEntry(persistedStore: Record<string, SessionEn
     },
   );
 }
+
+describe("syncCronSessionLiveSelection", () => {
+  it("stamps a source-less live profile as a user pin", () => {
+    const entry = makeSessionEntry({
+      compactionCount: 4,
+      authProfileOverrideCompactionCount: 2,
+    });
+
+    syncCronSessionLiveSelection({
+      entry,
+      liveSelection: {
+        provider: "openai",
+        model: "gpt-5.4",
+        authProfileId: "openai:work",
+      },
+    });
+
+    expect(entry.authProfileOverride).toBe("openai:work");
+    expect(entry.authProfileOverrideSource).toBe("user");
+    expect(entry.authProfileOverrideCompactionCount).toBeUndefined();
+  });
+
+  it("stamps an automatic profile with the current compaction generation", () => {
+    const entry = makeSessionEntry({ compactionCount: 4 });
+
+    syncCronSessionLiveSelection({
+      entry,
+      liveSelection: {
+        provider: "openai",
+        model: "gpt-5.4",
+        authProfileId: "openai:fallback",
+        authProfileIdSource: "auto",
+      },
+    });
+
+    expect(entry.authProfileOverride).toBe("openai:fallback");
+    expect(entry.authProfileOverrideSource).toBe("auto");
+    expect(entry.authProfileOverrideCompactionCount).toBe(4);
+  });
+
+  it("retains legacy automatic provenance for the same live profile", () => {
+    const entry = makeSessionEntry({
+      compactionCount: 4,
+      authProfileOverride: "openai:fallback",
+      authProfileOverrideCompactionCount: 2,
+    });
+
+    syncCronSessionLiveSelection({
+      entry,
+      liveSelection: {
+        provider: "openai",
+        model: "gpt-5.4",
+        authProfileId: "openai:fallback",
+      },
+    });
+
+    expect(entry.authProfileOverrideSource).toBe("auto");
+    expect(entry.authProfileOverrideCompactionCount).toBe(4);
+  });
+});
 
 describe("createPersistCronSessionEntry", () => {
   it("commits a pending reset boundary with the guarded session row", async () => {
