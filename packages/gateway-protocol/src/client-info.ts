@@ -81,7 +81,6 @@ export type GatewayClientInfo = {
 export const GATEWAY_CLIENT_CAPS = {
   AGENT_KIND: "agent-kind",
   APPROVALS: "approvals",
-  CONTROL_UI_BUILD_MISMATCH: "control-ui-build-mismatch",
   EXEC_APPROVALS: "exec-approvals",
   INLINE_WIDGETS: "inline-widgets",
   RUN_TOOL_BINDINGS: "run-tool-bindings",

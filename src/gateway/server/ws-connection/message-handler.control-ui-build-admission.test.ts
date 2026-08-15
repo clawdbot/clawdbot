@@ -104,30 +104,13 @@ describe("Control UI build admission over WebSocket", () => {
     {
       name: "legacy same-origin document",
       clientBuildId: undefined,
-      clientCaps: [],
-      errorMessage: "protocol mismatch: Control UI updated; reload this page to continue",
-      errorDetails: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
     },
     {
-      name: "pre-capability stale same-origin document",
-      clientBuildId: "pre-capability-build",
-      clientCaps: [],
-      errorMessage: "protocol mismatch: Control UI updated; reload this page to continue",
-      errorDetails: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
-    },
-    {
-      name: "capable stale same-origin document",
+      name: "explicit stale same-origin document",
       clientBuildId: "stale-build",
-      clientCaps: ["control-ui-build-mismatch"],
-      errorMessage: "Control UI updated; reload this page to continue",
-      errorDetails: {
-        code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
-        gatewayBuildId: "gateway-build",
-        reloadRequired: true,
-      },
     },
   ])("rejects a $name before registration or RPC dispatch", async (testCase) => {
-    const { clientBuildId, clientCaps, errorMessage, errorDetails } = testCase;
+    const { clientBuildId } = testCase;
     const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await withDeadline(
       new Promise<void>((resolve) => {
@@ -230,7 +213,7 @@ describe("Control UI build admission over WebSocket", () => {
               ...(clientBuildId ? { buildId: clientBuildId } : {}),
             },
             role: "operator",
-            caps: clientCaps,
+            caps: [],
             auth: { token: "test-token" },
           },
         }),
@@ -241,9 +224,9 @@ describe("Control UI build admission over WebSocket", () => {
         ok: false,
         error: {
           code: ErrorCodes.UNAVAILABLE,
-          message: errorMessage,
+          message: "protocol mismatch: Control UI updated; reload this page to continue",
           retryable: false,
-          details: errorDetails,
+          details: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
         },
       });
       ws.send(

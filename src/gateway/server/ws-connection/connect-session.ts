@@ -3,10 +3,8 @@ import os from "node:os";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { WebSocket } from "ws";
 import {
-  GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
-  hasGatewayClientCap,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
@@ -325,29 +323,16 @@ export async function attachAuthenticatedGatewayConnect(
     requestOrigin,
   });
   if (controlUiBuildMismatch) {
-    // Build identity predates the exact mismatch error. Only this capability proves
-    // the frozen client can stop reconnecting and consume guarded auto-reload details.
-    const supportsExactBuildMismatch = hasGatewayClientCap(
-      connectParams.caps,
-      GATEWAY_CLIENT_CAPS.CONTROL_UI_BUILD_MISMATCH,
-    );
-    const reloadMessage = "Control UI updated; reload this page to continue";
-    const message = supportsExactBuildMismatch
-      ? reloadMessage
-      : `protocol mismatch: ${reloadMessage}`;
+    // Build identity predates this rejection. Frozen clients recognize the shipped
+    // protocol-mismatch signal and surface its literal reload guidance.
+    const message = "protocol mismatch: Control UI updated; reload this page to continue";
     markHandshakeFailure("control-ui-build-mismatch", {
       clientBuildId: controlUiBuildMismatch.clientBuildId ?? "legacy",
       gatewayBuildId: controlUiBuildMismatch.gatewayBuildId,
     });
     sendHandshakeErrorResponse(ErrorCodes.UNAVAILABLE, message, {
       retryable: false,
-      details: supportsExactBuildMismatch
-        ? {
-            code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
-            gatewayBuildId: controlUiBuildMismatch.gatewayBuildId,
-            reloadRequired: true,
-          }
-        : { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
+      details: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
     });
     logWsControl.warn(
       `control ui build rejected conn=${connId} clientBuild=${formatForLog(controlUiBuildMismatch.clientBuildId ?? "legacy")} gatewayBuild=${formatForLog(controlUiBuildMismatch.gatewayBuildId)}; reload required`,
