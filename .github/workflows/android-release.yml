@@ -58,54 +58,39 @@ jobs:
 
       - name: Setup Android toolchain
         uses: ./.github/actions/setup-android-toolchain
-      
-      - name: Materialize Fork Release Signing
+      - name: 物化 signing keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
           set -euo pipefail
+      
           signing_dir="apps/android/build/release-signing"
-          mkdir -p "${signing_dir}"
-          keystore_path="${GITHUB_WORKSPACE}/${signing_dir}/release.keystore"
-          
-          # 1. 生成签名文件
-          keytool -genkeypair -v \
-            -keystore "${keystore_path}" \
-            -keyalg RSA -keysize 2048 -validity 3650 \
-            -alias openclaw \
-            -storepass openclawpassword \
-            -keypass openclawpassword \
-            -dname "CN=OpenClawFork, O=Fork, C=CN"
-
-          # 2. 写入 gradle.properties 供 Gradle 读取
-          cat > "${signing_dir}/gradle.properties" << EOF
-          OPENCLAW_ANDROID_STORE_FILE=${keystore_path}
-          OPENCLAW_ANDROID_STORE_PASSWORD=openclawpassword
-          OPENCLAW_ANDROID_KEY_ALIAS=openclaw
-          OPENCLAW_ANDROID_KEY_PASSWORD=openclawpassword
-          EOF
-
-          mkdir -p ~/.gradle
-          cp "${signing_dir}/gradle.properties" ~/.gradle/gradle.properties
-
+          mkdir -p "$signing_dir"
+      
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$signing_dir/release.keystore"
+          chmod 600 "$signing_dir/release.keystore"
       - name: Build Android APK
+        env:
+          ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_STORE_FILE: ${{ github.workspace }}/apps/android/build/release-signing/release.keystore
+          ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-      
           mkdir -p dist
-      
           cd apps/android
       
           build_commit="$(git rev-parse HEAD)"
           build_timestamp="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
       
-          echo "Build commit: ${build_commit}"
-          echo "Build timestamp: ${build_timestamp}"
-      
-          ./gradlew \
-            -PopenclawBuildCommit="${build_commit}" \
-            -PopenclawBuildTimestamp="${build_timestamp}" \
+          ./gradlew --no-daemon \
+            -PopenclawBuildCommit="$build_commit" \
+            -PopenclawBuildTimestamp="$build_timestamp" \
             :app:assembleThirdPartyRelease
-      
-          cd "$GITHUB_WORKSPACE"
+
+      - name: 收集 Android APK
+        run: |
+          set -euo pipefail      
       
           mapfile -t apk_files < <(
             find apps/android/app/build/outputs/apk \
@@ -158,7 +143,7 @@ jobs:
               > OpenClaw-Android-SHA256SUMS.txt
           )
 
-      - name: Upload Signed Android APK
+      - name: Upload Android APK
         uses: actions/upload-artifact@v4
         with:
           name: OpenClaw-Android-Release
