@@ -625,6 +625,8 @@ export const CronAddParamsSchema = closedObject({
   sessionTarget: CronSessionTargetSchema,
   wakeMode: CronWakeModeSchema,
   payload: CronPayloadSchema,
+  /** Host-shell admission gate (same shape as CronJob / CronJobPatch). */
+  precheck: Type.Optional(CronJobPrecheckSchema),
   delivery: Type.Optional(CronDeliverySchema),
   failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
 });

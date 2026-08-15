@@ -228,15 +228,17 @@ export async function authorizeCronJobPrecheckCommand(params: {
       env: params.env ?? process.env,
       platform: process.platform,
     });
+    const isWindows = process.platform === "win32";
     const decision = evaluateSystemRunPolicy({
       security: "allowlist",
       ask: "off",
       analysisOk: allowlistEval.analysisOk,
       allowlistSatisfied: allowlistEval.allowlistSatisfied,
       approvalDecision: null,
-      isWindows: process.platform === "win32",
-      cmdInvocation: false,
-      shellWrapperInvocation: false,
+      isWindows,
+      // Precheck always launches via cmd.exe /d /s /c on Windows — classify as such.
+      cmdInvocation: isWindows,
+      shellWrapperInvocation: isWindows,
     });
     if (!decision.allowed) {
       return {
@@ -282,6 +284,7 @@ export async function authorizeCronJobPrecheckCommand(params: {
     platform: process.platform,
   });
 
+  const isWindows = process.platform === "win32";
   const decision = evaluateSystemRunPolicy({
     security: hostSecurity,
     ask: "off",
@@ -289,9 +292,10 @@ export async function authorizeCronJobPrecheckCommand(params: {
     allowlistSatisfied: hostSecurity === "allowlist" ? allowlistEval.allowlistSatisfied : true,
     durableApprovalSatisfied: false,
     approvalDecision: null,
-    isWindows: process.platform === "win32",
-    cmdInvocation: false,
-    shellWrapperInvocation: false,
+    isWindows,
+    // Precheck always launches via cmd.exe /d /s /c on Windows — classify as such.
+    cmdInvocation: isWindows,
+    shellWrapperInvocation: isWindows,
   });
 
   if (!decision.allowed) {
