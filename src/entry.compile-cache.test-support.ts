@@ -5,8 +5,6 @@ import "./entry.compile-cache.js";
 type CompileCacheParams = {
   env?: NodeJS.ProcessEnv;
   installRoot: string;
-  nodeVersion?: string;
-  platform?: NodeJS.Platform;
 };
 
 type CompileCacheRespawnPlan = {
@@ -25,7 +23,6 @@ type CompileCacheTestApi = {
     installRoot: string;
     argv?: string[];
     compileCacheDir?: string;
-    nodeVersion?: string;
     platform?: NodeJS.Platform;
   }): CompileCacheRespawnPlan | undefined;
   isSourceCheckoutInstallRoot(installRoot: string): boolean;

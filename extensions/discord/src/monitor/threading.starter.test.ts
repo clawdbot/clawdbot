@@ -1,10 +1,11 @@
 // Discord tests cover threading.starter plugin behavior.
 import { StickerFormatType } from "discord-api-types/v10";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ChannelType, type Client } from "../internal/discord.js";
-import { resetDiscordThreadStarterCacheForTest, resolveDiscordThreadStarter } from "./threading.js";
+import { resolveDiscordThreadStarter } from "./threading.js";
 
 type ResolvedThreadStarter = NonNullable<Awaited<ReturnType<typeof resolveDiscordThreadStarter>>>;
+let threadIdIndex = 0;
 
 type ThreadStarterRestMessage = {
   content?: string | null;
@@ -92,23 +93,20 @@ async function resolveStarter(params: {
 }) {
   const get = vi.fn().mockResolvedValue(params.message);
   const client = { rest: { get } } as unknown as Client;
+  const threadId = `thread-${++threadIdIndex}`;
 
   const result = await resolveDiscordThreadStarter({
-    channel: { id: "thread-1" },
+    channel: { id: threadId },
     client,
     parentId: params.parentId ?? "parent-1",
     parentType: params.parentType ?? ChannelType.GuildText,
     resolveTimestampMs: params.resolveTimestampMs ?? (() => undefined),
   });
 
-  return { get, result };
+  return { get, result, threadId };
 }
 
 describe("resolveDiscordThreadStarter", () => {
-  beforeEach(() => {
-    resetDiscordThreadStarterCacheForTest();
-  });
-
   it("falls back to joined embed title and description when content is empty", async () => {
     const { result } = await resolveStarter({
       message: createStarterMessage({
@@ -277,7 +275,7 @@ describe("resolveDiscordThreadStarter", () => {
   });
 
   it("uses the thread id as the message channel id for forum parents", async () => {
-    const { get, result } = await resolveStarter({
+    const { get, result, threadId } = await resolveStarter({
       message: createStarterMessage({ content: "starter content" }),
       parentId: undefined,
       parentType: ChannelType.GuildForum,
@@ -285,7 +283,7 @@ describe("resolveDiscordThreadStarter", () => {
 
     expect(requireThreadStarter(result).text).toBe("starter content");
     expect(get).toHaveBeenCalledTimes(1);
-    expect(firstRestGetPath(get)).toBe("/channels/thread-1/messages/thread-1");
+    expect(firstRestGetPath(get)).toBe(`/channels/${threadId}/messages/${threadId}`);
   });
 
   it("returns null when content, embeds, and snapshots are all empty", async () => {

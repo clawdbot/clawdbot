@@ -580,7 +580,6 @@ openclaw-chat-pane {
   max-width: min(260px, calc(100vw - 24px));
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
 }
 
 .chat-pane__sharing-menu--capped::part(menu) {

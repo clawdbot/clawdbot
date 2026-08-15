@@ -3,19 +3,26 @@ import {
   getRequiredHookHandler,
   registerHookHandlersForTest,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { ClawdbotConfig, OpenClawPluginApi } from "../runtime-api.js";
 import { registerFeishuSubagentHooks } from "../subagent-hooks-api.js";
 import { handleFeishuSubagentSpawning } from "./subagent-hooks.js";
-import {
-  createFeishuThreadBindingManager,
-  testing as threadBindingTesting,
-} from "./thread-bindings.js";
+import { createFeishuThreadBindingManager as createFeishuThreadBindingManagerImpl } from "./thread-bindings.js";
 
 const baseConfig: ClawdbotConfig = {
   session: { mainKey: "main", scope: "per-sender" },
   channels: { feishu: {} },
 };
+
+type FeishuThreadBindingManager = ReturnType<typeof createFeishuThreadBindingManagerImpl>;
+let trackedManager: FeishuThreadBindingManager | null = null;
+
+function createFeishuThreadBindingManager(
+  params: Parameters<typeof createFeishuThreadBindingManagerImpl>[0],
+): FeishuThreadBindingManager {
+  trackedManager = createFeishuThreadBindingManagerImpl(params);
+  return trackedManager;
+}
 
 function registerHandlersForTest(config: Record<string, unknown> = baseConfig) {
   return registerHookHandlersForTest<OpenClawPluginApi>({
@@ -87,8 +94,9 @@ function managedHookFixture() {
 }
 
 describe("feishu subagent hook handlers", () => {
-  beforeEach(() => {
-    threadBindingTesting.resetFeishuThreadBindingsForTests();
+  afterEach(() => {
+    trackedManager?.stop();
+    trackedManager = null;
   });
 
   it("binds a Feishu DM conversation on subagent_spawning", async () => {
