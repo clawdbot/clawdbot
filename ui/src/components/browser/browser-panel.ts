@@ -186,6 +186,8 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
       this.dockLayout.setOpen(true);
       if (normalizedRequestedUrl) {
         void this.browserPanelController.openUrl(normalizedRequestedUrl, { newTab: true });
+      } else if (detail?.newTab === true) {
+        this.browserPanelController.beginNewTab();
       } else if (!wasOpen) {
         void this.browserPanelController.refreshAll();
       }

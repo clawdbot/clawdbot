@@ -4,7 +4,10 @@ import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { icons } from "../../../components/icons.ts";
 import { renderPanelTabStrip } from "../../../components/panel-tab-strip.ts";
-import type { PanelToggleElement } from "../../../components/panel-toggle-contract.ts";
+import {
+  BROWSER_PANEL_TOGGLE_EVENT,
+  type PanelToggleElement,
+} from "../../../components/panel-toggle-contract.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
@@ -151,6 +154,14 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           const slot = event.detail.item.value;
           if (slot) {
             this.callbacks?.openSlot(slot);
+            if (slot === "browser" && openSlots.has(slot)) {
+              this.deliverPanelEvent(
+                slot,
+                new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, {
+                  detail: { open: true, newTab: true },
+                }),
+              );
+            }
           }
         }}
       >
@@ -164,7 +175,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           ${icons.plus}
         </button>
         ${this.panelTypes()
-          .filter((type) => !openSlots.has(type.slot))
+          .filter((type) => type.slot === "browser" || !openSlots.has(type.slot))
           .map(
             (type) => html`
               <wa-dropdown-item

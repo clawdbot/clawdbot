@@ -22,6 +22,7 @@ export type TerminalPanelToggleDetail = {
 
 export type BrowserPanelToggleDetail = {
   dock?: "bottom" | "right";
+  newTab?: boolean;
   open?: boolean;
   url?: string;
 };

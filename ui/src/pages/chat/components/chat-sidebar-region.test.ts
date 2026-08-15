@@ -137,6 +137,30 @@ describe("chat sidebar region", () => {
     expect(root(region).querySelector("wa-dropdown-item[disabled]")).toBeNull();
   });
 
+  it("keeps Browser available in the plus menu to start another browser tab", async () => {
+    const handleToggleRequest = vi.fn();
+    const region = await createRegion(openSlot({ columns: [] }, "browser"));
+    region.panelTemplates = {
+      browser: html`<div .handleToggleRequest=${handleToggleRequest}>Browser panel</div>`,
+    };
+    await region.updateComplete;
+    const browserItem = Array.from(
+      root(region).querySelectorAll<HTMLElement>("wa-dropdown-item"),
+    ).find((item) => Reflect.get(item, "value") === "browser");
+
+    browserItem?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        detail: { item: { value: "browser" } },
+      }),
+    );
+
+    expect(region.callbacks?.openSlot).toHaveBeenCalledWith("browser");
+    expect(handleToggleRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ detail: { open: true, newTab: true } }),
+    );
+  });
+
   it("opens into a type selector instead of restoring a previous tab", async () => {
     const region = await createRegion({ columns: [], open: true, expanded: false });
     const selector = root(region).querySelector(".side-panel-empty--selector");

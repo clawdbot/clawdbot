@@ -185,4 +185,26 @@ describe("normalizeBrowserUrlDraft", () => {
 
     expect(panel.browserPanelIsOpen()).toBe(true);
   });
+
+  it("starts a fresh browser tab draft when an embedded panel receives a new-tab request", async () => {
+    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
+      available: boolean;
+      embedded: boolean;
+      handleToggleRequest: (event: Event) => void;
+      renderRoot: ShadowRoot;
+      updateComplete: Promise<unknown>;
+    };
+    panel.available = true;
+    panel.embedded = true;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    panel.handleToggleRequest(
+      new CustomEvent("openclaw:browser-toggle", { detail: { open: true, newTab: true } }),
+    );
+    await panel.updateComplete;
+    await Promise.resolve();
+
+    expect(panel.renderRoot.activeElement).toBe(panel.renderRoot.querySelector(".bp-url"));
+  });
 });
