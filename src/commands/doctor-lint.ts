@@ -2,7 +2,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
-import { readConfigFileSnapshot } from "../config/config.js";
+import { createConfigIO, readConfigFileSnapshot } from "../config/config.js";
+import { maybeLoadDotEnvForConfig } from "../config/io.read-helpers.js";
+import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { registerBundledHealthChecks } from "../flows/bundled-health-checks.js";
 import { configValidationIssuesToHealthFindings } from "../flows/doctor-core-checks.js";
 import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
@@ -37,6 +39,12 @@ interface DoctorLintCliOptions {
   readonly includeAllChecks?: boolean;
 }
 
+type DoctorLintStateView = {
+  pluginMetadataEnv: NodeJS.ProcessEnv;
+  readConfigSnapshot: () => ReturnType<typeof readConfigFileSnapshot>;
+  sourceEnv: NodeJS.ProcessEnv;
+};
+
 function detectMode(opts: DoctorLintCliOptions): "human" | "json" {
   if (opts.json === true) {
     return "json";
@@ -59,15 +67,18 @@ export async function runDoctorLintCli(
   if (sevMin === null) {
     throw new Error("Invalid --severity-min value. Expected one of: info, warning, error.");
   }
-  return await withReadOnlyPluginStateSnapshot(() => executeDoctorLint(runtime, opts, sevMin));
+  return await withReadOnlyPluginStateSnapshot((stateView) =>
+    executeDoctorLint(runtime, opts, sevMin, stateView),
+  );
 }
 
 async function executeDoctorLint(
   runtime: RuntimeEnv,
   opts: DoctorLintCliOptions,
   sevMin: NonNullable<ReturnType<typeof parseHealthFindingSeverity>>,
+  stateView: DoctorLintStateView,
 ): Promise<number> {
-  const snapshot = await readConfigFileSnapshot({ observe: false });
+  const snapshot = await stateView.readConfigSnapshot();
   if (snapshot.exists && !snapshot.valid) {
     const findings = configValidationIssuesToHealthFindings(snapshot.issues);
     const visible = findings.filter((finding) => healthFindingMeetsSeverity(finding, sevMin));
@@ -94,10 +105,15 @@ async function executeDoctorLint(
     runtime,
     cfg: snapshot.config,
     cwd: defaultAgentId ? resolveAgentWorkspaceDir(snapshot.config, defaultAgentId) : process.cwd(),
+    env: stateView.sourceEnv,
     allowExecSecretRefs: opts.allowExec === true,
     ...(snapshot.path !== undefined ? { configPath: snapshot.path } : {}),
   };
-  registerBundledHealthChecks({ cfg: snapshot.config, cwd: ctx.cwd });
+  registerBundledHealthChecks({
+    cfg: snapshot.config,
+    cwd: ctx.cwd,
+    env: stateView.pluginMetadataEnv,
+  });
   const registeredExtensionChecks = listExtensionHealthChecksForDoctor([]);
   const onlyRegisteredExtensionChecks =
     opts.onlyIds !== undefined &&
@@ -149,10 +165,18 @@ async function executeDoctorLint(
   return exitCodeFromFindings(result.findings, sevMin);
 }
 
-async function withReadOnlyPluginStateSnapshot<T>(run: () => Promise<T>): Promise<T> {
-  const sourceDatabasePath = resolveOpenClawStateSqlitePath(process.env);
+async function withReadOnlyPluginStateSnapshot<T>(
+  run: (stateView: DoctorLintStateView) => Promise<T>,
+): Promise<T> {
+  maybeLoadDotEnvForConfig(process.env);
+  const sourceEnv = { ...process.env };
+  const sourceDatabasePath = resolveOpenClawStateSqlitePath(sourceEnv);
   if (!fs.existsSync(sourceDatabasePath)) {
-    return await run();
+    return await run({
+      sourceEnv,
+      pluginMetadataEnv: sourceEnv,
+      readConfigSnapshot: () => readConfigFileSnapshot({ observe: false }),
+    });
   }
   const prepared = prepareSqliteReadOnlyLocationSync(sourceDatabasePath);
   try {
@@ -168,8 +192,27 @@ async function withReadOnlyPluginStateSnapshot<T>(run: () => Promise<T>): Promis
         fs.renameSync(sourcePath, `${privateDatabasePath}${suffix}`);
       }
     }
-    const installRoots = resolvePluginInstallRoots(process.env);
-    return await withPluginInstallRoots({ ...installRoots, stateDir: privateStateDir }, run);
+    const sourceConfigPath = resolveConfigPath(sourceEnv, resolveStateDir(sourceEnv));
+    const privateEnv = {
+      ...sourceEnv,
+      OPENCLAW_CONFIG_PATH: sourceConfigPath,
+      OPENCLAW_STATE_DIR: privateStateDir,
+    };
+    const configIo = createConfigIO({
+      env: privateEnv,
+      configPath: sourceConfigPath,
+      observe: false,
+    });
+    const installRoots = resolvePluginInstallRoots(sourceEnv);
+    return await withPluginInstallRoots(
+      { ...installRoots, stateDir: privateStateDir },
+      async () =>
+        await run({
+          sourceEnv,
+          pluginMetadataEnv: privateEnv,
+          readConfigSnapshot: () => configIo.readConfigFileSnapshot(),
+        }),
+    );
   } finally {
     if (!prepared.cleanup()) {
       throw new Error("Temporary doctor lint state snapshot cleanup did not complete.");

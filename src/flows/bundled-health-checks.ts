@@ -26,7 +26,12 @@ type BundledHealthApi = {
 };
 
 /** Registers bundled health checks that are explicitly enabled by config and owner policy. */
-export function registerBundledHealthChecks(params: { cfg: OpenClawConfig; cwd?: string }): void {
+export function registerBundledHealthChecks(params: {
+  cfg: OpenClawConfig;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+}): void {
+  const env = params.env ?? process.env;
   let manifestRegistry: PluginManifestRegistry | undefined;
   loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
     dirName: "memory-core",
@@ -37,7 +42,7 @@ export function registerBundledHealthChecks(params: { cfg: OpenClawConfig; cwd?:
       manifestRegistry ??= loadPluginManifestRegistryForPluginRegistry({
         config: params.cfg,
         workspaceDir: params.cwd,
-        env: process.env,
+        env,
       });
       return resolveProviderPolicySurface(provider, { manifestRegistry })
         ?.inspectEmbeddingProviderSetup;

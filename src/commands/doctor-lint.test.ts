@@ -11,14 +11,20 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { runDoctorLintCli } from "./doctor-lint.js";
 
 const mocks = vi.hoisted(() => ({
+  createConfigIO: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   resolveDoctorContributionHealthChecks: vi.fn(),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/config.js")>()),
-  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  mocks.createConfigIO.mockImplementation(actual.createConfigIO);
+  return {
+    ...actual,
+    createConfigIO: (...args: unknown[]) => mocks.createConfigIO(...args),
+    readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+  };
+});
 vi.mock("../flows/doctor-health-contributions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../flows/doctor-health-contributions.js")>();
   mocks.resolveDoctorContributionHealthChecks.mockImplementation(
@@ -346,7 +352,14 @@ describe("runDoctorLintCli", () => {
     database.close();
     const sourceContents = fs.readFileSync(databasePath);
     const sourceEntries = fs.readdirSync(path.dirname(databasePath)).toSorted();
+    let configIoEnv: NodeJS.ProcessEnv | undefined;
     let observedPluginStateDir: string | undefined;
+    mocks.createConfigIO.mockImplementationOnce((options: { env?: NodeJS.ProcessEnv }) => {
+      configIoEnv = options.env;
+      return {
+        readConfigFileSnapshot: () => mocks.readConfigFileSnapshot(),
+      };
+    });
     mocks.readConfigFileSnapshot.mockImplementation(async () => {
       observedPluginStateDir = resolveActivePluginInstallRoots(process.env).stateDir;
       expect(observedPluginStateDir).not.toBe(stateDir);
@@ -369,7 +382,8 @@ describe("runDoctorLintCli", () => {
       id: "plugin/example/read-only-state",
       kind: "plugin",
       description: "read-only state fixture",
-      async detect() {
+      async detect(ctx) {
+        expect(ctx.env?.OPENCLAW_STATE_DIR).toBe(stateDir);
         return [];
       },
     });
@@ -383,6 +397,8 @@ describe("runDoctorLintCli", () => {
         }),
       ).resolves.toBe(0);
       expect(observedPluginStateDir).toBeDefined();
+      expect(configIoEnv?.OPENCLAW_STATE_DIR).toBe(observedPluginStateDir);
+      expect(configIoEnv?.OPENCLAW_CONFIG_PATH).toBe(path.join(stateDir, "openclaw.json"));
       expect(resolveActivePluginInstallRoots(process.env).stateDir).toBe(stateDir);
       expect(fs.readFileSync(databasePath)).toEqual(sourceContents);
       expect(fs.readdirSync(path.dirname(databasePath)).toSorted()).toEqual(sourceEntries);
