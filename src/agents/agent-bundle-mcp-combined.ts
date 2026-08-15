@@ -205,15 +205,15 @@ export function createCombinedSessionMcpRuntime(params: {
         part.markUsed();
       }
     },
-    async callTool(serverName, toolName, input) {
-      return await (await ownerForServer(serverName)).callTool(serverName, toolName, input);
+    async callTool(serverName, toolName, input, options) {
+      return (await ownerForServer(serverName)).callTool(serverName, toolName, input, options);
     },
-    async listTools(serverName, requestParams) {
+    async listTools(serverName, requestParams, options) {
       const owner = await ownerForServer(serverName);
       if (!owner.listTools) {
         throw new Error(`bundle-mcp server "${serverName}" does not support listTools`);
       }
-      return await owner.listTools(serverName, requestParams);
+      return await owner.listTools(serverName, requestParams, options);
     },
     async listResources(serverName, options) {
       const owner = await ownerForServer(serverName);
@@ -229,26 +229,26 @@ export function createCombinedSessionMcpRuntime(params: {
       }
       return await owner.readResource(serverName, uri, options);
     },
-    async listResourceTemplates(serverName, requestParams) {
+    async listResourceTemplates(serverName, requestParams, options) {
       const owner = await ownerForServer(serverName);
       if (!owner.listResourceTemplates) {
         throw new Error(`bundle-mcp server "${serverName}" does not support listResourceTemplates`);
       }
-      return await owner.listResourceTemplates(serverName, requestParams);
+      return await owner.listResourceTemplates(serverName, requestParams, options);
     },
-    async listPrompts(serverName) {
+    async listPrompts(serverName, options) {
       const owner = await ownerForServer(serverName);
       if (!owner.listPrompts) {
         throw new Error(`bundle-mcp server "${serverName}" does not support listPrompts`);
       }
-      return await owner.listPrompts(serverName);
+      return await owner.listPrompts(serverName, options);
     },
-    async getPrompt(serverName, name, args) {
+    async getPrompt(serverName, name, args, options) {
       const owner = await ownerForServer(serverName);
       if (!owner.getPrompt) {
         throw new Error(`bundle-mcp server "${serverName}" does not support getPrompt`);
       }
-      return await owner.getPrompt(serverName, name, args);
+      return await owner.getPrompt(serverName, name, args, options);
     },
     async dispose() {
       await Promise.allSettled(parts.map((part) => part.dispose()));

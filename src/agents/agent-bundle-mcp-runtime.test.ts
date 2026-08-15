@@ -106,6 +106,7 @@ async function writeListToolsMcpServer(params: {
   callToolJsonRpcError?: boolean;
   callToolJsonRpcErrorCode?: number;
   callToolResult?: CallToolResult;
+  callToolDelayMs?: number;
   resourcePageDelayMs?: number;
   resourcePageCount?: number;
   resourcePageCursors?: Array<string | null>;
@@ -150,6 +151,7 @@ const callToolIsError = ${params.callToolIsError === true};
 const callToolJsonRpcError = ${params.callToolJsonRpcError === true};
 const callToolJsonRpcErrorCode = ${params.callToolJsonRpcErrorCode ?? -32000};
 const callToolResult = ${JSON.stringify(params.callToolResult)};
+const callToolDelayMs = ${params.callToolDelayMs ?? 0};
 const resourcePageDelayMs = ${params.resourcePageDelayMs ?? 0};
 const resourcePageCount = ${params.resourcePageCount ?? 1};
 const resourcePageCursors = ${JSON.stringify(params.resourcePageCursors)};
@@ -297,16 +299,18 @@ function handle(message) {
       });
       return;
     }
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: {
-        isError: callToolIsError,
-        ...(callToolResult ?? {
-          content: [{ type: "text", text: callToolIsError ? "tool failed" : "tool ok" }],
-        }),
-      },
-    });
+    setTimeout(() => {
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          isError: callToolIsError,
+          ...(callToolResult ?? {
+            content: [{ type: "text", text: callToolIsError ? "tool failed" : "tool ok" }],
+          }),
+        },
+      });
+    }, callToolDelayMs);
   }
   if (message.method === "resources/list") {
     resourceListCount += 1;
@@ -2089,6 +2093,69 @@ process.on("SIGINT", shutdown);`,
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("cancels materialized MCP calls without pausing the healthy server", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-caller-cancel-");
+    const serverPath = path.join(tempDir, "caller-cancel.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      callToolDelayMs: 250,
+    });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-caller-cancel",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            healthy: { command: process.execPath, args: [serverPath] },
+          },
+        },
+      },
+    });
+    const materialized = await materializeBundleMcpToolsForRun({ runtime });
+    const tool = expectDefined(
+      materialized.tools.find((entry) => entry.name === "healthy__slow_tool"),
+      "materialized MCP tool",
+    );
+
+    try {
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        const controller = new AbortController();
+        const pending = tool.execute(`cancel-${attempt}`, {}, controller.signal);
+        await waitForPredicate(
+          async () =>
+            ((await fs.readFile(logPath, "utf8").catch(() => "")).match(/recv tools\/call/g)
+              ?.length ?? 0) >= attempt,
+          `MCP call ${attempt} to reach the server`,
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+        controller.abort(new Error(`turn cancelled ${attempt}`));
+        await expect(pending).rejects.toThrow(`turn cancelled ${attempt}`);
+      }
+
+      await waitForPredicate(
+        async () =>
+          ((await fs.readFile(logPath, "utf8").catch(() => "")).match(
+            /recv notifications\/cancelled/g,
+          )?.length ?? 0) === 3,
+        "three MCP cancellation notifications",
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+      );
+      await expect(runtime.callTool("healthy", "slow_tool", {})).resolves.toMatchObject({
+        isError: false,
+      });
+      await materialized.dispose();
+      await runtime.dispose();
+      expect(
+        (await fs.readFile(logPath, "utf8")).match(/recv notifications\/cancelled/g) ?? [],
+      ).toHaveLength(3);
+    } finally {
+      await materialized.dispose();
+      await runtime.dispose();
     }
   });
 

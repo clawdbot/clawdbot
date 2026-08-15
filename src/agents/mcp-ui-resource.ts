@@ -226,6 +226,7 @@ export async function fetchMcpAppView(params: {
   authorizeAppInteraction?: () => boolean | Promise<boolean>;
   readOnly?: true;
   viewId?: string;
+  signal?: AbortSignal;
 }): Promise<
   | {
       viewId: string;
@@ -252,6 +253,7 @@ export async function fetchMcpAppView(params: {
     const result = asRecord(
       await params.runtime.readResource(params.serverName, params.uiResourceUri, {
         failureBackoff: "ignore",
+        signal: params.signal,
       }),
     );
     const contents = Array.isArray(result?.contents) ? result.contents : [];
@@ -269,6 +271,7 @@ export async function fetchMcpAppView(params: {
     const listingUiMeta = contentUiMeta
       ? undefined
       : await resolveListingUiMeta(params.runtime, params.serverName, params.uiResourceUri);
+    params.signal?.throwIfAborted();
     const uiMeta = contentUiMeta ?? listingUiMeta;
     const csp = normalizeMcpAppCsp(uiMeta?.csp);
     const permissions = normalizePermissions(uiMeta?.permissions);
@@ -326,6 +329,7 @@ export async function fetchMcpAppView(params: {
     };
   } catch (error) {
     releaseRuntimeLease?.();
+    params.signal?.throwIfAborted();
     logWarn(
       `mcp-app: failed to prepare ${params.uiResourceUri} from "${params.serverName}": ${formatErrorMessage(error)}`,
     );

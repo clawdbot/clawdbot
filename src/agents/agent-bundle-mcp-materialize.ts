@@ -465,46 +465,47 @@ export async function materializeBundleMcpToolsForRun(params: {
   reservedToolNames?: Iterable<string>;
   disposeRuntime?: () => Promise<void>;
 }): Promise<BundleMcpToolRuntime> {
+  const runtime = params.runtime;
   let disposed = false;
   let allowedAppToolsByServer: Map<string, Set<string>> | undefined;
-  const releaseLease = params.runtime.acquireLease?.();
-  params.runtime.markUsed();
+  const releaseLease = runtime.acquireLease?.();
+  runtime.markUsed();
   let catalog;
   try {
-    catalog = await params.runtime.getCatalog();
+    catalog = await runtime.getCatalog();
   } catch (error) {
-    await releaseRuntimeLease({ runtime: params.runtime, releaseLease });
+    await releaseRuntimeLease({ runtime, releaseLease });
     throw error;
   }
   const reservedToolNames = params.reservedToolNames
     ? Array.from(params.reservedToolNames)
     : undefined;
-  const materializedCatalog = mergeMcpConnectCatalog(catalog, params.runtime.requesterConnect);
+  const materializedCatalog = mergeMcpConnectCatalog(catalog, runtime.requesterConnect);
   const tools = buildBundleMcpToolsFromCatalog({
     catalog: materializedCatalog,
     reservedToolNames,
-    createExecute: (tool) => async (toolCallId: string, input: unknown) => {
+    createExecute: (tool) => async (toolCallId: string, input: unknown, signal?: AbortSignal) => {
       if (!Object.hasOwn(catalog.servers, tool.serverName)) {
-        const connect = params.runtime.requesterConnect?.createExecute(tool.serverName);
+        const connect = runtime.requesterConnect?.createExecute(tool.serverName);
         if (connect) {
           return await connect(toolCallId, input);
         }
       }
-      params.runtime.markUsed();
-      const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
+      runtime.markUsed();
+      const result = await runtime.callTool(tool.serverName, tool.toolName, input, { signal });
       const agentResult = toAgentToolResult({
         serverName: tool.serverName,
         toolName: tool.toolName,
         result,
       });
       // Requester-scoped servers never mint app views (outlive run; no requester id on view boundary).
-      const scopedServer = params.runtime.isRequesterScopedServer?.(tool.serverName) === true;
-      if (params.runtime.mcpAppsEnabled && tool.uiResourceUri && !scopedServer) {
+      const scopedServer = runtime.isRequesterScopedServer?.(tool.serverName) === true;
+      if (runtime.mcpAppsEnabled && tool.uiResourceUri && !scopedServer) {
         const allowedAppToolNames = allowedAppToolsByServer
           ? (allowedAppToolsByServer.get(tool.serverName) ?? new Set<string>())
           : undefined;
         const view = await fetchMcpAppView({
-          runtime: params.runtime,
+          runtime,
           agentId: params.agentId,
           serverName: tool.serverName,
           toolName: tool.toolName,
@@ -512,13 +513,14 @@ export async function materializeBundleMcpToolsForRun(params: {
           toolCallId,
           toolInput: input,
           toolResult: result,
+          signal,
           ...(allowedAppToolNames ? { allowedAppToolNames } : {}),
         });
         if (view) {
           (agentResult.details as Record<string, unknown>).mcpAppPreview = buildMcpAppCanvasPayload(
             {
               ...view,
-              ...(params.runtime.sessionKey ? { originSessionKey: params.runtime.sessionKey } : {}),
+              ...(runtime.sessionKey ? { originSessionKey: runtime.sessionKey } : {}),
               ...(result["_meta"] !== undefined ? { resultMetaState: "unavailable" as const } : {}),
             },
           );
@@ -526,46 +528,48 @@ export async function materializeBundleMcpToolsForRun(params: {
       }
       return agentResult;
     },
-    createResourceListExecute: params.runtime.listResources
-      ? (serverName) => async () => {
-          params.runtime.markUsed();
+    createResourceListExecute: runtime.listResources
+      ? (serverName) => async (_toolCallId, _input, signal) => {
+          runtime.markUsed();
           return toJsonAgentToolResult({
             serverName,
             operation: "resources_list",
-            value: await params.runtime.listResources?.(serverName),
+            value: await runtime.listResources?.(serverName, { signal }),
           });
         }
       : undefined,
-    createResourceReadExecute: params.runtime.readResource
-      ? (serverName) => async (_toolCallId: string, input: unknown) => {
-          params.runtime.markUsed();
+    createResourceReadExecute: runtime.readResource
+      ? (serverName) => async (_toolCallId: string, input: unknown, signal?: AbortSignal) => {
+          const uri = requireStringArg(input, "uri");
+          runtime.markUsed();
           return toJsonAgentToolResult({
             serverName,
             operation: "resources_read",
-            value: await params.runtime.readResource?.(serverName, requireStringArg(input, "uri")),
+            value: await runtime.readResource?.(serverName, uri, { signal }),
           });
         }
       : undefined,
-    createPromptListExecute: params.runtime.listPrompts
-      ? (serverName) => async () => {
-          params.runtime.markUsed();
+    createPromptListExecute: runtime.listPrompts
+      ? (serverName) => async (_toolCallId, _input, signal) => {
+          runtime.markUsed();
           return toJsonAgentToolResult({
             serverName,
             operation: "prompts_list",
-            value: await params.runtime.listPrompts?.(serverName),
+            value: await runtime.listPrompts?.(serverName, { signal }),
           });
         }
       : undefined,
-    createPromptGetExecute: params.runtime.getPrompt
-      ? (serverName) => async (_toolCallId: string, input: unknown) => {
-          params.runtime.markUsed();
+    createPromptGetExecute: runtime.getPrompt
+      ? (serverName) => async (_toolCallId: string, input: unknown, signal?: AbortSignal) => {
+          runtime.markUsed();
           return toJsonAgentToolResult({
             serverName,
             operation: "prompts_get",
-            value: await params.runtime.getPrompt?.(
+            value: await runtime.getPrompt?.(
               serverName,
               requireStringArg(input, "name"),
               optionalStringRecordArg(input, "arguments"),
+              { signal },
             ),
           });
         }
@@ -603,7 +607,7 @@ export async function materializeBundleMcpToolsForRun(params: {
       disposed = true;
       // Reset/delete can request retirement while this run owns the lease.
       // Dispose as soon as the final run, view, or request lease has released.
-      await releaseRuntimeLease({ runtime: params.runtime, releaseLease });
+      await releaseRuntimeLease({ runtime, releaseLease });
       await params.disposeRuntime?.();
     },
   };
