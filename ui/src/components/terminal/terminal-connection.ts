@@ -97,6 +97,16 @@ export class TerminalOpenTimeoutError extends Error {
   }
 }
 
+/** A session opened without the fields the protocol guarantees cannot drive a
+ *  tab label or uploads. Fail here so the panel reports an unusable gateway
+ *  instead of surfacing a downstream TypeError as its only content. */
+export class TerminalOpenUnusableSessionError extends Error {
+  constructor(field: string) {
+    super(`terminal open response is missing ${field}`);
+    this.name = "TerminalOpenUnusableSessionError";
+  }
+}
+
 function isTerminalOpenRequestTimeout(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -215,6 +225,14 @@ export class TerminalConnection {
         this.forceReconnect("terminal open watchdog timeout");
       }
       throw new TerminalOpenTimeoutError(error);
+    }
+    // The request is a bare cast over the wire payload, so the protocol's
+    // required fields are checked once here rather than by every consumer.
+    if (typeof result.sessionId !== "string" || result.sessionId.length === 0) {
+      throw new TerminalOpenUnusableSessionError("sessionId");
+    }
+    if (typeof result.shell !== "string" || result.shell.length === 0) {
+      throw new TerminalOpenUnusableSessionError("shell");
     }
     const stream = this.setStream(result.sessionId, sink, {
       seqMode: "unknown",

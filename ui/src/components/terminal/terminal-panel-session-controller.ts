@@ -5,6 +5,7 @@ import {
   TerminalConnection,
   type TerminalGatewayClient,
   TerminalOpenTimeoutError,
+  TerminalOpenUnusableSessionError,
   type TerminalSessionInfo,
 } from "./terminal-connection.ts";
 import {
@@ -558,9 +559,11 @@ export class TerminalPanelSessionController
       this.host.terminalPanelErrorText =
         error instanceof TerminalOpenTimeoutError
           ? t("terminal.connectionTimedOut")
-          : error instanceof Error
-            ? error.message
-            : String(error);
+          : error instanceof TerminalOpenUnusableSessionError
+            ? t("terminal.unavailable")
+            : error instanceof Error
+              ? error.message
+              : String(error);
       return true;
     } finally {
       if (this.isTerminalOperationCurrent(operation)) {
