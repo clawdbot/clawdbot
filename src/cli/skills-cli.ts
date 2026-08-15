@@ -25,6 +25,7 @@ import {
 } from "../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveSkillStatusEntry, type SkillStatusReport } from "../skills/discovery/status.js";
 import {
   installSkillFromClawHub,
   readVerifiedClawHubSkillSourceUrl,
@@ -80,9 +81,6 @@ export type {
 } from "./skills-cli.format.js";
 export { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
-type SkillStatusReport = Awaited<
-  ReturnType<(typeof import("../skills/discovery/status.js"))["buildWorkspaceSkillStatus"]>
->;
 type ResolvedClawHubSkillVerificationTarget = Extract<
   Awaited<ReturnType<typeof resolveClawHubSkillVerificationTarget>>,
   { ok: true }
@@ -1236,16 +1234,22 @@ export function registerSkillsCli(program: Command) {
     .option("--json", "Output as JSON", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
     .action(async (name: string, opts: { json?: boolean; agent?: string }, command: Command) => {
+      let skillFound = false;
       await runSkillsAction(
-        (report) =>
-          formatSkillInfo(report, name, {
+        (report) => {
+          skillFound = resolveSkillStatusEntry(report.skills, name) !== null;
+          return formatSkillInfo(report, name, {
             ...opts,
             json: hasJsonOutput(opts),
-          }),
+          });
+        },
         {
           agentId: resolveAgentOption(command, opts),
         },
       );
+      if (!skillFound) {
+        defaultRuntime.exit(1);
+      }
     });
 
   skills
