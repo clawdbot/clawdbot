@@ -1,7 +1,7 @@
 /** Shared export-command parsing and target session resolution helpers. */
 import {
   resolveDefaultSessionStorePath,
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
@@ -64,7 +64,7 @@ export function resolveExportCommandSessionTarget(
   }
 
   try {
-    const sessionFile = resolveSessionFilePath(
+    const sessionFile = resolveSessionFilePathCore(
       sessionId,
       entry,
       resolveSessionFilePathOptions({ agentId: targetAgentId, storePath }),

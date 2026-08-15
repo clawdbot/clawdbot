@@ -1,11 +1,45 @@
 ---
 name: openclaw-pr-maintainer
-description: Use immediately for any pasted OpenClaw GitHub issue or PR URL/number, and for OpenClaw issue/PR review, triage, duplicate search, opener identity/who wrote it, author account age/activity, comments, labels, close, land, or maintainer evidence checks.
+description: Use immediately for any pasted OpenClaw GitHub issue or PR URL/number, and for OpenClaw issue/PR orchestration, review, triage, root-cause repair, PR rewrite, duplicate search, opener identity/who wrote it, author account age/activity, comments, labels, close, land, or maintainer evidence checks.
 ---
 
 # OpenClaw PR Maintainer
 
-Use this skill for maintainer-facing GitHub workflow, not for ordinary code changes.
+Use this skill for maintainer-facing GitHub workflows and the code changes needed to finish an authorized issue/PR repair; do not invoke it for unrelated ordinary code changes.
+
+## The lead owns the outcome; collaboration workers extend it
+
+The original, user-facing root conversation is the authoritative lead. It may personally inspect, implement, test, operate Git/GitHub, and land, or delegate bounded independent lanes when parallelism, isolation, specialist judgment, or independent challenge creates concrete value. Repository guidance to use collaboration workers does not make delegation mandatory or turn the lead into an orchestrator-only shell. Do not create separate Codex app/project threads. A subagent assigned an execution role performs its scoped operations itself, retains personal inspection/verdict duties, and must not recursively delegate away ownership unless the root explicitly authorizes and tracks that nested lane.
+
+- **Lead:** own the critical path and complete maintainer outcome; decompose and prioritize the request; personally perform serial, tightly coupled, or readily lead-owned work; assign disjoint independent lanes when useful; enforce authorization, owner, security, source-trust, proof, and publication gates; coordinate resources and shared-checkout safety; inspect actual repository/runtime effects; redirect, stop, replace, or correct weak work; dispatch independent verification; resolve routine decisions from existing authority and evidence; and communicate outcomes.
+- **Workers:** perform bounded hands-on investigation, implementation, proof, review, or delivery assignments when delegation creates concrete value. Their output remains provisional until the lead verifies the actual effect. Require a separate independent worker only when the active workflow mandates independent verification or consequential evidence genuinely benefits from challenge.
+- Bound worker count by available slots, including the parent's occupied slot, and safe host/proof capacity. Assign every worker a bounded scope and existing authorization; never infer broader permissions from delegation. Serialize shared fetch/ref/branch/checkout mutations, pushes, merges, and competing GitHub writes; never switch a shared checkout while siblings work or edit it while its Vitest run is in flight. Preserve unfinished worker state during reassignment. Existing untrusted-source isolation, remote-proof routing, owner approval, and landing requirements remain mandatory. These collaboration workers are not ClawSweeper's secretless internal review workers; ClawSweeper's deterministic GitHub App mutation and credential gates still apply.
+- Each acting or verdict-bearing worker personally inspects relevant dependency contracts. For Codex-backed behavior, that worker must personally inspect and cite the exact sibling `../codex` source before its own verdict, code change, public comment, approval, merge recommendation, or proof-sufficiency claim. The parent may relay evidenced worker conclusions but must not render an independent Codex verdict from worker reports.
+- Supervise workers through actual effects: shared-checkout diffs, processes, tests, runtime behavior, explicit checkpoints, terminal results, and liveness. Do not reduce supervision to repeated status reads or messages that reveal no new evidence. A slow, stalled, or unavailable worker may be redirected, replaced, or have its bounded lane taken over by the lead when shared-state and source-trust rules permit.
+
+## Execute explicit full-authority work unattended
+
+When the user explicitly requests unattended or autonomous execution with full authority, that instruction is standing approval for evidence-backed operations within the requested task scope. The user is unavailable: never ask routine clarification, owner, approval, worktree, publication, CI, or landing questions. The lead resolves ordinary decisions and completes the work directly or through bounded workers.
+
+- The lead or bounded workers may investigate, repair/refactor, test, rewrite editable contributor PRs while preserving credit, create credited replacements when necessary, commit/push task-owned changes, update PRs, post proof, close items proven fixed on current `main`, diagnose/repair/rerun exact-head CI, create repo-managed PR worktrees or necessary task-owned isolated worktrees, run native review/prepare/merge, and verify terminal remote state.
+- Preserve unrelated dirty work. Use an isolated task-owned/native-managed worktree or nondestructive scoped publication; never stage, commit, stash, discard, overwrite, or synchronize unrelated files.
+- Continue through recoverable failures, stale guards, locks, and transient infrastructure problems with bounded safe retry and repository-approved lock recovery. Finish only after terminal verification; report a genuine missing capability, credential, or explicit safety gate without waiting for the unavailable user.
+- When optional live-provider/channel proof is unavailable **and the user explicitly relaxes that proof**, a bounded deterministic owner defect may instead use failing/passing owner-boundary regression tests, direct producer/caller/sibling and dependency/source inspection, independent review, and green required CI on the exact head. Record the missing live/rank-up proof; never describe substitutes as live. Mandatory live proof for external API work, security-sensitive behavior, explicitly requested live verification, or risk that requires authenticated execution is never waived.
+- Preserve source-trust isolation, contributor credit, exact-head required CI, native landing gates, and every acting worker's direct sibling `../codex` inspection. Standing authority never authorizes unrelated/destructive changes, unapproved paid or external side effects, irreversible data/security operations, SQLite schema-version or protocol bumps, dependency overrides, releases, or other actions behind an explicit safety/owner approval gate. Closing/reopening more than 50 items still requires separate explicit approval naming the exact count and scope.
+
+## Finish proven bugs with root-cause repairs
+
+Apply the root `AGENTS.md` Repair Doctrine to every maintainer-requested issue or PR. The goal is to fix real bugs without introducing new bugs, not merely produce a review, preserve an incoming patch, or close an item without proof.
+
+Choose the outcome from live GitHub state, current `main`, affected source and tests, caller/owner/sibling paths, and relevant dependency contracts:
+
+1. **Already fixed:** Prove with high confidence that current `main` already provides the same or better behavior. Identify the canonical fix commit/PR, any relevant release, and focused source, test, or reproduction evidence. When close/sweep/landing action is authorized, comment with that proof and close the issue or superseded PR. If equivalence, current-main behavior, or authority is uncertain, leave it open and state what is missing.
+2. **Confirmed issue:** Reproduce or otherwise prove the defect, trace the violated invariant to its producer or lifecycle owner, and implement the architectural root-cause fix when repair is authorized. Cover the original failure and affected sibling paths with focused regression tests and realistic behavior proof. Do not settle for a downstream guard, workaround, speculative fallback, or passing test that leaves the owner broken.
+3. **Confirmed bug-fix PR:** Independently prove both the defect and whether the proposed change repairs the root cause without regressions. If the PR is already the clean owner-boundary fix, verify and land it when authorized. If it is incomplete, in the wrong layer, needlessly complex, or only masks symptoms, rewrite/refactor the editable PR into the correct fix; verify the rewritten head and then land it. If the source branch cannot safely be edited, create an authorized replacement PR, preserve the original author's credit, and close the source only after the replacement exists. Never merge a speculative or merely plausible patch.
+
+Prefer cleanup, deletion, coherent refactoring, and one canonical flow over additional branches, wrappers, fallbacks, or compatibility shims. Target net-neutral or net-negative **production** LOC; tests are counted separately and useful regression tests may grow freely. Inspect `git diff --numstat` before landing, report production and test deltas separately, and justify any unavoidable production growth with a concrete capability, ownership boundary, security invariant, or public/dependency contract.
+
+Honor the requested action boundary: a fix request authorizes scoped investigation, local edits, and verification; an explicit ship/land/merge request or autonomous repair sweep also authorizes the scoped publication, closing, and landing needed to finish it. An explicit request to autonomously process, resolve, or fix-and-land a named maintainer issue/PR queue is an authorized autonomous repair sweep, including necessary evidence-backed comments, closures, root-cause fixes, pushes, and landing for those items. Ordinary review-only, triage-only, listing, or landable-shortlist requests are read-only: they authorize neither local source edits nor GitHub writes, including labels, assignments, public comments, closures, pushes, or landing, unless separately authorized. For authorized end-to-end landing work, a review summary or unlanded local patch is not completion: finish with a proven already-fixed close, a verified root-cause repair landed, or a specific evidence, ownership, product, safety, or authorization blocker.
 
 ## Start issue and PR triage with gitcrawl
 
@@ -24,13 +58,13 @@ gitcrawl search openclaw/openclaw --query "<scope or title keywords>" --mode hyb
 gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --body-chars 280 --json
 ```
 
-## Claim specific review targets
+## Inspect specific targets; claim only when authorized
 
-When a maintainer asks Codex to review, triage, fix, or land a specific OpenClaw issue/PR, check assignment before deep work.
+When a maintainer asks Codex to review, triage, fix, or land a specific OpenClaw issue/PR, have the lead or assigned collaboration worker inspect live assignment before deep work. Assignment itself is a public GitHub write.
 
 - Identify the requesting maintainer's GitHub login. In this environment, default Peter to `steipete`; if another maintainer is clearly the requester, use that maintainer's bare login.
 - Read current assignees with live `gh issue view` / `gh pr view`; `gitcrawl` is not enough for assignment state.
-- If unassigned, assign the requester before deep review. This is allowed for specific requested targets; do not auto-assign broad discovery candidates or shortlists.
+- If unassigned, assign the requester only when an explicit land, fix-and-land, autonomous-resolution, or assignment request authorizes that mutation. For fix-only, review-only, triage-only, listing, or shortlist requests, report `unassigned` without assigning unless assignment is separately requested. Never auto-assign broad discovery candidates or shortlists.
 - If assigned to someone else, say so clearly before analysis and include assignment age:
   - fresh: assigned within 6h; treat as actively owned unless user explicitly asks to continue or reassign
   - stale: assigned 6h+ ago; treat as ownership hint, not a hard block; continue only with that caveat
@@ -118,9 +152,9 @@ Exceptions:
 
 ## Apply close and triage labels correctly
 
-- If an issue or PR matches an auto-close reason, apply the label and let `.github/workflows/auto-response.yml` handle the comment/close/lock flow.
+- If an issue or PR matches an auto-close reason, apply its label only when labeling or closure is explicitly authorized; let `.github/workflows/auto-response.yml` handle the comment/close/lock flow. Without that authority, report the matching reason without mutating GitHub.
 - Do not manually close plus manually comment for these reasons.
-- If an issue/PR is already fixed on current `main` or solved by a new release, comment with proof plus the canonical commit/PR/release, then close it.
+- If an issue/PR is provably fixed on current `main` and closing is authorized, comment with focused proof plus the canonical commit/PR and any relevant release, then close it.
 - `r:*` labels can be used on both issues and PRs.
 - Current reasons:
   - `r: skill`
@@ -134,20 +168,20 @@ Exceptions:
   - `invalid`
   - `dirty` for PRs only
 
-## Select small high-confidence triage candidates
+## Select explicitly small high-confidence triage candidates
 
-When asked for `X` issues or PRs to triage, `X` means qualified candidates, not sampled threads.
+When explicitly asked for `X` small, easy, or narrowly scoped issues or PRs to triage, `X` means qualified candidates, not sampled threads. These shortlist filters do not apply to a confirmed issue/PR selected for end-to-end repair; do not reject its correct root-cause fix merely because a coherent owner-boundary refactor is required.
 
-Issue triage is review/prove/patch-local by default:
+Plain review, triage, listing, and shortlist requests are read-only: the lead or workers inspect and report candidates without editing files or mutating GitHub. Only an explicit scoped fix request authorizes this patch-local/proof flow; shipping and public writes still require separate approval:
 
 1. Review the issue body, comments, related threads, current code, and adjacent tests.
-2. Fix only issues that are easy, high-confidence, and narrowly owned by the implicated path.
+2. Fix only shortlisted issues whose root cause and owning architectural neighborhood are high-confidence.
 3. Add focused regression proof when practical.
 4. Stop with the dirty diff, touched files, and test/gate output for maintainer review.
 5. After maintainer approval to ship, make one commit per accepted fix, with release-note context in the PR body or commit message when user-facing.
-6. Pull/rebase, push, then comment and close only the issues that were fixed or explicitly triaged closed.
+6. After authorization, synchronize and push for the actual destination: direct `main` must rebase onto latest `origin/main` without merge commits; rebase a PR only for an actual conflict, failing native guard/exact-head check, explicit user request, or material stale-base risk, never merely because `main` advanced. Comment and close only issues proven fixed on `main` or explicitly triaged closed.
 
-Do not batch unrelated issue fixes into one commit. Do not publish, comment, close, or label during the review/prove phase.
+Do not batch unrelated issue fixes into one commit. Do not publish, assign, comment, close, or label during the review/prove phase.
 
 Missing `CHANGELOG.md` is not a PR review finding or merge blocker. If landing/fixing a user-visible change, make sure the PR body or commit message captures the release-note context; never ask or block solely on it.
 
@@ -173,7 +207,7 @@ Output only qualifying candidates, with: ref, surface, proof, cause, fix sketch,
 
 - Start every PR review with 1-3 plain sentences explaining what the change does and why it matters. Put this before `Findings`.
 - Then list findings first. If none, say `No blocking findings` or `No findings`.
-- Show size near the top as `LOC: +<additions>/-<deletions> (<changedFiles> files)`, using live PR stats or local diff stats.
+- Show size near the top as `Production LOC: +<additions>/-<deletions> (net <delta>) | Tests: +<additions>/-<deletions>`, classifying per-file `git diff --numstat` or live PR file stats. Optional aggregate PR totals never replace the production/test split; justify positive production growth.
 - Always answer: bug/behavior being fixed, PR/issue URL and affected surface, provenance for regressions when traceable, and best-fix verdict.
 - For bug/regression fixes, include a compact `Provenance:` line after cause/root-cause when a bounded history pass can identify it. Use `git log -S/-G`, `git blame`, linked PRs/issues, and tests.
 - Provenance must separate roles when they differ: blamed code author username, blamed PR author username, blamed PR merger/committer username, automerge trigger when known, current PR author username, PR number, and date. Do not collapse them into one "introduced by" actor.
@@ -187,6 +221,7 @@ LOC proof:
 ```bash
 gh pr view <number> --json additions,deletions,changedFiles \
   --jq '"LOC: +\(.additions)/-\(.deletions) (\(.changedFiles) files)"'
+git diff --numstat <base-sha>...<head-sha>
 ```
 
 ## Read beyond the diff
@@ -227,21 +262,29 @@ If the best-fix answer is only "maybe", keep reading or state the missing eviden
 ## Enforce the bug-fix evidence bar
 
 - Never merge a bug-fix PR based only on issue text, PR text, or AI rationale.
-- Whenever feasible, use Crabbox (`$crabbox`) for end-to-end verification before
-  commenting that a bug is unreproducible, closing an issue, or opening/landing
-  a fix PR. Prefer a real packaged/Docker/live lane that exercises the reported
-  user flow over unit-only proof.
+- Choose the strongest proof proportionate to the owner boundary and risk. When
+  feasible, prefer Crabbox (`$crabbox`) or a real packaged/Docker/live lane
+  exercising the reported user flow before closing or landing; do not confuse
+  packaged, mocked, Docker, or unit proof with live authenticated proof.
+- For a bounded deterministic owner defect, optional unavailable provider/channel
+  live proof may be replaced **only when the user explicitly relaxes it** by a
+  failing/passing focused owner-boundary regression, direct producer/caller/sibling
+  and dependency/source contract inspection, independent review, and exact-head
+  green required CI. Record the missing live/rank-up evidence openly. External
+  API work, security-sensitive changes, explicitly requested live proof, and risk
+  requiring real authenticated execution retain their mandatory live-proof gate.
 - Before landing, require:
   1. symptom evidence such as a repro, logs, or a failing test
   2. a verified root cause in code with file/line
   3. blame-backed provenance for regressions when traceable, including blamed PR merger and automerge trigger when known, or commit SHA/date when no PR is traceable
   4. a fix that touches the implicated code path
   5. a regression test when feasible, or explicit manual verification plus a reason no test was added
-- If the claim is unsubstantiated or likely wrong, request evidence or changes instead of merging.
+- If the claim is unsubstantiated or likely wrong, obtain the missing evidence or make authorized owner-boundary repairs; never merge without proof.
 - If the linked issue appears outdated or incorrect, correct triage first. Do not merge a speculative fix.
-- If Crabbox/E2E proof is blocked, say exactly why and use the closest available
-  local, Docker, mocked, or targeted proof. Do not present unit tests as real
-  behavior proof.
+- If optional Crabbox/E2E/live proof is unavailable and the user explicitly
+  relaxes it, state the exact gap and use the strongest focused owner-boundary
+  and exact-head CI evidence. Never claim substitutes are live or waive mandatory
+  external-API, security, or explicitly requested live proof.
 
 ## Close low-signal manual PRs carefully
 
@@ -288,9 +331,9 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
   on the maintainer host. Let its preflight fail loudly when one is missing.
   Tests that source `scripts/pr-lib/*` directly must provide the same command
   surface instead of weakening the production wrapper for a minimal test image.
-- At the start of code-changing or landing work that will need tests or heavy
-  proof, classify source trust and pre-warm the safe backend through `$crabbox`
-  in the background. Trusted maintainer code defaults to Blacksmith Testbox;
+- Classify source trust before executing code-changing or landing proof; acquire
+  the safe backend lazily through `$crabbox` at the first heavy proof, never
+  pre-warm it at task start. Trusted maintainer code defaults to Blacksmith Testbox;
   contributor/fork code stays untrusted unless a maintainer explicitly approves
   credentialed execution after review; it uses secretless fork CI or
   sanitized direct AWS Crabbox with `CRABBOX_ENV_ALLOW=CI`,
@@ -305,16 +348,20 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
   code. Force public networking, disable and
   unset inherited Tailscale/exit-node settings, and fail closed unless
   `crabbox inspect` reports no Tailscale state before any script. Rewarm after
-  any head change. Continue
-  review/editing while it hydrates, sync every run, reuse the lease, then stop
-  it before handoff. Skip warmup for read-only triage and docs-only work.
+  any head change, sync every run, reuse the lease, then stop it before handoff.
+  Do not acquire a backend for read-only triage or docs-only work.
 - Never mention release-note bookkeeping in review-only output. It is landing
   or release-generation mechanics, not a correctness finding.
 - If bot review conversations exist on your PR, address them and resolve them yourself once fixed.
 - Leave a review conversation unresolved only when reviewer or maintainer judgment is still needed.
-- Before landing any PR with non-trivial code changes, run `$autoreview` until no accepted/actionable findings remain, unless equivalent manual review already covered it, the change is trivial/docs-only, or the user opts out.
-- When an agent is landing or merging a PR targeting `main`, use only the repo-native `scripts/pr` wrapper: run `scripts/pr review-init <PR>`, follow its emitted checkout/guard guidance, initialize and complete review artifacts with `scripts/pr review-artifacts-init <PR>`, validate them with `scripts/pr review-validate-artifacts <PR>`, then run `OPENCLAW_TESTBOX=1 scripts/pr prepare-run <PR>` and `scripts/pr merge-run <PR>`. The Testbox flag is mandatory for agents: it verifies hosted CI/Testbox on the current head or reuses a patch-identical pre-rebase run green within 24 hours instead of running full `pnpm` gates locally. Do not rebase only because `main` advanced; behind-main drift is advisory unless strict drift is explicitly enabled, while GitHub still blocks conflicts.
-- Use `scripts/committer "<msg>" <file...>` for scoped commits instead of manual `git add` and `git commit`.
+- Before landing any PR with non-trivial code changes, run fresh `$autoreview` until no accepted/actionable findings remain; prior CI, ClawSweeper, or manual review is not a substitute. Skip only for truly trivial/docs-only changes or when the user explicitly opts out.
+- When an agent is landing or merging a PR targeting `main`, use only the repo-native `scripts/pr` wrapper: run `scripts/pr review-init <PR>`, follow its emitted checkout/guard guidance, initialize and complete review artifacts with `scripts/pr review-artifacts-init <PR>`, validate them with `scripts/pr review-validate-artifacts <PR>`, then run `OPENCLAW_TESTBOX=1 scripts/pr prepare-run <PR>` and `scripts/pr merge-run <PR>`. The Testbox flag is mandatory for agents: it verifies hosted CI/Testbox on the current head or reuses a patch-identical pre-rebase run green within 24 hours instead of running full `pnpm` gates locally. `prepare-run` fails fast; invoke only after exact-head CI is complete and green, and do not idle on `auto-response` or `check-docs`. For owner-approved reviewed fork code without hosted Testbox, use `OPENCLAW_PR_GATES_REMOTE=testbox` instead. Do not rebase only because `main` advanced; behind-main drift is advisory unless strict drift is explicitly enabled, while GitHub still blocks conflicts.
+- `scripts/pr` gotchas: subcommands require a PR number (no subcommand `--help` placeholder). Artifacts preserve template enum values with evidence detail in summaries; validate before prepare, from PR-head mode (moving main invalidates the main-baseline guard). Review flow: checkout main baseline, then PR, before artifact validation. After every PR push, rerun `scripts/pr review-init`; checkout alone leaves a stale guard SHA. Locally unset `GITHUB_TOKEN`, `GH_TOKEN`, `HOMEBREW_GITHUB_API_TOKEN`; ambient tokens can select an exhausted or wrong identity. Review JSON: land-ready recommendation `READY FOR /prepare-pr`, `issueValidation.status=valid`; never `APPROVE`. After `scripts/pr merge-run` removes its worktree, `cd` to a persistent repo before follow-up commands.
+- After GitHub throttling, check core quota before `scripts/pr prepare-run` or `merge-run`. A failed operation can retain its lock; verify no child remains, then recover only with its emitted token.
+- Non-main PRs: do not run `scripts/pr prepare-run` or `merge-run`; they diff against `main`. Use review artifacts, exact base-head CI, revalidate `headRefOid`, then `gh pr merge --match-head-commit <verified-sha>`.
+- PR-create merge-ref race recognition: the dropped/killed pull_request CI run appears as `startup_failure`/`BuildFailed` (`(Unknown event)`) and is not rerunnable — close/reopen or wait for the hourly `pr-ci-sweeper`; rerun attempts are wasted.
+- PR/issue media upload: 422 = unsupported type; 404 = bad repo id/no push. Video: `content_type` `video/mp4` or `video/webm`; embed the returned URL on its own bare line — GitHub renders a player, `![]()` does not; transcode Playwright webm via `ffmpeg -i in.webm -c:v libx264 -pix_fmt yuv420p out.mp4` for broad playback. Non-media artifacts or endpoint failure: Crabbox artifact publishing plus the manifest URL.
+- Use standard Git commands and stage only the files intended for each commit.
 - Keep commit messages concise and action-oriented.
 - Group related changes; avoid bundling unrelated refactors.
 - Use `.github/pull_request_template.md` for PR submissions and `.github/ISSUE_TEMPLATE/` for issues.
@@ -322,5 +369,5 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
 
 ## Extra safety
 
-- If a close or reopen action would affect more than 20 PRs, ask for explicit confirmation with the exact count and target query first.
-- `sync` means: if the tree is dirty, commit all changes with a sensible Conventional Commit message, then `git pull --rebase`, then `git push`. Stop if rebase conflicts cannot be resolved safely.
+- Closing or reopening more than 20 PRs needs an explicitly authorized bounded count and scope. Standing full authority covers an already specified count/scope; more than 50 still requires separate explicit exact-count/scope approval under root policy.
+- `sync` means synchronize only task-owned, explicitly authorized changes. Preserve unrelated dirty files untouched; use an isolated task-owned/native-managed worktree or nondestructive scoped publication when needed. Never commit all dirty changes, stage/stash/discard unrelated edits, or pull/rebase a dirty shared checkout; resolve only task-owned conflicts safely.

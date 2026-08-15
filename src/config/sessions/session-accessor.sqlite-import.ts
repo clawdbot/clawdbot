@@ -1,17 +1,24 @@
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+} from "../../infra/kysely-sync.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
-import { publishSqliteSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
+import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { readTranscriptEventJsonSetInTransaction } from "./session-accessor.sqlite-read.js";
 import {
   formatSqliteSessionReferenceForScope,
+  getSessionKysely,
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import {
   advanceTranscriptMutationAtInTransaction,
+  ensureTranscriptGenerationInTransaction,
+  ensureTranscriptSessionRoot,
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
@@ -24,6 +31,10 @@ type SqliteSessionImportRowsParams = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   preserveExactStoredKey?: boolean;
+  readExactTranscriptRows?: (
+    append: (row: { createdAt: number; eventJson: string }) => void,
+  ) => void;
+  skipIfExists?: boolean;
   storePath?: string;
   sessionKey: string;
   entry: SessionEntry;
@@ -35,6 +46,7 @@ type SqliteSessionImportRowsParams = {
 type SqliteSessionImportRowsResult = {
   sessionId: string;
   sessionKey: string;
+  skippedExisting?: true;
   transcriptEvents: number;
 };
 
@@ -42,6 +54,9 @@ type SqliteSessionImportRowsResult = {
 export async function importSqliteSessionRows(
   params: SqliteSessionImportRowsParams,
 ): Promise<SqliteSessionImportRowsResult> {
+  if (params.readExactTranscriptRows && params.readTranscriptEvents) {
+    throw new Error("SQLite session import accepts only one transcript row source");
+  }
   const resolvedScope = resolveSqliteScope({
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.env ? { env: params.env } : {}),
@@ -54,6 +69,7 @@ export async function importSqliteSessionRows(
     : resolvedScope;
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     let transcriptEvents = 0;
+    let skippedExisting = false;
     runOpenClawAgentWriteTransaction((database) => {
       // Doctor may have staged another legacy alias in this database already. Inspect only this
       // exact import target; runtime-wide canonical validation runs after the import phase.
@@ -64,6 +80,10 @@ export async function importSqliteSessionRows(
           allowMalformedRowRepair: params.allowMalformedRowRepair === true,
         },
       )?.entry;
+      if (params.skipIfExists === true && currentEntry) {
+        skippedExisting = true;
+        return;
+      }
       const preservedHarnessId =
         params.entry.agentHarnessId === undefined &&
         currentEntry?.sessionId === params.entry.sessionId &&
@@ -85,7 +105,47 @@ export async function importSqliteSessionRows(
         allowStoredAliases: true,
         previousEntry: currentEntry ?? null,
       });
-      if (params.readTranscriptEvents) {
+      // The legacy-main handoff hashes raw ordered rows. Parsing or deduping here would make the
+      // destination proof differ and strand a partially imported canonical claim.
+      if (params.readExactTranscriptRows) {
+        const transcriptScope = {
+          ...resolved,
+          sessionId: params.entry.sessionId,
+        };
+        const db = getSessionKysely(database.db);
+        const existing = executeSqliteQueryTakeFirstSync(
+          database.db,
+          db
+            .selectFrom("transcript_events")
+            .select("seq")
+            .where("session_id", "=", params.entry.sessionId)
+            .limit(1),
+        );
+        if (!existing) {
+          const rows: Array<{ createdAt: number; eventJson: string }> = [];
+          params.readExactTranscriptRows((row) => rows.push(row));
+          if (rows.length > 0) {
+            ensureTranscriptSessionRoot(database, transcriptScope, rows[0]!.createdAt, {
+              allowStoredAlias: true,
+            });
+            ensureTranscriptGenerationInTransaction(database, params.entry.sessionId);
+            for (const [seq, row] of rows.entries()) {
+              executeSqliteQuerySync(
+                database.db,
+                db.insertInto("transcript_events").values({
+                  session_id: params.entry.sessionId,
+                  seq,
+                  event_json: row.eventJson,
+                  created_at: row.createdAt,
+                }),
+              );
+            }
+            transcriptEvents = rows.length;
+            reconcileSessionTranscriptIndexInTransaction(database.db, params.entry.sessionId);
+            publishSessionEntryCacheInvalidation(database);
+          }
+        }
+      } else if (params.readTranscriptEvents) {
         const transcriptScope = {
           ...resolved,
           sessionId: params.entry.sessionId,
@@ -111,7 +171,7 @@ export async function importSqliteSessionRows(
           }
         });
         reconcileSessionTranscriptIndexInTransaction(database.db, params.entry.sessionId);
-        publishSqliteSessionEntryCacheInvalidation(database);
+        publishSessionEntryCacheInvalidation(database);
       }
       if (params.transcriptMtimeMs !== undefined) {
         advanceTranscriptMutationAtInTransaction(
@@ -126,6 +186,7 @@ export async function importSqliteSessionRows(
     return {
       sessionId: params.entry.sessionId,
       sessionKey: resolved.sessionKey,
+      ...(skippedExisting ? { skippedExisting: true as const } : {}),
       transcriptEvents,
     };
   });

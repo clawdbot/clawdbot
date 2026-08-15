@@ -20,6 +20,15 @@ describe("tool mutation helpers", () => {
     ).toBe(true);
   });
 
+  it("classifies portal list as replay-safe and portal mutations as mutating", () => {
+    expect(isMutatingToolCall("portal", { action: "list" })).toBe(false);
+    expect(isReplaySafeToolCall("portal", { action: "list" })).toBe(true);
+    for (const action of ["open", "close"]) {
+      expect(isMutatingToolCall("portal", { action }), action).toBe(true);
+      expect(isReplaySafeToolCall("portal", { action }), action).toBe(false);
+    }
+  });
+
   it("builds stable fingerprints for mutating calls and omits read-only calls", () => {
     const writeFingerprint = buildToolMutationState(
       "write",
@@ -292,6 +301,7 @@ describe("tool mutation helpers", () => {
     );
     expect(isReplaySafeToolCall("skill_workshop", { action: "list" })).toBe(true);
     expect(isReplaySafeToolCall("skill_workshop", { action: "inspect" })).toBe(true);
+    expect(isReplaySafeToolCall("skill_workshop", { action: "read" })).toBe(true);
     expect(isReplaySafeToolCall("skill_workshop", { action: "create" })).toBe(false);
     expect(isReplaySafeToolCall("transcripts", { action: "status" })).toBe(true);
     expect(isReplaySafeToolCall("transcripts", { action: "import" })).toBe(false);
@@ -335,11 +345,8 @@ describe("tool mutation helpers", () => {
     expect(buildToolMutationState("write", { path: "/tmp/Foo|bar" }).fileTarget).toEqual({
       path: "/tmp/foo|bar",
     });
-    // Non-file-mutating tools never carry fileTarget, even with a path arg.
     expect(buildToolMutationState("bash", { command: "rm /tmp/a" }).fileTarget).toBeUndefined();
     expect(buildToolMutationState("exec", { command: "touch /tmp/a" }).fileTarget).toBeUndefined();
-    // apply_patch is excluded from file-mutating set, so no fileTarget even
-    // if a path-shaped arg is synthetically present.
     expect(
       buildToolMutationState("apply_patch", { input: "*** Update File: /tmp/a" }).fileTarget,
     ).toBeUndefined();
@@ -374,10 +381,6 @@ describe("tool mutation helpers", () => {
         },
       ),
     ).toBe(true);
-    // `apply_patch` is intentionally excluded from the file-mutating set
-    // because production `apply_patch` calls only carry opaque `input` text,
-    // so `extractFileTarget` returns `undefined` and the fail-closed branch
-    // refuses cross-tool recovery.
     expect(
       isSameToolMutationAction(
         {
@@ -391,7 +394,7 @@ describe("tool mutation helpers", () => {
           fileTarget: { path: "/tmp/a" },
         },
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("does not cross-recover file mutations on different targets (#79024)", () => {

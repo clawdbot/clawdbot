@@ -1,9 +1,10 @@
-// Matrix tests cover subagent hooks plugin behavior.
 import type { OpenClawPluginApi as MatrixEntryPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
 import {
   getRequiredHookHandler,
   registerHookHandlersForTest,
 } from "openclaw/plugin-sdk/channel-test-helpers";
+// Matrix tests cover subagent hooks plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerMatrixSubagentHooks } from "../../subagent-hooks-api.js";
 
@@ -158,12 +159,7 @@ function makeDeliveryResult(
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {

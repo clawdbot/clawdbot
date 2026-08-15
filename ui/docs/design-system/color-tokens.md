@@ -32,7 +32,7 @@ Light mode uses a warm paper palette: ivory backgrounds, warm gray borders (`#e8
 
 | Token            | Dark Value | Contrast on `--bg` | Use                                                |
 | ---------------- | ---------- | ------------------ | -------------------------------------------------- |
-| `--text`         | `#d4d4d8`  | ~12.9:1 ✅         | Body copy, labels                                  |
+| `--text`         | `#bcbcc0`  | ~10.1:1 ✅         | Body copy, labels                                  |
 | `--text-strong`  | `#f4f4f5`  | ~17.3:1 ✅         | Headings, emphasis                                 |
 | `--muted`        | `#8b8b94`  | ~5.6:1 ✅          | Placeholder, metadata                              |
 | `--muted-strong` | `#898990`  | ~5.5:1 ✅          | Secondary text, captions; prefer `--text` for body |

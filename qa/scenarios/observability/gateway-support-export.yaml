@@ -29,6 +29,7 @@ scenario:
     - test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/runtime/gateway-support-export-runtime.ts
     summary: Run the real child CLI against a live isolated Gateway and inspect the resulting support zip privacy and artifact-safety contract.
     args:

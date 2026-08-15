@@ -838,6 +838,7 @@ describe("isRecoverableAgentWaitError", () => {
     "EHOSTUNREACH",
     "ENETUNREACH",
     "EAI_AGAIN",
+    "UND_ERR_SOCKET",
   ])("recovers from %s connection failures", (code) => {
     expect(isRecoverableAgentWaitError(`connect ${code} 127.0.0.1:443`)).toBe(true);
   });
@@ -846,6 +847,7 @@ describe("isRecoverableAgentWaitError", () => {
     undefined,
     "",
     "gateway timeout",
+    "gateway request timeout for agent.wait",
     "ENOENT: no such file",
     "getaddrinfo ENOTFOUND gateway.example.com",
   ])("does not recover from %s", (error) => {

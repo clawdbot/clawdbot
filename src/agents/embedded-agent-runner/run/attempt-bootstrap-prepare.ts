@@ -18,8 +18,8 @@ import {
   type WorkspaceBootstrapFile,
 } from "../../workspace.js";
 import { log } from "../logger.js";
-import { remapInjectedContextFilesToWorkspace } from "./attempt.bootstrap-context.js";
-import { resolveAttemptBootstrapContext } from "./attempt.context-engine-helpers.js";
+import { resolveAttemptBootstrapContext } from "./attempt-context-engine-helpers.js";
+import { remapInjectedContextFilesToWorkspace } from "./attempt-setup.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export async function prepareEmbeddedAttemptBootstrap(params: {
@@ -79,6 +79,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
       config: attempt.config,
       sessionKey: attempt.sessionKey,
       sessionId: attempt.sessionId,
+      chatType: attempt.chatType,
       agentId: params.sessionAgentId,
       warn: bootstrapWarn,
       contextMode: attempt.bootstrapContextMode,
@@ -108,6 +109,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
           config: attempt.config,
           sessionKey: attempt.sessionKey,
           sessionId: attempt.sessionId,
+          chatType: attempt.chatType,
           agentId: params.sessionAgentId,
           warn: bootstrapWarn,
           contextMode: attempt.bootstrapContextMode,

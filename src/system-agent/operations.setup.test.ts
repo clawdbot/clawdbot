@@ -9,13 +9,15 @@ import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-stor
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { executeSystemAgentOperation, type SystemAgentCommandDeps } from "./operations.js";
+import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 import {
-  createSystemAgentTestRuntime,
   expectSystemAgentAuditRecord as expectAuditRecord,
   expectTestRecordFields as expectRecordFields,
   installSystemAgentClaudeCliBackendTestFixture,
+  installSystemAgentPluginMetadataTestSnapshot,
   readLastSystemAgentAuditEntry as readLastAuditEntry,
   requireTestRecord as requireRecord,
+  type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 
 type TestConfig = Record<string, unknown>;
@@ -29,8 +31,10 @@ const mockConfig = vi.hoisted(() => {
     hash: "mock-hash-0" as string | undefined,
   };
   const cloneConfig = () => structuredClone(state.config);
+  let bindPluginMetadata = (_config: TestConfig) => {};
   const snapshot = () => {
     const config = cloneConfig();
+    bindPluginMetadata(config);
     return {
       path: state.path,
       exists: state.exists,
@@ -53,18 +57,24 @@ const mockConfig = vi.hoisted(() => {
       state.exists = true;
       state.config = { agents: { entries: { main: { default: true } } } };
       state.hash = "mock-hash-0";
+      bindPluginMetadata(state.config);
     },
     missing(pathLocal: string) {
       state.path = pathLocal;
       state.exists = false;
       state.config = { agents: { entries: { main: { default: true } } } };
       state.hash = undefined;
+      bindPluginMetadata(state.config);
     },
     currentConfig() {
       return cloneConfig();
     },
     setConfig(config: TestConfig) {
       state.config = structuredClone(config);
+      bindPluginMetadata(state.config);
+    },
+    setPluginMetadataBinder(binder: (config: TestConfig) => void) {
+      bindPluginMetadata = binder;
     },
     readConfigFileSnapshot: vi.fn(async () => snapshot()),
     mutateConfigFile: vi.fn(
@@ -80,10 +90,12 @@ const mockConfig = vi.hoisted(() => {
         const before = snapshot();
         const draft = cloneConfig();
         await params.mutate(draft, { snapshot: before });
+        bindPluginMetadata(draft);
         await params.writeOptions?.preCommitRuntimePreflight?.(structuredClone(draft));
         state.exists = true;
         state.config = draft;
         state.hash = "mock-hash-1";
+        bindPluginMetadata(state.config);
         return {
           path: state.path,
           previousHash: before.hash ?? null,
@@ -148,12 +160,20 @@ vi.mock("../state/local-onboarding-state.js", () => ({
 
 const opTempDirs = useAutoCleanupTempDirTracker(afterEach);
 let restoreCliBackendFixture: (() => void) | undefined;
+let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
 
 beforeAll(() => {
   restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
+  pluginMetadataSnapshot = installSystemAgentPluginMetadataTestSnapshot();
+  mockConfig.setPluginMetadataBinder((config) => {
+    pluginMetadataSnapshot?.bindForConfig(config as OpenClawConfig);
+  });
+  mockConfig.reset();
 });
 
 afterAll(() => {
+  mockConfig.setPluginMetadataBinder(() => {});
+  pluginMetadataSnapshot?.restore();
   restoreCliBackendFixture?.();
 });
 
@@ -213,7 +233,7 @@ describe("parseSystemAgentOperation", () => {
     expect(applySetup).not.toHaveBeenCalled();
 
     const result = await executeSystemAgentOperation(
-      { kind: "setup", workspace: "/tmp/work" },
+      { kind: "setup", workspace: "/tmp/work", agentName: "robby" },
       runtime,
       {
         approved: true,
@@ -228,6 +248,7 @@ describe("parseSystemAgentOperation", () => {
     expect(applySetup).toHaveBeenCalledWith(
       {
         workspace: "/tmp/work",
+        firstAgent: { name: "robby" },
         expectedInferenceRoute: expect.any(Object),
         surface: "cli",
         runtime,
@@ -472,6 +493,7 @@ describe("parseSystemAgentOperation", () => {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: ["openai/gpt-5.2"] },
+          systemAgent: { agentId: "main" },
         },
         entries: { main: { default: true, workspace: "/tmp/main" } },
       },
@@ -578,6 +600,9 @@ describe("parseSystemAgentOperation", () => {
     expect(
       requireRecord(requireRecord(persisted.agents, "agents").defaults, "defaults").model,
     ).toEqual({ primary: "openai/gpt-5.5", fallbacks: ["openai/gpt-5.2"] });
+    expect(
+      requireRecord(requireRecord(persisted.agents, "agents").defaults, "defaults").systemAgent,
+    ).toEqual({ agentId: "main" });
     expect(requireRecord(persisted.agents, "agents").entries).toEqual({
       main: { default: true, workspace: "/tmp/main" },
       work: { workspace: "/tmp/work" },
@@ -618,18 +643,20 @@ describe("parseSystemAgentOperation", () => {
 
   it.each([
     {
-      field: "default agent",
+      field: "system agent",
       initial: {
         agents: {
-          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            systemAgent: { agentId: "main" },
+          },
           entries: { main: { default: true }, work: {} },
         },
       },
       change: (config: TestConfig) => {
         const next = structuredClone(config);
-        const entries = requireRecord(requireRecord(next.agents, "agents").entries, "entries");
-        delete requireRecord(entries.main, "main").default;
-        requireRecord(entries.work, "work").default = true;
+        const defaults = requireRecord(requireRecord(next.agents, "agents").defaults, "defaults");
+        defaults.systemAgent = { agentId: "work" };
         return next;
       },
     },

@@ -9,10 +9,10 @@ import type {
   FunctionTool,
 } from "@mistralai/mistralai/models/components";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
   AssistantMessage,
@@ -31,6 +31,8 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
+import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
+import { projectProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
@@ -40,10 +42,8 @@ import {
   extractToolResultText,
   isImageWithMediaPayload,
 } from "./tool-result-text.js";
-import { transformMessages } from "./transform-messages.js";
 
 const MISTRAL_TOOL_CALL_ID_LENGTH = 9;
-const MAX_MISTRAL_ERROR_BODY_CHARS = 4000;
 
 // 16 MiB cap on Mistral streaming success bodies, matching the
 // `PROVIDER_TEXT_RESPONSE_MAX_BYTES` / `PROVIDER_JSON_RESPONSE_MAX_BYTES`
@@ -194,9 +194,9 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
     } catch (error) {
       // Failed or canceled generations must never retain partially repaired tool calls.
       output.content = output.content.filter((block) => block.type !== "toolCall");
-      output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-      output.errorMessage = formatMistralError(error);
-      stream.push({ type: "error", reason: output.stopReason, error: output });
+      const terminal = projectProviderError(error, options?.signal);
+      Object.assign(output, terminal);
+      stream.push({ type: "error", reason: terminal.stopReason, error: output });
       stream.end();
     }
   })();
@@ -292,39 +292,6 @@ function deriveMistralToolCallId(id: string, attempt: number): string {
     .replace(/[^a-zA-Z0-9]/g, "")
     .padEnd(MISTRAL_TOOL_CALL_ID_LENGTH, "0")
     .slice(0, MISTRAL_TOOL_CALL_ID_LENGTH);
-}
-
-function formatMistralError(error: unknown): string {
-  if (error instanceof Error) {
-    const sdkError = error as Error & { statusCode?: unknown; body?: unknown };
-    const statusCode = typeof sdkError.statusCode === "number" ? sdkError.statusCode : undefined;
-    const bodyText = typeof sdkError.body === "string" ? sdkError.body.trim() : undefined;
-    if (statusCode !== undefined && bodyText) {
-      return `Mistral API error (${statusCode}): ${truncateErrorText(bodyText, MAX_MISTRAL_ERROR_BODY_CHARS)}`;
-    }
-    if (statusCode !== undefined) {
-      return `Mistral API error (${statusCode}): ${error.message}`;
-    }
-    return error.message;
-  }
-  return safeJsonStringify(error);
-}
-
-function truncateErrorText(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
-    return text;
-  }
-  const truncated = truncateUtf16Safe(text, maxChars);
-  return `${truncated}... [truncated ${text.length - truncated.length} chars]`;
-}
-
-function safeJsonStringify(value: unknown): string {
-  try {
-    const serialized = JSON.stringify(value);
-    return serialized === undefined ? String(value) : serialized;
-  } catch {
-    return String(value);
-  }
 }
 
 function buildChatPayload(
@@ -818,21 +785,25 @@ async function consumeChatStream(
 }
 
 function toFunctionTools(tools: Tool[]): Array<FunctionTool & { type: "function" }> {
-  return tools.flatMap((tool) => {
+  const converted = tools.flatMap((tool) => {
     try {
-      return {
+      const name = tool.name;
+      const description = tool.description;
+      const value = {
         type: "function",
         function: {
-          name: tool.name,
-          description: tool.description,
+          name,
+          description,
           parameters: stripSymbolKeys(tool.parameters) as Record<string, unknown>,
           strict: false,
         },
-      };
+      } satisfies FunctionTool & { type: "function" };
+      return { name, description, value };
     } catch {
       return [];
     }
   });
+  return sortPromptCacheToolsByName(converted).map(({ value }) => value);
 }
 
 function stripSymbolKeys(value: unknown): unknown {

@@ -1,4 +1,5 @@
-import { writeFile } from "node:fs/promises";
+import { stat } from "node:fs/promises";
+import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { format } from "node:util";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -7,6 +8,7 @@ import {
   clampTimerTimeoutMs,
   parseStrictPositiveInteger,
 } from "openclaw/plugin-sdk/number-runtime";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import prettyMilliseconds from "pretty-ms";
 import type { GoogleMeetCalendarLookupResult } from "./calendar.js";
 import {
@@ -17,8 +19,8 @@ import {
 import type { GoogleMeetRuntime } from "./runtime.js";
 
 export type JoinOptions = {
-  transport?: GoogleMeetTransport;
-  mode?: GoogleMeetModeInput;
+  transport?: string;
+  mode?: string;
   message?: string;
   timeoutMs?: string;
   dialInNumber?: string;
@@ -122,8 +124,8 @@ export type GoogleMeetExportManifest = {
 
 export type SetupOptions = {
   json?: boolean;
-  mode?: GoogleMeetModeInput;
-  transport?: GoogleMeetTransport;
+  mode?: string;
+  transport?: string;
 };
 
 type GoogleMeetGatewayMethod =
@@ -158,7 +160,7 @@ export type JsonOptions = {
 };
 
 export type RecoverTabOptions = JsonOptions & {
-  transport?: GoogleMeetTransport;
+  transport?: string;
 };
 
 export type CreateOptions = {
@@ -170,14 +172,46 @@ export type CreateOptions = {
   accessType?: string;
   entryPointAccess?: string;
   join?: boolean;
-  transport?: GoogleMeetTransport;
-  mode?: GoogleMeetModeInput;
+  transport?: string;
+  mode?: string;
   message?: string;
   dialInNumber?: string;
   pin?: string;
   dtmfSequence?: string;
   json?: boolean;
 };
+
+export function parseGoogleMeetMode(value: string | undefined): GoogleMeetModeInput | undefined {
+  if (
+    value === undefined ||
+    value === "agent" ||
+    value === "bidi" ||
+    value === "transcribe" ||
+    value === "realtime"
+  ) {
+    return value;
+  }
+  throw new Error(`mode must be agent, bidi, transcribe, or realtime; received ${value}`);
+}
+
+export function parseGoogleMeetTransport(
+  value: string | undefined,
+): GoogleMeetTransport | undefined {
+  if (value === undefined || value === "chrome" || value === "chrome-node" || value === "twilio") {
+    return value;
+  }
+  throw new Error(`transport must be chrome, chrome-node, or twilio; received ${value}`);
+}
+
+export function parseGoogleMeetBrowserTransport(
+  value: string | undefined,
+): "chrome" | "chrome-node" | undefined {
+  const transport = parseGoogleMeetTransport(value);
+  if (transport === "twilio") {
+    throw new Error(`transport must be chrome or chrome-node; received ${value}`);
+  }
+  return transport;
+}
 
 export function writeStdoutJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -204,7 +238,18 @@ export function writeStdoutLine(...values: unknown[]): void {
 
 export async function writeCliOutput(options: { output?: string }, text: string): Promise<void> {
   if (options.output?.trim()) {
-    await writeFile(options.output, text.endsWith("\n") ? text : `${text}\n`, "utf8");
+    const dirMode = (await stat(path.dirname(options.output))).mode & 0o7777;
+    await replaceFileAtomic({
+      filePath: options.output,
+      content: text.endsWith("\n") ? text : `${text}\n`,
+      dirMode,
+      mode: 0o666 & ~process.umask(),
+      preserveExistingMode: true,
+      tempPrefix: ".google-meet-output",
+      syncTempFile: true,
+      syncParentDir: true,
+      throwOnCleanupError: true,
+    });
     writeStdoutLine("wrote: %s", options.output);
     return;
   }
@@ -451,7 +496,6 @@ export function writeRecoverCurrentTabResult(
             : "signed-in Google Chrome profile",
         realtime: { enabled: false, toolPolicy: "safe-read-only" },
         chrome: {
-          audioBackend: "blackhole-2ch",
           launched: true,
           nodeId: result.nodeId,
           health: result.browser,

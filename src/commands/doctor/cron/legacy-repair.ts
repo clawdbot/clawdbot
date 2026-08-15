@@ -1,5 +1,6 @@
 // Doctor cron storage repair mechanics for legacy stores, run logs, payloads, and Codex refs.
 import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../../agents/agent-scope-config.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
@@ -15,6 +16,7 @@ import {
 } from "../../../cron/store.js";
 import type { CronJob } from "../../../cron/types.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { LegacyCodexModelIdentity } from "../shared/codex-route-model-ref.js";
 import { migrateLegacyDreamingPayloadShape } from "./dreaming-payload-migration.js";
@@ -54,6 +56,11 @@ import {
   type CronCodexRuntimePolicyTarget,
 } from "./store-migration.js";
 
+export type CronOwnerProjection =
+  | { kind: "explicit"; agentId: string }
+  | { kind: "runtime-default"; agentId: string }
+  | { kind: "unresolved" };
+
 export type LegacyCronRepairState = {
   storePath: string;
   legacyStoreDetected: boolean;
@@ -64,6 +71,7 @@ export type LegacyCronRepairState = {
   legacyImportCount: number;
   sqliteProjectionBackfillCount: number;
   invalidConfigRows: QuarantinedCronConfigJob[];
+  projectedOwnersByJobId: ReadonlyMap<string, CronOwnerProjection>;
   rawJobs: Array<Record<string, unknown>>;
 };
 
@@ -88,12 +96,30 @@ function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
     ?.store;
 }
 
+function projectCronOwner(
+  job: { agentId?: unknown; sessionKey?: unknown },
+  runtimeDefaultAgentId: string | undefined,
+): CronOwnerProjection {
+  const explicitAgentId =
+    normalizeOptionalString(job.agentId) ??
+    parseAgentSessionKey(normalizeOptionalString(job.sessionKey))?.agentId;
+  if (explicitAgentId) {
+    return { kind: "explicit", agentId: explicitAgentId };
+  }
+  return runtimeDefaultAgentId
+    ? { kind: "runtime-default", agentId: runtimeDefaultAgentId }
+    : { kind: "unresolved" };
+}
+
 export async function loadLegacyCronRepairState(params: {
   cfg: OpenClawConfig;
+  storePath?: string;
+  env?: NodeJS.ProcessEnv;
   onlyIfLegacyDetected?: boolean;
   readOnly?: boolean;
 }): Promise<LegacyCronRepairState | null> {
-  const storePath = resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg));
+  const storePath =
+    params.storePath ?? resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg), params.env);
   const legacyStoreDetected = await legacyCronStoreFilesExist(storePath);
   const legacyRunLogDetected = await legacyCronRunLogFilesExist(storePath);
   const legacyQuarantine = await loadLegacyCronQuarantineForMigration(storePath);
@@ -107,8 +133,12 @@ export async function loadLegacyCronRepairState(params: {
   }
 
   const loaded = params.readOnly
-    ? await loadCronJobsStoreWithConfigJobsReadOnly(storePath)
+    ? await loadCronJobsStoreWithConfigJobsReadOnly(storePath, params.env)
     : await loadCronJobsStoreWithConfigJobs(storePath);
+  const runtimeDefaultAgentId = tryResolveLegacyCompatibilityAgentId(params.cfg);
+  const projectedOwnersByJobId = new Map(
+    loaded.store.jobs.map((job) => [job.id, projectCronOwner(job, runtimeDefaultAgentId)]),
+  );
   const currentEntries = loaded.configJobs.map((job, index) => ({
     sourceIndex: loaded.configJobIndexes[index] ?? index,
     job: mergeRuntimeEntryIntoConfigJob({
@@ -178,6 +208,7 @@ export async function loadLegacyCronRepairState(params: {
     legacyImportCount,
     sqliteProjectionBackfillCount,
     invalidConfigRows,
+    projectedOwnersByJobId,
     rawJobs,
   };
 }

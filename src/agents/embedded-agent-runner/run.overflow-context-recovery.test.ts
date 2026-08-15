@@ -201,6 +201,32 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
   });
 
+  it("does not compact after an ambiguous bodyless 400", async () => {
+    const assistantOverflowCandidate = makeAssistantMessage({
+      stopReason: "error",
+      errorMessage: "400 status code (no body)",
+    });
+    const result = await recoverEmbeddedRunOverflow(
+      makeInput({ promptError: null, assistantOverflowCandidate }),
+    );
+
+    expect(result).toEqual({ action: "none" });
+    expect(mocks.compact).not.toHaveBeenCalled();
+  });
+
+  it("preserves compaction recovery after a bodyless 413", async () => {
+    const assistantOverflowCandidate = makeAssistantMessage({
+      stopReason: "error",
+      errorMessage: "413 status code (no body)",
+    });
+    const result = await recoverEmbeddedRunOverflow(
+      makeInput({ promptError: null, assistantOverflowCandidate }),
+    );
+
+    expect(result).toEqual({ action: "retry" });
+    expect(mocks.compact).toHaveBeenCalledOnce();
+  });
+
   it("recovers a canonical zero-output length overflow", async () => {
     const assistantOverflowCandidate = makeAssistantMessage({
       stopReason: "length",

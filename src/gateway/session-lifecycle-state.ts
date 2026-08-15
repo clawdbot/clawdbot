@@ -1,23 +1,25 @@
 // Gateway session lifecycle state projection.
 // Converts agent run lifecycle events into session row/store status updates.
+import { normalizeOptionalString as normalizeLifecycleRunId } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
-import { sanitizeUserFacingText } from "../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "../agents/embedded-agent-helpers/user-facing-text.js";
 import {
   isMainSessionRecoveryLifecycleEvent,
   projectMainSessionRecoveryLifecycle,
-} from "../agents/main-session-recovery-lifecycle.js";
+} from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { loadSessionEntry } from "./session-utils.js";
-import type { GatewaySessionRow, SessionRunStatus } from "./session-utils.types.js";
+import type { GatewaySessionRow } from "./session-utils.types.js";
 
 type LifecyclePhase = "start" | "end" | "error";
 
@@ -55,6 +57,7 @@ type PersistedLifecycleSessionShape = Pick<
   | "abortedLastRun"
   | "restartRecoveryRuns"
   | "mainRestartRecovery"
+  | "lifecycleRunId"
 >;
 
 type GatewaySessionLifecycleSnapshot = Partial<LifecycleSessionShape>;
@@ -93,7 +96,7 @@ function resolveSessionRunError(
   if ((status !== "failed" && status !== "timeout") || !outcome.error) {
     return undefined;
   }
-  const sanitized = sanitizeUserFacingText(outcome.error, { errorContext: true })
+  const sanitized = renderUserFacingText(outcome.error, { errorContext: true })
     .replace(/\s+/g, " ")
     .trim();
   return sanitized ? truncateUtf16Safe(sanitized, SESSION_RUN_ERROR_MAX_CHARS) : undefined;
@@ -214,15 +217,32 @@ function derivePersistedSessionLifecyclePatch(params: {
     event: params.event,
     snapshotPatch,
   });
-  return projection.action === "suppress" ? {} : projection.patch;
+  if (projection.action === "suppress") {
+    return {};
+  }
+  const phase = resolveLifecyclePhase(params.event);
+  const runId = normalizeLifecycleRunId(params.event.runId);
+  // Run ownership follows the durable running projection. Terminal settlement
+  // releases it; yielded parents retain it for their continuation lifecycle.
+  return {
+    ...projection.patch,
+    ...(phase === "start"
+      ? { lifecycleRunId: runId }
+      : projection.patch.status && projection.patch.status !== "running"
+        ? { lifecycleRunId: undefined }
+        : {}),
+  };
 }
 
 export function deriveGatewaySessionLifecycleProjectionPatch(params: {
   entry?: Partial<PersistedLifecycleSessionShape> | null;
   event: LifecycleEventLike;
 }): GatewaySessionLifecycleSnapshot {
-  const { restartRecoveryRuns: _restartRecoveryRuns, ...patch } =
-    derivePersistedSessionLifecyclePatch(params);
+  const {
+    restartRecoveryRuns: _restartRecoveryRuns,
+    lifecycleRunId: _lifecycleRunId,
+    ...patch
+  } = derivePersistedSessionLifecyclePatch(params);
   return patch;
 }
 
@@ -240,18 +260,29 @@ export function isRestartRecoveryLifecycleEvent(params: {
 export function isStaleLifecycleEventForSession(params: {
   owningSessionId?: string;
   currentSessionId?: string;
+  eventRunId?: unknown;
+  currentRunId?: unknown;
   eventStartedAt?: unknown;
   currentStartedAt?: number;
 }): boolean {
+  if (
+    params.owningSessionId &&
+    params.currentSessionId &&
+    params.owningSessionId !== params.currentSessionId
+  ) {
+    return true;
+  }
+  const eventRunId = normalizeLifecycleRunId(params.eventRunId);
+  const currentRunId = normalizeLifecycleRunId(params.currentRunId);
+  // Matching ownership is stronger than producer timestamps. Missing or
+  // different identities retain the legacy timestamp fence.
+  if (eventRunId && currentRunId && eventRunId === currentRunId) {
+    return false;
+  }
   return (
-    Boolean(
-      params.owningSessionId &&
-      params.currentSessionId &&
-      params.owningSessionId !== params.currentSessionId,
-    ) ||
-    (isFiniteTimestamp(params.eventStartedAt) &&
-      isFiniteTimestamp(params.currentStartedAt) &&
-      params.eventStartedAt < params.currentStartedAt)
+    isFiniteTimestamp(params.eventStartedAt) &&
+    isFiniteTimestamp(params.currentStartedAt) &&
+    params.eventStartedAt < params.currentStartedAt
   );
 }
 
@@ -265,6 +296,16 @@ function acceptsCronRunContinuationLifecycleEvent(params: {
   }
   const runId = params.event.runId?.trim();
   return Boolean(marker?.phase === "continuing" && runId && marker.ownerRunId === runId);
+}
+
+// sessions.list cache fence input. The terminal entry write (status/endedAt/
+// runtimeMs) commits asynchronously after the run-index fence already bumped
+// at lifecycle end; without its own fence a list computed in that window
+// caches the pre-terminal row indefinitely.
+let lifecyclePersistenceVersion = 0;
+
+export function readSessionLifecyclePersistenceVersion(): number {
+  return lifecyclePersistenceVersion;
 }
 
 export async function persistGatewaySessionLifecycleEvent(params: {
@@ -295,7 +336,8 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       storePath: sessionEntry.storePath,
       sessionKey: sessionEntry.canonicalKey,
     },
-    async (entry) => {
+    async (storedEntry) => {
+      const entry = storedEntry as SessionEntry;
       if (
         exactCronRun &&
         !acceptsCronRunContinuationLifecycleEvent({ entry, event: params.event })
@@ -308,6 +350,8 @@ export async function persistGatewaySessionLifecycleEvent(params: {
         isStaleLifecycleEventForSession({
           owningSessionId,
           currentSessionId: entry.sessionId,
+          eventRunId: params.event.runId,
+          currentRunId: entry.lifecycleRunId,
           eventStartedAt: params.event.data?.startedAt,
           currentStartedAt: entry.startedAt,
         })
@@ -326,4 +370,5 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       requireWriteSuccess: true,
     },
   );
+  lifecyclePersistenceVersion += 1;
 }

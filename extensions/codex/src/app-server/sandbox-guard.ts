@@ -3,7 +3,8 @@
  * node-exec routing guarantees.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveSandboxRuntimeStatus } from "openclaw/plugin-sdk/sandbox";
+import { resolveSandboxRuntimeStatus, type SandboxContext } from "openclaw/plugin-sdk/sandbox";
+import { isCodexRemoteExecPlacementSandbox } from "./config-parsing.js";
 import {
   formatCodexNativeNodeExecBlock,
   resolveCodexNativeExecutionPolicy,
@@ -82,6 +83,7 @@ export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
+  sandbox?: Pick<SandboxContext, "enabled"> | null;
 }): string | undefined {
   const policy = resolveDirectMethodPolicy(params.method);
   if (NODE_EXEC_BLOCKED_CONTROL_PLANE_METHODS.has(params.method)) {
@@ -114,6 +116,7 @@ export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
   const sandboxBlock = resolveCodexNativeSandboxBlock({
     config: params.config,
     sessionKey,
+    sandbox: params.sandbox,
     surface: `app-server method \`${params.method}\``,
   });
   if (!sandboxBlock) {
@@ -134,6 +137,8 @@ export function resolveCodexNativeExecutionBlock(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  sandbox?: Pick<SandboxContext, "enabled"> | null;
+  sandboxEnvironmentSelected?: boolean;
   surface: string;
 }): string | undefined {
   return resolveCodexNativeSandboxBlock(params) ?? resolveCodexNativeNodeExecBlock(params);
@@ -144,11 +149,19 @@ export function resolveCodexNativeSandboxBlock(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
+  sandbox?: Pick<SandboxContext, "enabled"> | null;
+  sandboxEnvironmentSelected?: boolean;
   surface: string;
 }): string | undefined {
+  if (params.sandboxEnvironmentSelected) {
+    return undefined;
+  }
   const sessionKey = params.sessionKey?.trim() || params.sessionId?.trim();
   if (!sessionKey) {
     return undefined;
+  }
+  if (isCodexRemoteExecPlacementSandbox(params.sandbox) || params.sandbox?.enabled === true) {
+    return formatCodexNativeSandboxBlock({ surface: params.surface });
   }
   const runtime = resolveSandboxRuntimeStatus({
     cfg: params.config,

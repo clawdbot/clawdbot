@@ -23,7 +23,7 @@ function runPluginPublishWrapper(args: string[], env: NodeJS.ProcessEnv = {}) {
   });
 }
 
-function makePackage(version: string): { packageDir: string; path: string } {
+function makePackage(version: string): { packageDir: string; path: string; root: string } {
   const root = mkdtempSync(join(tmpdir(), "openclaw-plugin-publish-test-"));
   tempDirs.push(root);
   const packageDir = join(root, "plugin");
@@ -37,7 +37,7 @@ function makePackage(version: string): { packageDir: string; path: string } {
   const npmPath = join(binDir, "npm");
   writeFileSync(npmPath, "#!/bin/sh\nexit 1\n");
   chmodSync(npmPath, 0o755);
-  return { packageDir, path: `${binDir}${delimiter}${process.env.PATH ?? ""}` };
+  return { packageDir, path: `${binDir}${delimiter}${process.env.PATH ?? ""}`, root };
 }
 
 describe("plugin npm publish wrapper", () => {
@@ -46,7 +46,7 @@ describe("plugin npm publish wrapper", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(
-      "usage: bash scripts/plugin-npm-publish.sh [--dry-run|--pack|--pack-dry-run|--publish] <package-dir>",
+      "usage: bash scripts/plugin-npm-publish.sh [--repo-root <dir>] [--dry-run|--pack|--pack-dry-run|--publish] <package-dir>",
     );
     expect(result.stderr).toBe("");
   });
@@ -57,8 +57,20 @@ describe("plugin npm publish wrapper", () => {
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr.trim()).toBe(
-      "usage: bash scripts/plugin-npm-publish.sh [--dry-run|--pack|--pack-dry-run|--publish] <package-dir>",
+      "usage: bash scripts/plugin-npm-publish.sh [--repo-root <dir>] [--dry-run|--pack|--pack-dry-run|--publish] <package-dir>",
     );
+  });
+
+  it("runs trusted tooling against an explicit repository root", () => {
+    const fixture = makePackage("2026.8.1-beta.1");
+    const result = runPluginPublishWrapper(["--repo-root", fixture.root, "--dry-run", "plugin"], {
+      PATH: fixture.path,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`Resolved repository root: ${fixture.root}`);
+    expect(result.stdout).toContain(`Resolved package dir: ${fixture.packageDir}`);
+    expect(result.stdout).toContain("Resolved package name: @openclaw/demo");
   });
 
   it("requires an explicit artifact directory for real pack mode", () => {

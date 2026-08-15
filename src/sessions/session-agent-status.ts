@@ -3,14 +3,23 @@ import {
   SESSION_AGENT_ATTENTION_ICON_IDS,
   type SessionAgentAttentionIconId,
   type SessionAgentStatus,
-} from "../../packages/gateway-protocol/src/session-icon.js";
-import { sanitizeUserFacingText } from "../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+} from "../../packages/gateway-protocol/src/session-agent-status.js";
+import { renderUserFacingText } from "../agents/embedded-agent-helpers/user-facing-text.js";
 
 const SESSION_AGENT_STATUS_NOTE_MAX_CHARS = 120;
 const SESSION_AGENT_STATUS_DEFAULT_TTL_MINUTES = 30;
 export const SESSION_AGENT_STATUS_MAX_TTL_MINUTES = 120;
 
 const ATTENTION_ICON_IDS = new Set<string>(SESSION_AGENT_ATTENTION_ICON_IDS);
+// Anchored RGI_Emoji admits exactly one recommended-for-interchange emoji
+// sequence (ZWJ families, flags, keycaps included) and nothing else. Construct
+// it dynamically because the repository TypeScript target rejects literal `v` flags.
+const SESSION_ICON_RE = new RegExp("^\\p{RGI_Emoji}$", "v");
+
+export function normalizeSessionIconValue(value: string): string | null {
+  const normalized = value.trim();
+  return SESSION_ICON_RE.test(normalized) ? normalized : null;
+}
 
 export function isSessionAgentAttentionIconId(
   value: unknown,
@@ -19,7 +28,7 @@ export function isSessionAgentAttentionIconId(
 }
 
 export function sanitizeSessionAgentStatusNote(value: string): string {
-  const normalized = sanitizeUserFacingText(value, { errorContext: true })
+  const normalized = renderUserFacingText(value, { errorContext: true })
     .replace(/\s+/g, " ")
     .trim();
   return truncateUtf16Safe(normalized, SESSION_AGENT_STATUS_NOTE_MAX_CHARS).trimEnd();

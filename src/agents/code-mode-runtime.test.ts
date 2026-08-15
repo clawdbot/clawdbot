@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { boundCodeModeResult } from "./code-mode-json.js";
 import {
-  enforceOutputLimit,
-  enforceResultLimit,
+  boundOutputToLimit,
   isCodeModeEngagedForModel,
   prepareSource,
   resolveCodeModeConfig,
@@ -10,43 +10,54 @@ import { parseCodeModeScriptSyntax } from "./code-mode-script-syntax.js";
 
 const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
 
-describe("Code Mode output accounting", () => {
-  it("accepts Unicode output at its exact serialized byte limit", () => {
-    const output = [{ type: "text", text: "😀 café" }];
+describe("Code Mode output bounding", () => {
+  it("preserves Unicode output at its exact serialized byte limit", () => {
+    const output = [{ type: "text", text: "😀 café".repeat(200) }];
     const maxOutputBytes = Buffer.byteLength(JSON.stringify(output), "utf8");
 
-    expect(() => enforceOutputLimit(output, { ...config, maxOutputBytes })).not.toThrow();
-    expect(() =>
-      enforceOutputLimit(output, { ...config, maxOutputBytes: maxOutputBytes - 1 }),
-    ).toThrow("code mode output limit exceeded");
+    expect(boundOutputToLimit(output, { ...config, maxOutputBytes })).toBe(false);
+    expect(output).toEqual([{ type: "text", text: "😀 café".repeat(200) }]);
+
+    expect(boundOutputToLimit(output, { ...config, maxOutputBytes: maxOutputBytes - 1 })).toBe(
+      true,
+    );
+    expect(JSON.stringify(output)).toContain("rerun with narrower args");
   });
 
-  it("counts serialized output only once against the returned value", () => {
-    const output = [{ type: "text", text: "😀" }];
-    const value = { result: "café" };
+  it("bounds output and the returned value under one serialized budget", () => {
+    const output = [{ type: "text", text: "😀".repeat(200) }];
+    const value = { result: "café".repeat(200) };
     const maxOutputBytes =
       Buffer.byteLength(JSON.stringify(output), "utf8") +
       Buffer.byteLength(JSON.stringify(value), "utf8");
 
-    expect(() =>
-      enforceResultLimit({ output, value, config: { ...config, maxOutputBytes } }),
-    ).not.toThrow();
-    expect(() =>
-      enforceResultLimit({
-        output,
-        value,
-        config: { ...config, maxOutputBytes: maxOutputBytes - 1 },
-      }),
-    ).toThrow("code mode output limit exceeded");
+    expect(boundCodeModeResult({ output, value, maxOutputBytes })).toMatchObject({
+      output,
+      value,
+      truncated: false,
+    });
+
+    const bounded = boundCodeModeResult({
+      output,
+      value,
+      maxOutputBytes: maxOutputBytes - 1,
+    });
+    expect(bounded.truncated).toBe(true);
+    expect(
+      Buffer.byteLength(JSON.stringify(bounded.output), "utf8") +
+        Buffer.byteLength(JSON.stringify(bounded.value), "utf8"),
+    ).toBeLessThanOrEqual(maxOutputBytes - 1);
   });
 
   it("does not charge an empty output array against the returned value", () => {
     const value = "ok";
     const maxOutputBytes = Buffer.byteLength(JSON.stringify(value), "utf8");
 
-    expect(() =>
-      enforceResultLimit({ output: [], value, config: { ...config, maxOutputBytes } }),
-    ).not.toThrow();
+    expect(boundCodeModeResult({ output: [], value, maxOutputBytes })).toMatchObject({
+      output: [],
+      value,
+      truncated: false,
+    });
   });
 });
 

@@ -35,15 +35,20 @@ async function runSystemGatewayCommand(
   action: () => Promise<unknown>,
   successText?: string,
 ): Promise<void> {
+  const machineOutput = opts.json || successText === undefined;
   try {
     const result = await action();
-    if (opts.json || successText === undefined) {
+    if (machineOutput) {
       defaultRuntime.writeJson(result);
     } else {
       defaultRuntime.log(successText);
     }
   } catch (err) {
-    defaultRuntime.error(danger(String(err)));
+    if (machineOutput) {
+      defaultRuntime.writeJson({ error: String(err) });
+    } else {
+      defaultRuntime.error(danger(String(err)));
+    }
     defaultRuntime.exit(1);
   }
 }
@@ -117,37 +122,26 @@ export function registerSystemCli(program: Command) {
     });
   });
 
-  addGatewayClientOptions(
-    heartbeat
-      .command("enable")
-      .description("Enable heartbeats")
-      .option("--json", "Output JSON", false),
-  ).action(async (opts: SystemGatewayOpts) => {
-    await runSystemGatewayCommand(opts, async () => {
-      return await callGatewayFromCli(
-        "set-heartbeats",
-        opts,
-        { enabled: true },
-        { expectFinal: false },
-      );
+  for (const [name, enabled] of [
+    ["enable", true],
+    ["disable", false],
+  ] as const) {
+    addGatewayClientOptions(
+      heartbeat
+        .command(name)
+        .description(`${enabled ? "Enable" : "Disable"} heartbeats`)
+        .option("--json", "Output JSON", false),
+    ).action(async (opts: SystemGatewayOpts) => {
+      await runSystemGatewayCommand(opts, async () => {
+        return await callGatewayFromCli(
+          "set-heartbeats",
+          opts,
+          { enabled },
+          { expectFinal: false },
+        );
+      });
     });
-  });
-
-  addGatewayClientOptions(
-    heartbeat
-      .command("disable")
-      .description("Disable heartbeats")
-      .option("--json", "Output JSON", false),
-  ).action(async (opts: SystemGatewayOpts) => {
-    await runSystemGatewayCommand(opts, async () => {
-      return await callGatewayFromCli(
-        "set-heartbeats",
-        opts,
-        { enabled: false },
-        { expectFinal: false },
-      );
-    });
-  });
+  }
 
   addGatewayClientOptions(
     system

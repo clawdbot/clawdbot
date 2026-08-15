@@ -19,7 +19,7 @@ type WorkflowStep = {
   id?: string;
   name?: string;
   run?: string;
-  with?: { name?: string; path?: string; script?: string };
+  with?: { name?: string; overwrite?: boolean; path?: string; script?: string };
 };
 
 type Workflow = {
@@ -148,8 +148,39 @@ describe("shared OpenClawKit Periphery workflow", () => {
     const macosUpload = workflow.jobs?.["scan-macos"]?.steps?.find(
       (step) => step.name === "Upload macOS consumer report",
     );
-    expect(iosUpload?.with?.name).toContain("shared-periphery-ios-");
-    expect(macosUpload?.with?.name).toContain("shared-periphery-macos-");
+    const iosDownload = workflow.jobs?.intersect?.steps?.find(
+      (step) => step.name === "Download iOS consumer report",
+    );
+    const macosDownload = workflow.jobs?.intersect?.steps?.find(
+      (step) => step.name === "Download macOS consumer report",
+    );
+    const intersectionUpload = workflow.jobs?.intersect?.steps?.find(
+      (step) => step.name === "Upload shared intersection",
+    );
+
+    expect(iosUpload?.with?.name).toBe("shared-periphery-ios-${{ github.run_id }}");
+    expect(iosDownload?.with?.name).toBe(iosUpload?.with?.name);
+    expect(macosUpload?.with?.name).toBe("shared-periphery-macos-${{ github.run_id }}");
+    expect(macosDownload?.with?.name).toBe(macosUpload?.with?.name);
+    expect(intersectionUpload?.with?.name).toBe(
+      "shared-periphery-intersection-${{ github.run_id }}",
+    );
+
+    const artifactNames = [
+      iosUpload?.with?.name,
+      iosDownload?.with?.name,
+      macosUpload?.with?.name,
+      macosDownload?.with?.name,
+      intersectionUpload?.with?.name,
+    ];
+    expect(artifactNames).not.toContain(undefined);
+    for (const artifactName of artifactNames) {
+      expect(artifactName).not.toContain("github.run_attempt");
+    }
+
+    expect(iosUpload?.with?.overwrite).toBe(true);
+    expect(macosUpload?.with?.overwrite).toBe(true);
+    expect(intersectionUpload?.with?.overwrite).toBe(true);
   });
 
   it("retains the generated protocol contract and leaves findings for the intersection", () => {

@@ -1,9 +1,10 @@
 // Transcript persistence and source-reply rewrites shared by chat send and abort.
+import { asOptionalRecord as transcriptEventRecord } from "@openclaw/normalization-core/record-coerce";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
   findTranscriptEvent,
   loadTranscriptEventRowsAfterSeqSync,
-  patchSessionEntry,
+  patchSessionEntryCore,
   publishTranscriptUpdate,
   readSessionTranscriptWatermark,
   rewriteTranscriptEventRowsExact,
@@ -67,22 +68,13 @@ export function assistantTranscriptScope(
   };
 }
 
-function transcriptEventRecord(event: TranscriptEvent): Record<string, unknown> | undefined {
-  return event && typeof event === "object" && !Array.isArray(event)
-    ? (event as Record<string, unknown>)
-    : undefined;
-}
-
 function transcriptEventId(event: TranscriptEvent): string | undefined {
   const id = transcriptEventRecord(event)?.id;
   return typeof id === "string" && id.trim().length > 0 ? id : undefined;
 }
 
 function transcriptEventMessage(event: TranscriptEvent): Record<string, unknown> | undefined {
-  const message = transcriptEventRecord(event)?.message;
-  return message && typeof message === "object" && !Array.isArray(message)
-    ? (message as Record<string, unknown>)
-    : undefined;
+  return transcriptEventRecord(transcriptEventRecord(event)?.message);
 }
 
 function findAssistantTranscriptMessageByIdempotencyKeyInEvents(
@@ -310,7 +302,7 @@ async function touchAssistantTranscriptSessionEntry(
     return;
   }
   const transcriptMarkerUpdatedAt = Date.now();
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     {
       storePath: scope.storePath,
       sessionKey: scope.sessionKey,

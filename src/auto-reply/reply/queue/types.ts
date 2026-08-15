@@ -1,22 +1,28 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Shared queue type contracts for admission, drain, and fallback handling.
+import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { CliSessionBindingFacts } from "../../../agents/cli-runner/types.js";
 import type { CurrentInboundPromptContext } from "../../../agents/embedded-agent-runner/run/params.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
+import type { ScheduledToolPolicyContext } from "../../../agents/scheduled-tool-policy.js";
+import type { TrustedSubagentCompletionHandoff } from "../../../agents/subagents/announce/subagent-announce-handoff.js";
 import type { SilentReplyPromptMode } from "../../../agents/system-prompt.types.js";
 import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
+import type { ChannelAdmissionEvidence } from "../../../channels/message-access/admission-evidence.js";
 import type { SessionEntry, SessionToolOverrides } from "../../../config/sessions.js";
 import type { ReplyToMode } from "../../../config/types.base.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
 import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
+import type { RuntimePluginToolGrant } from "../../../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
-import type { SkillSnapshot } from "../../../skills/types.js";
+import type { ExplicitSkillSelection, SkillSnapshot } from "../../../skills/types.js";
 import type {
   QueuedReplyDeliveryCorrelation,
   SourceReplyDeliveryMode,
@@ -27,8 +33,6 @@ import type { OriginatingChannelType } from "../../templating.js";
 import type { ThinkingCatalogEntry } from "../../thinking.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
 import { releaseRecentQueueMessageId } from "./recent-message-ids.js";
-
-export type QueueMode = "steer" | "followup" | "collect" | "interrupt";
 
 export type QueueDropPolicy = "old" | "new" | "summarize";
 
@@ -54,7 +58,10 @@ type QueueInsertPosition = "tail" | "front";
 
 export type EnqueueFollowupRunOptions = {
   position?: QueueInsertPosition;
+  steerCandidate?: boolean;
 };
+
+export type FollowupQueueDisposition = "queue-cap" | "queue-cap-old" | "queue-cap-new";
 
 export class FollowupRunDeferredError extends Error {
   constructor(message = "Follow-up run deferred") {
@@ -78,8 +85,12 @@ export type FollowupRun = {
   currentInboundEventKind?: InboundEventKind;
   /** Whether the current inbound message contained audio for inbound-only TTS policy. */
   currentInboundAudio?: boolean;
+  /** Host-minted participant evidence; raw channel identities never live on this object. */
+  channelAdmissionEvidence?: ChannelAdmissionEvidence;
   /** Explicit current-turn context that should be visible for this run but not persisted as user text. */
   currentInboundContext?: CurrentInboundPromptContext;
+  /** Explicit skills resolved from the authenticated inbound message. */
+  explicitSkillSelections?: ExplicitSkillSelection[];
   /** Abort signal for turns that are canceled by their source-channel admission fence. */
   abortSignal?: AbortSignal;
   /** Queue-owned cancellation fence used when lifecycle cleanup invalidates pending work. */
@@ -89,11 +100,24 @@ export type FollowupRun = {
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
   /** Dispatch-scoped freshness owner for a queued delivery-barrier wait. */
   onReplyAdmissionWaitChange?: (waiting: boolean) => void;
+  /** Records terminal queue-cap outcomes at the queue owner before lifecycle cleanup. */
+  onQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
+  /** Turn-owned tool authority captured before queue ownership transfers. */
+  toolsAllow?: string[];
+  disableTools?: boolean;
   /** Force individual drain; never merge this run into a collect batch. */
   disableCollectBatching?: boolean;
+  /** The current-turn hook already ran before this steer became a fallback. */
+  /** Pending same-turn acceptance while this item remains parked in FIFO order. */
+  steerPending?: {
+    predecessor: Promise<boolean>;
+    settle: (accepted: boolean) => void;
+  };
+  /** Preserves this candidate's position ahead of overflow summaries. */
+  steerAnchor?: true;
   /** Internal marker for the one-shot stranded final recovery retry. */
   strandedReplyRetry?: boolean;
   /** Preserve priority runs when old-item queue overflow eviction runs before drain. */
@@ -137,9 +161,11 @@ export type FollowupRun = {
     toolBindings?: Readonly<Record<string, unknown>>;
     chatType?: ChatType;
     agentAccountId?: string;
+    conversationToolPolicy?: GroupToolPolicyConfig;
     groupId?: string;
     groupChannel?: string;
     groupSpace?: string;
+    memberRoleIds?: string[];
     /** Parent session provenance used to validate inherited group policy. */
     spawnedBy?: string;
     senderId?: string;
@@ -189,6 +215,10 @@ export type FollowupRun = {
     blockReplyBreak: "text_end" | "message_end";
     ownerNumbers?: string[];
     inputProvenance?: InputProvenance;
+    /** Trusted authority facts that must survive queueing and steering admission. */
+    trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
+    scheduledToolPolicy?: ScheduledToolPolicyContext;
+    runtimePluginToolGrant?: RuntimePluginToolGrant;
     extraSystemPrompt?: string;
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
     taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
@@ -226,7 +256,7 @@ const retiredTurnAdoptionCancellationLifecycles = new WeakSet<TurnAdoptionLifecy
 const completedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
 const completedTurnAdoptionLifecycleCallbacks = new WeakSet<TurnAdoptionLifecycle>();
 
-type FollowupLifecycleRun = Pick<FollowupRun, "turnAdoptionLifecycle">;
+type FollowupLifecycleRun = Pick<FollowupRun, "steerPending" | "turnAdoptionLifecycle">;
 
 export function markFollowupRunEnqueued(run: FollowupLifecycleRun): boolean {
   const lifecycle = run.turnAdoptionLifecycle;
@@ -278,6 +308,7 @@ export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Prom
 }
 
 export function completeFollowupRunLifecycle(run: FollowupLifecycleRun): void {
+  run.steerPending?.settle(false);
   const lifecycle = run.turnAdoptionLifecycle;
 
   const finish = () => {

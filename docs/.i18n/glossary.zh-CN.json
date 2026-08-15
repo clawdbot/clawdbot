@@ -676,6 +676,10 @@
     "target": "记忆概览"
   },
   {
+    "source": "QMD memory backend removal",
+    "target": "QMD 记忆后端移除"
+  },
+  {
     "source": "Active memory",
     "target": "主动记忆"
   },
@@ -1668,6 +1672,26 @@
     "target": "Baseten（Inkling + Model APIs）"
   },
   {
+    "source": "ChromeOS",
+    "target": "ChromeOS"
+  },
+  {
+    "source": "ChromeOS (Crostini)",
+    "target": "ChromeOS (Crostini)"
+  },
+  {
+    "source": "Linux guide",
+    "target": "Linux 指南"
+  },
+  {
+    "source": "Node install guidance",
+    "target": "Node 安装指南"
+  },
+  {
+    "source": "Gateway runbook",
+    "target": "Gateway 运行手册"
+  },
+  {
     "source": "Multi-user mode",
     "target": "多用户模式"
   },
@@ -1718,5 +1742,13 @@
   {
     "source": "Updating OpenClaw",
     "target": "更新 OpenClaw"
+  },
+  {
+    "source": "Connect a machine",
+    "target": "连接机器"
+  },
+  {
+    "source": "Portals",
+    "target": "门户"
   }
 ]

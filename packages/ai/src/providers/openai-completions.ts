@@ -11,7 +11,7 @@ import type {
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import { clampThinkingLevel } from "../model-utils.js";
-import { convertMessages } from "../openai-completions-messages.js";
+import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import {
   resolveOpenAICompletionsCompat,
@@ -19,16 +19,19 @@ import {
 } from "../transports/openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-compat.js";
 import {
+  createOpenAIResponseHook,
   isOpenAICompletionsThinkingEnabled,
   parseOpenAICompletionsUsage,
   readOpenAICompletionsContentDeltas,
 } from "../transports/openai-transport-shared.js";
-import { transportAbortError } from "../transports/transport-stream-shared.js";
+import {
+  transportAbortError,
+  withProviderResponseHook,
+} from "../transports/transport-stream-shared.js";
 import type {
   AssistantMessage,
   CacheRetention,
   Context,
-  Message,
   Model,
   SimpleStreamOptions,
   StreamFunction,
@@ -44,10 +47,10 @@ import {
   type PendingCommentaryTags,
 } from "../utils/assistant-text-phase.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
-import { formatProviderError } from "../utils/provider-error.js";
+import { sortPromptCacheToolsByName } from "../utils/prompt-cache-stability.js";
+import { projectProviderError } from "../utils/provider-error.js";
 import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
 import {
   createFirstStreamEventAbortController,
@@ -75,27 +78,6 @@ import {
   type OpenAIToolProjection,
 } from "./openai-tool-projection.js";
 import { buildBaseOptions } from "./simple-options.js";
-
-/**
- * Check if conversation messages contain tool calls or tool results.
- * This is needed because Anthropic (via proxy) requires the tools param
- * to be present when messages include tool_calls or tool role messages.
- */
-function hasToolHistory(messages: Message[]): boolean {
-  for (const msg of messages) {
-    if (msg.role === "toolResult") {
-      return true;
-    }
-    if (msg.role === "assistant") {
-      // Assistant content can be a raw string from transcript replay; a string
-      // never carries tool calls, so it should not count toward tool history.
-      if (Array.isArray(msg.content) && msg.content.some((block) => block.type === "toolCall")) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
 
 export type { OpenAICompletionsOptions } from "../provider-options.js";
 export { convertMessages } from "../openai-completions-messages.js";
@@ -187,11 +169,13 @@ export const streamOpenAICompletions: StreamFunction<
           requestOptions,
         )
         .withResponse();
-      await options?.onResponse?.(
-        { status: response.status, headers: headersToRecord(response.headers) },
-        model,
-      );
-      stream.push({ type: "start", partial: output });
+      const hookedOpenAIStream = withProviderResponseHook({
+        stream: openaiStream,
+        signal: firstEventAbort.signal,
+        abort: firstEventAbort.abort,
+        hook: createOpenAIResponseHook(options?.onResponse, response, model),
+        onReady: () => stream.push({ type: "start", partial: output }),
+      });
 
       interface StreamingToolCallBlock extends ToolCall {
         partialArgs?: string;
@@ -380,7 +364,7 @@ export const streamOpenAICompletions: StreamFunction<
         }
       };
 
-      const guardedOpenaiStream = withFirstStreamEventTimeout(openaiStream, {
+      const guardedOpenaiStream = withFirstStreamEventTimeout(hookedOpenAIStream, {
         provider: model.provider,
         api: model.api,
         model: model.id,
@@ -605,7 +589,8 @@ export const streamOpenAICompletions: StreamFunction<
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
-      output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+      const terminal = projectProviderError(error, options?.signal);
+      Object.assign(output, terminal);
       finalizeOpenAICompletionsToolCalls(output, { allowSilentToolCallPromotion: false });
       for (const block of output.content) {
         delete (block as { index?: number }).index;
@@ -613,14 +598,7 @@ export const streamOpenAICompletions: StreamFunction<
         delete (block as { partialArgs?: string }).partialArgs;
         delete (block as { streamIndex?: number }).streamIndex;
       }
-      output.errorMessage = formatProviderError(error);
-      // Some providers via OpenRouter give additional information in this field.
-      const rawMetadata = (error as { error?: { metadata?: { raw?: string } } })?.error?.metadata
-        ?.raw;
-      if (rawMetadata && !output.errorMessage.includes(rawMetadata)) {
-        output.errorMessage += `\n${rawMetadata}`;
-      }
-      stream.push({ type: "error", reason: output.stopReason, error: output });
+      stream.push({ type: "error", reason: terminal.stopReason, error: output });
       stream.end();
     } finally {
       firstEventAbort?.dispose();
@@ -814,13 +792,13 @@ function buildParams(
     toolProjection = converted.projection;
     if (converted.tools.length > 0) {
       params.tools = converted.tools;
-    } else if (hasToolHistory(context.messages)) {
+    } else if (hasToolCallHistory(context.messages)) {
       params.tools = [];
     }
     if (compat.zaiToolStream && converted.tools.length > 0) {
       params.tool_stream = true;
     }
-  } else if (hasToolHistory(context.messages)) {
+  } else if (hasToolCallHistory(context.messages)) {
     // Anthropic (via LiteLLM/proxy) requires tools param when conversation has tool_calls/tool_results
     params.tools = [];
   }
@@ -1082,7 +1060,7 @@ function convertTools(
   const projection = projectOpenAITools(tools);
   return {
     projection,
-    tools: projection.tools.map((tool) => ({
+    tools: sortPromptCacheToolsByName(projection.tools).map((tool) => ({
       type: "function",
       function: {
         name: tool.name,

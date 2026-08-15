@@ -1,10 +1,12 @@
 // Discord plugin module implements payload behavior.
 import { MessageFlags, type APIEmbed } from "discord-api-types/v10";
 import { Embed } from "./embeds.js";
+import { stripUndefinedFields as clean } from "./undefined-fields.js";
 
 export type MessagePayloadFile = {
   name: string;
   data: Blob | Uint8Array | ArrayBuffer;
+  contentType?: string;
   description?: string;
   duration_secs?: number;
   waveform?: string;
@@ -27,10 +29,6 @@ export type TopLevelComponents = {
   isV2?: boolean;
   serialize: () => unknown;
 };
-
-function clean<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
-}
 
 function serializeAnyComponent(component: { serialize: () => unknown }): unknown {
   return component.serialize();

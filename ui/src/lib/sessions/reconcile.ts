@@ -1,4 +1,5 @@
 import { asNullableRecord as recordOrNull } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as stringValue } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
 import {
@@ -146,6 +147,46 @@ function preserveRicherThinkingMetadata<T extends ThinkingMetadataCarrier>(
   };
 }
 
+export function preserveRosterPresentationMetadata(
+  incoming: GatewaySessionRow,
+  existing: GatewaySessionRow | undefined,
+): GatewaySessionRow {
+  if (
+    !existing ||
+    !incoming.sessionId ||
+    incoming.sessionId !== existing.sessionId ||
+    (incoming.derivedTitle !== undefined && incoming.lastMessagePreview !== undefined)
+  ) {
+    return incoming;
+  }
+  return {
+    ...incoming,
+    ...(incoming.derivedTitle === undefined && existing.derivedTitle !== undefined
+      ? { derivedTitle: existing.derivedTitle }
+      : {}),
+    ...(incoming.lastMessagePreview === undefined && existing.lastMessagePreview !== undefined
+      ? { lastMessagePreview: existing.lastMessagePreview }
+      : {}),
+  };
+}
+
+export function reconcileRosterPresentationMetadata(
+  incoming: SessionsListResult | null,
+  existing: SessionsListResult | null,
+): SessionsListResult | null {
+  if (!incoming || !existing) {
+    return incoming;
+  }
+  const existingByKey = new Map(existing.sessions.map((session) => [session.key, session]));
+  let changed = false;
+  const sessions = incoming.sessions.map((session) => {
+    const reconciled = preserveRosterPresentationMetadata(session, existingByKey.get(session.key));
+    changed ||= reconciled !== session;
+    return reconciled;
+  });
+  return changed ? { ...incoming, sessions } : incoming;
+}
+
 function stripThinkingMetadata<T extends ThinkingMetadataCarrier>(value: T): T {
   const next = { ...value };
   delete next.thinkingLevels;
@@ -213,10 +254,6 @@ function sessionAgentId(
 
 function recordValue(record: Record<string, unknown>, key: string): unknown {
   return Object.hasOwn(record, key) ? record[key] : undefined;
-}
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function sessionRunStatus(value: unknown): SessionRunStatus | null {
@@ -406,11 +443,11 @@ export function reconcileSessionChanged(
   if (rowFields.pinnedAt === null) {
     delete row.pinnedAt;
   }
-  if (rowFields.icon === null) {
-    delete row.icon;
-  }
   if (rowFields.label === null) {
     delete row.label;
+  }
+  if (rowFields.icon === null) {
+    delete row.icon;
   }
   if (rowFields.category === null) {
     delete row.category;
@@ -522,8 +559,11 @@ export function reconcileSessionHistory(
     return defaults ? { ...result, defaults: nextDefaults } : result;
   }
   const visibleKey = existing?.key ?? session.key;
-  const visibleSession = preserveRicherThinkingMetadata(
-    visibleKey === session.key ? session : { ...session, key: visibleKey },
+  const visibleSession = preserveRosterPresentationMetadata(
+    preserveRicherThinkingMetadata(
+      visibleKey === session.key ? session : { ...session, key: visibleKey },
+      existing,
+    ),
     existing,
   );
   if (isStaleForActiveSession(visibleSession, existing)) {

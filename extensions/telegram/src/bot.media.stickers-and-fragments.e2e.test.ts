@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readRemoteMediaBufferSpy, telegramBotDepsForTest } from "./bot.media.e2e-harness.js";
+import { readRemoteMediaBufferSpy, telegramBotDepsForTest } from "./bot.media.e2e.test-harness.js";
 import {
   TELEGRAM_TEST_TIMINGS,
   cacheStickerSpy,
@@ -286,20 +286,22 @@ describe("telegram text fragments", () => {
     "buffers near-limit text and processes sequential parts as one message",
     async () => {
       const { handler, replySpy } = await createBotHandlerWithOptions({});
-      const part1 = "A".repeat(4050);
+      const quote = "FRAGMENT_REPLY_QUOTE";
+      const part1 = `${"A".repeat(4050)} ${quote}`;
       const part2 = "B".repeat(50);
+      const firstMessage = {
+        chat: { id: 42, type: "private" as const },
+        from: { id: 777, is_bot: false as const, first_name: "Ada" },
+        message_id: 10,
+        date: 1736380800,
+        text: part1,
+      };
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
 
       try {
         await handler({
-          message: {
-            chat: { id: 42, type: "private" },
-            from: { id: 777, is_bot: false, first_name: "Ada" },
-            message_id: 10,
-            date: 1736380800,
-            text: part1,
-          },
+          message: firstMessage,
           me: { username: "openclaw_bot" },
           getFile: async () => ({}),
         });
@@ -311,6 +313,8 @@ describe("telegram text fragments", () => {
             message_id: 11,
             date: 1736380801,
             text: part2,
+            reply_to_message: { ...firstMessage, reply_to_message: undefined },
+            quote: { text: quote, position: 4051 },
           },
           me: { username: "openclaw_bot" },
           getFile: async () => ({}),
@@ -324,9 +328,10 @@ describe("telegram text fragments", () => {
         );
 
         await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
-        const payload = replySpy.mock.calls.at(0)?.[0] as { RawBody?: string };
+        const payload = replySpy.mock.calls.at(0)?.[0] as { Body?: string; RawBody?: string };
         expect(payload.RawBody).toContain(part1.slice(0, 32));
         expect(payload.RawBody).toContain(part2.slice(0, 32));
+        expect(payload.Body).toContain(`[1. Ada id:10]\n"${quote}"`);
       } finally {
         setTimeoutSpy.mockRestore();
         clearTimeoutSpy.mockRestore();

@@ -123,6 +123,7 @@ export function resolveQaRunProfileExecutionSelection(params: {
   claudeCliAuthMode?: QaCliBackendAuthMode;
   executionKind?: QaSeedScenarioWithSource["execution"]["kind"];
   supportsChannel?: (channel: string) => boolean;
+  resolveModuleFlowSupport?: (channel?: string) => boolean;
 }): QaRunProfileExecutionSelection {
   const selectedScenarios: QaSeedScenarioWithSource[] = [];
   const excludedScenarios: QaRunProfileExecutionSelection["excludedScenarios"] = [];
@@ -150,6 +151,7 @@ export function resolveQaRunProfileExecutionSelection(params: {
         channelDriver: params.channelDriver,
         channel: effectiveChannel,
         claudeCliAuthMode: params.claudeCliAuthMode,
+        supportsModuleFlows: params.resolveModuleFlowSupport?.(effectiveChannel),
       }),
     );
     if (
@@ -191,6 +193,7 @@ export function resolveQaProfileScenarios(params: {
   eligibleChannels?: readonly string[];
   executionKind?: QaSeedScenarioWithSource["execution"]["kind"];
   requireDeclaredChannel?: boolean;
+  resolveModuleFlowSupport?: (channel?: string) => boolean;
   scenarioIds?: readonly string[];
 }) {
   const membership = resolveQaRunProfileMembership({
@@ -236,6 +239,7 @@ export function resolveQaProfileScenarios(params: {
         channelDriver,
         channel: channel ?? scenario.execution.channel,
         executionKind: params.executionKind,
+        resolveModuleFlowSupport: params.resolveModuleFlowSupport,
       }).excludedScenarios.flatMap((entry) => entry.reasons),
     );
     return { scenario, reasons: uniqueStrings(reasons) };

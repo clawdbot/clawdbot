@@ -88,6 +88,13 @@ const proposal: SkillWorkshopProposal = {
 
 function propsFor(mode: SkillWorkshopMode): SkillWorkshopProps {
   return {
+    access: {
+      canEvaluate: true,
+      canApply: true,
+      canRevise: true,
+      canReject: true,
+      canScanHistory: true,
+    },
     loading: false,
     error: null,
     inspectingKey: null,

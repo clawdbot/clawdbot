@@ -55,6 +55,28 @@ describe("schedule column codec round-trip", () => {
     });
   });
 
+  it("keeps private runtime authority out of job_json", () => {
+    const runtimeAuthority = {
+      version: 1 as const,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "calendar" }] },
+    };
+    const job = projectCronJobThroughStorageCodec({
+      ...makeCronJob({}),
+      runtimeAuthority,
+      runtimeAuthorityRecoveryRequired: true,
+    });
+    expect(job.runtimeAuthority).toBeUndefined();
+    expect(job.runtimeAuthorityRecoveryRequired).toBeUndefined();
+
+    const malformed = projectCronJobThroughStorageCodec({
+      ...makeCronJob({}),
+      runtimeAuthority: { ...runtimeAuthority, version: 2 } as never,
+    });
+    expect(malformed.runtimeAuthority).toBeUndefined();
+  });
+
   it("round-trips pacing through the additive job_json envelope", () => {
     const job = projectCronJobThroughStorageCodec(
       makeCronJob({ pacing: { min: "15m", max: "4h" } }),

@@ -116,9 +116,11 @@ describe("createOpenAICompletionsToolsCompatWrapper", () => {
 });
 
 describe("createCodexNativeWebSearchWrapper", () => {
-  it("does not inject native web_search when code mode owns the tool surface", () => {
+  it("keeps native_active web_search alongside the code mode tool surface", () => {
+    let observedOptions: Parameters<StreamFn>[2];
     const payloads: Array<Record<string, unknown>> = [];
     const baseStreamFn: StreamFn = (model, context, options) => {
+      observedOptions = options;
       const payload: Record<string, unknown> = {
         model: model.id,
         tools: [
@@ -178,7 +180,12 @@ describe("createCodexNativeWebSearchWrapper", () => {
     expect(payloads[0]?.tools).toEqual([
       { type: "function", name: "exec" },
       { type: "function", name: "wait" },
+      { type: "web_search" },
     ]);
+    expect(
+      (observedOptions as { openclawCodeModeAllowedHostedToolTypes?: Set<string> } | undefined)
+        ?.openclawCodeModeAllowedHostedToolTypes,
+    ).toEqual(new Set(["web_search"]));
   });
 
   it("filters async replacement payloads when code mode owns the tool surface", async () => {
@@ -189,12 +196,22 @@ describe("createCodexNativeWebSearchWrapper", () => {
     };
     const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
       codeModeToolSurfaceEnabled: true,
+      config: {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: { enabled: true, mode: "cached" },
+            },
+          },
+        },
+      },
     });
     const model = {
-      api: "openai-responses",
-      provider: "openai",
+      api: "openai-chatgpt-responses",
+      provider: "gateway",
       id: "gpt-5.5",
-    } as Model<"openai-responses">;
+    } as Model<"openai-chatgpt-responses">;
 
     void wrapped(
       model,
@@ -224,6 +241,7 @@ describe("createCodexNativeWebSearchWrapper", () => {
             },
             { type: "function", name: "wait" },
             { type: "web_search" },
+            { type: "file_search" },
           ],
         }),
       },
@@ -236,8 +254,66 @@ describe("createCodexNativeWebSearchWrapper", () => {
         { type: "function", name: "sessions_yield" },
         { type: "function", name: "structured_output" },
         { type: "function", name: "wait" },
+        { type: "web_search" },
       ],
     });
+    expect(
+      (observedOptions as { openclawCodeModeAllowedHostedToolTypes?: Set<string> } | undefined)
+        ?.openclawCodeModeAllowedHostedToolTypes,
+    ).toEqual(new Set(["web_search"]));
+  });
+
+  it("does not authorize hosted search when runtime tool policy denies it in code mode", () => {
+    let observedOptions: Parameters<StreamFn>[2];
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      observedOptions = options;
+      const payload = {
+        tools: [
+          { type: "function", name: "exec" },
+          { type: "function", name: "wait" },
+          { type: "web_search" },
+        ],
+      };
+      options?.onPayload?.(payload, model);
+      payloads.push(structuredClone(payload));
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
+      codeModeToolSurfaceEnabled: true,
+      nativeWebSearchAllowedByToolPolicy: false,
+      config: {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: { enabled: true, mode: "cached" },
+            },
+          },
+        },
+      },
+    });
+
+    void wrapped(
+      codexModel,
+      {
+        messages: [],
+        tools: [
+          { name: "exec", description: "", parameters: {} },
+          { name: "wait", description: "", parameters: {} },
+        ],
+      },
+      {},
+    );
+
+    expect(payloads[0]?.tools).toEqual([
+      { type: "function", name: "exec" },
+      { type: "function", name: "wait" },
+    ]);
+    expect(
+      (observedOptions as { openclawCodeModeAllowedHostedToolTypes?: Set<string> } | undefined)
+        ?.openclawCodeModeAllowedHostedToolTypes,
+    ).toEqual(new Set());
   });
 
   it("does not enable code-mode transport enforcement when config is on but controls are inactive", () => {
@@ -577,16 +653,6 @@ describe("createOpenAIThinkingLevelWrapper", () => {
     void wrapped(openaiModel, { messages: [] }, {});
 
     expect(payloads[0]?.reasoning).toBeUndefined();
-  });
-
-  it("overrides existing reasoning.effort from upstream wrappers", () => {
-    const { baseStreamFn, payloads } = createPayloadCapture({
-      initialReasoning: { effort: "none" },
-    });
-    const wrapped = createOpenAIThinkingLevelWrapper(baseStreamFn, "medium");
-    void wrapped(codexModel, { messages: [] }, {});
-
-    expect(payloads[0]?.reasoning).toEqual({ effort: "medium" });
   });
 
   it("returns underlying streamFn unchanged when thinkingLevel is undefined", () => {

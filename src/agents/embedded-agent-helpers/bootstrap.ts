@@ -8,7 +8,7 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
-import type { EmbeddedContextFile } from "./types.js";
+import type { EmbeddedContextFile } from "./context-file.js";
 
 type ContentBlockWithSignature = {
   thought_signature?: unknown;

@@ -1,5 +1,5 @@
 // Post-install migration tests cover migration prompts and command guidance.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createNonExitingRuntime } from "../runtime.js";
@@ -41,6 +41,8 @@ const migrateDefaultCommand = vi.hoisted(() =>
 vi.mock("../commands/migrate.js", () => ({ migrateDefaultCommand }));
 
 import { offerPostInstallMigrations } from "./setup.post-install-migration.js";
+
+const originalStdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 
 type ProviderMock = {
   id: string;
@@ -108,6 +110,20 @@ describe("offerPostInstallMigrations", () => {
     resolveStateDir.mockReset().mockReturnValue("/tmp/state");
     migrateDefaultCommand.mockReset().mockResolvedValue(undefined);
     setTTY(true);
+  });
+
+  afterEach(() => {
+    if (originalStdinIsTTYDescriptor) {
+      Object.defineProperty(process.stdin, "isTTY", originalStdinIsTTYDescriptor);
+    } else {
+      delete (process.stdin as Partial<typeof process.stdin>).isTTY;
+    }
+  });
+
+  afterAll(() => {
+    expect(Object.getOwnPropertyDescriptor(process.stdin, "isTTY")).toEqual(
+      originalStdinIsTTYDescriptor,
+    );
   });
 
   it("returns early when no plugins were installed in this onboarding step", async () => {

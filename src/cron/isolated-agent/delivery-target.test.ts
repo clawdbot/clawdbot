@@ -31,7 +31,7 @@ vi.mock("../../config/sessions/delivery-info.js", () => ({
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
+  resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/test-store.json"),
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => {

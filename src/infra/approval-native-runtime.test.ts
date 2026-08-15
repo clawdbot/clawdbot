@@ -1,4 +1,5 @@
 // Covers native approval runtime delivery and resolution.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelApprovalNativeAdapter } from "../channels/plugins/types.adapters.js";
 import {
@@ -62,12 +63,7 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {
   const arg = mock.mock.calls[index]?.[0];

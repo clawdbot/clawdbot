@@ -56,7 +56,7 @@ export function resetCommandPollCount(state: SessionState, commandId: string): v
  * Prune stale command poll records (older than 1 hour).
  * Call periodically to prevent memory bloat.
  */
-export function pruneStaleCommandPolls(state: SessionState, maxAgeMs = 3600000): void {
+export function pruneStaleCommandPollsCore(state: SessionState, maxAgeMs = 3600000): void {
   if (!state.commandPollCounts) {
     return;
   }

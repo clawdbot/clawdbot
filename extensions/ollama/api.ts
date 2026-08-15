@@ -33,4 +33,4 @@ export {
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
-} from "./src/stream.js";
+} from "./src/stream-api.js";

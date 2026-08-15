@@ -7,6 +7,7 @@ scenario:
     primary:
       - agent-runtime.startup-instructions
       - agent-runtime.startup-first-action
+      - session-memory.instruction-profile-first-action
   objective: Verify a fresh agent receives canonical workspace startup instructions and reads the instructed file before any visible plan, permission request, or other tool action.
   successCriteria:
     - The initial provider request contains the seeded AGENTS.md startup marker but not the fixture nonce.

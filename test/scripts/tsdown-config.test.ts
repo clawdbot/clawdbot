@@ -2,12 +2,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mjs";
+import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
-} from "../../scripts/lib/tsdown-config-groups.mjs";
+} from "../../scripts/lib/tsdown-config-groups.mts";
 import config from "../../tsdown.config.ts";
 
 const configs = Array.isArray(config) ? config : [config];

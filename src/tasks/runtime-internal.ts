@@ -25,7 +25,7 @@ export {
   deleteTaskRecordById,
   ensureTaskRegistryReady,
   findTaskByRunId,
-  finalizeTaskRunByRunId,
+  finalizeTaskRecordByRunId,
   getTaskById,
   hasActiveTaskForChildSessionKey,
   listFreshTasksForOwnerKey,

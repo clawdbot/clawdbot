@@ -2,8 +2,8 @@
 import os from "node:os";
 import path from "node:path";
 import { isMainThread, threadId } from "node:worker_threads";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { resolveStateDir } from "../config/paths.js";
-import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 
 /**
  * Path helpers for the shared OpenClaw SQLite state database.
@@ -38,4 +38,10 @@ export function resolveOpenClawStateSqliteDir(env: NodeJS.ProcessEnv = process.e
 /** Resolve the shared state SQLite file path. */
 export function resolveOpenClawStateSqlitePath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveOpenClawStateSqliteDir(env), "openclaw.sqlite");
+}
+
+/** Resolve the state owner directory for a canonical or explicit shared database path. */
+export function resolveOpenClawStateDirForDatabasePath(databasePath: string): string {
+  const databaseDir = path.dirname(path.resolve(databasePath));
+  return path.basename(databaseDir) === "state" ? path.dirname(databaseDir) : databaseDir;
 }

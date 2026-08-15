@@ -4,6 +4,7 @@ import type {
   PublishedModelCatalogOwnerCandidate,
   ResolvedPublishedModelCatalogOwner,
 } from "./prepared-model-catalog.types.js";
+import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 
 class PublishedModelCatalogOwnerResolutionError extends Error {
   constructor(message: string) {
@@ -37,11 +38,20 @@ export function resolvePublishedModelCatalogOwner(
       `published model catalog owner did not identify a workspace (${agentId})`,
     );
   }
+  const authStore = snapshot.authStore ?? getPreparedModelRuntimeAuthStore(snapshot);
+  if (!authStore) {
+    throw new PublishedModelCatalogOwnerResolutionError(
+      `published model catalog owner is missing prepared auth state (${agentId})`,
+    );
+  }
   return Object.freeze({
     agentId,
     agentDir: snapshot.agentDir,
     workspaceDir,
     config: snapshot.config,
+    authModes: snapshot.authModes,
+    authStore,
+    metadataSnapshot: snapshot.metadataSnapshot,
     modelCatalog: snapshot.modelCatalog,
   });
 }

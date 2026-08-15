@@ -15,6 +15,7 @@ function activePlacementRecord(): WorkerSessionPlacementRecord {
     sessionId: "sess-main",
     agentId: "main",
     sessionKey: "agent:main:main",
+    executionMode: "worker-turn",
     state: "active",
     environmentId: "env-placement",
     generation: 7,
@@ -25,6 +26,8 @@ function activePlacementRecord(): WorkerSessionPlacementRecord {
     lastTranscriptAckCursor: 23,
     lastLiveEventAckCursor: 9,
     recoveryError: null,
+    terminalReason: null,
+    terminalAtMs: null,
     turnClaim: null,
     createdAtMs: 100,
     updatedAtMs: 300,
@@ -59,12 +62,20 @@ test("sessions.list batch-projects durable worker placement", async () => {
     expect(sessionIds).toEqual(expect.arrayContaining(["sess-main", "sess-other"]));
     return new Map([[placement.sessionId, placement]]);
   });
-
+  const diskSpace = {
+    status: "warning" as const,
+    availableBytes: 400,
+    totalBytes: 1_000,
+    observedAtMs: 350,
+  };
   const result = await directSessionReq<{ sessions: GatewaySessionRow[] }>(
     "sessions.list",
     {},
     {
-      context: { workerSessionPlacementService: { getMany } },
+      context: {
+        workerSessionPlacementService: { getMany },
+        workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
+      },
     },
   );
 
@@ -85,6 +96,7 @@ test("sessions.list batch-projects durable worker placement", async () => {
     createdAtMs: 100,
     updatedAtMs: 300,
     stateChangedAtMs: 200,
+    diskSpace,
   });
   expect(other?.placement).toBeUndefined();
 });
@@ -96,12 +108,21 @@ test("sessions.describe projects durable worker placement", async () => {
     expect(sessionIds).toEqual(["sess-main"]);
     return new Map([[placement.sessionId, placement]]);
   });
+  const diskSpace = {
+    status: "critical" as const,
+    availableBytes: 50,
+    totalBytes: 1_000,
+    observedAtMs: 350,
+  };
 
   const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
     "sessions.describe",
     { key: "main" },
     {
-      context: { workerSessionPlacementService: { getMany } },
+      context: {
+        workerSessionPlacementService: { getMany },
+        workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
+      },
     },
   );
 
@@ -120,5 +141,35 @@ test("sessions.describe projects durable worker placement", async () => {
     createdAtMs: 100,
     updatedAtMs: 300,
     stateChangedAtMs: 200,
+    diskSpace,
+  });
+});
+
+test("sessions.describe projects a durable per-session terminal reason without environment lookup", async () => {
+  await seedSessionRows();
+  const active = activePlacementRecord();
+  const placement = {
+    ...active,
+    state: "failed" as const,
+    turnClaim: null,
+    recoveryError: "cloud worker disappeared: provider reported lease destroyed",
+    terminalReason: "cloud worker disappeared: provider reported lease destroyed",
+    terminalAtMs: 400,
+  } satisfies WorkerSessionPlacementRecord;
+  const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>(
+    () => new Map([[placement.sessionId, placement]]),
+  );
+
+  const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
+    "sessions.describe",
+    { key: "main" },
+    { context: { workerSessionPlacementService: { getMany } } },
+  );
+
+  expect(result.ok).toBe(true);
+  expect(result.payload?.session?.placement).toMatchObject({
+    state: "failed",
+    terminalReason: "cloud worker disappeared: provider reported lease destroyed",
+    terminalAtMs: 400,
   });
 });

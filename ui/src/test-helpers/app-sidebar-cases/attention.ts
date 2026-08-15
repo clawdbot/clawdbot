@@ -59,6 +59,57 @@ function agentAttentionRow(
 }
 
 describe("AppSidebar session attention", () => {
+  it("projects canonical attention onto Home across row refresh ordering", async () => {
+    const mainKey = "agent:main:main";
+    const client = {
+      request: vi.fn().mockResolvedValue({ questions: [] }),
+    } as unknown as GatewayBrowserClient;
+    const gatewayHarness = createGatewayHarness(client);
+    const sessionsHarness = createSessionsHarness("main", [mainKey]);
+    setRows(sessionsHarness, [agentAttentionRow(mainKey)]);
+    const { sidebar } = await mountSidebar(gatewayHarness.gateway, sessionsHarness.sessions);
+    const home = sidebar.querySelector(".nav-item--home");
+
+    expect(home?.querySelector('[data-session-attention="agent"]')).not.toBeNull();
+
+    gatewayHarness.publishEvent("question.requested", {
+      id: "question-home",
+      agentId: "main",
+      sessionKey: mainKey,
+      questions: [
+        {
+          questionId: "confirm",
+          header: "Confirm",
+          question: "Continue?",
+          options: [{ label: "Continue", description: "Resume the run." }],
+        },
+      ],
+      createdAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+      status: "pending",
+    });
+    await sidebar.updateComplete;
+    expect(home?.querySelector('[data-session-attention="question"]')).not.toBeNull();
+
+    setRows(sessionsHarness, []);
+    await sidebar.updateComplete;
+    expect(home?.querySelector('[data-session-attention="question"]')).not.toBeNull();
+
+    gatewayHarness.publishEvent("question.resolved", {
+      id: "question-home",
+      status: "cancelled",
+    });
+    setRows(sessionsHarness, [failedRow(mainKey)]);
+    await sidebar.updateComplete;
+    expect(home?.querySelector('[data-session-attention="error"]')).not.toBeNull();
+
+    setRows(sessionsHarness, [
+      { key: mainKey, kind: "direct", label: "Home", updatedAt: 3, status: "done" },
+    ]);
+    await sidebar.updateComplete;
+    expect(home?.querySelector("[data-session-attention]")).toBeNull();
+  });
+
   it("shows question attention ahead of a run error and clears it on resolution", async () => {
     const client = {
       request: vi.fn().mockResolvedValue({ questions: [] }),
@@ -180,7 +231,7 @@ describe("AppSidebar session attention", () => {
     expect(sidebar.textContent).not.toContain("Run failed:");
   });
 
-  it("uses shared tooltips for Home and agent approval badges", async () => {
+  it("uses canonical Home attention and shared agent approval tooltips", async () => {
     const mainKey = "agent:main:main";
     const approval = {
       id: "approval-main",
@@ -197,13 +248,14 @@ describe("AppSidebar session attention", () => {
       [approval],
     );
 
-    const homeBadge = sidebar.querySelector(".nav-item--home .session-approval-badge");
-    expect(homeBadge?.getAttribute("aria-label")).toBe("Approval needed");
-    expect(homeBadge?.hasAttribute("title")).toBe(false);
+    const homeAttention = sidebar.querySelector(
+      '.nav-item--home [data-session-attention="approval"]',
+    );
+    expect(homeAttention).not.toBeNull();
     expect(
-      (homeBadge?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
+      (homeAttention?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
         ?.content,
-    ).toBe("Approval needed");
+    ).toBe("Waiting for approval");
 
     const agentBadge = sidebar.querySelector(".sidebar-agent-card__approval-count");
     const agentLabel = agentBadge?.getAttribute("aria-label");

@@ -43,6 +43,7 @@ export function normalizeMessageActionInput(params: {
   args: Record<string, unknown>;
   toolContext?: ChannelThreadingToolContext;
   targetAliasSpec?: ActionDeliveryTargetAliasSpec;
+  allowResourceOnly?: boolean;
 }): Record<string, unknown> {
   const normalizedArgs = { ...params.args };
   const { action, toolContext } = params;
@@ -124,7 +125,7 @@ export function normalizeMessageActionInput(params: {
   if (
     actionRequiresTarget(action) &&
     (!actionHasTarget(action, normalizedArgs, { channel: inferredChannel }) ||
-      (hasResourceReference && !hasCanonicalTarget))
+      (hasResourceReference && !hasCanonicalTarget && !params.allowResourceOnly))
   ) {
     throw new Error(`Action ${action} requires a target.`);
   }

@@ -253,12 +253,13 @@ export function formatNodeRunToolResult(params: {
   const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
   const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
   const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
+  const output = [stdout, stderr, errorText].filter(Boolean).join("\n");
   return {
     content: [
       {
         type: "text",
         text: renderExecUpdateText({
-          tailText: stdout || stderr || errorText,
+          tailText: output,
           warnings: params.warnings ?? [],
         }),
       },
@@ -267,7 +268,7 @@ export function formatNodeRunToolResult(params: {
       status: success ? "completed" : "failed",
       exitCode,
       durationMs: Date.now() - params.startedAt,
-      aggregated: [stdout, stderr, errorText].filter(Boolean).join("\n"),
+      aggregated: output,
       cwd: params.cwd,
     } satisfies ExecToolDetails,
   };

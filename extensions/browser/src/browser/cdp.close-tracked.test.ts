@@ -1,8 +1,8 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { afterEach, describe, expect, it } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
-import { rawDataToString } from "../infra/ws.js";
 import "../test-support/browser-security.mock.js";
 import { closeTrackedCdpTarget, resolveCdpTabOwnership } from "./cdp.helpers.js";
 

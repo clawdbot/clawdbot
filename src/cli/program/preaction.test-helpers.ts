@@ -7,8 +7,6 @@ export const COLD_READ_COMMAND_PATHS: string[][] = [
   ["hooks", "list"],
   ["hooks", "info"],
   ["hooks", "check"],
-  ["memory", "status"],
-  ["memory", "search"],
   ["update", "--dry-run"],
 ];
 

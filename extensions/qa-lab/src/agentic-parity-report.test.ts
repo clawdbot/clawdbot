@@ -422,13 +422,11 @@ describe("qa agentic parity report", () => {
     ]);
   });
 
-  it("ignores neutral Failed and Blocked headings in passing protocol reports", () => {
-    const summary: QaParitySuiteSummary = {
-      scenarios: [
-        {
-          name: "Source and docs discovery report",
-          status: "pass",
-          details: `Worked:
+  it.each([
+    {
+      title: "ignores neutral Failed and Blocked headings in passing protocol reports",
+      scenarioName: "Source and docs discovery report",
+      report: `Worked:
 - Read the seeded QA material.
 Failed:
 - None observed.
@@ -436,11 +434,40 @@ Blocked:
 - No live provider evidence in this lane.
 Follow-up:
 - Re-run with a real provider if needed.`,
+      expectedSuspiciousPasses: 0,
+    },
+    {
+      title: "still flags genuine error-narration suspicious passes",
+      scenarioName: "Approval turn tool followthrough",
+      report: "Tool call completed, but an error occurred mid-turn and no retry happened.",
+      expectedSuspiciousPasses: 1,
+    },
+    {
+      title: "does not flag bare 'Done.' prose as fake success",
+      scenarioName: "Approval turn tool followthrough",
+      report: "Done.",
+      expectedSuspiciousPasses: 0,
+    },
+    {
+      title: "does not flag structured status lines that end in `done`",
+      scenarioName: "Compaction retry after mutating tool",
+      report: `Confirmed, replay unsafe after write.
+compactionCount=0
+status=done`,
+      expectedSuspiciousPasses: 0,
+    },
+  ])("$title", ({ scenarioName, report, expectedSuspiciousPasses }) => {
+    const summary: QaParitySuiteSummary = {
+      scenarios: [
+        {
+          name: scenarioName,
+          status: "pass",
+          details: report,
         },
       ],
     };
 
-    expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(0);
+    expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(expectedSuspiciousPasses);
   });
 
   it("ignores neutral error-budget and no-errors-observed phrasing in passing reports", () => {
@@ -467,20 +494,6 @@ Follow-up:
     expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(0);
   });
 
-  it("still flags genuine error-narration suspicious passes", () => {
-    const summary: QaParitySuiteSummary = {
-      scenarios: [
-        {
-          name: "Approval turn tool followthrough",
-          status: "pass",
-          details: "Tool call completed, but an error occurred mid-turn and no retry happened.",
-        },
-      ],
-    };
-
-    expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(1);
-  });
-
   it("does not flag positive-tone prose as fake success (positive-tone detection removed)", () => {
     // Positive-tone detection was removed because for passing runs the
     // `details` field is the model's prose, which never contains tool-call
@@ -491,36 +504,6 @@ Follow-up:
           name: "Subagent handoff",
           status: "pass",
           details: "Successfully completed the delegation. The subagent returned its result.",
-        },
-      ],
-    };
-
-    expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(0);
-  });
-
-  it("does not flag bare 'Done.' prose as fake success", () => {
-    const summary: QaParitySuiteSummary = {
-      scenarios: [
-        {
-          name: "Approval turn tool followthrough",
-          status: "pass",
-          details: "Done.",
-        },
-      ],
-    };
-
-    expect(computeQaAgenticParityMetrics(summary).fakeSuccessCount).toBe(0);
-  });
-
-  it("does not flag structured status lines that end in `done`", () => {
-    const summary: QaParitySuiteSummary = {
-      scenarios: [
-        {
-          name: "Compaction retry after mutating tool",
-          status: "pass",
-          details: `Confirmed, replay unsafe after write.
-compactionCount=0
-status=done`,
         },
       ],
     };

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const MAX_REGISTERED_ITEMS = 32;
@@ -33,7 +33,10 @@ function requiredString(record: Record<string, unknown>, key: string): string {
   return value.trim();
 }
 
-function optionalString(record: Record<string, unknown>, key: string): string | undefined {
+function readOptionalOnePasswordString(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined {
   const value = record[key];
   if (value === undefined) {
     return undefined;
@@ -54,7 +57,7 @@ function readPolicy(value: unknown, label: string, fallback: OnePasswordPolicy):
   throw new Error(`1Password config ${label} must be auto, approve, or deny`);
 }
 
-function readNumber(
+function readOnePasswordNumber(
   record: Record<string, unknown>,
   key: string,
   fallback: number,
@@ -108,17 +111,17 @@ export function parseOnePasswordConfig(value: unknown): OnePasswordConfig | unde
     if (item.startsWith("-")) {
       throw new Error(`1Password config item ${slug} item must not start with a hyphen`);
     }
-    const itemVault = optionalString(rawItem, "vault") ?? vault;
+    const itemVault = readOptionalOnePasswordString(rawItem, "vault") ?? vault;
     if (itemVault.startsWith("-")) {
       throw new Error(`1Password config item ${slug} vault must not start with a hyphen`);
     }
-    const description = optionalString(rawItem, "description");
+    const description = readOptionalOnePasswordString(rawItem, "description");
     if (description && description.length > MAX_DESCRIPTION_LENGTH) {
       throw new Error(
         `1Password config item ${slug} description must be at most ${MAX_DESCRIPTION_LENGTH} characters`,
       );
     }
-    const field = optionalString(rawItem, "field") ?? "credential";
+    const field = readOptionalOnePasswordString(rawItem, "field") ?? "credential";
     // op treats commas in --fields as multiple selectors. Reject them so one
     // registry entry can never load more than its single configured field.
     if (field.includes(",")) {
@@ -133,7 +136,7 @@ export function parseOnePasswordConfig(value: unknown): OnePasswordConfig | unde
     };
   }
 
-  const opBin = optionalString(value, "opBin");
+  const opBin = readOptionalOnePasswordString(value, "opBin");
   if (opBin && !path.isAbsolute(opBin)) {
     throw new Error("1Password config opBin must be an absolute path");
   }
@@ -142,15 +145,15 @@ export function parseOnePasswordConfig(value: unknown): OnePasswordConfig | unde
     vault,
     ...(opBin ? { opBin } : {}),
     defaultPolicy,
-    cacheTtlSeconds: readNumber(value, "cacheTtlSeconds", 300, {
+    cacheTtlSeconds: readOnePasswordNumber(value, "cacheTtlSeconds", 300, {
       integer: true,
       allowZero: true,
     }),
-    grantTtlHours: readNumber(value, "grantTtlHours", 720, {
+    grantTtlHours: readOnePasswordNumber(value, "grantTtlHours", 720, {
       integer: false,
       allowZero: false,
     }),
-    opTimeoutMs: readNumber(value, "opTimeoutMs", 15_000, {
+    opTimeoutMs: readOnePasswordNumber(value, "opTimeoutMs", 15_000, {
       integer: true,
       allowZero: false,
     }),

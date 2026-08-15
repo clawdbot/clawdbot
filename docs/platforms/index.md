@@ -18,11 +18,12 @@ Linux-compatible Gateway runtime.
 
 ## Choose your OS
 
-- macOS: [macOS](/platforms/macos)
-- iOS: [iOS](/platforms/ios)
 - Android: [Android](/platforms/android)
-- Windows: [Windows](/platforms/windows)
+- ChromeOS: [ChromeOS (Crostini)](/platforms/chromeos)
+- iOS: [iOS](/platforms/ios)
 - Linux: [Linux](/platforms/linux)
+- macOS: [macOS](/platforms/macos)
+- Windows: [Windows](/platforms/windows)
 
 ## VPS and hosting
 

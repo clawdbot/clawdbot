@@ -68,6 +68,7 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn<T
         error: null,
         deletedSessions: [],
         groups: [],
+        groupSettings: [],
         sectionOrder: [],
       },
     },
@@ -332,6 +333,7 @@ describe("loadToolsCatalog", () => {
       agentId: "main",
       profiles: [{ id: "full", label: "Full" }],
       groups: [],
+      groupSettings: [],
     });
     await pending;
 
@@ -624,6 +626,26 @@ describe("setDefaultAgent", () => {
 
     await setDefaultAgent(config, "kimi", refreshAgents);
 
+    expect(refreshAgents).not.toHaveBeenCalled();
+  });
+
+  it("passes the originating action guard through the queued config save", async () => {
+    const { config } = createSaveState();
+    const refreshAgents = vi.fn(async () => null);
+    let canDispatch = true;
+    config.state.configFormDirty = false;
+    vi.mocked(config.stageDefaultAgent).mockImplementation(() => {
+      config.state.configFormDirty = true;
+      return true;
+    });
+    vi.mocked(config.save).mockImplementation(async (options) => {
+      canDispatch = false;
+      return options?.canDispatch?.() ?? true;
+    });
+
+    await setDefaultAgent(config, "kimi", refreshAgents, () => canDispatch);
+
+    expect(config.save).toHaveBeenCalledOnce();
     expect(refreshAgents).not.toHaveBeenCalled();
   });
 });

@@ -2,8 +2,16 @@
 // JSON-RPC surface, including hook filtering and context propagation.
 import { request } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+  type AdmittedRunContext,
+  type PreparedAgentRunAdmission,
+} from "../agents/admitted-run-context.js";
 import type { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import { buildMcpToolSchema } from "./mcp-http.schema.js";
@@ -21,6 +29,22 @@ type MockGatewayTool = {
     details?: Record<string, unknown>;
   }>;
 };
+
+const activeAdmissions: PreparedAgentRunAdmission[] = [];
+
+async function activeAdmission(runId: string): Promise<AdmittedRunContext> {
+  const admission = prepareAgentRunAdmission({
+    cfg: {},
+    facts: {
+      runId,
+      agentId: "main",
+      ingress: { kind: "system", boundary: "mcp-http-test", state: "present" },
+    },
+    operationalRunInstance: createOperationalRunInstanceRef(runId),
+  });
+  activeAdmissions.push(admission);
+  return await admission.admit("gateway", `gateway-${runId}`);
+}
 
 type MockGatewayScopedTools = {
   agentId: string;
@@ -632,6 +656,9 @@ beforeEach(() => {
 afterEach(async () => {
   await server?.close();
   server = undefined;
+  for (const admission of activeAdmissions.splice(0)) {
+    admission.close();
+  }
 });
 
 describe("buildMcpToolSchema", () => {
@@ -1140,8 +1167,8 @@ describe("mcp loopback server", () => {
     expect(getScopedToolsCall(1).clientCaps).toBeUndefined();
   });
 
-  it("binds an attach grant's session and ignores ALL spoofed context headers (no scope-shop)", async () => {
-    const grant = mintAttachGrant({ sessionKey: "agent:main:attach-host" });
+  it("binds an attach grant's session owner and ignores ALL spoofed context headers", async () => {
+    const grant = mintAttachGrant({ sessionKey: "global", agentId: "ops" });
     const port = await getFreePortBlockWithPermissionFallback({
       offsets: [0],
       fallbackBase: 53_000,
@@ -1167,7 +1194,8 @@ describe("mcp loopback server", () => {
 
     expect(response.status).toBe(200);
     const call = getScopedToolsCall(0);
-    expect(call.sessionKey).toBe("agent:main:attach-host");
+    expect(call.sessionKey).toBe("global");
+    expect(call.agentId).toBe("ops");
     expect(call.senderIsOwner).toBe(false);
     expect(call.surface).toBe("loopback");
     expect(call.messageProvider).toBeUndefined();
@@ -1185,10 +1213,28 @@ describe("mcp loopback server", () => {
 
   it("binds a CLI grant's complete context and ignores spoofed scope headers", async () => {
     const { port, runtime } = await startLoopbackServerForTest();
+    const admittedRunContext = await activeAdmission("run-bound");
+    let toolCallerIdentity: ReturnType<typeof getGatewayToolCallerIdentity>;
+    resolveGatewayScopedToolsMock.mockReturnValue({
+      agentId: "main",
+      tools: [
+        {
+          name: "message",
+          label: "Message",
+          description: "send a message",
+          parameters: { type: "object", properties: {} },
+          execute: async () => {
+            toolCallerIdentity = getGatewayToolCallerIdentity();
+            return { content: [{ type: "text", text: "ok" }] };
+          },
+        },
+      ],
+    });
     const boundContext = {
       sessionKey: "agent:main:discord:channel:bound",
       runtimePolicySessionKey: "agent:worker:discord:default:direct:bound-user",
-      agentId: "worker",
+      runtimePolicyAgentId: "worker",
+      agentId: "main",
       sessionId: "session-bound",
       runId: "run-bound",
       modelProvider: "anthropic",
@@ -1233,6 +1279,7 @@ describe("mcp loopback server", () => {
     const grant = mintMcpLoopbackClientGrant({
       context: boundContext,
       runtimeOwnerToken: runtime.ownerToken,
+      admittedRunContext,
     });
     expect(
       activateMcpLoopbackClientGrantCapture({
@@ -1294,6 +1341,69 @@ describe("mcp loopback server", () => {
       turnSourceThreadId: "bound-thread",
     });
     expect(getBeforeToolCallHookInput(0).ctx).toHaveProperty("loopDetection");
+    expect(toolCallerIdentity).toMatchObject({
+      agentId: "main",
+      sessionKey: boundContext.sessionKey,
+      operationalRunInstance: admittedRunContext.operationalRunInstance,
+      turnSourceChannel: boundContext.messageProvider,
+      turnSourceTo: boundContext.currentChannelId,
+      turnSourceAccountId: boundContext.accountId,
+      turnSourceThreadId: boundContext.currentThreadTs,
+    });
+  });
+
+  it("keeps prepared auth stores isolated between CLI grants", async () => {
+    const { runtime } = await startLoopbackServerForTest();
+    const firstStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "xai:first": { type: "token", provider: "xai", token: "first-token" },
+      },
+    };
+    const secondStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "xai:second": { type: "token", provider: "xai", token: "second-token" },
+      },
+    };
+    const mintGrant = async (agentDir: string, store: AuthProfileStore) =>
+      mintMcpLoopbackClientGrant({
+        context: { sessionKey: "agent:main:main", senderIsOwner: true },
+        runtimeOwnerToken: runtime.ownerToken,
+        admittedRunContext: await activeAdmission(`run-auth-${agentDir}`),
+        toolAuth: { agentDir, store },
+      });
+    const firstGrant = await mintGrant("/agents/first", firstStore);
+    const secondGrant = await mintGrant("/agents/second", secondStore);
+    const listForGrant = async (token: string, captureKey: string) => {
+      expect(
+        activateMcpLoopbackClientGrantCapture({
+          token,
+          runtimeOwnerToken: runtime.ownerToken,
+          captureKey,
+        }),
+      ).toBe(true);
+      expect(
+        (
+          await sendLoopbackToolsList({
+            token,
+            headers: { "x-openclaw-cli-capture-key": captureKey },
+          })
+        ).status,
+      ).toBe(200);
+    };
+
+    await listForGrant(firstGrant.token, "capture-first");
+    await listForGrant(secondGrant.token, "capture-second");
+
+    expect(getScopedToolsCall(0)).toMatchObject({
+      agentDir: "/agents/first",
+      authProfileStore: firstStore,
+    });
+    expect(getScopedToolsCall(1)).toMatchObject({
+      agentDir: "/agents/second",
+      authProfileStore: secondStore,
+    });
   });
 
   it("carries the resolved workspace dir into the before-tool-call hook context", async () => {
@@ -1313,7 +1423,7 @@ describe("mcp loopback server", () => {
     expect(getBeforeToolCallHookInput(0).ctx?.workspaceDir).toBe("/tmp/openclaw-workspace");
   });
 
-  it("revalidates a CLI grant after async preparation before tool execution", async () => {
+  it("revalidates admitted authority after async preparation before tool execution", async () => {
     let releasePreparation: (() => void) | undefined;
     let markPreparationStarted: (() => void) | undefined;
     const preparationGate = new Promise<void>((resolve) => {
@@ -1344,6 +1454,7 @@ describe("mcp loopback server", () => {
         nodeExecAllowed: true,
       },
       runtimeOwnerToken: runtime.ownerToken,
+      admittedRunContext: await activeAdmission("run-revoked-during-prepare"),
     });
     const captureKey = "capture-revoked-during-prepare";
     expect(
@@ -1360,13 +1471,7 @@ describe("mcp loopback server", () => {
       headers: { "x-openclaw-cli-capture-key": captureKey },
     });
     await preparationStarted;
-    expect(
-      deactivateMcpLoopbackClientGrantCapture({
-        token: grant.token,
-        runtimeOwnerToken: runtime.ownerToken,
-        captureKey,
-      }),
-    ).toBe(true);
+    activeAdmissions.at(-1)?.close();
     releasePreparation?.();
 
     const response = await responsePromise;
@@ -1425,6 +1530,69 @@ describe("mcp loopback server", () => {
         })
       ).status,
     ).toBe(401);
+  });
+
+  it("rejects a slow tools request revoked after header admission", async () => {
+    const captureKey = "slow-revoked-grant";
+    let resolveRequestStarted: (() => void) | undefined;
+    const requestStarted = new Promise<void>((resolve) => {
+      resolveRequestStarted = resolve;
+    });
+    beginMcpLoopbackToolCallCapture({
+      captureKey,
+      onRequestStart: () => resolveRequestStarted?.(),
+      onRequestClassified: vi.fn(),
+      onToolCallResult: vi.fn(),
+    });
+    const { runtime, port } = await startLoopbackServerForTest();
+    const grant = mintMcpLoopbackClientGrant({
+      context: { sessionKey: "agent:main:slow-revoked", senderIsOwner: true },
+      runtimeOwnerToken: runtime.ownerToken,
+      admittedRunContext: await activeAdmission("run-slow-revoked"),
+      toolAuth: { store: { version: 1, profiles: {} } },
+    });
+    expect(
+      activateMcpLoopbackClientGrantCapture({
+        token: grant.token,
+        runtimeOwnerToken: runtime.ownerToken,
+        captureKey,
+      }),
+    ).toBe(true);
+
+    let revoked = false;
+    const responsePromise = new Promise<{ status: number | undefined }>((resolve, reject) => {
+      const req = request(
+        {
+          hostname: "127.0.0.1",
+          port,
+          path: "/mcp",
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${grant.token}`,
+            "content-type": "application/json",
+            "transfer-encoding": "chunked",
+            "x-openclaw-cli-capture-key": captureKey,
+          },
+        },
+        (res) => {
+          res.resume();
+          res.on("end", () => resolve({ status: res.statusCode }));
+        },
+      );
+      req.on("error", reject);
+      req.flushHeaders();
+      void requestStarted.then(() => {
+        revoked = revokeMcpLoopbackClientGrant(grant.token);
+        req.end(mcpToolsListBody());
+      });
+    });
+
+    await requestStarted;
+    const resolverCallsBeforeBody = resolveGatewayScopedToolsMock.mock.calls.length;
+    await expect(responsePromise).resolves.toEqual({ status: 401 });
+    expect(revoked).toBe(true);
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(resolverCallsBeforeBody);
+    clearMcpLoopbackToolCallCapture(captureKey);
   });
 
   it("routes sessions_yield to the current CLI capture", async () => {
@@ -3155,6 +3323,7 @@ describe("createMcpLoopbackServerConfig", () => {
     const grant = mintMcpLoopbackClientGrant({
       context: { sessionKey: "agent:main:transport", senderIsOwner: false },
       runtimeOwnerToken: runtime.ownerToken,
+      admittedRunContext: await activeAdmission("run-transport"),
     });
     const captureKey = "capture-transport";
     activateMcpLoopbackClientGrantCapture({
@@ -3291,6 +3460,7 @@ describe("createMcpLoopbackServerConfig", () => {
       const successorGrant = mintMcpLoopbackClientGrant({
         context: { sessionKey: "agent:main:successor", senderIsOwner: false },
         runtimeOwnerToken: successor.runtime.ownerToken,
+        admittedRunContext: await activeAdmission("run-successor"),
       });
       activateMcpLoopbackClientGrantCapture({
         token: successorGrant.token,

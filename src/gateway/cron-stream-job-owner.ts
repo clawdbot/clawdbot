@@ -1,5 +1,5 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { errorBackoffMs } from "../cron/service/jobs.js";
+import { errorBackoffMs } from "../cron/service/jobs-scheduling.js";
 import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import type { CronJob, CronJobState } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";

@@ -1,13 +1,14 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 // Bench Gateway Concurrency script measures gateway probes during synthetic streaming turns.
 import { randomUUID } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.ts";
+import { asFiniteNumber } from "../packages/normalization-core/src/number-coercion.ts";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
 import { getFreePort } from "./lib/gateway-bench-probes.ts";
@@ -26,6 +27,7 @@ import {
   validateCliArgs,
   waitForInitialProbe,
   writeGatewayBenchConfig,
+  writePluginFixtures,
 } from "./lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 
@@ -42,6 +44,11 @@ type TimedProbe = {
   error: string | null;
   latencyMs: number;
   ok: boolean;
+};
+
+type DiagnosticsTimelineSpan = {
+  durationMs?: number;
+  name?: string;
 };
 
 type ReadyProbe = TimedProbe & {
@@ -63,15 +70,23 @@ type GatewaySample = {
   sessionsList: TimedProbe;
 };
 
+type FreshConnectionProbe = {
+  error: string | null;
+  latencyMs: number;
+  ok: boolean;
+};
+
 type GatewayRpc = <T>(method: string, params: unknown, timeoutMs?: number) => Promise<T>;
 
 type BenchmarkRun = {
   controlUi: ControlUiProbe[];
   durationMs: number;
+  freshConnection: FreshConnectionProbe;
   probeWarmup: {
     durationMs: number;
     samples: GatewaySample[];
   };
+  pluginMetadataScans: ReturnType<typeof summarizePluginMetadataScans>;
   readyz: ReadyProbe[];
   sessionsList: TimedProbe[];
   turnCount: number;
@@ -81,12 +96,18 @@ type BenchmarkRun = {
 type CliOptions = {
   cadenceMs: number;
   concurrency: number;
+  cpuProfDir?: string;
   entry: string;
   json: boolean;
+  maxControlMs?: number;
+  maxHandshakeMs?: number;
   output?: string;
+  pluginCount: number;
   runs: number;
   timeoutMs: number;
+  toolEvents: boolean;
   warmup: number;
+  workspaceFanout: boolean;
 };
 
 const DEFAULT_CADENCE_MS = 100;
@@ -97,6 +118,7 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_WARMUP = 0;
 const MOCK_RESPONSE_CHUNK_DELAY_MS = 1_000;
 const MAX_CONCURRENCY = 64;
+const MAX_PLUGIN_COUNT = 100;
 const MAX_RUNS = 20;
 const MAX_WARMUP = 10;
 const MAX_SAMPLES_PER_RUN = 2_048;
@@ -107,12 +129,16 @@ const PROBE_WARMUP_TARGET_MS = 1_000;
 const PROBE_WARMUP_RETRY_DELAY_MS = 100;
 const GATEWAY_STDERR_TAIL_LINES = 20;
 const AGENT_WAIT_RPC_GRACE_MS = 5_000;
-const BOOLEAN_FLAGS = new Set(["--help", "-h", "--json"]);
+const BOOLEAN_FLAGS = new Set(["--help", "-h", "--json", "--tool-events", "--workspace-fanout"]);
 const VALUE_FLAGS = new Set([
   "--cadence-ms",
   "--concurrency",
+  "--cpu-prof-dir",
   "--entry",
+  "--max-control-ms",
+  "--max-handshake-ms",
   "--output",
+  "--plugin-count",
   "--runs",
   "--timeout-ms",
   "--warmup",
@@ -159,9 +185,32 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       "--concurrency",
       MAX_CONCURRENCY,
     ),
+    cpuProfDir: resolveOutputPath(parseFlagValue(argv, "--cpu-prof-dir")),
     entry: resolveEntry(parseFlagValue(argv, "--entry"), DEFAULT_ENTRY),
     json: hasFlag(argv, "--json"),
+    maxControlMs: parseFlagValue(argv, "--max-control-ms")
+      ? parseBoundedPositiveInt(
+          parseFlagValue(argv, "--max-control-ms"),
+          2_000,
+          "--max-control-ms",
+          30_000,
+        )
+      : undefined,
+    maxHandshakeMs: parseFlagValue(argv, "--max-handshake-ms")
+      ? parseBoundedPositiveInt(
+          parseFlagValue(argv, "--max-handshake-ms"),
+          2_000,
+          "--max-handshake-ms",
+          30_000,
+        )
+      : undefined,
     output: resolveOutputPath(parseFlagValue(argv, "--output")),
+    pluginCount: parseBoundedNonNegativeInt(
+      parseFlagValue(argv, "--plugin-count"),
+      0,
+      "--plugin-count",
+      MAX_PLUGIN_COUNT,
+    ),
     runs: parseBoundedPositiveInt(parseFlagValue(argv, "--runs"), DEFAULT_RUNS, "--runs", MAX_RUNS),
     timeoutMs: parseBoundedPositiveInt(
       parseFlagValue(argv, "--timeout-ms"),
@@ -169,12 +218,14 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       "--timeout-ms",
       10 * 60_000,
     ),
+    toolEvents: hasFlag(argv, "--tool-events"),
     warmup: parseBoundedNonNegativeInt(
       parseFlagValue(argv, "--warmup"),
       DEFAULT_WARMUP,
       "--warmup",
       MAX_WARMUP,
     ),
+    workspaceFanout: hasFlag(argv, "--workspace-fanout"),
   };
 }
 
@@ -187,11 +238,17 @@ Usage:
 
 Options:
   --concurrency <n>  Concurrent synthetic streaming turns (default: ${DEFAULT_CONCURRENCY})
+  --cpu-prof-dir <p> Write Gateway V8 CPU profiles to this directory
   --runs <n>         Measured gateway runs (default: ${DEFAULT_RUNS})
   --warmup <n>       Warmup gateway runs (default: ${DEFAULT_WARMUP})
   --cadence-ms <ms>  Probe cadence (default: ${DEFAULT_CADENCE_MS})
-  --timeout-ms <ms>  Whole benchmark cap, excluding probe warmup (default: ${DEFAULT_TIMEOUT_MS})
+  --timeout-ms <ms>  Per-run cap, excluding probe warmup (default: ${DEFAULT_TIMEOUT_MS})
   --entry <path>     Gateway CLI entry file (default: ${DEFAULT_ENTRY})
+  --plugin-count <n> Configure synthetic plugins through plugins.load.paths (default: 0)
+  --tool-events      Make every synthetic turn execute a tool before replying
+  --workspace-fanout Bind each turn to a distinct workspace
+  --max-control-ms   Fail when any load-phase health/control probe exceeds this bound
+  --max-handshake-ms Fail when a fresh authenticated connection exceeds this bound
   --output <path>    Write machine-readable JSON to a file
   --json             Emit machine-readable JSON
   --help, -h         Show this text
@@ -220,6 +277,51 @@ function summarizeNumbers(values: readonly number[]): MetricSummary | null {
   };
 }
 
+function summarizePluginMetadataScans(events: readonly DiagnosticsTimelineSpan[]) {
+  const durations = events.flatMap((event) =>
+    event.name === "plugins.metadata.scan" &&
+    typeof event.durationMs === "number" &&
+    Number.isFinite(event.durationMs)
+      ? [event.durationMs]
+      : [],
+  );
+  return {
+    count: durations.length,
+    durationMs: summarizeNumbers(durations),
+    totalDurationMs: durations.reduce((sum, durationMs) => sum + durationMs, 0),
+  };
+}
+
+function readDiagnosticsTimelineSpans(timelinePath: string): DiagnosticsTimelineSpan[] {
+  try {
+    return readFileSync(timelinePath, "utf8")
+      .split(/\r?\n/u)
+      .filter(Boolean)
+      .flatMap((line) => {
+        try {
+          const event = JSON.parse(line) as {
+            durationMs?: unknown;
+            name?: unknown;
+            type?: unknown;
+          };
+          if (event.type !== "span.end" || typeof event.name !== "string") {
+            return [];
+          }
+          return [
+            {
+              name: event.name,
+              ...(typeof event.durationMs === "number" ? { durationMs: event.durationMs } : {}),
+            },
+          ];
+        } catch {
+          return [];
+        }
+      });
+  } catch {
+    return [];
+  }
+}
+
 function remainingMs(deadlineAt: number): number {
   return Math.max(0, deadlineAt - performance.now());
 }
@@ -239,11 +341,23 @@ async function requestHttp(params: {
   port: number;
 }): Promise<{ body: string; latencyMs: number; status: number }> {
   const startedAt = performance.now();
-  const timeoutMs = Math.max(
-    1,
-    Math.min(HTTP_TIMEOUT_MS, requireRemainingMs(params.deadlineAt, `requesting ${params.path}`)),
-  );
+  const requestDeadlineAt = Math.min(params.deadlineAt, startedAt + HTTP_TIMEOUT_MS);
+  requireRemainingMs(requestDeadlineAt, `requesting ${params.path}`);
   return await new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (run: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      run();
+    };
+    const fail = (error: Error) =>
+      settle(() => {
+        req.destroy();
+        reject(error);
+      });
     const req = request(
       {
         headers: { accept: params.accept },
@@ -251,7 +365,6 @@ async function requestHttp(params: {
         method: "GET",
         path: params.path,
         port: params.port,
-        timeout: timeoutMs,
       },
       (res) => {
         const chunks: Buffer[] = [];
@@ -259,28 +372,33 @@ async function requestHttp(params: {
         res.on("data", (chunk: Buffer) => {
           bytes += chunk.length;
           if (bytes > MAX_HTTP_BODY_BYTES) {
-            req.destroy(new Error(`${params.path} response exceeded ${MAX_HTTP_BODY_BYTES} bytes`));
+            fail(new Error(`${params.path} response exceeded ${MAX_HTTP_BODY_BYTES} bytes`));
             return;
           }
           chunks.push(chunk);
         });
-        res.on("end", () => {
-          resolve({
-            body: Buffer.concat(chunks).toString("utf8"),
-            latencyMs: performance.now() - startedAt,
-            status: res.statusCode ?? 0,
-          });
-        });
+        res.once("aborted", () => fail(new Error(`${params.path} response aborted`)));
+        res.once("error", fail);
+        res.once("end", () =>
+          settle(() =>
+            resolve({
+              body: Buffer.concat(chunks).toString("utf8"),
+              latencyMs: performance.now() - startedAt,
+              status: res.statusCode ?? 0,
+            }),
+          ),
+        );
       },
     );
-    req.once("error", reject);
-    req.once("timeout", () => req.destroy(new Error(`${params.path} request timed out`)));
+    req.once("error", fail);
+    // Request/socket timeouts measure inactivity; this timer owns the wall-clock deadline.
+    const timer = setTimeout(
+      () => fail(new Error(`${params.path} request timed out`)),
+      Math.max(1, Math.ceil(remainingMs(requestDeadlineAt))),
+    );
+    timer.unref?.();
     req.end();
   });
-}
-
-function numberOrNull(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function describeProbeError(error: unknown): string {
@@ -383,7 +501,12 @@ async function waitForGatewayDispatchReady(
   throw new Error("gateway did not finish dispatch-ready sidecars");
 }
 
-function buildConfig(root: string, mockPort: number, concurrency: number): string {
+function buildConfig(
+  root: string,
+  mockPort: number,
+  concurrency: number,
+  pluginCount: number,
+): string {
   const controlUiRoot = path.join(root, "control-ui");
   mkdirSync(controlUiRoot, { recursive: true });
   copyFileSync(
@@ -402,10 +525,12 @@ function buildConfig(root: string, mockPort: number, concurrency: number): strin
     ...(agents.defaults as Record<string, unknown>),
     maxConcurrent: concurrency,
   };
-  return writeGatewayBenchConfig(root, config, {});
+  const pluginFixtures =
+    pluginCount > 0 ? writePluginFixtures(root, { count: pluginCount }) : undefined;
+  return writeGatewayBenchConfig(root, config, { pluginFixtures });
 }
 
-async function connectGateway(port: number, deadlineAt: number) {
+async function connectGateway(port: number, deadlineAt: number, subscribeSessions = true) {
   let requestDeadlineAt = deadlineAt;
   const client = createGatewayWsClient({
     handshakeTimeoutMs: Math.min(8_000, requireRemainingMs(deadlineAt, "connecting WebSocket")),
@@ -454,6 +579,9 @@ async function connectGateway(port: number, deadlineAt: number) {
     scopes: ["operator.read", "operator.write", "operator.admin"],
     caps: [],
   });
+  if (subscribeSessions) {
+    await requestRpc("sessions.subscribe", {});
+  }
   return {
     close: client.close,
     request: requestRpc,
@@ -463,14 +591,23 @@ async function connectGateway(port: number, deadlineAt: number) {
   };
 }
 
-async function runTurn(rpc: GatewayRpc, index: number, deadlineAt: number): Promise<void> {
+async function runTurn(
+  rpc: GatewayRpc,
+  index: number,
+  deadlineAt: number,
+  toolEvents = false,
+  options?: { onStarted?: () => void; sessionKey?: string },
+): Promise<void> {
   const requestedRunId = randomUUID();
   const started = await rpc<{ runId?: string; status?: string }>("agent", {
-    sessionKey: `agent:main:gateway-concurrency-${index + 1}`,
-    message: `Reply with benchmark stream ${index + 1}.`,
+    sessionKey: options?.sessionKey ?? `agent:main:gateway-concurrency-${index + 1}`,
+    message: toolEvents
+      ? `OPENCLAW_E2E_DRAFTPROOF benchmark tool stream ${index + 1}.`
+      : `Reply with benchmark stream ${index + 1}.`,
     deliver: false,
     idempotencyKey: requestedRunId,
   });
+  options?.onStarted?.();
   if (started.status === "ok") {
     return;
   }
@@ -580,10 +717,10 @@ async function sampleGateway(params: {
       ok: readyz.ok && readyz.status === 200,
       status: readyz.status,
       degraded: typeof eventLoop?.degraded === "boolean" ? eventLoop.degraded : null,
-      degradedSinceMs: numberOrNull(eventLoop?.degradedSinceMs),
-      delayP99Ms: numberOrNull(eventLoop?.delayP99Ms),
-      utilization: numberOrNull(eventLoop?.utilization),
-      cpuCoreRatio: numberOrNull(eventLoop?.cpuCoreRatio),
+      degradedSinceMs: asFiniteNumber(eventLoop?.degradedSinceMs) ?? null,
+      delayP99Ms: asFiniteNumber(eventLoop?.delayP99Ms) ?? null,
+      utilization: asFiniteNumber(eventLoop?.utilization) ?? null,
+      cpuCoreRatio: asFiniteNumber(eventLoop?.cpuCoreRatio) ?? null,
     },
     sessionsList: {
       atMs,
@@ -613,7 +750,8 @@ async function warmGatewayProbes(params: {
         sample.sessionsList.latencyMs,
         sample.controlUi.latencyMs,
       ) <= targetMs;
-    if (healthy && fast) {
+    const eventLoopSettled = sample.readyz.degraded !== true;
+    if (healthy && fast && eventLoopSettled) {
       return { durationMs: performance.now() - startedAt, samples };
     }
     await delay(
@@ -633,10 +771,15 @@ async function runGatewaySample(options: {
   concurrency: number;
   deadlineAt: number;
   entry: string;
+  cpuProfDir?: string;
+  pluginCount: number;
+  toolEvents: boolean;
+  workspaceFanout: boolean;
 }): Promise<BenchmarkRun> {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-gateway-concurrency-"));
   const [port, mockPort] = await Promise.all([getFreePort(), getFreePort()]);
   const runStartedAt = performance.now();
+  const timelinePath = path.join(root, "diagnostics-timeline.jsonl");
   let gateway: ChildProcessWithoutNullStreams | undefined;
   let mockProvider: ChildProcessWithoutNullStreams | undefined;
   let client: Awaited<ReturnType<typeof connectGateway>> | undefined;
@@ -644,7 +787,7 @@ async function runGatewaySample(options: {
   let mockOutput = { readOutput: () => "", readStderrTail: () => "" };
 
   try {
-    const configPath = buildConfig(root, mockPort, options.concurrency);
+    const configPath = buildConfig(root, mockPort, options.concurrency, options.pluginCount);
     mockProvider = spawn(process.execPath, ["scripts/e2e/mock-openai-server.mjs"], {
       cwd: process.cwd(),
       detached: process.platform !== "win32",
@@ -659,16 +802,30 @@ async function runGatewaySample(options: {
     mockOutput = captureChildOutput(mockProvider);
     await waitForMockServer(mockPort, options.deadlineAt);
 
-    gateway = spawn(process.execPath, buildGatewayBenchChildArgs(options.entry, port), {
-      cwd: process.cwd(),
-      detached: process.platform !== "win32",
-      env: {
-        ...createGatewayBenchEnv(root, configPath, {
-          caseEnv: { OPENCLAW_SKIP_CHANNELS: "1" },
-        }),
-        OPENAI_API_KEY: "gateway-concurrency-benchmark",
+    if (options.cpuProfDir) {
+      mkdirSync(options.cpuProfDir, { recursive: true });
+    }
+    const gatewayArgs = buildGatewayBenchChildArgs(options.entry, port);
+    gateway = spawn(
+      process.execPath,
+      options.cpuProfDir
+        ? ["--cpu-prof", `--cpu-prof-dir=${options.cpuProfDir}`, ...gatewayArgs]
+        : gatewayArgs,
+      {
+        cwd: process.cwd(),
+        detached: process.platform !== "win32",
+        env: {
+          ...createGatewayBenchEnv(root, configPath, {
+            caseEnv: {
+              OPENCLAW_DIAGNOSTICS: "timeline",
+              OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
+              OPENCLAW_SKIP_CHANNELS: "1",
+            },
+          }),
+          OPENAI_API_KEY: "gateway-concurrency-benchmark",
+        },
       },
-    });
+    );
     gatewayOutput = captureChildOutput(gateway);
     const ready = await waitForInitialProbe({
       deadlineAt: options.deadlineAt,
@@ -700,18 +857,63 @@ async function runGatewaySample(options: {
     });
     const loadDeadlineAt = options.deadlineAt + probeWarmup.durationMs;
     client.setDeadlineAt(loadDeadlineAt);
+    const workspaceSessionKeys = options.workspaceFanout
+      ? await Promise.all(
+          Array.from({ length: options.concurrency }, async (_, index) => {
+            const workspaceDir = path.join(root, `workspace-${index + 1}`);
+            mkdirSync(workspaceDir, { recursive: true });
+            const sessionKey = `agent:main:gateway-concurrency-${index + 1}`;
+            await rpc("sessions.create", {
+              key: sessionKey,
+              agentId: "main",
+              cwd: workspaceDir,
+            });
+            return sessionKey;
+          }),
+        )
+      : [];
+    // The benchmark compares runtime event work, so discard startup and lazy-import spans.
+    writeFileSync(timelinePath, "");
 
     const controlUi: ControlUiProbe[] = [];
     const readyz: ReadyProbe[] = [];
     const sessionsList: TimedProbe[] = [];
     let turnsDone = false;
+    let startedTurnCount = 0;
+    let resolveAllTurnsStarted!: () => void;
+    const allTurnsStarted = new Promise<void>((resolve) => {
+      resolveAllTurnsStarted = resolve;
+    });
     const turnsStartedAt = performance.now();
     const turns = Promise.all(
       Array.from({ length: options.concurrency }, (_, index) =>
-        runTurn(rpc, index, loadDeadlineAt),
+        runTurn(rpc, index, loadDeadlineAt, options.toolEvents, {
+          onStarted: () => {
+            startedTurnCount += 1;
+            if (startedTurnCount === options.concurrency) {
+              resolveAllTurnsStarted();
+            }
+          },
+          ...(workspaceSessionKeys[index] ? { sessionKey: workspaceSessionKeys[index] } : {}),
+        }),
       ),
     ).finally(() => {
       turnsDone = true;
+      resolveAllTurnsStarted();
+    });
+    const freshConnection = allTurnsStarted.then(async (): Promise<FreshConnectionProbe> => {
+      const startedAt = performance.now();
+      try {
+        const freshClient = await connectGateway(port, loadDeadlineAt, false);
+        freshClient.close();
+        return { error: null, latencyMs: performance.now() - startedAt, ok: true };
+      } catch (error) {
+        return {
+          error: describeProbeError(error),
+          latencyMs: performance.now() - startedAt,
+          ok: false,
+        };
+      }
     });
     const sampler = (async () => {
       for (;;) {
@@ -737,12 +939,15 @@ async function runGatewaySample(options: {
       }
     })();
     await Promise.all([turns, sampler]);
+    const freshConnectionResult = await freshConnection;
     const turnsDurationMs = performance.now() - turnsStartedAt;
 
     return {
       controlUi,
       durationMs: performance.now() - runStartedAt,
+      freshConnection: freshConnectionResult,
       probeWarmup,
+      pluginMetadataScans: summarizePluginMetadataScans(readDiagnosticsTimelineSpans(timelinePath)),
       readyz,
       sessionsList,
       turnCount: options.concurrency,
@@ -754,6 +959,16 @@ async function runGatewaySample(options: {
   } finally {
     client?.close();
     if (gateway) {
+      if (options.cpuProfDir && gateway.exitCode === null && gateway.signalCode === null) {
+        // V8 flushes the main-isolate CPU profile on its normal interrupt path.
+        const profileFlushed = new Promise<void>((resolve) => {
+          gateway!.once("exit", () => {
+            resolve();
+          });
+        });
+        gateway.kill("SIGINT");
+        await Promise.race([profileFlushed, delay(2_000)]);
+      }
       await stopChild(gateway);
     }
     if (mockProvider) {
@@ -781,6 +996,13 @@ function summarizeRuns(runs: readonly BenchmarkRun[]) {
     eventLoopUtilization: summarizeNumbers(
       readyz.flatMap((sample) => (sample.utilization == null ? [] : [sample.utilization])),
     ),
+    freshConnectionFailedRuns: runs.filter((run) => !run.freshConnection.ok).length,
+    freshConnectionLatencyMs: summarizeNumbers(runs.map((run) => run.freshConnection.latencyMs)),
+    pluginMetadataScanCount: runs.reduce((sum, run) => sum + run.pluginMetadataScans.count, 0),
+    pluginMetadataScanTotalDurationMs: runs.reduce(
+      (sum, run) => sum + run.pluginMetadataScans.totalDurationMs,
+      0,
+    ),
     readyzLatencyMs: summarizeNumbers(readyz.map((sample) => sample.latencyMs)),
     readyzFailedSamples: readyz.filter((sample) => !sample.ok).length,
     sampleCount: readyz.length,
@@ -794,6 +1016,35 @@ function summarizeRuns(runs: readonly BenchmarkRun[]) {
   };
 }
 
+async function runBenchmarkSamples(params: {
+  now?: () => number;
+  onProgress?: (message: string) => void;
+  options: CliOptions;
+  runSample?: typeof runGatewaySample;
+}): Promise<BenchmarkRun[]> {
+  const now = params.now ?? performance.now.bind(performance);
+  const runSample = params.runSample ?? runGatewaySample;
+  const runs: BenchmarkRun[] = [];
+  const total = params.options.runs + params.options.warmup;
+  for (let index = 0; index < total; index += 1) {
+    // Each sample gets the same budget so earlier runs cannot shrink later agent waits.
+    // runGatewaySample extends this deadline by its probe warmup before load starts.
+    const deadlineAt = now() + params.options.timeoutMs;
+    const run = await runSample({ ...params.options, deadlineAt });
+    if (index >= params.options.warmup) {
+      runs.push(run);
+      params.onProgress?.(
+        `[bench-gateway-concurrency] run ${runs.length}/${params.options.runs}: turns=${run.turnCount} samples=${run.readyz.length} duration=${run.durationMs.toFixed(1)}ms`,
+      );
+    } else {
+      params.onProgress?.(
+        `[bench-gateway-concurrency] warmup ${index + 1}/${params.options.warmup}: duration=${run.durationMs.toFixed(1)}ms`,
+      );
+    }
+  }
+  return runs;
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   if (hasHelpFlag(argv)) {
@@ -801,32 +1052,18 @@ async function main(): Promise<void> {
     return;
   }
   const options = parseOptions(argv);
-  let deadlineAt = performance.now() + options.timeoutMs;
-  const runs: BenchmarkRun[] = [];
-  const total = options.runs + options.warmup;
-  for (let index = 0; index < total; index += 1) {
-    requireRemainingMs(deadlineAt, "starting gateway run");
-    const run = await runGatewaySample({ ...options, deadlineAt });
-    deadlineAt += run.probeWarmup.durationMs;
-    if (index >= options.warmup) {
-      runs.push(run);
-      console.error(
-        `[bench-gateway-concurrency] run ${runs.length}/${options.runs}: turns=${run.turnCount} samples=${run.readyz.length} duration=${run.durationMs.toFixed(1)}ms`,
-      );
-    } else {
-      console.error(
-        `[bench-gateway-concurrency] warmup ${index + 1}/${options.warmup}: duration=${run.durationMs.toFixed(1)}ms`,
-      );
-    }
-  }
+  const runs = await runBenchmarkSamples({ onProgress: console.error, options });
   const payload = {
     cadenceMs: options.cadenceMs,
     concurrency: options.concurrency,
     entry: options.entry,
     generatedAt: new Date().toISOString(),
     mode: "mock-streaming-agent",
+    pluginCount: options.pluginCount,
     runs,
     summary: summarizeRuns(runs),
+    toolEvents: options.toolEvents,
+    workspaceFanout: options.workspaceFanout,
   };
   if (options.output) {
     mkdirSync(path.dirname(options.output), { recursive: true });
@@ -835,14 +1072,49 @@ async function main(): Promise<void> {
   if (options.json || !options.output) {
     console.log(JSON.stringify(payload, null, 2));
   }
+  if (options.maxHandshakeMs !== undefined) {
+    const violation = runs.find(
+      (run) => !run.freshConnection.ok || run.freshConnection.latencyMs > options.maxHandshakeMs!,
+    );
+    if (violation) {
+      throw new Error(
+        `fresh Gateway connection exceeded ${options.maxHandshakeMs}ms: ` +
+          `ok=${violation.freshConnection.ok} ` +
+          `latencyMs=${violation.freshConnection.latencyMs.toFixed(1)} ` +
+          `error=${violation.freshConnection.error ?? "none"}`,
+      );
+    }
+  }
+  if (options.maxControlMs !== undefined) {
+    const controlSamples: Array<{ name: string; sample: TimedProbe }> = [];
+    for (const run of runs) {
+      controlSamples.push(
+        ...run.readyz.map((sample) => ({ name: "readyz", sample })),
+        ...run.sessionsList.map((sample) => ({ name: "sessions.list", sample })),
+      );
+    }
+    const violation = controlSamples.find(
+      ({ sample }) => !sample.ok || sample.latencyMs > options.maxControlMs!,
+    );
+    if (violation) {
+      throw new Error(
+        `Gateway ${violation.name} probe exceeded ${options.maxControlMs}ms: ` +
+          `ok=${violation.sample.ok} latencyMs=${violation.sample.latencyMs.toFixed(1)} ` +
+          `error=${violation.sample.error ?? "none"}`,
+      );
+    }
+  }
 }
 
 export const testing = {
   parseOptions,
   formatProbeFailure,
   formatRunFailure,
+  requestHttp,
+  runBenchmarkSamples,
   runTurn,
   sampleGateway,
+  summarizePluginMetadataScans,
   summarizeNumbers,
   summarizeRuns,
   tailLines,

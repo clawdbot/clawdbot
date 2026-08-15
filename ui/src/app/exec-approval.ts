@@ -1,6 +1,6 @@
 // Application-owned approval parsing and queue state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "../lib/string-coerce.ts";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export type ExecApprovalRequestPayload = {
   command: string;

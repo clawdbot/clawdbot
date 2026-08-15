@@ -21,12 +21,13 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
-import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+import { openInlineChatImage } from "./chat-image-lightbox.ts";
+import { openResolvedImage } from "./chat-message-image-open.ts";
 import "./session-diff-panel.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
-import type { SessionDiffLoader } from "./session-diff-panel.ts";
+import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./session-diff-panel.ts";
 
 type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
 type DetailFullMessageResult = {
@@ -81,6 +82,9 @@ type SessionDiffSidebarContent = {
   kind: "session-diff";
   /** Fetches a fresh sessions.diff snapshot; the panel refetches on refresh. */
   load: SessionDiffLoader;
+  loadFileText?: SessionDiffFileTextLoader;
+  openFile?: (path: string) => void;
+  revealFile?: (path: string) => void;
   rawText?: string | null;
   fullMessageRequest?: SidebarFullMessageRequest;
   unavailableReason?: DetailUnavailableReason | null;
@@ -134,15 +138,17 @@ function setRetainedFileDraft(content: FileSidebarContent, draft: RetainedFileDr
   retainedFileDrafts.set(key, draft);
 }
 
-export type SidebarContent =
+type ChatDetailContent =
   | MarkdownSidebarContent
   | CanvasSidebarContent
   | ImageSidebarContent
   | FileSidebarContent
   | SessionDiffSidebarContent;
 
-function hasFullMessageRequest(content: SidebarContent): content is SidebarContent & {
-  fullMessageRequest: NonNullable<SidebarContent["fullMessageRequest"]>;
+export type SidebarContent = ChatDetailContent | { kind: "task"; taskId: string };
+
+function hasFullMessageRequest(content: ChatDetailContent): content is ChatDetailContent & {
+  fullMessageRequest: SidebarFullMessageRequest;
 } {
   return Boolean(
     content.fullMessageRequest && (content.kind === "markdown" || content.kind === "canvas"),
@@ -176,7 +182,9 @@ function toPlainTextCodeFence(value: string, language = ""): string {
   return `${fenceHeader}\n${value}\n\`\`\``;
 }
 
-function buildRawSidebarContent(content: SidebarContent | null | undefined): SidebarContent | null {
+function buildRawSidebarContent(
+  content: ChatDetailContent | null | undefined,
+): ChatDetailContent | null {
   if (!content) {
     return null;
   }
@@ -484,7 +492,7 @@ function renderFileSidebarContent(
 }
 
 function resolveSidebarCanvasSandbox(
-  content: SidebarContent,
+  content: ChatDetailContent,
   embedSandboxMode: EmbedSandboxMode,
 ): string {
   return content.kind === "canvas"
@@ -492,20 +500,8 @@ function resolveSidebarCanvasSandbox(
     : "allow-scripts";
 }
 
-function openSidebarImage(
-  onOpenImage: ((item: ImageLightboxItem) => void) | undefined,
-  src: string,
-  title: string,
-) {
-  if (onOpenImage) {
-    onOpenImage({ src, title });
-  } else {
-    openExternalUrlSafe(src, { allowDataImage: true });
-  }
-}
-
 type MarkdownSidebarProps = {
-  content: SidebarContent | null;
+  content: ChatDetailContent | null;
   error: string | null;
   fileView?: FileViewControls;
   onClose: () => void;
@@ -590,7 +586,12 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
             ? content.kind === "file"
               ? renderFileSidebarContent(content, props.onViewRawText, props.fileView)
               : content.kind === "session-diff"
-                ? html`<openclaw-session-diff .loader=${content.load}></openclaw-session-diff>`
+                ? html`<openclaw-session-diff
+                    .loader=${content.load}
+                    .loadFileText=${content.loadFileText ?? null}
+                    .openFile=${content.openFile ?? null}
+                    .revealFile=${content.revealFile ?? null}
+                  ></openclaw-session-diff>`
                 : content.kind === "canvas"
                   ? html`
                       <div class="chat-tool-card__preview" data-kind="canvas">
@@ -631,7 +632,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                               class="chat-tool-card__preview-image-button"
                               aria-label=${t("chat.imageLightbox.open", { title })}
                               @click=${() =>
-                                openSidebarImage(props.onOpenImage, content.src, title)}
+                                openResolvedImage(props.onOpenImage, content.src, title)}
                             >
                               <img
                                 class="chat-tool-card__preview-image"
@@ -688,7 +689,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
 }
 
 class ChatDetailPanel extends OpenClawLightDomElement {
-  @property({ attribute: false }) content: SidebarContent | null = null;
+  @property({ attribute: false }) content: ChatDetailContent | null = null;
   @property({ attribute: false }) loadFullMessage?: SidebarFullMessageLoader | null = null;
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
@@ -700,7 +701,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) onRevealInWorkspace?: ((path: string) => void) | null = null;
   @property({ attribute: false }) onOpenImage?: ((item: ImageLightboxItem) => void) | null = null;
 
-  @state() private visibleContent: SidebarContent | null = null;
+  @state() private visibleContent: ChatDetailContent | null = null;
   @state() private error: string | null = null;
   @state() private fileSearchOpen = false;
   @state() private fileSearchQuery = "";
@@ -1230,7 +1231,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       });
   };
 
-  private async upgradeToFullMessage(content: SidebarContent, version: number) {
+  private async upgradeToFullMessage(content: ChatDetailContent, version: number) {
     if (!hasFullMessageRequest(content) || !this.loadFullMessage) {
       return;
     }
@@ -1296,21 +1297,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   };
 
   private readonly handlePanelClick = (event: Event) => {
-    const imageButton = event
-      .composedPath()
-      .find(
-        (target): target is HTMLElement =>
-          target instanceof HTMLElement &&
-          target.classList.contains("markdown-inline-image-button"),
-      );
-    const image = imageButton?.querySelector<HTMLImageElement>(".markdown-inline-image");
-    if (image) {
-      event.preventDefault();
-      openSidebarImage(
-        this.onOpenImage ?? undefined,
-        image.currentSrc || image.src,
-        image.alt.trim() || t("chat.imageLightbox.untitled"),
-      );
+    if (openInlineChatImage(event, this.onOpenImage ?? undefined)) {
       return;
     }
     handleMarkdownCodeBlockCopy(event);
@@ -1335,7 +1322,9 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     // Markdown previews and file editors need a bounded host wrapper so their
     // inner content can shrink and scroll. Content-sized kinds keep auto height.
     const fillHost =
-      this.visibleContent?.kind === "file" || this.visibleContent?.kind === "markdown";
+      this.visibleContent?.kind === "file" ||
+      this.visibleContent?.kind === "markdown" ||
+      this.visibleContent?.kind === "session-diff";
     return html`
       <div
         class=${fillHost ? "sidebar-panel-host--fill" : ""}

@@ -174,7 +174,7 @@ flow:
             expr: "normalizeLowercaseStringOrEmpty(baselineReply.text)"
         - set: baselineMockRequests
           value:
-            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeBaseline}`))"
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeBaseline}`)).filter((request) => String(request.allInputText ?? '').includes(config.turnMarker))"
         - assert:
             expr: baselineMockRequests.length === 1
             message:
@@ -243,7 +243,7 @@ flow:
             message: active memory recall left a transient SQLite session behind
         - set: activeRequests
           value:
-            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeActive}`))"
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeActive}`)).filter((request) => String(request.allInputText ?? '').includes(config.turnMarker))"
         - assert:
             expr: activeRequests.length === 4
             message:

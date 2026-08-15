@@ -1,6 +1,6 @@
 /** Reads or waits for descendant subagent summaries after isolated cron orchestration. */
 import { readLatestAssistantReply, waitForAgentRunsToDrain } from "../../agents/run-wait.js";
-import { listDescendantRunsForRequester } from "../../agents/subagent-registry-read.js";
+import { listDescendantRunsForRequester } from "../../agents/subagents/registry/subagent-registry-read.js";
 import { stripHeartbeatToken } from "../../auto-reply/heartbeat.js";
 import {
   HEARTBEAT_TOKEN,

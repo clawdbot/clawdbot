@@ -4,10 +4,11 @@ import {
   flushSessionActivityAssistantNote,
   noteSessionActivityEvent,
 } from "../../agents/session-activity-notes.js";
+import { isCommandBearingToolCall } from "../../agents/tool-display.js";
 import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
 import { PROGRESS_STATUS_PREAMBLE_FRESH_MS } from "../../channels/progress-draft-compositor.js";
 import { sanitizeProgressStatusText } from "../../channels/progress-draft-status-text.js";
-import { isChannelProgressDraftWorkToolName, isCommandToolName } from "../../channels/streaming.js";
+import { isChannelProgressDraftWorkToolName } from "../../channels/streaming.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import type { AgentEventPayload, AgentEventStream } from "../../infra/agent-events.js";
@@ -324,8 +325,8 @@ function createProgressNarrator(params: {
       if (payload.phase !== "start" || !isChannelProgressDraftWorkToolName(payload.name)) {
         return;
       }
-      // Same command-tool set the draft formatter uses for commandText policy.
-      const hideDetail = params.hideCommandText === true && isCommandToolName(payload.name);
+      const hideDetail =
+        params.hideCommandText === true && isCommandBearingToolCall(payload.name, payload.args);
       recordEvent("tool", {
         phase: "start",
         name: payload.name,

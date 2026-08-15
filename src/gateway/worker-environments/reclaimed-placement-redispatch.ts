@@ -20,6 +20,11 @@ export function createReclaimedPlacementRedispatch(params: {
       sessionKey: placement.sessionKey,
       agentId: placement.agentId,
       profileId: previousEnvironment.profileId,
+      executionMode: placement.executionMode,
+      inheritedProfile: {
+        providerId: previousEnvironment.providerId,
+        profileSnapshot: previousEnvironment.profileSnapshot,
+      },
     });
   };
 }

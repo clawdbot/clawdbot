@@ -156,6 +156,7 @@ export function mapAnthropicStopReason(reason: string | undefined): StopReason {
   switch (reason) {
     case "end_turn":
     case "pause_turn":
+    case "compaction":
     case "stop_sequence":
       return "stop";
     case "max_tokens":

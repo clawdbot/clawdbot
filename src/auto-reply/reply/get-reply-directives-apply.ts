@@ -21,6 +21,7 @@ import { resolveModelSelectionFromDirective } from "./directive-handling.model-s
 import { maybeHandleUnexpectedNativeDirectiveArguments } from "./directive-handling.native.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
+import { formatModelSelectionScopeAck } from "./directive-handling.shared.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveContextTokens } from "./model-selection-context.js";
 import type { createModelSelectionState } from "./model-selection.js";
@@ -183,9 +184,11 @@ export async function applyInlineDirectiveOverrides(params: {
   let { directives } = params;
   let { provider, model } = params;
   let { contextTokens } = params;
-  const canPersistStickyModelSelection = Array.isArray(ctx.GatewayClientScopes)
-    ? ctx.GatewayClientScopes.includes("operator.admin")
-    : command.senderIsOwner;
+  const canPersistStickyModelSelection =
+    !directives.modelSessionOnly &&
+    (Array.isArray(ctx.GatewayClientScopes)
+      ? ctx.GatewayClientScopes.includes("operator.admin")
+      : command.senderIsOwner);
   const directiveModelState = {
     allowedModelKeys: modelState.allowedModelKeys,
     allowedModelCatalog: modelState.allowedModelCatalog,
@@ -260,7 +263,10 @@ export async function applyInlineDirectiveOverrides(params: {
     });
     if (lockedModelResolution.modelSelection) {
       typing.cleanup();
-      return { kind: "reply", reply: { text: MODEL_SELECTION_LOCKED_MESSAGE } };
+      return {
+        kind: "reply",
+        reply: { text: MODEL_SELECTION_LOCKED_MESSAGE, isError: true },
+      };
     }
   }
 
@@ -362,7 +368,10 @@ export async function applyInlineDirectiveOverrides(params: {
       });
       if (modelResolution.errorText) {
         typing.cleanup();
-        return { kind: "reply", reply: { text: modelResolution.errorText } };
+        return {
+          kind: "reply",
+          reply: { text: modelResolution.errorText, isError: true },
+        };
       }
       const modelSelection = modelResolution.modelSelection;
       if (modelSelection) {
@@ -374,7 +383,10 @@ export async function applyInlineDirectiveOverrides(params: {
         });
         if (runtime.kind === "invalid") {
           typing.cleanup();
-          return { kind: "reply", reply: { text: runtime.errorText } };
+          return {
+            kind: "reply",
+            reply: { text: runtime.errorText, isError: true },
+          };
         }
         const applied = await (
           await loadDirectivePersist()
@@ -403,20 +415,22 @@ export async function applyInlineDirectiveOverrides(params: {
         });
         if (applied.status === "rejected") {
           typing.cleanup();
-          return { kind: "reply", reply: { text: applied.message } };
+          return { kind: "reply", reply: { text: applied.message, isError: true } };
         }
         if (applied.status === "conflict") {
           typing.cleanup();
-          return { kind: "reply", reply: { text: applied.message } };
+          return { kind: "reply", reply: { text: applied.message, isError: true } };
         }
         const label = `${modelSelection.provider}/${modelSelection.model}`;
         const labelWithAlias = modelSelection.alias ? `${modelSelection.alias} (${label})` : label;
         // Model change first, then the thinking remap it triggered: the remap is a
         // consequence of the model switch, so the cause is announced before the effect.
         const parts = [
-          modelSelection.isDefault
-            ? `Model reset to default (${labelWithAlias}).`
-            : `Model set to ${labelWithAlias} for this session.`,
+          formatModelSelectionScopeAck({
+            isDefault: modelSelection.isDefault,
+            label: labelWithAlias,
+            configuredDefaultUpdate: applied.configuredDefaultUpdate,
+          }),
           applied.thinkingRemap
             ? `Thinking level set to ${applied.thinkingRemap.to} (${applied.thinkingRemap.from} not supported for ${applied.thinkingRemap.provider}/${applied.thinkingRemap.model}).`
             : undefined,
@@ -485,7 +499,7 @@ export async function applyInlineDirectiveOverrides(params: {
       typing.cleanup();
       return {
         kind: "reply",
-        reply: { text: persistenceState.outcome.errorText },
+        reply: { text: persistenceState.outcome.errorText, isError: true },
       };
     }
     ({ provider, model } = persistenceState.outcome);

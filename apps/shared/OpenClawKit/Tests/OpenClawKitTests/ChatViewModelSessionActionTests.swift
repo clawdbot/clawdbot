@@ -25,8 +25,48 @@ private func sessionActionOutboxCommand(
         lastError: nil)
 }
 
+private actor LegacyForkTransportState {
+    var parentKeys: [String] = []
+
+    func record(_ parentKey: String) {
+        self.parentKeys.append(parentKey)
+    }
+}
+
+private final class LegacyForkTransport: @unchecked Sendable, OpenClawChatTransport {
+    let state = LegacyForkTransportState()
+
+    func requestHistory(sessionKey _: String) async throws -> OpenClawChatHistoryPayload {
+        throw CancellationError()
+    }
+
+    func sendMessage(
+        sessionKey _: String,
+        message _: String,
+        thinking _: String,
+        idempotencyKey _: String,
+        attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+    {
+        throw CancellationError()
+    }
+
+    func forkSession(parentKey: String) async throws -> String {
+        await self.state.record(parentKey)
+        return "legacy-child"
+    }
+
+    func requestHealth(timeoutMs _: Int) async throws -> Bool {
+        false
+    }
+
+    func events() -> AsyncStream<OpenClawChatTransportEvent> {
+        AsyncStream { $0.finish() }
+    }
+}
+
 private actor SessionActionTransportState {
     var forkedParentKeys: [String] = []
+    var forkedFromLastCompleted: [Bool] = []
     var rewoundMessages: [(sessionKey: String, entryID: String)] = []
     var forkedMessages: [(sessionKey: String, entryID: String)] = []
     var branchListSessionKeys: [String] = []
@@ -36,13 +76,15 @@ private actor SessionActionTransportState {
     var historySessionKeys: [String] = []
     var historyCallCount = 0
     var patchedKeys: [String] = []
+    var patchIdentities: [(key: String, expectedSessionID: String?)] = []
     var deletedKeys: [String] = []
     var groupPuts: [[String]] = []
     var createdAgentIDs: [String?] = []
     var createdParentKeys: [String?] = []
 
-    func recordFork(_ key: String) {
+    func recordFork(_ key: String, fromLastCompleted: Bool) {
         self.forkedParentKeys.append(key)
+        self.forkedFromLastCompleted.append(fromLastCompleted)
     }
 
     func recordRewind(sessionKey: String, entryID: String) {
@@ -73,8 +115,9 @@ private actor SessionActionTransportState {
         return self.historyCallCount
     }
 
-    func recordPatch(_ key: String) {
+    func recordPatch(_ key: String, expectedSessionID: String?) {
         self.patchedKeys.append(key)
+        self.patchIdentities.append((key: key, expectedSessionID: expectedSessionID))
     }
 
     func recordGroupPut(_ names: [String]) {
@@ -209,8 +252,8 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         throw NSError(domain: "SessionActionTransport", code: 1)
     }
 
-    func forkSession(parentKey: String) async throws -> String {
-        await self.state.recordFork(parentKey)
+    func forkSession(parentKey: String, fromLastCompleted: Bool) async throws -> String {
+        await self.state.recordFork(parentKey, fromLastCompleted: fromLastCompleted)
         await self.forkGate?.suspendCompletion()
         return "forked"
     }
@@ -262,13 +305,14 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
 
     func patchSession(
         key: String,
+        expectedSessionID: String?,
         label _: String??,
         category _: String??,
         pinned _: Bool?,
         archived _: Bool?,
         unread _: Bool?) async throws
     {
-        await self.state.recordPatch(key)
+        await self.state.recordPatch(key, expectedSessionID: expectedSessionID)
     }
 
     func acquireSessionGroupsRouteLease() async -> OpenClawChatSessionGroupsRouteLease? {
@@ -326,6 +370,10 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         await self.state.forkedParentKeys
     }
 
+    func stableForkFlags() async -> [Bool] {
+        await self.state.forkedFromLastCompleted
+    }
+
     func rewoundMessages() async -> [(sessionKey: String, entryID: String)] {
         await self.state.rewoundMessages
     }
@@ -352,6 +400,10 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
 
     func patchedKeys() async -> [String] {
         await self.state.patchedKeys
+    }
+
+    func patchIdentities() async -> [(key: String, expectedSessionID: String?)] {
+        await self.state.patchIdentities
     }
 
     func groupPuts() async -> [[String]] {
@@ -423,6 +475,23 @@ struct ChatViewModelSessionActionTests {
         #expect(result.succeededKeys == ["older-search-result"])
         #expect(result.errorsByKey.isEmpty)
         #expect(await transport.patchedKeys() == ["older-search-result"])
+    }
+
+    @Test func `batch archive carries each observed identity and rejects missing identity`() async {
+        let transport = SessionActionTransport()
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+
+        let result = await viewModel.performSessionBatch(
+            sessions: [
+                self.entry(key: "durable", sessionId: "session-durable"),
+                self.entry(key: "missing"),
+            ],
+            action: .archive)
+
+        #expect(result.succeededKeys == ["durable"])
+        #expect(result.errorsByKey["missing"] != nil)
+        #expect(await transport.patchIdentities().map(\.key) == ["durable"])
+        #expect(await transport.patchIdentities().map(\.expectedSessionID) == ["session-durable"])
     }
 
     @Test func `group create lists and replaces through one captured route lease`() async throws {
@@ -1090,6 +1159,28 @@ struct ChatViewModelSessionActionTests {
             localized: "Remove attachments or wait for delivery to resolve before starting a new chat."))
     }
 
+    @Test func `fork routes active sessions through the completed-message boundary`() async {
+        let transport = SessionActionTransport()
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        viewModel.sessions = [self.entry(key: "main", hasActiveRun: true)]
+
+        await viewModel.forkSession(key: "main")
+
+        #expect(await transport.stableForkFlags() == [true])
+    }
+
+    @Test func `boundary-aware fork remains compatible with legacy transports`() async throws {
+        let legacy = LegacyForkTransport()
+        let transport: any OpenClawChatTransport = legacy
+
+        let childKey = try await transport.forkSession(
+            parentKey: "main",
+            fromLastCompleted: true)
+
+        #expect(childKey == "legacy-child")
+        #expect(await legacy.state.parentKeys == ["main"])
+    }
+
     @Test func `fork completion does not override newer navigation`() async {
         let forkGate = SessionActionCompletionGate()
         let transport = SessionActionTransport(forkGate: forkGate)
@@ -1253,7 +1344,11 @@ struct ChatViewModelSessionActionTests {
         ]
     }
 
-    private func entry(key: String) -> OpenClawChatSessionEntry {
+    private func entry(
+        key: String,
+        sessionId: String? = nil,
+        hasActiveRun: Bool? = nil) -> OpenClawChatSessionEntry
+    {
         OpenClawChatSessionEntry(
             key: key,
             kind: nil,
@@ -1263,7 +1358,7 @@ struct ChatViewModelSessionActionTests {
             room: nil,
             space: nil,
             updatedAt: nil,
-            sessionId: nil,
+            sessionId: sessionId,
             systemSent: nil,
             abortedLastRun: nil,
             thinkingLevel: nil,
@@ -1273,6 +1368,7 @@ struct ChatViewModelSessionActionTests {
             totalTokens: nil,
             modelProvider: nil,
             model: nil,
-            contextTokens: nil)
+            contextTokens: nil,
+            hasActiveRun: hasActiveRun)
     }
 }

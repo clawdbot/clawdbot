@@ -64,6 +64,24 @@ describe("Tool Search flattened call arguments", () => {
       expected: { command: "list", timeout_ms: 5_000 },
     },
     {
+      label: "dotted args from compatibility providers",
+      arguments: {
+        id: "inspect_resource",
+        "args.path": "projects/example.md",
+        "args.limit": 20,
+      },
+      expected: { path: "projects/example.md", limit: 20 },
+    },
+    {
+      label: "ordinary flattened args precedence over dotted args",
+      arguments: {
+        id: "inspect_resource",
+        "args.path": "projects/dotted.md",
+        path: "projects/flattened.md",
+      },
+      expected: { path: "projects/flattened.md" },
+    },
+    {
       label: "toolId selector with a target id",
       arguments: { toolId: "inspect_resource", id: "record-7" },
       expected: { id: "record-7" },
@@ -84,8 +102,10 @@ describe("Tool Search flattened call arguments", () => {
         id: "inspect_resource",
         args: { command: "nested" },
         command: "flattened",
+        "args.command": "dotted",
+        "args.path": "projects/dotted.md",
       },
-      expected: { command: "nested" },
+      expected: { command: "nested", path: "projects/dotted.md" },
     },
     {
       label: "explicit input precedence",

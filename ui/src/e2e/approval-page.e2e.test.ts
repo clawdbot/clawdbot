@@ -1,24 +1,23 @@
 import { copyFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page, type Video } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { Browser, BrowserContext, Page, Video } from "playwright";
+import { afterEach, expect, it } from "vitest";
 import type {
   AllowedApprovalSnapshot,
   PendingApprovalSnapshot,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
-  canRunPlaywrightChromium,
+  controlUiE2eWaitTimeoutMs,
   installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI standalone approval page",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
 
 const APPROVAL_ID = "Approval:Mobile/東京 100% 🦞";
 const APPROVAL_NOW_MS = Date.UTC(2026, 6, 10, 18, 0, 0);
@@ -35,8 +34,6 @@ type ApprovalSurface = {
   rawVideoDir?: string;
 };
 
-let browser: Browser | undefined;
-let server: ControlUiE2eServer | undefined;
 const openContexts = new Set<BrowserContext>();
 const rawVideoDirs = new Set<string>();
 
@@ -45,7 +42,7 @@ function approvalPath(basePath: string): string {
 }
 
 function approvalUrl(basePath: string): string {
-  return new URL(approvalPath(basePath), server?.baseUrl ?? "http://127.0.0.1/").href;
+  return new URL(approvalPath(basePath), suite.server?.baseUrl ?? "http://127.0.0.1/").href;
 }
 
 function pendingApproval(basePath: string): PendingApprovalSnapshot {
@@ -84,10 +81,10 @@ function allowedApproval(pending: PendingApprovalSnapshot): AllowedApprovalSnaps
 }
 
 function requireBrowser(): Browser {
-  if (!browser) {
+  if (!suite.browser) {
     throw new Error("Control UI E2E browser is not running");
   }
-  return browser;
+  return suite.browser;
 }
 
 async function createSurface(params: {
@@ -116,7 +113,7 @@ async function createSurface(params: {
   });
   openContexts.add(context);
   const page = await context.newPage();
-  page.setDefaultTimeout(10_000);
+  page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
   await page.clock.setFixedTime(new Date(APPROVAL_NOW_MS));
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(String(error)));
@@ -238,15 +235,7 @@ async function expectMobilePendingLayout(page: Page): Promise<void> {
   expect(metrics.backLinkTop).toBeGreaterThanOrEqual(metrics.cardBottom + 10);
 }
 
-describeControlUiE2e("Control UI standalone approval page", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
+suite.define(() => {
   afterEach(async () => {
     await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
     openContexts.clear();
@@ -254,11 +243,6 @@ describeControlUiE2e("Control UI standalone approval page", () => {
       [...rawVideoDirs].map((rawVideoDir) => rm(rawVideoDir, { force: true, recursive: true })),
     );
     rawVideoDirs.clear();
-  });
-
-  afterAll(async () => {
-    await browser?.close().catch(() => {});
-    await server?.close();
   });
 
   it("keeps one canonical winner across conflicting surfaces and terminal reload", async () => {
@@ -428,7 +412,7 @@ describeControlUiE2e("Control UI standalone approval page", () => {
       pending,
       viewport: MOBILE_VIEWPORT,
     });
-    const appUrl = new URL(server?.baseUrl ?? "http://127.0.0.1/");
+    const appUrl = new URL(suite.server?.baseUrl ?? "http://127.0.0.1/");
     const pageGatewayScope = `ws://${appUrl.host}`;
     const selectionKey = `openclaw.control.currentGateway.v1:${pageGatewayScope}`;
     const pageGateway = pageGatewayScope;

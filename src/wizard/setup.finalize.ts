@@ -48,7 +48,7 @@ import {
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { launchTuiCli } from "../tui/tui-launch.js";
+import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
 import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
 import { t } from "./i18n/index.js";
@@ -163,6 +163,37 @@ export type GatewayServiceSetupOutcome =
   | { status: "skipped"; reason: "explicit" | "systemd-unavailable" | "external" }
   | { status: "failed"; error: string };
 
+function buildGatewayRecoveryProjection(gateway: GatewayServiceSetupOutcome): {
+  detail: string;
+  summary: string;
+} {
+  const startGuidance =
+    gateway.status === "skipped" && gateway.reason === "external"
+      ? formatExternalSupervisorActionRequired("start the gateway")
+      : t("wizard.finalize.startGatewayNow", {
+          command: formatCliCommand("openclaw gateway run"),
+        });
+  const notDetected = t("wizard.finalize.gatewayNotDetected");
+  const summary = [notDetected, startGuidance].join(" ");
+  if (gateway.status === "skipped" && gateway.reason === "external") {
+    return { detail: [notDetected, startGuidance].join("\n"), summary };
+  }
+  return {
+    detail: [
+      notDetected,
+      t("wizard.finalize.noBackgroundGatewayExpected"),
+      startGuidance,
+      t("wizard.finalize.rerunInstallDaemon", {
+        command: formatCliCommand("openclaw onboard --install-daemon"),
+      }),
+      t("wizard.finalize.skipHealthNextTime", {
+        command: formatCliCommand("openclaw onboard --skip-health"),
+      }),
+    ].join("\n"),
+    summary,
+  };
+}
+
 /**
  * Ensure the gateway service matches the onboarding decision: prompt/decide
  * whether to install the daemon, then install/restart/reinstall it. Shared by
@@ -196,6 +227,17 @@ export async function ensureGatewayServiceForOnboarding(params: {
       );
     }
   };
+
+  if (isGatewayExternallySupervised()) {
+    await prompter.note(
+      formatExternalSupervisorActionRequired("manage the gateway service"),
+      "Gateway",
+    );
+    return {
+      gateway: { status: "skipped", reason: "external" },
+      containerWithoutUserSystemd: false,
+    };
+  }
 
   const systemdAvailable =
     process.platform === "linux" ? await isSystemdUserServiceAvailable() : true;
@@ -257,14 +299,6 @@ export async function ensureGatewayServiceForOnboarding(params: {
       },
       containerWithoutUserSystemd,
     };
-  }
-
-  if (isGatewayExternallySupervised()) {
-    await prompter.note(
-      formatExternalSupervisorActionRequired("manage the gateway service"),
-      "Gateway",
-    );
-    return { gateway: { status: "skipped", reason: "external" }, containerWithoutUserSystemd };
   }
 
   let gateway: GatewayServiceSetupOutcome = { status: "ready", action: "reused" };
@@ -458,6 +492,7 @@ export async function finalizeSetupWizard(
     prompter,
     runtime,
   });
+  const gatewayRecovery = buildGatewayRecoveryProjection(gateway);
   if (gateway.status === "failed") {
     gatewayProbe = { ok: false, detail: gateway.error };
   }
@@ -565,22 +600,7 @@ export async function finalizeSetupWizard(
           t("wizard.finalize.healthCheckHelp"),
         );
       } else {
-        await prompter.note(
-          [
-            t("wizard.finalize.gatewayNotDetected"),
-            t("wizard.finalize.noBackgroundGatewayExpected"),
-            t("wizard.finalize.startGatewayNow", {
-              command: formatCliCommand("openclaw gateway run"),
-            }),
-            t("wizard.finalize.rerunInstallDaemon", {
-              command: formatCliCommand("openclaw onboard --install-daemon"),
-            }),
-            t("wizard.finalize.skipHealthNextTime", {
-              command: formatCliCommand("openclaw onboard --skip-health"),
-            }),
-          ].join("\n"),
-          "Gateway",
-        );
+        await prompter.note(gatewayRecovery.detail, "Gateway");
       }
     }
 
@@ -946,28 +966,36 @@ export async function finalizeSetupWizard(
                 }),
               ].join(" ")
             : t("wizard.guided.complete")
-        : [
-            t("wizard.finalize.gatewayNotDetected"),
-            t("wizard.finalize.startGatewayNow", {
-              command: formatCliCommand("openclaw gateway run"),
-            }),
-          ].join(" "),
+        : gatewayRecovery.summary,
     );
 
     if (shouldLaunchTui) {
       restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: false });
       try {
-        await launchTuiCli(
-          {
-            ...(gatewayProbe.ok ? {} : { local: true }),
-            deliver: false,
-            message: shouldSeedBootstrapHatch
-              ? t("wizard.finalize.bootstrapHatchMessage")
-              : undefined,
-            timeoutMs: HATCH_TUI_TIMEOUT_MS,
-          },
-          gatewayProbe.ok ? { gatewayUrl: displayLinks.wsUrl, authSource: "config" } : {},
-        );
+        // Setup now hosts the TUI in-process, so arm the final exit fallback
+        // when runtime handles outlive the normal TUI teardown.
+        await runTui({
+          ...(gatewayProbe.ok
+            ? {
+                config: nextConfig,
+                boundGateway: {
+                  url: displayLinks.wsUrl,
+                  ...(settings.authMode === "token" && settings.gatewayToken
+                    ? { token: settings.gatewayToken }
+                    : {}),
+                  ...(settings.authMode === "password" && resolvedGatewayPassword
+                    ? { password: resolvedGatewayPassword }
+                    : {}),
+                },
+              }
+            : { local: true }),
+          deliver: false,
+          forceProcessExitOnReturn: true,
+          message: shouldSeedBootstrapHatch
+            ? t("wizard.finalize.bootstrapHatchMessage")
+            : undefined,
+          timeoutMs: HATCH_TUI_TIMEOUT_MS,
+        });
       } finally {
         restoreTerminalState("post-setup tui", { resumeStdinIfPaused: false });
         if (sessionGateway) {
