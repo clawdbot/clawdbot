@@ -195,6 +195,71 @@ describe("node worker tunnel manager", () => {
     );
   });
 
+  it("keeps same-owner starts behind restored workspace validation", async () => {
+    const record = environment();
+    const validation = createDeferred();
+    const manifest = { version: 1 as const, baseCommit: null, entries: [] };
+    const rawManifest = serializeWorkerWorkspaceManifest(manifest);
+    const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+    const outputs = [`quiesced ${"c".repeat(32)}`, manifestRef, ""];
+    const nodeTransport = transport();
+    nodeTransport.invoke = vi.fn(async () => ({
+      ok: true,
+      payloadJSON: JSON.stringify({
+        workspaceDir: "/node/workspace",
+        stdout: outputs.shift() ?? "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      }),
+    }));
+    const prepareSync = vi.fn(async () => {
+      await validation.promise;
+      return {
+        snapshot: { manifest, manifestRef, rawManifest, root: "/gateway/workspace" },
+        token: "restore-token",
+      };
+    });
+    const transfer = {
+      prepareSync,
+      close: vi.fn(async () => {}),
+      revoke: vi.fn(),
+    } as unknown as NodeWorkspaceTransferService;
+    const manager = createNodeWorkerTunnelManager({
+      gatewayDeviceId: "gateway-device-1",
+      getEnvironment: () => record,
+      getTransport: () => nodeTransport,
+      launchNodeWorker: vi.fn(),
+      validateWorkerTurn: () => true,
+      workspaceTransfer: transfer,
+    });
+    manager.bindWorkspaceBindingResolver(async () => ({
+      localPath: "/gateway/workspace",
+      manifestRef,
+      remoteWorkspaceDir: "/node/workspace",
+    }));
+
+    const first = manager.start(startRequest());
+    await vi.waitFor(() => expect(prepareSync).toHaveBeenCalledOnce());
+    const second = manager.start(startRequest());
+    const secondSettled = vi.fn();
+    void second.then(
+      () => secondSettled(),
+      () => secondSettled(),
+    );
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(secondSettled).not.toHaveBeenCalled();
+    validation.resolve();
+
+    const handle = await first;
+    await expect(second).resolves.toBe(handle);
+    expect(manager.status("environment-1")).toBe("connected");
+  });
+
   it("keeps concurrent workspace commands on the admitted build while launch capacity is full", async () => {
     const record = environment();
     const manifest = { version: 1 as const, baseCommit: null, entries: [] };
