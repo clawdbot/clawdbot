@@ -12,7 +12,7 @@ export default defineToolPlugin({
   id: "planning-knowledge",
   name: "Planning Knowledge",
   description:
-    "Read-only access to Oliver's Planning-owned personal Knowledge Notes. Canonical refs remain note:notes/knowledge/<slug>.",
+    "Private retrieval and explicit Planning-owned capture for personal Knowledge Notes. Canonical refs remain note:notes/knowledge/<slug>.",
   configSchema: planningKnowledgeConfigSchema,
   tools: (tool) => [
     tool({
@@ -32,13 +32,18 @@ export default defineToolPlugin({
     }),
     tool({
       name: "planning_knowledge_capture",
-      label: "Planning Knowledge Capture (disabled)",
+      label: "Planning Knowledge Capture",
       description:
-        "Recognize an explicit request to save content as a personal Planning Knowledge Note. PLN-500A is retrieval-only: never write, edit, archive, or create a task from this tool. For mixed requests, route any operational reminder separately.",
+        "Create an explicit personal Knowledge Note through the Planning-owned writer and refresh the derived OneLibrary index. Never edit arbitrary Planning files or create tasks/calendar events; route mixed operational follow-ups separately.",
       parameters: planningKnowledgeCaptureParameters,
       optional: true,
-      factory: ({ toolContext }) =>
-        toolContext.senderIsOwner === false ? null : createPlanningKnowledgeCaptureTool(),
+      factory: ({ api, config, toolContext }) => {
+        if (toolContext.senderIsOwner === false) {
+          return null;
+        }
+        const resolved = resolvePlanningKnowledgeConfig(config, api.resolvePath);
+        return createPlanningKnowledgeCaptureTool(resolved ?? undefined);
+      },
     }),
   ],
 });

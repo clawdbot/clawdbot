@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -22,6 +22,11 @@ const config = {
   pythonExecutable: "python3",
   mode: "text" as const,
   timeoutMs: 5000,
+};
+
+const writerConfig = {
+  ...config,
+  writerScriptPath: "/opt/Goal_Agent/tools/planning/knowledge_notes.py",
 };
 
 const validHit = {
@@ -83,6 +88,11 @@ describe("planning-knowledge config", () => {
       indexPath: config.indexPath,
     });
     expect(resolvePath).not.toHaveBeenCalled();
+  });
+
+  it("accepts an explicit Planning-owned writer path", () => {
+    const resolved = resolvePlanningKnowledgeConfig(writerConfig, () => undefined);
+    expect(resolved).toMatchObject({ writerScriptPath: writerConfig.writerScriptPath });
   });
 
   it("fails closed when a relative path is outside the plugin resolver boundary", () => {
@@ -163,6 +173,7 @@ describe("planning-knowledge search", () => {
     "canary-runs the configured OneLibrary CLI against a synthetic note",
     async () => {
       const cliPath = process.env.OPENCLAW_PLANNING_KNOWLEDGE_CLI;
+      const pythonExecutable = process.env.OPENCLAW_PLANNING_KNOWLEDGE_PYTHON ?? "python3";
       if (!cliPath) {
         throw new Error("OneLibrary CLI canary requires OPENCLAW_PLANNING_KNOWLEDGE_CLI");
       }
@@ -210,12 +221,13 @@ Output after learning improves retention.
             scriptPath: cliPath,
             sourceRoot,
             indexPath,
+            pythonExecutable,
           },
           (value) => value,
         );
         expect(configured).not.toBeNull();
         await execFileAsync(
-          "python3",
+          pythonExecutable,
           [cliPath, "sync", "--root", sourceRoot, "--index", indexPath, "--mode", "text"],
           { env: process.env },
         );
@@ -257,5 +269,164 @@ describe("planning-knowledge capture in PLN-500A", () => {
       operational_follow_up: "route_separately",
       write_performed: false,
     });
+  });
+});
+
+describe("planning-knowledge capture in PLN-500C", () => {
+  it("calls only the Planning writer and derived sync, returning the canonical ref", async () => {
+    const responses = [
+      {
+        stdout: JSON.stringify({
+          status: "created",
+          title: "Input Output Balance",
+          canonical_ref: "note:notes/knowledge/input_output_balance",
+        }),
+        exitCode: 0,
+      },
+      {
+        stdout: JSON.stringify({
+          inserted_records: 1,
+          updated_records: 0,
+          unchanged_records: 0,
+        }),
+        exitCode: 0,
+      },
+    ];
+    const calls: Array<Parameters<PlanningKnowledgeCommandRunner>[0]> = [];
+    const runner: PlanningKnowledgeCommandRunner = vi.fn(async (request) => {
+      calls.push(request);
+      return responses.shift() ?? { stdout: "{}", exitCode: 0 };
+    });
+    const tool = createPlanningKnowledgeCaptureTool(writerConfig, runner);
+
+    const result = await tool.execute("call-1", {
+      title: "Input Output Balance",
+      knowledgeType: "principle",
+      sourceType: "human",
+      verificationStatus: "reviewed",
+      content: "Output after learning improves retention.",
+      essence: "Input should be followed by active output.",
+      knowledge: "Output after learning improves retention.",
+      operationalFollowUp: "Remind me tomorrow",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "created",
+      write_performed: true,
+      canonical_ref: "note:notes/knowledge/input_output_balance",
+      corpus: "planning_personal",
+      derived_sync: "completed",
+      operational_follow_up: "route_separately",
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.args).toEqual([
+      writerConfig.writerScriptPath,
+      "create",
+      "--root",
+      "/tmp/goal-agent",
+      "--input",
+      "-",
+    ]);
+    expect(JSON.parse(calls[0]?.stdin ?? "{}")).toMatchObject({
+      title: "Input Output Balance",
+      knowledge_type: "principle",
+      source_type: "human",
+      verification_status: "reviewed",
+    });
+    expect(calls[1]?.args).toEqual([
+      writerConfig.scriptPath,
+      "sync",
+      "--root",
+      writerConfig.sourceRoot,
+      "--index",
+      writerConfig.indexPath,
+      "--mode",
+      "text",
+    ]);
+  });
+
+  it("fails closed on a writer collision and does not sync", async () => {
+    const runner: PlanningKnowledgeCommandRunner = vi.fn(async () => ({
+      stdout: JSON.stringify({
+        status: "error",
+        error_code: "collision",
+        message: "Knowledge target already contains different content",
+      }),
+      exitCode: 2,
+    }));
+    const tool = createPlanningKnowledgeCaptureTool(writerConfig, runner);
+
+    await expect(
+      tool.execute("call-1", {
+        title: "Input Output Balance",
+        knowledgeType: "principle",
+        sourceType: "human",
+        verificationStatus: "reviewed",
+        content: "A conflicting proposition.",
+      }),
+    ).rejects.toThrow(/different content/);
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it.skipIf(
+    !process.env.OPENCLAW_PLANNING_KNOWLEDGE_CLI || !process.env.OPENCLAW_PLANNING_KNOWLEDGE_WRITER,
+  )("runs the real writer → sync → retrieval cycle in an isolated fixture", async () => {
+    const cliPath = process.env.OPENCLAW_PLANNING_KNOWLEDGE_CLI;
+    const writerPath = process.env.OPENCLAW_PLANNING_KNOWLEDGE_WRITER;
+    const pythonExecutable = process.env.OPENCLAW_PLANNING_KNOWLEDGE_PYTHON ?? "python3";
+    if (!cliPath || !writerPath) {
+      throw new Error("PLN-500C canary requires both Planning and OneLibrary CLIs");
+    }
+    const tempRoot = await mkdtemp(join(tmpdir(), "openclaw-pln-500c-"));
+    const sourceRoot = join(tempRoot, "notes", "knowledge");
+    const indexPath = join(tempRoot, "planning-personal.sqlite3");
+    try {
+      await mkdir(sourceRoot, { recursive: true });
+      const configured = resolvePlanningKnowledgeConfig(
+        {
+          ...config,
+          scriptPath: cliPath,
+          writerScriptPath: writerPath,
+          sourceRoot,
+          indexPath,
+          pythonExecutable,
+        },
+        (value) => value,
+      );
+      expect(configured).not.toBeNull();
+      const capture = createPlanningKnowledgeCaptureTool(configured!);
+      const payload = {
+        title: "Input Output Balance",
+        knowledgeType: "principle" as const,
+        sourceType: "human" as const,
+        verificationStatus: "reviewed" as const,
+        content: "Output after learning improves retention.",
+        essence: "Input should be followed by active output.",
+        knowledge: "Output after learning improves retention.",
+      };
+
+      const created = await capture.execute("call-1", payload);
+      expect(created.details).toMatchObject({
+        status: "created",
+        canonical_ref: "note:notes/knowledge/input_output_balance",
+        derived_sync: "completed",
+      });
+      await execFileAsync(pythonExecutable, [writerPath, "validate-all", "--root", tempRoot]);
+
+      const search = createPlanningKnowledgeSearchTool(configured!);
+      const retrieved = await search.execute("call-2", {
+        query: "Input Output Balance",
+      });
+      expect(retrieved.details).toMatchObject({
+        corpus: "planning_personal",
+        results: [{ canonical_ref: "note:notes/knowledge/input_output_balance" }],
+      });
+
+      const retry = await capture.execute("call-3", payload);
+      expect(retry.details).toMatchObject({ status: "already_exists", write_performed: false });
+      expect(await readdir(sourceRoot)).toHaveLength(1);
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
   });
 });
