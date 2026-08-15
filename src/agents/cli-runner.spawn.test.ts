@@ -1240,6 +1240,37 @@ describe("runCliAgent spawn path", () => {
     expect(requireArgAfter(input.argv, "--effort")).toBe("high");
   });
 
+  it("passes the elapsed effective fast-mode state to backend argument resolution", async () => {
+    mockSuccessfulCliRun(CLAUDE_OK_JSONL);
+    const resolveExecutionArgs = vi.fn(({ baseArgs }) => baseArgs);
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        fastMode: "auto",
+        fastModeStartedAtMs: Date.now() - 6_000,
+        fastModeAutoOnSeconds: 5,
+        resolveExecutionArgs,
+      }),
+    );
+
+    const resolveArgsInput = requireRecord(mockCallArg(resolveExecutionArgs), "resolved args");
+    expect(resolveArgsInput.fastMode).toBe(false);
+  });
+
+  it("preserves an unset fast mode for backend argument resolution", async () => {
+    mockSuccessfulCliRun(CLAUDE_OK_JSONL);
+    const resolveExecutionArgs = vi.fn(({ baseArgs }) => baseArgs);
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        resolveExecutionArgs,
+      }),
+    );
+
+    const resolveArgsInput = requireRecord(mockCallArg(resolveExecutionArgs), "resolved args");
+    expect(resolveArgsInput.fastMode).toBeUndefined();
+  });
+
   it("preserves exact tool availability through execution-time argument resolution", async () => {
     mockSuccessfulCliRun(CLAUDE_OK_JSONL);
     const toolAvailability: NonNullable<PreparedCliRunContext["params"]["cliToolAvailability"]> = {

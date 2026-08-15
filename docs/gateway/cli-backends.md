@@ -151,6 +151,14 @@ Claude Code can drive a Chrome browser through the [Claude in Chrome extension](
 
 The backend also maps OpenClaw `/think` levels to Claude Code's native `--effort` flag: `minimal`/`low` -> `low`, `medium` -> `medium`, and `high`/`xhigh`/`max` pass through directly. This keeps the supported Fable 5 effort levels the same for subscription-backed Claude CLI and API-key routes. `adaptive` removes configured `--effort` flags and supplies no replacement, so Claude Code resolves effective effort from its own environment, settings, and model defaults. Other CLI backends need their owning plugin to declare an equivalent argv mapper before `/think` affects the spawned CLI.
 
+OpenClaw `/fast` settings also map to Claude Code's per-invocation `fastMode`
+setting. Automatic mode is recalculated before every fresh, retry, fallback,
+tool-result, or continuation call, while restricted and `/btw` side-question
+runs keep fast mode off. If `--settings` names a file, leave OpenClaw fast mode
+unset or replace the argument with inline JSON; Claude Code accepts only one
+file-or-JSON value, so OpenClaw rejects an authoritative `/fast` override rather
+than silently contradicting the file.
+
 Before OpenClaw can use `claude-cli`, Claude Code itself must be logged in on the same host:
 
 ```bash

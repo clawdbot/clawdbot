@@ -281,6 +281,12 @@ side-question argv reliably disables those tools, also set
 `sideQuestionToolMode: "disabled"`; otherwise OpenClaw fails closed when BTW
 requires a no-tools CLI run.
 
+`ctx.fastMode` is the effective boolean for this individual invocation when
+OpenClaw has a configured fast-mode value; `undefined` means the backend should
+preserve its own default. OpenClaw resolves automatic fast-mode cutoffs before
+calling the hook; the backend only needs to map the boolean to its native
+request or argv contract.
+
 Set `nativeToolMode: "selectable"` only when the backend can disable every
 backend-native tool for an individual run. Restricted runs receive a canonical
 contract: `ctx.toolAvailability.native` is the exact backend-native list and

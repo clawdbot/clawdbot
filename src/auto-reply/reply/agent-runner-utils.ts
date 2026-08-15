@@ -226,7 +226,10 @@ export function resolveRunFastModeForFallbackCandidate(params: {
     };
   }
   return {
-    fastMode: state.mode,
+    // Preserve "not configured" for CLI backends. A backend may already have
+    // its own fast-mode setting, so the OpenClaw default must not become an
+    // authoritative per-invocation `false` override.
+    fastMode: state.source === "default" ? undefined : state.mode,
     fastModeAutoOnSeconds: params.run.fastModeAutoOnSecondsOverride
       ? params.run.fastModeAutoOnSeconds
       : state.fastAutoOnSeconds,

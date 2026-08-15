@@ -20,6 +20,7 @@ import {
   detectImageReferences,
   hasHydratableMediaImages,
 } from "../embedded-agent-runner/run/images.js";
+import { resolveFastModeForElapsed } from "../fast-mode.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
 import { buildClaudeOwnerKey, closeClaudeSession } from "./claude-live-registry.js";
@@ -206,6 +207,14 @@ export async function executePreparedCliRun(
     : (context.claudeSkillsPluginArgs ?? fallbackClaudeSkillsPlugin?.args ?? []);
   const baseArgsWithSkills =
     claudeSkillsPluginArgs.length > 0 ? [...resolvedArgs, ...claudeSkillsPluginArgs] : resolvedArgs;
+  const fastMode =
+    params.fastMode === undefined
+      ? undefined
+      : resolveFastModeForElapsed({
+          mode: params.fastMode,
+          startedAtMs: params.fastModeStartedAtMs ?? context.started,
+          fastAutoOnSeconds: params.fastModeAutoOnSeconds,
+        }).enabled;
   const resolvedExecutionArgs = context.backendResolved.resolveExecutionArgs?.({
     config: params.config,
     workspaceDir: context.workspaceDir,
@@ -213,6 +222,7 @@ export async function executePreparedCliRun(
     modelId: context.modelId,
     authProfileId: context.effectiveAuthProfileId,
     thinkingLevel: normalizeCliBackendThinkingLevel(params.thinkLevel),
+    fastMode,
     executionMode: params.executionMode ?? "agent",
     // Node runs project the native subset only: gateway-loopback MCP tools do
     // not exist on the node, and auto-approval must not cross that boundary.

@@ -96,7 +96,7 @@ const CLAUDE_NO_TOOLS_VALUE = "";
 const CLAUDE_DENY_MCP_TOOLS_VALUE = "mcp__*";
 const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
 const CLAUDE_RESTRICTED_SETTINGS =
-  '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}';
+  '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"fastMode":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}';
 
 type ClaudeCliEffort = "low" | "medium" | "high" | "xhigh" | "max";
 type ClaudeCliEffortArgAction =
@@ -292,6 +292,59 @@ function stripClaudeEffortArgs(args: readonly string[]): string[] {
   return normalized;
 }
 
+function resolveClaudeFastModeArgs(
+  args: readonly string[],
+  fastMode: boolean | undefined,
+): string[] {
+  if (fastMode === undefined) {
+    return [...args];
+  }
+  const terminatorIndex = args.indexOf("--");
+  const optionEnd = terminatorIndex < 0 ? args.length : terminatorIndex;
+  let settingsArg:
+    | { index: number; value: string | undefined; valueIndex: number | undefined }
+    | undefined;
+  for (let index = 0; index < optionEnd; index += 1) {
+    const arg = args[index] ?? "";
+    if (arg === CLAUDE_SETTINGS_ARG) {
+      settingsArg = { index, value: args[index + 1], valueIndex: index + 1 };
+      index += 1;
+    } else if (arg.startsWith(`${CLAUDE_SETTINGS_ARG}=`)) {
+      settingsArg = {
+        index,
+        value: arg.slice(`${CLAUDE_SETTINGS_ARG}=`.length),
+        valueIndex: undefined,
+      };
+    }
+  }
+  if (settingsArg) {
+    let settings: unknown;
+    try {
+      settings = JSON.parse(settingsArg.value ?? "");
+    } catch {
+      settings = undefined;
+    }
+    if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+      throw new Error(
+        "claude-cli cannot apply an OpenClaw fast-mode override when --settings names a file; use inline JSON settings or remove the OpenClaw fast-mode override",
+      );
+    }
+    const normalized = [...args];
+    const value = JSON.stringify({ ...(settings as Record<string, unknown>), fastMode });
+    if (settingsArg.valueIndex !== undefined) {
+      normalized[settingsArg.valueIndex] = value;
+    } else {
+      normalized[settingsArg.index] = `${CLAUDE_SETTINGS_ARG}=${value}`;
+    }
+    return normalized;
+  }
+  const settingsArgs = [CLAUDE_SETTINGS_ARG, JSON.stringify({ fastMode })];
+  if (terminatorIndex < 0) {
+    return [...args, ...settingsArgs];
+  }
+  return [...args.slice(0, terminatorIndex), ...settingsArgs, ...args.slice(terminatorIndex)];
+}
+
 const CLAUDE_SIDE_QUESTION_VARIADIC_VALUE_ARGS = new Set([
   CLAUDE_ALLOWED_TOOLS_ARG,
   "--allowed-tools",
@@ -463,7 +516,7 @@ function resolveClaudeCliRestrictedExecutionArgs(
 export function resolveClaudeCliExecutionArgs(
   context: CliBackendResolveExecutionArgsContext,
 ): string[] {
-  const executionArgs = (() => {
+  const executionArgsWithoutFastMode = (() => {
     if (context.executionMode === "side-question") {
       return resolveClaudeCliSideQuestionExecutionArgs(context.baseArgs);
     }
@@ -479,10 +532,20 @@ export function resolveClaudeCliExecutionArgs(
         return action satisfies never;
     }
   })();
-  if (!context.toolAvailability) {
-    return executionArgs;
-  }
-  return resolveClaudeCliRestrictedExecutionArgs(executionArgs, context.toolAvailability);
+  const executionArgsWithRestrictions = context.toolAvailability
+    ? resolveClaudeCliRestrictedExecutionArgs(
+        executionArgsWithoutFastMode,
+        context.toolAvailability,
+      )
+    : executionArgsWithoutFastMode;
+  return resolveClaudeFastModeArgs(
+    executionArgsWithRestrictions,
+    context.fastMode === undefined
+      ? undefined
+      : context.executionMode === "side-question" || context.toolAvailability
+        ? false
+        : context.fastMode,
+  );
 }
 
 /** Normalize Claude CLI backend config before registration or execution. */

@@ -138,6 +138,9 @@ export type PreparedCliRunContextOverrides = {
   mcpDeliveryCapture?: boolean;
   skillsSnapshot?: PreparedCliRunContext["params"]["skillsSnapshot"];
   thinkLevel?: PreparedCliRunContext["params"]["thinkLevel"];
+  fastMode?: PreparedCliRunContext["params"]["fastMode"];
+  fastModeStartedAtMs?: PreparedCliRunContext["params"]["fastModeStartedAtMs"];
+  fastModeAutoOnSeconds?: PreparedCliRunContext["params"]["fastModeAutoOnSeconds"];
   executionMode?: PreparedCliRunContext["params"]["executionMode"];
   cliToolAvailability?: PreparedCliRunContext["params"]["cliToolAvailability"];
   emitCommentaryText?: boolean;
@@ -217,6 +220,9 @@ export function buildPreparedCliRunContext(
       provider,
       model,
       thinkLevel: overrides.thinkLevel,
+      fastMode: overrides.fastMode,
+      fastModeStartedAtMs: overrides.fastModeStartedAtMs,
+      fastModeAutoOnSeconds: overrides.fastModeAutoOnSeconds,
       executionMode: overrides.executionMode,
       cliToolAvailability: overrides.cliToolAvailability,
       emitCommentaryText: overrides.emitCommentaryText,
