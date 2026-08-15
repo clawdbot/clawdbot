@@ -80,10 +80,16 @@ suite.define(() => {
         agentId: "main",
         message: "fix the flaky draft test",
       });
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+
+      // Wait for the same canonical settle signal the neighboring submission
+      // test uses (navigation to the created session route) before counting
+      // requests: the exactly-once assert must observe the submission flow
+      // after it has fully resolved, not mid-flight, or a late duplicate
+      // sessions.create could land after a premature pass.
       await expect
         .poll(() => new URL(page.url()).pathname)
         .toBe(controlUiSessionPath("agent:main:draft-e2e"));
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
     } finally {
       await context.close();
     }
