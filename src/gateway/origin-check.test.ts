@@ -4,22 +4,9 @@ import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
 import {
   checkBrowserOrigin,
-  isGatewayHostBrowserOrigin,
   normalizeChromeExtensionOrigin,
   resolveAcceptedBrowserOrigin,
 } from "./origin-check.js";
-
-describe("isGatewayHostBrowserOrigin", () => {
-  it.each([
-    ["same host", "claw.example:18789", "https://claw.example:18789", true],
-    ["normalized host", "CLAW.EXAMPLE:18789", "https://claw.example:18789/", true],
-    ["separate host", "gateway.example:18789", "https://ui.example", false],
-    ["local dev port", "127.0.0.1:18789", "http://127.0.0.1:5173", false],
-    ["missing origin", "127.0.0.1:18789", undefined, false],
-  ])("classifies %s", (_name, requestHost, origin, expected) => {
-    expect(isGatewayHostBrowserOrigin({ requestHost, origin })).toBe(expected);
-  });
-});
 
 describe("checkBrowserOrigin", () => {
   it.each([

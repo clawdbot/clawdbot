@@ -53,6 +53,7 @@ function bundleArtifact(overrides: Partial<WorkerBundleArtifact> = {}): WorkerBu
     bundleHash: "a".repeat(64),
     openclawVersion: "1.2.3",
     protocolFeatures: [],
+    tarballBytes: 1,
     tarballSha256: "b".repeat(64),
     tarballPath: "/tmp/openclaw-worker.tgz",
     ...overrides,
@@ -93,6 +94,9 @@ describe("worker bundle producer", () => {
 
       expect(first.bundleHash).toMatch(/^[a-f0-9]{64}$/u);
       expect(second.bundleHash).toBe(first.bundleHash);
+      await expect(fs.stat(first.tarballPath)).resolves.toMatchObject({
+        size: first.tarballBytes,
+      });
       expect(nodeBuild).toEqual({
         bundleHash: first.bundleHash,
         openclawVersion: first.openclawVersion,

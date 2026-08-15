@@ -1387,6 +1387,7 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-nav {
+  position: relative;
   padding: 0;
 }
 
@@ -1426,7 +1427,10 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-recent-sessions {
+  --sidebar-inset: 8px;
   --sidebar-lead: 20px;
+  --sidebar-row-gap: 8px;
+  --sidebar-text-offset: calc(var(--sidebar-inset) + var(--sidebar-lead) + var(--sidebar-row-gap));
 
   display: flex;
   flex-direction: column;
@@ -1501,7 +1505,7 @@ body.update-dialog-open .sidebar-update-card__status {
   align-items: center;
   gap: 8px;
   min-height: 24px;
-  padding: 0 10px 0 0;
+  padding: 0 10px 0 var(--sidebar-inset);
   color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
 }
 
@@ -1516,7 +1520,7 @@ body.update-dialog-open .sidebar-update-card__status {
 .sidebar-session-group-toggle {
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: var(--sidebar-row-gap);
   min-width: 0;
   flex: 1 1 auto;
   padding: 2px 0;
@@ -1617,8 +1621,8 @@ body.update-dialog-open .sidebar-update-card__status {
 
 .sidebar-session-catalog-load-more {
   display: block;
-  width: calc(100% - var(--sidebar-lead) - 10px);
-  margin: 3px 10px 5px var(--sidebar-lead);
+  width: calc(100% - var(--sidebar-text-offset) - 10px);
+  margin: 3px 10px 5px var(--sidebar-text-offset);
   padding: 4px 0;
   border: none;
   border-radius: var(--radius-sm);
@@ -1786,11 +1790,6 @@ body.update-dialog-open .sidebar-update-card__status {
   color: var(--muted);
 }
 
-.sidebar-session-group-toggle
-  > :not(.sidebar-session-group-toggle__lead):not(.sidebar-recent-sessions__label-text) {
-  margin-left: 5px;
-}
-
 /* Flex, not grid: WebKit does not re-run a grid flex-item's intrinsic sizing
    when rows stream in or grow a second subtitle line after first layout, so a
    grid list keeps a stale height and the next section paints over its rows. */
@@ -1813,19 +1812,23 @@ body.update-dialog-open .sidebar-update-card__status {
 
 .sidebar-session-tree__children {
   margin-left: var(--sidebar-lead);
-  box-shadow: inset 1px 0 0 color-mix(in srgb, var(--border-strong) 52%, transparent);
+  background: linear-gradient(
+      color-mix(in srgb, var(--border-strong) 52%, transparent),
+      color-mix(in srgb, var(--border-strong) 52%, transparent)
+    )
+    calc(var(--sidebar-inset) + 10px) 0 / 1px 100% no-repeat;
 }
 
 .sidebar-session-tree__loading {
   min-height: 28px;
-  padding: 6px var(--sidebar-lead);
+  padding: 6px var(--sidebar-text-offset);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
 
 .sidebar-session-tree__show-more {
   min-height: 28px;
-  padding: 6px var(--sidebar-lead);
+  padding: 6px var(--sidebar-text-offset);
   border: 0;
   background: transparent;
   color: var(--muted);
@@ -1854,7 +1857,7 @@ body.update-dialog-open .sidebar-update-card__status {
   align-items: center;
   gap: 8px;
   min-height: 19px;
-  padding: 1px 12px 1px var(--sidebar-lead);
+  padding: 1px 12px 1px var(--sidebar-inset);
   color: color-mix(in srgb, var(--muted) 82%, var(--text) 18%);
 }
 
@@ -1894,10 +1897,10 @@ body.update-dialog-open .sidebar-update-card__status {
 .sidebar-session-catalog-project__head {
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: var(--sidebar-row-gap);
   width: 100%;
   min-height: 18px;
-  padding: 2px 12px 0 0;
+  padding: 2px 12px 0 var(--sidebar-inset);
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -1959,7 +1962,7 @@ body.update-dialog-open .sidebar-update-card__status {
   display: flex;
   justify-content: flex-start;
   gap: 14px;
-  padding: 0 10px 10px var(--sidebar-lead);
+  padding: 0 10px 10px var(--sidebar-text-offset);
 }
 
 .sidebar-session-pagination__button {
@@ -1978,7 +1981,7 @@ body.update-dialog-open .sidebar-update-card__status {
 
 .sidebar-session-empty-hint {
   display: block;
-  padding: 4px 10px 10px var(--sidebar-lead);
+  padding: 4px 10px 10px var(--sidebar-text-offset);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
@@ -2054,19 +2057,13 @@ body.update-dialog-open .sidebar-update-card__status {
 .sidebar-recent-session__link {
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: var(--sidebar-row-gap);
   flex: 1 1 auto;
   min-width: 0;
-  padding: 3px 4px 3px 0;
+  padding: 3px 4px 3px var(--sidebar-inset);
   color: inherit;
   cursor: var(--cursor-action);
   text-decoration: none;
-}
-
-.sidebar-recent-sessions
-  .sidebar-recent-session__link
-  > :not(.sidebar-session-indicator):not(.sidebar-recent-session__text) {
-  margin-left: 8px;
 }
 
 .sidebar-child-session-toggle {
@@ -2836,7 +2833,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   justify-content: flex-start;
   gap: 8px;
   min-height: 32px;
-  padding: 0 9px;
+  padding: 0 8px;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: transparent;
@@ -2851,16 +2848,22 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 }
 
 .nav-item__icon {
-  width: 16px;
+  width: 20px;
   height: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  flex: 0 0 20px;
   opacity: 0.72;
   transition:
     opacity var(--duration-fast) ease,
     color var(--duration-fast) ease;
+}
+
+.nav-item .session-glyph .nav-item__icon {
+  width: 16px;
+  height: 16px;
+  flex-basis: 16px;
 }
 
 .nav-item__icon svg {
@@ -2939,7 +2942,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 .sidebar-zone-entry .sidebar-recent-session {
   position: relative;
   min-height: 32px;
-  padding: 0 9px;
+  padding: 0 8px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
@@ -3109,13 +3112,14 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 /* "Pages" section head: zone-style label plus the pin-editor affordance. */
 .sidebar-nav__head {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 0;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   padding: 2px 8px 2px 12px;
-}
-
-.sidebar-nav__head .sidebar-recent-sessions__label-text {
-  flex: 1 1 auto;
 }
 
 .sidebar-nav__head-action {
@@ -3130,9 +3134,24 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
+  opacity: 0;
   transition:
     color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
+    background var(--duration-fast) ease,
+    opacity var(--duration-fast) ease;
+}
+
+.sidebar-nav:hover .sidebar-nav__head-action,
+.sidebar-nav:focus-within .sidebar-nav__head-action {
+  opacity: 1;
+}
+
+/* Touch has no hover: keep the Pages editor discoverable, matching the
+   child-session-toggle touch override above. */
+@media (hover: none), (pointer: coarse) {
+  .sidebar-nav__head-action {
+    opacity: 1;
+  }
 }
 
 .sidebar-nav__head-action:hover,

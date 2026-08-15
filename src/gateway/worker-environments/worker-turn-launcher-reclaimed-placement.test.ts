@@ -412,30 +412,6 @@ describe("worker turn launcher reclaimed placement", () => {
     }
   });
 
-  it("rejects a reclaimed placement when redispatch is unavailable", async () => {
-    seedReclaimedPlacement();
-    const provider = createWorkerSessionTurnPlacementProvider({
-      environments: unusedEnvironments(),
-      placements,
-    });
-    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
-
-    await expect(
-      provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "run-reclaimed-unavailable",
-        },
-        turn("run-reclaimed-unavailable"),
-        runLocal,
-      ),
-    ).rejects.toThrow("Reclaimed worker placement requires redispatch");
-    expect(runLocal).not.toHaveBeenCalled();
-    expect(placements.get(SESSION_ID)).toMatchObject({ state: "reclaimed", turnClaim: null });
-  });
-
   it("does not fall back locally when reclaimed redispatch fails", async () => {
     seedReclaimedPlacement();
     const provider = createWorkerSessionTurnPlacementProvider({

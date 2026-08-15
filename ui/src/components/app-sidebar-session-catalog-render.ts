@@ -313,6 +313,9 @@ function renderCatalogHostGroup(
             aria-label=${errorHelp ? `${host.label}: ${errorHelp}` : host.label}
             title=${errorHelp ?? host.label}
           >
+            <span class="sidebar-session-group-toggle__lead" aria-hidden="true">
+              <span class="sidebar-session-group-toggle__icon">${icons.monitor}</span>
+            </span>
             <span class="sidebar-session-catalog-host__label">${host.label}</span>
             <span
               class="sidebar-session-catalog-host__count ${host.error
@@ -475,6 +478,7 @@ function renderCatalogSessionRow(
           }
         }}
       >
+        <span class="sidebar-session-indicator"></span>
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name hover-marquee">${label}</span>
         </span>

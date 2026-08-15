@@ -466,6 +466,7 @@ describe("sessions.dispatch", () => {
     mocks.resolveTarget.mockReturnValue(
       targetWithEntry({
         sessionId,
+        agentRuntimeOverride: "openclaw",
         worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
       }),
     );
@@ -526,6 +527,7 @@ describe("sessions.dispatch", () => {
         sessionId,
         sessionKey,
         agentId: "main",
+        executionMode: "worker-turn",
         profileId: "test",
       }),
       expect.any(Function),

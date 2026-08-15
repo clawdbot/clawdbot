@@ -352,9 +352,12 @@ describe("agents set-identity command", () => {
 
     await agentsSetIdentityCommand({ agent: "main", identityFile: identityPath }, runtime);
 
-    expect(runtime.error).toHaveBeenCalledWith(
+    const renderedError = String(runtime.error.mock.calls[0]?.[0]);
+    expect(renderedError).toContain(
       `Identity file ${identityPath} exceeds the maximum size of ${TEST_MAX_IDENTITY_FILE_BYTES} bytes`,
     );
+    expect(renderedError).toContain(`File exceeds ${TEST_MAX_IDENTITY_FILE_BYTES} bytes:`);
+    expect(renderedError).toContain("too-large");
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
   });

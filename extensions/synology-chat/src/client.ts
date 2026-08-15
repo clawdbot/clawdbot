@@ -142,53 +142,34 @@ export async function sendMessage(
   text: string,
   userId?: string | number,
   allowInsecureSsl = false,
+  onPlatformSendDispatch?: () => Promise<void>,
 ): Promise<boolean> {
   const chunks = chunkTextForOutbound(text, SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT);
   for (const chunk of chunks.length > 0 ? chunks : [text]) {
-    if (!(await sendMessageChunk(incomingUrl, chunk, userId, allowInsecureSsl))) {
-      return false;
+    // Synology Chat API requires numeric user_ids to specify the recipient.
+    const body = buildWebhookBody({ text: chunk }, userId);
+    // Retry only proven pre-connect failures; ambiguous webhook replays can duplicate messages.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await waitForSendSlot();
+      await onPlatformSendDispatch?.();
+      try {
+        const result = await doPost(incomingUrl, body, allowInsecureSsl);
+        if (result === "accepted") {
+          break;
+        }
+        return false;
+      } catch (error) {
+        if (!isProvenPreConnectFailure(error)) {
+          return false;
+        }
+      }
+      if (attempt === 2) {
+        return false;
+      }
+      await sleep(300 * 2 ** attempt);
     }
   }
   return true;
-}
-
-async function sendMessageChunk(
-  incomingUrl: string,
-  text: string,
-  userId?: string | number,
-  allowInsecureSsl = false,
-): Promise<boolean> {
-  // Synology Chat API requires user_ids (numeric) to specify the recipient
-  // The @mention is optional but user_ids is mandatory
-  const body = buildWebhookBody({ text }, userId);
-
-  // A webhook POST is non-idempotent. Retry only when the transport proves the
-  // request never connected; replaying an ambiguous failure can duplicate a message.
-  const maxRetries = 3;
-  const baseDelay = 300;
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      await waitForSendSlot();
-      const result = await doPost(incomingUrl, body, allowInsecureSsl);
-      if (result === "accepted") {
-        return true;
-      }
-      // An explicit rejection is final, while a server-side/ambiguous outcome
-      // cannot be replayed safely after a non-idempotent webhook POST.
-      return false;
-    } catch (error) {
-      if (!isProvenPreConnectFailure(error)) {
-        return false;
-      }
-    }
-
-    if (attempt < maxRetries - 1) {
-      await sleep(baseDelay * 2 ** attempt);
-    }
-  }
-
-  return false;
 }
 
 /**
@@ -199,6 +180,7 @@ export async function sendHostedFileUrl(
   fileUrl: SynologyHostedMediaUrl,
   userId?: string | number,
   allowInsecureSsl = false,
+  onPlatformSendDispatch?: () => Promise<void>,
 ): Promise<SynologyHostedFileSendResult> {
   let body: string;
   try {
@@ -208,6 +190,7 @@ export async function sendHostedFileUrl(
   }
 
   await waitForSendSlot();
+  await onPlatformSendDispatch?.();
 
   try {
     return { status: await doPost(incomingUrl, body, allowInsecureSsl) };

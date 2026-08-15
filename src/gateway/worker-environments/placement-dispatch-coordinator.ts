@@ -91,6 +91,7 @@ export function coordinateWorkerPlacementDispatch(
           inFlight.request.sessionKey !== request.sessionKey ||
           inFlight.request.agentId !== request.agentId ||
           inFlight.request.profileId !== request.profileId ||
+          inFlight.request.executionMode !== request.executionMode ||
           inFlight.request.deviceId !== request.deviceId ||
           !isDeepStrictEqual(inFlight.request.inheritedProfile, request.inheritedProfile)
         ) {
