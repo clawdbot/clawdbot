@@ -66,18 +66,10 @@ async function listLegacyImportedSourceSyncRows(params: {
   return { legacyRows, retainedKeys };
 }
 
-export async function countLegacyImportedSourceSyncRows(params: {
-  vaultRoot: string;
-  openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
-}): Promise<number> {
-  const { legacyRows } = await listLegacyImportedSourceSyncRows(params);
-  return legacyRows.length;
-}
-
 // Counts every unscoped row for the vault, including unknown shapes that stay
 // retained. Runtime reads hide these rows, but they still occupy reject-new
 // namespace capacity, so migration preflights must account for them.
-export async function countUnscopedImportedSourceSyncRows(params: {
+export async function countLegacyImportedSourceSyncRows(params: {
   vaultRoot: string;
   openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
 }): Promise<number> {
@@ -89,9 +81,10 @@ type LegacyImportedSourceSyncMigrationResult = {
   translatedCount: number;
   prunedCount: number;
   retainedKeys: string[];
-  // Legacy rows kept because a full reject-new namespace could not hold the
-  // scoped replacement; deleting them first would risk losing durable
-  // ownership between two separate write transactions.
+  // Legacy rows restored after a racing writer claimed the freed slot
+  // mid-rekey; the next doctor run retries them. Only reachable on hosts
+  // without atomic rekey support, where a full namespace cannot hold the
+  // temporary register-first replacement.
   capacityRetainedKeys: string[];
 };
 
@@ -173,9 +166,12 @@ export async function migrateLegacyImportedSourceSyncKeys(params: {
     path.resolve(configuredPath),
   );
 
-  // Migrates one legacy row to its scoped key. Returns "capacity" when a full
-  // reject-new namespace cannot hold the temporary extra row; the legacy row
-  // is left untouched in that case so durable ownership is never lost.
+  // Two rekey paths, chosen by host capability. Stores with atomic rekey move
+  // key and value in one slot-neutral transaction: no register-first spare
+  // slot, no delete-first window, so a process kill mid-rekey can never drop
+  // the only durable ownership record, full namespaces converge in one pass,
+  // and reruns stay idempotent. Stores without it fall back to register-first
+  // and retain the legacy row at capacity rather than opening a kill window.
   const migrateRow = async (
     row: LegacyImportedSourceSyncRow,
     nextSyncKey: string,
@@ -185,23 +181,34 @@ export async function migrateLegacyImportedSourceSyncKeys(params: {
       await raw.delete(row.storeKey);
       return "migrated";
     }
+    const nextValue = { ...row.entry, vaultRootKey, syncKey: nextSyncKey };
+    if (raw.rekey) {
+      const outcome = await raw.rekey(row.storeKey, nextStoreKey, nextValue);
+      if (outcome === "conflict") {
+        // A racing writer owns the scoped key, so the replacement is already
+        // durable and the legacy duplicate can go.
+        await raw.delete(row.storeKey);
+      }
+      // "rekeyed" moved the row; "missing" means it vanished mid-pass. Either
+      // way no legacy row remains.
+      return "migrated";
+    }
     try {
-      // Register the scoped replacement before deleting the legacy row so a
-      // crash mid-migration never loses ownership; reruns are idempotent.
-      await raw.register(nextStoreKey, { ...row.entry, vaultRootKey, syncKey: nextSyncKey });
+      await raw.register(nextStoreKey, nextValue);
+      await raw.delete(row.storeKey);
+      return "migrated";
     } catch (error) {
       if (!isPluginStateLimitExceeded(error)) {
         throw error;
       }
+      // No atomic rekey and no spare slot: keep the legacy row durable and
+      // retry on the next doctor run instead of deleting it first.
       return "capacity";
     }
-    await raw.delete(row.storeKey);
-    return "migrated";
   };
 
   let translatedCount = 0;
   const staleRows: LegacyImportedSourceSyncRow[] = [];
-  const capacityRows: { row: LegacyImportedSourceSyncRow; nextSyncKey: string }[] = [];
   const capacityRetainedKeys: string[] = [];
   for (const row of legacyRows) {
     const nextSyncKey = translateLegacyImportedSourceSyncKey({
@@ -218,28 +225,17 @@ export async function migrateLegacyImportedSourceSyncKeys(params: {
     if ((await migrateRow(row, nextSyncKey)) === "migrated") {
       translatedCount += 1;
     } else {
-      capacityRows.push({ row, nextSyncKey });
+      capacityRetainedKeys.push(row.syncKey);
     }
   }
 
-  // Prune stale rows before retrying capacity-blocked ones: pruning frees
-  // namespace slots that may let those translations complete in the same run.
+  // Prune stale rows last: the canonical salvage path owns their pages, and
+  // the slots it frees are available to later migrations in the same pass.
   const prunedCount = await pruneLegacyImportedSourceRows({
     vaultRoot: params.vaultRoot,
     openKeyedStore: params.openKeyedStore,
     rows: staleRows,
   });
-
-  for (const { row, nextSyncKey } of capacityRows) {
-    if ((await migrateRow(row, nextSyncKey)) === "migrated") {
-      translatedCount += 1;
-      continue;
-    }
-    // Still no free slot. Deleting the legacy row first would leave a crash
-    // window with no durable ownership at all, so retain it instead; Doctor
-    // surfaces a warning and a later run retries once capacity frees up.
-    capacityRetainedKeys.push(row.syncKey);
-  }
 
   return { translatedCount, prunedCount, retainedKeys, capacityRetainedKeys };
 }

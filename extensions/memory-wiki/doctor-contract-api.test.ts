@@ -357,7 +357,7 @@ describe("memory-wiki doctor source sync migration", () => {
     ).resolves.toBeNull();
   });
 
-  it("skips the JSON import gracefully when hidden legacy rows fill the namespace", async () => {
+  it("rekeys a full legacy namespace in one pass and skips the JSON import until capacity frees", async () => {
     // Ordering invariant: the JSON preflight only sees scoped rows until the
     // rekey pass runs, so the exported migration order is part of the fix.
     const migrationIds = stateMigrations.map((migration) => migration.id);
@@ -410,13 +410,18 @@ describe("memory-wiki doctor source sync migration", () => {
     const rekey = requireStateMigration("memory-wiki-source-sync-group-scoped-keys");
     const jsonImport = requireStateMigration("memory-wiki-source-sync-json-to-plugin-state");
 
-    // Full namespace: the rekey retains every row, and the JSON preflight
-    // counts the hidden rows and skips with a warning instead of crashing the
-    // write mid-import. Before the fix this import threw
+    // Full namespace: the slot-neutral rekey deletes each legacy row before
+    // registering its scoped replacement, so every row translates in one pass
+    // with no spare slot and no external deletion. The JSON preflight then
+    // counts the physical rows and skips with a warning instead of crashing
+    // the write mid-import. Before the fix this import threw
     // PLUGIN_STATE_LIMIT_EXCEEDED out of migrateLegacyState.
-    const retained = await rekey.migrateLegacyState(params);
-    expect(retained.changes).toEqual([]);
-    expect(retained.warnings).toHaveLength(MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES);
+    await expect(rekey.migrateLegacyState(params)).resolves.toEqual({
+      changes: [
+        `Migrated Memory Wiki source sync ownership -> group-scoped keys (${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES} translated, 0 stale pruned)`,
+      ],
+      warnings: [],
+    });
     await expect(jsonImport.migrateLegacyState(params)).resolves.toEqual({
       changes: [],
       warnings: [
@@ -425,15 +430,14 @@ describe("memory-wiki doctor source sync migration", () => {
     });
     await expect(fs.stat(legacyPath)).resolves.toBeDefined();
 
-    // Once removed sources free capacity, the ordered pass converges: rekey
-    // translates the remaining rows and the JSON import merges cleanly.
+    // Once removed sources free capacity (rows a later source sync prunes),
+    // the ordered pass converges: the rekey is a no-op and the JSON import
+    // merges cleanly.
     for (const storeKey of [...capped.values.keys()].slice(0, 2)) {
       capped.values.delete(storeKey);
     }
     await expect(rekey.migrateLegacyState(params)).resolves.toEqual({
-      changes: [
-        `Migrated Memory Wiki source sync ownership -> group-scoped keys (${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES - 2} translated, 0 stale pruned)`,
-      ],
+      changes: [],
       warnings: [],
     });
     await expect(jsonImport.migrateLegacyState(params)).resolves.toEqual({

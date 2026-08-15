@@ -29,7 +29,6 @@ import {
 } from "./src/import-runs-state.js";
 import {
   countLegacyImportedSourceSyncRows,
-  countUnscopedImportedSourceSyncRows,
   migrateLegacyImportedSourceSyncKeys,
   pruneLegacyImportedSourceRows,
   translateLegacyImportedSourceSyncKey,
@@ -258,7 +257,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         }
         for (const capacityKey of result.capacityRetainedKeys) {
           warnings.push(
-            `Memory Wiki source sync namespace is full; retained legacy ownership row for ${vaultRoot}: ${capacityKey}. The migration retries on each doctor run once stale rows or removed sources free namespace capacity.`,
+            `Memory Wiki source sync host lacks atomic rekey and the namespace is full; retained legacy ownership row for ${vaultRoot}: ${capacityKey}. Update OpenClaw and rerun doctor to finish the migration.`,
           );
         }
       }
@@ -340,7 +339,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         // store.read hides unscoped legacy rows, but a full write preserves
         // them and they still occupy reject-new namespace capacity: count them
         // or this preflight passes and the write crashes mid-import.
-        const unscopedRowCount = await countUnscopedImportedSourceSyncRows({
+        const unscopedRowCount = await countLegacyImportedSourceSyncRows({
           vaultRoot,
           openKeyedStore: params.context.openPluginStateKeyedStore,
         });

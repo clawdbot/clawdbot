@@ -13,6 +13,7 @@ import {
   pluginStateRegister,
   pluginStateRegisterIfAbsent,
   pluginStateRegisterSequencedJournalEntry,
+  pluginStateRekey,
   pluginStateUpdate,
 } from "./plugin-state-store.sqlite.js";
 import type {
@@ -199,6 +200,7 @@ function createKeyedStoreForPluginId<T>(
     registerIfAbsent: async (...args) => store.registerIfAbsent(...args),
     update: async (...args) => store.update(...args),
     deleteIf: async (...args) => store.deleteIf(...args),
+    rekey: async (...args) => store.rekey(...args),
     lookup: async (...args) => store.lookup(...args),
     consume: async (...args) => store.consume(...args),
     delete: async (...args) => store.delete(...args),
@@ -274,6 +276,19 @@ function createSyncKeyedStoreForPluginId<T>(
         namespace,
         key: normalizedKey,
         predicate: (current) => predicate(current as T),
+        ...(env ? { env } : {}),
+      });
+    },
+    rekey(key, nextKey, value) {
+      const normalizedKey = validateKey(key, "rekey");
+      const normalizedNextKey = validateKey(nextKey, "rekey");
+      const prepared = prepareRegisterParams(normalizedNextKey, value, defaultTtlMs);
+      return pluginStateRekey({
+        pluginId,
+        namespace,
+        key: normalizedKey,
+        nextKey: prepared.key,
+        valueJson: prepared.valueJson,
         ...(env ? { env } : {}),
       });
     },
