@@ -29,6 +29,49 @@ export const terminalPanelStyles = css`
     width: 100%;
     height: 100%;
   }
+  .tp-header .tabstrip {
+    height: 100%;
+    align-self: stretch;
+  }
+  .tp-header .tabstrip::part(nav),
+  .tp-header .tabstrip::part(tabs) {
+    height: 100%;
+    align-items: stretch;
+  }
+  .tp-header .tabstrip-tab::part(base) {
+    box-sizing: border-box;
+    height: 100%;
+  }
+  .tp-header .tabstrip-tab__icon {
+    color: var(--muted, #8a919e);
+  }
+  .tp-header .tabstrip-tab[active]::part(base) {
+    border-bottom-color: var(--text, #d7dae0);
+  }
+  .tp-header .tabstrip-tab__close {
+    box-sizing: border-box;
+    height: 100%;
+    align-self: stretch;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+  }
+  .tp-header .tabstrip-tab[active] + .tabstrip-tab__close {
+    border-bottom-color: var(--text, #d7dae0);
+  }
+  .tp-header .tabstrip-new {
+    position: relative;
+    margin-left: 6px;
+  }
+  .tp-header .tabstrip-tab[active] + .tabstrip-tab__close + .tabstrip-new::before {
+    position: absolute;
+    top: 50%;
+    left: -4px;
+    width: 1px;
+    height: 14px;
+    background: color-mix(in srgb, var(--muted, #8a919e) 20%, transparent);
+    content: "";
+    transform: translateY(-50%);
+  }
   .tp-dock-modes {
     display: flex;
     align-items: center;
