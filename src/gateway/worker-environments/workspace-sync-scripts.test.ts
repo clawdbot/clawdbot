@@ -399,6 +399,9 @@ describe("remote workspace quiescence scripts", () => {
 
     try {
       const nonce = await quiesce(input, false, "6000");
+      const lease = JSON.parse(
+        await fs.readFile(leasePath(input.home, input.workspace, nonce), "utf8"),
+      ) as { watchdog: { pid: number } };
       expect(await waitForProcessState(child.pid!, /^T/u)).toMatch(/^T/u);
 
       // ps stays stalled across the failed resume and past lease expiry, so only a
@@ -414,6 +417,8 @@ describe("remote workspace quiescence scripts", () => {
 
       await new Promise((resolve) => setTimeout(resolve, 9_000));
       expect(await processState(child.pid!)).toMatch(/^T/u);
+      // The watchdog must still be holding the lease well past expiry, not retired by a cap.
+      expect(() => process.kill(lease.watchdog.pid, 0)).not.toThrow();
 
       await fs.writeFile(path.join(input.bin, "ps"), healthyPs);
       await fs.chmod(path.join(input.bin, "ps"), 0o755);

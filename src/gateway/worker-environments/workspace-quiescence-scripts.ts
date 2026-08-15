@@ -246,7 +246,7 @@ try {
   throw error;
 }
 function watchdogMain(watchedLeasePath, watchedNonce) {
-  let retriesLeft = 150;
+  let retryDelayMs = 1000;
   const check = () => {
     try {
       const watchdogFs = require("node:fs");
@@ -289,10 +289,11 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
       watchdogFs.unlinkSync(watchedLeasePath);
     } catch (error) {
       if (error && error.code === "ENOENT") return;
-      // A stalled ps must not retire the lease's last resumer: keep re-probing identity on a
-      // bounded schedule (~5min) so frozen processes still get a verified SIGCONT once ps answers.
-      if (retriesLeft > 0) { retriesLeft -= 1; setTimeout(check, 2000); return; }
-      process.exitCode = 1;
+      // This is the lease's last resumer, so it retries with backoff until the sweep completes
+      // or the lease file is gone. Any attempt cap would just re-create the permanent freeze
+      // for a longer stall; whoever removes the lease retires this watchdog on the next tick.
+      setTimeout(check, retryDelayMs);
+      retryDelayMs = Math.min(retryDelayMs * 2, 60000);
     }
   };
   check();
