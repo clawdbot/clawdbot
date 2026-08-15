@@ -8,14 +8,17 @@ import {
 import {
   connectReq,
   ConnectErrorDetailCodes,
+  onceMessage,
   openWs,
   restoreGatewayToken,
+  rpcReq,
+  TEST_OPERATOR_CLIENT,
   waitForWsClose,
 } from "./server.auth.test-helpers.js";
 
 export function registerControlUiBootstrapLifecycleSuite(): void {
   test("qr bootstrap retry keeps full operator handoff after paired approval", async () => {
-    const { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } =
+    const { issueDevicePairSetupBootstrapToken, verifyDeviceBootstrapToken } =
       await import("../infra/device-bootstrap.js");
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
     const { approveBootstrapDevicePairing, requestDevicePairing } =
@@ -28,6 +31,7 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
     );
     const client = {
       id: "openclaw-ios",
+      displayName: "Test iPhone",
       version: "2026.3.30",
       platform: "iOS 26.3.1",
       mode: "node",
@@ -35,7 +39,19 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
     };
 
     try {
-      const issued = await issueDeviceBootstrapToken({
+      const wsObserver = await openWs(port);
+      const observerConnect = await connectReq(wsObserver, {
+        token: "secret",
+        role: "operator",
+        scopes: ["operator.admin"],
+        client: TEST_OPERATOR_CLIENT,
+      });
+      expect(observerConnect.ok).toBe(true);
+      const completionPromise = onceMessage(
+        wsObserver,
+        (message) => message.type === "event" && message.event === "device.pair.setup.completed",
+      );
+      const issued = await issueDevicePairSetupBootstrapToken({
         profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
       });
       const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
@@ -53,7 +69,7 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
         ],
         clientId: client.id,
         clientMode: client.mode,
-        displayName: client.id,
+        displayName: "Test iPhone",
         platform: client.platform,
         deviceFamily: client.deviceFamily,
         silent: true,
@@ -94,7 +110,26 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
         "operator.write",
       ]);
       expect(operatorHandoff?.scopes).toContain("operator.admin");
+      const completion = await completionPromise;
+      expect(completion.payload).toEqual({
+        setupId: issued.setupId,
+        deviceId: identity.deviceId,
+        deviceName: "Test iPhone",
+        access: "full",
+        ts: expect.any(Number),
+      });
+      const reconciled = await rpcReq(wsObserver, "device.pair.setupStatus", {
+        setupId: issued.setupId,
+      });
+      expect(reconciled.ok).toBe(true);
+      expect(reconciled.payload).toEqual({ completion: completion.payload });
+      const unknownSetup = await rpcReq(wsObserver, "device.pair.setupStatus", {
+        setupId: "setup-never-issued",
+      });
+      expect(unknownSetup.ok).toBe(true);
+      expect(unknownSetup.payload).toEqual({});
       wsRetry.close();
+      wsObserver.close();
 
       await expect(
         verifyDeviceBootstrapToken({

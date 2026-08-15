@@ -84,7 +84,7 @@ let cachedAuthenticatedSelfUserId: string | undefined;
 let cachedSelfInstanceId: string | undefined;
 let cachedPresenceProjection: ReturnType<typeof projectPresenceViewers> | undefined;
 
-function projectPresencePayload(
+export function projectPresencePayload(
   value: unknown,
   authenticatedSelfUserId?: string,
   selfInstanceId?: string,
@@ -189,6 +189,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) selfUserId?: string;
   @property({ attribute: false }) selfInstanceId?: string;
   @property({ attribute: false }) sessionKey?: string;
+  @property({ attribute: false }) excludeUserId?: string;
   @property({ type: Number, attribute: "max-visible" }) maxVisible = 3;
   @property() variant: "session" | "footer" = "session";
   @property({ attribute: false }) buildInfo: ControlUiBuildInfo = CONTROL_UI_BUILD_INFO;
@@ -201,9 +202,13 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
       this.selfInstanceId,
     );
     const sessionKey = this.sessionKey;
+    const excludeUserId = normalized(this.excludeUserId);
     const users = sessionKey
       ? projection.users.filter(
-          (user) => user.id !== projection.selfUserId && user.watchedSessions.includes(sessionKey),
+          (user) =>
+            user.id !== projection.selfUserId &&
+            user.id !== excludeUserId &&
+            user.watchedSessions.includes(sessionKey),
         )
       : this.variant === "footer"
         ? projection.users.filter((user) => user.id !== projection.selfUserId)

@@ -1332,6 +1332,18 @@ describe("grouped chat rendering", () => {
       10_000,
     );
     expect(outputHeavy.querySelector(".msg-meta__ctx")?.textContent).toBe("10% ctx");
+
+    // Cost is nested under usage.cost in the canonical AssistantMessage
+    // shape; the popover must surface it (it was dead reading message.cost).
+    const withCost = renderUsage(
+      {
+        input: 1_000,
+        output: 500,
+        cost: { total: 0.1234 } as unknown as number,
+      } as Record<string, number>,
+      10_000,
+    );
+    expect(withCost.querySelector(".msg-meta__cost")?.textContent).toContain("$0.12");
   });
 
   it("previews message context from the timestamp and pins it on click", () => {
@@ -4527,7 +4539,7 @@ describe("grouped chat rendering", () => {
       expect(image?.getAttribute("src")).toBe(objectUrl);
       expect(image?.getAttribute("alt")).toBe("Generated image 1");
     });
-    const thumbnailUrl = managedChatImageUrl.replace(/\/full$/u, "/thumbnail");
+    const thumbnailUrl = `/rosita${managedChatImageUrl.replace(/\/full$/u, "/thumbnail")}`;
     const [, fetchInit] = requireFetchCallForUrl(fetchMock, thumbnailUrl);
     expectSameOriginGet(fetchInit);
     expectElement(container, ".chat-message-image-button", HTMLButtonElement).click();
@@ -4540,7 +4552,7 @@ describe("grouped chat rendering", () => {
     activeItem?.release?.();
   });
 
-  it("prefers an artifact ticket without forwarding the gateway bearer", async () => {
+  it("prefixes the Control UI base path on artifact tickets without forwarding the gateway bearer", async () => {
     const artifactId = `artifact_managed_image_${crypto.randomUUID()}`;
     const managedChatImageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
     const ticketedUrl = `${managedChatImageUrl}?mediaTicket=ticket`;
@@ -4549,7 +4561,7 @@ describe("grouped chat rendering", () => {
       expiresAt: "2026-07-28T05:00:00.000Z",
     }));
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      expect(url).toBe(ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail"));
+      expect(url).toBe(`/rosita${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}`);
       const headers = new Headers(init?.headers);
       expect(headers.get("Authorization")).toBeNull();
       expect(headers.get("x-openclaw-requester-session-key")).toBeNull();
@@ -4564,6 +4576,7 @@ describe("grouped chat rendering", () => {
       {
         showToolCalls: false,
         assistantAttachmentAuthToken: "must-not-be-forwarded",
+        basePath: "/rosita",
         resolveArtifactDownload,
       },
     );

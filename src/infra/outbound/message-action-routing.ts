@@ -37,6 +37,7 @@ async function resolveChannel(
   params: Record<string, unknown>,
   toolContext?: { currentChannelProvider?: string },
   action?: ChannelMessageActionName,
+  agentId?: string,
 ) {
   const channel = readToolStringParam(params, "channel");
   // Explicit reads must never switch to the source conversation when their
@@ -47,6 +48,7 @@ async function resolveChannel(
     cfg,
     channel,
     fallbackChannel,
+    agentId,
   });
   if (selection.source === "tool-context-fallback") {
     params.channel = selection.channel;
@@ -349,7 +351,7 @@ export async function prepareMessageRoute(params: {
     throw new Error(`Action ${action} requires a target.`);
   }
 
-  const selection = await resolveChannel(cfg, actionParams, input.toolContext, action);
+  const selection = await resolveChannel(cfg, actionParams, input.toolContext, action, agentId);
   const { channel, plugin: channelPlugin } = selection;
   actionParams.channel = channel;
   const explicitAccountId = validateExplicitMessageAccountSelection({

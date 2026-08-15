@@ -198,6 +198,7 @@ describe("telegram user credential IO", () => {
     )) as {
       hydratePayloadFromLease(params: {
         acquired: Record<string, unknown>;
+        actorRole: "ci" | "maintainer";
         ownerId: string;
         siteUrl: string;
         token: string;
@@ -236,6 +237,7 @@ describe("telegram user credential IO", () => {
           chunkCount: 1,
         },
       },
+      actorRole: "maintainer",
       ownerId: "owner-utf8",
       siteUrl: "https://qa.example.invalid",
       token: "ci-secret",
@@ -245,7 +247,7 @@ describe("telegram user credential IO", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "https://qa.example.invalid/qa-credentials/v1/payload-chunk",
       expect.objectContaining({
-        body: expect.stringContaining('"credentialId":"cred-utf8"'),
+        body: expect.stringContaining('"actorRole":"maintainer"'),
       }),
     );
   });

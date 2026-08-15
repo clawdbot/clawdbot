@@ -1686,7 +1686,8 @@ class MainViewModel private constructor(
   suspend fun forkChatSession(
     parentKey: String,
     ownerAgentId: String? = null,
-  ): String? = ensureRuntime().forkChatSession(parentKey, ownerAgentId)
+    fromLastCompleted: Boolean = false,
+  ): String? = ensureRuntime().forkChatSession(parentKey, ownerAgentId, fromLastCompleted)
 
   suspend fun rewindChatAtEntry(entryId: String): SessionRewindResult? = ensureRuntime().rewindChatAtEntry(entryId)
 

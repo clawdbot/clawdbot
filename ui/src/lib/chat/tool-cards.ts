@@ -359,7 +359,13 @@ function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
       if (existing) {
         fallbackMatchedCards.add(existing);
         existing.callId ??= callId;
-        existing.completed = true;
+        // Live tool-stream messages emit a toolresult block for partial
+        // `update` output too; completion there is owned by the stream's
+        // resultReceived marker (set at card creation), not block presence —
+        // otherwise a running tool flips to "succeeded" mid-execution.
+        if (!isLiveToolStream) {
+          existing.completed = true;
+        }
         existing.outputText = text;
         existing.preview = preview;
         if (details !== undefined) {

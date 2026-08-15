@@ -17,6 +17,7 @@ import { NonEmptyString } from "./primitives.js";
 const GatewayAgentRuntimeSchema = closedObject({
   id: NonEmptyString,
   fallback: Type.Optional(Type.Union([Type.Literal("openclaw"), Type.Literal("none")])),
+  cloudPlacementSupported: Type.Optional(Type.Boolean()),
   source: Type.Union([
     Type.Literal("env"),
     Type.Literal("agent"),

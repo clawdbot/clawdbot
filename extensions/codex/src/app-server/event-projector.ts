@@ -41,8 +41,8 @@ import {
 } from "./event-projector-values.js";
 import type { CodexNativePreToolUseFailure } from "./native-hook-relay.js";
 import {
+  isCodexNotificationForTurn,
   readCodexNotificationThreadId,
-  readCodexNotificationTurnId,
 } from "./notification-correlation.js";
 import { readCodexTurn } from "./protocol-validators.js";
 import {
@@ -221,7 +221,7 @@ export class CodexAppServerEventProjector {
       if (readCodexNotificationThreadId(params) !== this.threadId) {
         return;
       }
-    } else if (!this.isNotificationForTurn(params)) {
+    } else if (!isCodexNotificationForTurn(params, this.threadId, this.turnId)) {
       return;
     }
     this.nativeToolLifecycleProjector.handleNotification(notification);
@@ -450,7 +450,7 @@ export class CodexAppServerEventProjector {
     if (item?.type === "contextCompaction" && itemId) {
       this.activeCompactionItemIds.delete(itemId);
       this.completedCompactionCount += 1;
-      this.options.onContextCompacted?.();
+      await this.options.onContextCompacted?.();
       await runAgentHarnessAfterCompactionHook({
         sessionFile: this.params.sessionFile,
         messages: await this.toolTranscriptProjection.readMirroredSessionMessages(),
@@ -640,12 +640,6 @@ export class CodexAppServerEventProjector {
       // Downstream event consumers must not corrupt the canonical Codex turn projection.
       embeddedAgentLog.debug("codex app-server agent event handler threw", { error });
     }
-  }
-
-  private isNotificationForTurn(params: JsonObject): boolean {
-    const threadId = readCodexNotificationThreadId(params);
-    const turnId = readCodexNotificationTurnId(params);
-    return threadId === this.threadId && turnId === this.turnId;
   }
 
   private isHookNotificationForCurrentThread(params: JsonObject): boolean {

@@ -80,6 +80,17 @@
   --accent-subtle: rgba(255, 92, 92, 0.1);
   --accent-foreground: #fafafa;
   --accent-glow: rgba(255, 92, 92, 0.2);
+
+  /* Link text keeps the accent hue but cannot be --accent: chat paints user
+     bubbles from that same token, so a link there fights its own background.
+     Derived, not per-theme — --accent-hover is every palette's audited lifted
+     accent and custom themes derive it too, and the extra 15% of --text buys
+     the margin the sender-tinted peer bubbles need (the lightest tint hue on
+     openknot sits at 4.3:1 against bare --accent-hover). Both steps move toward
+     the text color, which raises contrast in light and dark alike, so hover is
+     feedback that never costs readability. */
+  --link: color-mix(in srgb, var(--accent-hover) 85%, var(--text));
+  --link-hover: color-mix(in srgb, var(--link) 82%, var(--text));
   --selection-bg: #005fcc;
   --selection-fg: #ffffff;
   --primary: #d13c3c;

@@ -65,6 +65,29 @@ describe("skills event scope guards", () => {
   });
 });
 
+describe("device setup event scope guards", () => {
+  it("delivers exact setup completion only to pairing-capable operators", () => {
+    const pairing = makeClient("pairing", "operator", ["operator.pairing"]);
+    const node = makeClient("node", "node", ["operator.read"]);
+    const read = makeClient("read", "operator", ["operator.read"]);
+    const admin = makeClient("admin", "operator", ["operator.admin"]);
+    const clients = new Set([pairing, node, read, admin].map((entry) => entry.client));
+    const { broadcast } = createGatewayBroadcaster({ clients });
+
+    broadcast("device.pair.setup.completed", {
+      setupId: "setup-123",
+      deviceId: "device-123",
+      access: "limited",
+      ts: 1,
+    });
+
+    expect(pairing.socket.events).toEqual(["device.pair.setup.completed"]);
+    expect(node.socket.events).toEqual([]);
+    expect(read.socket.events).toEqual([]);
+    expect(admin.socket.events).toEqual(["device.pair.setup.completed"]);
+  });
+});
+
 describe("board event scope guards", () => {
   it("delivers board events only to read-capable operators", () => {
     const pairing = makeClient("pairing", "operator", ["operator.pairing"]);

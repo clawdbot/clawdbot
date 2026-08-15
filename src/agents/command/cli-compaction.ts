@@ -646,7 +646,7 @@ export async function runCliTurnCompactionLifecycle(params: {
     return params.sessionEntry;
   }
 
-  let compacted = false;
+  let compactionKind: EmbeddedAgentCompactResult["compactionKind"];
   let contextCompactionOutcome: CliTranscriptCompactionOutcome | undefined;
   let nativeCompactionResult: EmbeddedAgentCompactResult | undefined;
   let useContextEngineCompaction = true;
@@ -695,7 +695,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       extraSystemPrompt: params.extraSystemPrompt,
     });
     if (nativeOutcome.compacted) {
-      compacted = true;
+      compactionKind = "native-harness";
       nativeCompactionResult = nativeOutcome.result;
       useContextEngineCompaction = false;
     } else if (nativeOutcome.fallbackToContextEngine) {
@@ -704,9 +704,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       nativeFallbackNeedsBindingClear = nativeOutcome.clearCliSessionBinding === true;
     } else if (nativeOutcome.failureReason) {
       throw new Error(
-        `CLI native harness compaction failed for ${params.provider}/${params.model}: ${
-          nativeOutcome.failureReason ?? "compaction did not reduce context"
-        }`,
+        `CLI native harness compaction failed for ${params.provider}/${params.model}: ${nativeOutcome.failureReason}`,
       );
     } else {
       useContextEngineCompaction = false;
@@ -749,17 +747,15 @@ export async function runCliTurnCompactionLifecycle(params: {
       bestEffortMaintenance: nativeFallbackToContextEngine,
     });
     contextCompactionOutcome = contextOutcome;
-    compacted = contextOutcome.compacted;
-    if (!compacted && contextOutcome.failureReason) {
+    compactionKind = contextOutcome.compacted ? "context-engine" : undefined;
+    if (!compactionKind && contextOutcome.failureReason) {
       throw new Error(
-        `CLI transcript compaction failed for ${params.provider}/${params.model}: ${
-          contextOutcome.failureReason ?? "compaction did not reduce context"
-        }`,
+        `CLI transcript compaction failed for ${params.provider}/${params.model}: ${contextOutcome.failureReason}`,
       );
     }
   }
 
-  if (nativeFallbackNeedsBindingClear && !compacted && params.sessionStore && params.storePath) {
+  if (nativeFallbackNeedsBindingClear && !compactionKind && params.sessionStore) {
     return (
       (await cliCompactionDeps.clearCliSessionInStore({
         provider: params.provider,
@@ -771,13 +767,13 @@ export async function runCliTurnCompactionLifecycle(params: {
     );
   }
 
-  if (!compacted || !params.sessionStore || !params.storePath) {
+  if (!compactionKind || !params.sessionStore) {
     return params.sessionEntry;
   }
 
   return (
     (await cliCompactionDeps.recordCliCompactionInStore({
-      provider: params.provider,
+      compactionKind,
       sessionKey: params.sessionKey,
       sessionStore: params.sessionStore,
       storePath: params.storePath,

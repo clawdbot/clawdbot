@@ -16,6 +16,7 @@ import {
   bashExecutionToText,
   COMPACTION_SUMMARY_PREFIX,
   COMPACTION_SUMMARY_SUFFIX,
+  IMAGE_BLOCK_TOKENS,
 } from "../../runtime/index.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
@@ -28,7 +29,6 @@ const TOOL_RESULT_CHARS_PER_TOKEN = 2;
 const JSON_PAYLOAD_CHARS_PER_TOKEN = 3;
 const MESSAGE_BOUNDARY_OVERHEAD_TOKENS = 12;
 const CONTENT_BLOCK_OVERHEAD_TOKENS = 6;
-const IMAGE_BLOCK_TOKENS = 2_000;
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
 
 /** Pre-prompt routing decision plus the budget facts used to explain it in logs and session state. */

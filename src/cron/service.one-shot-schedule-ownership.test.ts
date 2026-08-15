@@ -168,12 +168,14 @@ describe("cron one-shot schedule ownership", () => {
         }
 
         if (mode === "queued") {
+          // Removal aborts the in-flight run: the original run must end as the
+          // operator's explicit stop, never finalize "ok" into the replacement.
           expect(
             events.filter((event) => event.action === "finished" && event.jobId === original.id),
           ).toEqual([
             expect.objectContaining({
-              status: "ok",
-              summary: "original run finished",
+              status: "error",
+              error: "Cron job removed by operator.",
               job: expect.objectContaining({ name: "removed original one-shot" }),
             }),
           ]);

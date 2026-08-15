@@ -34,6 +34,8 @@ type OpenClawPluginNodeHostCommandBase = {
     context: OpenClawPluginNodeHostCommandAvailabilityContext,
     onChange: () => void,
   ) => (() => void) | void;
+  /** Optional Computer Use declaration published with this command's node manifest. */
+  computerUse?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => unknown;
   agentTool?: {
     name: string;
     description: string;

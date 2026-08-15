@@ -84,7 +84,20 @@ const writeResultAndExit = (value) => {
   exitWorker(0);
 };
 const mode = descriptor.assignment.prompt;
-if (mode === "wait") {
+if (mode === "connection-failure") {
+  process.send(
+    {
+      type: "openclaw-worker-connection-failure-v1",
+      cause: "certificate rejected " + descriptor.admission.credential,
+    },
+    () =>
+      fs.writeFileSync(
+        path.join(descriptor.assignment.workspaceDir, "connection-failure-reported"),
+        "reported",
+      ),
+  );
+  setInterval(() => {}, 1000);
+} else if (mode === "wait") {
   setInterval(() => {}, 1000);
 } else if (mode === "tree") {
   grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });

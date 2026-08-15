@@ -191,6 +191,34 @@ describe("setupWizardCommand", () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({ exists: false, valid: false, config: {} });
   });
 
+  it.each(["main", "robby", "Robby!"])("accepts valid first-agent name %s", async (agentName) => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand({ nonInteractive: true, acceptRisk: true, agentName }, runtime);
+
+    expect(mocks.runNonInteractiveSetup).toHaveBeenCalledWith(
+      expect.objectContaining({ agentName }),
+      runtime,
+    );
+  });
+
+  it.each(["!!!", "openclaw", "crestodian"])(
+    "rejects invalid or reserved first-agent name %s before setup",
+    async (agentName) => {
+      const runtime = makeRuntime();
+
+      await setupWizardCommand(
+        { nonInteractive: true, acceptRisk: true, reset: true, agentName },
+        runtime,
+      );
+
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Invalid --agent-name"));
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(mocks.handleReset).not.toHaveBeenCalled();
+      expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+    },
+  );
+
   it("fails fast for invalid secret-input-mode before setup starts", async () => {
     const runtime = makeRuntime();
 

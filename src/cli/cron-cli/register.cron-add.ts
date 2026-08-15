@@ -481,7 +481,7 @@ export function registerCronAddCommand(cron: Command) {
               defaultRuntime.error(
                 theme.warn(
                   "No --agent specified; the job will run with the configured default agent. " +
-                    "Specify --agent to choose a specific agent.",
+                    "Specify --agent to choose a specific agent, or set agents.defaults.systemAgent.agentId.",
                 ),
               );
             }

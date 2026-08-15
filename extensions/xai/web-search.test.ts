@@ -840,6 +840,29 @@ describe("xai web search config resolution", () => {
     expect(transportSignal?.reason).toBe(reason);
   });
 
+  it("does not cache a Grok result completed after caller cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Grok search cancelled after response");
+    const mockFetch = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        controller.abort(reason);
+        return xaiAnswerResponse("Cancelled Grok answer");
+      })
+      .mockResolvedValueOnce(xaiAnswerResponse("Recovered Grok answer"));
+    global.fetch = withFetchPreconnect(mockFetch);
+    const tool = requireXaiWebSearchTool({
+      config: xaiPluginConfig({ webSearch: { apiKey: "xai-cancel-cache-key" } }),
+    });
+    const query = "unique Grok late-cancel cache regression";
+
+    await expect(tool.execute({ query }, { signal: controller.signal })).rejects.toBe(reason);
+    const recovered = await tool.execute({ query });
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(recovered.content).toContain("Recovered Grok answer");
+  });
+
   it("does not contact the generic xAI provider when the caller is already cancelled", async () => {
     const mockFetch = installXaiWebSearchFetch();
     const controller = new AbortController();

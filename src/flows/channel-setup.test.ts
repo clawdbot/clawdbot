@@ -132,6 +132,9 @@ const collectChannelStatus = vi.hoisted(() =>
     statusLines: [],
   })),
 );
+const resolveChannelSetupWorkspaceDir = vi.hoisted(() =>
+  vi.fn((_cfg?: unknown) => "/tmp/openclaw-workspace"),
+);
 const isChannelConfigured = vi.hoisted(() => vi.fn((_cfg?: unknown, _channel?: unknown) => true));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -201,6 +204,7 @@ vi.mock("./channel-setup.status.js", () => ({
   resolveCatalogChannelSelectionHint: vi.fn(() => "download from <npm>"),
   resolveChannelSelectionNoteLines: vi.fn(() => []),
   resolveChannelSetupSelectionContributions: vi.fn(() => []),
+  resolveChannelSetupWorkspaceDir: (cfg?: unknown) => resolveChannelSetupWorkspaceDir(cfg),
   resolveQuickstartDefault: vi.fn(() => undefined),
 }));
 
@@ -211,6 +215,7 @@ describe("setupChannels workspace shadow exclusion", () => {
     vi.clearAllMocks();
     resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
     resolveDefaultAgentId.mockReturnValue("default");
+    resolveChannelSetupWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
     listTrustedChannelPluginCatalogEntries.mockReturnValue([
       {
         id: "external-chat",
@@ -263,6 +268,30 @@ describe("setupChannels workspace shadow exclusion", () => {
     expect(registryInput.channel).toBe("external-chat");
     expect(registryInput.pluginId).toBe("@vendor/external-chat-plugin");
     expect(registryInput.workspaceDir).toBe("/tmp/openclaw-workspace");
+  });
+
+  it("resolves plugin discovery through the channel setup workspace owner", async () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, helper: {}, third: {} },
+      },
+    } as unknown as OpenClawConfig;
+    resolveDefaultAgentId.mockImplementationOnce(() => {
+      throw new Error("legacy default resolver must not own channel setup");
+    });
+
+    await setupChannels(
+      cfg,
+      {} as never,
+      {
+        confirm: vi.fn(async () => false),
+        note: vi.fn(async () => undefined),
+      } as never,
+    );
+
+    expect(resolveChannelSetupWorkspaceDir).toHaveBeenCalledWith(cfg);
   });
 
   it("keeps trusted workspace overrides eligible during preload", async () => {

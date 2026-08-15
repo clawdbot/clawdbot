@@ -15,12 +15,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { extractModelCompat } from "../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { normalizeProviderTransportWithPlugin } from "../plugins/provider-runtime.js";
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
-  resolveSessionAgentId,
-} from "./agent-scope.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
 import { resolveModel, resolveModelAsync } from "./embedded-agent-runner/model.js";
@@ -295,7 +290,6 @@ export async function resolveEffectiveToolInventoryRuntimeModelContextAsync(
     agentId,
     agentDir,
     config: params.cfg,
-    inheritedAuthDir: resolveDefaultAgentDir(params.cfg),
     workspaceDir,
   });
   try {

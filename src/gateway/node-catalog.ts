@@ -295,6 +295,7 @@ function buildEffectiveKnownNode(entry: {
     commands: filterPublicNodeCommands(
       live ? uniqueSortedStrings(live.commands) : uniqueSortedStrings(nodePairing?.commands),
     ),
+    computerUse: live?.computerUse,
     sessionHost,
     nodePluginTools: live?.nodePluginTools,
     pathEnv: live?.pathEnv,

@@ -405,6 +405,9 @@ export function createHarness(
     markEnvironmentOwnerEpoch: (ownerEpoch: number) => {
       currentEnvironment = { ...attached, ownerEpoch };
     },
+    markEnvironmentProviderId: (providerId: string) => {
+      currentEnvironment = { ...attached, providerId };
+    },
     markEnvironmentAttachments: (attachedSessionIds: string[]) => {
       currentEnvironment = { ...attached, attachedSessionIds };
     },
