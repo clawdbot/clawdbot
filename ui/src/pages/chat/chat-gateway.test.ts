@@ -920,6 +920,93 @@ describe("handleChatGatewayEvent", () => {
     });
   });
 
+  it("retires a landed steer chip when its request run finishes inside the active run", () => {
+    const activePrompt = {
+      id: "active-prompt",
+      text: "Keep this run active",
+      createdAt: 1,
+      sendRunId: "active-run",
+      sendState: "waiting-model" as const,
+      sessionKey: "main",
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "active-run",
+      chatQueue: [
+        activePrompt,
+        {
+          id: "landed-steer-chip",
+          text: "Use the deployment plan",
+          createdAt: 3,
+          kind: "steered",
+          pendingRunId: "active-run",
+          sendRunId: "steer-request-run",
+          sessionKey: "main",
+        },
+      ],
+    });
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "steer-request-run",
+        sessionKey: "main",
+        state: "final",
+      }),
+    ).toBe("final");
+
+    expect(state.chatQueue).toEqual([activePrompt]);
+    expect(state.chatRunId).toBe("active-run");
+    expect(state.chatMessages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        __openclaw: { idempotencyKey: "active-run:user" },
+      }),
+      expect.objectContaining({
+        role: "user",
+        __openclaw: { idempotencyKey: "steer-request-run:user" },
+      }),
+    ]);
+  });
+
+  it("keeps a pending steer chip when an unrelated request run finishes", () => {
+    const chip = {
+      id: "pending-steer-chip",
+      text: "Keep waiting for this steer",
+      createdAt: 3,
+      kind: "steered" as const,
+      pendingRunId: "active-run",
+      sendRunId: "steer-request-run",
+      sessionKey: "main",
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "active-run",
+      chatQueue: [
+        chip,
+        {
+          id: "unrelated-pending-row",
+          text: "Keep unrelated pending work",
+          createdAt: 4,
+          pendingRunId: "unrelated-run",
+          sessionKey: "main",
+        },
+      ],
+    });
+
+    handleChatGatewayEvent(state, {
+      runId: "unrelated-run",
+      sessionKey: "main",
+      state: "final",
+    });
+
+    expect(state.chatQueue).toEqual([
+      chip,
+      expect.objectContaining({ id: "unrelated-pending-row" }),
+    ]);
+    expect(state.chatRunId).toBe("active-run");
+    expect(state.chatMessages).toEqual([]);
+  });
+
   it("uses an already-persisted steer to recover the active stream boundary", () => {
     const state = createState({
       sessionKey: "main",

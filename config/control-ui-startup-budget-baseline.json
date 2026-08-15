@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 332040,
-  "reason": "cumulative 2026-08-14 growth (run 31798463207 baseline), redacted-rename guard i18n (#123571), and pairing completion (#120933); CI run 31814389572 build-artifacts bytes",
-  "updatedAt": "2026-08-14"
+  "startupJsGzipBytes": 333309,
+  "reason": "cumulative 2026-08-15 UI fix growth (tab retry/session attention/talk backpressure stream); CI run 31861213699 build-artifacts bytes",
+  "updatedAt": "2026-08-15"
 }
