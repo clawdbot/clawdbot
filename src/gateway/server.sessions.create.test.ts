@@ -225,6 +225,32 @@ test("sessions.create assigns and registers its requested group", async () => {
   );
 });
 
+test("sessions.create carries keyed adoption authorization through the durable commit", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:dashboard:categorized-adoption";
+  await writeSessionStore({
+    entries: {
+      [key]: sessionStoreEntry("session-categorized-adoption", { category: "Personal" }),
+    },
+  });
+  const assertCurrent = vi.fn();
+
+  const adopted = await directSessionReq(
+    "sessions.create",
+    { agentId: "main", key, category: "Projects" },
+    {
+      sessionMutationAuthorization: {
+        assertCurrent,
+        assertTargetCurrent: vi.fn(),
+      },
+    },
+  );
+
+  expect(adopted.ok).toBe(true);
+  expect(assertCurrent).toHaveBeenCalled();
+  expect(loadSessionEntry({ sessionKey: key, storePath })?.category).toBe("Projects");
+});
+
 test("sessions.create registers a category only after the session commit succeeds", async () => {
   await createSessionStoreDir();
   const category = "Deferred category";

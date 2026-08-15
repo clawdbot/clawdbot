@@ -280,6 +280,7 @@ const SESSION_KEY_PARAM_BY_METHOD = new Map<string, "key" | "sessionKey">([
   ["sessions.compaction.branch", "key"],
   ["sessions.compaction.restore", "key"],
   ["sessions.compact", "key"],
+  ["sessions.create", "key"],
   ["sessions.delete", "key"],
   ["sessions.dispatch", "key"],
   ["sessions.files.set", "sessionKey"],

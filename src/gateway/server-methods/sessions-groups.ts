@@ -29,7 +29,10 @@ import { SessionMutationAuthorizationChangedError } from "../session-sharing.js"
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
+import {
+  isWorkspacePathContainmentCurrent,
+  resolveWorkspacePathContainment,
+} from "./workspace-path-containment.js";
 
 export const sessionGroupHandlers: GatewayRequestHandlers = {
   "sessions.groups.list": async ({ params, respond }) => {
@@ -134,7 +137,10 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     if (cwd && !clientScopes.includes(ADMIN_SCOPE)) {
       const containment = await resolveWorkspacePathContainment(cwd, context.getRuntimeConfig());
-      if (!containment) {
+      if (
+        !containment ||
+        !isWorkspacePathContainmentCurrent(containment, context.getRuntimeConfig())
+      ) {
         respond(
           false,
           undefined,

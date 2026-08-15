@@ -8,6 +8,7 @@ const groupMocks = vi.hoisted(() => ({
   update: vi.fn(),
 }));
 const pathMocks = vi.hoisted(() => ({
+  isCurrent: vi.fn(),
   resolveContainment: vi.fn(),
 }));
 
@@ -22,6 +23,7 @@ vi.mock("../session-groups.js", () => ({
   updateSessionGroupDefaults: groupMocks.update,
 }));
 vi.mock("./workspace-path-containment.js", () => ({
+  isWorkspacePathContainmentCurrent: pathMocks.isCurrent,
   resolveWorkspacePathContainment: pathMocks.resolveContainment,
 }));
 
@@ -54,6 +56,8 @@ function renameOptions(params: Record<string, unknown>, respond: ReturnType<type
 describe("sessions.groups.update", () => {
   beforeEach(() => {
     groupMocks.update.mockReset();
+    pathMocks.isCurrent.mockReset();
+    pathMocks.isCurrent.mockReturnValue(true);
     pathMocks.resolveContainment.mockReset();
   });
 
@@ -147,6 +151,48 @@ describe("sessions.groups.update", () => {
         defaults: [{ name: "Client", cwd: "/workspace/client", worktree: true }],
       },
       undefined,
+    );
+  });
+
+  it("rejects containment retired by a runtime config change before commit", async () => {
+    const containment = {
+      path: "/workspace/client",
+      workspaceRoot: "/workspace",
+    };
+    let finishContainment: ((value: typeof containment) => void) | undefined;
+    pathMocks.resolveContainment.mockImplementation(
+      async () =>
+        await new Promise<typeof containment>((resolve) => {
+          finishContainment = resolve;
+        }),
+    );
+    const initialConfig = { agents: { defaults: { workspace: "/workspace" } } };
+    const retiredConfig = { agents: { defaults: { workspace: "/replacement" } } };
+    let runtimeConfig = initialConfig;
+    pathMocks.isCurrent.mockImplementation((_containment, cfg) => cfg === initialConfig);
+    const respond = vi.fn();
+    const options = updateOptions(
+      { name: "Client", cwd: "/workspace/client", worktree: true },
+      respond,
+      ["operator.write"],
+    );
+    options.context.getRuntimeConfig = () => runtimeConfig;
+    const update = expectDefined(
+      sessionGroupHandlers["sessions.groups.update"],
+      'sessionGroupHandlers["sessions.groups.update"] test invariant',
+    )(options);
+
+    await vi.waitFor(() => expect(pathMocks.resolveContainment).toHaveBeenCalledOnce());
+    runtimeConfig = retiredConfig;
+    finishContainment?.(containment);
+    await update;
+
+    expect(pathMocks.isCurrent).toHaveBeenCalledWith(containment, retiredConfig);
+    expect(groupMocks.update).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("operator.admin") }),
     );
   });
 });

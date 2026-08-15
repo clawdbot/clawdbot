@@ -96,6 +96,33 @@ function target(createdActor?: { type: "human"; id: string; label?: string }): S
 }
 
 describe("session sharing policy", () => {
+  it("requires participation before sessions.create can adopt a categorized key", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:dashboard:categorized-adoption";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-categorized-adoption",
+          updatedAt: 1,
+          visibility: "read-only",
+          category: "Personal",
+          createdActor: { type: "human", id: "owner@example.com" },
+        },
+      );
+
+      const authorization = resolveSessionMutationAuthorization({
+        client: client({ user: "viewer@example.com" }),
+        method: "sessions.create",
+        requestParams: { key: sessionKey, category: "Projects" },
+        context: { getRuntimeConfig: () => ({}) } as GatewayRequestContext,
+      });
+
+      expect(authorization.error).toMatchObject({
+        details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+      });
+    });
+  });
+
   it("rechecks group members before committing a defaults update", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       putSessionGroups(["Race"]);
