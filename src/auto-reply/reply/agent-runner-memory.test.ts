@@ -3039,6 +3039,64 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.currentTokenCount).toBeGreaterThan(100_000);
   });
 
+  it("uses CJK-aware pressure for content appended after provider context usage", async () => {
+    await writeTestSessionTranscript({
+      rootDir,
+      events: [
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "small answer",
+            usage: {
+              input: 90_000,
+              output: 100,
+              totalTokens: 90_100,
+              contextUsage: {
+                state: "available",
+                promptTokens: 90_000,
+                totalTokens: 90_100,
+              },
+            },
+          },
+        },
+        {
+          type: "message",
+          message: { role: "user", content: "测".repeat(7_000) },
+        },
+      ],
+    });
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({ sessionId: "session", sessionKey: "main" }),
+      promptForEstimate: "",
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(requireCompactEmbeddedAgentSessionCall().currentTokenCount).toBeGreaterThan(96_000);
+  });
+
   it("combines latest usage with post-usage tail pressure for preflight compaction", async () => {
     const sessionFile = path.join(rootDir, "combined-tail-pressure-session.jsonl");
     await writeTestSessionTranscript({

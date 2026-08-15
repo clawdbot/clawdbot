@@ -359,7 +359,7 @@ function truncateMemoryFlushErrorMessage(err: unknown): string {
 type SessionTranscriptUsageSnapshot = {
   promptTokens?: number;
   outputTokens?: number;
-  trailingBytesTokens?: number;
+  trailingTokens?: number;
 };
 
 function isUnavailableContextBarrier(
@@ -383,7 +383,7 @@ function deriveTranscriptUsageSnapshot(
   snapshot:
     | {
         usage?: ReturnType<typeof normalizeUsage>;
-        trailingBytes?: number;
+        trailingTokens?: number;
       }
     | undefined,
 ): SessionTranscriptUsageSnapshot | undefined {
@@ -403,20 +403,19 @@ function deriveTranscriptUsageSnapshot(
   return {
     promptTokens,
     outputTokens,
-    trailingBytesTokens:
-      typeof snapshot.trailingBytes === "number" &&
-      Number.isFinite(snapshot.trailingBytes) &&
-      snapshot.trailingBytes >= 0
-        ? Math.ceil(snapshot.trailingBytes / FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN)
-        : undefined,
+    trailingTokens: snapshot.trailingTokens,
   };
 }
 
-function readLatestNonzeroUsageSnapshotFromTranscriptEvents(
-  events: readonly unknown[],
-): { usage: NonNullable<ReturnType<typeof normalizeUsage>>; trailingBytes: number } | undefined {
+function readLatestNonzeroUsageSnapshotFromTranscriptEvents(events: readonly unknown[]):
+  | {
+      usage: NonNullable<ReturnType<typeof normalizeUsage>>;
+      trailingTokens: number;
+    }
+  | undefined {
   const activeEvents = selectSessionTranscriptLeafControlledPath(events) ?? events;
   let trailingBytes = 0;
+  const trailingMessages: AgentMessage[] = [];
   for (const event of activeEvents.toReversed()) {
     if (!event || typeof event !== "object" || Array.isArray(event)) {
       continue;
@@ -440,12 +439,19 @@ function readLatestNonzeroUsageSnapshotFromTranscriptEvents(
       return undefined;
     }
     if (usage && hasNonzeroUsage(usage)) {
-      return { usage, trailingBytes };
+      return {
+        usage,
+        trailingTokens: Math.max(
+          Math.ceil(trailingBytes / FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN),
+          estimateMessagesTokens(trailingMessages.toReversed()),
+        ),
+      };
     }
     if (message) {
       // Count later conversation content, not session metadata, when projecting
       // context growth since the most recent authoritative provider usage.
       trailingBytes += Buffer.byteLength(JSON.stringify(message), "utf8") + 1;
+      trailingMessages.push(message as AgentMessage);
     }
   }
   return undefined;
@@ -597,11 +603,11 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         ? Math.ceil(snapshot.byteSize / FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN)
         : undefined;
     const promptTokens = snapshot.usage?.promptTokens;
-    const trailingBytesTokens = snapshot.usage?.trailingBytesTokens;
+    const trailingTokens = snapshot.usage?.trailingTokens;
     const outputTokens = snapshot.usage?.outputTokens;
     if (typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0) {
       return {
-        promptTokens: Math.ceil(promptTokens) + (trailingBytesTokens ?? 0),
+        promptTokens: Math.ceil(promptTokens) + (trailingTokens ?? 0),
         outputTokens:
           typeof outputTokens === "number" && Number.isFinite(outputTokens) && outputTokens > 0
             ? Math.ceil(outputTokens)
