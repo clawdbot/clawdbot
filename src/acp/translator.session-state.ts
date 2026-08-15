@@ -82,8 +82,18 @@ export class AcpTranslatorSessionState {
   async sendSnapshotUpdate(
     session: { sessionId: string; sessionKey: string; ledgerSessionId?: string },
     sessionSnapshot: SessionSnapshot,
-    options: { includeControls: boolean; record: boolean; runId?: string },
+    options: {
+      includeControls: boolean;
+      record: boolean;
+      runId?: string;
+      deferDelivery?: boolean;
+      deliveryGuard?: () => boolean;
+    },
   ): Promise<void> {
+    const deliveryOptions = {
+      ...(options.deferDelivery ? { deferDelivery: true } : {}),
+      ...(options.deliveryGuard ? { deliveryGuard: options.deliveryGuard } : {}),
+    };
     if (options.includeControls) {
       await this.sessionUpdates.emit({
         sessionId: session.sessionId,
@@ -91,6 +101,7 @@ export class AcpTranslatorSessionState {
         ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
         runId: options.runId,
         record: options.record,
+        ...deliveryOptions,
         update: {
           sessionUpdate: "current_mode_update",
           currentModeId: sessionSnapshot.modes.currentModeId,
@@ -102,6 +113,7 @@ export class AcpTranslatorSessionState {
         ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
         runId: options.runId,
         record: options.record,
+        ...deliveryOptions,
         update: {
           sessionUpdate: "config_option_update",
           configOptions: sessionSnapshot.configOptions,
@@ -115,6 +127,7 @@ export class AcpTranslatorSessionState {
         ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
         runId: options.runId,
         record: options.record,
+        ...deliveryOptions,
         update: {
           sessionUpdate: "session_info_update",
           ...sessionSnapshot.metadata,
@@ -128,6 +141,7 @@ export class AcpTranslatorSessionState {
         ...(session.ledgerSessionId ? { ledgerSessionId: session.ledgerSessionId } : {}),
         runId: options.runId,
         record: options.record,
+        ...deliveryOptions,
         update: {
           sessionUpdate: "usage_update",
           used: sessionSnapshot.usage.used,
