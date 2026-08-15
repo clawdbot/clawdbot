@@ -1,5 +1,4 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { sql } from "kysely";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";
 import {
@@ -78,14 +77,7 @@ function hasStaleSqliteSessionEntryCandidate(
       .selectFrom("session_nodes")
       .select(["entry_json", "session_key"])
       .where("updated_at", "<", cutoffMs)
-      .where(
-        /* kysely-allow-raw: archivedAt lives inside the canonical JSON entry, not a SQL column.
-         * The CASE guard keeps malformed legacy bytes from aborting unrelated session writes. */
-        sql<boolean>`CASE
-          WHEN json_valid(entry_json) THEN json_extract(entry_json, '$.archivedAt') IS NULL
-          ELSE 0
-        END`,
-      )
+      .where("archived_at", "is", null)
       .orderBy("updated_at", "asc"),
   ).rows;
   return rows.some((row) => {
