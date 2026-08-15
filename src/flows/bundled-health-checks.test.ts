@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProviderPolicySurface } from "../plugins/provider-policy-surface.js";
 import { registerBundledHealthChecks } from "./bundled-health-checks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -21,7 +22,7 @@ const mocks = vi.hoisted(() => ({
         ? { registerCuaDriverDoctorChecks: mocks.registerCuaDriverDoctorChecks }
         : { registerPolicyDoctorChecks: mocks.registerPolicyDoctorChecks },
   ),
-  resolveProviderPolicySurface: vi.fn(() => ({
+  resolveProviderPolicySurface: vi.fn((): ProviderPolicySurface | null => ({
     inspectEmbeddingProviderSetup: mocks.inspectEmbeddingProviderSetup,
   })),
 }));
