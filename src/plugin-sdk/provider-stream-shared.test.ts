@@ -1,8 +1,9 @@
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Model } from "openclaw/plugin-sdk/llm";
 /**
  * Tests provider stream shared helpers and stream hook capture.
  */
-import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import type { Model } from "openclaw/plugin-sdk/llm";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
@@ -77,12 +78,7 @@ const lmstudioBareModel = {
   reasoning: true,
 } as unknown as Model<"openai-completions">;
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function messageOf(event: unknown) {
   return requireRecord(requireRecord(event, "done event").message, "done message");

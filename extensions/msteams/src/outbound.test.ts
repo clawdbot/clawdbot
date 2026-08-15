@@ -169,63 +169,51 @@ describe("msteamsOutbound cfg threading", () => {
     });
   });
 
-  it("forwards resolved channel thread ids through the Teams target", async () => {
-    await requireSendText()({
-      cfg,
-      to: "conversation:19:channel@thread.tacv2",
-      text: "threaded",
+  it.each([
+    {
+      title: "forwards resolved channel thread ids through the Teams target",
+      target: "conversation:19:channel@thread.tacv2",
+      peerKind: "threaded",
       threadId: "thread-root-2",
-    });
-
-    expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
-      cfg,
-      to: "conversation:19:channel@thread.tacv2;messageid=thread-root-2",
-      text: "threaded",
-    });
-  });
-
-  it("preserves explicit Teams thread targets", async () => {
-    await requireSendText()({
-      cfg,
-      to: "conversation:19:channel@thread.tacv2;messageid=explicit-root",
-      text: "threaded",
+      expectedTarget: "conversation:19:channel@thread.tacv2;messageid=thread-root-2",
+      expectedPeerKind: "threaded",
+    },
+    {
+      title: "preserves explicit Teams thread targets",
+      target: "conversation:19:channel@thread.tacv2;messageid=explicit-root",
+      peerKind: "threaded",
       threadId: "ambient-root",
-    });
-
-    expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
-      cfg,
-      to: "conversation:19:channel@thread.tacv2;messageid=explicit-root",
-      text: "threaded",
-    });
-  });
-
-  it("forwards thread ids through Graph team/channel targets", async () => {
-    await requireSendText()({
-      cfg,
-      to: "graph-team/19:channel@thread.tacv2",
-      text: "threaded",
+      expectedTarget: "conversation:19:channel@thread.tacv2;messageid=explicit-root",
+      expectedPeerKind: "threaded",
+    },
+    {
+      title: "forwards thread ids through Graph team/channel targets",
+      target: "graph-team/19:channel@thread.tacv2",
+      peerKind: "threaded",
       threadId: "thread-root-3",
-    });
-
-    expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
-      cfg,
-      to: "graph-team/19:channel@thread.tacv2;messageid=thread-root-3",
-      text: "threaded",
-    });
-  });
-
-  it("does not append channel thread ids to direct-message targets", async () => {
+      expectedTarget: "graph-team/19:channel@thread.tacv2;messageid=thread-root-3",
+      expectedPeerKind: "threaded",
+    },
+    {
+      title: "does not append channel thread ids to direct-message targets",
+      target: "user:aad-user-1",
+      peerKind: "direct",
+      threadId: "quoted-parent",
+      expectedTarget: "user:aad-user-1",
+      expectedPeerKind: "direct",
+    },
+  ])("$title", async ({ target, peerKind, threadId, expectedTarget, expectedPeerKind }) => {
     await requireSendText()({
       cfg,
-      to: "user:aad-user-1",
-      text: "direct",
-      threadId: "quoted-parent",
+      to: target,
+      text: peerKind,
+      threadId,
     });
 
     expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
       cfg,
-      to: "user:aad-user-1",
-      text: "direct",
+      to: expectedTarget,
+      text: expectedPeerKind,
     });
   });
 

@@ -124,7 +124,13 @@ Example:
 ```json5
 {
   agents: {
-    list: [{ id: "support", name: "Support", workspace: "~/.openclaw/workspace-support" }],
+    entries: {
+      support: {
+        default: true,
+        name: "Support",
+        workspace: "~/.openclaw/workspace-support",
+      },
+    },
   },
   bindings: [
     { match: { channel: "slack", teamId: "T123" }, agentId: "support" },

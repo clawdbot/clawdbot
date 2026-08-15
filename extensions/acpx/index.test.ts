@@ -136,6 +136,7 @@ describe("acpx plugin", () => {
       inboundAudio: false,
       shouldRouteToOriginating: false,
       shouldSendToolSummaries: true,
+      shouldSendFullToolDetails: false,
       sendPolicy: "allow",
     };
     const ctx = {
@@ -202,6 +203,7 @@ describe("acpx plugin", () => {
           inboundAudio: false,
           shouldRouteToOriginating: false,
           shouldSendToolSummaries: true,
+          shouldSendFullToolDetails: false,
           sendPolicy: "allow",
         },
         {

@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
@@ -415,11 +415,6 @@ type RootBoundIncludeFile = {
   root: FsSafeRoot;
 };
 
-function isMissingFileError(error: unknown): boolean {
-  const code = (error as { code?: unknown } | null)?.code;
-  return code === "ENOENT" || code === "not-found";
-}
-
 function resolveRootBoundRelativePath(target: RootBoundIncludeFile, absolutePath: string): string {
   const relativePath = path.relative(target.root.rootReal, path.resolve(absolutePath));
   const firstSegment = relativePath.split(path.sep)[0];
@@ -496,7 +491,7 @@ async function readRootBoundFileRawIfExists(target: RootBoundIncludeFile): Promi
   try {
     return await target.root.readText(target.relativePath);
   } catch (error) {
-    if (isMissingFileError(error)) {
+    if (isMissingPathError(error)) {
       return null;
     }
     throw error;
@@ -508,7 +503,7 @@ async function assertRootConfigStillMatchesSnapshot(snapshot: ConfigFileSnapshot
   try {
     currentRaw = await fs.readFile(snapshot.path, "utf-8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+    if (!isMissingPathError(error)) {
       throw error;
     }
   }
@@ -541,7 +536,7 @@ async function rollbackJsonFileWriteIfUnchanged(params: {
   try {
     await params.target.root.remove(params.target.relativePath);
   } catch (error) {
-    if (!isMissingFileError(error)) {
+    if (!isMissingPathError(error)) {
       throw error;
     }
   }
@@ -566,8 +561,6 @@ function createRootBoundBackupFs(target: RootBoundIncludeFile) {
         overwrite: true,
       });
     },
-    readdir: async (dir: string) =>
-      await target.root.list(resolveRootBoundRelativePath(target, dir)),
     rename: async (from: string, to: string) => {
       await target.root.move(
         resolveRootBoundRelativePath(target, from),

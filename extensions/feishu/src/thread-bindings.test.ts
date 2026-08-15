@@ -35,7 +35,10 @@ describe("Feishu thread bindings", () => {
 
   it("binds and resolves a Feishu topic conversation", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
-    createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
+    createFeishuThreadBindingManager({
+      cfg: { ...baseCfg, agents: { list: [{ id: "main" }, { id: "codex" }] } },
+      accountId: "default",
+    });
 
     const binding = await getSessionBindingService().bind({
       targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
@@ -48,7 +51,6 @@ describe("Feishu thread bindings", () => {
       },
       placement: "current",
       metadata: {
-        agentId: "codex",
         label: "codex-main",
       },
     });

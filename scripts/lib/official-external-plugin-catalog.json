@@ -316,6 +316,25 @@
       }
     },
     {
+      "name": "@openclaw/fish-audio-speech",
+      "description": "OpenClaw Fish Audio speech plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "legacyPluginIds": ["fish-audio"],
+        "plugin": {
+          "id": "fish-audio-speech",
+          "label": "Fish Audio Speech"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/fish-audio-speech",
+          "npmSpec": "@openclaw/fish-audio-speech",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/google-meet",
       "description": "OpenClaw Google Meet participant plugin",
       "source": "official",
@@ -424,7 +443,7 @@
     },
     {
       "name": "@openclaw/llama-cpp-provider",
-      "description": "OpenClaw llama.cpp embedding provider plugin",
+      "description": "OpenClaw managed llama.cpp server provider plugin",
       "source": "official",
       "kind": "plugin",
       "openclaw": {

@@ -1,21 +1,4 @@
 // Qa Lab plugin module implements reply failure behavior.
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-const FAILURE_REPLY_PREFIXES = [
-  "⚠️ something went wrong while processing your request.",
-  "⚠️ agent couldn't generate a response",
-  "⚠️ session history got out of sync.",
-  "⚠️ session history was corrupted.",
-  "⚠️ context overflow",
-  "⚠️ message ordering conflict.",
-  "⚠️ model login expired on the gateway",
-  "⚠️ model login failed on the gateway",
-  "⚠️ agent failed before reply:",
-  "⚠️ ✉️ message failed",
-  "⚠️ no api key found for provider ",
-  "⚠️ missing api key for ",
-];
-
 const VISIBLE_REPLY_LEAK_PATTERNS = [
   /\bchecking thread context\b/i,
   /\bthread context thin\b/i,
@@ -41,13 +24,15 @@ export function extractQaVisibleReplyLeakText(text: string): string | undefined 
   return undefined;
 }
 
-export function extractQaFailureReplyText(text: string): string | undefined {
-  const trimmed = text.trim();
+export function extractQaFailureReplyText(message: {
+  text: string;
+  isError?: boolean;
+}): string | undefined {
+  const trimmed = message.text.trim();
   if (!trimmed) {
     return undefined;
   }
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
-  if (FAILURE_REPLY_PREFIXES.some((prefix) => lower.startsWith(prefix))) {
+  if (message.isError === true) {
     return trimmed;
   }
   const visibleReplyLeak = extractQaVisibleReplyLeakText(trimmed);

@@ -1,5 +1,5 @@
 // Codex plugin module implements run attempt behavior.
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { activateCodexAttemptTurn } from "./run-attempt-active-turn.js";
 import { cleanupCodexAttempt } from "./run-attempt-cleanup.js";
@@ -21,7 +21,7 @@ import { createCodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import type { CodexRunAttemptOptions } from "./run-attempt-types.js";
 
 export async function runCodexAppServerAttempt(
-  params: EmbeddedRunAttemptParams,
+  params: EmbeddedRunAttemptParamsV2,
   options: CodexRunAttemptOptions,
 ): Promise<EmbeddedRunAttemptResult> {
   const connection = await prepareCodexAttemptConnection({ params, options });

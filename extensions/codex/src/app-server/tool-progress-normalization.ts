@@ -4,7 +4,7 @@
  */
 import {
   inferToolMetaFromArgs,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
@@ -20,6 +20,19 @@ export function resolveCodexToolProgressDetailMode(
   value: EmbeddedRunAttemptParams["toolProgressDetail"],
 ): ToolProgressDetailMode {
   return value === "raw" ? "raw" : "explain";
+}
+
+export function isCodexCommandBearingToolCall(
+  name: string | undefined,
+  args: Record<string, unknown> | undefined,
+): boolean {
+  const normalizedName = name?.trim().toLowerCase();
+  return (
+    normalizedName === "exec" ||
+    normalizedName === "bash" ||
+    normalizedName === "shell" ||
+    (typeof args?.command === "string" && args.command.trim().length > 0)
+  );
 }
 
 /** Recursively redacts sensitive strings and handles circular values in event payloads. */

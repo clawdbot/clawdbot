@@ -13,6 +13,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/runtime-snapshot.js", () => ({
+  registerRuntimeConfigSnapshotPreparer: vi.fn(),
   resolveRuntimeConfigCacheKey: hoisted.resolveRuntimeConfigCacheKey,
 }));
 
@@ -140,12 +141,30 @@ describe("plugin tool descriptor cache keys", () => {
         parameters: { type: "object", properties: {} },
         outputSchema,
         requiredClientCaps: ["inline-widgets"],
+        resultContentSource: "network",
         execute: async () => ({ content: [], details: {} }),
       },
     });
 
     expect(cached.requiredClientCaps).toEqual(["inline-widgets"]);
     expect(cached.descriptor.outputSchema).toBe(outputSchema);
+    expect(cached).toHaveProperty("resultContentSource", "network");
+  });
+
+  it("does not add network provenance to descriptors for ordinary plugin tools", () => {
+    const cached = capturePluginToolDescriptor({
+      pluginId: "demo",
+      optional: false,
+      tool: {
+        name: "ordinary_demo",
+        label: "Ordinary demo",
+        description: "Read trusted local data",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ content: [], details: {} }),
+      },
+    });
+
+    expect(cached).not.toHaveProperty("resultContentSource");
   });
 
   it("isolates descriptor caches by declared gateway client capabilities", () => {

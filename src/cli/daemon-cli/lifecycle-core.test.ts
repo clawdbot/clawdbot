@@ -4,10 +4,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { GatewayServiceControlArgs } from "../../daemon/service-types.js";
 import type { GatewayService } from "../../daemon/service.js";
 import {
-  defaultRuntime,
+  lifecycleTestRuntime,
   resetLifecycleRuntimeLogs,
   resetLifecycleServiceMocks,
-  runtimeLogs,
+  lifecycleRuntimeLogs,
   service,
   stubEmptyGatewayEnv,
 } from "./test-helpers/lifecycle-core-harness.js";
@@ -38,7 +38,7 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../runtime.js", () => ({
-  defaultRuntime,
+  defaultRuntime: lifecycleTestRuntime,
 }));
 
 vi.mock("../../infra/restart-intent.js", () => ({
@@ -74,7 +74,7 @@ let runServiceStop: typeof import("./lifecycle-core.js").runServiceStop;
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe logged JSON shape.
 function readJsonLog<T extends object>() {
-  const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+  const jsonLine = lifecycleRuntimeLogs.find((line) => line.trim().startsWith("{"));
   return JSON.parse(jsonLine ?? "{}") as T;
 }
 
@@ -248,8 +248,8 @@ describe("runServiceRestart token drift", () => {
       opts: { json: false },
     });
 
-    expect(runtimeLogs).toContain("Gateway service not loaded.");
-    expect(runtimeLogs).toContain(
+    expect(lifecycleRuntimeLogs).toContain("Gateway service not loaded.");
+    expect(lifecycleRuntimeLogs).toContain(
       "Start with: Restart the container or the service that manages it for openclaw-demo-container.",
     );
   });
@@ -266,6 +266,33 @@ describe("runServiceRestart token drift", () => {
     expect(beforeServiceMutation.mock.invocationCallOrder[0]).toBeLessThan(
       service.restart.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
+  });
+
+  it("restarts an installed system-scope service when its loaded-state probe is unavailable", async () => {
+    service.isLoaded.mockRejectedValue(
+      new Error(
+        "systemctl is-enabled unavailable: Command failed during launch or output capture (EACCES)",
+      ),
+    );
+    service.readCommand.mockResolvedValue(null);
+    const hasInstalledDefinition = vi.fn(async () => true);
+    const postRestartCheck = vi.fn(async () => {});
+
+    await expect(
+      runServiceRestart({
+        ...createServiceRunArgs(),
+        service: { ...service, hasInstalledDefinition } as GatewayService,
+        postRestartCheck,
+      }),
+    ).resolves.toBe(true);
+
+    expect(hasInstalledDefinition).toHaveBeenCalledWith({ env: process.env });
+    expect(service.restart).toHaveBeenCalledTimes(1);
+    expect(postRestartCheck).toHaveBeenCalledTimes(1);
+    expect(readJsonLog<{ ok?: boolean; result?: string }>()).toMatchObject({
+      ok: true,
+      result: "restarted",
+    });
   });
 
   it("aborts loaded-service mutation when the service guard rejects", async () => {
@@ -652,17 +679,16 @@ describe("runServiceRestart token drift", () => {
   it("warns in json when an already-running gateway definition needs repair", async () => {
     service.readRuntime.mockResolvedValue({ status: "running", pid: 4242 });
     service.readCommand.mockResolvedValue({
-      programArguments: ["openclaw", "gateway", "run"],
-      environment: { OPENCLAW_SERVICE_VERSION: "2026.4.24" },
+      programArguments: ["openclaw", "gateway", "--port", "18789"],
     });
 
-    await runServiceStart(createServiceRunArgs());
+    await runServiceStart({ ...createServiceRunArgs(), expectedPort: 19_001 });
 
     const payload = readJsonLog<{ result?: string; warnings?: string[] }>();
     expect(payload.result).toBe("already-running");
     expect(payload.warnings).toEqual([
       expect.stringMatching(
-        /^Gateway service already running, but its installed service definition needs repair: service was installed by OpenClaw 2026\.4\.24, current CLI is .+; run `openclaw gateway restart` to apply\.$/,
+        /^Gateway service already running, but its installed service definition needs repair: service port 18789 does not match current gateway config port 19001; run `openclaw gateway restart` to apply\.$/,
       ),
     ]);
     expect(service.start).not.toHaveBeenCalled();
@@ -671,17 +697,17 @@ describe("runServiceRestart token drift", () => {
   it("prints one warning line when an already-running gateway definition needs repair", async () => {
     service.readRuntime.mockResolvedValue({ status: "running", pid: 4242 });
     service.readCommand.mockResolvedValue({
-      programArguments: ["openclaw", "gateway", "run"],
-      environment: { OPENCLAW_SERVICE_VERSION: "2026.4.24" },
+      programArguments: ["openclaw", "gateway", "--port", "18789"],
     });
 
     await runServiceStart({
       serviceNoun: "Gateway",
       service,
       renderStartHints: () => [],
+      expectedPort: 19_001,
     });
 
-    const repairWarnings = runtimeLogs.filter((line) =>
+    const repairWarnings = lifecycleRuntimeLogs.filter((line) =>
       line.startsWith(
         "Gateway service already running, but its installed service definition needs repair:",
       ),
@@ -762,10 +788,9 @@ describe("runServiceRestart token drift", () => {
     );
   });
 
-  it("repairs stale loaded services during start before reporting success", async () => {
+  it("repairs loaded services with port drift during start before reporting success", async () => {
     service.readCommand.mockResolvedValue({
-      programArguments: ["openclaw", "gateway"],
-      environment: { OPENCLAW_SERVICE_VERSION: "2026.4.24" },
+      programArguments: ["openclaw", "gateway", "--port", "18789"],
     });
     type RepairLoadedService = NonNullable<
       Parameters<typeof runServiceStart>[0]["repairLoadedService"]
@@ -777,7 +802,7 @@ describe("runServiceRestart token drift", () => {
       return {
         result: "started" as const,
         message: "Gateway service definition repaired and started.",
-        warnings: ["service was installed by OpenClaw 2026.4.24, current CLI is 2026.5.2"],
+        warnings: ["service port 18789 does not match current gateway config port 19001"],
         loaded: true,
       };
     });
@@ -788,6 +813,7 @@ describe("runServiceRestart token drift", () => {
       renderStartHints: () => [],
       opts: { json: true },
       repairLoadedService,
+      expectedPort: 19_001,
     });
 
     expect(repairLoadedService).toHaveBeenCalledTimes(1);
@@ -802,20 +828,21 @@ describe("runServiceRestart token drift", () => {
     expect(payload.message).toBe("Gateway service definition repaired and started.");
     expect(payload.warnings).toEqual(
       expect.arrayContaining([
-        expect.stringContaining("service was installed by OpenClaw"),
+        expect.stringContaining("service port 18789"),
         expect.stringContaining("custom behavior and will be overwritten"),
       ]),
     );
     expect(payload.service?.loaded).toBe(true);
   });
 
-  it("fails start with an install hint when a stale loaded service has no repair callback", async () => {
+  it("fails start with an install hint when port drift has no repair callback", async () => {
     service.readCommand.mockResolvedValue({
-      programArguments: ["openclaw", "gateway"],
-      environment: { OPENCLAW_SERVICE_VERSION: "2026.4.24" },
+      programArguments: ["openclaw", "gateway", "--port", "18789"],
     });
 
-    await expect(runServiceStart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
+    await expect(
+      runServiceStart({ ...createServiceRunArgs(), expectedPort: 19_001 }),
+    ).rejects.toThrow("__exit__:1");
 
     const payload = readJsonLog<{ ok?: boolean; error?: string; hints?: string[] }>();
     expect(payload.ok).toBe(false);

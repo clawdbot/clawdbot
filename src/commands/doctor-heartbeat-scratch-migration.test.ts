@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { heartbeatMonitorAgentId } from "../cron/heartbeat-monitor.js";
 import { readCronJobScratchState, writeCronJobScratch } from "../cron/scratch-store.js";
@@ -148,15 +149,18 @@ describe("HEARTBEAT.md cron scratch migration", () => {
 
   it("imports a shared workspace file into every agent monitor before removing it", async () => {
     const fixture = await createFixture();
-    const cfg = {
-      agents: {
-        defaults: { heartbeat: { every: "30m" } },
-        list: [
-          { id: "main", workspace: fixture.workspace },
-          { id: "ops", workspace: fixture.workspace },
-        ],
-      },
-    } as OpenClawConfig;
+    const cfg = retainLegacyDefaultAgentId(
+      {
+        agents: {
+          defaults: { heartbeat: { every: "30m" } },
+          list: [
+            { id: "main", workspace: fixture.workspace },
+            { id: "ops", workspace: fixture.workspace },
+          ],
+        },
+      } as OpenClawConfig,
+      "main",
+    );
     await fs.writeFile(fixture.heartbeatPath, "shared checklist\n", "utf8");
 
     const result = await maybeMigrateHeartbeatFilesToScratch({ cfg, shouldRepair: true });

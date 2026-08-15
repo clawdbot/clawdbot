@@ -240,9 +240,17 @@ only for behavior that really belongs to the backend.
 | `ownsNativeCompaction`             | Backend owns its own compaction - OpenClaw defers                           |
 | `subscriptionAuthDispatch`         | Opted-in embedded runs on subscription credentials execute via this backend |
 | `runtimeArtifact`                  | Bound a script launcher to its complete bundled package tree                |
+| `liveSessionRequirement`           | Require an init capability before trusting long-lived session output        |
 
 Keep these hooks provider-owned. Do not add CLI-specific branches to core when
 a backend hook can express the behavior.
+
+`liveSessionRequirement` declares one exact capability that the CLI must
+advertise in its initialization record before OpenClaw trusts streamed output.
+It also supplies the first known compatible version, version-probe arguments,
+and update command used by setup and Doctor. Runtime support remains
+capability-based, so a compatible backport or wrapper is not rejected only
+because of its version string.
 
 `prepareExecution(ctx)` receives `ctx.contextTokenBudget`, the effective token
 limit selected for the run. Backends that own native compaction can map that

@@ -1,5 +1,5 @@
 import { t } from "../../i18n/index.ts";
-import type { RuntimeConfigCapability } from "../../lib/config/index.ts";
+import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import type { ModelProviderRowMessage } from "./view.ts";
 
 export type ModelProviderConfigMutation = {

@@ -1,10 +1,20 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../auto-reply/heartbeat.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import { buildAgentRunTerminalOutcome } from "./agent-run-terminal-outcome.js";
+import {
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  classifyAgentRunTerminalOutcome,
+} from "./agent-run-terminal-outcome.js";
+import {
+  normalizeAgentRunTerminalReplySnapshot,
+  type AgentRunTerminalReplySnapshot,
+} from "./agent-run-terminal-reply.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -22,6 +32,7 @@ export type SessionActivityNoteState = {
   lastAssistantBufferAt: number;
   lastAssistantNote?: string;
   planProgress?: { completed: number; total: number };
+  terminalReply?: AgentRunTerminalReplySnapshot;
 };
 
 const MAX_NOTES = 40;
@@ -164,13 +175,7 @@ function rememberItemStatus(
   }
   state.itemStatuses.delete(itemId);
   state.itemStatuses.set(itemId, status);
-  while (state.itemStatuses.size > limit) {
-    const oldest = state.itemStatuses.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    state.itemStatuses.delete(oldest);
-  }
+  pruneMapToMaxSize(state.itemStatuses, limit);
   return true;
 }
 
@@ -211,8 +216,13 @@ export function noteSessionActivityEvent(
         addActivityNote(state, "Run is wrapping up", noteMaxChars);
       } else if (phase === "end" || phase === "error") {
         const health = terminalHealthFor(event);
-        const error = readString(data.error);
+        const error = readNonBlankString(data.error);
         addActivityNote(state, error ? `Run ${health}: ${error}` : `Run ${health}`, noteMaxChars);
+        const terminalReply = normalizeAgentRunTerminalReplySnapshot(data.terminalReply);
+        state.terminalReply = terminalReply;
+        if (terminalReply?.disposition === "visible") {
+          addActivityNote(state, `Assistant: ${terminalReply.text}`, noteMaxChars);
+        }
       }
       return;
     }
@@ -222,7 +232,7 @@ export function noteSessionActivityEvent(
       if (data.phase !== "start") {
         return;
       }
-      const name = readString(data.name) ?? "tool";
+      const name = readNonBlankString(data.name) ?? "tool";
       const args = summarizeToolArgs(data.args);
       addActivityNote(state, args ? `Tool ${name}: ${args}` : `Tool ${name}`, noteMaxChars);
       return;
@@ -231,9 +241,9 @@ export function noteSessionActivityEvent(
       if (data.phase !== "end") {
         return;
       }
-      const title = readString(data.title) ?? readString(data.name) ?? "command";
-      const exitCode = readFiniteNumber(data.exitCode);
-      const status = readString(data.status) ?? (exitCode === 0 ? "completed" : "failed");
+      const title = readNonBlankString(data.title) ?? readNonBlankString(data.name) ?? "command";
+      const exitCode = asFiniteNumber(data.exitCode);
+      const status = readNonBlankString(data.status) ?? (exitCode === 0 ? "completed" : "failed");
       addActivityNote(
         state,
         `${title}: ${status}${exitCode === undefined ? "" : ` (exit ${exitCode})`}`,
@@ -242,9 +252,9 @@ export function noteSessionActivityEvent(
       return;
     }
     case "item": {
-      const status = readString(data.status);
-      const title = readString(data.title);
-      const itemId = readString(data.itemId) ?? title;
+      const status = readNonBlankString(data.status);
+      const title = readNonBlankString(data.title);
+      const itemId = readNonBlankString(data.itemId) ?? title;
       if (!status || !title || !itemId) {
         return;
       }
@@ -277,8 +287,8 @@ export function noteSessionActivityEvent(
       return;
     }
     case "assistant": {
-      const full = readString(data.text);
-      const delta = readString(data.delta);
+      const full = readNonBlankString(data.text);
+      const delta = readNonBlankString(data.delta);
       if (full) {
         state.assistantRawBuffer = full;
       } else if (delta) {
@@ -309,7 +319,7 @@ export function noteSessionActivityEvent(
       }
       addActivityNote(
         state,
-        `Waiting for approval: ${readString(data.title) ?? "user action"}`,
+        `Waiting for approval: ${readNonBlankString(data.title) ?? "user action"}`,
         noteMaxChars,
       );
       break;
@@ -319,25 +329,11 @@ export function noteSessionActivityEvent(
   }
 }
 
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-export function readFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 export function terminalHealthFor(event: AgentEventPayload): "done" | "failed" {
   const phase = event.data.phase;
-  const outcome = buildAgentRunTerminalOutcome({
-    status: phase === "end" ? "ok" : "error",
-    error: event.data.error,
-    stopReason: event.data.stopReason,
-    livenessState: event.data.livenessState,
-    timeoutPhase: event.data.timeoutPhase,
-    providerStarted: event.data.providerStarted,
-    startedAt: event.data.startedAt,
-    endedAt: event.data.endedAt,
+  const outcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
+    phase: phase === "end" ? "end" : "error",
+    data: event.data,
   });
-  return outcome.reason === "completed" ? "done" : "failed";
+  return classifyAgentRunTerminalOutcome(outcome) === "success" ? "done" : "failed";
 }

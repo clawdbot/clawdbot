@@ -1,5 +1,5 @@
 /** Converts loaded plugin registries into stable plugin records for status and diagnostics. */
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { parseBooleanValue } from "../utils/boolean.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";
 import type { PluginBundleFormat, PluginDiagnosticCode, PluginFormat } from "./manifest-types.js";
@@ -204,8 +204,7 @@ export function formatPluginFailureSummary(failedPlugins: PluginRecord[]): strin
 }
 
 function isPluginLoadDebugEnabled(env: NodeJS.ProcessEnv): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(env.OPENCLAW_PLUGIN_LOAD_DEBUG);
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+  return parseBooleanValue(env.OPENCLAW_PLUGIN_LOAD_DEBUG) === true;
 }
 
 function describePluginModuleExportShape(

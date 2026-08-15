@@ -10,6 +10,7 @@ import {
   type AnyMessage,
 } from "@agentclientprotocol/sdk";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
+import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -145,6 +146,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
     preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
+    tlsFingerprint: bootstrap.tlsFingerprint,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
     clientDisplayName: "ACP",
     clientVersion: "acp",
@@ -286,10 +288,6 @@ function normalizeAcpInitializeProtocolVersion(message: AnyMessage): AnyMessage 
       protocolVersion: PROTOCOL_VERSION,
     },
   } as AnyMessage;
-}
-
-function isJsonObject(value: unknown): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isUint16Integer(value: unknown): value is number {

@@ -6,7 +6,6 @@ import {
   resolveExecApprovalsPath,
   tryParsePersistedExecApprovals,
 } from "./exec-approvals-config.js";
-import { resetLegacyExecApprovalsPresenceCache } from "./exec-approvals-migration-gate.js";
 import {
   readExecApprovalsConfigRow,
   serializeExecApprovals,
@@ -321,7 +320,6 @@ async function migrateWithExclusiveStateOwnership(params: {
       `Legacy exec approvals were removed, but their receipt could not be finalized: ${String(error)}`,
     );
   }
-  resetLegacyExecApprovalsPresenceCache(params.env);
   return {
     changes: [decisionMessage(result.decision, result.removeSource)],
     warnings,

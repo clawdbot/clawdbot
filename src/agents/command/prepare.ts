@@ -1,14 +1,15 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
+import { isSyntheticSourceReplyTurn } from "../../auto-reply/reply/source-reply-delivery-mode.js";
 import {
   formatThinkingLevels,
   normalizeThinkLevel,
   normalizeVerboseLevel,
 } from "../../auto-reply/thinking.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent-delivery.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import {
   isPluginMetadataSnapshotCompatible,
@@ -19,7 +20,6 @@ import {
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
-  scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -32,7 +32,6 @@ import { resolveAgentRuntimeConfig } from "../agent-runtime-config.js";
 import {
   listAgentIds,
   resolveAgentDir,
-  resolveDefaultAgentId,
   resolveSessionAgentId,
   resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
@@ -50,6 +49,7 @@ import {
   prependInternalEventContext,
   resolveInternalEventTranscriptBody,
 } from "./attempt-execution.shared.js";
+import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
 import { createAgentCommandSessionWorkingCopy } from "./session-helpers.js";
 import { resolveSession } from "./session.js";
@@ -83,28 +83,6 @@ export function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "
     throw new Error(`${label} override contains invalid control characters.`);
   }
   return trimmed;
-}
-
-export function resolveExplicitAgentCommandSessionKey(params: {
-  rawExplicitSessionKey?: string;
-  agentIdOverride?: string;
-  shouldScopeDefaultAgentKey?: boolean;
-  cfg: OpenClawConfig;
-}): string | undefined {
-  if (
-    isUnscopedSessionKeySentinel(params.rawExplicitSessionKey) &&
-    !params.agentIdOverride &&
-    !params.shouldScopeDefaultAgentKey
-  ) {
-    return params.rawExplicitSessionKey;
-  }
-  return scopeLegacySessionKeyToAgent({
-    agentId:
-      params.agentIdOverride ??
-      (params.shouldScopeDefaultAgentKey ? resolveDefaultAgentId(params.cfg) : undefined),
-    sessionKey: params.rawExplicitSessionKey,
-    mainKey: params.cfg.session?.mainKey,
-  });
 }
 
 export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: RuntimeEnv) {
@@ -233,7 +211,7 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
   if (explicitRecipientSession?.error) {
     throw explicitRecipientSession.error;
   }
-  const commandOpts = explicitRecipientSession?.sessionKey
+  let commandOpts: AgentCommandOpts = explicitRecipientSession?.sessionKey
     ? {
         ...selectedCommandOpts,
         channel: explicitRecipientSession.channel,
@@ -328,6 +306,27 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
     sessionKey,
     sessionEntry: sessionEntryRaw,
   });
+  if (
+    sessionEntryRaw &&
+    commandOpts.cliSessionBindingFacts === undefined &&
+    isSyntheticSourceReplyTurn({
+      inputProvenance: commandOpts.inputProvenance,
+      isHeartbeat: commandOpts.bootstrapContextRunKind === "heartbeat",
+    })
+  ) {
+    commandOpts = {
+      ...commandOpts,
+      cliSessionBindingFacts: {
+        sourceReplyDeliveryMode: resolveSessionStableReplyMode({
+          cfg,
+          ctx: { CommandAuthorized: false },
+          sessionEntry: sessionEntryRaw,
+          sessionAgentId,
+          sessionKey,
+        }),
+      },
+    };
+  }
   const thinkingLevelsHint = formatThinkingLevels(
     configuredModel.provider,
     configuredModel.model,

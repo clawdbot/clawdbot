@@ -1,9 +1,9 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isRenderableAvatarImageDataUrl } from "../../../src/shared/avatar-limits.js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { DEFAULT_ASSISTANT_AVATAR } from "./assistant-identity.ts";
 import { takeGraphemes } from "./graphemes.ts";
-import { normalizeOptionalString } from "./string-coerce.ts";
 
 const CONTROL_UI_SAME_ORIGIN_AVATAR_URL_RE = /^\/(?!\/)/;
 const UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u;

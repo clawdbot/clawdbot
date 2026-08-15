@@ -351,6 +351,56 @@ describe("auth-store", () => {
     }
   });
 
+  it("clears every Baileys auth category from the shared legacy root without touching other files", async () => {
+    const authDir = createTempAuthDir("openclaw-wa-auth-legacy-categories");
+    const previousOAuthDir = hoisted.oauthDir;
+    const authFiles = [
+      "creds.json",
+      "creds.json.bak",
+      "pre-key-1.json",
+      "session-contact.json",
+      "sender-key-group.json",
+      "sender-key-memory-group.json",
+      "app-state-sync-key-contact.json",
+      "app-state-sync-version-contact.json",
+      "lid-mapping-15551234567.json",
+      "device-list-15551234567.json",
+      "tctoken-15551234567.json",
+      "identity-key-15551234567.json",
+    ];
+    const unrelatedFiles = ["oauth.json", "google-oauth.json", "notes.txt"];
+    const nestedAuthFile = path.join(authDir, "nested", "session-keep.json");
+    hoisted.oauthDir = authDir;
+
+    try {
+      for (const file of [...authFiles, ...unrelatedFiles]) {
+        fsSync.writeFileSync(path.join(authDir, file), "{}", "utf-8");
+      }
+      fsSync.mkdirSync(path.dirname(nestedAuthFile));
+      fsSync.writeFileSync(nestedAuthFile, "keep", "utf-8");
+      fsSync.symlinkSync(
+        path.join(authDir, "notes.txt"),
+        path.join(authDir, "session-linked.json"),
+      );
+
+      await expect(logoutWeb({ authDir, isLegacyAuthDir: true })).resolves.toBe(true);
+
+      for (const file of authFiles) {
+        expect(fsSync.existsSync(path.join(authDir, file)), file).toBe(false);
+      }
+      for (const file of unrelatedFiles) {
+        expect(fsSync.existsSync(path.join(authDir, file)), file).toBe(true);
+      }
+      expect(fsSync.readFileSync(nestedAuthFile, "utf-8")).toBe("keep");
+      expect(fsSync.lstatSync(path.join(authDir, "session-linked.json")).isSymbolicLink()).toBe(
+        true,
+      );
+    } finally {
+      hoisted.oauthDir = previousOAuthDir;
+      fsSync.rmSync(authDir, { recursive: true, force: true });
+    }
+  });
+
   it("clears auth state even when directory enumeration fails", async () => {
     await withOwnedOAuthAuthDir("openclaw-wa-auth-readdir", async (authDir) => {
       fsSync.writeFileSync(path.join(authDir, "creds.json"), "{}", "utf-8");

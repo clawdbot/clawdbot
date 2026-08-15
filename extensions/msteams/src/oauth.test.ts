@@ -192,6 +192,23 @@ describe("exchangeMSTeamsCodeForTokens", () => {
       }),
     ).rejects.toThrow("MSTeams token exchange failed: invalid token response fields");
   });
+
+  it.each([
+    { label: "null", body: null },
+    { label: "array", body: [] },
+  ])("rejects a top-level $label token exchange response", async ({ body }) => {
+    fetchSpy.mockResolvedValueOnce(responseJson(body));
+
+    await expect(
+      exchangeMSTeamsCodeForTokens({
+        tenantId: "t",
+        clientId: "c",
+        clientSecret: "s", // pragma: allowlist secret
+        code: "invalid-shape",
+        verifier: "v",
+      }),
+    ).rejects.toThrow("MSTeams token exchange failed: invalid token response fields");
+  });
 });
 
 describe("refreshMSTeamsDelegatedTokens", () => {
@@ -291,5 +308,21 @@ describe("refreshMSTeamsDelegatedTokens", () => {
         refreshToken: "bad-json",
       }),
     ).rejects.toThrow("MSTeams token refresh failed: malformed JSON response");
+  });
+
+  it.each([
+    { label: "null", body: null },
+    { label: "array", body: [] },
+  ])("rejects a top-level $label token refresh response", async ({ body }) => {
+    fetchSpy.mockResolvedValueOnce(responseJson(body));
+
+    await expect(
+      refreshMSTeamsDelegatedTokens({
+        tenantId: "t",
+        clientId: "c",
+        clientSecret: "s", // pragma: allowlist secret
+        refreshToken: "rt",
+      }),
+    ).rejects.toThrow("MSTeams token refresh failed: invalid token response fields");
   });
 });

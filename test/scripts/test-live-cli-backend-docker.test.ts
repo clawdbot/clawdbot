@@ -19,7 +19,7 @@ describe("scripts/test-live-cli-backend-docker.sh", () => {
     const script = fs.readFileSync(SCRIPT_PATH, "utf8");
 
     expect(script).toContain(
-      "node scripts/test-live.mjs -- src/gateway/gateway-cli-backend.live.test.ts",
+      "node --import tsx scripts/test-live.mts -- src/gateway/gateway-cli-backend.live.test.ts",
     );
     expect(script).not.toContain("pnpm test:live src/gateway/gateway-cli-backend.live.test.ts");
   });

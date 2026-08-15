@@ -128,6 +128,24 @@ const {
   runtimeErrors,
 } = mocks;
 
+function primeSkillVerification(overrides: Record<string, unknown> = {}) {
+  return fetchClawHubSkillVerificationMock.mockResolvedValueOnce({
+    schema: "clawhub.skill.verify.v1",
+    ok: true,
+    decision: "pass",
+    reasons: [],
+    skill: { slug: "agentreceipt" },
+    publisher: null,
+    version: { version: "1.2.3" },
+    card: { available: true },
+    artifact: null,
+    provenance: null,
+    security: { status: "clean" },
+    signature: { status: "unsigned" },
+    ...overrides,
+  });
+}
+
 function mockCall(mock: unknown, index = 0): Array<unknown> {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
   const call = calls.at(index);
@@ -234,7 +252,7 @@ vi.mock("../skills/lifecycle/clawhub.js", () => ({
     mocks.resolveLocalSkillCardStatusSyncMock(...args),
 }));
 
-vi.mock("../infra/clawhub.js", () => ({
+vi.mock("../infra/clawhub-skills.js", () => ({
   CLAWHUB_SKILLS_SH_TRUST_LABEL: "Not scanned by ClawHub",
   CLAWHUB_SKILLS_SH_TRUST_STATE: "not-scanned-by-clawhub",
   fetchClawHubSkillVerification: (...args: unknown[]) =>
@@ -383,6 +401,7 @@ describe("skills cli commands", () => {
       {
         slug: "calendar",
         ownerHandle: "demo-owner",
+        installRef: "@demo-owner/calendar",
         displayName: "Calendar",
         summary: "CalDAV helpers",
         version: "1.2.3",
@@ -390,6 +409,7 @@ describe("skills cli commands", () => {
       {
         slug: "calendar",
         ownerHandle: "work-owner",
+        installRef: "@work-owner/calendar",
         displayName: "Team Calendar",
       },
     ]);
@@ -446,6 +466,7 @@ describe("skills cli commands", () => {
       {
         slug: "oauth-helper",
         ownerHandle: "demo-owner",
+        installRef: "@demo-owner/oauth-helper",
         displayName: "Oauth\nHelper",
         summary:
           "Automate OAuth login flows.\nSupports multiple providers.\n\nFeatures:\n- Confirm before authorizing",
@@ -1089,14 +1110,9 @@ describe("skills cli commands", () => {
     const verifiedSourceUrl =
       "https://github.com/openclaw/skills/tree/0123456789abcdef0123456789abcdef01234567/agentreceipt";
     readVerifiedClawHubSkillSourceUrlMock.mockReturnValueOnce(verifiedSourceUrl);
-    fetchClawHubSkillVerificationMock.mockResolvedValueOnce({
-      schema: "clawhub.skill.verify.v1",
-      ok: true,
-      decision: "pass",
-      reasons: [],
+    primeSkillVerification({
       skill: { slug: "agentreceipt", displayName: "Agent Receipt" },
       publisher: { handle: "openclaw" },
-      version: { version: "1.2.3" },
       card: {
         available: true,
         url: "https://private.example.com/clawhub/api/v1/skills/agentreceipt/card?version=1.2.3",
@@ -1106,8 +1122,6 @@ describe("skills cli commands", () => {
         bundleFingerprints: ["generated-bundle-fingerprint"],
       },
       provenance,
-      security: { status: "clean" },
-      signature: { status: "unsigned" },
     });
 
     await runCommand(["skills", "verify", "agentreceipt"]);
@@ -1121,14 +1135,9 @@ describe("skills cli commands", () => {
   });
 
   it("fetches generated Skill Card markdown for --card", async () => {
-    fetchClawHubSkillVerificationMock.mockResolvedValueOnce({
-      schema: "clawhub.skill.verify.v1",
-      ok: true,
-      decision: "pass",
-      reasons: [],
+    primeSkillVerification({
       skill: { slug: "agentreceipt", displayName: "Agent Receipt" },
       publisher: { handle: "openclaw" },
-      version: { version: "1.2.3" },
       card: {
         available: true,
         url: "https://cards.example.test/generated/agentreceipt.md",
@@ -1137,9 +1146,6 @@ describe("skills cli commands", () => {
         sourceFingerprint: "source-fingerprint",
         bundleFingerprints: ["generated-bundle-fingerprint"],
       },
-      provenance: null,
-      security: { status: "clean" },
-      signature: { status: "unsigned" },
     });
 
     await runCommand(["skills", "verify", "agentreceipt", "--tag", "latest", "--card"]);
@@ -1160,19 +1166,11 @@ describe("skills cli commands", () => {
   });
 
   it("fails --card when the verified Skill Card is unavailable", async () => {
-    fetchClawHubSkillVerificationMock.mockResolvedValueOnce({
-      schema: "clawhub.skill.verify.v1",
+    primeSkillVerification({
       ok: false,
       decision: "fail",
       reasons: ["card.missing"],
-      skill: { slug: "agentreceipt" },
-      publisher: null,
-      version: { version: "1.2.3" },
       card: { available: false },
-      artifact: null,
-      provenance: null,
-      security: { status: "clean" },
-      signature: { status: "unsigned" },
     });
 
     await expect(runCommand(["skills", "verify", "agentreceipt", "--card"])).rejects.toThrow(
@@ -1188,20 +1186,7 @@ describe("skills cli commands", () => {
     { label: "missing card", card: null },
     { label: "missing card URL", card: { available: true } },
   ])("fails --card when the verification response has $label metadata", async ({ card }) => {
-    fetchClawHubSkillVerificationMock.mockResolvedValueOnce({
-      schema: "clawhub.skill.verify.v1",
-      ok: true,
-      decision: "pass",
-      reasons: [],
-      skill: { slug: "agentreceipt" },
-      publisher: null,
-      version: { version: "1.2.3" },
-      card,
-      artifact: null,
-      provenance: null,
-      security: { status: "clean" },
-      signature: { status: "unsigned" },
-    });
+    primeSkillVerification({ card });
 
     await expect(runCommand(["skills", "verify", "agentreceipt", "--card"])).rejects.toThrow(
       "__exit__:1",
@@ -1215,19 +1200,11 @@ describe("skills cli commands", () => {
   });
 
   it("exits non-zero when the ClawHub verification envelope fails", async () => {
-    fetchClawHubSkillVerificationMock.mockResolvedValueOnce({
-      schema: "clawhub.skill.verify.v1",
+    primeSkillVerification({
       ok: false,
       decision: "fail",
       reasons: ["security.status_not_clean"],
-      skill: { slug: "agentreceipt" },
-      publisher: null,
-      version: { version: "1.2.3" },
-      card: { available: true },
-      artifact: null,
-      provenance: null,
       security: { status: "malicious" },
-      signature: { status: "unsigned" },
     });
 
     await expect(runCommand(["skills", "verify", "agentreceipt"])).rejects.toThrow("__exit__:1");
@@ -1241,22 +1218,13 @@ describe("skills cli commands", () => {
     { label: "unknown decision", ok: true, decision: "quarantined" },
     { label: "non-boolean ok", ok: "false", decision: "pass" },
   ])("fails closed for malformed verification envelopes with $label", async ({ ok, decision }) => {
-    fetchClawHubSkillVerificationMock.mockResolvedValueOnce({
-      schema: "clawhub.skill.verify.v1",
+    primeSkillVerification({
       ok,
       decision,
-      reasons: [],
-      skill: { slug: "agentreceipt" },
-      publisher: null,
-      version: { version: "1.2.3" },
       card: {
         available: true,
         url: "https://private.example.com/clawhub/api/v1/skills/agentreceipt/card?version=1.2.3",
       },
-      artifact: null,
-      provenance: null,
-      security: { status: "clean" },
-      signature: { status: "unsigned" },
     });
 
     await expect(runCommand(["skills", "verify", "agentreceipt"])).rejects.toThrow("__exit__:1");

@@ -114,15 +114,15 @@ function renderSecurityOverview(props: SecurityViewProps) {
       }),
     }),
     renderSettingsRow({
-      title: t("nodes.pairing.title"),
+      title: t("devices.pairing.title"),
       control: html`
         <button
           class="btn"
-          title=${props.canPairDevice ? "" : t("nodes.pairing.adminRequired")}
+          title=${props.canPairDevice ? "" : t("devices.pairing.adminRequired")}
           ?disabled=${!props.canPairDevice}
           @click=${props.onPairMobile}
         >
-          ${icons.smartphone} ${t("nodes.pairing.button")}
+          ${icons.smartphone} ${t("devices.pairing.button")}
         </button>
       `,
     }),

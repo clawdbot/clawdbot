@@ -195,6 +195,7 @@ function buildPluginCommandEntries(params: {
       source: "plugin",
       scope: "both",
       acceptsArgs: spec.acceptsArgs,
+      ...(spec.clientPresentation ? { clientPresentation: spec.clientPresentation } : {}),
     });
   }
 

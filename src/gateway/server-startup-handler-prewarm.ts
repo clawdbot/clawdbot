@@ -1,10 +1,9 @@
-import { listAgentIds, resolveConfiguredAgentWorkspaceDirs } from "../agents/agent-scope-config.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 
 const SIDEBAR_SESSION_LIST_LIMIT = 60;
-const SIDEBAR_CATALOG_LIMIT_PER_HOST = 40;
 const SIDEBAR_PREWARM_MAX_SESSION_ENTRIES = 2_000;
 const GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS = 250;
 
@@ -22,12 +21,12 @@ type GatewayHandlerPrewarmHandle = {
 };
 
 async function prewarmGatewaySessionListData(cfg: OpenClawConfig, agentId: string): Promise<void> {
-  const [{ loadCombinedSessionStoreForGateway }, { listSessionsFromStoreAsync }] =
+  const [{ loadCombinedSessionStoreForGatewayCore }, { listSessionsFromStoreAsync }] =
     await Promise.all([
       import("../config/sessions/combined-store-gateway.js"),
       import("./session-utils-list.js"),
     ]);
-  const { durableStorePath, storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
+  const { durableStorePath, storePath, store } = loadCombinedSessionStoreForGatewayCore(cfg, {
     agentId,
     projection: "list",
   });
@@ -77,7 +76,7 @@ function dashboardDataPrewarmItems(
       name: `sessions.${agentId}`,
       load: async () => {
         // A count-only query keeps unusually large stores off the synchronous JSON projection
-        // path. Request-time session and catalog handlers remain authoritative when skipped.
+        // path. The request-time session handler remains authoritative when skipped.
         if (!(await shouldPrewarmSessionData())) {
           return;
         }
@@ -88,7 +87,7 @@ function dashboardDataPrewarmItems(
     // cache key; a cold key pays a multi-second synchronous load that freezes
     // the whole event loop on that agent's FIRST message. Warm every
     // configured workspace's key here instead, while nobody is waiting.
-    ...resolveConfiguredAgentWorkspaceDirs(cfg).map((workspaceDir, index) => ({
+    ...resolveConfiguredAgentWorkspaceDirsForPrewarm(cfg).map((workspaceDir, index) => ({
       name: `runtime-plugins.${index}`,
       load: async () => {
         const { loadAgentRuntimePluginRegistryHandle } =
@@ -115,21 +114,20 @@ function dashboardDataPrewarmItems(
         await listManagedPlugins({ config: cfg });
       },
     },
-    ...agentIds.map((agentId) => ({
-      name: `session-catalog.${agentId}`,
-      load: async () => {
-        if (!(await shouldPrewarmSessionData())) {
-          return;
-        }
-        const { prewarmSessionCatalogList } = await import("./server-methods/session-catalog.js");
-        await prewarmSessionCatalogList({
-          config: cfg,
-          agentId,
-          limitPerHost: SIDEBAR_CATALOG_LIMIT_PER_HOST,
-        });
-      },
-    })),
   ];
+}
+
+/**
+ * Every configured agent's workspace dir, deduplicated. Kept local so this
+ * branch builds standalone against origin/main; a sibling branch introduces the
+ * same helper in agent-scope-config, and whichever lands first wins on merge.
+ */
+function resolveConfiguredAgentWorkspaceDirsForPrewarm(cfg: OpenClawConfig): string[] {
+  const dirs = new Set<string>();
+  for (const agentId of listAgentIds(cfg)) {
+    dirs.add(resolveAgentWorkspaceDir(cfg, agentId));
+  }
+  return Array.from(dirs);
 }
 
 export function scheduleGatewayHandlerPrewarm(params: {
@@ -140,7 +138,8 @@ export function scheduleGatewayHandlerPrewarm(params: {
   waitForPostReadyWork?: () => Promise<void>;
 }): GatewayHandlerPrewarmHandle {
   // Frequent updater restarts make cold dashboard data the remaining slow tier.
-  // Keep cheap session reads first, process-stable plugin data second, and provider catalogs last.
+  // Keep bounded session reads first and process-stable plugin data second.
+  // Provider catalogs stay request-driven because their adapters may do unbounded external work.
   const items = params.items ?? dashboardDataPrewarmItems(params.cfgAtStart, params.log);
   let stopped = false;
   let nextIndex = 0;

@@ -14,9 +14,13 @@ const PLUGIN_LIFECYCLE_LEASE_KEY = "global";
 const DEFAULT_PLUGIN_LIFECYCLE_LEASE_MS = 5 * 60_000;
 const DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS = 10 * 60_000;
 
+type PluginLifecycleLeaseContext = OpenClawStateLeaseContext & {
+  databasePath: string;
+};
+
 type ActivePluginLifecycleLease = {
   databasePath: string;
-  lease: OpenClawStateLeaseContext;
+  lease: PluginLifecycleLeaseContext;
 };
 
 type PluginLifecycleLeaseOptions = Pick<
@@ -46,13 +50,24 @@ function resolveLifecycleLeaseEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.Pr
 /** Serialize plugin artifact, install-index, and config mutations across processes. */
 export async function withPluginLifecycleLease<T>(
   options: PluginLifecycleLeaseOptions,
-  run: (lease: OpenClawStateLeaseContext) => Promise<T>,
+  run: (lease: PluginLifecycleLeaseContext) => Promise<T>,
 ): Promise<T> {
+  const active = activePluginLifecycleLease.getStore();
+  if (
+    active &&
+    options.env === undefined &&
+    options.path === undefined &&
+    options.database === undefined
+  ) {
+    options.signal?.throwIfAborted();
+    active.lease.assertOwned();
+    return await run(active.lease);
+  }
+
   const env = resolveLifecycleLeaseEnv(options.env);
   const databasePath = path.resolve(
     options.database?.path ?? options.path ?? resolveOpenClawStateSqlitePath(env),
   );
-  const active = activePluginLifecycleLease.getStore();
   if (active) {
     if (active.databasePath !== databasePath) {
       throw new OpenClawStateLeaseError(
@@ -84,11 +99,17 @@ export async function withPluginLifecycleLease<T>(
       operationLabel: "plugins.lifecycle.lease",
     },
     async (lease) => {
+      const pluginLease: PluginLifecycleLeaseContext = {
+        databasePath,
+        signal: lease.signal,
+        assertOwned: () => lease.assertOwned(),
+        assertOwnedInTransaction: (database) => lease.assertOwnedInTransaction(database),
+      };
       // Another process may have committed while this process waited for ownership.
       clearLoadInstalledPluginIndexInstallRecordsCache();
       return await activePluginLifecycleLease.run(
-        { databasePath, lease },
-        async () => await run(lease),
+        { databasePath, lease: pluginLease },
+        async () => await run(pluginLease),
       );
     },
   );

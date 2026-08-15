@@ -217,6 +217,30 @@ function runRestartArgParser(...args: string[]) {
   return spawnSync("bash", [harnessPath, ...args], { encoding: "utf8" });
 }
 
+function runProfileGuard(profile: string) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-restart-mac-profile-test-"));
+  tempRoots.push(root);
+  const script = readFileSync(restartScriptPath, "utf8");
+  const start = script.indexOf('if [[ -n "${OPENCLAW_PROFILE:-}" ]]');
+  const guardBlock = script.slice(start, script.indexOf("canonicalize_app_bundle", start));
+  const harnessPath = join(root, "profile-guard.sh");
+  writeFileSync(
+    harnessPath,
+    [
+      "#!/bin/bash",
+      "set -euo pipefail",
+      'fail() { printf "ERROR: %s\\n" "$*" >&2; exit 1; }',
+      guardBlock,
+      'printf "safe\\n"',
+    ].join("\n"),
+  );
+  chmodSync(harnessPath, 0o755);
+  return spawnSync("/bin/bash", [harnessPath], {
+    encoding: "utf8",
+    env: { ...process.env, OPENCLAW_PROFILE: profile },
+  });
+}
+
 function runLaunchArgBuilder(...args: string[]) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-restart-mac-test-"));
   tempRoots.push(root);
@@ -402,6 +426,19 @@ describe("scripts/restart-mac.sh", () => {
       'LOG_PATH="${OPENCLAW_RESTART_LOG:-${TMPDIR:-/tmp}/openclaw-restart-${LOCK_KEY}.log}"',
     );
     expect(script).not.toContain('LOG_PATH="${OPENCLAW_RESTART_LOG:-/tmp/openclaw-restart.log}"');
+  });
+
+  it("rejects named app profiles before global process or launchd cleanup", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+
+    expect(script).toContain('if [[ -n "${OPENCLAW_PROFILE:-}"');
+    expect(script).toContain("restart-mac.sh cannot safely target one app profile");
+    expect(script.indexOf("cannot safely target one app profile")).toBeLessThan(
+      script.indexOf("\nacquire_lock\n"),
+    );
+    expect(runProfileGuard("work").status).toBe(1);
+    expect(runProfileGuard("default").stdout.trim()).toBe("safe");
+    expect(runProfileGuard("Default").stdout.trim()).toBe("safe");
   });
 
   it("does not remove a live restart lock it did not acquire", () => {

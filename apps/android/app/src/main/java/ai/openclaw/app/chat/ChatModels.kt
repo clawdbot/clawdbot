@@ -28,6 +28,20 @@ data class ChatMessage(
   val idempotencyKey: String? = null,
   /** Canonical transcript-tree identity supplied by chat.history. */
   val entryId: String? = null,
+  val provenance: ChatMessageProvenance? = null,
+  val transcriptMarker: ChatTranscriptMarker? = null,
+)
+
+data class ChatMessageProvenance(
+  val kind: String,
+  val sourceTool: String? = null,
+)
+
+data class ChatTranscriptMarker(
+  val kind: String,
+  val id: String? = null,
+  val tokensBefore: Double? = null,
+  val tokensAfter: Double? = null,
 )
 
 /** One selectable transcript branch returned by sessions.branches.list. */
@@ -102,7 +116,29 @@ data class ChatPendingToolCall(
   val args: kotlinx.serialization.json.JsonObject? = null,
   val startedAtMs: Long,
   val isError: Boolean? = null,
+  val liveDiff: ChatDiffStat? = null,
 )
+
+data class ChatDiffStat(
+  val added: Int,
+  val removed: Int,
+  val files: Int? = null,
+)
+
+data class ChatSubagentActivity(
+  val id: String,
+  val status: String,
+  val snippet: String?,
+  val diffStat: ChatDiffStat?,
+  val terminalSummary: String?,
+  val error: String?,
+  val startedAtMs: Long,
+  val endedAtMs: Long?,
+  val childSessionKey: String?,
+) {
+  val isWorking: Boolean
+    get() = status == "queued" || status == "running"
+}
 
 enum class ChatPlanStepStatus {
   Pending,
@@ -196,7 +232,15 @@ internal data class ChatActiveRunPresentation(
 data class ChatSessionEntry(
   val key: String,
   val updatedAtMs: Long?,
+  val sessionId: String? = null,
   val ownerAgentId: String? = null,
+  val classification: String? = null,
+  val accountId: String? = null,
+  val peerKind: String? = null,
+  val isMain: Boolean? = null,
+  val isBackground: Boolean? = null,
+  val hasClassificationMetadata: Boolean =
+    classification != null || accountId != null || peerKind != null || isMain != null || isBackground != null,
   val displayName: String? = null,
   val derivedTitle: String? = null,
   val label: String? = null,

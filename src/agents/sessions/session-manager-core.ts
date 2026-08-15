@@ -1,8 +1,8 @@
 import {
   loadTranscriptEventsSync,
   replaceTranscriptEventsSync,
+  type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
@@ -12,7 +12,7 @@ import {
   parseParentLinkedOpaqueEntry,
   partitionSessionFileEntries,
 } from "./session-manager-codec.js";
-import { createSessionId, generateSessionEntryId } from "./session-manager-id.js";
+import { createManagedSessionId, generateSessionEntryId } from "./session-manager-id.js";
 import type {
   FileEntry,
   NewSessionOptions,
@@ -40,7 +40,6 @@ export class SessionManagerCore {
   protected appendParentId: string | null = null;
   protected appendMode: "side" | undefined;
   protected pendingDeliberateAppend = false;
-  protected promptReleasedSideBranchParentId: string | null | undefined;
   protected persistenceTarget: SessionManagerPersistenceTarget | undefined;
   protected persistenceHeaderPending = false;
 
@@ -92,7 +91,7 @@ export class SessionManagerCore {
     this.persistenceTarget = target ? { ...target } : undefined;
     this.fileEntries = partitioned.fileEntries;
     this.opaqueFileEntries = partitioned.opaqueEntries;
-    this.sessionId = header?.id ?? target?.sessionId ?? createSessionId();
+    this.sessionId = header?.id ?? target?.sessionId ?? createManagedSessionId();
     this.migrated = migrateToCurrentVersion(
       this.fileEntries,
       partitioned.fileEntriesByOriginalIndex,
@@ -116,7 +115,7 @@ export class SessionManagerCore {
   }
 
   private initializeSession(options?: NewSessionOptions): string | undefined {
-    this.sessionId = options?.id ?? this.persistenceTarget?.sessionId ?? createSessionId();
+    this.sessionId = options?.id ?? this.persistenceTarget?.sessionId ?? createManagedSessionId();
     this.migrated = false;
     const timestamp = new Date().toISOString();
     const header: SessionHeader = {
@@ -139,7 +138,6 @@ export class SessionManagerCore {
     this.appendParentId = null;
     this.appendMode = undefined;
     this.pendingDeliberateAppend = false;
-    this.promptReleasedSideBranchParentId = undefined;
     return this.persistenceTarget ? this.sessionId : undefined;
   }
 
@@ -195,7 +193,6 @@ export class SessionManagerCore {
     this.appendParentId = null;
     this.appendMode = undefined;
     this.pendingDeliberateAppend = false;
-    this.promptReleasedSideBranchParentId = undefined;
     let opaqueIndex = 0;
     let latestResetId: string | undefined;
     const resetDescendantIds = new Set<string>();
@@ -231,10 +228,6 @@ export class SessionManagerCore {
           this.leafId = effectiveLeafState.leafId;
           this.appendParentId = effectiveLeafState.appendParentId;
           this.appendMode = effectiveLeafState.appendMode;
-          this.promptReleasedSideBranchParentId =
-            effectiveLeafState.appendMode === "side"
-              ? effectiveLeafState.appendParentId
-              : undefined;
           opaqueIndex += 1;
           continue;
         }
@@ -249,9 +242,6 @@ export class SessionManagerCore {
             resetDescendantIds.add(link.id);
           }
           this.appendParentId = link.id;
-          if (this.promptReleasedSideBranchParentId !== undefined) {
-            this.promptReleasedSideBranchParentId = link.id;
-          }
         }
         opaqueIndex += 1;
       }
@@ -296,11 +286,9 @@ export class SessionManagerCore {
       this.appendParentId = entry.id;
       if (isSessionTranscriptSideAppendEntry(entry)) {
         this.appendMode = "side";
-        this.promptReleasedSideBranchParentId = entry.id;
       } else {
         this.leafId = entry.id;
         this.appendMode = undefined;
-        this.promptReleasedSideBranchParentId = undefined;
       }
       if (entry.type === "label") {
         if (entry.label) {
@@ -521,7 +509,6 @@ export class SessionManagerCore {
     this.appendParentId = null;
     this.appendMode = undefined;
     this.pendingDeliberateAppend = false;
-    this.promptReleasedSideBranchParentId = undefined;
   }
 
   protected replacePersistedTranscript(options?: {

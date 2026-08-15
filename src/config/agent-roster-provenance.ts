@@ -72,6 +72,16 @@ export function includeContributionOwnsAgentRoster(event: {
   return false;
 }
 
+export function includeContributionOwnsBindings(event: {
+  path: readonly string[];
+  value: unknown;
+}): boolean {
+  if (event.path.length === 0) {
+    return isRecord(event.value) && Object.hasOwn(event.value, "bindings");
+  }
+  return event.path[0] === "bindings";
+}
+
 /** Whether include/env resolution produced a non-empty roster before raw migrations. */
 export function hasResolvedRosterBeforeMigrations(snapshot: ConfigFileSnapshot): boolean {
   return listAgentEntries(snapshot.sourceConfigBeforeMigrations ?? {}).length > 0;

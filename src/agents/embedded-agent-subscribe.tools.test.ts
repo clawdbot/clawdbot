@@ -9,10 +9,10 @@ import {
   extractToolResultText,
   extractToolErrorCode,
   extractToolErrorMessage,
-  isToolResultError,
   sanitizeToolArgs,
   sanitizeToolResult,
-} from "./embedded-agent-subscribe.tools.js";
+} from "./embedded-agent-tool-results.js";
+import { isToolResultError } from "./tool-result-error.js";
 
 afterEach(() => {
   // Logging config spies are global module state; restore after every sanitizer

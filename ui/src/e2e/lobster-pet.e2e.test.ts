@@ -1,18 +1,14 @@
 // Control UI E2E tests cover real-browser lobster pet timing and pointer cancellation.
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import type { BrowserContext, Page } from "playwright";
+import { afterEach, beforeEach, expect, it } from "vitest";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI lobster pet",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium cannot start at ${executablePath}`,
+});
 
 type BrowserLobsterPet = HTMLElement & {
   mode: "idle" | "busy" | "offline";
@@ -21,11 +17,8 @@ type BrowserLobsterPet = HTMLElement & {
   updateComplete: Promise<unknown>;
 };
 
-let browser: Browser;
 let context: BrowserContext;
 let page: Page;
-let server: ControlUiE2eServer;
-
 async function mountPet(params: {
   mode: BrowserLobsterPet["mode"];
   outcome: BrowserLobsterPet["runOutcome"];
@@ -47,21 +40,13 @@ async function settlePet() {
   );
 }
 
-describeControlUiE2e("Control UI lobster pet", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium cannot start at ${chromiumExecutablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
+suite.define(() => {
   beforeEach(async () => {
-    context = await browser.newContext({ hasTouch: true });
+    context = await suite.browser.newContext({ hasTouch: true });
     page = await context.newPage();
     await page.clock.install({ time: new Date("2026-07-09T12:00:00") });
     await installMockGateway(page);
-    await page.goto(server.baseUrl);
+    await page.goto(suite.server.baseUrl);
     await page.waitForFunction(() => Boolean(customElements.get("openclaw-lobster-pet")));
     const loadedAt = await page.evaluate(() => Date.now());
     await page.clock.pauseAt(loadedAt + 1_000);
@@ -69,11 +54,6 @@ describeControlUiE2e("Control UI lobster pet", () => {
 
   afterEach(async () => {
     await context.close();
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
   });
 
   it("keeps a vigil-only failure present through droop and sweep before leaving", async () => {

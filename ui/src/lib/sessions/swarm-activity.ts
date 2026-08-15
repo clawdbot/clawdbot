@@ -1,4 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as normalizedString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 
 // Lifecycle notes are transient UI state, so bound them for long-lived board tabs.
@@ -12,10 +13,6 @@ type SwarmDisplayCarrier = {
   swarmLog?: string;
   swarmPhase?: string;
 };
-
-function normalizedString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function setBounded<K, V>(map: Map<K, V>, key: K, value: V, limit: number): void {
   map.delete(key);

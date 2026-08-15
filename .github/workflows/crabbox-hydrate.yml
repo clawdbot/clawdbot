@@ -34,7 +34,6 @@ env:
   PNPM_CONFIG_CHILD_CONCURRENCY: "1"
   PNPM_CONFIG_MODULES_DIR: "/var/tmp/openclaw-pnpm/node_modules"
   PNPM_CONFIG_NETWORK_CONCURRENCY: "1"
-  PNPM_CONFIG_STORE_DIR: "/var/cache/crabbox/pnpm/store"
   PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false"
   PNPM_CONFIG_VIRTUAL_STORE_DIR: "/var/tmp/openclaw-pnpm/virtual-store"
 
@@ -65,11 +64,30 @@ jobs:
           export COREPACK_HOME="${COREPACK_HOME:-$XDG_CACHE_HOME/corepack}"
           export PNPM_HOME="${PNPM_HOME:-$RUNNER_TEMP/pnpm-home}"
           mkdir -p "$XDG_CACHE_HOME" "$COREPACK_HOME" "$PNPM_HOME"
+          preferred_pnpm_store="/var/cache/crabbox/pnpm/store"
+          pnpm_install_root="/var/tmp/openclaw-pnpm"
+          if mkdir -p "$preferred_pnpm_store" 2>/dev/null &&
+            [ ! -L "$preferred_pnpm_store" ] &&
+            [ -d "$preferred_pnpm_store" ] &&
+            [ -w "$preferred_pnpm_store" ]; then
+            export PNPM_CONFIG_STORE_DIR="$preferred_pnpm_store"
+          else
+            pnpm_cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/openclaw/pnpm"
+            pnpm_install_root="$pnpm_cache_root/install"
+            export PNPM_CONFIG_STORE_DIR="$pnpm_cache_root/store"
+            export PNPM_CONFIG_MODULES_DIR="$pnpm_install_root/node_modules"
+            export PNPM_CONFIG_PACKAGE_IMPORT_METHOD="hardlink"
+            export PNPM_CONFIG_VIRTUAL_STORE_DIR="$pnpm_install_root/virtual-store"
+          fi
           export PATH="$PNPM_HOME:$PATH"
           {
             echo "XDG_CACHE_HOME=$XDG_CACHE_HOME"
             echo "COREPACK_HOME=$COREPACK_HOME"
             echo "PNPM_HOME=$PNPM_HOME"
+            echo "PNPM_CONFIG_STORE_DIR=$PNPM_CONFIG_STORE_DIR"
+            echo "PNPM_CONFIG_MODULES_DIR=$PNPM_CONFIG_MODULES_DIR"
+            echo "PNPM_CONFIG_PACKAGE_IMPORT_METHOD=${PNPM_CONFIG_PACKAGE_IMPORT_METHOD:-}"
+            echo "PNPM_CONFIG_VIRTUAL_STORE_DIR=$PNPM_CONFIG_VIRTUAL_STORE_DIR"
           } >> "$GITHUB_ENV"
 
           package_manager="$(node -e "const fs = require('node:fs'); const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8')); process.stdout.write(pkg.packageManager || '')")"
@@ -119,6 +137,7 @@ jobs:
           append_pnpm_option_arg PNPM_CONFIG_CHILD_CONCURRENCY child-concurrency
           append_pnpm_option_arg PNPM_CONFIG_MODULES_DIR modules-dir
           append_pnpm_option_arg PNPM_CONFIG_NETWORK_CONCURRENCY network-concurrency
+          append_pnpm_option_arg PNPM_CONFIG_PACKAGE_IMPORT_METHOD package-import-method
           append_pnpm_option_arg PNPM_CONFIG_VIRTUAL_STORE_DIR virtual-store-dir
           require_safe_writable_dir() {
             local dir="$1"
@@ -128,14 +147,18 @@ jobs:
             fi
           }
           prepare_crabbox_pnpm_dirs() {
-            local volatile_root="/var/tmp/openclaw-pnpm"
-            case "${PNPM_CONFIG_MODULES_DIR:?}" in "$volatile_root"/*) ;; *) echo "::error::PNPM_CONFIG_MODULES_DIR must stay under $volatile_root"; exit 1 ;; esac
-            case "${PNPM_CONFIG_VIRTUAL_STORE_DIR:?}" in "$volatile_root"/*) ;; *) echo "::error::PNPM_CONFIG_VIRTUAL_STORE_DIR must stay under $volatile_root"; exit 1 ;; esac
-            rm -rf -- "$volatile_root"
-            mkdir -p "$volatile_root" "$PNPM_CONFIG_STORE_DIR"
-            require_safe_writable_dir "$volatile_root"
+            case "${PNPM_CONFIG_MODULES_DIR:?}" in "$pnpm_install_root"/*) ;; *) echo "::error::PNPM_CONFIG_MODULES_DIR must stay under $pnpm_install_root"; exit 1 ;; esac
+            case "${PNPM_CONFIG_VIRTUAL_STORE_DIR:?}" in "$pnpm_install_root"/*) ;; *) echo "::error::PNPM_CONFIG_VIRTUAL_STORE_DIR must stay under $pnpm_install_root"; exit 1 ;; esac
+            rm -rf -- "$pnpm_install_root"
+            mkdir -p "$pnpm_install_root" "$PNPM_CONFIG_STORE_DIR"
+            require_safe_writable_dir "$pnpm_install_root"
             require_safe_writable_dir "$PNPM_CONFIG_STORE_DIR"
             mkdir -p "$PNPM_CONFIG_MODULES_DIR" "$PNPM_CONFIG_VIRTUAL_STORE_DIR"
+            if [ "$PNPM_CONFIG_STORE_DIR" != "$preferred_pnpm_store" ] &&
+              [ "$(stat -c %d "$PNPM_CONFIG_STORE_DIR")" != "$(stat -c %d "$PNPM_CONFIG_MODULES_DIR")" ]; then
+              echo "::error::Fallback pnpm store and modules directories must share a filesystem"
+              exit 1
+            fi
           }
           prepare_crabbox_pnpm_dirs
           if [ -L node_modules ] && [ "$(readlink node_modules)" = "${PNPM_CONFIG_MODULES_DIR:-}" ]; then
@@ -242,24 +265,37 @@ jobs:
       - &crabbox_ensure_docker_step
         name: Ensure Docker is running
         shell: bash
+        env:
+          CRABBOX_JOB: ${{ inputs.crabbox_job }}
         run: |
           set -euo pipefail
 
-          if ! command -v docker >/dev/null 2>&1; then
-            echo "docker not found; installing fallback engine"
-            curl --fail --show-error --location \
-              --connect-timeout "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}" \
-              --max-time "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_TIMEOUT_SECONDS:-300}" \
-              --retry "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRIES:-3}" \
-              --retry-delay "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRY_DELAY_SECONDS:-5}" \
-              --retry-all-errors \
-              https://get.docker.com | sudo sh
+          docker_required=false
+          # crabbox_job is also the readiness marker. Only the routed Docker
+          # workload contract requires an engine; other marker names do not.
+          if [ "${CRABBOX_JOB:-hydrate}" = "hydrate-docker" ]; then
+            docker_required=true
           fi
 
-          if command -v systemctl >/dev/null 2>&1; then
-            sudo systemctl start docker || true
-          elif command -v service >/dev/null 2>&1; then
-            sudo service docker start || true
+          if ! command -v docker >/dev/null 2>&1; then
+            if [ "$docker_required" = true ]; then
+              echo "docker not found; installing fallback engine"
+              curl --fail --show-error --location \
+                --connect-timeout "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}" \
+                --max-time "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_TIMEOUT_SECONDS:-300}" \
+                --retry "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRIES:-3}" \
+                --retry-delay "${OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRY_DELAY_SECONDS:-5}" \
+                --retry-all-errors \
+                https://get.docker.com | sudo sh
+            fi
+          fi
+
+          if command -v docker >/dev/null 2>&1; then
+            if command -v systemctl >/dev/null 2>&1; then
+              sudo systemctl start docker || true
+            elif command -v service >/dev/null 2>&1; then
+              sudo service docker start || true
+            fi
           fi
 
           if [ -S /var/run/docker.sock ]; then
@@ -269,6 +305,17 @@ jobs:
             sudo chmod 666 /var/run/docker.sock
           fi
 
+          if ! docker version >/dev/null 2>&1; then
+            if [ "$docker_required" = true ]; then
+              echo "::error::Docker is unavailable for ${CRABBOX_JOB:-hydrate}; route this workload to a Docker-capable provider"
+              exit 1
+            fi
+            echo "::notice::Docker is unavailable; standard hydration will continue without Docker"
+            echo "OPENCLAW_CRABBOX_DOCKER_AVAILABLE=0" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          echo "OPENCLAW_CRABBOX_DOCKER_AVAILABLE=1" >> "$GITHUB_ENV"
           if ! docker buildx version >/dev/null 2>&1; then
             arch="$(uname -m)"
             case "$arch" in
@@ -341,7 +388,7 @@ jobs:
             fi
           }
           {
-            for key in CI GITHUB_ACTIONS GITHUB_WORKSPACE GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_NUMBER GITHUB_RUN_ATTEMPT GITHUB_REF GITHUB_REF_NAME GITHUB_SHA GITHUB_EVENT_NAME GITHUB_ACTOR RUNNER_OS RUNNER_ARCH RUNNER_TEMP RUNNER_TOOL_CACHE XDG_CACHE_HOME COREPACK_HOME NODE_BIN PNPM_HOME PNPM_CONFIG_CHILD_CONCURRENCY PNPM_CONFIG_MODULES_DIR PNPM_CONFIG_NETWORK_CONCURRENCY PNPM_CONFIG_STORE_DIR PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN PNPM_CONFIG_VIRTUAL_STORE_DIR PATH; do
+            for key in CI GITHUB_ACTIONS GITHUB_WORKSPACE GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_NUMBER GITHUB_RUN_ATTEMPT GITHUB_REF GITHUB_REF_NAME GITHUB_SHA GITHUB_EVENT_NAME GITHUB_ACTOR RUNNER_OS RUNNER_ARCH RUNNER_TEMP RUNNER_TOOL_CACHE XDG_CACHE_HOME COREPACK_HOME NODE_BIN OPENCLAW_CRABBOX_DOCKER_AVAILABLE PNPM_HOME PNPM_CONFIG_CHILD_CONCURRENCY PNPM_CONFIG_MODULES_DIR PNPM_CONFIG_NETWORK_CONCURRENCY PNPM_CONFIG_PACKAGE_IMPORT_METHOD PNPM_CONFIG_STORE_DIR PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN PNPM_CONFIG_VIRTUAL_STORE_DIR PATH; do
               write_export "$key"
             done
           } > "${env_file}.tmp"
@@ -760,7 +807,7 @@ jobs:
             fi
           }
           {
-            for key in CI GITHUB_ACTIONS GITHUB_WORKSPACE GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_NUMBER GITHUB_RUN_ATTEMPT GITHUB_REF GITHUB_REF_NAME GITHUB_SHA GITHUB_EVENT_NAME GITHUB_ACTOR RUNNER_OS RUNNER_ARCH RUNNER_TEMP RUNNER_TOOL_CACHE NODE_BIN PNPM_HOME PNPM_CONFIG_CHILD_CONCURRENCY PNPM_CONFIG_MODULES_DIR PNPM_CONFIG_NETWORK_CONCURRENCY PNPM_CONFIG_STORE_DIR PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN PNPM_CONFIG_VIRTUAL_STORE_DIR PATH; do
+            for key in CI GITHUB_ACTIONS GITHUB_WORKSPACE GITHUB_REPOSITORY GITHUB_RUN_ID GITHUB_RUN_NUMBER GITHUB_RUN_ATTEMPT GITHUB_REF GITHUB_REF_NAME GITHUB_SHA GITHUB_EVENT_NAME GITHUB_ACTOR RUNNER_OS RUNNER_ARCH RUNNER_TEMP RUNNER_TOOL_CACHE NODE_BIN OPENCLAW_CRABBOX_DOCKER_AVAILABLE PNPM_HOME PNPM_CONFIG_CHILD_CONCURRENCY PNPM_CONFIG_MODULES_DIR PNPM_CONFIG_NETWORK_CONCURRENCY PNPM_CONFIG_PACKAGE_IMPORT_METHOD PNPM_CONFIG_STORE_DIR PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN PNPM_CONFIG_VIRTUAL_STORE_DIR PATH; do
               write_export "$key"
             done
           } > "${env_file}.tmp"

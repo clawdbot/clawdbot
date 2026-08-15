@@ -172,7 +172,7 @@ export function buildCliExecLogLine(params: {
 }
 
 /** Summarizes auth-related env keys preserved or cleared for a CLI child process. */
-export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
+function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
   const hostKeys = listPresentCliEnvKeys(process.env, CLI_ENV_AUTH_LOG_KEYS);
   const childKeys = listPresentCliEnvKeys(childEnv, CLI_ENV_AUTH_LOG_KEYS);
   const childKeySet = new Set(childKeys);

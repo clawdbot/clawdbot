@@ -16,10 +16,12 @@ import { buildRuntimeCompatibleMcpToolInventory } from "../../agents/tools-effec
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { toErrorObject } from "../../infra/errors.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { logDebug, logWarn } from "../../logger.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { sessionDeliveryOrigin } from "../../utils/delivery-context.shared.js";
 import { getConnectedNodePluginToolsVersion } from "../node-plugin-tool-snapshot.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   applyFinalEffectiveToolPolicy,
   buildBundleMcpToolsFromCatalog,
@@ -28,7 +30,7 @@ import {
   getActivePluginRegistryVersion,
   getRegisteredAgentHarness,
   listAgentIds,
-  loadSessionEntryReadOnly,
+  loadGatewaySessionEntryReadOnly,
   peekSessionMcpRuntime,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -130,16 +132,6 @@ function buildToolsEffectiveCacheKey(params: {
   });
 }
 
-function trimToolsEffectiveCache(): void {
-  while (toolsEffectiveCache.size > TOOLS_EFFECTIVE_CACHE_LIMIT) {
-    const oldest = toolsEffectiveCache.keys().next().value;
-    if (typeof oldest !== "string") {
-      return;
-    }
-    toolsEffectiveCache.delete(oldest);
-  }
-}
-
 function buildMcpConfigSummaryCacheKey(params: {
   context: TrustedToolsEffectiveContext;
   workspaceDir: string;
@@ -151,16 +143,6 @@ function buildMcpConfigSummaryCacheKey(params: {
     workspaceDir: params.workspaceDir,
     toolOverrides: params.context.toolOverrides,
   });
-}
-
-function trimMcpConfigSummaryCache(): void {
-  while (mcpConfigSummaryCache.size > MCP_CONFIG_SUMMARY_CACHE_LIMIT) {
-    const oldest = mcpConfigSummaryCache.keys().next().value;
-    if (typeof oldest !== "string") {
-      return;
-    }
-    mcpConfigSummaryCache.delete(oldest);
-  }
 }
 
 function resolveCachedSessionMcpConfigSummary(params: {
@@ -178,14 +160,14 @@ function resolveCachedSessionMcpConfigSummary(params: {
     ...(params.context.toolOverrides ? { toolOverrides: params.context.toolOverrides } : {}),
   });
   mcpConfigSummaryCache.set(key, summary);
-  trimMcpConfigSummaryCache();
+  pruneMapToMaxSize(mcpConfigSummaryCache, MCP_CONFIG_SUMMARY_CACHE_LIMIT);
   return summary;
 }
 
 function cacheToolsEffectiveResult(key: string, value: BaseToolsEffectiveResolution): void {
   toolsEffectiveCache.delete(key);
   toolsEffectiveCache.set(key, { value, createdAtMs: nowForToolsEffectiveCache() });
-  trimToolsEffectiveCache();
+  pruneMapToMaxSize(toolsEffectiveCache, TOOLS_EFFECTIVE_CACHE_LIMIT);
 }
 
 // Base inventory resolution is pure CPU work, but it can still fan through
@@ -550,7 +532,7 @@ function resolveTrustedToolsEffectiveContext(params: {
 }) {
   // The effective tools request is read-only but security-sensitive. Derive
   // routing/account/model context from the persisted session, not client params.
-  const loaded = loadSessionEntryReadOnly(
+  const loaded = loadGatewaySessionEntryReadOnly(
     params.sessionKey,
     params.requestedAgentId ? { agentId: params.requestedAgentId } : undefined,
   );
@@ -563,18 +545,11 @@ function resolveTrustedToolsEffectiveContext(params: {
     return null;
   }
 
-  // Only a canonical `global` key may adopt the client-requested agent: global
-  // stores are shared, so the requested agent selects which agent's global store
-  // to read. Non-global keys encode their owning agent, so the requested agent
-  // must stay subject to the mismatch guard below instead of overriding session
-  // ownership — otherwise `{ sessionKey: "agent:main:x", agentId: "work" }` would
-  // resolve under `work` and silently bypass the guard.
   const canonicalKey = loaded.canonicalKey ?? params.sessionKey;
-  const allowRequestedAgentOverride = canonicalKey === "global" && Boolean(params.requestedAgentId);
   const sessionAgentId = resolveSessionAgentId({
     sessionKey: canonicalKey,
     config: loaded.cfg,
-    ...(allowRequestedAgentOverride ? { agentId: params.requestedAgentId } : {}),
+    ...(params.requestedAgentId ? { agentId: params.requestedAgentId } : {}),
   });
   if (params.requestedAgentId && params.requestedAgentId !== sessionAgentId) {
     params.respond(
@@ -658,9 +633,18 @@ async function handleToolsEffectiveRequest(params: {
   if (requestedAgentId === null) {
     return;
   }
+  const sessionOwner = resolveRequestedSessionAgentId(
+    cfg,
+    params.rawParams.sessionKey,
+    requestedAgentId,
+  );
+  if (!sessionOwner.ok) {
+    params.respond(false, undefined, sessionOwner.error);
+    return;
+  }
   const trustedContext = resolveTrustedToolsEffectiveContext({
     sessionKey: params.rawParams.sessionKey,
-    requestedAgentId,
+    requestedAgentId: sessionOwner.agentId,
     respond: params.respond,
   });
   if (!trustedContext) {
@@ -700,4 +684,3 @@ export const testing = {
     nowForToolsEffectiveCache = () => Date.now();
   },
 } as const;
-export { testing as __testing };

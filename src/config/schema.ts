@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { CHANNEL_IDS } from "../channels/ids.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { computeBaseConfigSchemaResponse } from "./schema-base.js";
@@ -379,14 +380,14 @@ function applyHeartbeatTargetHints(
   const next: ConfigUiHints = { ...hints };
   const channelList = listHeartbeatTargetChannels(channels);
   const channelHelp = channelList.length ? ` Known channels: ${channelList.join(", ")}.` : "";
-  const help = `Delivery target ("last", "none", or a channel id).${channelHelp}`;
+  const help = `Delivery target ("owner", "last", "none", or a channel id).${channelHelp}`;
   const paths = ["agents.defaults.heartbeat.target", "agents.entries.*.heartbeat.target"];
   for (const path of paths) {
     const current = next[path] ?? {};
     next[path] = {
       ...current,
       help: current.help ?? help,
-      placeholder: current.placeholder ?? "last",
+      placeholder: current.placeholder ?? "owner",
     };
   }
   return next;
@@ -506,12 +507,7 @@ function buildMergedSchemaCacheKey(params: {
 }
 
 function setMergedSchemaCache(key: string, value: ConfigSchemaResponse): void {
-  if (mergedSchemaCache.size >= MERGED_SCHEMA_CACHE_MAX) {
-    const oldest = mergedSchemaCache.keys().next();
-    if (!oldest.done) {
-      mergedSchemaCache.delete(oldest.value);
-    }
-  }
+  pruneMapToMaxSize(mergedSchemaCache, MERGED_SCHEMA_CACHE_MAX - 1);
   mergedSchemaCache.set(key, value);
 }
 
@@ -571,7 +567,7 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
   return next;
 }
 
-export function buildConfigSchema(params?: {
+export function buildConfigSchemaCore(params?: {
   plugins?: PluginUiMetadata[];
   channels?: ChannelUiMetadata[];
   cache?: boolean;

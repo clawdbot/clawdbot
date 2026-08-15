@@ -354,6 +354,10 @@ describe("openai image generation provider", () => {
     expect(provider.capabilities.geometry?.sizes).toContain("2048x2048");
     expect(provider.capabilities.geometry?.sizes).toContain("3840x2160");
     expect(provider.capabilities.geometry?.sizes).toContain("2160x3840");
+    expect(provider.capabilities.geometry?.sizesByModel).toEqual({
+      "gpt-image-2": [],
+      "gpt-image-2-2026-04-21": [],
+    });
     expect(provider.capabilities.output).toEqual({
       formats: ["png", "jpeg", "webp"],
       qualities: ["low", "medium", "high", "auto"],
@@ -676,6 +680,56 @@ describe("openai image generation provider", () => {
     });
     expect(result.images).toHaveLength(1);
   });
+
+  it.each([
+    { model: "gpt-image-2", size: "1536x864" },
+    { model: "gpt-image-2", size: "1024x640" },
+    { model: "gpt-image-2", size: "2304x2304" },
+    { model: "gpt-image-2", size: "2560x2560" },
+    { model: "gpt-image-2", size: "2880x2880" },
+    { model: "gpt-image-2", size: "3072x2176" },
+    { model: "gpt-image-2-2026-04-21", size: "864x1536" },
+  ])("preserves flexible $model generation dimensions $size", async ({ model, size }) => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model,
+      prompt: "Preserve the requested image dimensions",
+      cfg: {},
+      size,
+    });
+
+    expect(jsonRequestCall().body).toEqual({
+      model,
+      prompt: "Preserve the requested image dimensions",
+      n: 1,
+      size,
+    });
+    expect(result.metadata).toBeUndefined();
+  });
+
+  it.each(["16x16", "1024x624", "1025x1024", "3088x1024", "4096x2048", "2896x2896"])(
+    "normalizes unsupported flexible-model dimensions %s",
+    async (size) => {
+      mockGeneratedPngResponse();
+
+      const provider = buildOpenAIImageGenerationProvider();
+      const result = await provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Normalize unsupported image dimensions",
+        cfg: {},
+        size,
+      });
+
+      const normalizedSize = (jsonRequestCall().body as { size: string }).size;
+      expect(normalizedSize).not.toBe(size);
+      expect(provider.capabilities.geometry?.sizes).toContain(normalizedSize);
+      expect(result.metadata).toEqual({ requestedSize: size, normalizedSize });
+    },
+  );
 
   it("normalizes legacy gpt-image-1 sizes before native OpenAI generation", async () => {
     mockGeneratedPngResponse();
@@ -1012,6 +1066,30 @@ describe("openai image generation provider", () => {
     expect(images[1]?.type).toBe("image/jpeg");
     expectNoJsonRequestUrl("https://api.openai.com/v1/images/edits");
     expect(result.images).toHaveLength(1);
+  });
+
+  it.each([
+    { model: "gpt-image-2", size: "1536x864" },
+    { model: "gpt-image-2", size: "2560x2560" },
+    { model: "gpt-image-2-2026-04-21", size: "864x1536" },
+  ])("preserves flexible $model multipart-edit dimensions $size", async ({ model, size }) => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model,
+      prompt: "Preserve the requested edited image dimensions",
+      cfg: {},
+      size,
+      inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+    });
+
+    const request = multipartRequestCall() as RequestCall & { body: FormData };
+    expect(request.url).toBe("https://api.openai.com/v1/images/edits");
+    expect(request.body.get("model")).toBe(model);
+    expect(request.body.get("size")).toBe(size);
+    expect(result.metadata).toBeUndefined();
   });
 
   it("forwards supported OpenAI options on multipart edits", async () => {

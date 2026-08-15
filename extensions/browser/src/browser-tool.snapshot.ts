@@ -40,7 +40,7 @@ export type BrowserProxyRequest = ((opts: {
 
 /** Wrap page-controlled JSON payloads as untrusted browser content. */
 export function wrapBrowserExternalJson(params: {
-  kind: "snapshot" | "console" | "tabs";
+  kind: "snapshot" | "console" | "tabs" | "act" | "download";
   payload: unknown;
   includeWarning?: boolean;
 }): { wrappedText: string; safeDetails: Record<string, unknown> } {
@@ -241,7 +241,8 @@ export async function executeSnapshotAction(params: {
         label: "browser:snapshot",
         path: snapshot.imagePath,
         extraText: wrappedSnapshot,
-        details: safeDetails,
+        // Keep model-only screenshots out of automatic channel delivery.
+        details: { ...safeDetails, media: { outbound: false } },
         imageSanitization: resolveRuntimeImageSanitization(),
       });
     }
@@ -326,7 +327,10 @@ export async function appendNavigatedPageState(params: {
     }
     return withPageStateUnavailableHint(
       params.result,
-      neutralizeMediaDirectives(formatErrorMessage(err)),
+      wrapExternalContent(neutralizeMediaDirectives(formatErrorMessage(err)), {
+        source: "browser",
+        includeWarning: false,
+      }),
     );
   }
   if (!hostFallbackWasActive && params.proxyRequest?.isHostFallbackActive?.()) {

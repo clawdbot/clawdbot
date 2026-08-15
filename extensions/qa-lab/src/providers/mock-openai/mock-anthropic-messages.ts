@@ -1,109 +1,70 @@
+// QA Lab Anthropic Messages wire adapter.
 import {
-  convertAnthropicMessagesToResponsesInput,
-  type ExtractedAssistantOutput,
-  extractFinalAssistantOutputFromEvents,
+  buildAnthropicFailureResponse,
   buildAnthropicMessageResponse,
+  buildAnthropicMessageStreamEvents,
   buildAnthropicThinkingErrorResponse,
   buildAnthropicThinkingErrorStreamEvents,
-  buildAnthropicMessageStreamEvents,
+  convertAnthropicMessagesToResponsesInput,
+  extractFinalAssistantOutputFromEvents,
+  normalizeAnthropicSystemToString,
 } from "./mock-anthropic-wire.js";
-// QA Lab Anthropic Messages request dispatcher.
-import {
-  type ResponsesInputItem,
-  type StreamEvent,
-  type AnthropicMessagesRequest,
-  QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT_RE,
-  type MockScenarioState,
-  type AnthropicStreamEvent,
+import type {
+  AnthropicMessagesRequest,
+  AnthropicStreamEvent,
+  QaMockProviderDispatchResult,
+  ResponsesInputItem,
 } from "./mock-openai-contracts.js";
-import { buildAssistantEvents } from "./mock-openai-events.js";
-import {
-  extractAllRequestTexts,
-  extractLastUserText,
-  extractToolOutput,
-  extractToolOutputCallId,
-} from "./mock-openai-input.js";
-import { buildToolCallEventsWithArgs } from "./mock-openai-tooling.js";
 
-export async function buildMessagesPayload(
-  body: AnthropicMessagesRequest,
-  scenarioState: MockScenarioState,
-  dispatchResponses: (
-    body: Record<string, unknown>,
-    scenarioState: MockScenarioState,
-  ) => Promise<StreamEvent[]>,
-): Promise<{
-  events: StreamEvent[];
+export function normalizeAnthropicMessagesRequest(body: AnthropicMessagesRequest): {
+  body: Record<string, unknown>;
   input: ResponsesInputItem[];
-  extracted: ExtractedAssistantOutput;
+  model: string;
+} {
+  const model =
+    typeof body.model === "string" && body.model.trim() !== "" ? body.model : "claude-opus-4-8";
+  const input = convertAnthropicMessagesToResponsesInput({
+    messages: Array.isArray(body.messages) ? body.messages : [],
+  });
+  const instructions = normalizeAnthropicSystemToString(body.system);
+  return {
+    body: {
+      input,
+      model,
+      stream: false,
+      ...(instructions ? { instructions } : {}),
+      ...(Array.isArray(body.tools) ? { tools: body.tools } : {}),
+    },
+    input,
+    model,
+  };
+}
+
+export function buildMessagesPayload(dispatched: QaMockProviderDispatchResult): {
   responseBody: Record<string, unknown>;
   streamEvents: AnthropicStreamEvent[];
-  model: string;
-}> {
-  const messages = Array.isArray(body.messages) ? body.messages : [];
-  const input = convertAnthropicMessagesToResponsesInput({
-    system: body.system,
-    messages,
-  });
-  // Treat empty-string model the same as absent. A bare typeof check lets
-  // `""` leak through to `responseBody.model` and `lastRequest.model`,
-  // which then confuses parity consumers that assume the mock always
-  // echoes the real provider label. Normalize once and reuse everywhere.
-  const normalizedModel =
-    typeof body.model === "string" && body.model.trim() !== "" ? body.model : "claude-opus-4-8";
-  // Dispatch through the same scenario logic the /v1/responses route uses.
-  // Preserve declared tools so route-specific adapters mirror what the
-  // real provider request made available to the model.
-  const dispatchBody: Record<string, unknown> = {
-    input,
-    model: normalizedModel,
-    stream: false,
-    ...(Array.isArray(body.tools) ? { tools: body.tools } : {}),
-  };
-  const allInputText = extractAllRequestTexts(input, dispatchBody);
-  if (QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT_RE.test(allInputText)) {
-    const toolOutput = extractToolOutput(input);
-    const toolOutputCallId = extractToolOutputCallId(input);
-    const scenarioKey = `${normalizedModel}\n${extractLastUserText(input)}`;
-    const shouldEmitThinkingError =
-      toolOutput.length > 0 &&
-      toolOutputCallId.length > 0 &&
-      !scenarioState.anthropicThinkingErrorScenarioKeys.has(scenarioKey);
-    // Safe retries generate fresh read call IDs. The original user prompt stays
-    // stable, so fail once per model and nonce-bearing logical scenario instead.
-    if (shouldEmitThinkingError) {
-      scenarioState.anthropicThinkingErrorScenarioKeys.add(scenarioKey);
-    }
-    const events =
-      toolOutput.length === 0
-        ? buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" })
-        : shouldEmitThinkingError
-          ? buildAssistantEvents("")
-          : buildAssistantEvents("ANTHROPIC-THINKING-ERROR-RECOVERED-OK");
-    const extracted = extractFinalAssistantOutputFromEvents(events);
-    const responseBody = shouldEmitThinkingError
-      ? buildAnthropicThinkingErrorResponse({ model: normalizedModel })
-      : buildAnthropicMessageResponse({
-          model: normalizedModel,
-          extracted,
-        });
-    const streamEvents = shouldEmitThinkingError
-      ? buildAnthropicThinkingErrorStreamEvents({ model: normalizedModel })
-      : buildAnthropicMessageStreamEvents({
-          model: normalizedModel,
-          extracted,
-        });
-    return { events, input, extracted, responseBody, streamEvents, model: normalizedModel };
+} {
+  if (dispatched.failure?.presentation === "anthropic-thinking") {
+    return {
+      responseBody: buildAnthropicThinkingErrorResponse({ model: dispatched.model }),
+      streamEvents: buildAnthropicThinkingErrorStreamEvents({ model: dispatched.model }),
+    };
   }
-  const events = await dispatchResponses(dispatchBody, scenarioState);
-  const extracted = extractFinalAssistantOutputFromEvents(events);
-  const responseBody = buildAnthropicMessageResponse({
-    model: normalizedModel,
-    extracted,
-  });
-  const streamEvents = buildAnthropicMessageStreamEvents({
-    model: normalizedModel,
-    extracted,
-  });
-  return { events, input, extracted, responseBody, streamEvents, model: normalizedModel };
+  if (dispatched.failure) {
+    return {
+      responseBody: buildAnthropicFailureResponse(dispatched.failure),
+      streamEvents: [],
+    };
+  }
+  const extracted = extractFinalAssistantOutputFromEvents(dispatched.events);
+  return {
+    responseBody: buildAnthropicMessageResponse({
+      model: dispatched.model,
+      extracted,
+    }),
+    streamEvents: buildAnthropicMessageStreamEvents({
+      model: dispatched.model,
+      extracted,
+    }),
+  };
 }

@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -19,7 +19,7 @@ import {
   persistCliSessionForkSuccessorInStore,
   restoreCliSessionForkInStore,
   recordCliCompactionInStore,
-  updateSessionStoreAfterAgentRun,
+  updateSessionStoreAfterAgentRun as updateSessionStoreAfterAgentRunBase,
 } from "./session-store.js";
 import { resolveSession } from "./session.js";
 
@@ -60,7 +60,16 @@ vi.mock("../../utils/usage-format.js", () => ({
     }
     return total / 1e6;
   },
-  resolveModelCostConfig: (params: { provider?: string; model?: string; config?: unknown }) => {
+  resolveModelCostConfig: (params: {
+    provider?: string;
+    model?: string;
+    config?: unknown;
+    agentDir?: string;
+  }) => {
+    const agents = (params.config as OpenClawConfig | undefined)?.agents?.list ?? [];
+    if (agents.length > 1 && !params.agentDir) {
+      throw new Error("multi-agent cost resolution requires an explicit agent directory");
+    }
     const providers = (params.config as MockUsageFormatConfig | undefined)?.models?.providers;
     if (!providers) {
       return undefined;
@@ -111,7 +120,7 @@ async function seedSessionStore(
 
 function loadPersistedSessionStore(storePath: string): Record<string, SessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
 }
 
@@ -126,7 +135,70 @@ afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
 });
 
+type SessionStoreUpdateParams = Parameters<typeof updateSessionStoreAfterAgentRunBase>[0];
+
+async function updateSessionStoreAfterAgentRun(
+  params: Omit<SessionStoreUpdateParams, "agentDir"> & { agentDir?: string },
+) {
+  await updateSessionStoreAfterAgentRunBase({
+    ...params,
+    agentDir: params.agentDir ?? "/tmp/openclaw-session-store-test-agent",
+  });
+}
+
 describe("updateSessionStoreAfterAgentRun", () => {
+  it("uses the prepared agent directory for multi-agent cost accounting", async () => {
+    await withTempSessionStore(async ({ dir, storePath }) => {
+      const sessionKey = "agent:marie:dashboard:cost-accounting";
+      const sessionId = "cost-accounting-session";
+      const sessionStore: Record<string, SessionEntry> = {};
+
+      await updateSessionStoreAfterAgentRun({
+        cfg: {
+          agents: { list: [{ id: "main" }, { id: "marie" }] },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                models: [
+                  {
+                    id: "gpt-5.5",
+                    name: "GPT-5.5",
+                    reasoning: true,
+                    input: ["text"],
+                    cost: { input: 2, output: 4, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128_000,
+                    maxTokens: 8_192,
+                  },
+                ],
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
+        agentDir: path.join(dir, "agents", "marie", "agent"),
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId,
+              provider: "openai",
+              model: "gpt-5.5",
+              usage: { input: 1_000_000, output: 1_000_000 },
+            },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]?.estimatedCostUsd).toBe(6);
+    });
+  });
+
   it("clears the durable replay-safe recovery guard after the recovery run terminates", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const sessionKey = "agent:main:explicit:restart-recovery";
@@ -310,7 +382,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       const persisted = loadPersistedSessionStore(storePath);
-      expect(Object.keys(persisted)).toHaveLength(42);
+      expect(Object.keys(persisted).filter((key) => key !== sessionKey)).toHaveLength(42);
       expect(persisted[sessionKey]?.sessionId).toBe(sessionId);
       expect(persisted["agent:main:stale:44"]).toBeUndefined();
     });

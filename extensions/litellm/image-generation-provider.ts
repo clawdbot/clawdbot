@@ -3,9 +3,8 @@ import { isIP } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createOpenAiCompatibleImageGenerationProvider,
+  imageSourceUploadFileName,
   type ImageGenerationProvider,
-  type ImageGenerationSourceImage,
-  toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LITELLM_BASE_URL } from "./onboard.js";
@@ -39,10 +38,6 @@ function resolveLitellmProviderConfig(
 
 function resolveConfiguredLitellmBaseUrl(cfg: OpenClawConfig | undefined): string {
   return normalizeOptionalString(resolveLitellmProviderConfig(cfg)?.baseUrl) ?? LITELLM_BASE_URL;
-}
-
-function imageToDataUrl(image: ImageGenerationSourceImage): string {
-  return toImageDataUrl({ buffer: image.buffer, mimeType: image.mimeType });
 }
 
 // LiteLLM's default proxy is loopback. Auto-enable private-network access only
@@ -124,18 +119,28 @@ export function buildLitellmImageGenerationProvider(): ImageGenerationProvider {
         size: req.size ?? DEFAULT_SIZE,
       },
     }),
-    buildEditRequest: ({ req, inputImages, model, count }) => ({
-      kind: "json",
-      body: {
-        model,
-        prompt: req.prompt,
-        n: count,
-        size: req.size ?? DEFAULT_SIZE,
-        images: inputImages.map((image) => ({
-          image_url: imageToDataUrl(image),
-        })),
-      },
-    }),
+    // LiteLLM's /v1/images/edits is multipart (OpenAI's edits schema): the
+    // reference image must be an uploaded file part, not a JSON field — a JSON
+    // body fails before the request reaches the provider.
+    buildEditRequest: ({ req, inputImages, model, count }) => {
+      const form = new FormData();
+      form.set("model", model);
+      form.set("prompt", req.prompt);
+      form.set("n", String(count));
+      form.set("size", req.size ?? DEFAULT_SIZE);
+      // OpenAI-compatible edits take repeated `image[]` parts when more than one
+      // reference is supplied, and a single `image` part otherwise.
+      const partName = inputImages.length > 1 ? "image[]" : "image";
+      for (const [index, image] of inputImages.entries()) {
+        const mimeType = normalizeOptionalString(image.mimeType) ?? "image/png";
+        form.append(
+          partName,
+          new Blob([new Uint8Array(image.buffer)], { type: mimeType }),
+          imageSourceUploadFileName({ image, index }),
+        );
+      }
+      return { kind: "multipart", form };
+    },
     missingApiKeyError: "LiteLLM API key missing",
     failureLabels: {
       generate: "LiteLLM image generation failed",

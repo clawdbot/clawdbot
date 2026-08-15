@@ -4,6 +4,7 @@ import type {
   ProviderToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { findUnsupportedSchemaKeywords } from "openclaw/plugin-sdk/provider-tools";
+import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const PERPLEXITY_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "patternProperties",
@@ -35,12 +36,6 @@ const SCHEMA_VALUE_KEYS = new Set([
   "unevaluatedProperties",
   "contentSchema",
 ]);
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 
 // JSON Schema allows `type` to be an array; a union containing "object" still
 // admits objects, so it needs `properties` for Perplexity too.

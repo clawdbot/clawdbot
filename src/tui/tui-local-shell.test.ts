@@ -1,5 +1,7 @@
 // Verifies local shell process handling for TUI local mode.
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { join } from "node:path";
 import type { OverlayHandle } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { createLocalShellRunner } from "./tui-local-shell.js";
@@ -240,6 +242,28 @@ describe("createLocalShellRunner", () => {
     expect(harness.messages).toContain(
       "local shell: working directory was deleted; cd to an existing directory first",
     );
+  });
+
+  it("finishes a failed child before reporting the next local command", async () => {
+    const harness = createShellHarness({
+      spawnCommand: spawn,
+      getCwd: vi
+        .fn(() => process.cwd())
+        .mockReturnValueOnce(join(process.cwd(), ".missing-openclaw-local-shell-directory")),
+    });
+
+    const failedRun = harness.runLocalShellLine("!echo first");
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+    await failedRun;
+    await harness.runLocalShellLine("!echo second");
+
+    expect(harness.messages.filter((message) => message.startsWith("[local]"))).toEqual([
+      "[local] $ echo first",
+      expect.stringContaining("[local] error: "),
+      "[local] $ echo second",
+      "[local] second",
+      "[local] exit 0",
+    ]);
   });
 
   it("does not crash when stdout or stderr emit an error event", async () => {

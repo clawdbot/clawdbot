@@ -16,19 +16,57 @@ const applyPluginAutoEnableMock = vi.hoisted(() =>
     autoEnabledReasons: {},
   })),
 );
+const withBundledPluginEnablementCompatMock = vi.hoisted(() =>
+  vi.fn((params: { config?: OpenClawConfig }) => params.config),
+);
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: applyPluginAutoEnableMock,
 }));
+vi.mock("./bundled-compat.js", () => ({
+  withBundledPluginEnablementCompat: withBundledPluginEnablementCompatMock,
+}));
 
-import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
+import {
+  resolveBundledCompatActivationInputs,
+  resolvePluginActivationInputs,
+  withActivatedPluginIds,
+} from "./activation-context.js";
 
 afterEach(() => {
   clearCurrentPluginMetadataSnapshot();
   applyPluginAutoEnableMock.mockClear();
+  withBundledPluginEnablementCompatMock.mockClear();
 });
 
-describe("resolveBundledPluginCompatibleActivationInputs", () => {
+describe("withActivatedPluginIds", () => {
+  it("keeps omitted plugin ids outside restrictive allowlists", () => {
+    expect(
+      withActivatedPluginIds({
+        config: {
+          plugins: {
+            allow: ["memory-core"],
+            deny: ["blocked"],
+            entries: {
+              disabled: { enabled: false },
+            },
+          },
+        },
+        pluginIds: ["openai", "blocked", "disabled"],
+      }),
+    ).toEqual({
+      plugins: {
+        allow: ["memory-core"],
+        deny: ["blocked"],
+        entries: {
+          disabled: { enabled: false },
+        },
+      },
+    });
+  });
+});
+
+describe("plugin activation inputs", () => {
   it("passes the current manifest registry into activation auto-enable", () => {
     const manifestRegistry = makeRegistry([{ id: "openai", channels: [], providers: ["openai"] }]);
     const workspaceDir = "/tmp/openclaw-activation-workspace";
@@ -44,12 +82,10 @@ describe("resolveBundledPluginCompatibleActivationInputs", () => {
       },
     );
 
-    resolveBundledPluginCompatibleActivationInputs({
+    resolvePluginActivationInputs({
       rawConfig: { plugins: { allow: ["openai"] } },
       workspaceDir,
       applyAutoEnable: true,
-      compatMode: {},
-      resolveCompatPluginIds: () => [],
     });
 
     expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
@@ -73,13 +109,11 @@ describe("resolveBundledPluginCompatibleActivationInputs", () => {
       [firstManifestRegistry, firstDiscovery],
       [secondManifestRegistry, secondDiscovery],
     ] as const) {
-      resolveBundledPluginCompatibleActivationInputs({
+      resolvePluginActivationInputs({
         rawConfig: { plugins: { allow: [manifestRegistry.plugins[0]!.id] } },
         manifestRegistry,
         discovery,
         applyAutoEnable: true,
-        compatMode: {},
-        resolveCompatPluginIds: () => [],
       });
     }
 
@@ -95,5 +129,50 @@ describe("resolveBundledPluginCompatibleActivationInputs", () => {
       manifestRegistry: secondManifestRegistry,
       discovery: secondDiscovery,
     });
+  });
+
+  it("applies bundled enablement once after canonical auto-enable", () => {
+    const rawConfig = { plugins: { allow: ["openai"] } } satisfies OpenClawConfig;
+    const autoEnabledConfig = {
+      plugins: { allow: ["openai"], entries: { openai: { enabled: true } } },
+    } satisfies OpenClawConfig;
+    const compatConfig = {
+      plugins: {
+        allow: ["openai", "anthropic"],
+        entries: { openai: { enabled: true }, anthropic: { enabled: true } },
+      },
+    } satisfies OpenClawConfig;
+    const resolveBundledPluginIds = vi.fn(() => ["anthropic"]);
+    applyPluginAutoEnableMock.mockReturnValueOnce({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: { openai: ["configured"] },
+    });
+    withBundledPluginEnablementCompatMock.mockReturnValueOnce(compatConfig);
+
+    const activation = resolveBundledCompatActivationInputs({
+      rawConfig,
+      env: process.env,
+      workspaceDir: "/tmp/openclaw-activation-workspace",
+      onlyPluginIds: ["anthropic"],
+      applyAutoEnable: true,
+      resolveBundledPluginIds,
+    });
+
+    expect(resolveBundledPluginIds).toHaveBeenCalledWith({
+      config: autoEnabledConfig,
+      workspaceDir: "/tmp/openclaw-activation-workspace",
+      env: process.env,
+      onlyPluginIds: ["anthropic"],
+    });
+    expect(withBundledPluginEnablementCompatMock).toHaveBeenCalledOnce();
+    expect(withBundledPluginEnablementCompatMock).toHaveBeenCalledWith({
+      config: autoEnabledConfig,
+      pluginIds: ["anthropic"],
+    });
+    expect(activation.config).toBe(compatConfig);
+    expect(activation.normalized.entries.anthropic?.enabled).toBe(true);
+    expect(activation.activationSourceConfig).toBe(rawConfig);
+    expect(activation.autoEnabledReasons).toEqual({ openai: ["configured"] });
   });
 });

@@ -1,4 +1,8 @@
 // Slack tests cover approval handler plugin behavior.
+import type {
+  ApprovalActionView,
+  ApprovalMetadataView,
+} from "openclaw/plugin-sdk/approval-handler-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { decodeSlackApprovalAction } from "./approval-actions.js";
 import { slackApprovalNativeRuntime } from "./approval-handler.runtime.js";
@@ -14,10 +18,198 @@ type ChatUpdatePayload = {
   text?: string;
   blocks?: unknown;
 };
+type SlackUpdateEntryParams = Parameters<
+  NonNullable<typeof slackApprovalNativeRuntime.transport.updateEntry>
+>[0];
 const SLACK_CHAT_UPDATE_TEXT_MAX_BYTES = 4000;
+const APPROVAL_TIMING = {
+  createdAtMs: 0,
+  expiresAtMs: 60_000,
+};
+const APPROVAL_CONTEXT = {
+  cfg: {} as never,
+  accountId: "default",
+  context: {
+    app: {} as never,
+    config: {} as never,
+  },
+};
+const APPROVAL_ENTRY = {
+  channelId: "D123APPROVER",
+  messageTs: "1712345678.999999",
+};
+const SCREEN_SHARE_APPROVAL = {
+  approvalKind: "plugin" as const,
+  approvalId: "plugin:req-1",
+  title: "Share screen with Computer Use",
+  description: "Computer Use wants to inspect the desktop.",
+  severity: "warning" as const,
+  pluginId: "computer-use",
+  toolName: "screenshot",
+  metadata: [{ label: "Plugin", value: "computer-use" }],
+};
+const SCREEN_SHARE_REQUEST = {
+  id: SCREEN_SHARE_APPROVAL.approvalId,
+  request: {
+    title: SCREEN_SHARE_APPROVAL.title,
+    description: SCREEN_SHARE_APPROVAL.description,
+  },
+  ...APPROVAL_TIMING,
+};
+
+type ApprovalDecision = ApprovalActionView["decision"];
+
+const ACTION_PRESENTATION = {
+  "allow-once": { label: "Allow Once", style: "success" },
+  "allow-always": { label: "Allow Always", style: "success" },
+  deny: { label: "Deny", style: "danger" },
+} as const satisfies Record<ApprovalDecision, Pick<ApprovalActionView, "label" | "style">>;
+
+function buildApprovalAction(
+  approvalKind: "exec" | "plugin",
+  approvalId: string,
+  decision: ApprovalDecision,
+): ApprovalActionView {
+  return {
+    decision,
+    ...ACTION_PRESENTATION[decision],
+    action: { type: "approval", approvalId, approvalKind, decision },
+    command: `/approve ${approvalId} ${decision}`,
+  };
+}
+
+async function buildExecPendingPayload(params: {
+  approvalId: string;
+  commandText: string;
+  metadata?: ApprovalMetadataView[];
+  decisions?: ApprovalDecision[];
+}): Promise<SlackPayload> {
+  const decisions = params.decisions ?? ["allow-once"];
+  return (await slackApprovalNativeRuntime.presentation.buildPendingPayload({
+    ...APPROVAL_CONTEXT,
+    request: {
+      id: params.approvalId,
+      request: { command: params.commandText },
+      ...APPROVAL_TIMING,
+    },
+    approvalKind: "exec",
+    nowMs: 0,
+    view: {
+      approvalKind: "exec",
+      approvalId: params.approvalId,
+      commandText: params.commandText,
+      metadata: params.metadata ?? [],
+      actions: decisions.map((decision) =>
+        buildApprovalAction("exec", params.approvalId, decision),
+      ),
+    } as never,
+  })) as SlackPayload;
+}
+
+async function buildPluginPendingPayload(params: {
+  approvalId: string;
+  title: string;
+  description: string;
+  severity: "info" | "warning" | "critical";
+  pluginId: string;
+  toolName: string;
+  metadata?: ApprovalMetadataView[];
+  decisions?: ApprovalDecision[];
+}): Promise<SlackPayload> {
+  const decisions = params.decisions ?? ["deny"];
+  return (await slackApprovalNativeRuntime.presentation.buildPendingPayload({
+    ...APPROVAL_CONTEXT,
+    request: {
+      id: params.approvalId,
+      request: { title: params.title, description: params.description },
+      ...APPROVAL_TIMING,
+    },
+    approvalKind: "plugin",
+    nowMs: 0,
+    view: {
+      approvalKind: "plugin",
+      phase: "pending",
+      approvalId: params.approvalId,
+      title: params.title,
+      description: params.description,
+      severity: params.severity,
+      pluginId: params.pluginId,
+      toolName: params.toolName,
+      metadata: params.metadata ?? [],
+      actions: decisions.map((decision) =>
+        buildApprovalAction("plugin", params.approvalId, decision),
+      ),
+      expiresAtMs: APPROVAL_TIMING.expiresAtMs,
+    },
+  })) as SlackPayload;
+}
+
+function buildExecResolvedResult() {
+  return slackApprovalNativeRuntime.presentation.buildResolvedResult({
+    ...APPROVAL_CONTEXT,
+    request: {
+      id: "req-1",
+      request: { command: "echo hi" },
+      ...APPROVAL_TIMING,
+    },
+    resolved: {
+      id: "req-1",
+      decision: "allow-once",
+      resolvedBy: "U123APPROVER",
+      ts: 0,
+    } as never,
+    view: {
+      approvalKind: "exec",
+      approvalId: "req-1",
+      decision: "allow-once",
+      commandText: "echo hi",
+      resolvedBy: "U123APPROVER",
+    } as never,
+    entry: APPROVAL_ENTRY,
+  });
+}
+
+function buildPluginResolvedResult() {
+  return slackApprovalNativeRuntime.presentation.buildResolvedResult({
+    ...APPROVAL_CONTEXT,
+    request: SCREEN_SHARE_REQUEST,
+    resolved: {
+      id: SCREEN_SHARE_APPROVAL.approvalId,
+      decision: "allow-once",
+      resolvedBy: "U123APPROVER",
+      ts: 0,
+    } as never,
+    view: {
+      ...SCREEN_SHARE_APPROVAL,
+      phase: "resolved",
+      decision: "allow-once",
+      resolvedBy: "U123APPROVER",
+    },
+    entry: APPROVAL_ENTRY,
+  });
+}
+
+function buildPluginExpiredResult() {
+  return slackApprovalNativeRuntime.presentation.buildExpiredResult({
+    ...APPROVAL_CONTEXT,
+    request: SCREEN_SHARE_REQUEST,
+    view: {
+      ...SCREEN_SHARE_APPROVAL,
+      phase: "expired",
+    },
+    entry: APPROVAL_ENTRY,
+  });
+}
 
 function findSlackActionsBlock(blocks: Array<{ type?: string; elements?: unknown[] }>) {
   return blocks.find((block) => block.type === "actions");
+}
+
+function readSlackActionLabels(block: { elements?: unknown[] } | undefined): string[] {
+  return (block?.elements ?? []).map((element) => {
+    const text = (element as { text?: { text?: unknown } } | null)?.text?.text;
+    return typeof text === "string" ? text : "";
+  });
 }
 
 function decodeSlackApprovalElements(block: { elements?: unknown[] } | undefined) {
@@ -41,6 +233,19 @@ function readChatUpdatePayload(
     throw new Error(`Expected Slack chat.update payload #${index + 1}`);
   }
   return payload as ChatUpdatePayload;
+}
+
+async function updateSlackApprovalEntry(
+  context: SlackUpdateEntryParams["context"],
+  payload: SlackUpdateEntryParams["payload"],
+): Promise<void> {
+  await slackApprovalNativeRuntime.transport.updateEntry?.({
+    ...APPROVAL_CONTEXT,
+    context,
+    entry: { channelId: "C123", messageTs: "1712345678.999999" },
+    payload,
+    phase: "resolved",
+  });
 }
 
 const UNPAIRED_SURROGATE_RE =
@@ -101,44 +306,10 @@ describe("slackApprovalNativeRuntime", () => {
 
   it("does not leave dangling surrogates when truncating exec approval command mrkdwn", async () => {
     const commandText = `${"a".repeat(2598)}😀tail`;
-    const payload = (await slackApprovalNativeRuntime.presentation.buildPendingPayload({
-      cfg: {} as never,
-      accountId: "default",
-      context: {
-        app: {} as never,
-        config: {} as never,
-      },
-      request: {
-        id: "req-surrogate",
-        request: {
-          command: commandText,
-        },
-        createdAtMs: 0,
-        expiresAtMs: 60_000,
-      },
-      approvalKind: "exec",
-      nowMs: 0,
-      view: {
-        approvalKind: "exec",
-        approvalId: "req-surrogate",
-        commandText,
-        metadata: [],
-        actions: [
-          {
-            decision: "allow-once",
-            label: "Allow Once",
-            action: {
-              type: "approval",
-              approvalId: "req-surrogate",
-              approvalKind: "exec",
-              decision: "allow-once",
-            },
-            command: "/approve req-surrogate allow-once",
-            style: "success",
-          },
-        ],
-      } as never,
-    })) as SlackPayload;
+    const payload = await buildExecPendingPayload({
+      approvalId: "req-surrogate",
+      commandText,
+    });
 
     const commandMrkdwn = findApprovalMrkdwn(payload, "*Command*");
     expect(commandMrkdwn).toMatch(/…\n```$/);
@@ -147,51 +318,14 @@ describe("slackApprovalNativeRuntime", () => {
 
   it("does not leave dangling surrogates when truncating plugin approval request mrkdwn", async () => {
     const title = `${"a".repeat(2598)}😀tail`;
-    const payload = (await slackApprovalNativeRuntime.presentation.buildPendingPayload({
-      cfg: {} as never,
-      accountId: "default",
-      context: {
-        app: {} as never,
-        config: {} as never,
-      },
-      request: {
-        id: "plugin:req-surrogate",
-        request: {
-          title,
-          description: "Needs approval.",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 60_000,
-      },
-      approvalKind: "plugin",
-      nowMs: 0,
-      view: {
-        approvalKind: "plugin",
-        phase: "pending",
-        approvalId: "plugin:req-surrogate",
-        title,
-        description: "Needs approval.",
-        severity: "warning",
-        pluginId: "test-plugin",
-        toolName: "test-tool",
-        metadata: [],
-        actions: [
-          {
-            decision: "deny",
-            label: "Deny",
-            action: {
-              type: "approval",
-              approvalId: "plugin:req-surrogate",
-              approvalKind: "plugin",
-              decision: "deny",
-            },
-            command: "/approve plugin:req-surrogate deny",
-            style: "danger",
-          },
-        ],
-        expiresAtMs: 60_000,
-      } as never,
-    })) as SlackPayload;
+    const payload = await buildPluginPendingPayload({
+      approvalId: "plugin:req-surrogate",
+      title,
+      description: "Needs approval.",
+      severity: "warning",
+      pluginId: "test-plugin",
+      toolName: "test-tool",
+    });
 
     const requestMrkdwn = findApprovalMrkdwn(payload, "*Request*");
     expect(requestMrkdwn).toMatch(/…$/);
@@ -200,44 +334,7 @@ describe("slackApprovalNativeRuntime", () => {
 
   it("still truncates plain BMP approval mrkdwn at the Slack approval preview limit", async () => {
     const commandText = "b".repeat(2700);
-    const payload = (await slackApprovalNativeRuntime.presentation.buildPendingPayload({
-      cfg: {} as never,
-      accountId: "default",
-      context: {
-        app: {} as never,
-        config: {} as never,
-      },
-      request: {
-        id: "req-bmp",
-        request: {
-          command: commandText,
-        },
-        createdAtMs: 0,
-        expiresAtMs: 60_000,
-      },
-      approvalKind: "exec",
-      nowMs: 0,
-      view: {
-        approvalKind: "exec",
-        approvalId: "req-bmp",
-        commandText,
-        metadata: [],
-        actions: [
-          {
-            decision: "allow-once",
-            label: "Allow Once",
-            action: {
-              type: "approval",
-              approvalId: "req-bmp",
-              approvalKind: "exec",
-              decision: "allow-once",
-            },
-            command: "/approve req-bmp allow-once",
-            style: "success",
-          },
-        ],
-      } as never,
-    })) as SlackPayload;
+    const payload = await buildExecPendingPayload({ approvalId: "req-bmp", commandText });
 
     const commandMrkdwn = findApprovalMrkdwn(payload, "*Command*");
     expect(commandMrkdwn).toMatch(/…\n```$/);
@@ -246,68 +343,17 @@ describe("slackApprovalNativeRuntime", () => {
   });
 
   it("renders only the allowed pending actions", async () => {
-    const payload = (await slackApprovalNativeRuntime.presentation.buildPendingPayload({
-      cfg: {} as never,
-      accountId: "default",
-      context: {
-        app: {} as never,
-        config: {} as never,
-      },
-      request: {
-        id: "req-1",
-        request: {
-          command: "echo hi",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 60_000,
-      },
-      approvalKind: "exec",
-      nowMs: 0,
-      view: {
-        approvalKind: "exec",
-        approvalId: "req-1",
-        commandText: "echo hi",
-        metadata: [],
-        actions: [
-          {
-            decision: "allow-once",
-            label: "Allow Once",
-            action: {
-              type: "approval",
-              approvalId: "req-1",
-              approvalKind: "exec",
-              decision: "allow-once",
-            },
-            command: "/approve req-1 allow-once",
-            style: "success",
-          },
-          {
-            decision: "deny",
-            label: "Deny",
-            action: {
-              type: "approval",
-              approvalId: "req-1",
-              approvalKind: "exec",
-              decision: "deny",
-            },
-            command: "/approve req-1 deny",
-            style: "danger",
-          },
-        ],
-      } as never,
-    })) as SlackPayload;
+    const payload = await buildExecPendingPayload({
+      approvalId: "req-1",
+      commandText: "echo hi",
+      decisions: ["allow-once", "deny"],
+    });
 
     expect(payload.text).toContain("*Exec approval required*");
     const actionsBlock = findSlackActionsBlock(
       payload.blocks as Array<{ type?: string; elements?: unknown[] }>,
     );
-    const labels = (actionsBlock?.elements ?? []).map((element) =>
-      typeof element === "object" &&
-      element &&
-      typeof (element as { text?: { text?: unknown } }).text?.text === "string"
-        ? (element as { text: { text: string } }).text.text
-        : "",
-    );
+    const labels = readSlackActionLabels(actionsBlock);
 
     expect(labels).toEqual(["Allow Once", "Deny"]);
     expect(JSON.stringify(payload.blocks)).not.toContain("Allow Always");
@@ -320,78 +366,14 @@ describe("slackApprovalNativeRuntime", () => {
   });
 
   it("renders plugin pending approvals with plugin approval actions", async () => {
-    const payload = (await slackApprovalNativeRuntime.presentation.buildPendingPayload({
-      cfg: {} as never,
-      accountId: "default",
-      context: {
-        app: {} as never,
-        config: {} as never,
-      },
-      request: {
-        id: "plugin:req-1",
-        request: {
-          title: "Share screen with Computer Use",
-          description: "Computer Use wants to inspect the desktop.",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 60_000,
-      },
-      approvalKind: "plugin",
-      nowMs: 0,
-      view: {
-        approvalKind: "plugin",
-        phase: "pending",
-        approvalId: "plugin:req-1",
-        title: "Share screen with Computer Use",
-        description: "Computer Use wants to inspect the desktop.",
-        severity: "warning",
-        pluginId: "computer-use",
-        toolName: "screenshot",
-        metadata: [
-          { label: "Severity", value: "Warning" },
-          { label: "Plugin", value: "computer-use" },
-        ],
-        actions: [
-          {
-            decision: "allow-once",
-            label: "Allow Once",
-            action: {
-              type: "approval",
-              approvalId: "plugin:req-1",
-              approvalKind: "plugin",
-              decision: "allow-once",
-            },
-            command: "/approve plugin:req-1 allow-once",
-            style: "success",
-          },
-          {
-            decision: "allow-always",
-            label: "Allow Always",
-            action: {
-              type: "approval",
-              approvalId: "plugin:req-1",
-              approvalKind: "plugin",
-              decision: "allow-always",
-            },
-            command: "/approve plugin:req-1 allow-always",
-            style: "success",
-          },
-          {
-            decision: "deny",
-            label: "Deny",
-            action: {
-              type: "approval",
-              approvalId: "plugin:req-1",
-              approvalKind: "plugin",
-              decision: "deny",
-            },
-            command: "/approve plugin:req-1 deny",
-            style: "danger",
-          },
-        ],
-        expiresAtMs: 60_000,
-      },
-    })) as SlackPayload;
+    const payload = await buildPluginPendingPayload({
+      ...SCREEN_SHARE_APPROVAL,
+      metadata: [
+        { label: "Severity", value: "Warning" },
+        { label: "Plugin", value: "computer-use" },
+      ],
+      decisions: ["allow-once", "allow-always", "deny"],
+    });
 
     expect(payload.text).toContain("*Plugin approval required*");
     expect(payload.text).toContain("Share screen with Computer Use");
@@ -400,13 +382,7 @@ describe("slackApprovalNativeRuntime", () => {
     const actionsBlock = findSlackActionsBlock(
       payload.blocks as Array<{ type?: string; elements?: unknown[] }>,
     );
-    const labels = (actionsBlock?.elements ?? []).map((element) =>
-      typeof element === "object" &&
-      element &&
-      typeof (element as { text?: { text?: unknown } }).text?.text === "string"
-        ? (element as { text: { text: string } }).text.text
-        : "",
-    );
+    const labels = readSlackActionLabels(actionsBlock);
 
     expect(labels).toEqual(["Allow Once", "Allow Always", "Deny"]);
     expect(JSON.stringify(payload.blocks)).toContain("plugin:req-1");
@@ -419,39 +395,7 @@ describe("slackApprovalNativeRuntime", () => {
   });
 
   it("renders resolved updates without interactive blocks", async () => {
-    const result = await slackApprovalNativeRuntime.presentation.buildResolvedResult({
-      cfg: {} as never,
-      accountId: "default",
-      context: {
-        app: {} as never,
-        config: {} as never,
-      },
-      request: {
-        id: "req-1",
-        request: {
-          command: "echo hi",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 60_000,
-      },
-      resolved: {
-        id: "req-1",
-        decision: "allow-once",
-        resolvedBy: "U123APPROVER",
-        ts: 0,
-      } as never,
-      view: {
-        approvalKind: "exec",
-        approvalId: "req-1",
-        decision: "allow-once",
-        commandText: "echo hi",
-        resolvedBy: "U123APPROVER",
-      } as never,
-      entry: {
-        channelId: "D123APPROVER",
-        messageTs: "1712345678.999999",
-      },
-    });
+    const result = await buildExecResolvedResult();
 
     expect(result.kind).toBe("update");
     if (result.kind !== "update") {
@@ -466,78 +410,8 @@ describe("slackApprovalNativeRuntime", () => {
   });
 
   it("renders plugin resolved and expired updates without command text", async () => {
-    const resolved = await slackApprovalNativeRuntime.presentation.buildResolvedResult({
-      cfg: {} as never,
-      accountId: "default",
-      context: {
-        app: {} as never,
-        config: {} as never,
-      },
-      request: {
-        id: "plugin:req-1",
-        request: {
-          title: "Share screen with Computer Use",
-          description: "Computer Use wants to inspect the desktop.",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 60_000,
-      },
-      resolved: {
-        id: "plugin:req-1",
-        decision: "allow-once",
-        resolvedBy: "U123APPROVER",
-        ts: 0,
-      } as never,
-      view: {
-        approvalKind: "plugin",
-        phase: "resolved",
-        approvalId: "plugin:req-1",
-        title: "Share screen with Computer Use",
-        description: "Computer Use wants to inspect the desktop.",
-        severity: "warning",
-        pluginId: "computer-use",
-        toolName: "screenshot",
-        metadata: [{ label: "Plugin", value: "computer-use" }],
-        decision: "allow-once",
-        resolvedBy: "U123APPROVER",
-      },
-      entry: {
-        channelId: "D123APPROVER",
-        messageTs: "1712345678.999999",
-      },
-    });
-    const expired = await slackApprovalNativeRuntime.presentation.buildExpiredResult({
-      cfg: {} as never,
-      accountId: "default",
-      context: {
-        app: {} as never,
-        config: {} as never,
-      },
-      request: {
-        id: "plugin:req-1",
-        request: {
-          title: "Share screen with Computer Use",
-          description: "Computer Use wants to inspect the desktop.",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 60_000,
-      },
-      view: {
-        approvalKind: "plugin",
-        phase: "expired",
-        approvalId: "plugin:req-1",
-        title: "Share screen with Computer Use",
-        description: "Computer Use wants to inspect the desktop.",
-        severity: "warning",
-        pluginId: "computer-use",
-        toolName: "screenshot",
-        metadata: [{ label: "Plugin", value: "computer-use" }],
-      },
-      entry: {
-        channelId: "D123APPROVER",
-        messageTs: "1712345678.999999",
-      },
-    });
+    const resolved = await buildPluginResolvedResult();
+    const expired = await buildPluginExpiredResult();
 
     expect(resolved.kind).toBe("update");
     expect(expired.kind).toBe("update");
@@ -582,35 +456,12 @@ describe("slackApprovalNativeRuntime", () => {
       config: {},
     } as never;
 
-    await slackApprovalNativeRuntime.transport.updateEntry?.({
-      cfg: {} as never,
-      accountId: "default",
-      context,
-      entry: {
-        channelId: "C123",
-        messageTs: "1712345678.999999",
-      },
-      payload: {
-        text: "a".repeat(SLACK_CHAT_UPDATE_TEXT_MAX_BYTES),
-        blocks,
-      },
-      phase: "resolved",
+    await updateSlackApprovalEntry(context, {
+      text: "a".repeat(SLACK_CHAT_UPDATE_TEXT_MAX_BYTES),
+      blocks,
     });
 
-    await slackApprovalNativeRuntime.transport.updateEntry?.({
-      cfg: {} as never,
-      accountId: "default",
-      context,
-      entry: {
-        channelId: "C123",
-        messageTs: "1712345678.999999",
-      },
-      payload: {
-        text: "a".repeat(5000),
-        blocks,
-      },
-      phase: "resolved",
-    });
+    await updateSlackApprovalEntry(context, { text: "a".repeat(5000), blocks });
 
     const firstUpdate = readChatUpdatePayload(chatUpdate, 0);
     const secondUpdate = readChatUpdatePayload(chatUpdate, 1);
@@ -626,47 +477,14 @@ describe("slackApprovalNativeRuntime", () => {
   });
 
   it("keeps pending metadata context within Slack Block Kit limits", async () => {
-    const payload = (await slackApprovalNativeRuntime.presentation.buildPendingPayload({
-      cfg: {} as never,
-      accountId: "default",
-      context: {
-        app: {} as never,
-        config: {} as never,
-      },
-      request: {
-        id: "req-1",
-        request: {
-          command: "echo hi",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 60_000,
-      },
-      approvalKind: "exec",
-      nowMs: 0,
-      view: {
-        approvalKind: "exec",
-        approvalId: "req-1",
-        commandText: "echo hi",
-        metadata: Array.from({ length: 12 }, (_entry, index) => ({
-          label: `Metadata ${index + 1}`,
-          value: index === 0 ? "x".repeat(3100) : `value-${index + 1}`,
-        })),
-        actions: [
-          {
-            decision: "allow-once",
-            label: "Allow Once",
-            action: {
-              type: "approval",
-              approvalId: "req-1",
-              approvalKind: "exec",
-              decision: "allow-once",
-            },
-            command: "/approve req-1 allow-once",
-            style: "success",
-          },
-        ],
-      } as never,
-    })) as SlackPayload;
+    const payload = await buildExecPendingPayload({
+      approvalId: "req-1",
+      commandText: "echo hi",
+      metadata: Array.from({ length: 12 }, (_entry, index) => ({
+        label: `Metadata ${index + 1}`,
+        value: index === 0 ? "x".repeat(3100) : `value-${index + 1}`,
+      })),
+    });
 
     const contextBlock = (payload.blocks as Array<{ type?: string; elements?: unknown[] }>).find(
       (block) => block.type === "context",

@@ -131,10 +131,8 @@ async function fetchVoyageBatchStatus(params: {
   client: VoyageEmbeddingClient;
   batchId: string;
   deps: VoyageBatchDeps;
-  maxResponseBytes?: number;
   signal?: AbortSignal;
 }): Promise<VoyageBatchStatus> {
-  const maxBytes = params.maxResponseBytes ?? VOYAGE_BATCH_RESPONSE_MAX_BYTES;
   return await params.deps.withRemoteHttpResponse(
     buildVoyageBatchRequest({
       client: params.client,
@@ -143,7 +141,7 @@ async function fetchVoyageBatchStatus(params: {
       onResponse: async (res) => {
         await assertOkOrThrowProviderError(res, "voyage.batch-status");
         return await readProviderJsonResponse<VoyageBatchStatus>(res, "voyage-batch-status", {
-          maxBytes,
+          maxBytes: VOYAGE_BATCH_RESPONSE_MAX_BYTES,
         });
       },
     }),
@@ -154,9 +152,7 @@ async function readVoyageBatchError(params: {
   client: VoyageEmbeddingClient;
   errorFileId: string;
   deps: VoyageBatchDeps;
-  maxResponseBytes?: number;
 }): Promise<string | undefined> {
-  const maxBytes = params.maxResponseBytes ?? VOYAGE_BATCH_RESPONSE_MAX_BYTES;
   try {
     return await params.deps.withRemoteHttpResponse(
       buildVoyageBatchRequest({
@@ -164,7 +160,7 @@ async function readVoyageBatchError(params: {
         path: `files/${params.errorFileId}/content`,
         onResponse: async (res) => {
           await assertOkOrThrowProviderError(res, "voyage.batch-error-file-content");
-          const bytes = await readResponseWithLimit(res, maxBytes, {
+          const bytes = await readResponseWithLimit(res, VOYAGE_BATCH_RESPONSE_MAX_BYTES, {
             onOverflow: ({ maxBytes: maxBytesLocal }) =>
               new Error(`voyage batch error file content exceeds ${maxBytesLocal} bytes`),
           });
@@ -362,14 +358,4 @@ export async function runVoyageEmbeddingBatches(
       }
     },
   });
-}
-
-const testing = {
-  fetchVoyageBatchStatus,
-  readVoyageBatchError,
-  VOYAGE_BATCH_RESPONSE_MAX_BYTES,
-} as const;
-
-if (process.env.VITEST === "true") {
-  Reflect.set(globalThis, Symbol.for("openclaw.voyageEmbeddingBatchTestApi"), testing);
 }

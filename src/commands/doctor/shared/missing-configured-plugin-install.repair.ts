@@ -28,7 +28,7 @@ import {
   forceNpmInstallRecordRepair,
   isInstalledRecordMissingOnDisk,
   isTrustedOfficialInstallRecordForCandidate,
-  pathsEqual,
+  installPathsEqual,
   recordMatchesBundledPackage,
   resolveSafeBrokenOfficialInstallRemovalPath,
 } from "./missing-configured-plugin-install.records.js";
@@ -46,6 +46,8 @@ type RepairMissingPluginInstallsResult = {
   warnings: string[];
   /** Plugin ids successfully repaired from current configuration. */
   repairedPluginIds?: string[];
+  /** Successful install-record or package repairs that invalidate retained metadata. */
+  pluginInventoryChanged?: true;
   /** User-facing details for repairs explicitly deferred until post-core convergence. */
   deferredRepairDetails?: string[];
   /** Plugin ids whose install repair failed and should be preserved from cleanup passes. */
@@ -352,7 +354,7 @@ async function repairMissingPluginInstalls(params: {
         replacementSucceeded &&
         removalPath &&
         (!installedRecord?.installPath ||
-          !pathsEqual(resolveUserPath(installedRecord.installPath, env), removalPath))
+          !installPathsEqual(resolveUserPath(installedRecord.installPath, env), removalPath))
       ) {
         try {
           await rm(removalPath, { recursive: true, force: true });
@@ -375,16 +377,18 @@ async function repairMissingPluginInstalls(params: {
     }
   }
 
+  const persistedIndexOptions = { config: params.cfg, env };
   if (nextRecords !== records) {
-    await writePersistedInstalledPluginIndexInstallRecords(nextRecords, { env });
+    await writePersistedInstalledPluginIndexInstallRecords(nextRecords, persistedIndexOptions);
   } else if (params.baselineRecords) {
     // The caller seeded us from in-memory state that may not yet have been
     // persisted (e.g. earlier sync/npm record mutations). Even if repair
     // itself made no further changes, persist the baseline so the disk
     // matches what we are about to return — otherwise the next reader gets
     // a stale snapshot.
-    await writePersistedInstalledPluginIndexInstallRecords(nextRecords, { env });
+    await writePersistedInstalledPluginIndexInstallRecords(nextRecords, persistedIndexOptions);
   }
+  const pluginInventoryChanged = nextRecords !== records || repairedPluginIds.size > 0;
   return {
     changes,
     warnings,
@@ -397,6 +401,7 @@ async function repairMissingPluginInstalls(params: {
           ),
         }
       : {}),
+    ...(pluginInventoryChanged ? { pluginInventoryChanged: true as const } : {}),
     ...(failedPluginIds.size > 0
       ? {
           failedPluginIds: [...failedPluginIds].toSorted((left, right) =>

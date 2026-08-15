@@ -14,5 +14,5 @@ export {
   isOverloadedErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
-} from "../agents/embedded-agent-helpers/failover-matches.js";
+} from "../agents/failover/classify.js";
 export { isTruthyEnvValue } from "../infra/env.js";

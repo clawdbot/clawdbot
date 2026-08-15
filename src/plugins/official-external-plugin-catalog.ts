@@ -3,15 +3,16 @@ import { createHash } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import { normalizeClawHubSha256Integrity } from "../infra/clawhub.js";
+import { normalizeClawHubSha256Integrity } from "../infra/clawhub-artifacts.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { readResponseWithLimit } from "../infra/http-body.js";
+import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { isRecord } from "../utils.js";
 import type {
   PluginManifestCatalog,
   PluginManifestChannelConfig,
   PluginManifestContracts,
   PluginManifestProviderEndpoint,
+  PluginPackageChannel,
   PluginPackageInstall,
 } from "./manifest.js";
 import { BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOGS } from "./official-external-plugin-bundled-catalogs.js";
@@ -71,17 +72,44 @@ export type OfficialExternalWebSearchProvider = {
   autoDetectOrder?: number;
 };
 
+type OfficialExternalChannelSecretField = {
+  field: string;
+  activationField?: string;
+  activationEnv?: string;
+};
+
+type OfficialExternalChannelSecretContract = {
+  channelId: string;
+  fields: readonly OfficialExternalChannelSecretField[];
+};
+
+type OfficialExternalCatalogChannel = PluginPackageChannel & {
+  /** Older hosted catalogs used a flat env list before configuredState became canonical. */
+  envVars?: readonly string[];
+};
+
 /** Manifest-like metadata stored in official external catalog entries. */
 type OfficialExternalPluginCatalogManifest = {
+  legacyPluginIds?: readonly string[];
   plugin?: {
     id?: string;
     label?: string;
   };
   catalog?: PluginManifestCatalog;
-  channel?: {
-    id?: string;
-    label?: string;
-    envVars?: readonly string[];
+  channel?: OfficialExternalCatalogChannel;
+  /** Host fallback for external channels that do not yet publish a secret-contract artifact. */
+  channelSecrets?: {
+    fields?: readonly {
+      field?: string;
+      activationField?: string;
+      activationEnv?: string;
+    }[];
+  };
+  /** Host validation overlays for compatibility-sensitive external channel cutovers. */
+  channelHostConfig?: {
+    docsSource?: "external" | "official";
+    compatibilityMigration?: string;
+    schemaAllOf?: readonly Record<string, unknown>[];
   };
   providers?: readonly OfficialExternalProviderCatalogProvider[];
   /**
@@ -1326,9 +1354,7 @@ async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       now: currentTime(),
     });
   } finally {
-    if (response?.bodyUsed !== true) {
-      await response?.body?.cancel().catch(() => undefined);
-    }
+    await cancelUnreadResponseBody(response);
     await release?.().catch(() => undefined);
   }
 }
@@ -1448,6 +1474,28 @@ export function resolveOfficialExternalPluginId(
     normalizeOptionalString(manifest?.channel?.id) ??
     normalizeOptionalString(manifest?.providers?.[0]?.id) ??
     normalizeOptionalString(entry.id)
+  );
+}
+
+/** Returns legacy plugin ids used only for trusted update migrations. */
+export function resolveOfficialExternalPluginLegacyIds(
+  entry: OfficialExternalPluginCatalogEntry,
+): string[] {
+  return uniqueStrings(
+    (getOfficialExternalPluginCatalogManifest(entry)?.legacyPluginIds ?? [])
+      .map((pluginId) => normalizeOptionalString(pluginId))
+      .filter((pluginId): pluginId is string => Boolean(pluginId)),
+  );
+}
+
+/** Returns the host-owned setup migration selected for an external channel cutover. */
+export function resolveOfficialExternalChannelCompatibilityMigration(
+  channelId: string,
+): string | undefined {
+  const entry = getOfficialExternalPluginCatalogEntry(channelId);
+  return normalizeOptionalString(
+    getOfficialExternalPluginCatalogManifest(entry ?? {})?.channelHostConfig
+      ?.compatibilityMigration,
   );
 }
 
@@ -1680,12 +1728,81 @@ export function listOfficialExternalChannelEnvVars(): Array<{
     const channel = getOfficialExternalPluginCatalogManifest(entry)?.channel;
     const channelId = normalizeOptionalString(channel?.id)?.toLowerCase();
     const envVars = uniqueStrings(
-      (channel?.envVars ?? [])
+      [
+        ...(channel?.envVars ?? []),
+        ...(channel?.configuredState?.env?.allOf ?? []),
+        ...(channel?.configuredState?.env?.anyOf ?? []),
+      ]
         .map((envVar) => normalizeOptionalString(envVar))
         .filter((envVar): envVar is string => Boolean(envVar)),
     );
     return channelId && envVars.length > 0 ? [{ channelId, envVars }] : [];
   });
+}
+
+const CHANNEL_SECRET_FIELD_PATTERN = /^[A-Za-z][A-Za-z0-9]*$/;
+const CHANNEL_SECRET_ENV_PATTERN = /^[A-Z][A-Z0-9_]*$/;
+
+/** Returns a validated host fallback secret contract for one external channel. */
+export function getOfficialExternalChannelSecretContract(
+  channelId: string,
+): OfficialExternalChannelSecretContract | undefined {
+  const normalizedChannelId = normalizeOptionalString(channelId)?.toLowerCase();
+  if (!normalizedChannelId) {
+    return undefined;
+  }
+  const entry = listOfficialExternalChannelCatalogEntries().find((candidate) => {
+    const id = normalizeOptionalString(
+      getOfficialExternalPluginCatalogManifest(candidate)?.channel?.id,
+    )?.toLowerCase();
+    return id === normalizedChannelId;
+  });
+  const fields = getOfficialExternalPluginCatalogManifest(entry ?? {})?.channelSecrets?.fields;
+  if (!fields) {
+    return undefined;
+  }
+  const normalizedFields = fields.flatMap((field) => {
+    const fieldName = normalizeOptionalString(field.field);
+    const activationField = normalizeOptionalString(field.activationField);
+    const activationEnv = normalizeOptionalString(field.activationEnv);
+    if (
+      !fieldName ||
+      !CHANNEL_SECRET_FIELD_PATTERN.test(fieldName) ||
+      (activationField !== undefined && !CHANNEL_SECRET_FIELD_PATTERN.test(activationField)) ||
+      (activationEnv !== undefined && !CHANNEL_SECRET_ENV_PATTERN.test(activationEnv))
+    ) {
+      return [];
+    }
+    return [
+      {
+        field: fieldName,
+        ...(activationField ? { activationField } : {}),
+        ...(activationEnv ? { activationEnv } : {}),
+      },
+    ];
+  });
+  return normalizedFields.length > 0
+    ? { channelId: normalizedChannelId, fields: normalizedFields }
+    : undefined;
+}
+
+/** Returns trusted host validation clauses for one official external channel. */
+export function getOfficialExternalChannelHostSchemaAllOf(
+  channelId: string,
+): readonly Record<string, unknown>[] {
+  const normalizedChannelId = normalizeOptionalString(channelId)?.toLowerCase();
+  if (!normalizedChannelId) {
+    return [];
+  }
+  const entry = listOfficialExternalChannelCatalogEntries().find((candidate) => {
+    const id = normalizeOptionalString(
+      getOfficialExternalPluginCatalogManifest(candidate)?.channel?.id,
+    )?.toLowerCase();
+    return id === normalizedChannelId;
+  });
+  const clauses = getOfficialExternalPluginCatalogManifest(entry ?? {})?.channelHostConfig
+    ?.schemaAllOf;
+  return Array.isArray(clauses) ? clauses.filter(isRecord) : [];
 }
 
 export function listOfficialExternalProviderCatalogEntries(): OfficialExternalPluginCatalogEntry[] {

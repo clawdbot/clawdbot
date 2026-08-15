@@ -1,4 +1,6 @@
 // Provider discovery contract helpers define reusable discovery tests for provider plugins.
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runProviderCatalog } from "../../plugins/provider-discovery.js";
 import {
@@ -162,10 +164,7 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
           "Editor-Version": "vscode/1.96.2",
           "User-Agent": "GitHubCopilotChat/0.26.7",
         })),
-        coerceSecretRef: (value: unknown) =>
-          value && typeof value === "object" && !Array.isArray(value)
-            ? (value as Record<string, unknown>)
-            : null,
+        coerceSecretRef: asNullableRecord,
         ensureApiKeyFromOptionEnvOrPrompt: vi.fn(),
         ensureAuthProfileStore: ensureAuthProfileStoreMock,
         listProfilesForProvider: listProfilesForProviderMock,
@@ -176,8 +175,7 @@ function installDiscoveryHooks(state: DiscoveryState, options: DiscoveryContract
             ? trimmed
             : "github.com";
         },
-        normalizeOptionalSecretInput: (value: unknown) =>
-          typeof value === "string" && value.trim() ? value.trim() : undefined,
+        normalizeOptionalSecretInput: normalizeOptionalString,
         resolveNonEnvSecretRefApiKeyMarker: (source: unknown) =>
           typeof source === "string" ? source : "",
         upsertAuthProfile: vi.fn(),

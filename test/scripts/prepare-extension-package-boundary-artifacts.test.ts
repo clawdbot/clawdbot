@@ -9,6 +9,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  listPluginSdkDeclarationOutputs,
+  pluginSdkEntrypoints,
+} from "../../scripts/lib/plugin-sdk-entries.mjs";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   createPrefixedOutputWriter,
@@ -21,7 +25,7 @@ import {
   runNodeSteps,
   runNodeStepsInParallel,
   signalNodeStep,
-} from "../../scripts/prepare-extension-package-boundary-artifacts.mjs";
+} from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
 import { makeTempDir } from "../helpers/temp-dir.js";
 
 const tempRoots = new Set<string>();
@@ -439,7 +443,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       const descendantPidPath = path.join(rootDir, "descendant.pid");
       let descendantPid = 0;
       const moduleHref = pathToFileURL(
-        path.resolve("scripts/prepare-extension-package-boundary-artifacts.mjs"),
+        path.resolve("scripts/prepare-extension-package-boundary-artifacts.mts"),
       ).href;
       const descendantScript = [
         "const fs = require('node:fs');",
@@ -624,6 +628,13 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     const privateQaOutputs = resolveBoundaryEntryShimRequiredOutputs({
       OPENCLAW_BUILD_PRIVATE_QA: "1",
     });
+
+    expect(productionOutputs.filter((output) => output.startsWith("dist/plugin-sdk/"))).toEqual(
+      listPluginSdkDeclarationOutputs().toSorted((a, b) => a.localeCompare(b)),
+    );
+    expect(privateQaOutputs.filter((output) => output.startsWith("dist/plugin-sdk/"))).toEqual(
+      listPluginSdkDeclarationOutputs(pluginSdkEntrypoints).toSorted((a, b) => a.localeCompare(b)),
+    );
 
     expect(productionOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
     expect(productionOutputs).not.toContain("dist/plugin-sdk/test-fixtures.d.ts");

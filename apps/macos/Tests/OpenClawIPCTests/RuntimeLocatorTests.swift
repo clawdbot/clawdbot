@@ -28,6 +28,21 @@ struct RuntimeLocatorTests {
         #expect(res.version == RuntimeVersion(major: 22, minor: 22, patch: 3))
     }
 
+    @Test func `runtime version probe tolerates loaded host delay`() async throws {
+        let script = """
+        #!/bin/sh
+        /bin/sleep 2.1
+        echo v22.22.3
+        """
+        let node = try self.makeTempExecutable(contents: script)
+        let result = await RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
+        guard case let .success(resolution) = result else {
+            Issue.record("Expected delayed version probe to succeed, got \(result)")
+            return
+        }
+        #expect(resolution.version == RuntimeVersion(major: 22, minor: 22, patch: 3))
+    }
+
     @Test func `resolve fails on boundary below minimum`() async throws {
         let script = """
         #!/bin/sh

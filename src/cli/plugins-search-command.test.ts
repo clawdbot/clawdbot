@@ -32,7 +32,7 @@ vi.mock("../runtime.js", () => ({
     runtime.writeJson(value, space),
 }));
 
-vi.mock("../infra/clawhub.js", () => ({
+vi.mock("../infra/clawhub-packages.js", () => ({
   searchClawHubPackages: mocks.searchClawHubPackages,
 }));
 

@@ -13,12 +13,13 @@ import {
   type RequestFn,
 } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
-import { UPDATE_HANDOFF_STARTED_REASON } from "./update-overlay-helpers.ts";
 
 vi.mock("../build-info.ts", () => ({
   controlUiVersionDiffersFrom: (gatewayVersion: string | undefined) =>
     Boolean(gatewayVersion?.trim() && gatewayVersion.trim() !== "1.0.0"),
+  reloadControlUiIfStale: vi.fn(),
 }));
+vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
 const { peekStoredDeviceIdentityIdMock } = vi.hoisted(() => ({
   peekStoredDeviceIdentityIdMock: vi.fn((): string | null => "browser-1"),
 }));
@@ -28,6 +29,7 @@ vi.mock("../lib/nodes/index.ts", () => ({
 
 const HANDOFF_POLL_MS = 1_000;
 const RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
+const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 
 function installUpdateTranslations() {
   const translations: Record<string, string> = {
@@ -38,6 +40,9 @@ function installUpdateTranslations() {
       "Another managed update is already running. Wait for it to complete, then refresh update status.",
     "updates.verificationFailedWithVersions":
       "Update installed but running version did not change — restart may have been blocked. Expected v{expectedVersion}, running v{actualVersion}.",
+    "updates.verificationFailedWithIdentity":
+      "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}.",
+    "common.unknown": "Unknown",
     "updates.outcomeUnknown":
       "The update request may have been accepted, but the Gateway did not report a final result after reconnect. Run `openclaw update status` before retrying.",
   };

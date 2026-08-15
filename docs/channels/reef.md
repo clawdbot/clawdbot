@@ -85,6 +85,8 @@ Reef lives under `channels.reef`:
 
 ## Adding a friend
 
+Friendship changes and review decisions from authenticated chat require the sender to match an explicit `commands.ownerAllowFrom` entry. Wildcards can admit commands, but do not grant owner authority. A configured owner can make either change in chat; friendship changes can also use `openclaw reef friend` on the Gateway host.
+
 The receiving side mints a short-lived code in an authenticated chat:
 
 ```text
@@ -142,6 +144,8 @@ Reef runs a fail-closed classifier at both ends: outbound DLP before encryption,
 /reef review list
 /reef review approve <digest>
 ```
+
+These review commands use the same explicit owner check described in [Adding a friend](#adding-a-friend). If no chat sender is configured as an owner, add the intended owner to `commands.ownerAllowFrom` before deciding a review.
 
 Deterministic checks (size, UTF-8, destination pin, secret patterns) run before any model call and cannot be overridden.
 

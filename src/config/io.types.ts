@@ -120,6 +120,7 @@ export type ConfigSnapshotReadOptions = {
   observe?: boolean;
   isolateEnv?: boolean;
   lowerPrecedenceEnv?: Readonly<Record<string, string>>;
+  allowCurrentPluginMetadata?: boolean;
   recoverSuspicious?: boolean;
   allowSuspiciousRecovery?: (
     candidate: OpenClawConfig,
@@ -147,3 +148,17 @@ export type BestEffortConfigSnapshot = {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
 };
+
+export type ConfigRecoveryCandidate = {
+  raw: string;
+  parsed: unknown;
+  config?: OpenClawConfig;
+};
+
+export type ConfigRecoveryCandidatePreparation =
+  | { ok: true; candidate: ConfigRecoveryCandidate }
+  | { ok: false; reason: string };
+
+export type PrepareConfigRecoveryCandidate = (
+  candidate: ConfigRecoveryCandidate,
+) => ConfigRecoveryCandidatePreparation;

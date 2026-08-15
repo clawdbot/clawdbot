@@ -2,9 +2,10 @@
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
-import { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   listKnownSessionStoreAgentIds,
@@ -21,12 +22,11 @@ import {
 } from "../state/openclaw-agent-db-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { createDeferred } from "../test-utils/deferred.js";
 import type { Logger } from "./service/state.js";
 import { sweepCronRunSessions as sweepCronRunSessionsImpl } from "./session-reaper.js";
 import { resetReaperThrottle } from "./session-reaper.test-support.js";
 
-const { listSessionEntries, patchSessionEntry, replaceSessionEntry } = sessionAccessor;
+const { listSessionEntriesCore, patchSessionEntryCore, replaceSessionEntry } = sessionAccessor;
 
 const taskStatusMocks = vi.hoisted(() => ({
   buildPendingSet: vi.fn<() => Set<string>>(() => new Set()),
@@ -62,7 +62,7 @@ async function seedSessionEntries(
 
 function readSessionEntries(storePath: string): Record<string, SessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({ agentId: "main", storePath }).map(({ sessionKey, entry }) => [
+    listSessionEntriesCore({ agentId: "main", storePath }).map(({ sessionKey, entry }) => [
       sessionKey,
       entry,
     ]),
@@ -266,7 +266,7 @@ describe("sweepCronRunSessions", () => {
     expect(resolveExistingAgentSessionStoreTargetsSync(cfg, "ops")).toEqual([
       { agentId: "ops", storePath: exactStorePath },
     ]);
-    expect(Object.keys(loadCombinedSessionStoreForGateway(cfg).store).toSorted()).toEqual([
+    expect(Object.keys(loadCombinedSessionStoreForGatewayCore(cfg).store).toSorted()).toEqual([
       mainKey,
       opsKey,
     ]);
@@ -444,7 +444,7 @@ describe("sweepCronRunSessions", () => {
     const writerStarted = createDeferred();
     const releaseWriter = createDeferred();
     const firstValidation = createDeferred();
-    const writer = patchSessionEntry({ storePath, sessionKey }, async () => {
+    const writer = patchSessionEntryCore({ storePath, sessionKey }, async () => {
       writerStarted.resolve();
       await releaseWriter.promise;
       return {};
@@ -526,6 +526,32 @@ describe("sweepCronRunSessions", () => {
     expect(result.swept).toBe(false);
     expect(result.pruned).toBe(0);
   });
+
+  it.each([["0h"], ["0s"], ["0"]])(
+    "treats a zero retention (%s) as disabled instead of pruning everything",
+    async (sessionRetention) => {
+      const now = Date.now();
+      const store: Record<string, SessionEntry> = {
+        "agent:main:cron:job1:run:run1": {
+          sessionId: "run1",
+          updatedAt: now - 100 * 3_600_000,
+        },
+      };
+      await seedSessionEntries(storePath, store);
+
+      const result = await sweepCronRunSessions({
+        cronConfig: { sessionRetention },
+        sessionStorePath: storePath,
+        nowMs: now,
+        log,
+        force: true,
+      });
+
+      expect(result.swept).toBe(false);
+      expect(result.pruned).toBe(0);
+      expect(readSessionEntries(storePath)).toHaveProperty("agent:main:cron:job1:run:run1");
+    },
+  );
 
   it("sweeps immediately when disabled retention is enabled again", async () => {
     const now = Date.now();
@@ -661,7 +687,7 @@ describe("sweepCronRunSessions", () => {
     const eacces = Object.assign(new Error("EACCES: permission denied, open 'sessions.json'"), {
       code: "EACCES",
     });
-    const listSpy = vi.spyOn(sessionAccessor, "listSessionEntries").mockImplementation(() => {
+    const listSpy = vi.spyOn(sessionAccessor, "listSessionEntriesCore").mockImplementation(() => {
       throw eacces;
     });
 

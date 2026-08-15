@@ -1,19 +1,14 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { filterHeartbeatTranscriptTurns } from "../../auto-reply/heartbeat-transcript-turns.js";
 import { redactSensitiveText } from "../../logging/redact.js";
-import { formatSkillExperienceReviewTranscript } from "./experience-review-prompt.js";
+import {
+  countSkillModelIterations,
+  formatSkillExperienceReviewTranscript,
+} from "./experience-review-prompt.js";
 
 const HISTORY_SCAN_MAX_RECENT_MESSAGES = 80;
 const HISTORY_SCAN_MAX_LOCAL_TRANSCRIPT_BYTES = 8 * 1024 * 1024;
-
-function countModelIterations(messages: readonly unknown[]): number {
-  return messages.reduce<number>((count, message) => {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      return count;
-    }
-    return count + ((message as { role?: unknown }).role === "assistant" ? 1 : 0);
-  }, 0);
-}
 
 function capSessionTranscript(transcript: string, maxChars: number): string {
   if (transcript.length <= maxChars) {
@@ -32,12 +27,7 @@ function capSessionTranscript(transcript: string, maxChars: number): string {
 
 function hasLegacyHookTranscriptContent(messages: readonly unknown[]): boolean {
   return messages.some((message) => {
-    if (
-      !message ||
-      typeof message !== "object" ||
-      Array.isArray(message) ||
-      (message as { role?: unknown }).role !== "user"
-    ) {
+    if (!isRecord(message) || message.role !== "user") {
       return false;
     }
     const rendered = formatSkillExperienceReviewTranscript([message]);
@@ -56,13 +46,9 @@ function filterSkillHistoryScanReviewMessages(
   if (hasLegacyHookTranscriptContent(messages)) {
     return undefined;
   }
-  const roleMessages = messages.filter((message): message is { role: string; content?: unknown } =>
-    Boolean(
-      message &&
-      typeof message === "object" &&
-      !Array.isArray(message) &&
-      typeof (message as { role?: unknown }).role === "string",
-    ),
+  const roleMessages = messages.filter(
+    (message): message is { role: string; content?: unknown } =>
+      isRecord(message) && typeof message.role === "string",
   );
   return filterHeartbeatTranscriptTurns(roleMessages, heartbeatPrompt);
 }
@@ -77,7 +63,7 @@ export function prepareSkillHistoryScanReviewMessages(
   }
   return {
     messages: filtered.slice(-HISTORY_SCAN_MAX_RECENT_MESSAGES),
-    modelIterations: countModelIterations(filtered),
+    modelIterations: countSkillModelIterations(filtered),
   };
 }
 
