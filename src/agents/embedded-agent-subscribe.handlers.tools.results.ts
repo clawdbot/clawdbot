@@ -213,9 +213,15 @@ export function applyToolSendReceiptForExtraction(
   };
 }
 
-export function isAsyncStartedToolResult(result: unknown): boolean {
+export function isAsyncStartedToolResult(toolName: string, result: unknown): boolean {
   const details = readToolResultDetails(result);
-  return details?.async === true && details.status === "started";
+  if (details?.async === true && details.status === "started") {
+    return true;
+  }
+  if (toolName !== "exec" && toolName !== "bash" && toolName !== "process") {
+    return false;
+  }
+  return details?.status === "running" && Boolean(readStringValue(details.sessionId));
 }
 
 export function readAsyncStartedTaskIds(result: unknown): {

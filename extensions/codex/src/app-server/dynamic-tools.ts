@@ -809,7 +809,8 @@ export function createCodexDynamicToolBridge(params: {
             (confirmedSourceReply && sourceReplyFinal === true),
         );
         const asyncStarted =
-          isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result);
+          isAsyncStartedToolResult(toolName, rawResult) ||
+          isAsyncStartedToolResult(toolName, result);
         withDynamicToolAsyncStarted(response, asyncStarted);
         const replaySafe =
           executionPrevented ||
@@ -1396,9 +1397,22 @@ function isToolResultYield(result: AgentToolResult<unknown>): boolean {
   }
   return details.status.trim().toLowerCase() === "yielded";
 }
-function isAsyncStartedToolResult(result: AgentToolResult<unknown>): boolean {
+function isAsyncStartedToolResult(toolName: string, result: AgentToolResult<unknown>): boolean {
   const details = result.details;
-  return isRecord(details) && details.async === true && details.status === "started";
+  if (!isRecord(details)) {
+    return false;
+  }
+  if (details.async === true && details.status === "started") {
+    return true;
+  }
+  if (toolName !== "exec" && toolName !== "bash" && toolName !== "process") {
+    return false;
+  }
+  return (
+    details.status === "running" &&
+    typeof details.sessionId === "string" &&
+    details.sessionId.trim().length > 0
+  );
 }
 function withDiagnosticTerminalType<T extends CodexDynamicToolCallResponse>(
   response: T,

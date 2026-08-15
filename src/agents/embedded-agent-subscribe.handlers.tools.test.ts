@@ -2096,6 +2096,43 @@ describe("handleToolExecutionEnd timeout metadata", () => {
     expect(ctx.state.toolMetas[2]?.asyncStarted).toBe(true);
   });
 
+  it.each(["exec", "bash", "process"])(
+    "treats a running %s session as async continuation evidence",
+    async (toolName) => {
+      const { ctx } = createTestContext();
+      const normalizedToolName = toolName === "bash" ? "exec" : toolName;
+
+      await endTool(ctx, {
+        toolName,
+        toolCallId: `tool-${toolName}-running`,
+        isError: false,
+        result: {
+          details: {
+            status: "running",
+            sessionId: "quiet-dune",
+          },
+        },
+      });
+
+      expect(ctx.state.toolMetas).toEqual([
+        expect.objectContaining({ toolName: normalizedToolName, asyncStarted: true }),
+      ]);
+    },
+  );
+
+  it("does not treat an unscoped running result as continuation evidence", async () => {
+    const { ctx } = createTestContext();
+
+    await endTool(ctx, {
+      toolName: "process",
+      toolCallId: "tool-process-running-unscoped",
+      isError: false,
+      result: { details: { status: "running" } },
+    });
+
+    expect(ctx.state.toolMetas).toEqual([expect.not.objectContaining({ asyncStarted: true })]);
+  });
+
   it("retains every failed call after later successes change the last-error slot", async () => {
     const { ctx } = createTestContext();
 

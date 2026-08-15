@@ -176,7 +176,7 @@ export async function handleToolExecutionEnd(
     (trackedExecutionStarted ?? evt.executionStarted ?? true) && !executionPrevented;
   const attemptedPotentialSideEffect = !callSummary.replaySafe && executionStarted;
   const meta = callSummary.meta;
-  const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
+  const asyncStarted = !isToolError && isAsyncStartedToolResult(toolName, sanitizedResult);
   const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
   ctx.state.toolMetas.push({
     toolName,

@@ -2928,6 +2928,31 @@ describe("createCodexDynamicToolBridge", () => {
     expect(Object.keys(result)).not.toContain("terminate");
   });
 
+  it.each(["exec", "process"])(
+    "preserves a running %s session as asynchronous work",
+    async (toolName) => {
+      const bridge = createBridgeWithToolResult(
+        toolName,
+        textToolResult("Process still running.", {
+          status: "running",
+          sessionId: "quiet-dune",
+        }),
+      );
+
+      const result = await bridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: `call-${toolName}-running`,
+        namespace: null,
+        tool: toolName,
+        arguments: toolName === "exec" ? { command: "sleep 30" } : { action: "poll" },
+      });
+
+      expect(result.asyncStarted).toBe(true);
+      expect(result.sideEffectEvidence).toBe(true);
+    },
+  );
+
   it("marks executed dynamic tool results as side-effect evidence", async () => {
     const bridge = createBridgeWithToolResult("exec", textToolResult("done"));
 
