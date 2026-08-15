@@ -116,6 +116,7 @@ export class DiscordVoiceManager {
       params.accountId,
     );
     this.receive = new DiscordVoiceReceive({
+      accountId: params.accountId,
       admissionAllowFrom: this.admissionAllowFrom,
       botUserId: () => this.botUserId,
       cfg: params.cfg,
