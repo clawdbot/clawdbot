@@ -397,10 +397,10 @@ openclaw-chat-sidebar-region,
 }
 
 .side-panel__header .tabstrip-tab__close {
-  width: 16px;
-  min-width: 16px;
+  width: 14px;
+  min-width: 14px;
   height: 28px;
-  flex: 0 0 16px;
+  flex: 0 0 14px;
   align-self: center;
   margin: 0;
   opacity: 1;
@@ -412,9 +412,14 @@ openclaw-chat-sidebar-region,
 }
 
 .side-panel__header .tabstrip-tab__close-box {
-  width: 16px;
-  height: 16px;
+  width: 12px;
+  height: 12px;
   opacity: 0.72;
+}
+
+.side-panel__header .tabstrip-tab__close svg {
+  width: 11px;
+  height: 11px;
 }
 
 .side-panel__header .tabstrip-tab__close:hover .tabstrip-tab__close-box,
