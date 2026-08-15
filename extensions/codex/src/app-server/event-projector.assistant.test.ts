@@ -401,6 +401,57 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     expect(projector.buildSteeringTranscriptPrefix()).toEqual([]);
   });
 
+  it("selects the delivered answer, not a trailing silent token, as the Activity answer (#116604)", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onAgentEvent,
+    });
+    const summary = "The real review summary the operator should see.";
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta(summary, "answer-1"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: summary },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("NO_REPLY", "answer-2"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "NO_REPLY" },
+      }),
+    );
+    // turn/completed.items is a last-wins last_agent_message summary, so only the
+    // trailing silent item arrives here even though delivery keeps the real answer.
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "NO_REPLY" },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual([summary]);
+
+    const selectedEvents = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((event) => event.stream === "item" && event.data.kind === "answer_candidate")
+      .map((event) => event.data)
+      .filter((data) => data.status === "selected");
+    expect(selectedEvents).toEqual([
+      expect.objectContaining({ itemId: "answer-1", progressText: summary }),
+    ]);
+  });
+
   it("drops a pre-sleep final after a later sleep handoff", async () => {
     const projector = await createProjector(await createParams());
     const sleepItem = { type: "sleep", id: "sleep-1", durationMs: 250 };

@@ -464,7 +464,16 @@ export class CodexAssistantProjection {
       this.supersedeVisibleAnswerCandidate();
       return;
     }
-    const itemId = authoritative?.id ?? this.visibleAnswerCandidateItemId;
+    let itemId = authoritative?.id ?? this.visibleAnswerCandidateItemId;
+    // turn/completed.items is a last-wins last_agent_message summary (codex-rs
+    // thread_state.rs track_current_turn_event), so a trailing silent token shadows
+    // the real answer here even though collectAssistantTexts() delivers it. Re-derive
+    // the selected item from the same precedence delivery uses.
+    const authoritativeText =
+      typeof authoritative?.text === "string" ? authoritative.text.trim() : undefined;
+    if (authoritativeText && isSilentReplyPayloadText(authoritativeText)) {
+      itemId = this.resolveDeliveredAnswerItemId() ?? itemId;
+    }
     if (!itemId) {
       return;
     }
@@ -646,6 +655,36 @@ export class CodexAssistantProjection {
     this.latestTerminalAssistantCandidateCanReleaseAfterToolHandoff = false;
     this.terminalAssistantCandidateEarlierActiveItemIds.clear();
     this.supersedeVisibleAnswerCandidate();
+  }
+
+  private resolveDeliveredAnswerItemId(): string | undefined {
+    // Item-id mirror of collectAssistantTexts(): the Activity "selected answer" must
+    // name the item whose text delivery actually chooses. Without this, a trailing
+    // silent token shadows the real answer in the operator UI while the channel
+    // correctly receives the audible reply.
+    const pickLast = (minIndex: number, audibleOnly: boolean): string | undefined => {
+      for (let i = this.assistantItemOrder.length - 1; i >= minIndex; i -= 1) {
+        const itemId = this.assistantItemOrder[i];
+        if (!itemId || this.assistantPhaseByItem.get(itemId) === "commentary") {
+          continue;
+        }
+        const text = this.assistantTextByItem.get(itemId)?.trim();
+        if (!text || this.isToolProgressEchoText(itemId, text)) {
+          continue;
+        }
+        if (audibleOnly && isSilentReplyPayloadText(text)) {
+          continue;
+        }
+        return itemId;
+      }
+      return undefined;
+    };
+    return (
+      pickLast(this.persistableAssistantBarrier, true) ??
+      pickLast(this.persistableAssistantBarrier, false) ??
+      pickLast(0, true) ??
+      this.resolveFinalAssistantTextItem()?.itemId
+    );
   }
 
   private resolveFinalAssistantTextItem(): { itemId: string; text: string } | undefined {
