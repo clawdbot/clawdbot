@@ -11,11 +11,12 @@ import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 
 /** Gate outcome: "released" for every non-failure release (adoption success,
- * deferral, abandon, abort); "failed" when the durable adoption rejected.
- * The failure is carried separately from the value so even a falsy rejection
- * (`throw undefined`) cannot be conflated with a success release — that
- * would let the flush's race settle on the lane and skip its
- * abandon-and-retry path. */
+ * deferral, abandon, an abort whose abandonment settled); "failed" when a
+ * durable terminal transition (adoption, or a pre-adoption abort's
+ * abandonment) rejected. The failure is carried separately from the value so
+ * even a falsy rejection (`throw undefined`) cannot be conflated with a
+ * success release — that would let the flush's race settle on the lane and
+ * skip its abandon-and-retry path. */
 type FeishuTurnAdoptionGateRelease = { kind: "released" } | { kind: "failed"; failure: unknown };
 
 type FeishuTurnAdoptionGate = {
@@ -44,10 +45,23 @@ export function createTurnAdoptionGate(
   const gate = new Promise<FeishuTurnAdoptionGateRelease>((resolve) => {
     resolveGate = resolve;
   });
-  // The abort listener never forwards its Event argument into the gate: only
-  // a rejected durable adoption carries the failed outcome, and an abort
-  // Event is not one.
-  const onAbort = () => releaseAndDetach({ kind: "released" });
+  // A pre-adoption abort must abandon the durable claim before the lane
+  // frees: releasing "released" here would let the flush win on the lane and
+  // settle() adopt the row — a message that a shutdown stopped before
+  // reply-lane adoption would be tombstoned, not retried. The original
+  // lifecycle's onAbandoned sets handedOff synchronously, so on success the
+  // flush's settle() stays a no-op; a failed abandonment carries the gate's
+  // failed outcome so the flush catch retries it and surfaces the error.
+  const onAbort = () => {
+    void (async () => {
+      try {
+        await lifecycle.onAbandoned();
+        releaseAndDetach({ kind: "released" });
+      } catch (failure) {
+        releaseAndDetach({ kind: "failed", failure });
+      }
+    })();
+  };
   // One function is both the abort listener's target and the release helper;
   // the listener is detached on release so an aborted lifecycle cannot
   // re-enter.

@@ -396,6 +396,41 @@ describe("Feishu durable ingress debounce lifecycle", () => {
     },
   );
 
+  it("abandons the durable ingress instead of settling it as adopted when the signal aborts before adoption", async () => {
+    const transport = createLifecycle();
+    const logicalClaim = createClaim("shutdown-before-adoption");
+    const turnGate = createDeferred<void>();
+    const harness = createHarness({
+      lifecycles: new Map([["evt-shutdown", transport.lifecycle]]),
+      claims: [logicalClaim],
+      adoptTurn: false,
+    });
+    // The turn is in flight but never reaches the reply lane when the
+    // monitor shuts down and aborts the drain lifecycle (ingress-monitor
+    // stop contract); the gate must abandon the claim for restart retry.
+    harness.handleMessage.mockImplementationOnce(async () => {
+      await turnGate.promise;
+    });
+
+    await harness.handler(createTextEvent("evt-shutdown", "om-shutdown", "shutdown"));
+    const flush = harness.flush();
+    await vi.waitFor(() => expect(harness.handleMessage).toHaveBeenCalledTimes(1));
+    transport.controller.abort(new Error("monitor shutdown"));
+    await flush;
+
+    // The interrupted message stays retryable: the durable row is abandoned,
+    // never settled as adopted, and the logical guard releases instead of
+    // committing. The claim releases twice by contract — once by the flush's
+    // replay guard, once by the admission-time abandon handler on the
+    // transport.
+    expect(transport.calls.adopted).not.toHaveBeenCalled();
+    expect(transport.calls.abandoned).toHaveBeenCalledTimes(1);
+    expect(logicalClaim.commit).not.toHaveBeenCalled();
+    expect(logicalClaim.release).toHaveBeenCalledTimes(2);
+    expect(harness.runtimeError).not.toHaveBeenCalled();
+    turnGate.resolve();
+  });
+
   it("does not dispatch a queued turn after its ingress claim aborts", async () => {
     const first = createLifecycle();
     const second = createLifecycle();
@@ -432,7 +467,7 @@ describe("Feishu durable ingress debounce lifecycle", () => {
     expect(second.calls.adopted).not.toHaveBeenCalled();
   });
 
-  it("rejects the flush when a queued pre-start abandon fails to persist", async () => {
+  it("completes a queued pre-start abandonment after the gate's first attempt fails", async () => {
     const first = createLifecycle();
     const second = createLifecycle();
     second.calls.abandoned.mockRejectedValueOnce(new Error("abandon failed"));
@@ -460,27 +495,73 @@ describe("Feishu durable ingress debounce lifecycle", () => {
     await vi.waitFor(() => expect(harness.handleMessage).toHaveBeenCalledTimes(1));
     await harness.handler(createTextEvent("evt-second", "om-second", "second"));
     const secondFlush = harness.flush();
-    // The second flush dispatched with a live signal, so the turn is queued
-    // behind the first lane; aborting now puts the queue task on the
-    // pre-start-abort path. Its abandonment persistence failure must reject
-    // the flush (through `turn`) instead of settling it and dying in the
-    // lane where the flush's race has already resolved.
+    // The second flush dispatched with a live signal, so the gate owns the
+    // queued message's abort: its abandonment attempt fails once, then the
+    // task's pre-start retry succeeds — the flush completes with the claim
+    // abandoned, never settled as adopted.
     await Promise.resolve();
     second.controller.abort(new Error("adoption timeout"));
     finishFirst();
-    await expect(secondFlush).rejects.toThrow("abandon failed");
-    await firstFlush;
+    await Promise.all([firstFlush, secondFlush]);
 
     expect(harness.handleMessage).toHaveBeenCalledTimes(1);
     expect(second.calls.adopted).not.toHaveBeenCalled();
-    // The task's abandon attempt fails once, then the flush's catch retries
-    // the abandon before rethrowing — abandon retry accounting survives.
+    // One attempt from the gate's abort path, one retry from the queued
+    // task's pre-start branch.
     expect(second.calls.abandoned).toHaveBeenCalledTimes(2);
     expect(secondClaim.commit).not.toHaveBeenCalled();
     // Each abandon run releases the claim twice by contract — once by the
     // flush's replay guard, once by the admission-time abandon handler on
     // the transport — so the retried abandon releases four times.
     expect(secondClaim.release).toHaveBeenCalledTimes(4);
+  });
+
+  it("rejects the flush when a queued pre-start abandonment persists in failing", async () => {
+    const first = createLifecycle();
+    const second = createLifecycle();
+    second.calls.abandoned.mockRejectedValueOnce(new Error("abandon failed"));
+    second.calls.abandoned.mockRejectedValueOnce(new Error("abandon failed"));
+    second.calls.abandoned.mockRejectedValueOnce(new Error("abandon failed"));
+    let finishFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      finishFirst = resolve;
+    });
+    const secondClaim = createClaim("second-queued-abandon-persistent");
+    const harness = createHarness({
+      lifecycles: new Map([
+        ["evt-first", first.lifecycle],
+        ["evt-second", second.lifecycle],
+      ]),
+      claims: [createClaim("first-queued-abandon-persistent"), secondClaim],
+      adoptTurn: true,
+    });
+    harness.handleMessage.mockImplementationOnce(async (turn) => {
+      await firstGate;
+      turn.turnAdoptionLifecycle?.onAdoptionFinalizing();
+      await turn.turnAdoptionLifecycle?.onAdopted();
+    });
+
+    await harness.handler(createTextEvent("evt-first", "om-first", "first"));
+    const firstFlush = harness.flush();
+    await vi.waitFor(() => expect(harness.handleMessage).toHaveBeenCalledTimes(1));
+    await harness.handler(createTextEvent("evt-second", "om-second", "second"));
+    const secondFlush = harness.flush();
+    await Promise.resolve();
+    second.controller.abort(new Error("adoption timeout"));
+    finishFirst();
+    // The gate's abort attempt and the task's pre-start retry both fail, so
+    // the flush catch's third attempt also rejects and the flush surfaces
+    // the error — a persistent abandonment failure never settles silently.
+    await expect(secondFlush).rejects.toThrow("abandon failed");
+    await firstFlush;
+
+    expect(harness.handleMessage).toHaveBeenCalledTimes(1);
+    expect(second.calls.adopted).not.toHaveBeenCalled();
+    expect(second.calls.abandoned).toHaveBeenCalledTimes(3);
+    expect(secondClaim.commit).not.toHaveBeenCalled();
+    // Six releases: three abandon runs (gate, task retry, flush catch) times
+    // the two-by-contract releases per run.
+    expect(secondClaim.release).toHaveBeenCalledTimes(6);
   });
 
   it("submits a second same-chat message while the first turn is still running", async () => {

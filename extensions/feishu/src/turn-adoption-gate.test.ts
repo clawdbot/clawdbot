@@ -244,8 +244,8 @@ describe("enqueueAdoptionGatedTurn", () => {
     expect(order).toEqual(["turn:start", "turn:abandoned", "turn:end"]);
   });
 
-  it("releases the queue lane when the ingress abort signal fires", async () => {
-    const { lifecycle, controller } = createLifecycle();
+  it("abandons the durable claim and releases the lane when the ingress abort signal fires", async () => {
+    const { lifecycle, controller, calls } = createLifecycle();
     const turnGate = createDeferred<void>();
     let started = false;
     const { lane, turn } = enqueueAdoptionGatedTurn({
@@ -261,6 +261,33 @@ describe("enqueueAdoptionGatedTurn", () => {
     controller.abort(new Error("adoption stall"));
     await lane;
     expect(started).toBe(true);
+    // A pre-adoption abort must abandon the durable claim before the lane
+    // frees: releasing the lane as success would let the flush settle the
+    // row as adopted and drop the message on shutdown.
+    expect(calls.abandoned).toHaveBeenCalledTimes(1);
+    turnGate.resolve();
+    await turn;
+  });
+
+  it("rejects the lane when the pre-adoption abort's abandonment fails", async () => {
+    const { lifecycle, controller, calls } = createLifecycle();
+    calls.abandoned.mockRejectedValueOnce(new Error("abandon failed"));
+    const turnGate = createDeferred<void>();
+    let started = false;
+    const { lane, turn } = enqueueAdoptionGatedTurn({
+      enqueue: createQueue(),
+      sequentialKey: "feishu:default:oc-chat",
+      lifecycle,
+      runTurn: async () => {
+        started = true;
+        await turnGate.promise;
+      },
+    });
+    await vi.waitFor(() => expect(started).toBe(true));
+    controller.abort(new Error("monitor shutdown"));
+    // A failed abandonment must reject the lane so the flush's catch retries
+    // the abandonment and surfaces the error, instead of settling the flush.
+    await expect(lane).rejects.toThrow("abandon failed");
     turnGate.resolve();
     await turn;
   });
