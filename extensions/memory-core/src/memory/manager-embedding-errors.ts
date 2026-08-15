@@ -42,3 +42,28 @@ export function isMemoryEmbeddingOperationError(
     (err as { code?: unknown }).code === MEMORY_EMBEDDING_OPERATION_ERROR_CODE
   );
 }
+
+/** Whether `err` short-circuited a known billing cooldown rather than failing anew. */
+export function isMemorySyncCooldownSkip(err: unknown): boolean {
+  return isMemoryEmbeddingOperationError(err) && err.skippedDueToCooldown === true;
+}
+
+/**
+ * Logs a background memory-sync failure at the right level: a cooldown-skip is an
+ * already-reported, expected state (see the billing cooldown in manager-embedding-ops.ts),
+ * not a new failure, so every async sync entrypoint (session updates, on-search sync,
+ * startup catchup) must demote it to debug instead of re-warning on every cycle. Pass an
+ * already-formatted `message` when the caller needs redaction; defaults to `String(err)`.
+ */
+export function logMemorySyncOutcome(
+  log: { warn: (message: string) => void; debug: (message: string) => void },
+  label: string,
+  err: unknown,
+  message: string = String(err),
+): void {
+  if (isMemorySyncCooldownSkip(err)) {
+    log.debug(`memory sync skipped (${label}): ${message}`);
+    return;
+  }
+  log.warn(`memory sync failed (${label}): ${message}`);
+}

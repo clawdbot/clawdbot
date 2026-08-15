@@ -78,21 +78,71 @@ describe("memory embedding query retry cancellation", () => {
 });
 
 describe("memory embedding query cooldown recovery", () => {
-  it("clears an active billing cooldown once a query embedding succeeds", async () => {
+  type CooldownState = {
+    providerId: string;
+    untilMs: number;
+    reason: string;
+    consecutiveFailures: number;
+  };
+
+  it("skips the provider entirely while an active billing cooldown covers it", async () => {
+    // Regression: only the batch path checked embeddingBillingCooldown before calling the
+    // provider. Vector-search queries reach embedQueryWithRetry directly, so a billing-
+    // exhausted provider kept receiving query traffic (and paying/failing on every search)
+    // during a cooldown the batch path had already entered.
+    const embedQuery = vi.fn<EmbeddingProvider["embedQuery"]>().mockResolvedValue([0.1, 0.2]);
+    const manager = createEmbeddingQueryRetryHarness(embedQuery) as EmbeddingQueryRetryHarness & {
+      embeddingBillingCooldown?: CooldownState;
+    };
+    manager.embeddingBillingCooldown = {
+      providerId: "test-provider",
+      untilMs: Date.now() + 60_000,
+      reason: "402 payment required",
+      consecutiveFailures: 1,
+    };
+
+    await expect(manager.embedQueryWithRetry("search terms")).rejects.toMatchObject({
+      code: "MEMORY_EMBEDDING_OPERATION_FAILED",
+      operation: "query",
+    });
+    expect(embedQuery).not.toHaveBeenCalled();
+    expect(manager.embeddingBillingCooldown).toBeDefined();
+  });
+
+  it("clears an active billing cooldown once a query embedding succeeds after it expires", async () => {
     // Regression: only the batch-write success path cleared embeddingBillingCooldown, so
     // after credits were restored, memory search could succeed via embedQueryWithRetry
     // while every session write stayed skipped until the old cooldown deadline.
     const embedQuery = vi.fn<EmbeddingProvider["embedQuery"]>().mockResolvedValue([0.1, 0.2]);
     const manager = createEmbeddingQueryRetryHarness(embedQuery) as EmbeddingQueryRetryHarness & {
-      embeddingBillingCooldown?: { providerId: string; untilMs: number };
+      embeddingBillingCooldown?: CooldownState;
     };
     manager.embeddingBillingCooldown = {
       providerId: "test-provider",
-      untilMs: Date.now() + 60_000,
+      untilMs: Date.now() - 1,
+      reason: "402 payment required",
+      consecutiveFailures: 1,
     };
 
     await manager.embedQueryWithRetry("search terms");
 
+    expect(embedQuery).toHaveBeenCalledOnce();
     expect(manager.embeddingBillingCooldown).toBeUndefined();
+  });
+
+  it("enters a billing cooldown when a query fails with a billing-exhausted error", async () => {
+    const embedQuery = vi
+      .fn<EmbeddingProvider["embedQuery"]>()
+      .mockRejectedValue(new Error("402 payment required: insufficient_quota"));
+    const manager = createEmbeddingQueryRetryHarness(embedQuery) as EmbeddingQueryRetryHarness & {
+      embeddingBillingCooldown?: CooldownState;
+    };
+
+    await expect(manager.embedQueryWithRetry("search terms")).rejects.toMatchObject({
+      code: "MEMORY_EMBEDDING_OPERATION_FAILED",
+      operation: "query",
+    });
+
+    expect(manager.embeddingBillingCooldown?.providerId).toBe("test-provider");
   });
 });

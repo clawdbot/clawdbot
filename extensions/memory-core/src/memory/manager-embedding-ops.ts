@@ -805,6 +805,23 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!provider) {
       throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
     }
+    // Mirrors runProviderBatchWithRetry's cooldown guard: vector-search queries use the same
+    // provider as batch indexing, so a billing-exhausted provider must not keep receiving
+    // query traffic just because only the batch path checked the cooldown.
+    if (isMemoryEmbeddingCoolingDown(this.embeddingBillingCooldown, provider.id, Date.now())) {
+      const reason = this.embeddingBillingCooldown!.reason;
+      log.debug("memory embeddings: skipping query, provider in billing cooldown", {
+        provider: provider.id,
+        reason,
+        untilMs: this.embeddingBillingCooldown!.untilMs,
+      });
+      throw createMemoryEmbeddingOperationError({
+        operation: "query",
+        providerId: provider.id,
+        cause: new Error(reason),
+        skippedDueToCooldown: true,
+      });
+    }
     try {
       const embedding = await this.withProviderUse(
         provider,
@@ -835,6 +852,21 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     } catch (err) {
       if (markDegraded) {
         this.markLocalEmbeddingProviderDegraded(err);
+      }
+      const message = formatErrorMessage(err);
+      if (isBillingExhaustedMemoryEmbeddingError(message)) {
+        this.embeddingBillingCooldown = computeNextMemoryEmbeddingCooldown({
+          providerId: provider.id,
+          reason: message,
+          previous: this.embeddingBillingCooldown,
+          nowMs: Date.now(),
+        });
+        log.warn("memory embeddings: provider entering billing cooldown", {
+          provider: provider.id,
+          reason: message,
+          consecutiveFailures: this.embeddingBillingCooldown.consecutiveFailures,
+          cooldownUntil: new Date(this.embeddingBillingCooldown.untilMs).toISOString(),
+        });
       }
       throw createMemoryEmbeddingOperationError({
         operation: "query",

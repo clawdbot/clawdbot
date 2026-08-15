@@ -19,7 +19,7 @@ import {
   type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
+import { logMemorySyncOutcome } from "./manager-embedding-errors.js";
 import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
 import {
   resolveMemorySessionStartupState,
@@ -195,7 +195,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       return dirtyFiles;
     }
     void this.sync({ reason: "session-startup-catchup" }).catch((err: unknown) => {
-      log.warn("memory sync failed (session-startup-catchup): " + String(err));
+      logMemorySyncOutcome(log, "session-startup-catchup", err);
     });
     return dirtyFiles;
   }
@@ -238,15 +238,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
         sessions: pendingTargets,
         archiveFiles: pending,
       }).catch((err: unknown) => {
-        // A cooldown-skip is an already-reported, expected state (see
-        // manager-embedding-ops.ts's billing cooldown), not a new failure — every
-        // debounced sync cycle would otherwise re-log the same warning until the
-        // cooldown clears or the operator fixes the underlying account issue.
-        if (isMemoryEmbeddingOperationError(err) && err.skippedDueToCooldown) {
-          log.debug(`memory sync skipped (session update): ${String(err)}`);
-          return;
-        }
-        log.warn(`memory sync failed (session update): ${String(err)}`);
+        logMemorySyncOutcome(log, "session update", err);
       });
     }
   }

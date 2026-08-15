@@ -18,6 +18,7 @@ import {
 } from "./hybrid.js";
 import { applyImportanceMultiplier } from "./importance.js";
 import { startAsyncSearchSync } from "./manager-async-state.js";
+import { logMemorySyncOutcome } from "./manager-embedding-errors.js";
 import { MemoryKeywordRetrieval, type KeywordSearchHit } from "./manager-keyword-retrieval.js";
 import { resolveMemorySearchPreflight } from "./manager-search-preflight.js";
 import { resolveExactPathSpecificity, searchVector } from "./manager-search.js";
@@ -42,7 +43,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       return;
     }
     void this.sync({ reason: "session-start" }).catch((err: unknown) => {
-      log.warn(`memory sync failed (session-start): ${String(err)}`);
+      logMemorySyncOutcome(log, "session-start", err);
     });
     if (key) {
       this.sessionWarm.add(key);
@@ -106,11 +107,11 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
                 const message = redactSensitiveText(formatErrorMessage(fallbackErr), {
                   mode: "tools",
                 });
-                log.warn(`memory sync failed (search-bootstrap-fallback): ${message}`);
+                logMemorySyncOutcome(log, "search-bootstrap-fallback", fallbackErr, message);
               },
             );
           } else {
-            log.warn(`memory sync failed (search-bootstrap): ${String(err)}`);
+            logMemorySyncOutcome(log, "search-bootstrap", err);
           }
         }
         hasIndexedContent = this.hasIndexedContent();
@@ -139,7 +140,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         sessionsDirty: this.sessionsDirty,
         sync: async (params) => await this.syncAdmitted(params),
         onError: (err) => {
-          log.warn(`memory sync failed (search): ${String(err)}`);
+          logMemorySyncOutcome(log, "search", err);
         },
       });
       if (
