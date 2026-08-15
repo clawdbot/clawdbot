@@ -24,7 +24,7 @@ import type {
   SetSessionModeRequest,
   SetSessionModeResponse,
 } from "@agentclientprotocol/sdk";
-import { defaultAcpSessionStore, type AcpSessionStore } from "@openclaw/acp-core/session";
+import { createInMemorySessionStore, type AcpSessionStore } from "@openclaw/acp-core/session";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
@@ -60,6 +60,9 @@ export class AcpGatewayAgent implements Agent {
   private readonly sessionUpdates: AcpTranslatorSessionUpdates;
   private readonly promptStream: AcpTranslatorPromptStream;
   private readonly sessionLifecycle: AcpTranslatorSessionLifecycle;
+  private readonly ownedSessionStore:
+    | ReturnType<typeof createInMemorySessionStore>
+    | undefined;
   private readonly approvalRelays = new Map<string, AcpPendingApprovalRelay>();
   private readonly log: (msg: string) => void;
 
@@ -69,7 +72,9 @@ export class AcpGatewayAgent implements Agent {
     opts: AcpGatewayAgentOptions = {},
   ) {
     this.log = opts.verbose ? (msg: string) => process.stderr.write(`[acp] ${msg}\n`) : () => {};
-    const sessionStore = opts.sessionStore ?? defaultAcpSessionStore;
+    const sessionStore = opts.sessionStore ?? createInMemorySessionStore();
+    // Injected stores remain caller-owned; only the agent-created registry follows shutdown.
+    this.ownedSessionStore = opts.sessionStore === undefined ? sessionStore : undefined;
     this.sessionUpdates = new AcpTranslatorSessionUpdates({
       connection,
       eventLedger: opts.eventLedger ?? createInMemoryAcpEventLedger(),
@@ -115,9 +120,13 @@ export class AcpGatewayAgent implements Agent {
     this.log("ready");
   }
 
-  shutdown(): void {
+  async shutdown(): Promise<void> {
     this.sessionUpdates.stop();
-    this.promptStream.shutdown();
+    try {
+      await this.promptStream.shutdown();
+    } finally {
+      this.ownedSessionStore?.dispose();
+    }
   }
 
   handleGatewayReconnect(): void {
