@@ -479,7 +479,6 @@ async function resolveQaSuiteOutputDir(repoRoot: string, outputDir?: string) {
 }
 
 export {
-  applyQaMergePatch,
   applyQaSuiteGatewayConfigPatches,
   collectQaSuiteGatewayConfigPatches,
   collectQaSuiteGatewayRuntimeOptions,
