@@ -492,4 +492,55 @@ describe("cron run receipt store", () => {
       error: "owner changed",
     });
   });
+
+  it("rejects a live run after precheck config changes (revision fence)", async () => {
+    const { storePath } = await makeStorePath();
+    const admitted = {
+      ...makeJob("precheck-change", "alpha"),
+      precheck: { command: "echo OLD; exit 2" },
+    };
+    await saveCronStore(storePath, { version: 1, jobs: [admitted] });
+    const receipt = claim(storePath, admitted, 400);
+    const mutated = {
+      ...admitted,
+      precheck: { command: "echo NEW; exit 0" },
+      updatedAtMs: 2,
+    };
+    await saveCronStore(storePath, { version: 1, jobs: [mutated] });
+
+    expect(() =>
+      assertCronRunReceiptCurrent({
+        handle: receipt,
+        resolveAgentId: (job) => job.agentId!,
+      }),
+    ).toThrow(CronRunReceiptRevisionError);
+
+    finishCronRunReceipt({
+      handle: receipt,
+      status: "superseded",
+      finishedAtMs: 405,
+      error: "configuration changed",
+    });
+
+    // Clear-race: admit with precheck, then remove it before currency check.
+    await saveCronStore(storePath, { version: 1, jobs: [admitted] });
+    const receipt2 = claim(storePath, admitted, 410);
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [{ ...admitted, precheck: undefined, updatedAtMs: 4 }],
+    });
+    expect(() =>
+      assertCronRunReceiptCurrent({
+        handle: receipt2,
+        resolveAgentId: (job) => job.agentId!,
+      }),
+    ).toThrow(CronRunReceiptRevisionError);
+
+    finishCronRunReceipt({
+      handle: receipt2,
+      status: "superseded",
+      finishedAtMs: 421,
+      error: "configuration changed",
+    });
+  });
 });
