@@ -167,6 +167,34 @@ describe("enqueueAdoptionGatedTurn", () => {
     expect(order).toEqual(["turn:start", "turn:adopted", "turn:end"]);
   });
 
+  it("rejects the lane when adoption fails while the turn is still pending", async () => {
+    const { lifecycle, calls } = createLifecycle();
+    calls.adopted.mockRejectedValueOnce(new Error("adopt failed"));
+    const turnGate = createDeferred<void>();
+    const order: string[] = [];
+    const { lane, turn } = enqueueAdoptionGatedTurn({
+      enqueue: createQueue(),
+      sequentialKey: "feishu:default:oc-chat",
+      lifecycle,
+      runTurn: async (gated) => {
+        order.push("turn:start");
+        gated?.onAdoptionFinalizing();
+        // The real dispatcher runs the adoption several promise hops deep:
+        // the lane settles before the turn's rejection lands, so a gate that
+        // releases a failed adoption as success would let the flush settle.
+        const adoption = gated?.onAdopted() ?? Promise.resolve();
+        void adoption.catch(() => undefined);
+        await turnGate.promise;
+        await adoption;
+      },
+    });
+    await vi.waitFor(() => expect(order).toEqual(["turn:start"]));
+    await expect(lane).rejects.toThrow("adopt failed");
+    expect(calls.abandoned).not.toHaveBeenCalled();
+    turnGate.resolve();
+    await expect(turn).rejects.toThrow("adopt failed");
+  });
+
   it("releases the queue lane at deferral while the turn is still running", async () => {
     const { lifecycle } = createLifecycle();
     const turnGate = createDeferred<void>();

@@ -345,6 +345,43 @@ describe("Feishu durable ingress debounce lifecycle", () => {
     expect(logicalClaim.release).toHaveBeenCalled();
   });
 
+  it("rejects the flush when durable adoption persistence fails", async () => {
+    const transport = createLifecycle();
+    transport.calls.adopted.mockRejectedValueOnce(new Error("queue completion failed"));
+    const logicalClaim = createClaim("adoption-persistence-failure");
+    const harness = createHarness({
+      lifecycles: new Map([["evt-adopt-fail", transport.lifecycle]]),
+      claims: [logicalClaim],
+      adoptTurn: false,
+    });
+    // The real dispatcher runs adoption several promise hops deep, so the
+    // queue lane settles before the turn's rejection lands; the mock turn
+    // mirrors that with a macrotask so the lane cannot be outrun by luck.
+    harness.handleMessage.mockImplementationOnce(async (turn) => {
+      turn.turnAdoptionLifecycle?.onAdoptionFinalizing();
+      const adoption = turn.turnAdoptionLifecycle?.onAdopted();
+      void adoption?.catch(() => undefined);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await adoption;
+    });
+
+    await expect(
+      harness.handler(createTextEvent("evt-adopt-fail", "om-adopt-fail", "boom")),
+    ).resolves.toEqual({ kind: "deferred" });
+    await expect(harness.flush()).rejects.toThrow("queue completion failed");
+
+    // The adoption-persistence failure contract survives the gate: logical
+    // claims abandon instead of committing, and the transport abandons. The
+    // claim releases twice by contract — once by the flush's replay guard,
+    // once by the admission-time abandon handler on the transport.
+    expect(logicalClaim.commit).not.toHaveBeenCalled();
+    expect(logicalClaim.release).toHaveBeenCalledTimes(2);
+    expect(transport.calls.abandoned).toHaveBeenCalledTimes(1);
+    expect(transport.calls.adopted).toHaveBeenCalledTimes(1);
+  });
+
   it("does not dispatch a queued turn after its ingress claim aborts", async () => {
     const first = createLifecycle();
     const second = createLifecycle();
