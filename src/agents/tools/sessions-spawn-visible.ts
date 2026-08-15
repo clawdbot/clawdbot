@@ -1,10 +1,12 @@
 import { Type } from "typebox";
+import { readMissingScopeErrorDetails } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import {
   DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
 } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveWorkspacePathContainment } from "../../gateway/server-methods/workspace-path-containment.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
@@ -316,9 +318,13 @@ export async function maybeSpawnVisibleSession(params: {
         ...(worktreeBaseRef ? { worktreeBaseRef } : {}),
       });
     } catch (error) {
+      const missingScope = readMissingScopeErrorDetails(
+        error && typeof error === "object" && "details" in error ? error.details : undefined,
+      );
       if (
         spawnedCwd &&
-        summarizeSessionsSpawnError(error).includes("missing scope: operator.admin") &&
+        missingScope?.missingScope === ADMIN_SCOPE &&
+        missingScope.requiredScopes.includes(ADMIN_SCOPE) &&
         !(await resolveWorkspacePathContainment(spawnedCwd, cfg))
       ) {
         return {
