@@ -328,6 +328,9 @@ it("detects only other viewers watching the requested session", () => {
   expect(hasSessionPresenceViewers(payload, "self", "self-instance", "agent:main:other")).toBe(
     true,
   );
+  expect(
+    hasSessionPresenceViewers(payload, "self", "self-instance", "agent:main:other", "alice"),
+  ).toBe(false);
 });
 
 it.each([

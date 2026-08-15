@@ -113,10 +113,15 @@ export function hasSessionPresenceViewers(
   authenticatedSelfUserId: string | undefined,
   selfInstanceId: string | undefined,
   sessionKey: string,
+  excludeUserId?: string,
 ): boolean {
   const projection = projectPresencePayload(value, authenticatedSelfUserId, selfInstanceId);
+  const excludedUserId = normalized(excludeUserId);
   return projection.users.some(
-    (user) => user.id !== projection.selfUserId && user.watchedSessions.includes(sessionKey),
+    (user) =>
+      user.id !== projection.selfUserId &&
+      user.id !== excludedUserId &&
+      user.watchedSessions.includes(sessionKey),
   );
 }
 
