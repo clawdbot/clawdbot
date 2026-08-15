@@ -1657,6 +1657,7 @@
     "lint:plugins:no-monolithic-plugin-sdk-entry-imports": "node --import tsx scripts/check-no-monolithic-plugin-sdk-entry-imports.ts",
     "lint:plugins:no-register-http-handler": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions",
     "lint:plugins:plugin-sdk-subpaths-exported": "node --import tsx scripts/check-plugin-sdk-subpath-exports.mts",
+    "lint:no-widen-then-assert": "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions packages ui/src",
     "lint:scripts": "pnpm lint:docker-e2e && pnpm lint:tmp:no-raw-http2-imports && node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json scripts",
     "lint:swift": "./scripts/lint-swift.sh",
     "lint:tmp:channel-agnostic-boundaries": "node --import tsx scripts/check-channel-agnostic-boundaries.mts",
