@@ -241,20 +241,30 @@ describe("OpenClaw database maintenance schema validation", () => {
 
       ensureDevicePairSetupBootstrapSchema(database);
       ensureWorkspaceRetentionSchema(database);
-      for (const {
-        columnName,
-        dataType,
-        tableName,
-      } of CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
-        expect(readColumnContract(database, tableName, columnName)).toEqual({
-          dflt_value: null,
-          hidden: 0,
-          name: columnName,
-          notnull: 0,
-          pk: 0,
-          type: dataType,
-        });
-      }
+      expect(readColumnContract(database, "device_bootstrap_tokens", "setup_id")).toEqual({
+        dflt_value: null,
+        hidden: 0,
+        name: "setup_id",
+        notnull: 0,
+        pk: 0,
+        type: "TEXT",
+      });
+      expect(
+        readColumnContract(
+          database,
+          "worker_workspace_reconciliations",
+          "forced_abandonment_retained",
+        ),
+      ).toEqual({
+        dflt_value: null,
+        hidden: 0,
+        name: "forced_abandonment_retained",
+        notnull: 0,
+        pk: 0,
+        type: "INTEGER",
+      });
+      expect(readColumnContract(database, "session_groups", "cwd")).toBeUndefined();
+      expect(readColumnContract(database, "session_groups", "worktree")).toBeUndefined();
     } finally {
       database.close();
     }
