@@ -12,9 +12,9 @@ export const SESSION_AGENT_STATUS_MAX_TTL_MINUTES = 120;
 
 const ATTENTION_ICON_IDS = new Set<string>(SESSION_AGENT_ATTENTION_ICON_IDS);
 // Anchored RGI_Emoji admits exactly one recommended-for-interchange emoji
-// sequence (ZWJ families, flags, keycaps included) and nothing else, keeping
-// letters like "漢" out of the emoji-only icon contract.
-const SESSION_ICON_RE = /^\p{RGI_Emoji}$/v;
+// sequence (ZWJ families, flags, keycaps included) and nothing else. Construct
+// it dynamically because the repository TypeScript target rejects literal `v` flags.
+const SESSION_ICON_RE = new RegExp("^\\p{RGI_Emoji}$", "v");
 
 export function normalizeSessionIconValue(value: string): string | null {
   const normalized = value.trim();
