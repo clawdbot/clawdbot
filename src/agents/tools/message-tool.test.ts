@@ -2679,6 +2679,58 @@ describe("message tool explicit target guard", () => {
     expect(call?.params?.target).toBe("telegram:alert-channel");
   });
 
+  it("allows an iMessage delivery alias when requireExplicitTarget is set", async () => {
+    const plugin = createChannelPlugin({
+      id: "imessage",
+      label: "iMessage",
+      docsPath: "/channels/imessage",
+      blurb: "iMessage test plugin",
+      actions: ["sendWithEffect"],
+      messageActionTargetAliases: {
+        sendWithEffect: {
+          aliases: ["chatGuid", "chatIdentifier", "chatId"],
+          deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+          resolveDeliveryTarget: ({ args }) =>
+            typeof args.chatGuid === "string" ? `chat_guid:${args.chatGuid}` : undefined,
+        },
+      },
+    });
+    const preparedChannel = {
+      id: "imessage",
+      actions: plugin.actions,
+      reconcilesUnknownSend: false,
+    };
+    const preparedMessageToolCatalog = {
+      version: 1,
+      channels: [preparedChannel],
+      getChannel: (id: string) => (id === preparedChannel.id ? preparedChannel : undefined),
+    };
+    mocks.runMessageAction.mockResolvedValueOnce({
+      kind: "action",
+      channel: "imessage",
+      action: "sendWithEffect",
+      handledBy: "dry-run",
+      payload: { ok: true, dryRun: true, channel: "imessage", action: "sendWithEffect" },
+      dryRun: true,
+    });
+    const tool = createMessageTool({
+      runMessageAction: mocks.runMessageAction as never,
+      requireExplicitTarget: true,
+      currentChannelProvider: "imessage",
+      preparedMessageToolCatalog,
+    });
+
+    await tool.execute("1", {
+      action: "sendWithEffect",
+      channel: "imessage",
+      chatGuid: "iMessage;+;chat0000",
+      effectId: "com.apple.messages.effect.CKConfettiEffect",
+      message: "heartbeat alert",
+    });
+
+    expect(firstRunMessageActionInput()?.params?.chatGuid).toBe("iMessage;+;chat0000");
+  });
+
   it("requires an explicit target for upload-file when configured", async () => {
     const tool = createMessageTool({
       runMessageAction: mocks.runMessageAction as never,
