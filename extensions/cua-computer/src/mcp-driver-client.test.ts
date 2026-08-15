@@ -192,7 +192,7 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
         case "list_windows":
           fake.respond(request, toolResult({ windows: [] }));
           break;
-        case "escalate_session":
+        case "get_session_state":
           fake.respond(request, sessionState("desktop"));
           break;
         case "end_session":
@@ -262,7 +262,7 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       expect(
         endpoint.requests.find(
           (request) =>
-            request.method === "tools/call" && request.params?.name === "escalate_session",
+            request.method === "tools/call" && request.params?.name === "get_session_state",
         )?.params?.arguments?.session,
       ).toBe(desktopSession);
       expect(

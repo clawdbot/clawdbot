@@ -199,10 +199,10 @@ class DirectCuaDriverSession implements CuaDriverSession {
       ),
     );
   }
-  async escalateScope(reason: EscalationReason, signal?: AbortSignal) {
+  async escalateScope(_reason: EscalationReason, signal?: AbortSignal) {
     await this.ensureSessionStarted("desktop", signal);
-    return await this.desktopSession.escalateSession(
-      { session: this.desktopPublicSession, reason },
+    return await this.desktopSession.getSessionState(
+      { session: this.desktopPublicSession },
       asyncOptions(signal),
     );
   }

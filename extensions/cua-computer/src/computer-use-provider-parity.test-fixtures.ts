@@ -461,14 +461,15 @@ export const CUA_MCP_TOOL_PARITY: readonly CuaMcpToolClassification[] = [
   {
     tool: "escalate_session",
     platforms: CUA_ALL_PLATFORMS,
-    classification: "portable-action",
-    actions: ["escalate_scope"],
+    classification: "node-internal-lifecycle",
+    reason:
+      "The fixed desktop session already satisfies escalation without mutating window authority.",
   },
   {
     tool: "get_session_state",
     platforms: CUA_ALL_PLATFORMS,
-    classification: "node-internal-lifecycle",
-    reason: "Provider session state is owned by the node execution.",
+    classification: "portable-action",
+    actions: ["escalate_scope"],
   },
   {
     tool: "end_session",

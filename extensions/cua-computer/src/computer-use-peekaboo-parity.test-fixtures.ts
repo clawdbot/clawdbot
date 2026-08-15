@@ -448,7 +448,12 @@ export const COMPUTER_USE_V2_PROVIDER_ACTION_SUPPORT: readonly ComputerUseV2Prov
       cuaTools: ["browser_pointer"],
       peekabooTools: ["browser"],
     },
-    { action: "escalate_scope", support: "cua", cuaTools: ["escalate_session"], peekabooTools: [] },
+    {
+      action: "escalate_scope",
+      support: "cua",
+      cuaTools: ["get_session_state"],
+      peekabooTools: [],
+    },
     {
       action: "get_recording_state",
       support: "cua",

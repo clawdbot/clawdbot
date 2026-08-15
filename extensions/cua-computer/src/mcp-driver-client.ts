@@ -509,20 +509,11 @@ class McpCuaDriverSession implements CuaDriverSession {
     return await this.desktopTool(name, args, signal);
   }
 
-  async escalateScope(reason: EscalationReason, signal?: AbortSignal) {
+  async escalateScope(_reason: EscalationReason, signal?: AbortSignal) {
     await this.ensureStarted("desktop", signal);
     const result = await this.client.callTool(
-      "escalate_session",
-      {
-        session: this.desktopPublicSession,
-        reason: [
-          "ax_tree_pixel_mismatch",
-          "background_delivery_failed",
-          "foreground_ineffective",
-          "no_window_target",
-          "other",
-        ][reason],
-      },
+      "get_session_state",
+      { session: this.desktopPublicSession },
       signal,
     );
     return sessionState(result);

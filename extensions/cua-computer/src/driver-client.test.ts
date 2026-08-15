@@ -14,6 +14,12 @@ const mocks = vi.hoisted(() => ({
     desktopUnlocked: true,
   })),
   getDesktopState: vi.fn(async () => ({})),
+  getSessionState: vi.fn(async () => ({
+    session: "openclaw-test",
+    captureScope: "desktop",
+    effectiveScope: "desktop",
+    desktopUnlocked: true,
+  })),
   isAvailable: vi.fn(() => true),
   startSession: vi.fn(async () => ({})),
   shutdown: vi.fn(async () => {}),
@@ -59,6 +65,7 @@ describe("CUA Driver direct session", () => {
       endSession: mocks.endSession,
       escalateSession: mocks.escalateSession,
       getDesktopState: mocks.getDesktopState,
+      getSessionState: mocks.getSessionState,
       startSession: mocks.startSession,
     });
   });
@@ -162,10 +169,11 @@ describe("CUA Driver direct session", () => {
       JSON.stringify({ session: desktopOptions.publicSession }),
       undefined,
     );
-    expect(mocks.escalateSession).toHaveBeenCalledWith(
-      { session: desktopOptions.publicSession, reason: EscalationReason.Other },
+    expect(mocks.getSessionState).toHaveBeenCalledWith(
+      { session: desktopOptions.publicSession },
       undefined,
     );
+    expect(mocks.escalateSession).not.toHaveBeenCalled();
     expect(mocks.callTool).toHaveBeenNthCalledWith(
       3,
       "list_windows",
