@@ -107,6 +107,7 @@ export function renderPanelTabStrip(params: {
   newLabel: string;
   newDisabled?: boolean;
   newControl?: TemplateResult;
+  separateTabs?: boolean;
   onReorder?: (sourceId: string, targetId: string, placement: "before" | "after") => void;
 }) {
   const newButton = (slotted: boolean) =>
@@ -139,10 +140,20 @@ export function renderPanelTabStrip(params: {
       ? activeElement.id
       : null;
   const tabOrder = params.tabs.map((tab) => tab.id).join("\u0000");
+  const activeIndex = params.tabs.findIndex((tab) => tab.id === params.activeId);
+  const separatorCount = params.separateTabs
+    ? Math.max(
+        0,
+        params.tabs.length -
+          1 -
+          (activeIndex > 0 ? 1 : 0) -
+          (activeIndex >= 0 && activeIndex < params.tabs.length - 1 ? 1 : 0),
+      )
+    : 0;
   return html`
     <wa-tab-group
       class="tabstrip"
-      style=${`--tabstrip-tab-count: ${params.tabs.length}`}
+      style=${`--tabstrip-tab-count: ${params.tabs.length}; --tabstrip-separator-count: ${separatorCount}`}
       .active=${params.activeId ?? ""}
       activation="auto"
       without-scroll-controls
@@ -151,8 +162,14 @@ export function renderPanelTabStrip(params: {
       ${repeat(
         params.tabs,
         (tab) => tab.id,
-        (tab) => {
+        (tab, index) => {
           const selected = tab.id === params.activeId;
+          const nextTab = params.tabs[index + 1];
+          const showSeparator =
+            params.separateTabs &&
+            nextTab !== undefined &&
+            tab.id !== params.activeId &&
+            nextTab.id !== params.activeId;
           return html`
             <wa-tab
               id=${tab.domId}
@@ -312,6 +329,9 @@ export function renderPanelTabStrip(params: {
             >
               <span class="tabstrip-tab__close-box">${icons.x}</span>
             </button>
+            ${showSeparator
+              ? html`<span slot="nav" class="tabstrip-separator" aria-hidden="true"></span>`
+              : nothing}
           `;
         },
       )}
@@ -423,6 +443,10 @@ export const panelTabStripStyles = css`
   .tabstrip-new-control {
     display: inline-flex;
     flex: none;
+    align-self: center;
+  }
+  .tabstrip-separator {
+    flex: 0 0 auto;
     align-self: center;
   }
   @keyframes tabstrip-pulse {

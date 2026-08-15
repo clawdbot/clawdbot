@@ -88,6 +88,17 @@ describe("chat sidebar region", () => {
     expect(region.callbacks?.closeSlot).toHaveBeenCalledWith("detail");
   });
 
+  it("renders separators as independent items away from the active tab", async () => {
+    const region = await createRegion(
+      openSlot(openSlot(openSlot({ columns: [] }, "detail"), "terminal"), "workspace"),
+    );
+
+    const separators = root(region).querySelectorAll(".tabstrip-separator");
+    expect(separators).toHaveLength(1);
+    expect(separators[0]?.previousElementSibling).toHaveClass("tabstrip-tab__close");
+    expect(separators[0]?.nextElementSibling).toHaveClass("tabstrip-tab");
+  });
+
   it("delivers typed requests to the mounted panel owner", async () => {
     const handleToggleRequest = vi.fn();
     const region = await createRegion(openSlot({ columns: [] }, "terminal"));

@@ -278,7 +278,7 @@ openclaw-chat-sidebar-region,
   width: 100%;
   min-width: 0;
   height: 100%;
-  align-items: stretch;
+  align-items: center;
 }
 
 .side-panel__header .tabstrip::part(tabs) {
@@ -297,27 +297,21 @@ openclaw-chat-sidebar-region,
   position: relative;
   width: max(
     28px,
-    calc((100cqi - 28px - 16px * var(--tabstrip-tab-count)) / var(--tabstrip-tab-count))
+    calc(
+      (100cqi - 28px - 14px * var(--tabstrip-tab-count) - 11px * var(--tabstrip-separator-count)) /
+        var(--tabstrip-tab-count)
+    )
   );
   min-width: 28px;
   max-width: none;
   flex: 0 1 auto;
 }
 
-.side-panel__header .tabstrip-tab:not(:first-of-type)::before {
-  position: absolute;
-  top: 50%;
-  left: 0;
+.side-panel__header .tabstrip-separator {
   width: 1px;
   height: 14px;
+  margin: 0 5px;
   background: color-mix(in srgb, var(--muted) 20%, transparent);
-  content: "";
-  transform: translateY(-50%);
-}
-
-.side-panel__header .tabstrip-tab[active]::before,
-.side-panel__header .tabstrip-tab[active] + .tabstrip-tab__close + .tabstrip-tab::before {
-  opacity: 0;
 }
 
 .side-panel__header .tabstrip-tab:is(.is-drop-before, .is-drop-after)::after {

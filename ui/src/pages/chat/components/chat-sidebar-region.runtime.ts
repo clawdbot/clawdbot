@@ -208,6 +208,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
           onNew: () => undefined,
           newLabel: t("chat.sidePanel.addTab"),
           newControl: this.renderTypeMenu(),
+          separateTabs: true,
           onReorder: (panelId, targetPanelId, placement) =>
             this.callbacks?.reorderPanel(panelId, targetPanelId, placement),
         })}
