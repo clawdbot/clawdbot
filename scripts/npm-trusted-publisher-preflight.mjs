@@ -89,7 +89,7 @@ export async function preflightNpmTrustedPublisher(packageName) {
   );
 
   // npm-package-arg's escapedName preserves the scope and escapes only its slash.
-  const escapedPackageName = packageName.replace("/", "%2f");
+  const escapedPackageName = packageName.replaceAll("/", "%2f");
   await requestToken(
     `${NPM_REGISTRY}/-/npm/v1/oidc/token/exchange/package/${escapedPackageName}`,
     {
