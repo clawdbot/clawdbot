@@ -219,17 +219,16 @@ describe("node worker tunnel manager", () => {
       }));
       const prepareSync = vi.fn(async () => {
         await validation.promise;
-        if (outcome === "failure") throw new Error("restored workspace validation failed");
+        if (outcome === "failure") {
+          throw new Error("restored workspace validation failed");
+        }
         return {
           snapshot: { manifest, manifestRef, rawManifest, root: "/gateway/workspace" },
           token: "restore-token",
         };
       });
-      const transfer = {
-        prepareSync,
-        close: vi.fn(async () => {}),
-        revoke: vi.fn(),
-      } as unknown as NodeWorkspaceTransferService;
+      const transfer = workspaceTransfer();
+      transfer.prepareSync = prepareSync;
       const manager = createNodeWorkerTunnelManager({
         gatewayDeviceId: "gateway-device-1",
         getEnvironment: () => record,
@@ -250,7 +249,9 @@ describe("node worker tunnel manager", () => {
       const second = manager.start(startRequest());
       const secondSettled = vi.fn();
       void second.then(secondSettled, secondSettled);
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(secondSettled).not.toHaveBeenCalled();
       validation.resolve();
       const results = await Promise.allSettled([first, second]);

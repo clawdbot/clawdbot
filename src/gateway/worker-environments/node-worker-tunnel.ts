@@ -712,9 +712,9 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       await options.workspaceTransfer.closeAll();
     },
     status(environmentId: string): WorkerTunnelStatus {
-      if (pendingStarts.get(environmentId)?.cancelled === false) return "connecting";
       const entry = entries.get(environmentId);
-      return entry && !entry.abortController.signal.aborted ? "connected" : "stopped";
+      const status = entry && !entry.abortController.signal.aborted ? "connected" : "stopped";
+      return pendingStarts.get(environmentId)?.cancelled === false ? "connecting" : status;
     },
   };
 }
