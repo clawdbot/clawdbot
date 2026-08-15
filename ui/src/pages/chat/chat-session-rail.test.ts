@@ -401,6 +401,32 @@ describe("ChatSessionCompanionThreads", () => {
     expect(threads.view("one").exchanges).toEqual([]);
   });
 
+  it("retires one session without clearing unrelated companion state", () => {
+    const threads = new ChatSessionCompanionThreads();
+    threads.setDraft("one", "retire me", "main");
+    threads.setDraft("two", "keep me", "main");
+
+    threads.retire("one", "main");
+
+    expect(threads.view("one", "main").draft).toBe("");
+    expect(threads.view("two", "main").draft).toBe("keep me");
+  });
+
+  it("adopts an empty restarted-Gateway thread without discarding its local draft", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    await threads.hydrate("one", async () => ({
+      exchanges: [{ question: "Before restart", answer: "Old answer", ts: 1 }],
+    }));
+    threads.setDraft("one", "unsent local draft");
+
+    await threads.hydrate("one", async () => ({ exchanges: [] }));
+
+    expect(threads.view("one")).toMatchObject({
+      draft: "unsent local draft",
+      exchanges: [],
+    });
+  });
+
   it.each(["resolve", "reject"] as const)(
     "does not resurrect a reset request after a late $outcome",
     async (outcome) => {

@@ -168,6 +168,7 @@ export async function prepareGatewayKernelState(params: {
     nodeWorkerGatewayNamespace,
     bindDeviceNodeControl,
     bindNodeWorkspaceBindingResolver,
+    handleNodeWorkerBundleTransferRequest,
     handleNodeWorkspaceTransferRequest,
   } = workerEnvironmentRuntime;
   // Assigned once approval managers exist; placement dispatch must not run before then.
@@ -184,7 +185,6 @@ export async function prepareGatewayKernelState(params: {
             placements: workerEnvironmentStartup.placementStore,
             environments: workerEnvironmentService,
             gatewayNamespace: nodeWorkerGatewayNamespace,
-            admitNewPlacements: true,
             revokeSessionAuthority: (request) => workerDispatchAuthority.revoke(request),
             warn: (message) => log.warn(message),
           });
@@ -464,6 +464,7 @@ export async function prepareGatewayKernelState(params: {
     getStartup,
     handleWatchNodeRequest: async (req: IncomingMessage, res: ServerResponse) =>
       (await watchNodeRequestHandler.current?.(req, res)) ?? false,
+    handleNodeWorkerBundleTransferRequest,
     handleNodeWorkspaceTransferRequest,
     workerIngressEnabled: Boolean(workerEnvironmentService),
     desktopSessionRegistry,

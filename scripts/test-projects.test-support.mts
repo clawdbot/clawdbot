@@ -559,6 +559,17 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
       "extensions/slack/src/monitor/provider.auth-test-token.test.ts",
     ],
   ],
+  [
+    "src/gateway/worker-environments/worker-turn-launcher.ts",
+    [
+      "src/gateway/worker-environments/worker-turn-launcher.test.ts",
+      "src/gateway/worker-environments/worker-turn-launcher-claim-admission.test.ts",
+      "src/gateway/worker-environments/worker-turn-launcher-failure-recovery.test.ts",
+      "src/gateway/worker-environments/worker-turn-launcher-reclaimed-placement.test.ts",
+      "src/gateway/worker-environments/worker-turn-launcher-remote-handoff.test.ts",
+      "src/gateway/worker-environments/worker-turn-launcher-terminal-results.test.ts",
+    ],
+  ],
 ]);
 const DOCS_CONFIG_EXAMPLES_TEST_TARGET = "src/config/docs-config-examples.test.ts";
 const RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS = ["src/plugins/bundled-plugin-metadata.test.ts"];

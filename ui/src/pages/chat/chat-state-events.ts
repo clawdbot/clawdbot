@@ -269,8 +269,11 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
     event && globalSessionEventMatchesChat(state, event) && sessionMessageMatchesChat(state, event),
   );
   const source = asNullableRecord(payload);
-  const resetsSelectedSession =
-    matchesChat && (source?.reason === "reset" || source?.phase === "reset");
+  const resetsSession = source?.reason === "reset" || source?.phase === "reset";
+  if (event && (resetsSession || source?.reason === "new")) {
+    state.retireSessionCompanion?.(event.key, event.agentId);
+  }
+  const resetsSelectedSession = matchesChat && resetsSession;
   if (resetsSelectedSession) {
     const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
     // Reset keeps the public session ID; the explicit reducer event is the

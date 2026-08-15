@@ -1988,6 +1988,20 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
+  it("routes worker launcher changes through every split owner suite", () => {
+    expectChangedTargets(
+      ["src/gateway/worker-environments/worker-turn-launcher.ts"],
+      [
+        "src/gateway/worker-environments/worker-turn-launcher.test.ts",
+        "src/gateway/worker-environments/worker-turn-launcher-claim-admission.test.ts",
+        "src/gateway/worker-environments/worker-turn-launcher-failure-recovery.test.ts",
+        "src/gateway/worker-environments/worker-turn-launcher-reclaimed-placement.test.ts",
+        "src/gateway/worker-environments/worker-turn-launcher-remote-handoff.test.ts",
+        "src/gateway/worker-environments/worker-turn-launcher-terminal-results.test.ts",
+      ],
+    );
+  });
+
   it("keeps unknown root surfaces cheap by default", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [

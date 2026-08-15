@@ -3045,6 +3045,7 @@ NODE
       "macos-swift": "blacksmith-12vcpu-macos-26",
       "ios-build": "blacksmith-12vcpu-macos-26",
       "check-test-types-hosted-core-shard": "blacksmith-8vcpu-ubuntu-2404",
+      "checks-ui": "blacksmith-8vcpu-ubuntu-2404",
     } as const;
     const configurableJobs = Object.entries(jobs)
       .filter(([, job]) => String(job["runs-on"]).startsWith("${{"))

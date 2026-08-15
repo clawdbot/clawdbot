@@ -81,6 +81,7 @@ export type NodeWorkerSupervisorNodeProof = {
 
 export type NodeWorkerSupervisorTransport = {
   listCurrentNodes(): Promise<readonly NodeWorkerSupervisorNodeProof[]>;
+  isCurrent(node: NodeWorkerSupervisorNodeProof, requireLaunchEligibility?: boolean): boolean;
   invoke(params: {
     node: NodeWorkerSupervisorNodeProof;
     command: NodeWorkerPrivateCommand;
@@ -487,6 +488,8 @@ export function registerNodeRegistryPrivateRuntime(
         return proof ? [proof] : [];
       });
     },
+    isCurrent: (node, requireLaunchEligibility = false) =>
+      isWorkerSupervisorProofCurrent(state, node, requireLaunchEligibility),
     invoke: async (params) => {
       if (!NODE_WORKER_PRIVATE_COMMANDS.includes(params.command)) {
         return {
