@@ -171,8 +171,8 @@ export function resolveSelectedAgentHarnessRuntime(
       }).runtime;
 }
 
-/** Returns whether a selection needs a plugin-owned harness in its prepared generation. */
-export function requiresAgentHarnessPluginSelection(
+// Returns whether a selection needs a plugin-owned harness in its prepared generation.
+function requiresAgentHarnessPluginSelection(
   selection: AgentHarnessPluginSelection,
   config?: OpenClawConfig,
 ): boolean {
