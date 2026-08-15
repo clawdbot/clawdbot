@@ -541,6 +541,33 @@ openclaw-chat-sidebar-region,
   font-size: var(--rail-header-title-size);
 }
 
+.side-panel-type-menu::part(menu) {
+  width: max-content;
+  min-width: 0;
+  max-width: min(208px, calc(100vw - 24px));
+  padding: var(--menu-padding);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+}
+
+.side-panel-type-menu__item {
+  font-size: calc(13px * var(--control-ui-text-scale));
+  white-space: nowrap;
+}
+
+.side-panel-type-menu__item::part(base) {
+  min-height: var(--menu-item-height);
+  padding: 0 8px;
+  border-radius: var(--menu-item-radius);
+}
+
+.side-panel-type-menu__item:hover::part(base),
+.side-panel-type-menu__item:focus-visible::part(base) {
+  background: var(--bg-hover);
+}
+
 .side-panel-type-option__icon {
   display: inline-flex;
   align-items: center;
@@ -558,14 +585,19 @@ openclaw-chat-sidebar-region,
 }
 
 .side-panel-type-option__shortcut {
-  padding: 2px 6px;
+  display: inline-flex;
+  min-width: 42px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
   border: 0;
   border-radius: var(--radius-full);
   background: var(--bg-hover);
   color: var(--muted);
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1;
+  font: 500 calc(10px * var(--control-ui-text-scale)) / 1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .side-panel-empty {
