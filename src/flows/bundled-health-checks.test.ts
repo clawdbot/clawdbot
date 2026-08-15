@@ -6,12 +6,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBundledHealthChecks } from "./bundled-health-checks.js";
 
 const mocks = vi.hoisted(() => ({
+  registerCodexManagedAppServerDoctorChecks: vi.fn(),
   registerCuaDriverDoctorChecks: vi.fn(),
   registerPolicyDoctorChecks: vi.fn(),
   loadBundledPluginPublicArtifactModuleSync: vi.fn(({ dirName }: { dirName: string }) =>
     dirName === "cua-computer"
       ? { registerCuaDriverDoctorChecks: mocks.registerCuaDriverDoctorChecks }
-      : { registerPolicyDoctorChecks: mocks.registerPolicyDoctorChecks },
+      : dirName === "codex"
+        ? {
+            registerCodexManagedAppServerDoctorChecks:
+              mocks.registerCodexManagedAppServerDoctorChecks,
+          }
+        : { registerPolicyDoctorChecks: mocks.registerPolicyDoctorChecks },
   ),
 }));
 
@@ -66,6 +72,60 @@ describe("registerBundledHealthChecks", () => {
     expect(mocks.registerCuaDriverDoctorChecks).toHaveBeenCalledWith({
       registerHealthCheck: expect.any(Function),
     });
+  });
+
+  it("loads managed Codex health when an effective model route selects Codex", () => {
+    registerBundledHealthChecks({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            models: {
+              "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+      },
+      cwd: workspaceDir,
+    });
+
+    expect(mocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
+      dirName: "codex",
+      artifactBasename: "api.js",
+    });
+    expect(mocks.registerCodexManagedAppServerDoctorChecks).toHaveBeenCalledWith({
+      registerHealthCheck: expect.any(Function),
+    });
+  });
+
+  it("does not load managed Codex health for OpenClaw routes or disabled Codex", () => {
+    for (const cfg of [
+      {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            models: {
+              "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        },
+      },
+      {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            models: {
+              "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+        plugins: { entries: { codex: { enabled: false } } },
+      },
+    ]) {
+      vi.clearAllMocks();
+      registerBundledHealthChecks({ cfg, cwd: workspaceDir });
+      expect(mocks.loadBundledPluginPublicArtifactModuleSync).not.toHaveBeenCalled();
+    }
   });
 
   it("does not use policy.jsonc existence as extension activation", () => {
