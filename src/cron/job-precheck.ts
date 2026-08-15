@@ -12,6 +12,7 @@ import {
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { evaluateSystemRunPolicy } from "../node-host/exec-policy.js";
+import { killProcessTree } from "../process/kill-tree.js";
 import { createCronRunDiagnosticsFromError } from "./run-diagnostics.js";
 import type { CronJobPrecheck } from "./types-shared.js";
 import type { CronRunDiagnostics, CronRunOutcome } from "./types.js";
@@ -300,8 +301,10 @@ export async function authorizeCronJobPrecheckCommand(params: {
   const toolsExecLayer = normalizeLayer(params.authz.toolsExec);
   const agentToolsExecLayer = normalizeLayer(params.authz.agentToolsExec);
   const hasConfigLayers = toolsExecLayer !== undefined || agentToolsExecLayer !== undefined;
+  // Canonical system.run default is allowlist when exec security is unspecified
+  // (node-host/invoke.ts). Do not widen unconfigured prechecks to full.
   const basePolicy = {
-    security: (requested ?? "full") as ExecSecurity,
+    security: (requested ?? "allowlist") as ExecSecurity,
     ask: "off" as const,
   };
   const layered = hasConfigLayers
@@ -310,8 +313,8 @@ export async function authorizeCronJobPrecheckCommand(params: {
   // Explicit authz.security remains a hard ceiling when config layers are also present.
   const ceilingSecurity =
     requested !== undefined
-      ? minSecurity(normalizeExecSecurity(layered.security) ?? "full", requested)
-      : (normalizeExecSecurity(layered.security) ?? (hasConfigLayers ? "full" : undefined));
+      ? minSecurity(normalizeExecSecurity(layered.security) ?? "allowlist", requested)
+      : (normalizeExecSecurity(layered.security) ?? "allowlist");
   const layeredMode: ExecMode | undefined =
     "mode" in layered &&
     (layered.mode === "deny" ||
@@ -323,7 +326,7 @@ export async function authorizeCronJobPrecheckCommand(params: {
       : undefined;
   const modePolicy = resolveExecModePolicy({
     mode: layeredMode,
-    security: ceilingSecurity ?? "full",
+    security: ceilingSecurity ?? "allowlist",
     ask: "off",
   });
   const approvals = await resolveExecApprovalsLocked(params.authz.agentId, {
@@ -432,6 +435,18 @@ export async function runCronJobPrecheck(
     };
   }
 
+  // Recheck cancellation after awaited authorization — cancel during authz must
+  // not still spawn a host shell (ClawSweeper P1).
+  if (opts?.abortSignal?.aborted) {
+    return {
+      decision: "error",
+      reason: PRECHECK_TIMEOUT_REASON,
+      exitCode: null,
+      stdout: "",
+      stderr: "aborted",
+    };
+  }
+
   const timeoutMs = resolveTimeoutMs(precheck);
   const spawnFn = opts?.spawnImpl ?? spawn;
   const { shell, args: shellArgs } = resolveShellCommand(command);
@@ -442,11 +457,33 @@ export async function runCronJobPrecheck(
     let stderr = "";
     let timedOut = false;
 
+    // Detached process group on POSIX so timeout/abort can terminate the full tree
+    // (shell + background descendants), matching system-run lifecycle.
     const child = spawnFn(shell, shellArgs, {
       cwd,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
     });
+
+    const terminateChildTree = () => {
+      const pid = child.pid;
+      if (typeof pid === "number" && Number.isFinite(pid) && pid > 0) {
+        try {
+          killProcessTree(pid, {
+            force: true,
+            detached: process.platform !== "win32",
+          });
+        } catch {
+          // fall through to direct kill
+        }
+      }
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore
+      }
+    };
 
     const finish = (result: CronJobPrecheckResult) => {
       if (settled) {
@@ -460,11 +497,7 @@ export async function runCronJobPrecheck(
 
     const timer = setTimeout(() => {
       timedOut = true;
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // ignore
-      }
+      terminateChildTree();
       finish({
         decision: "error",
         reason: PRECHECK_TIMEOUT_REASON,
@@ -475,11 +508,7 @@ export async function runCronJobPrecheck(
     }, timeoutMs);
 
     const onAbort = () => {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // ignore
-      }
+      terminateChildTree();
       finish({
         decision: "error",
         reason: PRECHECK_TIMEOUT_REASON,

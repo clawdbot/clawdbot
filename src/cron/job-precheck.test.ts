@@ -147,6 +147,21 @@ describe("authorizeCronJobPrecheckCommand", () => {
       expect(result.reason).toMatch(/security=deny/i);
     }
   });
+
+  it("defaults unconfigured exec policy to allowlist (not full)", async () => {
+    // ClawSweeper P1: canonical system.run default is allowlist when tools.exec
+    // security is omitted. An empty allowlist must deny arbitrary commands.
+    const result = await authorizeCronJobPrecheckCommand({
+      command: "echo should-not-run-unconfigured",
+      authz: {
+        triggersEnabled: true,
+      },
+    });
+    expect(result.allowed).toBe(false);
+    if (!result.allowed) {
+      expect(result.reason).toContain(PRECHECK_POLICY_DENIED_REASON);
+    }
+  });
 });
 
 describe("runCronJobPrecheck", () => {
@@ -171,5 +186,57 @@ describe("runCronJobPrecheck", () => {
   it("runs a real shell check for exit 0 work when policy allows", async () => {
     const result = await runCronJobPrecheck({ command: "exit 0" }, { authz: AUTH_FULL });
     expect(result.decision).toBe("run");
+  });
+
+  it("does not spawn after abort before run", async () => {
+    const controller = new AbortController();
+    let spawnCount = 0;
+    const spawnImpl = ((..._args: unknown[]) => {
+      spawnCount += 1;
+      throw new Error("spawn should not be called after abort");
+    }) as unknown as typeof import("node:child_process").spawn;
+    controller.abort();
+    const result = await runCronJobPrecheck(
+      { command: "echo hi" },
+      {
+        abortSignal: controller.signal,
+        spawnImpl,
+        authz: AUTH_FULL,
+      },
+    );
+    expect(result.decision).toBe("error");
+    expect(spawnCount).toBe(0);
+  });
+
+  it("terminates precheck process tree on timeout", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const marker = path.join(os.tmpdir(), `oc-precheck-tree-${process.pid}-${Date.now()}.pid`);
+    // Background sleep should die with process-tree termination, not only the shell root.
+    const command = `sleep 600 & echo $! > "${marker}"; wait`;
+    const result = await runCronJobPrecheck({ command, timeoutMs: 250 }, { authz: AUTH_FULL });
+    expect(result.decision).toBe("error");
+    if (result.decision === "error") {
+      expect(result.reason).toMatch(/precheck-timeout/);
+    }
+    await new Promise((r) => setTimeout(r, 400));
+    if (fs.existsSync(marker)) {
+      const pid = Number(fs.readFileSync(marker, "utf8").trim());
+      try {
+        fs.unlinkSync(marker);
+      } catch {
+        // ignore
+      }
+      if (Number.isFinite(pid) && pid > 0) {
+        let alive = true;
+        try {
+          process.kill(pid, 0);
+        } catch {
+          alive = false;
+        }
+        expect(alive).toBe(false);
+      }
+    }
   });
 });
