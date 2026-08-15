@@ -17,6 +17,7 @@ import {
   type RealtimeVoiceSessionConnection,
   type RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import WebSocket, { type RawData } from "ws";
 import {
   connectOpenAIQuicksilverSideband,
@@ -45,16 +46,6 @@ type OpenAIQuicksilverVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   resolveAuth: () => Promise<OpenAIQuicksilverAuth>;
   webSocketFactory?: OpenAIQuicksilverSocketFactory;
 };
-
-function decodeTextFrame(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString("utf8");
-  }
-  return data.toString("utf8");
-}
 
 function toolResultText(result: unknown): string {
   if (typeof result === "string") {
@@ -212,7 +203,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         }
         return;
       }
-      const payload = decodeTextFrame(data);
+      const payload = rawDataToString(data);
       captureWsEvent({
         url,
         direction: "inbound",
@@ -265,7 +256,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     );
     for (const frame of connected.bufferedFrames) {
       if (!frame.isBinary) {
-        const event = parseOpenAIQuicksilverEvent(decodeTextFrame(frame.data));
+        const event = parseOpenAIQuicksilverEvent(rawDataToString(frame.data));
         if (event) {
           this.handleEvent(event, connection, settleReady, failStartup);
         }

@@ -12,7 +12,7 @@ import {
 } from "../config/sessions/artifacts.js";
 import { extractGeneratedTranscriptSessionId } from "../config/sessions/generated-transcript-session-id.js";
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
 } from "../config/sessions/paths.js";
@@ -84,19 +84,19 @@ export function resolveSessionTranscriptCandidates(
     const sessionsDir = path.dirname(storePath);
     if (sessionFile && sessionFileState !== "stale") {
       pushCandidate(() =>
-        resolveSessionFilePath(sessionId, { sessionFile }, { sessionsDir, agentId }),
+        resolveSessionFilePathCore(sessionId, { sessionFile }, { sessionsDir, agentId }),
       );
     }
     pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, sessionsDir));
     if (sessionFile && sessionFileState === "stale") {
       pushCandidate(() =>
-        resolveSessionFilePath(sessionId, { sessionFile }, { sessionsDir, agentId }),
+        resolveSessionFilePathCore(sessionId, { sessionFile }, { sessionsDir, agentId }),
       );
     }
   } else if (sessionFile) {
     if (agentId) {
       if (sessionFileState !== "stale") {
-        pushCandidate(() => resolveSessionFilePath(sessionId, { sessionFile }, { agentId }));
+        pushCandidate(() => resolveSessionFilePathCore(sessionId, { sessionFile }, { agentId }));
       }
     } else {
       const trimmed = sessionFile.trim();
@@ -109,7 +109,7 @@ export function resolveSessionTranscriptCandidates(
   if (agentId) {
     pushCandidate(() => resolveSessionTranscriptPath(sessionId, agentId));
     if (sessionFile && sessionFileState === "stale") {
-      pushCandidate(() => resolveSessionFilePath(sessionId, { sessionFile }, { agentId }));
+      pushCandidate(() => resolveSessionFilePathCore(sessionId, { sessionFile }, { agentId }));
     }
   }
 

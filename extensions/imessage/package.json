@@ -29,8 +29,7 @@
     ],
     "setupEntry": "./setup-entry.ts",
     "setupFeatures": {
-      "configPromotion": true,
-      "legacyStateMigrations": true
+      "configPromotion": true
     },
     "channel": {
       "id": "imessage",

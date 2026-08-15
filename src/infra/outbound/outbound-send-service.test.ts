@@ -122,6 +122,7 @@ type MockCalls = {
 };
 
 const requireRecord = createRequireRecord("object", "expected-label");
+const defaultPlugin = createChannelTestPluginBase({ id: "demo-outbound" });
 
 function requireArray(value: unknown, label: string): unknown[] {
   expect(Array.isArray(value), label).toBe(true);
@@ -193,6 +194,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: { to: "channel:123", message: "hello" },
@@ -212,6 +214,7 @@ describe("executeSendAction", () => {
     overrides: Partial<ExecuteSendContext>,
   ): ExecuteSendContext {
     return {
+      plugin: defaultPlugin,
       cfg: {},
       channel: "demo-outbound",
       params: { media: "/tmp/host.png" },
@@ -258,6 +261,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
@@ -297,6 +301,7 @@ describe("executeSendAction", () => {
 
     const result = await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: { to: "channel:123", message: "hello" },
@@ -323,6 +328,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: { to: "channel:123", message: "hello" },
@@ -355,6 +361,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
@@ -382,6 +389,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
@@ -413,6 +421,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
@@ -507,6 +516,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
@@ -536,7 +546,6 @@ describe("executeSendAction", () => {
         sendText: async () => ({ channel: "discord", messageId: "msg-test" }),
       },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
     mocks.sendMessage.mockResolvedValue({
       channel: "discord",
@@ -547,6 +556,7 @@ describe("executeSendAction", () => {
 
     const result = await executeSendAction({
       ctx: {
+        plugin,
         cfg: {},
         channel: "discord",
         params: { to: "channel:123", presentation },
@@ -592,7 +602,6 @@ describe("executeSendAction", () => {
         sendText: async () => ({ channel: "discord", messageId: "msg-test" }),
       },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
     mocks.sendMessage.mockResolvedValue({
       channel: "discord",
@@ -603,6 +612,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin,
         cfg: {},
         channel: "discord",
         params: { to: "channel:123", message: "Deployment trend", presentation },
@@ -638,11 +648,11 @@ describe("executeSendAction", () => {
         sendText: async () => ({ channel: "discord", messageId: "msg-test" }),
       },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     const result = await executeSendAction({
       ctx: {
+        plugin,
         cfg: {},
         channel: "discord",
         params: { to: "channel:123", components: nativeComponents, presentation },
@@ -698,7 +708,6 @@ describe("executeSendAction", () => {
         sendText: async () => ({ channel: "whatsapp", messageId: "msg-test" }),
       },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "whatsapp", plugin, source: "test" }]));
     mocks.sendMessage.mockResolvedValue({
       channel: "whatsapp",
       to: "+15551234567",
@@ -708,6 +717,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin,
         cfg: {},
         channel: "whatsapp",
         params: { to: "+15551234567", message: "Deployment trend", presentation },
@@ -746,11 +756,11 @@ describe("executeSendAction", () => {
         handleAction: async () => ({ content: [], details: { ok: true } }),
       },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
 
     const result = await executeSendAction({
       ctx: {
+        plugin,
         cfg: {},
         channel: "discord",
         params: { to: "channel:123", presentation },
@@ -775,6 +785,7 @@ describe("executeSendAction", () => {
 
     const result = await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: { to: "channel:123", message: "hello" },
@@ -796,6 +807,7 @@ describe("executeSendAction", () => {
 
     const result = await executePollAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
@@ -821,6 +833,7 @@ describe("executeSendAction", () => {
 
     const result = await executePollAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {
@@ -844,6 +857,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: { to: "channel:123", message: "hello" },
@@ -870,6 +884,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {
@@ -897,6 +912,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {
@@ -926,6 +942,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {
@@ -1000,6 +1017,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: { to: "channel:123", message: "hello" },
@@ -1050,7 +1068,6 @@ describe("executeSendAction", () => {
       },
       outbound: { deliveryMode: "direct" },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     mocks.sendMessage.mockResolvedValue({
       channel: "discord",
       to: "channel:123",
@@ -1060,6 +1077,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin,
         cfg: {},
         channel: "discord",
         params: { to: "channel:123", message: "hello" },
@@ -1093,6 +1111,7 @@ describe("executeSendAction", () => {
       threadId: "thread-1",
       conversationReadOrigin: "delegated",
     });
+    expect(sendArgs.preparedPlugin).toBe(plugin);
     const [payload] = requireArray(sendArgs.payloads, "send payloads");
     expectFields(requireRecord(payload, "prepared payload"), {
       channelData: { prepared: true },
@@ -1114,7 +1133,6 @@ describe("executeSendAction", () => {
       },
       outbound: { deliveryMode: "direct" },
     };
-    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     mocks.sendMessage.mockResolvedValue({
       channel: "discord",
       to: "channel:123",
@@ -1124,6 +1142,7 @@ describe("executeSendAction", () => {
 
     await executeSendAction({
       ctx: {
+        plugin,
         cfg: {},
         channel: "discord",
         params: { to: "channel:123", message: "hello" },
@@ -1155,6 +1174,7 @@ describe("executeSendAction", () => {
 
     await executePollAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},
@@ -1199,6 +1219,7 @@ describe("executeSendAction", () => {
 
     await executePollAction({
       ctx: {
+        plugin: defaultPlugin,
         cfg: {},
         channel: "demo-outbound",
         params: {},

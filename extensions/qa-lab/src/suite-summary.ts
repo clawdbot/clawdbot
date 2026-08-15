@@ -1,7 +1,7 @@
 // Qa Lab plugin module implements suite summary behavior.
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asSafeIntegerInRange, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteArtifactError } from "./errors.js";
 import type { QaEvidenceSummaryJson, QaEvidenceTiming } from "./evidence-summary.js";
 import type { QaProviderMode } from "./model-selection.js";
@@ -110,7 +110,7 @@ async function readQaSuiteSummaryFile(summaryPath: string): Promise<unknown> {
 }
 
 function readNonNegativeCount(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  return asSafeIntegerInRange(value, { min: 0 }) ?? null;
 }
 
 function assertQaSuiteSummaryHasExecutedScenarios(

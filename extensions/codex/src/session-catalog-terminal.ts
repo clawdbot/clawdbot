@@ -275,3 +275,35 @@ export async function openCodexCatalogTerminal(
     title,
   };
 }
+
+export async function startCodexCatalogTerminal(
+  params: {
+    agentId: string;
+    cwd: string;
+    initialMessage?: string;
+    nodeId?: string;
+  } & CodexTerminalConfigSources,
+): Promise<SessionCatalogTerminalPlan> {
+  if (params.nodeId) {
+    throw new CatalogParamsError(
+      "Paired-node Codex terminal start is unavailable; omit hostId to start on the gateway host",
+    );
+  }
+  const resolution = resolveLocalCodexTerminalResolution();
+  if (!resolution) {
+    throw new CatalogParamsError(
+      "Codex CLI is unavailable; install Codex or add codex to PATH, then try again",
+    );
+  }
+  return {
+    kind: "local",
+    argv: [
+      resolution.executable,
+      ...(params.initialMessage !== undefined ? ["--", params.initialMessage] : []),
+    ],
+    cwd: params.cwd,
+    env: { CODEX_HOME: resolveCodexCatalogTerminalHome(params) },
+    ...(resolution.pathEnv ? { pathEnv: resolution.pathEnv } : {}),
+    title: "codex",
+  };
+}

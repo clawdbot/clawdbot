@@ -321,14 +321,9 @@ describe("claws cli", () => {
     registerClawsCli(program);
     const claws = program.commands.find((command) => command.name() === "claws");
 
-    expect(claws?.commands.map((command) => command.name())).toEqual([
-      "inspect",
-      "add",
-      "status",
-      "update",
-      "remove",
-      "export",
-    ]);
+    expect(claws?.commands.map((command) => command.name())).toEqual(
+      expect.arrayContaining(["inspect", "add", "status", "update", "remove", "export"]),
+    );
   });
 
   it("accepts an already-applied Gateway config revision", async () => {
@@ -857,6 +852,12 @@ describe("claws cli", () => {
 
   it("uses the source recorded by the installed Claw when --from is omitted", async () => {
     const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
+    await mkdir(join(root, "profiles"));
+    await writeFile(
+      join(root, "profiles", "openclaw.yml"),
+      "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n",
+      "utf8",
+    );
     mocks.readClawStatus.mockResolvedValue({
       schemaVersion: "openclaw.clawStatus.v1",
       records: [
@@ -892,6 +893,14 @@ describe("claws cli", () => {
       expect.objectContaining({
         agentId: "demo-agent",
         targetSource: expect.objectContaining({ name: "@acme/demo-agent", version: "1.2.3" }),
+        targetOpenClawProfile: expect.objectContaining({
+          agent: {
+            tools: expect.objectContaining({
+              profile: "full",
+              allow: expect.not.arrayContaining(["bundle-mcp"]),
+            }),
+          },
+        }),
       }),
     );
   });

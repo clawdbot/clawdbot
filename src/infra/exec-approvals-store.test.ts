@@ -76,6 +76,18 @@ function makeStateDatabaseUnavailable(): void {
   fs.writeFileSync(path.join(stateDir, "state"), "not a directory");
 }
 
+const TEST_DELETION_OPERATION_ID = "test-deletion-operation";
+
+function seedAgentDeletionJournal(agentId: string, operationId = TEST_DELETION_OPERATION_ID): void {
+  openOpenClawStateDatabase()
+    .db.prepare(
+      `INSERT INTO agent_deletion_journal (
+         agent_id, operation_id, agent_dir, workspace_dir, sessions_dir, created_at
+       ) VALUES (?, ?, '/agent', '/workspace', '/sessions', 1)`,
+    )
+    .run(agentId, operationId);
+}
+
 beforeEach(() => {
   createStateDir();
   loggerWarn.mockReset();
@@ -217,6 +229,7 @@ describe("exec approvals SQLite store", () => {
         kept: { security: "allowlist", allowlist: [{ pattern: "/usr/bin/keep" }] },
       },
     });
+    seedAgentDeletionJournal("removed");
 
     await expect(withAgentExecApprovalsRemoved("removed", async () => "ok")).resolves.toBe("ok");
     expect(loadExecApprovals().agents).toEqual({
@@ -234,6 +247,7 @@ describe("exec approvals SQLite store", () => {
         kept: { security: "deny" },
       },
     });
+    seedAgentDeletionJournal("removed");
     let notifyCommitStarted!: () => void;
     const commitStarted = new Promise<void>((resolve) => {
       notifyCommitStarted = resolve;
@@ -266,8 +280,9 @@ describe("exec approvals SQLite store", () => {
     await expect(deletion).resolves.toBe("committed");
   });
 
-  it("fences writers during deletion even when the agent has no approval policy", async () => {
+  it("allows unrelated writers while deleting an agent with no approval policy", async () => {
     saveExecApprovals({ version: 1, agents: { kept: { security: "deny" } } });
+    seedAgentDeletionJournal("missing");
     let notifyCommitStarted!: () => void;
     const commitStarted = new Promise<void>((resolve) => {
       notifyCommitStarted = resolve;
@@ -283,48 +298,51 @@ describe("exec approvals SQLite store", () => {
 
     await commitStarted;
     try {
-      expect(() =>
-        saveExecApprovals({
-          version: 1,
-          agents: { kept: { security: "full" } },
-        }),
-      ).toThrow("Exec approvals cannot be changed while agent deletion is in progress; retry.");
+      saveExecApprovals({
+        version: 1,
+        agents: { kept: { security: "full" } },
+      });
+      expect(loadExecApprovals().agents?.kept?.security).toBe("full");
     } finally {
       finishCommit();
     }
     await deletion;
   });
 
-  it("restores only the removed agent when the surrounding commit fails", async () => {
+  it("removes and restores every policy alias when the surrounding commit fails", async () => {
     saveExecApprovals({
       version: 1,
-      agents: { removed: { security: "allowlist" }, kept: { security: "deny" } },
+      agents: {
+        "Agent A": { security: "allowlist" },
+        "agent-a": { security: "full" },
+        kept: { security: "deny" },
+      },
     });
+    seedAgentDeletionJournal("agent-a");
+    let policiesDuringCommit: ReturnType<typeof loadExecApprovals>["agents"] = undefined;
 
     await expect(
-      withAgentExecApprovalsRemoved("removed", async () => {
+      withAgentExecApprovalsRemoved("Agent A", async () => {
+        policiesDuringCommit = loadExecApprovals().agents;
         throw new Error("roster commit failed");
       }),
     ).rejects.toThrow("roster commit failed");
 
-    expect(loadExecApprovals().agents).toMatchObject({
-      removed: { security: "allowlist" },
+    expect(policiesDuringCommit).toEqual({ kept: { security: "deny" } });
+    expect(loadExecApprovals().agents).toEqual({
+      "Agent A": { security: "allowlist" },
+      "agent-a": { security: "full" },
       kept: { security: "deny" },
     });
   });
 
-  it("allows writers after an abandoned mutation lease expires", async () => {
-    const { db } = openOpenClawStateDatabase();
-    const now = Date.now();
-    db.prepare(
-      "INSERT INTO state_leases (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)",
-    ).run("exec-approvals", "mutation", "crashed-deletion", now - 1, now - 10, now - 10, now - 10);
+  it("requires a deletion journal before commit", async () => {
+    const commit = vi.fn(async () => "committed");
 
-    await expect(
-      updateExecApprovals({
-        update: () => ({ version: 1, agents: { current: { security: "full" } } }),
-      }),
-    ).resolves.toMatchObject({ file: { agents: { current: { security: "full" } } } });
+    await expect(withAgentExecApprovalsRemoved("missing", commit)).rejects.toMatchObject({
+      name: "ExecApprovalsMutationFencedError",
+    });
+    expect(commit).not.toHaveBeenCalled();
   });
 
   it("restores snapshots and honors rollback CAS", async () => {

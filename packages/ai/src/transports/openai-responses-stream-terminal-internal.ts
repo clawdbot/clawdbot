@@ -26,6 +26,7 @@ import type {
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { captureOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 import {
+  OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE,
   OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
   type OpenAIResponsesReasoningReplayMetadata,
 } from "./openai-responses-contracts.js";
@@ -267,7 +268,12 @@ export function createResponsesTerminalController(params: {
         }
       } else {
         params.setLastTextBlock(null);
-        if (item.type === "compaction" && output.providerReplay?.id !== item.id) {
+        const alreadyCapturedCompaction =
+          item.type === "compaction" &&
+          output.providerReplay?.type === OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE &&
+          output.providerReplay.id === item.id &&
+          output.providerReplay.data === item.encrypted_content;
+        if (item.type === "compaction" && !alreadyCapturedCompaction) {
           let replayIndex = blocks.length;
           for (const laterItem of items.slice(terminalIndex + 1)) {
             const laterContentIndex = params.outputItemContentIndexes.get(laterItem);
@@ -292,16 +298,14 @@ export function createResponsesTerminalController(params: {
       }
     }
   };
-  const finalizeResponse = (
+  const finalizeTerminalFacts = (
     response: Extract<
       ResponseStreamEvent,
-      { type: "response.completed" | "response.incomplete" }
+      { type: "response.completed" | "response.incomplete" | "response.failed" }
     >["response"],
-    terminalEventType: "response.completed" | "response.incomplete",
+    responseId = response.id,
   ) => {
-    params.markFinalized();
-    backfillReasoning(response.output ?? []);
-    output.responseId = response.id || output.responseId;
+    output.responseId = responseId || output.responseId;
     output.responseModel = response.model?.trim() || undefined;
     const usage = mapResponsesTerminalUsage(response.usage);
     const reasoningTokens = readResponsesReasoningTokens(response.usage);
@@ -319,6 +323,17 @@ export function createResponsesTerminalController(params: {
         : (response.service_tier ?? options.serviceTier);
       options.applyServiceTierPricing(output.usage, tier);
     }
+  };
+  const finalizeResponse = (
+    response: Extract<
+      ResponseStreamEvent,
+      { type: "response.completed" | "response.incomplete" }
+    >["response"],
+    terminalEventType: "response.completed" | "response.incomplete",
+  ) => {
+    params.markFinalized();
+    backfillReasoning(response.output ?? []);
+    finalizeTerminalFacts(response);
     const terminal = resolveResponsesTerminalStopReason({
       status: response.status,
       terminalEventType,
@@ -328,5 +343,5 @@ export function createResponsesTerminalController(params: {
     output.stopReason = terminal.stopReason;
     output.errorMessage = terminal.errorMessage;
   };
-  return { finalizeResponse, recoverTerminalOutput };
+  return { finalizeResponse, finalizeFailedResponse: finalizeTerminalFacts, recoverTerminalOutput };
 }

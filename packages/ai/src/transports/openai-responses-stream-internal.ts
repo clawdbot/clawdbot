@@ -48,6 +48,7 @@ import {
   type ResponsesThinkingBlock,
   type TextBlockReference,
 } from "./openai-responses-stream-terminal-internal.js";
+import { transportAbortError } from "./transport-stream-shared.js";
 
 type ResponsesConsumedEventType =
   | "error"
@@ -71,6 +72,7 @@ type OpenAIResponsesConsumedEvent = Extract<
   ResponseStreamEvent,
   { type: ResponsesConsumedEventType }
 >;
+type CompletedResponse = Extract<ResponseStreamEvent, { type: "response.completed" }>["response"];
 type OpenAIResponsesIgnoredSdkEvent = Exclude<ResponseStreamEvent, OpenAIResponsesConsumedEvent>;
 type ResponsesTextContentPart =
   | ResponseOutputMessage["content"][number]
@@ -118,7 +120,7 @@ export async function processResponsesStream<TApi extends Api>(
   stream: ResponsesEventSink,
   model: Model<TApi>,
   options?: ResponsesStreamOptions,
-): Promise<void> {
+) {
   type StreamingToolCallBlock = ToolCall & { partialJson: string };
   type StreamingToolCallState = ResponsesToolCallState & {
     block: StreamingToolCallBlock;
@@ -133,7 +135,7 @@ export async function processResponsesStream<TApi extends Api>(
   const reasoningBlocksById = new Map<string, ResponsesThinkingBlock>();
   const outputItemContentIndexes = createResponsesOutputContentIndex();
   const startedTextBlocksByItemId = new Map<string, TextBlockReference>();
-  let terminalResponseEvent: "finalized" | "failed" | undefined;
+  let terminalResponse: CompletedResponse | null | undefined;
   let lastTextBlock: TextBlockReference | null = null;
   const blocks = output.content;
   const compactionTracker = createCompactionTracker(output, model, options);
@@ -254,22 +256,21 @@ export async function processResponsesStream<TApi extends Api>(
       }
     }
   };
-  const { finalizeResponse, recoverTerminalOutput } = createResponsesTerminalController({
-    output,
-    stream,
-    model,
-    options,
-    reasoningBlocksById,
-    startedTextBlocksByItemId,
-    outputItemContentIndexes,
-    getLastTextBlock: () => lastTextBlock,
-    setLastTextBlock: (block) => {
-      lastTextBlock = block;
-    },
-    markFinalized: () => {
-      terminalResponseEvent = "finalized";
-    },
-  });
+  const { finalizeResponse, finalizeFailedResponse, recoverTerminalOutput } =
+    createResponsesTerminalController({
+      output,
+      stream,
+      model,
+      options,
+      reasoningBlocksById,
+      startedTextBlocksByItemId,
+      outputItemContentIndexes,
+      getLastTextBlock: () => lastTextBlock,
+      setLastTextBlock: (block) => {
+        lastTextBlock = block;
+      },
+      markFinalized: () => undefined,
+    });
 
   const guardedStream = adaptResponsesStream(
     withFirstStreamEventTimeout(openaiStream, {
@@ -691,6 +692,7 @@ export async function processResponsesStream<TApi extends Api>(
         if (event.type === "response.completed" || output.stopReason === "length") {
           recoverTerminalOutput(event.response.output ?? [], event.type === "response.completed");
         }
+        terminalResponse = event.type === "response.completed" ? event.response : null;
         if (
           output.stopReason === "stop" &&
           output.content.some((block) => block.type === "toolCall")
@@ -707,18 +709,22 @@ export async function processResponsesStream<TApi extends Api>(
           event as unknown as Record<string, unknown>,
           model,
         );
-        if (failure.responseId) {
-          output.responseId = failure.responseId;
-        }
+        finalizeFailedResponse(event.response, failure.responseId);
         throw new ResponsesStreamFailure(failure, event.response);
       }
+    }
+    // openai-node turns an aborted SSE iterator into normal completion; preserve
+    // the caller's authoritative reason before classifying terminal stream state.
+    if (options?.signal?.aborted) {
+      throw transportAbortError(options.signal);
     }
     if (streamingToolCalls.hasActive()) {
       throw new Error("Responses stream ended with unresolved tool calls");
     }
-    if (!terminalResponseEvent) {
+    if (terminalResponse === undefined) {
       throw new Error("OpenAI Responses stream ended before a terminal response event");
     }
+    return terminalResponse ?? undefined;
   } finally {
     for (const block of output.content) {
       delete (block as { partialJson?: string }).partialJson;

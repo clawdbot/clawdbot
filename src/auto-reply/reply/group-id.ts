@@ -8,7 +8,7 @@ import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-l
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import {
-  stripTargetKindPrefix,
+  stripOutboundTargetKindPrefix,
   stripTargetProviderPrefix,
   stripTargetTopicSuffix,
 } from "../../infra/outbound/channel-target-prefix.js";
@@ -29,7 +29,7 @@ function extractInferredGroupTargetId(params: {
       continue;
     }
     const target = stripTargetTopicSuffix(
-      stripTargetKindPrefix(stripTargetProviderPrefix(candidate, params.channelId), [
+      stripOutboundTargetKindPrefix(stripTargetProviderPrefix(candidate, params.channelId), [
         "group",
         "channel",
         "conversation",
@@ -55,7 +55,7 @@ function extractLegacyParsedGroupTargetId(params: {
     return undefined;
   }
   const target = stripTargetTopicSuffix(
-    stripTargetKindPrefix(stripTargetProviderPrefix(parsed.to, params.channelId), [
+    stripOutboundTargetKindPrefix(stripTargetProviderPrefix(parsed.to, params.channelId), [
       "group",
       "channel",
       "conversation",

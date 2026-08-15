@@ -1,7 +1,9 @@
+import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
 import type {
   GatewayApprovalEventKind,
   GatewayNativeApprovalRuntime,
 } from "../infra/approval-gateway-runtime.types.js";
+import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 
 export type GatewayApprovalEventPublisher = {
   publishRequested: (kind: GatewayApprovalEventKind, request: unknown) => number;
@@ -9,8 +11,12 @@ export type GatewayApprovalEventPublisher = {
 };
 
 export type GatewayRecoveryRuntime = {
-  dispatchAgent: <T = unknown>(params: Record<string, unknown>, timeoutMs?: number) => Promise<T>;
-  waitForAgent: <T = unknown>(params: Record<string, unknown>, timeoutMs?: number) => Promise<T>;
+  dispatchAgent: <T = unknown>(
+    params: AgentRunRequest,
+    timeoutMs?: number,
+    options?: { allowModelOverride?: boolean; scopes?: string[] },
+  ) => Promise<T>;
+  waitForAgent: <T = unknown>(params: AgentWaitParams, timeoutMs?: number) => Promise<T>;
   sendRecoveryNotice: (params: {
     channel: string;
     to: string;
@@ -18,7 +24,10 @@ export type GatewayRecoveryRuntime = {
     threadId?: string | number;
     text: string;
     idempotencyKey: string;
-  }) => Promise<void>;
+  }) => Promise<{
+    /** True when delivery produced zero platform results (policy/channel suppression). */
+    suppressed: boolean;
+  }>;
 };
 
 export type GatewayInstanceRuntime = {

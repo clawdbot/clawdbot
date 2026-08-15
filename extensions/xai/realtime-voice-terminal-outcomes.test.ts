@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { RealtimeVoiceResponseOutcome } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it } from "vitest";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
@@ -7,13 +8,16 @@ import { buildXaiRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
 type RealtimeOutcome = {
   errors: string[];
+  outcomes: RealtimeVoiceResponseOutcome[];
   transcripts: Array<{ speaker: string; text: string; final: boolean }>;
   tools: Array<{ itemId: string; callId: string; name: string; args: unknown }>;
 };
 
 type CaptureRealtimeOutcomeOptions = {
+  completeQueuedResponse?: boolean;
   queuedUserMessage?: string;
   onClientEvent?: (event: Record<string, unknown>) => void;
+  throwOnResponseDone?: boolean;
 };
 
 async function waitForFixtureEvent(promise: Promise<void>, label: string): Promise<void> {
@@ -35,7 +39,7 @@ async function captureRealtimeOutcome(
   options: CaptureRealtimeOutcomeOptions = {},
 ): Promise<RealtimeOutcome> {
   const events = Array.isArray(eventInput) ? eventInput : [eventInput];
-  const outcome: RealtimeOutcome = { errors: [], transcripts: [], tools: [] };
+  const outcome: RealtimeOutcome = { errors: [], outcomes: [], transcripts: [], tools: [] };
   let markServerEventHandled: () => void = () => {};
   const serverEventHandled = new Promise<void>((resolve) => {
     markServerEventHandled = resolve;
@@ -43,6 +47,10 @@ async function captureRealtimeOutcome(
   let markResponseCreatedHandled: () => void = () => {};
   const responseCreatedHandled = new Promise<void>((resolve) => {
     markResponseCreatedHandled = resolve;
+  });
+  let markQueuedResponseCompleted: () => void = () => {};
+  const queuedResponseCompleted = new Promise<void>((resolve) => {
+    markQueuedResponseCompleted = resolve;
   });
   const server = createServer();
   const sockets = new Set<WebSocket>();
@@ -58,6 +66,15 @@ async function captureRealtimeOutcome(
         >;
         options.onClientEvent?.(clientEvent);
         if (clientEvent.type === "response.create" && options.queuedUserMessage) {
+          if (options.completeQueuedResponse) {
+            ws.send(JSON.stringify({ type: "response.created", response: { id: "response_2" } }));
+            ws.send(
+              JSON.stringify({
+                type: "response.done",
+                response: { id: "response_2", status: "completed" },
+              }),
+            );
+          }
           markServerEventHandled();
           return;
         }
@@ -94,6 +111,15 @@ async function captureRealtimeOutcome(
     onAudio() {},
     onClearAudio() {},
     onError: (error) => outcome.errors.push(error.message),
+    onResponseDone: (responseOutcome) => {
+      outcome.outcomes.push(responseOutcome);
+      if (responseOutcome.responseId === "response_2") {
+        markQueuedResponseCompleted();
+      }
+      if (options.throwOnResponseDone && responseOutcome.responseId === "response_1") {
+        throw new Error("consumer callback failed");
+      }
+    },
     onTranscript: (speaker, text, final) => outcome.transcripts.push({ speaker, text, final }),
     onToolCall: (tool) => outcome.tools.push(tool),
     onEvent: (observed) => {
@@ -114,6 +140,9 @@ async function captureRealtimeOutcome(
       await waitForFixtureEvent(responseCreatedHandled, "response.created");
       bridge.sendUserMessage?.(options.queuedUserMessage);
       await waitForFixtureEvent(serverEventHandled, "the queued response.create");
+      if (options.completeQueuedResponse) {
+        await waitForFixtureEvent(queuedResponseCompleted, "the completed queued response");
+      }
     } else {
       await serverEventHandled;
     }
@@ -147,6 +176,30 @@ const expectedTool = {
 };
 
 describe("xAI realtime terminal event ownership", () => {
+  it("drains a queued follow-up when the terminal consumer throws", async () => {
+    const outcome = await captureRealtimeOutcome(
+      {
+        type: "response.done",
+        response: { id: "response_1", status: "failed" },
+      },
+      {
+        completeQueuedResponse: true,
+        queuedUserMessage: "Continue after the terminal callback fails.",
+        throwOnResponseDone: true,
+      },
+    );
+
+    expect(outcome.errors).toEqual([]);
+    expect(outcome.outcomes).toEqual([
+      {
+        responseId: "response_1",
+        status: "failed",
+        message: "xAI realtime voice response failed",
+      },
+      { responseId: "response_2", status: "completed" },
+    ]);
+  });
+
   it("flushes a queued turn after malformed terminal output over a real WebSocket", async () => {
     const clientEventTypes: string[] = [];
 
@@ -165,7 +218,12 @@ describe("xAI realtime terminal event ownership", () => {
       },
     );
 
-    expect(outcome).toEqual({ errors: [], transcripts: [], tools: [] });
+    expect(outcome).toEqual({
+      errors: [],
+      outcomes: [{ status: "completed" }],
+      transcripts: [],
+      tools: [],
+    });
     expect(clientEventTypes).toEqual([
       "session.update",
       "conversation.item.create",
@@ -201,7 +259,11 @@ describe("xAI realtime terminal event ownership", () => {
         type: "response.done",
         response: { status: "failed", status_details: { error: { code: "rate_limit_exceeded" } } },
       },
-      expected: { errors: ["rate_limit_exceeded"], transcripts: [], tools: [] },
+      expected: {
+        errors: ["xAI realtime voice response failed: rate_limit_exceeded"],
+        transcripts: [],
+        tools: [],
+      },
     },
     {
       name: "surfaces incomplete responses with their authoritative reason",
@@ -234,7 +296,7 @@ describe("xAI realtime terminal event ownership", () => {
       expected: { errors: [], transcripts: [], tools: [expectedTool] },
     },
     {
-      name: "retains immediate authoritative function-call argument completion",
+      name: "buffers authoritative function-call arguments until response completion",
       event: {
         type: "response.function_call_arguments.done",
         item_id: completedTool.id,
@@ -242,7 +304,7 @@ describe("xAI realtime terminal event ownership", () => {
         name: completedTool.name,
         arguments: completedTool.arguments,
       },
-      expected: { errors: [], transcripts: [], tools: [expectedTool] },
+      expected: { errors: [], transcripts: [], tools: [] },
     },
     {
       name: "preserves required streamed-call timing when the response later fails",
@@ -259,7 +321,7 @@ describe("xAI realtime terminal event ownership", () => {
       expected: {
         errors: ["xAI realtime voice response failed"],
         transcripts: [],
-        tools: [expectedTool],
+        tools: [],
       },
     },
     {
@@ -279,7 +341,7 @@ describe("xAI realtime terminal event ownership", () => {
       expected: { errors: [], transcripts: [], tools: [expectedTool] },
     },
     {
-      name: "deduplicates immediate tool delivery against terminal output",
+      name: "releases finalized tool arguments only after a completed response",
       event: [
         {
           type: "response.function_call_arguments.done",
@@ -288,7 +350,7 @@ describe("xAI realtime terminal event ownership", () => {
           name: completedTool.name,
           arguments: completedTool.arguments,
         },
-        { type: "response.done", response: { status: "completed", output: [completedTool] } },
+        { type: "response.done", response: { status: "completed" } },
       ],
       expected: { errors: [], transcripts: [], tools: [expectedTool] },
     },
@@ -312,7 +374,54 @@ describe("xAI realtime terminal event ownership", () => {
       },
       expected: { errors: [], transcripts: [], tools: [] },
     },
+    {
+      name: "fails closed when response status is missing",
+      event: { type: "response.done", response: {} },
+      expected: {
+        errors: ["xAI realtime voice response failed: missing terminal status"],
+        transcripts: [],
+        tools: [],
+      },
+    },
+    {
+      name: "fails closed when response status is invalid",
+      event: { type: "response.done", response: { status: "in_progress" } },
+      expected: {
+        errors: ["xAI realtime voice response failed: invalid status in_progress"],
+        transcripts: [],
+        tools: [],
+      },
+    },
   ])("$name", async ({ event, expected }) => {
-    expect(await captureRealtimeOutcome(event)).toEqual(expected);
+    const actual = await captureRealtimeOutcome(event);
+    expect(actual.errors).toEqual([]);
+    expect(actual.transcripts).toEqual(expected.transcripts);
+    expect(actual.tools).toEqual(expected.tools);
+    const events = Array.isArray(event) ? event : [event];
+    const responseDone = events.findLast((candidate) => candidate.type === "response.done") as
+      | { response?: { status?: string } }
+      | undefined;
+    if (!responseDone) {
+      expect(actual.outcomes).toEqual([]);
+      return;
+    }
+    expect(actual.outcomes).toHaveLength(1);
+    const rawStatus = responseDone.response?.status;
+    if (
+      rawStatus !== "completed" &&
+      rawStatus !== "cancelled" &&
+      rawStatus !== "failed" &&
+      rawStatus !== "incomplete"
+    ) {
+      expect(actual.outcomes[0]).toMatchObject({
+        status: "failed",
+        reason: "invalid_response_status",
+      });
+    } else {
+      expect(actual.outcomes[0]?.status).toBe(rawStatus);
+    }
+    if (expected.errors[0]) {
+      expect(actual.outcomes[0]).toMatchObject({ message: expected.errors[0] });
+    }
   });
 });

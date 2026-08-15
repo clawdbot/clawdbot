@@ -9,7 +9,7 @@ import {
   collectVitestFileDurations,
   normalizeTrackedRepoPath,
   tryReadJsonFile,
-} from "../../scripts/test-report-utils.mjs";
+} from "../../scripts/test-report-utils.mts";
 
 const { spawnSyncMock } = vi.hoisted(() => ({
   spawnSyncMock: vi.fn(),
@@ -117,7 +117,7 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
   });
 
   it("launches Vitest through pnpm exec", async () => {
-    const { runVitestJsonReport } = await import("../../scripts/test-report-utils.mjs");
+    const { runVitestJsonReport } = await import("../../scripts/test-report-utils.mts");
     const reportPath = path.join(os.tmpdir(), `openclaw-vitest-json-${Date.now()}.json`);
     spawnSyncMock.mockImplementation(() => {
       fs.writeFileSync(reportPath, `${JSON.stringify({ testResults: [] })}\n`, "utf8");
@@ -155,7 +155,7 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
   });
 
   it("uses distinct default report paths when invocations share a clock tick", async () => {
-    const { runVitestJsonReport } = await import("../../scripts/test-report-utils.mjs");
+    const { runVitestJsonReport } = await import("../../scripts/test-report-utils.mts");
     const reportPaths: string[] = [];
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1234567890);
     spawnSyncMock.mockImplementation((_command: string, args: string[]) => {
@@ -191,7 +191,7 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
   });
 
   it("fails when Vitest exits successfully without writing a JSON report", async () => {
-    const { runVitestJsonReport } = await import("../../scripts/test-report-utils.mjs");
+    const { runVitestJsonReport } = await import("../../scripts/test-report-utils.mts");
     spawnSyncMock.mockReturnValue({ status: 0 });
     const reportPath = path.join(os.tmpdir(), `openclaw-vitest-json-missing-${Date.now()}.json`);
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((code) => {

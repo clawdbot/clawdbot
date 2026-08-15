@@ -17,6 +17,7 @@ import {
   processResponsesStream,
   type OpenAIResponsesStreamEvent,
 } from "./openai-responses-stream-internal.js";
+import { stripCompactionReplayCheckpoint } from "./provider-compaction-replay.js";
 
 const model = {
   id: "gpt-5.6-luna",
@@ -136,6 +137,28 @@ function responseMessage(id: string, text: string) {
 }
 
 describe("OpenAI Responses compaction replay", () => {
+  it("strips only exact compaction checkpoints with structural sharing", () => {
+    const unchanged = createOutput();
+    expect(stripCompactionReplayCheckpoint(unchanged)).toBe(unchanged);
+
+    const checkpoint = createAssistant(
+      [{ type: "text", text: "checkpoint owner" }],
+      compactionState(),
+    );
+    const stripped = stripCompactionReplayCheckpoint(checkpoint);
+    expect(stripped).not.toBe(checkpoint);
+    expect(stripped.content).toBe(checkpoint.content);
+    expect(stripped).not.toHaveProperty("providerReplay");
+    expect(checkpoint.providerReplay).toEqual(compactionState());
+
+    const suppression = createOutput();
+    suppressOpenAIResponsesCompaction(suppression, model, replayIdentity);
+    expect(stripCompactionReplayCheckpoint(suppression)).toBe(suppression);
+
+    const unrelated = createAssistant([], compactionState(model, { type: "future-replay" }));
+    expect(stripCompactionReplayCheckpoint(unrelated)).toBe(unrelated);
+  });
+
   it("persists a streamed compaction output item as opaque provider replay state", async () => {
     const output = createOutput();
 
@@ -215,6 +238,122 @@ describe("OpenAI Responses compaction replay", () => {
       replayIndex: 0,
       sessionHash: expect.any(String),
       authProfileHash: expect.any(String),
+    });
+  });
+
+  it("recovers and replays a terminal-only compaction without an id", async () => {
+    const output = await processEvents([
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_terminal_idless",
+          status: "completed",
+          output: [
+            {
+              type: "compaction",
+              encrypted_content: "opaque-terminal-idless",
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(output.providerReplay).toMatchObject({
+      type: "openai-responses-compaction",
+      data: "opaque-terminal-idless",
+      replayIndex: 0,
+    });
+    expect(output.providerReplay).not.toHaveProperty("id");
+    expect(
+      convertResponsesMessages(
+        model,
+        { messages: [output] },
+        new Set(["openai"]),
+        replayIdentity,
+      ).find((item) => item.type === "compaction"),
+    ).toEqual({
+      type: "compaction",
+      encrypted_content: "opaque-terminal-idless",
+    });
+  });
+
+  it("keeps an identical captured idless compaction without replacing its state", async () => {
+    const output = createOutput();
+    const existingReplay = compactionState(model, {
+      id: undefined,
+      data: "opaque-terminal-idless",
+      replayIndex: 7,
+    });
+    delete existingReplay.id;
+    output.providerReplay = existingReplay;
+
+    await processResponsesStream(
+      events([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_terminal_idless_duplicate",
+            status: "completed",
+            output: [
+              {
+                type: "compaction",
+                encrypted_content: "opaque-terminal-idless",
+              },
+            ],
+          },
+        },
+      ]),
+      output,
+      { push: () => undefined },
+      model,
+      {
+        reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
+      },
+    );
+
+    expect(output.providerReplay).toBe(existingReplay);
+    expect(output.providerReplay.replayIndex).toBe(7);
+  });
+
+  it("replaces an idless compaction when its encrypted payload changes", async () => {
+    const output = createOutput();
+    const existingReplay = compactionState(model, {
+      id: undefined,
+      data: "opaque-terminal-idless-old",
+      replayIndex: 0,
+    });
+    delete existingReplay.id;
+    output.providerReplay = existingReplay;
+
+    await processResponsesStream(
+      events([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_terminal_idless_changed",
+            status: "completed",
+            output: [
+              {
+                type: "compaction",
+                encrypted_content: "opaque-terminal-idless-new",
+              },
+            ],
+          },
+        },
+      ]),
+      output,
+      { push: () => undefined },
+      model,
+      {
+        reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity),
+      },
+    );
+
+    expect(output.providerReplay).not.toBe(existingReplay);
+    expect(output.providerReplay).toMatchObject({
+      type: "openai-responses-compaction",
+      data: "opaque-terminal-idless-new",
+      replayIndex: 0,
     });
   });
 
@@ -789,19 +928,15 @@ describe("OpenAI Responses compaction replay", () => {
     expect(input.map((item) => item.type)).toEqual(["compaction", "message"]);
   });
 
-  it("replays when session and auth identities match", () => {
-    const assistant = createOutput();
-    assistant.providerReplay = compactionState(model, { replayIndex: 0 });
+  it.each(responseConverters)(
+    "$name replays an empty checkpoint owner when request identities match",
+    ({ convert }) => {
+      const assistant = createOutput();
+      assistant.providerReplay = compactionState(model, { replayIndex: 0 });
 
-    const input = convertResponsesMessages(
-      model,
-      { messages: [assistant] },
-      new Set(["openai"]),
-      replayIdentity,
-    );
-
-    expect(input.some((item) => item.type === "compaction")).toBe(true);
-  });
+      expect(convert({ messages: [assistant] }).map((item) => item.type)).toEqual(["compaction"]);
+    },
+  );
 
   it.each(responseConverters)(
     "$name does not replay or prune across a different or missing request identity",

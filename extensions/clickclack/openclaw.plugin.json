@@ -1,7 +1,7 @@
 {
   "id": "clickclack",
   "doctorContract": {
-    "normalizeCompatibilityConfig": true
+    "configRepair": true
   },
   "activation": {
     "onStartup": false
@@ -16,6 +16,19 @@
         "additionalProperties": true,
         "properties": {
           "requireMention": { "type": "boolean" },
+          "allowBots": {
+            "anyOf": [{ "type": "boolean" }, { "type": "string", "const": "mentions" }]
+          },
+          "botLoopProtection": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "maxEventsPerWindow": { "type": "integer", "exclusiveMinimum": 0 },
+              "windowSeconds": { "type": "integer", "exclusiveMinimum": 0 },
+              "cooldownSeconds": { "type": "integer", "exclusiveMinimum": 0 }
+            }
+          },
           "mentionPatterns": {
             "type": "array",
             "items": { "type": "string" }
@@ -27,6 +40,19 @@
               "additionalProperties": true,
               "properties": {
                 "requireMention": { "type": "boolean" },
+                "allowBots": {
+                  "anyOf": [{ "type": "boolean" }, { "type": "string", "const": "mentions" }]
+                },
+                "botLoopProtection": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled": { "type": "boolean" },
+                    "maxEventsPerWindow": { "type": "integer", "exclusiveMinimum": 0 },
+                    "windowSeconds": { "type": "integer", "exclusiveMinimum": 0 },
+                    "cooldownSeconds": { "type": "integer", "exclusiveMinimum": 0 }
+                  }
+                },
                 "mentionPatterns": {
                   "type": "array",
                   "items": { "type": "string" }
@@ -41,6 +67,19 @@
               "additionalProperties": true,
               "properties": {
                 "requireMention": { "type": "boolean" },
+                "allowBots": {
+                  "anyOf": [{ "type": "boolean" }, { "type": "string", "const": "mentions" }]
+                },
+                "botLoopProtection": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled": { "type": "boolean" },
+                    "maxEventsPerWindow": { "type": "integer", "exclusiveMinimum": 0 },
+                    "windowSeconds": { "type": "integer", "exclusiveMinimum": 0 },
+                    "cooldownSeconds": { "type": "integer", "exclusiveMinimum": 0 }
+                  }
+                },
                 "mentionPatterns": {
                   "type": "array",
                   "items": { "type": "string" }
@@ -52,6 +91,19 @@
                     "additionalProperties": true,
                     "properties": {
                       "requireMention": { "type": "boolean" },
+                      "allowBots": {
+                        "anyOf": [{ "type": "boolean" }, { "type": "string", "const": "mentions" }]
+                      },
+                      "botLoopProtection": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "enabled": { "type": "boolean" },
+                          "maxEventsPerWindow": { "type": "integer", "exclusiveMinimum": 0 },
+                          "windowSeconds": { "type": "integer", "exclusiveMinimum": 0 },
+                          "cooldownSeconds": { "type": "integer", "exclusiveMinimum": 0 }
+                        }
+                      },
                       "mentionPatterns": {
                         "type": "array",
                         "items": { "type": "string" }

@@ -17,6 +17,7 @@ import type {
 } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
+import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { hasUsableOAuthCredential } from "./auth-profiles/credential-state.js";
 import { resolveExternalCliAuthProfiles } from "./auth-profiles/external-cli-sync.js";
 import {
@@ -30,7 +31,8 @@ import {
   resolveSecretRefReadOnlyAvailability,
   resolveStoredCredentialReadOnlyAvailability,
 } from "./auth-profiles/read-only-availability.js";
-import { getRuntimeAuthProfileStoreSnapshot } from "./auth-profiles/runtime-snapshots.js";
+import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
+import { getRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import {
   isAuthCooldownBypassedForProvider,
@@ -70,6 +72,7 @@ import {
   selectProviderModelAuthSources,
   type ProviderModelAuthSourceSelection,
 } from "./provider-model-route-auth.js";
+import { modelMatchesProviderModelRoute } from "./provider-model-route.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
@@ -119,6 +122,9 @@ type CreateModelAuthAvailabilityResolverParams = {
   externalCliProviderIds?: readonly string[];
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   allowPreparedRuntimeAuth?: boolean;
+  preparedRuntimeAuthStore?: AuthProfileStore;
+  preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
+  preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
 };
 
 type AuthTarget = ModelAuthAvailabilityRef & {
@@ -175,9 +181,10 @@ export function createModelAuthAvailabilityResolver(
       }
     : params.authStore;
   const runtimeStore =
-    params.allowPreparedRuntimeAuth !== false
-      ? getRuntimeAuthProfileStoreSnapshot(params.agentDir)
-      : undefined;
+    params.preparedRuntimeAuthStore ??
+    (params.allowPreparedRuntimeAuth !== false
+      ? getRuntimeAuthProfileStoreSnapshotCore(params.agentDir)
+      : undefined);
   const hydratedProfileIds = new Set<string>();
   const sameSecretRef = (
     left: ReturnType<typeof coerceSecretRef>,
@@ -594,6 +601,14 @@ export function createModelAuthAvailabilityResolver(
         evidence: "aws-sdk",
       };
     }
+    const preparedRuntimeAuthMode = params.preparedRuntimeAuthModes?.[normalizeProvider(provider)];
+    if (preparedRuntimeAuthMode) {
+      return {
+        availability: modeAllowed(provider, target, preparedRuntimeAuthMode),
+        selectedAuthMode: preparedRuntimeAuthMode,
+        evidence: "runtime",
+      };
+    }
     const environment = envAuth(provider);
     if (environment) {
       if (provider === "amazon-bedrock" && environment.mode === "aws-sdk") {
@@ -876,6 +891,81 @@ export function createModelAuthAvailabilityResolver(
       !modelLock && !awsSdkTerminal && basePolicy.binding.kind === "profile"
         ? basePolicy.binding.profileId
         : undefined;
+    const explicitProfileOrder = profileOrder(
+      provider,
+      ref.modelId,
+      ref.preferredProfileId,
+      ref.lockedProfileId,
+    ).hasExplicitOrder;
+    const materializedModelId = ref.modelId
+      ? normalizeModelIdForProvider(provider, ref.modelId)?.toLowerCase()
+      : undefined;
+    const materialized =
+      !modelLock &&
+      !bindingProfileId &&
+      !basePolicy.required &&
+      !explicitProfileOrder &&
+      materializedModelId
+        ? params.preparedRuntimeAuthMaterializations?.find(
+            (fact) =>
+              normalizeProvider(fact.provider) === provider &&
+              fact.modelId === materializedModelId &&
+              routeResolution.routes.some((route) => {
+                const configuredRequirement =
+                  resolveProviderModelRouteAuthRequirement(configuredAuthMode);
+                return (
+                  (!configuredRequirement || configuredRequirement === route.authRequirement) &&
+                  route.runtimePolicy?.compatibleIds.some(
+                    (runtimeId) => runtimeId.trim().toLowerCase() === fact.runtimeOwnerId,
+                  ) === true &&
+                  route.api.toLowerCase() === fact.modelApi &&
+                  route.requestTransportOverrides === fact.requestTransportOverrides &&
+                  modelMatchesProviderModelRoute({
+                    provider,
+                    api: fact.modelApi,
+                    baseUrl: fact.modelBaseUrl,
+                    route,
+                  }) &&
+                  modeAllowed(
+                    provider,
+                    {
+                      ...ref,
+                      api: route.api,
+                      baseUrl: route.baseUrl,
+                      authRequirement: route.authRequirement,
+                    },
+                    fact.authMode,
+                  )
+                );
+              }),
+          )
+        : undefined;
+    if (materialized) {
+      const selectedRoute = routeResolution.routes.find(
+        (route) =>
+          route.runtimePolicy?.compatibleIds.some(
+            (runtimeId) => runtimeId.trim().toLowerCase() === materialized.runtimeOwnerId,
+          ) === true &&
+          route.api.toLowerCase() === materialized.modelApi &&
+          route.requestTransportOverrides === materialized.requestTransportOverrides &&
+          modelMatchesProviderModelRoute({
+            provider,
+            api: materialized.modelApi,
+            baseUrl: materialized.modelBaseUrl,
+            route,
+          }),
+      );
+      if (selectedRoute) {
+        return {
+          availability: true,
+          routeResolution,
+          selectedRoute,
+          selectedAuthMode: materialized.authMode,
+          ...(materialized.authProfileId ? { selectedProfileId: materialized.authProfileId } : {}),
+          evidence: "runtime",
+        };
+      }
+    }
     const selectedConfiguredMode = awsSdkTerminal
       ? "aws-sdk"
       : bindingProfileId

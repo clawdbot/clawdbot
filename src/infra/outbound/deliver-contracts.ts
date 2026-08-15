@@ -25,13 +25,12 @@ import type { NormalizedOutboundPayload } from "./payloads.js";
 import type { PreparedOutboundBatch } from "./prepared-batch.js";
 import type { OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
-import type { OutboundChannel } from "./targets.js";
 
 export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
 
 export type OutboundDeliveryIntent = {
   id: string;
-  channel: Exclude<OutboundChannel, "none">;
+  channel: string;
   to: string;
   accountId?: string;
   queuePolicy: OutboundDeliveryQueuePolicy;
@@ -85,6 +84,10 @@ export type ChannelHandler = {
     payload: ReplyPayload;
     results: readonly OutboundDeliveryResult[];
   }) => Promise<void>;
+  adoptTargetFromDelivery?: (params: {
+    target: ChannelOutboundTargetRef;
+    result: OutboundDeliveryResult;
+  }) => { threadId: string | number } | null | undefined;
   buildTargetRef: (overrides?: { threadId?: string | number | null }) => ChannelOutboundTargetRef;
   shouldSkipPlainTextSanitization?: (payload: ReplyPayload) => boolean;
   resolveEffectiveTextChunkLimit?: (fallbackLimit?: number) => number | undefined;
@@ -119,7 +122,9 @@ export type PlatformSendRoute = {
 
 export type ChannelHandlerParams = {
   cfg: OpenClawConfig;
-  channel: Exclude<OutboundChannel, "none">;
+  /** Admitted run owner for agent-scoped channel runtime discovery. */
+  agentId?: string;
+  channel: string;
   to: string;
   accountId?: string;
   replyToId?: string | null;
@@ -144,7 +149,7 @@ export type ChannelHandlerParams = {
 
 export type DeliverOutboundPayloadsCoreParams = {
   cfg: OpenClawConfig;
-  channel: Exclude<OutboundChannel, "none">;
+  channel: string;
   to: string;
   accountId?: string;
   payloads: ReplyPayload[];

@@ -155,6 +155,17 @@ describe("package-mac-dist plist validation", () => {
     );
     chmodSync(path.join(toolsDir, "swift"), 0o755);
     writeFileSync(
+      path.join(toolsDir, "xcrun"),
+      [
+        "#!/usr/bin/env bash",
+        '[[ "${1:-}" == "xcodebuild" && "${2:-}" == "-version" ]] || exit 2',
+        "echo 'Xcode 26.0'",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(path.join(toolsDir, "xcrun"), 0o755);
+    writeFileSync(
       path.join(toolsDir, "node"),
       [
         "#!/usr/bin/env bash",

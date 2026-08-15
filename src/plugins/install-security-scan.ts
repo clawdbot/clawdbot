@@ -40,13 +40,6 @@ export type SkillInstallSpecMetadata = {
   targetDir?: string;
 };
 
-/** Package executable metadata used to scope dependency and entrypoint scans. */
-type PackageExecutableScanMetadata = {
-  runtimeExtensions?: readonly string[];
-  runtimeSetupEntry?: string;
-  setupEntry?: string;
-};
-
 /** Lazily loads install scanning so normal plugin startup avoids policy/runtime imports. */
 async function loadInstallSecurityScanRuntime() {
   return await import("./install-security-scan.runtime.js");
@@ -77,7 +70,6 @@ export async function scanPackageInstallSource(
     extensions: string[];
     logger: InstallScanLogger;
     packageDir: string;
-    packageMetadata?: PackageExecutableScanMetadata;
     pluginId: string;
     requestKind?: PluginInstallRequestKind;
     requestedSpecifier?: string;
@@ -98,10 +90,10 @@ export async function scanInstalledPackageDependencyTree(params: {
   additionalPackageDirs?: string[];
   allowManagedNpmRootPackagePeerSymlinks?: boolean;
   config?: OpenClawConfig;
-  dangerouslyForceUnsafeInstall?: boolean;
   dependencyScanRootDir?: string;
   logger: InstallScanLogger;
   mode?: "install" | "update";
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   packageDir: string;
   pluginId: string;
   requestKind?: PluginInstallRequestKind;
@@ -135,8 +127,10 @@ export async function scanFileInstallSource(
 /** Runs npm install policy checks before package install side effects. */
 export async function preflightPluginNpmInstallPolicy(params: {
   config?: OpenClawConfig;
+  dangerouslyForceUnsafeInstall?: boolean;
   logger: InstallScanLogger;
   mode?: "install" | "update";
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   packageName: string;
   pluginId?: string;
   requestedSpecifier?: string;
@@ -151,8 +145,10 @@ export async function preflightPluginNpmInstallPolicy(params: {
 /** Runs git install policy checks before plugin install side effects. */
 export async function preflightPluginGitInstallPolicy(params: {
   config?: OpenClawConfig;
+  dangerouslyForceUnsafeInstall?: boolean;
   logger: InstallScanLogger;
   mode?: "install" | "update";
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   pluginId: string;
   requestedSpecifier?: string;
   source?: InstallPolicySource;
@@ -168,10 +164,11 @@ export async function evaluateSkillInstallPolicy(params: {
   installId: string;
   installSpec?: SkillInstallSpecMetadata;
   logger: InstallScanLogger;
+  mode?: "install" | "update";
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   origin: InstallPolicyOrigin;
   requestedSpecifier?: string;
   source?: InstallPolicySource;
-  mode?: "install" | "update";
   skillName: string;
   sourceDir: string;
 }): Promise<InstallSecurityScanResult | undefined> {

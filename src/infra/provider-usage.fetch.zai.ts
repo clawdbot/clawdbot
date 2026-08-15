@@ -2,13 +2,7 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { cancelUnreadResponseBody } from "./http-body.js";
-import {
-  buildUsageHttpErrorSnapshot,
-  fetchJson,
-  parseUsageResetAt,
-  readUsageJson,
-} from "./provider-usage.fetch.shared.js";
+import { fetchUsageJson, parseUsageResetAt } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
@@ -66,9 +60,10 @@ export async function fetchZaiUsage(
   timeoutMs: number,
   fetchFn: typeof fetch,
 ): Promise<ProviderUsageSnapshot> {
-  const res = await fetchJson(
-    "https://api.z.ai/api/monitor/usage/quota/limit",
-    {
+  const parsed = await fetchUsageJson({
+    provider: "zai",
+    url: "https://api.z.ai/api/monitor/usage/quota/limit",
+    init: {
       method: "GET",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -77,17 +72,7 @@ export async function fetchZaiUsage(
     },
     timeoutMs,
     fetchFn,
-  );
-
-  if (!res.ok) {
-    await cancelUnreadResponseBody(res);
-    return buildUsageHttpErrorSnapshot({
-      provider: "zai",
-      status: res.status,
-    });
-  }
-
-  const parsed = await readUsageJson("zai", res);
+  });
   if (!parsed.ok) {
     return parsed.snapshot;
   }

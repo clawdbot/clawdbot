@@ -4,6 +4,30 @@ import { isPersistentSystemAgentOperation, type SystemAgentOperation } from "./o
 
 type ProposalRef = { current?: string; operation?: SystemAgentOperation };
 
+export type SystemAgentApprovalIntent = "approve" | "decline" | "other";
+
+const APPROVE_RE =
+  /^(?:y|yes|yeah|yep|yup|sure|ok|okay|approve|approved|apply|confirm|confirmed|do it|go ahead|sounds good|yes please|please do)$/i;
+const DECLINE_RE = /^(?:n|no|nope|nah|skip|not now|cancel|stop|abort|later|decline|don'?t)\b/i;
+
+/** Deterministic whole-message approvals and prefix declines. */
+export function classifySystemAgentApprovalText(message: string): SystemAgentApprovalIntent {
+  const normalized = message
+    .trim()
+    .replace(/[.!?,\s]+$/u, "")
+    .toLowerCase();
+  if (!normalized) {
+    return "other";
+  }
+  if (APPROVE_RE.test(normalized)) {
+    return "approve";
+  }
+  if (DECLINE_RE.test(normalized)) {
+    return "decline";
+  }
+  return "other";
+}
+
 export function resolvePendingOperatorProposal(
   pending: SystemAgentOperation | null,
   proposalRef: ProposalRef,

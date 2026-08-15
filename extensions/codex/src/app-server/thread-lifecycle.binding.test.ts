@@ -40,6 +40,17 @@ function startOrResumeThread(
   });
 }
 
+function disabledMcpServerStatus(name: string) {
+  return {
+    name,
+    serverInfo: null,
+    tools: {},
+    resources: [],
+    resourceTemplates: [],
+    authStatus: "unsupported",
+  };
+}
+
 function createThreadLifecycleAppServerOptions(): Parameters<
   typeof startOrResumeThread
 >[0]["appServer"] {
@@ -1153,7 +1164,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
         return threadStartResult("thread-ring-zero-1");
       }
       if (method === "mcpServerStatus/list") {
-        return { data: [], nextCursor: null };
+        return {
+          data: [
+            disabledMcpServerStatus("arbitrary.server"),
+            disabledMcpServerStatus("local helper"),
+          ],
+          nextCursor: null,
+        };
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -1240,7 +1257,14 @@ describe("Codex app-server thread lifecycle bindings", () => {
         return threadStartResult(`thread-message-only-${nextThread++}`);
       }
       if (method === "mcpServerStatus/list") {
-        return { data: [], nextCursor: null };
+        return {
+          data: [
+            disabledMcpServerStatus("arbitrary.server"),
+            disabledMcpServerStatus("local helper"),
+            disabledMcpServerStatus("request-only"),
+          ],
+          nextCursor: null,
+        };
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -1252,6 +1276,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       dynamicTools: [messageTool],
       config: {
         "features.apps": true,
+        "features.chronicle": true,
         "features.current_time_reminder": true,
         "features.deferred_executor": true,
         "features.hooks": true,
@@ -1259,8 +1284,12 @@ describe("Codex app-server thread lifecycle bindings", () => {
         "features.multi_agent": true,
         "features.multi_agent_v2": true,
         "features.plugins": true,
+        "features.skill_search": true,
+        "features.shell_tool": true,
         "features.standalone_web_search": true,
         "features.token_budget": true,
+        "features.unified_exec": true,
+        "features.view_image": true,
         "orchestrator.mcp.enabled": true,
         "tools.experimental_request_user_input.enabled": true,
         "tools.update_plan.enabled": true,
@@ -1294,7 +1323,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       config: common.config,
       nativeCodeModeEnabled: false,
       hostSystemAgentActive: false,
-      ringZeroInheritedMcpServerNames: ["arbitrary.server", "local helper"],
+      restrictedToolSurfaceInheritedMcpServerNames: ["arbitrary.server", "local helper"],
     });
     const threadPayloads = [
       ...threadRequests.map(([, threadRequest]) => threadRequest),
@@ -1357,10 +1386,83 @@ describe("Codex app-server thread lifecycle bindings", () => {
     for (const threadId of ["thread-message-only-1", "thread-message-only-2"]) {
       expect(request).toHaveBeenCalledWith(
         "mcpServerStatus/list",
-        { threadId, limit: 1, detail: "toolsAndAuthOnly" },
+        { threadId, detail: "toolsAndAuthOnly" },
         expect.anything(),
       );
     }
+  });
+
+  it("removes every native capability from an explicitly restricted thread", () => {
+    const params = createParams(
+      path.join(tempDir, "conversation-policy-session.jsonl"),
+      path.join(tempDir, "conversation-policy-workspace"),
+    );
+    params.conversationToolPolicy = { deny: ["exec"] };
+    params.pluginHarnessToolPolicyRestricted = true;
+    const request = buildThreadResumeParams(params, {
+      threadId: "thread-policy-restricted",
+      appServer: createThreadLifecycleAppServerOptions(),
+      dynamicTools: [],
+      config: {
+        "features.apps": true,
+        "features.current_time_reminder": true,
+        "features.deferred_executor": true,
+        "features.hooks": true,
+        "features.image_generation": true,
+        "features.memories": true,
+        "features.multi_agent": true,
+        "features.multi_agent_v2": true,
+        "features.plugins": true,
+        "features.standalone_web_search": true,
+        "features.token_budget": true,
+        "orchestrator.mcp.enabled": true,
+        "orchestrator.skills.enabled": true,
+        "tools.experimental_request_user_input.enabled": true,
+        "tools.update_plan.enabled": true,
+        mcp_servers: { inherited: { command: "unsafe" } },
+        web_search: "live",
+      },
+      nativeCodeModeEnabled: false,
+      hostSystemAgentActive: false,
+      restrictedToolSurfaceInheritedMcpServerNames: ["inherited"],
+    });
+
+    expect(request.config).toMatchObject({
+      "features.apps": false,
+      "features.artifact": false,
+      "features.browser_use": false,
+      "features.browser_use_external": false,
+      "features.browser_use_full_cdp_access": false,
+      "features.chronicle": false,
+      "features.computer_use": false,
+      "features.current_time_reminder": false,
+      "features.default_mode_request_user_input": false,
+      "features.deferred_executor": false,
+      "features.hooks": false,
+      "features.image_generation": false,
+      "features.memories": false,
+      "features.multi_agent": false,
+      "features.multi_agent_v2": false,
+      "features.plugins": false,
+      "features.request_permissions_tool": false,
+      "features.skill_search": false,
+      "features.shell_tool": false,
+      "features.standalone_web_search": false,
+      "features.token_budget": false,
+      "features.unified_exec": false,
+      "features.view_image": false,
+      "features.web_search_cached": false,
+      "features.web_search_request": false,
+      "features.workspace_dependencies": false,
+      "orchestrator.mcp.enabled": false,
+      "orchestrator.skills.enabled": false,
+      "skills.bundled.enabled": false,
+      "skills.include_instructions": false,
+      "tools.experimental_request_user_input.enabled": false,
+      "tools.update_plan.enabled": false,
+      mcp_servers: { inherited: { enabled: false } },
+      web_search: "disabled",
+    });
   });
 
   it("starts a fresh restricted OpenClaw thread for a new app-server client", async () => {
@@ -1449,7 +1551,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
 
     await startOrResumeThread(common);
     await expect(startOrResumeThread(common)).rejects.toThrow(
-      "Codex ring-zero MCP attestation failed",
+      "Codex restricted-tool-surface MCP attestation failed",
     );
 
     expect(abandonClient).toHaveBeenCalledTimes(1);
@@ -1607,6 +1709,66 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "config/read",
       "configRequirements/read",
     ]);
+  });
+
+  it.each([
+    "apps",
+    "artifact",
+    "browser_use",
+    "browser_use_external",
+    "browser_use_full_cdp_access",
+    "chronicle",
+    "code_mode",
+    "code_mode_only",
+    "computer_use",
+    "current_time_reminder",
+    "default_mode_request_user_input",
+    "deferred_executor",
+    "goals",
+    "hooks",
+    "image_generation",
+    "memories",
+    "multi_agent",
+    "multi_agent_v2",
+    "plugins",
+    "request_permissions_tool",
+    "skill_search",
+    "shell_tool",
+    "standalone_web_search",
+    "token_budget",
+    "unified_exec",
+    "view_image",
+    "web_search_cached",
+    "web_search_request",
+    "workspace_dependencies",
+    "codex_hooks",
+  ])("fails closed when requirements pin native registry %s on", async (feature) => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["openclaw"];
+    const request = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: { featureRequirements: { [feature]: true } } };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [createNamedDynamicTool("openclaw")],
+        appServer: createThreadLifecycleAppServerOptions(),
+        nativeCodeModeEnabled: false,
+        userMcpServersEnabled: false,
+        hostSystemAgentActive: true,
+      }),
+    ).rejects.toThrow(`cannot override required feature ${feature}`);
   });
 
   it.each([
@@ -3035,7 +3197,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(binding?.dynamicToolsFingerprint).not.toContain("tool_199");
   });
 
-  it("keeps plugin app bindings across transient native-tool-disabled turns", async () => {
+  it("keeps the native binding isolated from a restricted replacement-tool turn", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const pluginAppPolicyContext = createPluginAppPolicyContext();
@@ -3050,15 +3212,24 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
     const params = createParams(sessionFile, workspaceDir);
     const appServer = createThreadLifecycleAppServerOptions();
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-transient");
-      }
-      if (method === "thread/resume") {
-        return threadStartResult("thread-existing");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    const request = vi.fn(
+      async (
+        method: string,
+        _requestParams?: {
+          config?: unknown;
+          dynamicTools?: unknown[];
+          environments?: unknown[];
+        },
+      ) => {
+        if (method === "thread/start") {
+          return threadStartResult("thread-transient");
+        }
+        if (method === "thread/resume") {
+          return threadStartResult("thread-existing");
+        }
+        throw new Error(`unexpected method: ${method}`);
+      },
+    );
     const buildDenyAllPluginThreadConfig = vi.fn(async () => ({
       enabled: true,
       configPatch: {
@@ -3088,7 +3259,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       client: { request } as never,
       params,
       cwd: workspaceDir,
-      dynamicTools: [],
+      dynamicTools: [createNamedDynamicTool("read"), createNamedDynamicTool("apply_patch")],
       appServer,
       nativeCodeModeEnabled: false,
       pluginThreadConfig: {
@@ -3120,9 +3291,16 @@ describe("Codex app-server thread lifecycle bindings", () => {
 
     expect(buildDenyAllPluginThreadConfig).toHaveBeenCalledTimes(1);
     expect(buildEnabledPluginThreadConfig).toHaveBeenCalledTimes(1);
-    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
+    const requestCalls = request.mock.calls;
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
-    expect(requestCalls[0]?.[1].config).toMatchObject({
+    expect(requestCalls[0]?.[1]).toMatchObject({
+      dynamicTools: [
+        expect.objectContaining({ name: "read" }),
+        expect.objectContaining({ name: "apply_patch" }),
+      ],
+      environments: [],
+    });
+    expect(requestCalls[0]?.[1]?.config).toMatchObject({
       apps: {
         _default: {
           enabled: false,

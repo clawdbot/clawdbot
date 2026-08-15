@@ -1,8 +1,8 @@
 {
   "id": "imessage",
   "doctorContract": {
-    "legacyConfigRules": true,
-    "normalizeCompatibilityConfig": true
+    "configRepair": true,
+    "stateMigrations": true
   },
   "icon": "https://cdn.simpleicons.org/imessage",
   "activation": {

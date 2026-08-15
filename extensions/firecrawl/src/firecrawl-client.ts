@@ -729,7 +729,5 @@ export const testing = {
   postFirecrawlJson,
   readFirecrawlJsonResponse,
   resolveEndpoint,
-  validateFirecrawlBaseUrl,
   resolveSearchItems,
 };
-export { testing as __testing };

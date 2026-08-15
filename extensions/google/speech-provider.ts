@@ -15,8 +15,11 @@ import type {
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
-import { asObject, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { trimToUndefined } from "openclaw/plugin-sdk/speech-core";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleGenerativeAiHttpRequestConfig } from "./api.js";
 import { canonicalizeGoogleProviderBase64 } from "./base64.js";
 
@@ -193,8 +196,8 @@ function resolveGoogleTtsBaseUrl(params: {
 function resolveGoogleTtsConfigRecord(
   rawConfig: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  const providers = asObject(rawConfig.providers);
-  return asObject(providers?.google) ?? asObject(rawConfig.google);
+  const providers = asOptionalRecord(rawConfig.providers);
+  return asOptionalRecord(providers?.google) ?? asOptionalRecord(rawConfig.google);
 }
 
 function normalizeGoogleTtsProviderConfig(

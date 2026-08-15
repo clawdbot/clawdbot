@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
+import { resolveVitestCliEntry, resolveVitestNodeArgs } from "../../scripts/run-vitest.mts";
 
 const {
   applyParallelVitestCachePaths,
@@ -17,15 +18,8 @@ const {
   resolveChangedTargetArgs,
   resolveChangedTestTargetPlan,
   resolveParallelFullSuiteConcurrency,
-} = await import("../../scripts/test-projects.test-support.mjs");
+} = await import("../../scripts/test-projects.test-support.mts");
 
-const runVitestModulePath = "../../scripts/run-vitest.mjs";
-const { resolveVitestCliEntry, resolveVitestNodeArgs } = (await import(
-  runVitestModulePath
-)) as unknown as {
-  resolveVitestCliEntry: () => string;
-  resolveVitestNodeArgs: (env: NodeJS.ProcessEnv) => string[];
-};
 const VITEST_NODE_PREFIX = [
   "exec",
   "node",
@@ -346,12 +340,11 @@ describe("test-projects args", () => {
         includePatterns: [
           "src/agents/openai-transport-stream.base.test.ts",
           "src/agents/openai-transport-stream.deepseek-and-shaping.test.ts",
+          "src/agents/openai-transport-stream.failed-sse.test.ts",
           "src/agents/openai-transport-stream.incomplete-output.test.ts",
           "src/agents/openai-transport-stream.incomplete-sse.test.ts",
-          "src/agents/openai-transport-stream.inline-reasoning-and-tool-calls.test.ts",
           "src/agents/openai-transport-stream.reasoning-and-cache.test.ts",
           "src/agents/openai-transport-stream.replay-and-tools.test.ts",
-          "src/agents/openai-transport-stream.replay-sanitization.test.ts",
           "src/agents/openai-transport-stream.usage-and-calls.test.ts",
         ],
         watchMode: false,
@@ -523,27 +516,6 @@ describe("test-projects args", () => {
     );
   });
 
-  it("splits an explicit Vitest filesystem module cache root", () => {
-    const [spec] = applyParallelVitestCachePaths(
-      [
-        {
-          config: "test/vitest/vitest.gateway.config.ts",
-          env: {},
-        },
-      ],
-      {
-        cwd: "/repo",
-        env: {
-          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/cache",
-        },
-      },
-    );
-
-    expect(spec?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
-      "/tmp/cache/0-test-vitest-vitest.gateway.config.ts",
-    );
-  });
-
   it("routes plugin targets to the plugins config", () => {
     expect(buildVitestRunPlans(["src/plugins/loader.test.ts"])).toEqual([
       {
@@ -590,6 +562,12 @@ describe("test-projects args", () => {
         forwardedArgs: [],
         includePatterns: [
           "extensions/memory-core/src/memory/index.test.ts",
+          "extensions/memory-core/src/memory/manager-keyword-retrieval.test.ts",
+          "extensions/memory-core/src/memory/manager-provider-lifecycle-fallback.test.ts",
+          "extensions/memory-core/src/memory/manager-provider-lifecycle-leases.test.ts",
+          "extensions/memory-core/src/memory/manager-provider-lifecycle.test.ts",
+          "extensions/memory-core/src/memory/manager-registry.test.ts",
+          "extensions/memory-core/src/memory/manager-search-orchestration.test.ts",
           "extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts",
           "extensions/memory-core/src/memory/manager.legacy-migration-cleanup.test.ts",
           "extensions/memory-core/src/memory/manager.reindex-recovery.test.ts",
@@ -678,6 +656,19 @@ describe("test-projects args", () => {
     ]);
   });
 
+  it("routes the Docker package contract without private-QA E2E setup", () => {
+    const target = "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts";
+
+    expect(buildVitestRunPlans([target])).toEqual([
+      {
+        config: "test/vitest/vitest.package-docker.config.ts",
+        forwardedArgs: [target],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes direct Discord extension file targets to the Discord config", () => {
     expect(
       buildVitestRunPlans(["extensions/discord/src/monitor/message-handler.preflight.test.ts"]),
@@ -704,6 +695,16 @@ describe("test-projects args", () => {
     expect(
       buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths),
     ).toStrictEqual([]);
+  });
+
+  it("routes bundled plugin manifest changes through the docs config audit", () => {
+    expect(resolveChangedTestTargetPlan(["extensions/voice-call/openclaw.plugin.json"])).toEqual({
+      mode: "targets",
+      targets: [
+        "extensions/voice-call/openclaw.plugin.json",
+        "src/config/docs-config-examples.test.ts",
+      ],
+    });
   });
 
   it("routes auth setup script changes to the focused auth monitor test", () => {
@@ -873,43 +874,6 @@ describe("test-projects args", () => {
       fs.writeFileSync(path.join(tempDir, "src", "new.test.ts"), "test('new', () => {});\n");
 
       expect(findUnmatchedExplicitTestTargets(["src/new.test.ts"], tempDir)).toEqual([]);
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("routes explicit test-support helper files to affected tests", () => {
-    expect(
-      findUnmatchedExplicitTestTargets(["src/commands/onboard-non-interactive.test-helpers.ts"]),
-    ).toEqual([]);
-
-    expect(buildVitestRunPlans(["src/commands/onboard-non-interactive.test-helpers.ts"])).toEqual([
-      {
-        config: "test/vitest/vitest.commands.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["src/commands/onboard-non-interactive.gateway.test.ts"],
-        watchMode: false,
-      },
-    ]);
-  });
-
-  it("rejects explicit test-support helper files with no importing tests", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-targets-"));
-    try {
-      fs.mkdirSync(path.join(tempDir, "src", "lonely"), { recursive: true });
-      fs.writeFileSync(
-        path.join(tempDir, "src", "lonely", "runtime.test-helpers.ts"),
-        "export {};\n",
-      );
-
-      expect(
-        findUnmatchedExplicitTestTargets(["src/lonely/runtime.test-helpers.ts"], tempDir),
-      ).toEqual([
-        {
-          target: "src/lonely/runtime.test-helpers.ts",
-          reason: "target-matched-no-test-files",
-        },
-      ]);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

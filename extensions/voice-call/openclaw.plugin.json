@@ -228,6 +228,11 @@
       "label": "Call Log Store Path",
       "advanced": true
     },
+    "agentId": {
+      "label": "Response Agent ID",
+      "help": "Agent workspace used for voice response generation. Defaults to \"main\".",
+      "advanced": true
+    },
     "sessionScope": {
       "label": "Session Scope",
       "help": "Use per-phone to preserve caller memory across calls, or per-call to isolate every call into a fresh voice session."
@@ -707,8 +712,16 @@
                   "model": {
                     "type": "string"
                   },
-                  "voice": {
+                  "speakerVoice": {
                     "type": "string"
+                  },
+                  "voice": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
+                  },
+                  "voiceId": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
                   },
                   "speed": {
                     "type": "number",
@@ -730,8 +743,16 @@
                   "baseUrl": {
                     "type": "string"
                   },
-                  "voiceId": {
+                  "speakerVoiceId": {
                     "type": "string"
+                  },
+                  "voice": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoiceId."
+                  },
+                  "voiceId": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoiceId."
                   },
                   "modelId": {
                     "type": "string"
@@ -786,8 +807,16 @@
                   "enabled": {
                     "type": "boolean"
                   },
-                  "voice": {
+                  "speakerVoice": {
                     "type": "string"
+                  },
+                  "voice": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
+                  },
+                  "voiceId": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
                   },
                   "lang": {
                     "type": "string"
@@ -824,8 +853,16 @@
                   "enabled": {
                     "type": "boolean"
                   },
-                  "voice": {
+                  "speakerVoice": {
                     "type": "string"
+                  },
+                  "voice": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
+                  },
+                  "voiceId": {
+                    "type": "string",
+                    "description": "Legacy alias for speakerVoice."
                   },
                   "lang": {
                     "type": "string"
@@ -882,6 +919,10 @@
       },
       "store": {
         "type": "string"
+      },
+      "agentId": {
+        "type": "string",
+        "minLength": 1
       },
       "sessionScope": {
         "type": "string",

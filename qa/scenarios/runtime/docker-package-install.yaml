@@ -23,9 +23,9 @@ scenario:
     - docs/help/testing.md
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
-    - scripts/package-openclaw-for-docker.mjs
+    - scripts/package-openclaw-for-docker.mts
     - scripts/e2e/docker-package-install.sh
-    - scripts/lib/docker-e2e-scenarios.mjs
+    - scripts/lib/docker-e2e-scenarios.mts
     - test/e2e/qa-lab/runtime/docker-artifact-proof.ts
   execution:
     kind: script

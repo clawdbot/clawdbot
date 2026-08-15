@@ -12,6 +12,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 export type SessionCatalogListProviderParams = {
+  /** False when Gateway-local scans must not inherit a root from process HOME. */
+  allowProcessHomeFallback?: boolean;
   /** Trimmed, non-empty search capped at 500 UTF-16 code units by the gateway. */
   search?: string;
   limitPerHost?: number;
@@ -24,15 +26,36 @@ export type SessionCatalogListProviderParams = {
   /** Publishes completed hosts without waiting for slower machines in the same list. */
   onHost?: (host: SessionCatalogHost) => void;
 };
-export type SessionCatalogReadProviderParams = Omit<SessionsCatalogReadParams, "catalogId">;
+export type SessionCatalogReadProviderParams = Omit<SessionsCatalogReadParams, "catalogId"> & {
+  /** False when Gateway-local reads must not inherit a root from process HOME. */
+  allowProcessHomeFallback?: boolean;
+};
 export type SessionCatalogContinueProviderParams = Omit<
   SessionsCatalogContinueParams,
   "catalogId"
 > & {
+  /** False when Gateway-local continuation must not inherit a root from process HOME. */
+  allowProcessHomeFallback?: boolean;
   /** Caller's gateway scopes so providers can gate high-authority continues up front. */
   clientScopes?: readonly string[];
 };
-export type SessionCatalogArchiveProviderParams = Omit<SessionsCatalogArchiveParams, "catalogId">;
+export type SessionCatalogArchiveProviderParams = Omit<
+  SessionsCatalogArchiveParams,
+  "catalogId"
+> & {
+  /** False when Gateway-local archive must not inherit a root from process HOME. */
+  allowProcessHomeFallback?: boolean;
+};
+
+export type SessionCatalogStartTerminalProviderParams = {
+  /** False when Gateway-local terminal start must not inherit process HOME. */
+  allowProcessHomeFallback?: boolean;
+  agentId: string;
+  cwd: string;
+  initialMessage?: string;
+  /** Present only when the caller selected a catalog host backed by this node. */
+  nodeId?: string;
+};
 
 export type SessionCatalogTerminalPlan =
   | {
@@ -141,6 +164,8 @@ type SessionCatalogCreateParams = {
 export type SessionCatalogProvider = {
   id: string;
   label: string;
+  /** Declares that every HOME-sensitive action honors the host isolation policy. */
+  supportsProcessHomeIsolation?: true;
   /** Config-derived target; the Gateway memoizes it for one runtime-config object identity. */
   resolveCreateSession?: (
     params: SessionCatalogCreateParams,
@@ -150,12 +175,19 @@ export type SessionCatalogProvider = {
   continueSession?: (
     params: SessionCatalogContinueProviderParams,
   ) => Promise<SessionCatalogContinueProviderResult>;
-  checkUpstreamActivity?: (probes: SessionUpstreamProbe[]) => Promise<SessionUpstreamActivity[]>;
+  checkUpstreamActivity?: (
+    probes: SessionUpstreamProbe[],
+    policy?: { allowProcessHomeFallback?: boolean },
+  ) => Promise<SessionUpstreamActivity[]>;
   archive?: (params: SessionCatalogArchiveProviderParams) => Promise<{ ok: true }>;
   openTerminal?: (request: {
+    allowProcessHomeFallback?: boolean;
     hostId: string;
     threadId: string;
   }) => Promise<SessionCatalogTerminalPlan>;
+  startTerminalSession?: (
+    request: SessionCatalogStartTerminalProviderParams,
+  ) => Promise<SessionCatalogTerminalPlan>;
 };
 
 type SessionCatalogAdoptedSource = { hostId: string; threadId: string };

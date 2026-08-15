@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 324587,
-  "reason": "multi-gateway footer subtitle plus accumulated main drift (PR #114059), then the Memory settings surface: its i18n strings plus the rendering-free memory-schema facts settings search reads at startup",
-  "updatedAt": "2026-07-26"
+  "startupJsGzipBytes": 332040,
+  "reason": "cumulative 2026-08-14 growth (run 31798463207 baseline), redacted-rename guard i18n (#123571), and pairing completion (#120933); CI run 31814389572 build-artifacts bytes",
+  "updatedAt": "2026-08-14"
 }

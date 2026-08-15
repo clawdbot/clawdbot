@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { wrapRunWithTestAdmission } from "./admitted-run-context.test-support.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
@@ -62,13 +63,19 @@ const installRunEmbeddedMocks = () => {
   });
 };
 
-let runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
+type ProductionRunEmbeddedAgent = typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
+type TestRunEmbeddedAgent = (
+  params: Omit<Parameters<ProductionRunEmbeddedAgent>[0], "admittedRunContext">,
+) => ReturnType<ProductionRunEmbeddedAgent>;
+let runEmbeddedAgent: TestRunEmbeddedAgent;
 let runWithModelFallback: typeof import("./model-fallback-runner.js").runWithModelFallback;
 
 beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
-  ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
+  runEmbeddedAgent = wrapRunWithTestAdmission(
+    (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
+  );
   ({ runWithModelFallback } = await import("./model-fallback-runner.js"));
 });
 
@@ -619,7 +626,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     }
   });
 
-  it("keeps direct embedded-run lane suspension outside the outer fallback loop", async () => {
+  it("keeps direct embedded-run session suspension outside the outer fallback loop", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
       const sessionId = "session:direct-embedded-suspension";
@@ -645,9 +652,8 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
         }),
       ).rejects.toThrow();
 
-      expect(suspendSessionMock).toHaveBeenCalledWith(
-        expect.objectContaining({ laneId: "direct-lane" }),
-      );
+      expect(suspendSessionMock).toHaveBeenCalledOnce();
+      expect(suspendSessionMock.mock.calls[0]?.[0]).not.toHaveProperty("laneId");
     });
   });
 

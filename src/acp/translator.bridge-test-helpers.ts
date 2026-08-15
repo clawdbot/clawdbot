@@ -133,7 +133,7 @@ export async function expectOversizedPromptRejected(params: { sessionId: string;
 
 export type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
-export function requireRecord(value: unknown, label: string): Record<string, unknown> {
+export function requireAcpObject(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object") {
     throw new Error(`expected ${label}`);
   }
@@ -157,10 +157,10 @@ export function expectConfigOption(options: unknown, id: string, fields: Record<
 
 export function sessionUpdatePayloads(source: MockCallSource, updateType?: string) {
   const payloads = source.mock.calls.map((call, index) => {
-    const envelope = requireRecord(call[0], `session update envelope ${index}`);
+    const envelope = requireAcpObject(call[0], `session update envelope ${index}`);
     return {
       sessionId: envelope.sessionId,
-      update: requireRecord(envelope.update, `session update ${index}`),
+      update: requireAcpObject(envelope.update, `session update ${index}`),
     };
   });
   if (!updateType) {

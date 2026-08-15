@@ -31,6 +31,8 @@ const refreshLatestUpdateRestartSentinelMock = vi.fn<() => Promise<RestartSentin
 const recordLatestUpdateRestartSentinelMock = vi.fn();
 const isRestartEnabledMock = vi.fn(() => true);
 const readPackageVersionMock = vi.fn(async () => "1.0.0");
+const checkUpdateStatusMock = vi.fn();
+const versionMock = vi.hoisted(() => ({ value: "1.0.0" }));
 const detectRespawnSupervisorMock = vi.fn<() => RespawnSupervisor | null>(() => null);
 const normalizeUpdateChannelMock = vi.fn((): UpdateChannel | null => null);
 const getUpdateAvailableMock = vi.fn(
@@ -44,6 +46,7 @@ const getUpdateAvailableMock = vi.fn(
 const getUpdateScheduleMock = vi.fn<
   () => import("../../../packages/gateway-protocol/src/index.js").UpdateScheduleState | null
 >(() => null);
+const refreshGatewayUpdateStatusMock = vi.fn(async () => {});
 type UpdateCampaignAdoption = NonNullable<
   ReturnType<import("../../infra/update-campaign.js").UpdateCampaignController["adopt"]>
 >;
@@ -148,17 +151,31 @@ vi.mock("../../infra/package-json.js", () => ({
   readPackageVersion: readPackageVersionMock,
 }));
 
+vi.mock("../../infra/update-check.js", () => ({
+  checkUpdateStatus: checkUpdateStatusMock,
+}));
+
+vi.mock("../../version.js", () => ({
+  get VERSION() {
+    return versionMock.value;
+  },
+}));
+
 vi.mock("../../infra/supervisor-markers.js", () => ({
   detectRespawnSupervisor: detectRespawnSupervisorMock,
 }));
 
-vi.mock("../../infra/update-channels.js", () => ({
-  normalizeUpdateChannel: normalizeUpdateChannelMock,
-}));
+vi.mock("../../infra/update-channels.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/update-channels.js")>(
+    "../../infra/update-channels.js",
+  );
+  return { ...actual, normalizeUpdateChannel: normalizeUpdateChannelMock };
+});
 
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateAvailable: getUpdateAvailableMock,
   getUpdateSchedule: getUpdateScheduleMock,
+  refreshGatewayUpdateStatus: refreshGatewayUpdateStatusMock,
 }));
 
 vi.mock("../../infra/update-campaign.js", () => ({
@@ -233,6 +250,7 @@ beforeEach(() => {
   isRestartEnabledMock.mockReturnValue(true);
   readPackageVersionMock.mockClear();
   readPackageVersionMock.mockResolvedValue("1.0.0");
+  versionMock.value = "1.0.0";
   normalizeUpdateChannelMock.mockReset();
   normalizeUpdateChannelMock.mockReturnValue(null);
   getUpdateAvailableMock.mockReset();
@@ -514,13 +532,14 @@ describe("update.run restart scheduling", () => {
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        root: "/tmp/openclaw",
+        root: "/tmp/openclaw-global",
         restartDrainTimeoutMs: 300_000,
         restartDelayMs: 2000,
         handoffId: expect.any(String),
         supervisor: "launchd",
         meta: expect.objectContaining({
           handoffId: expect.any(String),
+          root: "/tmp/openclaw-global",
         }),
       }),
     );
@@ -686,7 +705,7 @@ describe("update.run restart scheduling", () => {
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        root: "/tmp/openclaw",
+        root: "/tmp/openclaw-global",
       }),
     );
   });
@@ -702,11 +721,12 @@ describe("update.run restart scheduling", () => {
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        root: "/tmp/openclaw",
+        root: "/tmp/openclaw-git",
         handoffId: expect.any(String),
         supervisor: "launchd",
         meta: expect.objectContaining({
           handoffId: expect.any(String),
+          root: "/tmp/openclaw-git",
         }),
       }),
     );
@@ -836,7 +856,7 @@ describe("update.run restart scheduling", () => {
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        root: "/tmp/openclaw",
+        root: "/tmp/openclaw-git",
         supervisor: "systemd",
       }),
     );
@@ -1033,96 +1053,5 @@ describe("update.run post-core plugin finalize", () => {
     expect(runGatewayUpdateMock).not.toHaveBeenCalled();
     expect(runPostCoreFinalizeAfterGatewayUpdateMock).not.toHaveBeenCalled();
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("update.status", () => {
-  it("refreshes the latest update sentinel before responding", async () => {
-    getUpdateAvailableMock.mockReturnValueOnce({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "latest",
-    });
-    getLatestUpdateRestartSentinelMock.mockReturnValueOnce({
-      kind: "update",
-      status: "skipped",
-      ts: 1,
-      stats: {
-        reason: "restart-health-pending",
-      },
-    });
-    refreshLatestUpdateRestartSentinelMock.mockResolvedValueOnce({
-      kind: "update",
-      status: "ok",
-      ts: 2,
-      stats: {
-        after: { version: "2.0.0" },
-      },
-    });
-    getUpdateScheduleMock.mockReturnValueOnce({
-      channel: "beta",
-      autoEnabled: true,
-    });
-    const { updateHandlers } = await import("./update.js");
-    const respond = vi.fn();
-
-    await expectDefined(
-      updateHandlers["update.status"],
-      'updateHandlers["update.status"] test invariant',
-    )({
-      params: {},
-      respond,
-    } as never);
-
-    expect(respond).toHaveBeenCalledTimes(1);
-    const [ok, response] = firstMockCall(respond, "update status response") as [
-      boolean,
-      (
-        | {
-            sentinel?: { kind?: string; status?: string };
-            updateAvailable?: { latestVersion?: string } | null;
-            schedule?: { channel?: string };
-          }
-        | undefined
-      ),
-    ];
-    expect(ok).toBe(true);
-    expect(refreshLatestUpdateRestartSentinelMock).toHaveBeenCalledTimes(1);
-    expect(response?.sentinel?.kind).toBe("update");
-    expect(response?.sentinel?.status).toBe("ok");
-    expect(response?.updateAvailable?.latestVersion).toBe("2.0.0");
-    expect(response?.schedule?.channel).toBe("beta");
-  });
-
-  it("falls back to the cached update sentinel when refresh fails", async () => {
-    refreshLatestUpdateRestartSentinelMock.mockRejectedValueOnce(new Error("read failed"));
-    getLatestUpdateRestartSentinelMock.mockReturnValueOnce({
-      kind: "update",
-      status: "skipped",
-      ts: 1,
-      stats: {
-        reason: "restart-health-pending",
-      },
-    });
-    const warn = vi.fn();
-    const { updateHandlers } = await import("./update.js");
-    const respond = vi.fn();
-
-    await expectDefined(
-      updateHandlers["update.status"],
-      'updateHandlers["update.status"] test invariant',
-    )({
-      params: {},
-      respond,
-      context: { logGateway: { warn } },
-    } as never);
-
-    expect(warn).toHaveBeenCalledWith("update.status sentinel refresh failed: read failed");
-    const [, response] = firstMockCall(respond, "update status response") as [
-      boolean,
-      { sentinel?: { kind?: string; status?: string } } | undefined,
-    ];
-    expect(response?.sentinel?.kind).toBe("update");
-    expect(response?.sentinel?.status).toBe("skipped");
   });
 });

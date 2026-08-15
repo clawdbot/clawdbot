@@ -179,6 +179,10 @@ describe("restart health", () => {
     "connect challenge missing nonce",
     "device signature invalid",
     "unauthorized: session revoked",
+    "device pairing required",
+    "role upgrade pending approval",
+    "scope upgrade pending approval",
+    "device metadata change pending approval",
   ])(
     "does not treat ambiguous 1008 close reason %s as healthy gateway reachability",
     async (reason) => {

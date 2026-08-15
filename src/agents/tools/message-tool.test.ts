@@ -10,14 +10,14 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
-import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
+import type { MessageActionResult } from "../../infra/outbound/message-action-contracts.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
 import {
   MESSAGE_TOOL_DELIVERY_HINTS,
   MESSAGE_TOOL_ONLY_DELIVERY_HINT,
 } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
-type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
+type CreateMessageTool = typeof import("./message-tool-execution.js").createMessageTool;
 type CreateOpenClawTools = typeof import("../openclaw-tools.js").createOpenClawTools;
 type ResetPluginRuntimeStateForTest =
   typeof import("../../plugins/runtime.js").resetPluginRuntimeStateForTest;
@@ -339,7 +339,7 @@ function mockSendResult(overrides: { channel?: string; to?: string } = {}) {
     handledBy: "plugin",
     payload: {},
     dryRun: true,
-  } satisfies MessageActionRunResult);
+  } satisfies MessageActionResult);
 }
 
 function getToolProperties(tool: ReturnType<CreateMessageTool>) {
@@ -370,7 +370,7 @@ beforeAll(async () => {
   ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } =
     await import("../../plugins/runtime.js"));
   ({ createTestRegistry } = await import("../../test-utils/channel-plugins.js"));
-  ({ createMessageTool } = await import("./message-tool.js"));
+  ({ createMessageTool } = await import("./message-tool-execution.js"));
   ({ createOpenClawTools } = await import("../openclaw-tools.js"));
 });
 
@@ -508,7 +508,7 @@ describe("message tool gateway timeout", () => {
         details: { ok: true },
       },
       dryRun: false,
-    } satisfies MessageActionRunResult);
+    } satisfies MessageActionResult);
 
     const { call, result } = await executeSendWithResult({
       action: { channel: "telegram", target: "telegram:123", message: "hello" },
@@ -524,7 +524,7 @@ describe("message tool gateway timeout", () => {
     });
   });
 
-  it("does not advertise the Codex-only final delivery control", () => {
+  it("does not advertise source-reply finality on ordinary message tools", () => {
     expect(getToolProperties(createMessageTool())).not.toHaveProperty("final");
     expect(getToolProperties(createMessageTool())).not.toHaveProperty("idempotencyKey");
   });
@@ -636,7 +636,16 @@ describe("completion source-reply authority", () => {
 
     expect(getActionEnum(properties)).toEqual(["send"]);
     expect(Object.keys(properties).toSorted()).toEqual(
-      ["accountId", "action", "channel", "message", "replyTo", "target", "threadId"].toSorted(),
+      [
+        "accountId",
+        "action",
+        "channel",
+        "final",
+        "message",
+        "replyTo",
+        "target",
+        "threadId",
+      ].toSorted(),
     );
     expectStringSchema(properties.message, {
       description: "Text to send to the current source conversation.",
@@ -778,7 +787,7 @@ describe("completion source-reply authority", () => {
     expect(mocks.runMessageAction).not.toHaveBeenCalled();
   });
 
-  it("allows Codex final controls and matched canonical source-thread text sends", async () => {
+  it("allows shared final controls and matched canonical source-thread text sends", async () => {
     mockSendResult({ channel: "discord", to: "channel:source" });
     const tool = createRestrictedTool();
 
@@ -871,7 +880,7 @@ describe("poll vote echo guard", () => {
               details: { pollVotedOption: votedOption },
             },
             dryRun: false,
-          } as MessageActionRunResult)
+          } as MessageActionResult)
         : ({
             kind: "send",
             channel: "imessage",
@@ -880,7 +889,7 @@ describe("poll vote echo guard", () => {
             handledBy: "plugin",
             payload: {},
             dryRun: false,
-          } as MessageActionRunResult),
+          } as MessageActionResult),
     );
     return createMessageTool({
       currentChannelProvider: "imessage",
@@ -1045,11 +1054,13 @@ describe("message tool secret scoping", () => {
     const defaultTool = createMessageTool();
 
     expect(scopedTool.description).toContain('visible reply: action="send" + message');
+    expect(getToolProperties(scopedTool).final).toMatchObject({ type: "boolean" });
     expect(scopedTool.description).toContain("target defaults current source");
     expect(scopedTool.description).toContain("Final answer private");
     expect(explicitTargetTool.description).toContain("send needs target");
     expect(explicitTargetTool.description).not.toContain("target defaults current source");
     expect(defaultTool.description).not.toContain('visible reply: action="send" + message');
+    expect(getToolProperties(defaultTool)).not.toHaveProperty("final");
   });
 
   it("forwards source reply delivery mode through createOpenClawTools", () => {
@@ -1059,6 +1070,7 @@ describe("message tool secret scoping", () => {
     }).find((candidate) => candidate.name === "message");
 
     expect(tool?.description).toContain('visible reply: action="send" + message');
+    expect(getToolProperties(tool!).final).toMatchObject({ type: "boolean" });
   });
 
   it("passes source reply delivery mode to the outbound runner", async () => {
@@ -1203,7 +1215,7 @@ describe("message tool secret scoping", () => {
         handledBy: "plugin",
         payload: {},
         dryRun: true,
-      } satisfies MessageActionRunResult);
+      } satisfies MessageActionResult);
 
     const tool = createMessageTool({
       getRuntimeConfig: mocks.getRuntimeConfig,
@@ -1454,10 +1466,10 @@ describe("message tool secret scoping", () => {
   });
 
   it("uses separate autogenerated idempotency keys for parallel identical sends", async () => {
-    const pending: Array<(value: MessageActionRunResult) => void> = [];
+    const pending: Array<(value: MessageActionResult) => void> = [];
     mocks.runMessageAction.mockImplementation(
       () =>
-        new Promise<MessageActionRunResult>((resolve) => {
+        new Promise<MessageActionResult>((resolve) => {
           pending.push(resolve);
         }),
     );
@@ -2698,7 +2710,7 @@ describe("message tool loop detection action runner proof", () => {
           },
         },
         dryRun: false,
-      } satisfies MessageActionRunResult;
+      } satisfies MessageActionResult;
     });
   }
 
@@ -3791,6 +3803,13 @@ describe("message tool reasoning tag sanitization", () => {
       field: "message",
       input: "Thinking...\nI'll check that now",
       expected: "Thinking...\nI'll check that now",
+      target: "telegram:123",
+      channel: "telegram",
+    },
+    {
+      field: "message",
+      input: "<internal>private reflection</internal>Visible answer",
+      expected: "Visible answer",
       target: "telegram:123",
       channel: "telegram",
     },

@@ -11,9 +11,11 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { needsTtsFallback } from "./dispatch-from-config.finalize.js";
 import {
   createDispatcher,
   diagnosticMocks,
@@ -38,7 +40,8 @@ import {
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
-import { usesFullReplyRuntime, usesPublishedReplyRuntime } from "./reply-config-runtime-mode.js";
+import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
+import { usesFullReplyRuntime } from "./reply-config-runtime-mode.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -50,6 +53,107 @@ describe("dispatchReplyFromConfig", () => {
     describe0BeforeEach0();
   });
   afterEach(clearRuntimeConfigSnapshot);
+
+  it("records channel transform suppression before TTS or visible fallback delivery", async () => {
+    setNoAbort();
+    const transport = vi.fn(async () => {});
+    const transformReplyPayload = vi.fn(() => null);
+    const dispatcher = createReplyDispatcher({ deliver: transport, transformReplyPayload });
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: "agent:main:telegram:direct:123",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: vi.fn(async (_ctx, opts) => {
+        await opts?.onBlockReply?.({ text: "private block" });
+        return { text: "private reply" };
+      }),
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(result).toMatchObject({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(result).not.toHaveProperty("noVisibleReplyFallbackEligible");
+    expect(result).not.toHaveProperty("noVisibleReplyFallbackDelivered");
+    expect(transformReplyPayload).toHaveBeenCalledTimes(2);
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "completed", reason: "channel_transform" }),
+    );
+  });
+
+  it("keeps a block-only channel transform veto terminal", async () => {
+    setNoAbort();
+    const transport = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({
+      deliver: transport,
+      transformReplyPayload: () => null,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: vi.fn(async (_ctx, opts) => {
+        await opts?.onBlockReply?.({ text: "private block" });
+        return undefined;
+      }),
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(result).toMatchObject({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(result).not.toHaveProperty("noVisibleReplyFallbackEligible");
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "channel_transform" }),
+    );
+  });
+
+  it("lets a later accepted final override an earlier transform veto", async () => {
+    setNoAbort();
+    const transport = vi.fn(async () => {});
+    const transformReplyPayload = vi.fn((payload: ReplyPayload) =>
+      payload.text === "private reply" ? null : payload,
+    );
+    const dispatcher = createReplyDispatcher({ deliver: transport, transformReplyPayload });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: vi.fn(async () => [{ text: "private reply" }, { text: "public reply" }]),
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(result).toMatchObject({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    expect(transformReplyPayload).toHaveBeenCalledTimes(2);
+    expect(ttsMocks.maybeApplyTtsToPayload).toHaveBeenCalledTimes(1);
+    expect(transport).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: "public reply" }),
+      { kind: "final" },
+    );
+    expect(diagnosticMocks.logMessageProcessed).not.toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "channel_transform" }),
+    );
+  });
 
   it("keeps unauthorized plugin-owned binding slash replies suppressed while routed to the bound plugin", async () => {
     setNoAbort();
@@ -970,32 +1074,53 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({ Provider: "msteams", Surface: "msteams" });
-    setRuntimeConfigSnapshot({
+    const runtimeCfg = {
       agents: { defaults: { userTimezone: "UTC" } },
       messages: { suppressToolErrors: true },
-    });
+    } satisfies OpenClawConfig;
+    const preparedRuntimeModule = await import("../../agents/prepared-model-runtime.js");
+    const preparedLookup = vi
+      .spyOn(preparedRuntimeModule, "loadPublishedGatewayReplyDispatchRuntime")
+      .mockResolvedValue(
+        Object.freeze({
+          agentId: "main",
+          agentDir: "/tmp/prepared-agent",
+          workspaceDir: "/tmp/prepared-workspace",
+          config: runtimeCfg,
+          modelCatalog: { entries: [], routeVariants: [] },
+          inboundPluginRegistry: createTestRegistry([]),
+        }),
+      );
 
     const overrideCfg = {
       agents: { defaults: { userTimezone: "America/New_York" } },
     } as OpenClawConfig;
 
     let receivedCfg: OpenClawConfig | undefined;
+    let receivedPreparedRuntime: unknown;
     const replyResolver = async (
       _ctx: MsgContext,
       _opts?: GetReplyOptions,
       cfgArg?: OpenClawConfig,
+      preparedRuntime?: unknown,
     ) => {
       receivedCfg = cfgArg;
+      receivedPreparedRuntime = preparedRuntime;
       return { text: "hi" } satisfies ReplyPayload;
     };
 
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyResolver,
-      configOverride: overrideCfg,
-    });
+    try {
+      await dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher,
+        replyResolver,
+        configOverride: overrideCfg,
+        usePublishedModelRuntime: true,
+      });
+    } finally {
+      preparedLookup.mockRestore();
+    }
 
     expect(receivedCfg).not.toBe(cfg);
     expect(receivedCfg).not.toBe(overrideCfg);
@@ -1003,6 +1128,7 @@ describe("dispatchReplyFromConfig", () => {
       agents: { defaults: { userTimezone: "America/New_York" } },
       messages: { suppressToolErrors: true },
     });
+    expect(receivedPreparedRuntime).toBeUndefined();
   });
 
   it("keeps the caller config exact before a runtime snapshot is published", async () => {
@@ -1024,10 +1150,9 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(receivedCfg).toBe(cfg);
     expect(usesFullReplyRuntime(receivedCfg)).toBe(true);
-    expect(usesPublishedReplyRuntime(receivedCfg)).toBe(false);
   });
 
-  it("marks the committed runtime snapshot for published-owner reply resolution", async () => {
+  it("does not independently reread the committed runtime config snapshot", async () => {
     setNoAbort();
     const runtimeCfg = {
       agents: { defaults: { userTimezone: "America/New_York" } },
@@ -1045,11 +1170,12 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
 
-    expect(receivedCfg).toBe(runtimeCfg);
-    expect(usesPublishedReplyRuntime(receivedCfg)).toBe(true);
+    expect(receivedCfg).toBe(emptyConfig);
+    expect(receivedCfg).not.toBe(runtimeCfg);
+    expect(usesFullReplyRuntime(receivedCfg)).toBe(true);
   });
 
-  it("marks a channel-captured config for published-owner resolution before a snapshot exists", async () => {
+  it("keeps a channel-captured config full when no prepared runtime exists", async () => {
     setNoAbort();
     const cfg = {
       agents: { defaults: { userTimezone: "America/Los_Angeles" } },
@@ -1068,7 +1194,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(receivedCfg).toBe(cfg);
-    expect(usesPublishedReplyRuntime(receivedCfg)).toBe(true);
+    expect(usesFullReplyRuntime(receivedCfg)).toBe(true);
   });
 
   it("drops a removed Firecrawl SecretRef from Discord replies after config reload", async () => {
@@ -1093,7 +1219,19 @@ describe("dispatchReplyFromConfig", () => {
     const runtimeCfg = {
       agents: { defaults: { userTimezone: "America/Edmonton" } },
     } as OpenClawConfig;
-    setRuntimeConfigSnapshot(runtimeCfg);
+    const preparedRuntimeModule = await import("../../agents/prepared-model-runtime.js");
+    const preparedLookup = vi
+      .spyOn(preparedRuntimeModule, "loadPublishedGatewayReplyDispatchRuntime")
+      .mockResolvedValue(
+        Object.freeze({
+          agentId: "main",
+          agentDir: "/tmp/prepared-agent",
+          workspaceDir: "/tmp/prepared-workspace",
+          config: runtimeCfg,
+          modelCatalog: { entries: [], routeVariants: [] },
+          inboundPluginRegistry: createTestRegistry([]),
+        }),
+      );
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({ Provider: "discord", Surface: "discord" });
 
@@ -1103,14 +1241,24 @@ describe("dispatchReplyFromConfig", () => {
       _opts?: GetReplyOptions,
       cfgArg?: OpenClawConfig,
     ) => {
-      receivedCfg = cfgArg;
-      if (cfgArg?.plugins?.entries?.firecrawl) {
+      receivedCfg = getPreparedReplyDispatchRuntime()?.config ?? cfgArg;
+      if (receivedCfg?.plugins?.entries?.firecrawl) {
         throw new Error("stale Firecrawl SecretRef reached reply resolution");
       }
       return { text: "hi" } satisfies ReplyPayload;
     };
 
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    try {
+      await dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher,
+        replyResolver,
+        usePublishedModelRuntime: true,
+      });
+    } finally {
+      preparedLookup.mockRestore();
+    }
 
     expect(receivedCfg).toBe(runtimeCfg);
     expect(receivedCfg?.plugins?.entries?.firecrawl).toBeUndefined();
@@ -2076,5 +2224,55 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({ text: "Plain tagged text." });
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      expectedText: "Private speech.",
+      ttsReply: { text: "Private speech." },
+      finalReply: {},
+      streamedText: "[[tts:text]]Private speech.[[/tts:text]]",
+    },
+    {
+      expectedText: undefined,
+      ttsReply: { text: "Private speech.", mediaUrl: "https://x/tts.opus", audioAsVoice: true },
+      finalReply: { mediaUrl: "https://x/tts.opus", audioAsVoice: true },
+      streamedText: "[[tts:text]]Private speech.[[/tts:text]]",
+    },
+    {
+      expectedText: "Visible answer.",
+      ttsReply: { text: "Visible answer." },
+      finalReply: undefined,
+      streamedText: "Visible answer. [[tts:text]]Private speech.[[/tts:text]]",
+    },
+  ])("keeps tagged TTS delivery single for $streamedText", async (testCase) => {
+    setNoAbort();
+    ttsMocks.state.statusSnapshot.autoMode = "tagged";
+    ttsMocks.maybeApplyTtsToPayload.mockResolvedValueOnce(testCase.ttsReply);
+    const dispatcher = createDispatcher();
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onBlockReply?.({ text: testCase.streamedText });
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    const blockReply = vi.mocked(dispatcher.sendBlockReply).mock.calls[0]?.[0];
+    const deliveredPayload = testCase.finalReply ? firstFinalReplyPayload(dispatcher) : blockReply;
+    expect(deliveredPayload?.text?.trim()).toBe(testCase.expectedText);
+    if (testCase.finalReply) {
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+      expect(deliveredPayload).toMatchObject(testCase.finalReply);
+    } else {
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    }
+  });
+
+  it("skips fallback when directives stay visible", () =>
+    expect(needsTtsFallback(false, "[[tts:text]]x", "x")).toBe(false));
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

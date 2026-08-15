@@ -18,7 +18,8 @@ scenario:
   codeRefs:
     - extensions/qa-lab/src/suite.ts
     - extensions/qa-lab/src/providers/mock-openai/server.ts
-    - src/agents/embedded-agent-runner/run/incomplete-turn.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts
   execution:
     kind: flow
     summary: Verify a short approval like "ok do it" triggers immediate tool use instead of fake-progress narration.

@@ -2,11 +2,11 @@ import {
   hasSessionProjectionAcceptedFinal,
   reduceSessionProjectionRunEvent,
 } from "@openclaw/gateway-client/browser";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 // Control UI page module reconciles Chat Gateway events into Chat state.
 import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
   chatScopedEventSessionMatches,
   isHiddenAssistantStreamText,
@@ -193,12 +193,19 @@ function appendCachedChatMessage(
   state: ChatState,
   sessionKey: string,
   message: unknown,
+  eventClaim: object,
   agentId?: string,
 ) {
   if (!state.chatMessagesBySession) {
     return;
   }
-  appendChatMessageToCache(state.chatMessagesBySession, state, { sessionKey, agentId }, message);
+  appendChatMessageToCache(
+    state.chatMessagesBySession,
+    state,
+    { sessionKey, agentId },
+    message,
+    eventClaim,
+  );
 }
 
 function handleChatEvent(
@@ -229,7 +236,7 @@ function handleChatEvent(
         const cacheAgentId = isUiGlobalSessionKey(payload.sessionKey)
           ? (payload.agentId ?? resolveUiDefaultAgentId(state))
           : payload.agentId;
-        appendCachedChatMessage(state, payload.sessionKey, finalMessage, cacheAgentId);
+        appendCachedChatMessage(state, payload.sessionKey, finalMessage, payload, cacheAgentId);
       }
     }
     return null;

@@ -9,18 +9,22 @@ on:
       - ".github/workflows/plugin-npm-release.yml"
       - "extensions/**"
       - "package.json"
+      - "packages/normalization-core/**"
       - "scripts/generate-npm-package-lock.mjs"
+      - "scripts/generate-npm-package-lock.mts"
       - "scripts/lib/npm-publish-plan.mjs"
-      - "scripts/lib/npm-json-output.mjs"
+      - "scripts/lib/npm-json-output.mts"
       - "scripts/lib/release-version.mjs"
       - "scripts/lib/plugin-npm-package-manifest.mjs"
+      - "scripts/lib/plugin-npm-package-manifest.mts"
+      - "scripts/lib/tsx-cli-shim.mjs"
       - "scripts/lib/plugin-npm-release.ts"
       - "scripts/lib/actions-artifact-archive.mjs"
       - "scripts/plugin-npm-publish.sh"
       - "scripts/plugin-publication-artifact.mjs"
       - "scripts/plugin-npm-release-check.ts"
       - "scripts/plugin-npm-release-plan.ts"
-      - "scripts/verify-plugin-npm-published-runtime.mjs"
+      - "scripts/verify-plugin-npm-published-runtime.mts"
   workflow_dispatch:
     inputs:
       publish_scope:
@@ -63,7 +67,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.15.0"
+  NODE_VERSION: "24.16.0"
 
 jobs:
   preview_plugins_npm:
@@ -330,7 +334,7 @@ jobs:
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
           fetch-depth: 1
 
-      - name: Checkout trusted packaging helper
+      - name: Checkout trusted packaging tooling
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
@@ -338,23 +342,8 @@ jobs:
           path: .release-tooling
           fetch-depth: 1
           sparse-checkout: |
-            scripts/generate-npm-package-lock.mjs
-            scripts/lib/npm-json-output.mjs
-            scripts/lib/plugin-npm-package-manifest.mjs
-          sparse-checkout-cone-mode: false
-
-      - name: Overlay trusted packaging helper
-        run: |
-          set -euo pipefail
-          cp \
-            .release-tooling/scripts/generate-npm-package-lock.mjs \
-            scripts/generate-npm-package-lock.mjs
-          cp \
-            .release-tooling/scripts/lib/npm-json-output.mjs \
-            scripts/lib/npm-json-output.mjs
-          cp \
-            .release-tooling/scripts/lib/plugin-npm-package-manifest.mjs \
-            scripts/lib/plugin-npm-package-manifest.mjs
+            packages/normalization-core
+            scripts
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -365,12 +354,12 @@ jobs:
       - name: Preview publish command
         env:
           OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
-        run: bash scripts/plugin-npm-publish.sh --dry-run "${{ matrix.plugin.packageDir }}"
+        run: bash .release-tooling/scripts/plugin-npm-publish.sh --repo-root "$GITHUB_WORKSPACE" --dry-run "${{ matrix.plugin.packageDir }}"
 
       - name: Preview npm pack contents
         env:
           OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
-        run: bash scripts/plugin-npm-publish.sh --pack-dry-run "${{ matrix.plugin.packageDir }}"
+        run: bash .release-tooling/scripts/plugin-npm-publish.sh --repo-root "$GITHUB_WORKSPACE" --pack-dry-run "${{ matrix.plugin.packageDir }}"
 
       - name: Prepare immutable npm preflight artifact
         id: preflight_artifact
@@ -401,11 +390,13 @@ jobs:
 
           OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD=0 \
             OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR="${artifact_dir}" \
-            bash scripts/plugin-npm-publish.sh --pack "${PACKAGE_DIR}" > "${pack_output}"
+            bash .release-tooling/scripts/plugin-npm-publish.sh \
+              --repo-root "$GITHUB_WORKSPACE" \
+              --pack "${PACKAGE_DIR}" > "${pack_output}"
 
-          node --input-type=module - "${pack_output}" "${pack_json}" <<'NODE'
+          node --import tsx --input-type=module - "${pack_output}" "${pack_json}" <<'NODE'
           import fs from "node:fs";
-          import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mjs";
+          import { resolveNpmJsonEntries } from "./.release-tooling/scripts/lib/npm-json-output.mts";
 
           const raw = fs.readFileSync(process.argv[2], "utf8").trim();
           let pack;
@@ -1237,21 +1228,7 @@ jobs:
           path: .publication-target
           fetch-depth: 1
 
-      - name: Overlay trusted OIDC packaging helper
-        if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
-        run: |
-          set -euo pipefail
-          cp \
-            scripts/generate-npm-package-lock.mjs \
-            .publication-target/scripts/generate-npm-package-lock.mjs
-          cp \
-            scripts/lib/npm-json-output.mjs \
-            .publication-target/scripts/lib/npm-json-output.mjs
-          cp \
-            scripts/lib/plugin-npm-package-manifest.mjs \
-            .publication-target/scripts/lib/plugin-npm-package-manifest.mjs
-
-      - name: Setup OIDC publication target
+      - name: Setup trusted OIDC packaging dependencies
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
         uses: ./.github/actions/setup-node-env
         with:
@@ -1275,18 +1252,17 @@ jobs:
 
       - name: Publish with trusted publisher
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc' && steps.npm_package_version.outputs.already_published != 'true'
-        working-directory: .publication-target
         env:
           OPENCLAW_NPM_PUBLISH_AUTH_MODE: trusted-publisher
           OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
-        run: bash scripts/plugin-npm-publish.sh --publish "${{ matrix.plugin.packageDir }}"
+        run: bash scripts/plugin-npm-publish.sh --repo-root .publication-target --publish "${{ matrix.plugin.packageDir }}"
 
       - name: Verify OIDC published runtime
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
         env:
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
-        run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+        run: node --import tsx scripts/verify-plugin-npm-published-runtime.mts "${PACKAGE_NAME}@${PACKAGE_VERSION}"
 
       - name: Check bootstrap npm package version
         id: bootstrap_npm_package_version
@@ -1385,14 +1361,14 @@ jobs:
         env:
           PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
           PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
-        run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+        run: node --import tsx scripts/verify-plugin-npm-published-runtime.mts "${PACKAGE_NAME}@${PACKAGE_VERSION}"
 
       - name: Verify immutable npm readback runtime
         if: steps.publication_evidence.outputs.publish_route == 'npm-readback'
         env:
           PACKAGE_NAME: ${{ steps.publication_evidence.outputs.package_name }}
           PACKAGE_VERSION: ${{ steps.publication_evidence.outputs.package_version }}
-        run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+        run: node --import tsx scripts/verify-plugin-npm-published-runtime.mts "${PACKAGE_NAME}@${PACKAGE_VERSION}"
 
       - name: Record Meta trusted publisher checkpoint
         if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap'

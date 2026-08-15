@@ -87,7 +87,7 @@ import {
   parseTranscriptPage,
   readControlCursor,
   readGatewayParams,
-  readOptionalString,
+  readBoundedOptionalString,
   readPageParams,
   requireBoundThread,
   requireOnlyKeys,
@@ -101,6 +101,7 @@ import {
   openCodexCatalogTerminal,
   requireCatalogEligibleThread,
   resolveLocalCodexTerminalExecutable,
+  startCodexCatalogTerminal,
   type CodexTerminalConfigSources,
 } from "./session-catalog-terminal.js";
 import { toGenericTranscriptItem } from "./session-catalog-transcript-item.js";
@@ -597,11 +598,13 @@ async function listCodexSessionCatalog(params: {
   listNodes?: Parameters<SessionCatalogProvider["list"]>[0]["listNodes"];
   onHost?: (host: CodexSessionCatalogHost) => void;
   sessionEntries?: SessionCatalogEntrySnapshot;
+  includeLocal?: boolean;
 }): Promise<CodexSessionCatalogResult> {
   const query = readGatewayParams(params.query);
   const requestedHostIds = query.hostIds ? new Set(query.hostIds) : undefined;
   const localHosts =
-    !requestedHostIds || requestedHostIds.has(CODEX_LOCAL_SESSION_HOST_ID)
+    params.includeLocal !== false &&
+    (!requestedHostIds || requestedHostIds.has(CODEX_LOCAL_SESSION_HOST_ID))
       ? [
           listGatewayHost({
             bindingStore: params.bindingStore,
@@ -730,11 +733,11 @@ function readNodeTranscriptParams(value: unknown): CodexNodeSessionTranscriptPar
     throw new CatalogParamsError("Codex session read parameters must be an object");
   }
   requireOnlyKeys(value, new Set(["threadId", "cursor", "limit"]));
-  const threadId = readOptionalString(value, "threadId", MAX_SESSION_ID_LENGTH);
+  const threadId = readBoundedOptionalString(value, "threadId", MAX_SESSION_ID_LENGTH);
   if (!threadId) {
     throw new CatalogParamsError("threadId is required");
   }
-  const cursor = readOptionalString(value, "cursor", MAX_CURSOR_LENGTH);
+  const cursor = readBoundedOptionalString(value, "cursor", MAX_CURSOR_LENGTH);
   const limit = readBoundedLimit(
     value.limit,
     "limit",
@@ -905,8 +908,6 @@ async function findAdoptedSessionEntry(params: {
   return (await listAdoptedSessionEntries(params)).get(params.threadId);
 }
 
-class CodexAdoptionBindingCleanupError extends AggregateError {}
-
 async function clearCreatedAdoptionBinding(params: {
   bindingStore: CodexAppServerBindingStore;
   identity: ReturnType<typeof sessionBindingIdentity>;
@@ -933,19 +934,22 @@ async function clearCreatedAdoptionBinding(params: {
   try {
     current = await params.bindingStore.read(params.identity);
   } catch (readError) {
-    throw new CodexAdoptionBindingCleanupError(
+    const cleanupFailure = new AggregateError(
       [params.cause, ...(clearError ? [clearError] : []), readError],
       `OpenClaw session creation failed and the Codex binding could not be verified for ${params.sourceThreadId}`,
+      { cause: readError },
     );
+    throw cleanupFailure;
   }
   // Pending state is the cleanup CAS token. Once lifecycle work changes it,
   // that successor owns every tracked native artifact and must survive here.
   if (!matchesPendingSupervisionOwner(current, params.expectedPending)) {
     return;
   }
-  throw new CodexAdoptionBindingCleanupError(
+  throw new AggregateError(
     [params.cause, ...(clearError ? [clearError] : [])],
     `OpenClaw session creation failed and the Codex binding could not be cleared for ${params.sourceThreadId}`,
+    { cause: params.cause },
   );
 }
 
@@ -1439,9 +1443,28 @@ function registerCodexSessionCatalog(params: {
   getPluginConfig: () => unknown;
   getRuntimeConfig: () => OpenClawConfig | undefined;
 }): void {
+  const usesProcessHomeFallback = () => {
+    const start = resolveCodexSupervisionAppServerRuntimeOptions({
+      pluginConfig: params.getPluginConfig(),
+    }).start;
+    return (
+      start.transport === "stdio" && start.homeScope === "user" && !process.env.CODEX_HOME?.trim()
+    );
+  };
+  const assertLocalAccess = (hostId: string, allowProcessHomeFallback?: boolean) => {
+    if (
+      hostId === CODEX_LOCAL_SESSION_HOST_ID &&
+      allowProcessHomeFallback === false &&
+      usesProcessHomeFallback()
+    ) {
+      throw new CatalogParamsError("local Codex sessions are unavailable in isolated state");
+    }
+  };
+  const checkUpstreamActivity = upstream.createChecker(params);
   const provider: SessionCatalogProvider = {
     id: "codex",
     label: "Codex",
+    supportsProcessHomeIsolation: true,
     resolveCreateSession: ({ agentId }) =>
       resolveCodexCatalogCreateSession(
         params.getRuntimeConfig() ?? (params.api.config as OpenClawConfig),
@@ -1449,7 +1472,8 @@ function registerCodexSessionCatalog(params: {
       ),
     list: async (query) => {
       const localTerminalAvailable = resolveLocalCodexTerminalExecutable() !== undefined;
-      const { listNodes, onHost, sessionEntries, ...gatewayQuery } = query;
+      const { allowProcessHomeFallback, listNodes, onHost, sessionEntries, ...gatewayQuery } =
+        query;
       const mapHost = (host: CodexSessionCatalogHost) =>
         toGenericCatalogHost(host, localTerminalAvailable);
       return (
@@ -1461,22 +1485,26 @@ function registerCodexSessionCatalog(params: {
           query: gatewayQuery,
           listNodes,
           sessionEntries,
+          includeLocal: allowProcessHomeFallback !== false || !usesProcessHomeFallback(),
           ...(onHost ? { onHost: (host) => onHost(mapHost(host)) } : {}),
         })
       ).hosts.map(mapHost);
     },
     read: async (request) => {
+      const { allowProcessHomeFallback, ...catalogRequest } = request;
+      assertLocalAccess(catalogRequest.hostId, allowProcessHomeFallback);
       const page = await readCodexSessionTranscript({
         runtime: params.api.runtime,
         control: params.control,
-        hostId: request.hostId,
-        threadId: request.threadId,
-        cursor: request.cursor,
-        limit: request.limit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT,
+        hostId: catalogRequest.hostId,
+        threadId: catalogRequest.threadId,
+        cursor: catalogRequest.cursor,
+        limit: catalogRequest.limit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT,
       });
       return { ...page, items: page.items.map(toGenericTranscriptItem) };
     },
     continueSession: async (request) => {
+      assertLocalAccess(request.hostId, request.allowProcessHomeFallback);
       const config = params.getRuntimeConfig();
       if (!config) {
         throw new Error("OpenClaw runtime config is unavailable");
@@ -1506,8 +1534,17 @@ function registerCodexSessionCatalog(params: {
       });
       return codexUpstreamContinueResult(continued.sessionKey, request.threadId, upstreamBaseline);
     },
-    checkUpstreamActivity: upstream.createChecker(params),
+    checkUpstreamActivity: (probes, policy) =>
+      checkUpstreamActivity(
+        probes.filter(
+          (probe) =>
+            probe.hostId !== CODEX_LOCAL_SESSION_HOST_ID ||
+            policy?.allowProcessHomeFallback !== false ||
+            !usesProcessHomeFallback(),
+        ),
+      ),
     archive: async (request) => {
+      assertLocalAccess(request.hostId, request.allowProcessHomeFallback);
       const runnerConfirmation: unknown = request.confirmNoOtherRunner;
       if (runnerConfirmation !== true) {
         throw new CatalogParamsError(
@@ -1530,15 +1567,28 @@ function registerCodexSessionCatalog(params: {
       });
       return { ok: true };
     },
-    openTerminal: (request) =>
-      openCodexCatalogTerminal({
+    openTerminal: async (request) => {
+      assertLocalAccess(request.hostId, request.allowProcessHomeFallback);
+      return await openCodexCatalogTerminal({
         api: params.api,
         control: params.control,
         getPluginConfig: params.getPluginConfig,
         getRuntimeConfig: params.getRuntimeConfig,
         parseCatalogPage,
         ...request,
-      }),
+      });
+    },
+    startTerminalSession: async (request) => {
+      assertLocalAccess(
+        request.nodeId ? `node:${request.nodeId}` : CODEX_LOCAL_SESSION_HOST_ID,
+        request.allowProcessHomeFallback,
+      );
+      return await startCodexCatalogTerminal({
+        getPluginConfig: params.getPluginConfig,
+        getRuntimeConfig: params.getRuntimeConfig,
+        ...request,
+      });
+    },
   };
   params.api.registerSessionCatalog(provider);
 }

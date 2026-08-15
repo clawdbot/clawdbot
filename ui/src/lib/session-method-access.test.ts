@@ -43,6 +43,26 @@ describe("readSessionMethodAccess", () => {
     });
   });
 
+  it("keeps model and effort patch access independent", () => {
+    const writeOnly = snapshot({ methods: ["sessions.patch"], scopes: ["operator.write"] });
+    expect(
+      readSessionMethodAccess(writeOnly, {
+        method: "sessions.patch",
+        params: { key: "agent:main:main", model: null },
+      }),
+    ).toEqual({ allowed: true, requiredScope: "operator.write" });
+    expect(
+      readSessionMethodAccess(writeOnly, {
+        method: "sessions.patch",
+        params: { key: "agent:main:main", thinkingLevel: null },
+      }),
+    ).toMatchObject({
+      allowed: false,
+      cause: "missing-scope",
+      requiredScope: "operator.admin",
+    });
+  });
+
   it("allows admin to satisfy write-scoped actions", () => {
     expect(
       readSessionMethodAccess(

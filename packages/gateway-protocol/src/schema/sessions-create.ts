@@ -25,6 +25,12 @@ export const SessionsCreateParamsSchema = closedObject({
   fork: Type.Optional(
     Type.Boolean({ description: "Fork the parent transcript; requires parentSessionKey." }),
   ),
+  forkFrom: Type.Optional(
+    Type.Literal("last-completed", {
+      description:
+        "Fork through the parent's last completed assistant message; requires fork=true.",
+    }),
+  ),
   emitCommandHooks: Type.Optional(Type.Boolean()),
   succeedsParent: Type.Optional(
     Type.Boolean({
@@ -35,6 +41,12 @@ export const SessionsCreateParamsSchema = closedObject({
   task: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
   attachments: Type.Optional(ChatAttachmentsSchema),
+  projectId: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description: "Start in a registered project; operator.write.",
+    }),
+  ),
   worktree: Type.Optional(Type.Boolean()),
   worktreeBaseRef: Type.Optional(
     Type.String({
@@ -59,7 +71,7 @@ export const SessionsCreateParamsSchema = closedObject({
     Type.String({
       minLength: 1,
       description:
-        "Absolute Gateway working directory, managed-worktree source directory, or working directory on execNode. Requires operator.admin.",
+        "Absolute Gateway working directory, managed-worktree source directory, or working directory on execNode. Gateway paths outside configured agent workspaces and all execNode paths require operator.admin.",
     }),
   ),
 });

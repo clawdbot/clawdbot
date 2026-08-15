@@ -71,7 +71,7 @@ import {
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
-import { resolveMSTeamsOutboundSessionRoute } from "./session-route.js";
+import { inferMSTeamsTargetChatType, resolveMSTeamsOutboundSessionRoute } from "./session-route.js";
 import { msteamsSetupContract } from "./setup-core.js";
 import { msteamsSetupWizard } from "./setup-surface.js";
 import { resolveMSTeamsCredentials } from "./token.js";
@@ -248,7 +248,7 @@ function readOptionalTrimmedString(
   params: Record<string, unknown>,
   key: string,
 ): string | undefined {
-  return typeof params[key] === "string" ? params[key].trim() || undefined : undefined;
+  return normalizeOptionalString(params[key]);
 }
 
 function resolveActionUploadFilePath(params: Record<string, unknown>): string | undefined {
@@ -464,6 +464,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         targetPrefixes: ["msteams", "teams"],
         directTargetStyle: "user-prefixed",
         normalizeTarget: normalizeMSTeamsMessagingTarget,
+        inferTargetChatType: ({ to }) => inferMSTeamsTargetChatType(to),
         resolveOutboundSessionRoute: (params) => resolveMSTeamsOutboundSessionRoute(params),
         targetResolver: {
           looksLikeId: (raw) => looksLikeMSTeamsTargetId(raw),

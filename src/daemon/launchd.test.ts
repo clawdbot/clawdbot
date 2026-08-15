@@ -15,7 +15,10 @@ import {
   disableCurrentOpenClawUpdateLaunchdJob,
   disableOpenClawUpdateLaunchdJob,
   findStaleOpenClawUpdateLaunchdJobs,
+  isLaunchAgentEnabled,
+  isLaunchAgentLoaded,
   parkCurrentLaunchAgentForMaintenance,
+  parseLaunchAgentEnabled,
   parseLaunchctlPrint,
   parseLaunchctlListOpenClawUpdateJobs,
   readLaunchAgentProgramArguments,
@@ -33,6 +36,9 @@ const state = vi.hoisted(() => ({
   launchctlCalls: [] as string[][],
   listOutput: "",
   printOutput: "",
+  printDisabledOutput: "",
+  printDisabledError: "",
+  printDisabledCode: 0,
   printNotLoadedRemaining: 0,
   printError: "",
   printCode: 1,
@@ -262,9 +268,11 @@ async function runRestartLaunchAgentWithFakeTimers(args: Parameters<typeof resta
   }
 }
 
-function expectLaunchctlEnableBootstrapOrder(env: Record<string, string | undefined>) {
+function expectLaunchctlEnableBootstrapOrder(
+  env: Record<string, string | undefined>,
+  label = "ai.openclaw.gateway",
+) {
   const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-  const label = "ai.openclaw.gateway";
   const plistPath = resolveLaunchAgentPlistPath(env);
   const serviceId = `${domain}/${label}`;
   const enableIndex = state.launchctlCalls.findIndex(
@@ -336,6 +344,13 @@ function executeLaunchctlMock(file: string, args: string[]) {
   state.launchctlCalls.push(call);
   if (call[0] === "list") {
     return { stdout: state.listOutput, stderr: "", code: 0 };
+  }
+  if (call[0] === "print-disabled") {
+    return {
+      stdout: state.printDisabledOutput,
+      stderr: state.printDisabledError,
+      code: state.printDisabledCode,
+    };
   }
   if (call[0] === "print") {
     if (state.printNotLoadedRemaining > 0) {
@@ -581,6 +596,9 @@ beforeEach(() => {
   state.launchctlCalls.length = 0;
   state.listOutput = "";
   state.printOutput = "";
+  state.printDisabledOutput = 'disabled services = {\n\t"ai.openclaw.gateway" => enabled\n}';
+  state.printDisabledError = "";
+  state.printDisabledCode = 0;
   state.printNotLoadedRemaining = 0;
   state.printError = "";
   state.printCode = 1;
@@ -648,6 +666,42 @@ beforeEach(() => {
 });
 
 describe("launchd runtime parsing", () => {
+  it.each([
+    ['disabled services = {\n\t"ai.openclaw.gateway" => enabled\n}', true],
+    ['disabled services = {\n\t"ai.openclaw.gateway" => disabled\n}', false],
+    ['disabled services = {\n\t"other.service" => disabled\n}', true],
+  ])("parses the LaunchAgent enabled override", (output, expected) => {
+    expect(parseLaunchAgentEnabled(output, "ai.openclaw.gateway")).toBe(expected);
+  });
+
+  it("rejects an unrecognized LaunchAgent enabled override", () => {
+    expect(() =>
+      parseLaunchAgentEnabled(
+        'disabled services = {\n\t"ai.openclaw.gateway" => unexpected\n}',
+        "ai.openclaw.gateway",
+      ),
+    ).toThrow("unrecognized state");
+  });
+
+  it("reads the persistent LaunchAgent enabled state", async () => {
+    state.printDisabledOutput = 'disabled services = {\n\t"ai.openclaw.gateway" => disabled\n}';
+
+    await expect(isLaunchAgentEnabled({ env: createDefaultLaunchdEnv() })).resolves.toBe(false);
+    expect(state.launchctlCalls).toContainEqual([
+      "print-disabled",
+      typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501",
+    ]);
+  });
+
+  it("fails closed when the LaunchAgent enabled state cannot be read", async () => {
+    state.printDisabledError = "Operation not permitted";
+    state.printDisabledCode = 1;
+
+    await expect(isLaunchAgentEnabled({ env: createDefaultLaunchdEnv() })).rejects.toThrow(
+      "launchctl print-disabled failed: Operation not permitted",
+    );
+  });
+
   it("parses state, pid, and exit status", () => {
     const output = [
       "state = running",
@@ -1445,6 +1499,15 @@ describe("launchd bootstrap repair", () => {
 });
 
 describe("launchd uninstall", () => {
+  it("rejects an unrecognized launchctl inspection failure", async () => {
+    state.printError = "launchctl print permission denied";
+    state.printFailuresRemaining = 1;
+
+    await expect(isLaunchAgentLoaded({ env: createDefaultLaunchdEnv() })).rejects.toThrow(
+      "launchctl print failed: launchctl print permission denied",
+    );
+  });
+
   it("refuses an in-band uninstall before bootout or plist removal", async () => {
     const env = createDefaultLaunchdEnv();
     const plistPath = resolveLaunchAgentPlistPath(env);
@@ -1475,6 +1538,18 @@ describe("launchd uninstall", () => {
 
     await expect(uninstall).rejects.toThrow("LaunchAgent removal failed (EACCES)");
     await expect(uninstall).rejects.not.toThrow(plistPath);
+    expect(state.files.has(plistPath)).toBe(true);
+  });
+
+  it("preserves the plist when launchctl cannot boot out the service", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(plistPath, "RunAtLoad=true");
+    state.bootoutError = "launchctl bootout permission denied";
+
+    await expect(uninstallLaunchAgent({ env, stdout: new PassThrough() })).rejects.toThrow(
+      "launchctl bootout failed: launchctl bootout permission denied",
+    );
     expect(state.files.has(plistPath)).toBe(true);
   });
 
@@ -1621,11 +1696,9 @@ describe("launchd install", () => {
       "print",
       "bootout",
       "unload",
-      "bootout",
-      "unload",
       "enable",
       "bootstrap",
-      "bootout",
+      "print",
       "enable",
       "bootstrap",
     ]);
@@ -1720,14 +1793,7 @@ describe("launchd install", () => {
     expect(state.files.get(plistPath)).toBe(previous);
     expect(state.serviceLoaded).toBe(false);
     expect(state.serviceRunning).toBe(false);
-    expect(launchctlCommandNames()).toEqual([
-      "print",
-      "bootout",
-      "unload",
-      "enable",
-      "bootstrap",
-      "bootout",
-    ]);
+    expect(launchctlCommandNames()).toEqual(["print", "enable", "bootstrap", "print"]);
   });
 
   it("removes generated artifacts after a failed fresh install", async () => {
@@ -1739,19 +1805,49 @@ describe("launchd install", () => {
     state.serviceRunning = false;
     state.bootstrapError = "Operation not permitted";
     state.bootstrapTransient = true;
+    state.bootoutError = "Boot-out failed: 5: Input/output error";
+    state.bootoutCode = 5;
 
-    await expect(
-      installLaunchAgent({
-        env,
-        stdout: new PassThrough(),
-        programArguments: defaultProgramArguments,
-        environment: { OPENCLAW_GATEWAY_PORT: "19000" },
-      }),
-    ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
+    const error = await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: { OPENCLAW_GATEWAY_PORT: "19000" },
+    }).catch((caught: unknown) => caught);
 
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("launchctl bootstrap failed: Operation not permitted");
     expect(state.files.has(plistPath)).toBe(false);
     expect(state.files.has(envFilePath)).toBe(false);
     expect(state.files.has(wrapperPath)).toBe(false);
+    expect(launchctlCommandNames()).toEqual(["print", "enable", "bootstrap", "print"]);
+  });
+
+  it("fails closed when rollback cannot determine the replacement state", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.printNotLoadedRemaining = 1;
+    state.printError = "launchctl print permission denied";
+    state.printFailuresRemaining = 1;
+    state.bootstrapError = "Operation not permitted";
+
+    const error = await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(
+      "launchctl bootstrap failed: Operation not permitted",
+    );
+    expect((error as Error).message).toContain(
+      "The previous LaunchAgent supervision could not be restored.",
+    );
+    expect((error as Error).cause).toBeInstanceOf(Error);
+    expect(((error as Error).cause as Error).message).toContain("could not determine whether");
+    expect(state.files.has(plistPath)).toBe(true);
+    expect(launchctlCommandNames()).toEqual(["print", "enable", "bootstrap", "print"]);
   });
 
   it("restores the exact prior plist and supervision after external bootstrap failure", async () => {
@@ -1804,7 +1900,7 @@ describe("launchd install", () => {
       "unload",
       "enable",
       "bootstrap",
-      "bootout",
+      "print",
       "enable",
       "bootstrap",
     ]);
@@ -1870,22 +1966,71 @@ describe("launchd install", () => {
     expect(state.launchctlCalls).toEqual([]);
   });
 
-  it("enables service before bootstrap without self-restarting the fresh agent", async () => {
-    const env = createDefaultLaunchdEnv();
-    await installLaunchAgent({
-      env,
-      stdout: new PassThrough(),
+  it.each([
+    {
+      name: "default gateway",
+      env: createDefaultLaunchdEnv(),
+      label: "ai.openclaw.gateway",
       programArguments: defaultProgramArguments,
-    });
+    },
+    {
+      name: "profiled gateway",
+      env: { HOME: "/Users/test", OPENCLAW_PROFILE: "qa" },
+      label: "ai.openclaw.qa",
+      programArguments: defaultProgramArguments,
+    },
+    {
+      name: "node service",
+      env: { HOME: "/Users/test", OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node" },
+      label: "ai.openclaw.node",
+      programArguments: ["node", "node-host.js"],
+    },
+  ])(
+    "installs a fresh $name without booting out the absent job",
+    async ({ env, label, programArguments }) => {
+      state.bootoutError = "Boot-out failed: 5: Input/output error";
+      state.bootoutCode = 5;
+      await installLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+        programArguments,
+      });
 
-    const plist = state.files.get(resolveLaunchAgentPlistPath(env)) ?? "";
-    expect(plist).toContain("<key>Comment</key>\n    <string>OpenClaw Gateway</string>");
-    expect(plist).not.toContain("OPENCLAW_SERVICE_VERSION");
-    const { serviceId } = expectLaunchctlEnableBootstrapOrder(env);
-    const installKickstartIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "kickstart" && c[2] === serviceId,
+      const plist = state.files.get(resolveLaunchAgentPlistPath(env)) ?? "";
+      expect(plist).not.toContain("OPENCLAW_SERVICE_VERSION");
+      const { serviceId } = expectLaunchctlEnableBootstrapOrder(env, label);
+      const installKickstartIndex = state.launchctlCalls.findIndex(
+        (c) => c[0] === "kickstart" && c[2] === serviceId,
+      );
+      expect(installKickstartIndex).toBe(-1);
+      expect(launchctlCommandNames()).toEqual(["print", "enable", "bootstrap"]);
+    },
+  );
+
+  it("keeps loaded reinstall deactivation failures fatal", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(
+      plistPath,
+      createTestLaunchAgentPlist({
+        label: "ai.openclaw.gateway",
+        programArguments: defaultProgramArguments,
+      }),
     );
-    expect(installKickstartIndex).toBe(-1);
+    state.bootoutError = "Boot-out failed: 5: Input/output error";
+    state.bootoutCode = 5;
+
+    await expect(
+      installLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+        programArguments: defaultProgramArguments,
+      }),
+    ).rejects.toThrow(
+      "launchctl bootout failed during LaunchAgent install: Boot-out failed: 5: Input/output error",
+    );
+
+    expect(launchctlCommandNames()).toEqual(["print", "bootout", "print", "bootout"]);
   });
 
   it("writes a version-free node service description", async () => {

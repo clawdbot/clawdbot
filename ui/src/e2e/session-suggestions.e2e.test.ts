@@ -99,8 +99,16 @@ suite.define(() => {
 
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
     const composer = page.locator(".agent-chat__composer-combobox textarea");
+    const modelTrigger = page.locator(".chat-controls__model-trigger");
+    const outsideTypingIndicator = page.locator(".agent-chat__typing-indicator--outside");
     await gateway.waitForRequest("session.suggestions.list");
     await expect(composer).toBeEnabled();
+    await modelTrigger.waitFor();
+    const idleModelBox = await modelTrigger.boundingBox();
+    if (idleModelBox === null) {
+      throw new Error("Expected the model trigger before remote typing");
+    }
+    await expect(outsideTypingIndicator).toHaveCount(0);
     await gateway.emitGatewayEvent("session.typing", {
       sessionKey: "main",
       sessionId: "session-main",
@@ -109,7 +117,20 @@ suite.define(() => {
       typing: true,
       ts: Date.now(),
     });
-    await expect(page.locator(".agent-chat__typing-indicator")).toHaveText("Owner is typing…");
+    await expect(page.locator(".agent-chat__typing-text")).toHaveText("Owner is typing…");
+    const [typingModelBox, typingIndicatorBox, composerShellBox] = await Promise.all([
+      modelTrigger.boundingBox(),
+      outsideTypingIndicator.boundingBox(),
+      page.locator(".agent-chat__composer-shell").boundingBox(),
+    ]);
+    if (typingModelBox === null || typingIndicatorBox === null || composerShellBox === null) {
+      throw new Error("Expected the composer layout after remote typing");
+    }
+    expect(Math.abs(typingModelBox.x - idleModelBox.x)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(typingModelBox.y - idleModelBox.y)).toBeLessThanOrEqual(2);
+    expect(typingIndicatorBox.y + typingIndicatorBox.height).toBeLessThanOrEqual(
+      composerShellBox.y + 1,
+    );
     await composer.fill("Try the focused change");
     const typing = await gateway.waitForRequest("session.typing");
     expect(typing.params).toMatchObject({ sessionId: "session-main" });

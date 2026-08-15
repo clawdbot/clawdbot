@@ -4,11 +4,12 @@ import path from "node:path";
 import { reviewExecRequestWithConfiguredModel } from "openclaw/plugin-sdk/agent-harness-exec-review-runtime";
 import {
   callGatewayTool,
+  buildAgentHookContextChannelFields,
   hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
   resolveNativeHookRelayDeferredToolApproval,
   runBeforeToolCallHook,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 // Codex tests cover approval bridge plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -49,6 +50,7 @@ const mockReviewExecRequestWithConfiguredModel = vi.mocked(reviewExecRequestWith
 const mockRunBeforeToolCallHook = vi.mocked(runBeforeToolCallHook);
 
 const requireRecord = createRequireRecord("record", "expected-label-capitalized");
+type AgentHarnessHostCapabilities = EmbeddedRunAttemptParams["hostCapabilities"];
 
 function gatewayCallAt(callIndex = 0) {
   const call = mockCallGatewayTool.mock.calls[callIndex];
@@ -105,7 +107,7 @@ function findApprovalEvent(
 }
 
 function createParams(): EmbeddedRunAttemptParams {
-  return {
+  const params = {
     sessionKey: "agent:main:session-1",
     agentId: "main",
     messageChannel: "telegram",
@@ -114,6 +116,58 @@ function createParams(): EmbeddedRunAttemptParams {
     currentThreadTs: "thread-ts",
     onAgentEvent: vi.fn(),
   } as unknown as EmbeddedRunAttemptParams;
+  const hostCapabilities: AgentHarnessHostCapabilities = {
+    kind: "agent-harness-host-capability",
+    version: 1,
+    assertActive: () => {},
+    bindToolSurface: (tools) => tools,
+    runBeforeToolCall: async ({ approvalMode = "request", ...request }) => {
+      const requester = {
+        ...((params.messageChannel ?? params.messageProvider)
+          ? { channel: params.messageChannel ?? params.messageProvider ?? undefined }
+          : {}),
+        ...(params.agentAccountId ? { accountId: params.agentAccountId } : {}),
+        ...(params.senderId ? { senderId: params.senderId } : {}),
+        ...(params.senderIsOwner !== undefined ? { senderIsOwner: params.senderIsOwner } : {}),
+        ...(params.memberRoleIds?.length ? { roleIds: [...params.memberRoleIds] } : {}),
+      };
+      return await runBeforeToolCallHook({
+        ...request,
+        approvalMode,
+        ctx: {
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          ...buildAgentHookContextChannelFields(params),
+          ...(Object.keys(requester).length > 0 ? { requester } : {}),
+          turnSourceChannel: params.messageChannel,
+          turnSourceTo: params.currentChannelId,
+          turnSourceAccountId: params.agentAccountId,
+          turnSourceThreadId: params.currentThreadTs,
+        },
+      });
+    },
+    requestApproval: async (request) =>
+      (await callGatewayTool(
+        "plugin.approval.request",
+        { timeoutMs: request.timeoutMs },
+        {
+          pluginId: "codex",
+          ...request,
+          timeoutMs: 120_000,
+          twoPhase: true,
+        },
+        { expectFinal: false },
+      )) as Awaited<ReturnType<AgentHarnessHostCapabilities["requestApproval"]>>,
+    waitForApproval: async (request) => {
+      const result = (await callGatewayTool(
+        "plugin.approval.waitDecision",
+        { timeoutMs: request.timeoutMs },
+        { id: request.approvalId },
+      )) as { id?: string; decision?: "allow-once" | "allow-always" | "deny" | null };
+      return result?.id === request.approvalId ? result.decision : undefined;
+    },
+  };
+  return Object.assign(params, { hostCapabilities });
 }
 
 describe("Codex app-server approval bridge", () => {
@@ -135,6 +189,35 @@ describe("Codex app-server approval bridge", () => {
       blocked: false,
       params,
     }));
+  });
+
+  it("keeps unrelated command approval policy unchanged for scheduled app authority", async () => {
+    const params = {
+      ...createParams(),
+      trigger: "cron",
+      scheduledRuntimeAuthority: {
+        version: 1,
+        runtimeId: "codex",
+        namespace: "codex.apps",
+        payload: { version: 1 },
+      },
+    } as EmbeddedRunAttemptParams;
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        ...codexTestTurnIds(),
+        itemId: "scheduled-command",
+        command: "dangerous-command",
+      },
+      paramsForRun: params,
+      ...codexTestTurnIds(),
+      autoApprove: true,
+    });
+
+    expect(result).toEqual({ decision: "acceptForSession" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(mockRunBeforeToolCallHook).toHaveBeenCalled();
   });
 
   it("auto-accepts app-server command approvals in yolo mode without opening plugin approvals", async () => {
@@ -331,40 +414,41 @@ describe("Codex app-server approval bridge", () => {
     expect(gatewayCallMethod()).toBe("plugin.approval.request");
     expect(typeof gatewayCallAt(0)[1]).toBe("object");
     const requestPayload = gatewayRequestPayload();
-    expect(requestPayload.pluginId).toBe("openclaw-codex-app-server");
+    expect(requestPayload.pluginId).toBe("codex");
     expect(requestPayload.title).toBe("Codex app-server command approval");
     expect(requestPayload.twoPhase).toBe(true);
-    expect(requestPayload.turnSourceChannel).toBe("telegram");
-    expect(requestPayload.turnSourceTo).toBe("chat-1");
+    expect(requestPayload.turnSourceChannel).toBeUndefined();
+    expect(requestPayload.turnSourceTo).toBeUndefined();
     expect(gatewayCallOptions()).toEqual({ expectFinal: false });
-    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith({
-      toolName: "exec",
-      params: {
-        command: "pnpm test extensions/codex/src/app-server",
-        approval: {
-          ...codexTestTurnIds(),
-          itemId: "cmd-1",
+    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "exec",
+        params: {
           command: "pnpm test extensions/codex/src/app-server",
+          approval: {
+            ...codexTestTurnIds(),
+            itemId: "cmd-1",
+            command: "pnpm test extensions/codex/src/app-server",
+          },
         },
-      },
-      toolCallId: "cmd-1",
-      approvalMode: "request",
-      signal: undefined,
-      ctx: {
-        agentId: "main",
-        sessionKey: "agent:main:session-1",
-        channelId: "chat-1",
-        requester: {
-          channel: "telegram",
-          accountId: "default",
-        },
-        workspaceDir: undefined,
-        turnSourceChannel: "telegram",
-        turnSourceTo: "chat-1",
-        turnSourceAccountId: "default",
-        turnSourceThreadId: "thread-ts",
-      },
-    });
+        toolCallId: "cmd-1",
+        approvalMode: "request",
+        signal: undefined,
+        ctx: expect.objectContaining({
+          agentId: "main",
+          sessionKey: "agent:main:session-1",
+          channelId: "chat-1",
+          requester: {
+            channel: "telegram",
+            accountId: "default",
+          },
+          turnSourceChannel: "telegram",
+          turnSourceTo: "chat-1",
+          turnSourceAccountId: "default",
+          turnSourceThreadId: "thread-ts",
+        }),
+      }),
+    );
     findApprovalEvent(params, { status: "pending", approvalId: "plugin:approval-1" });
     findApprovalEvent(params, { status: "approved", approvalId: "plugin:approval-1" });
   });
@@ -1166,7 +1250,7 @@ describe("Codex app-server approval bridge", () => {
         }),
       }),
     );
-    expect(gatewayRequestPayload().turnSourceTo).toBe("telegram:-100123");
+    expect(gatewayRequestPayload().turnSourceTo).toBeUndefined();
   });
 
   it("denies command approvals before prompting when OpenClaw tool policy blocks", async () => {
@@ -1192,6 +1276,39 @@ describe("Codex app-server approval bridge", () => {
     expect(result).toEqual({ decision: "decline" });
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
     findApprovalEvent(params, { status: "denied" });
+  });
+
+  it("passes the exact native command cwd to the host policy capability", async () => {
+    const params = createParams();
+    params.cwd = "/attempt/worktree";
+    const runBeforeToolCall: AgentHarnessHostCapabilities["runBeforeToolCall"] = vi.fn(
+      async ({ params: toolParams }) => ({
+        blocked: true as const,
+        kind: "veto" as const,
+        deniedReason: "plugin-before-tool-call" as const,
+        reason: "blocked by policy",
+        params: toolParams,
+      }),
+    );
+    params.hostCapabilities = { ...params.hostCapabilities, runBeforeToolCall };
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        ...codexTestTurnIds(),
+        itemId: "cmd-native-cwd",
+        command: "pwd",
+        cwd: "/native/action/worktree",
+      },
+      paramsForRun: params,
+      ...codexTestTurnIds(),
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(runBeforeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({ nativeOperation: { cwd: "/native/action/worktree" } }),
+    );
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
   it("routes command approvals through the active native hook relay before prompting", async () => {
@@ -1259,6 +1376,82 @@ describe("Codex app-server approval bridge", () => {
       status: "denied",
       message: "blocked by native relay",
     });
+  });
+
+  it("fails closed when native relay policy resolves after host capability closure", async () => {
+    const params = createParams();
+    let active = true;
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      assertActive: () => {
+        if (!active) {
+          throw new Error("agent harness host capability is no longer active");
+        }
+      },
+    };
+    mockInvokeNativeHookRelay.mockImplementationOnce(async () => {
+      active = false;
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    mockHasNativeHookRelayInvocation.mockReturnValueOnce(false).mockReturnValueOnce(true);
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        ...codexTestTurnIds(),
+        itemId: "cmd-native-relay-late",
+        command: "git status",
+      },
+      paramsForRun: params,
+      ...codexTestTurnIds(),
+      autoApprove: true,
+      nativeHookRelay: {
+        relayId: "relay-late",
+        generation: "generation-late",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, { status: "denied" });
+  });
+
+  it("fails closed when deferred native approval resolves after host capability closure", async () => {
+    const params = createParams();
+    let active = true;
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      assertActive: () => {
+        if (!active) {
+          throw new Error("agent harness host capability is no longer active");
+        }
+      },
+    };
+    mockHasNativeHookRelayInvocation.mockReturnValueOnce(true);
+    mockResolveNativeHookRelayDeferredToolApproval.mockImplementationOnce(async () => {
+      active = false;
+      return { handled: true, outcome: "approved-once" };
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        ...codexTestTurnIds(),
+        itemId: "cmd-native-relay-deferred-late",
+        command: "git status",
+      },
+      paramsForRun: params,
+      ...codexTestTurnIds(),
+      nativeHookRelay: {
+        relayId: "relay-deferred-late",
+        allowedEvents: ["pre_tool_use"],
+      },
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, { status: "unavailable" });
   });
 
   it("correlates distinct execve approvals by approvalId instead of parent itemId", async () => {
@@ -2336,6 +2529,7 @@ describe("Codex app-server approval bridge", () => {
     mockCallGatewayTool.mockImplementationOnce(() => new Promise(() => {}));
 
     const pending = waitForPluginApprovalDecision({
+      hostCapabilities: createParams().hostCapabilities,
       approvalId: "plugin:approval-abort",
       signal: controller.signal,
     });
@@ -2737,7 +2931,7 @@ describe("Codex app-server approval bridge", () => {
     mockCallGatewayTool.mockResolvedValueOnce({ id: "plugin:approval-utf16-gateway" });
 
     await requestPluginApproval({
-      paramsForRun: createParams(),
+      hostCapabilities: createParams().hostCapabilities,
       title: `${"t".repeat(76)}😀tail`,
       description: `${"d".repeat(252)}😀tail`,
       severity: "warning",

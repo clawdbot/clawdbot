@@ -46,6 +46,8 @@ extension OpenClawChatViewModel {
             self.handleSessionMessageEvent(message)
         case let .agent(agent):
             self.handleAgentEvent(agent)
+        case let .task(task):
+            self.handleTaskEvent(task)
         case let .questionRequested(question):
             self.upsertQuestion(question)
             self.reconcileQuestionsAfterEvent()
@@ -56,6 +58,8 @@ extension OpenClawChatViewModel {
             self.swarmEnabled = false
             self.resetSwarmProgress()
             Task { [weak self] in await self?.refreshSwarmCapability() }
+            let session = self.currentSessionSnapshot()
+            Task { [weak self] in await self?.refreshSubagentActivities(sessionSnapshot: session) }
         case .seqGap:
             self.errorText = nil
             self.swarmEnabled = false
@@ -72,6 +76,7 @@ extension OpenClawChatViewModel {
             // Question refresh is best-effort and must not delay transcript
             // recovery behind a slow gateway round trip.
             Task { await self.refreshQuestions() }
+            Task { await self.refreshSubagentActivities(sessionSnapshot: context.session) }
             Task {
                 await self.refreshHistoryAfterRun(historyRequest: context)
                 await self.pollHealthIfNeeded(force: true, sessionSnapshot: context.session)
@@ -591,6 +596,8 @@ extension OpenClawChatViewModel {
             role: message.role,
             content: message.content,
             timestamp: Date().timeIntervalSince1970 * 1000,
+            transcriptMessageID: message.transcriptMessageID,
+            isTruncated: message.isTruncated,
             idempotencyKey: message.idempotencyKey,
             toolCallId: message.toolCallId,
             toolName: message.toolName,
@@ -598,7 +605,9 @@ extension OpenClawChatViewModel {
             stopReason: message.stopReason,
             errorMessage: message.errorMessage,
             details: message.details,
-            isError: message.isError)
+            isError: message.isError,
+            provenance: message.provenance,
+            historyMarker: message.historyMarker)
     }
 
     private func handleAgentEvent(_ evt: OpenClawAgentEventPayload) {
@@ -649,7 +658,23 @@ extension OpenClawChatViewModel {
                     name: name,
                     args: args,
                     startedAt: evt.ts.map(Double.init) ?? Date().timeIntervalSince1970 * 1000,
-                    isError: nil)
+                    isError: nil,
+                    diffStat: nil)
+            } else if phase == "input_delta",
+                      let pending = self.pendingToolCallsById[toolCallId],
+                      let diff = evt.data["diff"]?.dictionaryValue,
+                      let added = diff["added"]?.intValue,
+                      let removed = diff["removed"]?.intValue,
+                      added >= 0,
+                      removed >= 0
+            {
+                self.pendingToolCallsById[toolCallId] = OpenClawChatPendingToolCall(
+                    toolCallId: pending.toolCallId,
+                    name: pending.name,
+                    args: pending.args,
+                    startedAt: pending.startedAt,
+                    isError: pending.isError,
+                    diffStat: ChatToolDiffStat(added: added, removed: removed))
             } else if phase == "result" {
                 self.pendingToolCallsById[toolCallId] = nil
             }

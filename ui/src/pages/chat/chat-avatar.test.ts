@@ -57,6 +57,9 @@ describe("renderChatAvatar", () => {
     expect(textAvatar?.tagName).toBe("DIV");
     expect(textAvatar?.textContent?.trim()).toBe("VC");
     expect(textAvatar?.getAttribute("aria-label")).toBe("Val");
+    // aria-label on a role-less div is ignored by AT; role="img" makes the
+    // name win over the raw initials text.
+    expect(textAvatar?.getAttribute("role")).toBe("img");
     expect(textAvatar?.classList.contains("chat-avatar--logo")).toBe(false);
 
     const localAvatar = renderAvatar(["assistant", { avatar: "/avatar/main", name: "OpenClaw" }]);

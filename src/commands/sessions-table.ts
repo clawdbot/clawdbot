@@ -5,6 +5,7 @@
  * terminal output stays aligned across commands.
  */
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
@@ -116,7 +117,7 @@ function truncateSessionKey(key: string): string {
 
 /** Formats a session key cell for table output. */
 export function formatSessionKeyCell(key: string, rich: boolean): string {
-  const label = truncateSessionKey(key).padEnd(SESSION_KEY_PAD);
+  const label = truncateSessionKey(sanitizeTerminalText(key)).padEnd(SESSION_KEY_PAD);
   return rich ? theme.accent(label) : label;
 }
 
@@ -129,7 +130,7 @@ export function formatSessionAgeCell(updatedAt: number | null | undefined, rich:
 
 /** Formats a model cell for table output. */
 export function formatSessionModelCell(model: string | null | undefined, rich: boolean): string {
-  const label = (model ?? "unknown").padEnd(SESSION_MODEL_PAD);
+  const label = sanitizeTerminalText(model ?? "unknown").padEnd(SESSION_MODEL_PAD);
   return rich ? theme.info(label) : label;
 }
 
@@ -164,6 +165,6 @@ export function formatSessionFlagsCell(
     row.runtimePolicySessionKey ? `policy:${row.runtimePolicySessionKey}` : null,
     row.sessionId ? `id:${row.sessionId}` : null,
   ].filter(Boolean);
-  const label = flags.join(" ");
+  const label = sanitizeTerminalText(flags.join(" "));
   return label.length === 0 ? "" : rich ? theme.muted(label) : label;
 }

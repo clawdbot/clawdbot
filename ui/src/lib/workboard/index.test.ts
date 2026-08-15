@@ -2,6 +2,7 @@
 // Control UI tests cover workboard behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -29,7 +30,6 @@ import {
 } from "./index.ts";
 import { normalizeExecution, normalizeMetadata } from "./metadata-normalization.ts";
 import {
-  createDeferred,
   createGatewaySession,
   createLifecycleHarness,
   createWorkboardCard,

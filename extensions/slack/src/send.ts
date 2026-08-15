@@ -40,7 +40,7 @@ import {
   withSlackDnsRequestRetry,
 } from "./client-delivery.js";
 import { createSlackReadClient, createSlackTokenCacheKey, getSlackWriteClient } from "./client.js";
-import { assertSlackDirectSendAllowed } from "./direct-send-admission.js";
+import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { formatSlackError } from "./errors.js";
 import { chunkSlackMrkdwnText, markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES, SLACK_TEXT_LIMIT } from "./limits.js";
@@ -113,6 +113,7 @@ type SlackSendOpts = {
   token?: string;
   accountId?: string;
   mediaUrl?: string;
+  forceDocument?: boolean;
   mediaAccess?: {
     localRoots?: readonly string[];
     readFile?: (filePath: string) => Promise<Buffer>;
@@ -280,18 +281,20 @@ export async function updateMessageSlack(params: {
   cfg: OpenClawConfig;
   accountId?: string;
   channelId: string;
+  teamId?: string;
   messageTs: string;
   text: string;
   blocks: (Block | KnownBlock)[];
 }): Promise<void> {
   const cfg = requireRuntimeConfig(params.cfg, "Slack update");
   const account = resolveSlackAccount({ cfg, accountId: params.accountId });
+  assertSlackDetachedTargetAllowed(account.accountId, params.teamId);
   const token = resolveToken({
     accountId: account.accountId,
     fallbackToken: account.botToken,
     fallbackSource: account.botTokenSource,
   });
-  const client = getSlackWriteClient(token);
+  const client = getSlackWriteClient(token, { teamId: params.teamId });
   await client.chat.update({
     channel: params.channelId,
     ts: params.messageTs,
@@ -381,16 +384,10 @@ function parseEnterpriseEventRecipient(raw: string): SlackRecipient {
   return { kind: "channel", id: canonicalizeSlackApiTargetId("channel", match[1]) };
 }
 
-function resolveSlackSendEventScope(params: {
-  account: ReturnType<typeof resolveSlackAccount>;
-  opts: SlackSendOpts;
-}): SlackEventScope | undefined {
+function resolveSlackSendEventScope(params: { opts: SlackSendOpts }): SlackEventScope | undefined {
   const scope = params.opts.eventScope;
   if (!scope) {
     return undefined;
-  }
-  if (params.account.config.enterpriseOrgInstall !== true) {
-    throw new Error("unexpected_enterprise_slack_listener_scope");
   }
   if (!/^T[A-Z0-9]+$/i.test(scope.teamId) || !scope.client) {
     throw new Error("invalid_enterprise_slack_listener_scope");
@@ -956,7 +953,7 @@ export async function reconcileSlackUnknownSend(
   }
   const recipient = parseRecipient(ctx.to);
   try {
-    assertSlackDirectSendAllowed(account, recipient.teamId);
+    assertSlackDetachedTargetAllowed(account.accountId, recipient.teamId);
   } catch (error) {
     return {
       status: "unresolved",
@@ -1076,10 +1073,10 @@ export async function sendMessageSlack(
     cfg,
     accountId: opts.accountId,
   });
-  const eventScope = resolveSlackSendEventScope({ account, opts });
+  const eventScope = resolveSlackSendEventScope({ opts });
   const recipient = eventScope ? parseEnterpriseEventRecipient(to) : parseRecipient(to);
   if (!eventScope) {
-    assertSlackDirectSendAllowed(account, recipient.teamId);
+    assertSlackDetachedTargetAllowed(account.accountId, recipient.teamId);
   }
   if (isSilentReplyText(normalizedMessage) && !opts.mediaUrl && !opts.blocks) {
     logVerbose("slack send: suppressed NO_REPLY token before API call");
@@ -1422,6 +1419,7 @@ async function sendMessageSlackQueuedInner(params: {
       caption: firstChunk,
       threadTs: opts.threadTs,
       maxBytes: mediaMaxBytes,
+      ...(opts.forceDocument ? { optimizeImages: false } : {}),
       onPlatformSendDispatch: dispatchOnce,
       ...(delivery.upload ? { auditContext: delivery.upload.auditContext } : {}),
     });

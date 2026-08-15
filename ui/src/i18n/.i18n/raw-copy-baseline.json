@@ -5,6 +5,13 @@
       "count": 1,
       "kind": "object-property",
       "name": "label",
+      "path": "ui/src/app/app-shell-view.ts",
+      "text": "device scope upgrade banner"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
       "text": "approval page"
     },
@@ -28,6 +35,13 @@
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
       "text": "custodian panel"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/lazy-custom-element.ts",
+      "text": "desktop panel"
     },
     {
       "count": 1,
@@ -446,55 +460,6 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer-skill-menu.ts",
-      "text": "Enter"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer-skill-menu.ts",
-      "text": "Esc"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer-skill-menu.ts",
-      "text": "Tab"
-    },
-    {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer-slash-menu.ts",
-      "text": "Enter"
-    },
-    {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer-slash-menu.ts",
-      "text": "Esc"
-    },
-    {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer-slash-menu.ts",
-      "text": "Tab"
-    },
-    {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-message-bubble.ts",
-      "text": "JSON"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/pages/chat/components/chat-message-timestamp.ts",
       "text": "% ctx"
     },
@@ -584,6 +549,13 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/cron/view.ts",
+      "text": "last"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/debug/view.ts",
@@ -595,6 +567,13 @@
       "name": "text",
       "path": "ui/src/pages/devices/view-exec-approvals.ts",
       "text": "exec host=gateway/node"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/model-providers/default-models-view.ts",
+      "text": "i"
     },
     {
       "count": 4,
@@ -616,6 +595,13 @@
       "name": "text",
       "path": "ui/src/pages/skill-workshop/view.ts",
       "text": "v"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "description",
+      "path": "ui/src/pages/skills/view.test-support.ts",
+      "text": "Skill description"
     },
     {
       "count": 1,

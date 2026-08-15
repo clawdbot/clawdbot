@@ -2,13 +2,15 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { resolveGatewayPort } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { killProcessTree } from "../process/kill-tree.js";
+import { sleep } from "../utils/sleep.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
-import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
 import { spawnPsSync } from "./spawn-ps.js";
 import { getWindowsInstallRoots } from "./windows-install-roots.js";
@@ -55,6 +57,20 @@ const restartLog = createSubsystemLogger("restart");
 const sleepSyncOverride: ((ms: number) => void) | null = null;
 const dateNowOverride: (() => number) | null = null;
 const parentPidOverride: (() => number) | null = null;
+
+/** Terminate externally discovered stale gateway processes and allow cleanup to settle. */
+export async function terminateStaleGatewayPids(pids: number[]): Promise<number[]> {
+  const targets = Array.from(
+    new Set(pids.filter((pid): pid is number => Number.isFinite(pid) && pid > 0)),
+  );
+  for (const pid of targets) {
+    killProcessTree(pid, { graceMs: 300 });
+  }
+  if (targets.length > 0) {
+    await sleep(500);
+  }
+  return targets;
+}
 
 function getTimeMs(): number {
   return dateNowOverride ? dateNowOverride() : Date.now();

@@ -1,7 +1,7 @@
 // Coverage for sessions_spawn workspace inheritance from sandbox context.
 import { describe, expect, it } from "vitest";
 import { createAgentToolsSandboxContext } from "../../test-helpers/agent-tools-sandbox-context.js";
-import { resolveAttemptSpawnWorkspaceDir } from "./attempt.thread-helpers.js";
+import { resolveAttemptSpawnWorkspaceDir } from "./attempt-thread-helpers.js";
 
 describe("runEmbeddedAttempt sessions_spawn workspace inheritance", () => {
   it("passes the real workspace to sessions_spawn when workspaceAccess is ro", () => {

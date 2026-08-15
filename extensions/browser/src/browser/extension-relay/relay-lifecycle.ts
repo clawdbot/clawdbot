@@ -11,7 +11,6 @@ import {
   withProfileOperationLease,
 } from "../server-context.lifecycle.js";
 import type { BrowserServerState, ProfileRuntimeState } from "../server-context.types.js";
-import { deliverPageShare } from "./page-share.js";
 import { type ExtensionRelayHandle, startExtensionRelayServer } from "./relay-server.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay");
@@ -27,7 +26,7 @@ const pendingRelayEnsures = new WeakMap<ProfileRuntimeState, PendingRelayEnsure>
 
 /** Human guidance for a relay without a paired/connected extension. */
 export const EXTENSION_PAIRING_HINT =
-  "Install the OpenClaw Chrome extension, then run `openclaw browser extension pair` and paste the pairing string into the extension popup.";
+  "Run `openclaw browser extension install`, load the printed unpacked directory once, and wait for automatic setup.";
 
 function relays(state: BrowserServerState): Map<string, ExtensionRelayHandle> {
   if (!state.extensionRelays) {
@@ -187,7 +186,6 @@ async function ensureDesiredRelay(params: {
           port: profile.cdpPort,
           token,
           allowLegacyAuth: state.resolved.extensionRelay.allowLegacyAuth,
-          onPageShare: (payload) => deliverPageShare(payload),
         });
         actor.cleanupRelays.add(handle);
         signal.throwIfAborted();

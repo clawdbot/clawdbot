@@ -50,17 +50,17 @@ function readPositiveNumberEnv(name, fallback) {
 
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
-function clampTimerTimeoutMs(valueMs) {
+function clampPluginLifecycleTimerMs(valueMs) {
   return Math.min(Math.max(Math.floor(valueMs), 1), MAX_TIMER_TIMEOUT_MS);
 }
 
-const pollMs = clampTimerTimeoutMs(
+const pollMs = clampPluginLifecycleTimerMs(
   readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_METRIC_POLL_MS", 100),
 );
-const timeoutMs = clampTimerTimeoutMs(
+const timeoutMs = clampPluginLifecycleTimerMs(
   readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS", 300000),
 );
-const timeoutKillGraceMs = clampTimerTimeoutMs(
+const timeoutKillGraceMs = clampPluginLifecycleTimerMs(
   readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS", 2000),
 );
 const maxRssKbThreshold = readPositiveIntEnv(

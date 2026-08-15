@@ -1,9 +1,10 @@
-import type { BoardWidgetAppViewState, BoardViewWidget } from "../../lib/board/view-types.ts";
+import type { BoardWidget } from "../../lib/board/types.ts";
+import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
 
 const REFRESH_LEAD_MS = 5_000;
 type AppViewMode = "cached" | "refresh" | "expired";
 
-function appViewKey(sessionKey: string, widget: BoardViewWidget): string {
+function appViewKey(sessionKey: string, widget: BoardWidget): string {
   return `${sessionKey}\0${widget.name}\0${widget.revision}\0${widget.instanceId ?? ""}\0${widget.grantState}`;
 }
 
@@ -77,7 +78,7 @@ type LifecycleHost = {
   connected: () => boolean;
   requestUpdate: () => void;
   sessionKey: () => string;
-  widget: () => BoardViewWidget | undefined;
+  widget: () => BoardWidget | undefined;
 };
 
 export class BoardMcpAppLifecycle {
@@ -97,7 +98,7 @@ export class BoardMcpAppLifecycle {
     return this.visibility.nearVisible;
   }
 
-  update(widget: BoardViewWidget | undefined, callbacks: AppViewCallbacks | undefined): void {
+  update(widget: BoardWidget | undefined, callbacks: AppViewCallbacks | undefined): void {
     this.callbacks = callbacks;
     if (!widget || widget.contentKind !== "mcp-app" || !callbacks) {
       this.reset();
@@ -206,7 +207,7 @@ export class BoardMcpAppLifecycle {
   }
 
   private async load(
-    widget: BoardViewWidget,
+    widget: BoardWidget,
     callbacks: AppViewCallbacks,
     mode: AppViewMode,
   ): Promise<void> {
@@ -284,7 +285,7 @@ export class BoardMcpAppLifecycle {
     }
   }
 
-  private scheduleExpiry(widget: BoardViewWidget, appView: BoardWidgetAppViewState): void {
+  private scheduleExpiry(widget: BoardWidget, appView: BoardWidgetAppViewState): void {
     if (appView.status !== "ready") {
       return;
     }
@@ -313,7 +314,7 @@ export class BoardMcpAppLifecycle {
   }
 
   private scheduleRenewal(
-    widget: BoardViewWidget,
+    widget: BoardWidget,
     callbacks: AppViewCallbacks,
     appView: BoardWidgetAppViewState,
     renewed: boolean,

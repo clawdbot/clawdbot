@@ -13,6 +13,7 @@ import {
 import { checkUpdateStatus } from "../../infra/update-check.js";
 import { defaultRuntime } from "../../runtime.js";
 import { pathExists } from "../../utils.js";
+import { VERSION } from "../../version.js";
 import {
   isEmptyDir,
   isGitCheckout,
@@ -54,6 +55,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     : null;
   const channelInfo = resolveEffectiveUpdateChannel({
     configChannel,
+    currentVersion: VERSION,
     installKind: updateStatus.installKind,
     git: updateStatus.git
       ? { tag: updateStatus.git.tag, branch: updateStatus.git.branch }

@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { bootstrapWorker as bootstrapWorkerCore } from "./bootstrap.js";
 import { createWorkerBundleProducer, type WorkerInstallationArtifact } from "./bundle.js";
 
@@ -188,6 +188,15 @@ describe("bootstrapWorker", () => {
     expect(runner.calls[2]?.options.input).toContain('ln -s "$lock_identity" "$lock"');
     expect(runner.calls[2]?.options.input).toContain("worker bundle archive digest mismatch");
     expect(runner.calls[2]?.options.input).toContain("worker install content does not match");
+    expect(runner.calls[2]?.options.input).toContain(
+      'mv "$staging" "$install_dir"\nfinish_with_receipt',
+    );
+    expect(runner.calls[2]?.options.input).toMatch(
+      /finish_with_receipt\(\) \{[\s\S]*?rm -f -- "\$upload"\s+printf [^\n]+ receipt/u,
+    );
+    expect(runner.calls[2]?.options.input).toMatch(
+      /if receipt_matches; then\s+finish_with_receipt/u,
+    );
     expect(runner.calls[2]?.argv.at(-1)).toContain(BUNDLE_HASH);
     expect(runner.calls[2]?.argv.at(-1)).toContain(TARBALL_SHA256);
     expect(runner.calls[2]?.argv.at(-1)).toContain(VERSION);
@@ -534,7 +543,7 @@ describe("bootstrapWorker", () => {
   it.skipIf(process.platform === "win32")(
     "reuses and finally cleans the operation upload across ambiguous candidate attempts",
     async () => {
-      await withTempDir({ prefix: "openclaw-worker-bootstrap-script-" }, async (root) => {
+      await withTestDir({ prefix: "openclaw-worker-bootstrap-script-" }, async (root) => {
         const packageRoot = path.join(root, "package");
         const remoteHome = path.join(root, "remote-home");
         await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
@@ -703,7 +712,7 @@ describe("bootstrapWorker", () => {
   it.skipIf(process.platform === "win32")(
     "fails closed instead of following a poisoned incoming directory",
     async () => {
-      await withTempDir({ prefix: "openclaw-worker-bootstrap-path-" }, async (root) => {
+      await withTestDir({ prefix: "openclaw-worker-bootstrap-path-" }, async (root) => {
         const remoteHome = path.join(root, "remote-home");
         const unrelated = path.join(root, "unrelated");
         const bootstrapRoot = path.join(remoteHome, ".openclaw-worker");
@@ -734,7 +743,7 @@ describe("bootstrapWorker", () => {
   it.skipIf(process.platform === "win32")(
     "does not follow a poisoned bootstrap root during terminal cleanup",
     async () => {
-      await withTempDir({ prefix: "openclaw-worker-bootstrap-cleanup-root-" }, async (root) => {
+      await withTestDir({ prefix: "openclaw-worker-bootstrap-cleanup-root-" }, async (root) => {
         const remoteHome = path.join(root, "remote-home");
         const unrelated = path.join(root, "unrelated");
         const incoming = path.join(unrelated, ".incoming");
@@ -767,7 +776,7 @@ describe("bootstrapWorker", () => {
   it.skipIf(process.platform === "win32")(
     "verifies npm installs from the packaged dist inventory",
     async () => {
-      await withTempDir({ prefix: "openclaw-worker-bootstrap-npm-inventory-" }, async (root) => {
+      await withTestDir({ prefix: "openclaw-worker-bootstrap-npm-inventory-" }, async (root) => {
         const packageRoot = path.join(root, "package");
         const remoteHome = path.join(root, "remote-home");
         await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });

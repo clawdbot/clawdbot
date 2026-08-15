@@ -7,6 +7,7 @@ import {
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { isBrowserCopilotClient } from "../utils/message-channel.js";
+import { GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED } from "./events.js";
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
@@ -67,9 +68,12 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "voicewake.routing.changed": [READ_SCOPE],
   "device.pair.requested": [PAIRING_SCOPE],
   "device.pair.resolved": [PAIRING_SCOPE],
+  "device.pair.setup.completed": [PAIRING_SCOPE],
+  "device.pair.setup.deliveryUncertain": [PAIRING_SCOPE],
   "node.pair.requested": [PAIRING_SCOPE],
   "node.pair.resolved": [PAIRING_SCOPE],
   "node.presence": [READ_SCOPE],
+  [GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED]: [READ_SCOPE],
   "sessions.catalog.host": [READ_SCOPE],
   "sessions.changed": [READ_SCOPE],
   "controlUi.sessionPullRequests.changed": [READ_SCOPE],
@@ -85,6 +89,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   // methods; also targeted to the owning connection at broadcast time.
   "terminal.data": [ADMIN_SCOPE],
   "terminal.exit": [ADMIN_SCOPE],
+  "portal.changed": [READ_SCOPE],
 };
 
 // Opt-in scoped clients never receive session-bearing broadcasts without an
@@ -256,6 +261,9 @@ export function createGatewayBroadcaster(params: {
       }
       return frameBase;
     };
+    const sessionSubscriptionVerified =
+      (opts as { sessionSubscriptionVerified?: boolean } | undefined)
+        ?.sessionSubscriptionVerified === true;
     for (const c of params.clients) {
       if (c.invalidated === true) {
         continue;
@@ -280,6 +288,7 @@ export function createGatewayBroadcaster(params: {
           SESSION_SUBSCRIPTION_EVENTS.has(event));
       if (
         requiresSessionSubscription &&
+        !(isTargeted && sessionSubscriptionVerified) &&
         (!sessionKeys.length ||
           !sessionKeys.some((sessionKey) =>
             params.sessionMessageSubscribers?.get(sessionKey).has(c.connId),

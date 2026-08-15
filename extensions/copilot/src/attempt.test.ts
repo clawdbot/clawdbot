@@ -8,11 +8,14 @@ import {
   abortAgentHarnessRun,
   attachModelProviderRequestTransport,
   queueAgentHarnessMessage,
-  type AgentHarnessAttemptParams,
+  type AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
   type AgentHarnessAttemptResult as AgentHarnessAttemptResultContract,
+  type AgentHarnessV2,
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -21,10 +24,14 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCopilotAttempt } from "./attempt.js";
+import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
 import type { CopilotClientPool } from "./runtime.js";
 import type { createCopilotToolBridge } from "./tool-bridge.js";
 
 type AgentHarnessAttemptResult = Extract<AgentHarnessAttemptResultContract, { terminal: unknown }>;
+type SettledTurnFinalizationAttemptParams = Parameters<
+  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
+>[0]["attempt"];
 
 function projectAgentRunAttemptTerminal(terminal: AgentHarnessAttemptResult["terminal"]) {
   return {
@@ -273,24 +280,6 @@ function requireResumeSessionConfig(sdk: FakeSdk): Record<string, unknown> {
   return expectDefined(sdk.resumeSession.mock.calls[0]?.[1], "Copilot resumeSession config");
 }
 
-function createDeferred<T>() {
-  let rejectPromise: ((reason?: unknown) => void) | undefined;
-  let resolvePromise: ((value: T | PromiseLike<T>) => void) | undefined;
-  const promise = new Promise<T>((resolve, reject) => {
-    resolvePromise = resolve;
-    rejectPromise = reject;
-  });
-  return {
-    promise,
-    reject(reason?: unknown) {
-      rejectPromise?.(reason);
-    },
-    resolve(value: T) {
-      resolvePromise?.(value);
-    },
-  };
-}
-
 function flushAsync() {
   // Pump enough microtasks for the attempt to settle past every
   // pre-createSession `await` in attempt.ts (resolvePoolAcquire,
@@ -484,6 +473,7 @@ function makeParams(
     agentId: "agent-1",
     auth: { useLoggedInUser: true, ...(overrides as { auth?: object }).auth },
     disableTools: true,
+    hostCapabilities: createCopilotTestHostCapabilities(),
     initialReplayState: undefined,
     messages: [{ content: "hello", role: "user", timestamp: 1 }],
     model: {
@@ -496,10 +486,10 @@ function makeParams(
     runId: "run-1",
     sessionFile: "session.json",
     sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
+    sessionKey: "agent:agent-1:session-1",
     sessionTarget: {
       sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
+      sessionKey: "agent:agent-1:session-1",
       storePath: "openclaw-agent.sqlite",
     },
     timeoutMs: 5000,
@@ -511,6 +501,13 @@ function makeParams(
     workspaceDir: "C:\\workspace",
     ...overrides,
   } as unknown as AgentHarnessAttemptParams;
+}
+
+function makeFinalizationParams(
+  overrides: Parameters<typeof makeParams>[0] = {},
+): SettledTurnFinalizationAttemptParams {
+  const { hostCapabilities: _hostCapabilities, ...params } = makeParams(overrides);
+  return params;
 }
 
 afterEach(() => {
@@ -1720,7 +1717,7 @@ describe("runCopilotAttempt", () => {
         modelId: "gpt-4o",
         modelProvider: "github-copilot",
         sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
+        sessionKey: "agent:agent-1:session-1",
         workspaceDir: "C:\\workspace",
       }),
     );
@@ -2016,12 +2013,20 @@ describe("runCopilotAttempt", () => {
     });
     const pool = makeFakePool(sdk);
 
-    const attempt = runCopilotAttempt(makeParams({ onBlockReply }), { pool });
+    const toolAuthorityFingerprint = "ask-user-authority";
+    const attempt = runCopilotAttempt(makeParams({ onBlockReply, toolAuthorityFingerprint }), {
+      pool,
+    });
 
     await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledTimes(1));
     expect(queueAgentHarnessMessage("session-1", "tool progress")).toBe(true);
     await waitForEventLoopTurn();
-    expect(queueAgentHarnessMessage("session-1", "2", { isInboundUserMessage: true })).toBe(true);
+    expect(
+      queueAgentHarnessMessage("session-1", "2", {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint,
+      }),
+    ).toBe(true);
     const result = await attempt;
 
     const cfg = requireCreateSessionConfig(sdk);
@@ -4431,7 +4436,7 @@ describe("runCopilotAttempt", () => {
       const sdk = makeFakeSdk();
       const createToolBridge = vi.fn(async () => ({ sdkTools: [], sourceTools: [] }));
 
-      const result = await runCopilotAttempt(makeParams(), {
+      const result = await runCopilotAttempt(makeFinalizationParams(), {
         createToolBridge,
         operation: "settled-tool-finalization",
         pool: makeFakePool(sdk),
@@ -4444,6 +4449,7 @@ describe("runCopilotAttempt", () => {
     });
 
     it("resumes with every ambient Copilot capability disabled", async () => {
+      gatewayQuestionMock.setActiveEmbeddedRun.mockClear();
       const beforePromptBuild = vi.fn();
       const llmInput = vi.fn();
       const llmOutput = vi.fn();
@@ -4478,7 +4484,7 @@ describe("runCopilotAttempt", () => {
         workspaceBootstrapMock.resolveCopilotWorkspaceBootstrapContext.mock.calls.length;
 
       const result = await runCopilotAttempt(
-        makeParams({
+        makeFinalizationParams({
           disableTools: false,
           extraSystemPrompt: "ambient instructions must not reach finalization",
           hooksConfig: { onPreToolUse: nativeHook },
@@ -4569,6 +4575,7 @@ describe("runCopilotAttempt", () => {
       expect(llmInput).not.toHaveBeenCalled();
       expect(llmOutput).not.toHaveBeenCalled();
       expect(agentEnd).not.toHaveBeenCalled();
+      expect(gatewayQuestionMock.setActiveEmbeddedRun).not.toHaveBeenCalled();
     });
 
     it("fails closed instead of creating a fresh session when resume is stale", async () => {
@@ -4579,7 +4586,7 @@ describe("runCopilotAttempt", () => {
       });
 
       const result = await runCopilotAttempt(
-        makeParams({
+        makeFinalizationParams({
           initialReplayState: { sdkSessionId: "sdk-stale-session" },
         } as never),
         {
@@ -4631,6 +4638,38 @@ describe("runCopilotAttempt", () => {
       expect(readAvailableTools(sdk.createSession.mock.calls[0])).toEqual([
         "read",
         "edit",
+        "builtin:ask_user",
+      ]);
+    });
+
+    it("omits native ask_user from a restricted create-session catalog", async () => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+      const sdkTools = [makeFakeSdkTool("read")];
+      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+
+      await runCopilotAttempt(makeParams({ pluginHarnessToolPolicyRestricted: true }), {
+        createToolBridge,
+        pool,
+      });
+
+      expect(readAvailableTools(sdk.createSession.mock.calls[0])).toEqual(["read"]);
+    });
+
+    it("keeps native ask_user when its restricted OpenClaw equivalent remains allowed", async () => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+      const sdkTools = [makeFakeSdkTool("read"), makeFakeSdkTool("ask_user")];
+      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+
+      await runCopilotAttempt(makeParams({ pluginHarnessToolPolicyRestricted: true }), {
+        createToolBridge,
+        pool,
+      });
+
+      expect(readAvailableTools(sdk.createSession.mock.calls[0])).toEqual([
+        "read",
+        "ask_user",
         "builtin:ask_user",
       ]);
     });
@@ -4716,6 +4755,27 @@ describe("runCopilotAttempt", () => {
       const resumeCall = sdk.resumeSession.mock.calls[0] as unknown[] | undefined;
       const resumeCfg = resumeCall?.[1] as { availableTools?: string[] };
       expect(resumeCfg?.availableTools).toEqual(["read", "builtin:ask_user"]);
+    });
+
+    it("omits native ask_user from a restricted resume-session catalog", async () => {
+      const sdk = makeFakeSdk({
+        onResumeSession: (session) => {
+          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("resumed"));
+        },
+      });
+      const pool = makeFakePool(sdk);
+      const sdkTools = [makeFakeSdkTool("read")];
+      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+
+      await runCopilotAttempt(
+        makeParams({
+          initialReplayState: { sdkSessionId: "sess-restricted" },
+          pluginHarnessToolPolicyRestricted: true,
+        } as never),
+        { createToolBridge, pool },
+      );
+
+      expect(requireResumeSessionConfig(sdk).availableTools).toEqual(["read"]);
     });
 
     it("keeps a host-scoped OpenClaw resume-session surface ring-zero", async () => {
@@ -4852,17 +4912,4 @@ describe("runCopilotAttempt", () => {
   });
 });
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

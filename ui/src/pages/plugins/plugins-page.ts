@@ -18,7 +18,7 @@ import type { McpServerForm } from "../../components/mcp-server-form.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
+import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import {
   buildAddMcpServerPatch,
   buildRemoveMcpServerPatch,

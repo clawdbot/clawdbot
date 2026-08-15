@@ -95,6 +95,7 @@ export async function activateCodexAttemptTurn(
     resourceState.thread.threadId,
     activeTurnId,
     {
+      initialContextTokens: connection.mutable.startupContextTokens,
       nativePostToolUseRelayEnabled:
         resourceState.nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
         resourceState.nativeHookRelay.shouldRelayEvent("post_tool_use"),
@@ -171,22 +172,37 @@ export async function activateCodexAttemptTurn(
     signal: runAbortController.signal,
   });
   steeringQueueRef.current = activeSteeringQueue;
+  const claimPendingUserInputAnswer = async (
+    text: string,
+    optionsLocal?: CodexSteeringQueueOptions,
+  ) => {
+    if (optionsLocal?.isInboundUserMessage !== true || optionsLocal.images?.length) {
+      return false;
+    }
+    const claimed = await claimPendingAgentQuestionAnswer({
+      sessionKey: params.sessionKey ?? params.sessionId,
+      text,
+      persist: optionsLocal.userTurnTranscriptRecorder
+        ? async () => {
+            await optionsLocal.userTurnTranscriptRecorder?.persistApproved();
+          }
+        : undefined,
+    });
+    return claimed;
+  };
+  const cancelPendingUserInput = (resolvedBy: string) =>
+    cancelPendingAgentQuestionForSession({
+      sessionKey: params.sessionKey ?? params.sessionId,
+      resolvedBy,
+    });
   const queueMessage = async (text: string, optionsLocal?: CodexSteeringQueueOptions) => {
     const isInboundUserMessage = optionsLocal?.isInboundUserMessage === true;
-    if (isInboundUserMessage && !optionsLocal?.images?.length) {
-      const claimed = await claimPendingAgentQuestionAnswer({
-        sessionKey: params.sessionKey ?? params.sessionId,
-        text,
-      });
-      if (claimed) {
-        return undefined;
-      }
-    } else if (isInboundUserMessage) {
+    if (await claimPendingUserInputAnswer(text, optionsLocal)) {
+      optionsLocal?.onQueueAccepted?.(true);
+      return undefined;
+    } else if (isInboundUserMessage && optionsLocal?.images?.length) {
       try {
-        await cancelPendingAgentQuestionForSession({
-          sessionKey: params.sessionKey ?? params.sessionId,
-          resolvedBy: "image-reply",
-        });
+        await cancelPendingUserInput("image-reply");
       } catch (error) {
         // Cleanup failure must not drop the user's image turn.
         embeddedAgentLog.warn("failed to cancel codex gateway question before image steering", {
@@ -210,9 +226,16 @@ export async function activateCodexAttemptTurn(
   const handle = {
     kind: "embedded" as const,
     runId: params.runId,
+    toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+    claimPendingUserInputAnswer,
+    cancelPendingUserInput,
     queueMessage,
     messageInjection: {
-      isAvailable: () => !state.completed && !state.timedOut && !runAbortController.signal.aborted,
+      isAvailable: () =>
+        !state.completed &&
+        !state.terminalTurnNotificationQueued &&
+        !state.timedOut &&
+        !runAbortController.signal.aborted,
       queueMessage,
     },
     isStreaming: () => !state.completed && !runAbortController.signal.aborted,

@@ -26,6 +26,7 @@ import type { CodexPluginsConfigBlock } from "./src/command-plugins-management.j
 import { createCodexCommand } from "./src/commands.js";
 import { codexConversationBindingRuntime } from "./src/conversation-binding.js";
 import { buildCodexMigrationProvider } from "./src/migration/provider.js";
+import { createCodexPluginsTool } from "./src/native-plugin-tool.js";
 import { createCodexThreadsTool } from "./src/native-thread-tool.js";
 import {
   createCodexCliSessionNodeHostCommands,
@@ -198,6 +199,22 @@ export default definePluginEntry({
       description: "Manage native Codex threads in the shared user Codex home.",
       risk: "high",
       tags: ["codex", "sessions"],
+    });
+    api.registerTool(
+      (context) =>
+        createCodexPluginsTool({
+          bindingStore,
+          context,
+          getPluginConfig: resolveCurrentPluginConfig,
+        }),
+      { name: "codex_plugins" },
+    );
+    api.registerToolMetadata({
+      toolName: "codex_plugins",
+      displayName: "Codex Plugins",
+      description: "Discover available Codex plugins without installing or enabling them.",
+      risk: "low",
+      tags: ["codex", "plugins", "discovery"],
     });
     for (const command of createCodexCliSessionNodeHostCommands()) {
       api.registerNodeHostCommand(command);

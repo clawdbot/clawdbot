@@ -5,7 +5,7 @@ export type SessionCreateOutcome = {
   key: string;
   initialRun:
     | { status: "idle" }
-    | { status: "started"; messageId?: string; messageSeq?: number }
+    | { status: "started"; runId?: string; messageSeq?: number }
     | { status: "rejected"; error: string };
 };
 
@@ -16,6 +16,7 @@ export type SessionCreateParams = {
   currentSessionKey?: string;
   parentSessionKey?: string;
   fork?: boolean;
+  forkFrom?: "last-completed";
   succeedsParent?: boolean;
   label?: string;
   model?: string;
@@ -61,13 +62,13 @@ export async function requestSessionCreate(
     throw new Error("sessions.create returned no key");
   }
   if (result.runStarted === true) {
-    const messageId = typeof result.runId === "string" ? result.runId.trim() : "";
+    const runId = typeof result.runId === "string" ? result.runId.trim() : "";
     const messageSeq = result.messageSeq;
     return {
       key,
       initialRun: {
         status: "started",
-        ...(messageId ? { messageId } : {}),
+        ...(runId ? { runId } : {}),
         ...(typeof messageSeq === "number" && Number.isSafeInteger(messageSeq) && messageSeq > 0
           ? { messageSeq }
           : {}),

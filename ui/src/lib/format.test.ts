@@ -14,7 +14,6 @@ import {
   formatRelativeTimestamp,
   formatTimeAgo,
   formatTimeMs,
-  formatTokens,
   formatUnknownText,
   truncateText,
 } from "./format.ts";
@@ -66,8 +65,13 @@ describe("formatAgo", () => {
 });
 
 describe("localized durations", () => {
-  it("preserves compact day and remainder-hour units", () => {
-    expect(formatDurationCompact(49 * 60 * 60 * 1000, { spaced: true })).toBe("2d 1h");
+  it.each([
+    { durationMs: 59_000, expected: "59s" },
+    { durationMs: 92_000, expected: "1m 32s" },
+    { durationMs: 3_660_000, expected: "1h 1m" },
+    { durationMs: 49 * 60 * 60 * 1000, expected: "2d 1h" },
+  ])("formats $durationMs ms with separated compact units", ({ durationMs, expected }) => {
+    expect(formatDurationCompact(durationMs)).toBe(expected);
   });
 
   it("switches human durations to days at 24 hours", () => {
@@ -252,15 +256,16 @@ describe("formatContextTokenCapacity", () => {
   });
 });
 
-describe("formatTokens", () => {
-  it("rolls a value that rounds up to 1000k over into the M branch", () => {
-    expect(formatTokens(999_500)).toBe("1.0M");
-    expect(formatTokens(999_999)).toBe("1.0M");
-    expect(formatTokens(999_499)).toBe("999k");
-    expect(formatTokens(1_000_000)).toBe("1.0M");
-    expect(formatTokens(12_345)).toBe("12k");
-    expect(formatTokens(5_500)).toBe("5.5k");
-    expect(formatTokens(null)).toBe("0");
+describe("formatCompactTokenCount edge inputs", () => {
+  it("falls back to 0 for nullish or non-finite input", () => {
+    expect(formatCompactTokenCount(null)).toBe("0");
+    expect(formatCompactTokenCount(undefined)).toBe("0");
+    expect(formatCompactTokenCount(Number.NaN)).toBe("0");
+  });
+
+  it("formats billion-scale provider totals with a B suffix", () => {
+    expect(formatCompactTokenCount(1_000_000_000)).toBe("1B");
+    expect(formatCompactTokenCount(4_132_000_000)).toBe("4.1B");
   });
 });
 

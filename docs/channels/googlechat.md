@@ -192,7 +192,7 @@ Use these identifiers for delivery and allowlists:
 
 Notes:
 
-- Service account credentials: `serviceAccountFile` (path) or `serviceAccount` (inline JSON string, object, or env/file/exec SecretRef). Env vars `GOOGLE_CHAT_SERVICE_ACCOUNT` (inline JSON) and `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE` (path) apply to the default account only. Multi-account setups use `channels.googlechat.accounts.<id>` with the same keys, including per-account `serviceAccount` SecretRefs.
+- Service account credentials: `serviceAccountFile` (path) or `serviceAccount` (inline JSON string, object, or env/file/exec/store SecretRef). Env vars `GOOGLE_CHAT_SERVICE_ACCOUNT` (inline JSON) and `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE` (path) apply to the default account only. Multi-account setups use `channels.googlechat.accounts.<id>` with the same keys, including per-account `serviceAccount` SecretRefs.
 - Default webhook path is `/googlechat` when `webhookPath` is unset; `webhookUrl` can supply the path instead.
 - Group keys must be stable space ids (`spaces/<spaceId>`). Display-name keys are deprecated and logged as such.
 - `dangerouslyAllowNameMatching` re-enables mutable email principal matching for allowlists (break-glass compatibility mode); doctor warns about email entries.

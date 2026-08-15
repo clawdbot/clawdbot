@@ -1,5 +1,8 @@
 /** Operator CLI for bounded metadata-only activity audit pages. */
-import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import {
+  parseStrictPositiveInteger,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   AuditActivityListParams,
@@ -13,9 +16,9 @@ import type {
   PrincipalRefV1,
 } from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { parsePositiveAuditCursor } from "../audit/audit-cursor.js";
 import { parseAbsoluteTimeMs } from "../cron/parse.js";
 import { callGateway } from "../gateway/call.js";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
 const DEFAULT_AUDIT_LIMIT = 100;
@@ -90,16 +93,6 @@ function parseAuditDecisionLimit(value: string | undefined): number {
   if (parsed === undefined || parsed > MAX_AUDIT_DECISION_LIMIT) {
     throw new Error(
       `--limit must be between 1 and ${String(MAX_AUDIT_DECISION_LIMIT)} with --explain.`,
-    );
-  }
-  return parsed;
-}
-
-function parseAuditExecutionLimit(value: string | undefined): number {
-  const parsed = parseAuditDecisionLimit(value);
-  if (parsed > MAX_AUDIT_EXECUTION_LIMIT) {
-    throw new Error(
-      `--limit must be between 1 and ${String(MAX_AUDIT_EXECUTION_LIMIT)} for run discovery.`,
     );
   }
   return parsed;
@@ -335,11 +328,26 @@ function unavailableIdentityLines(state: "unknown" | "unsupported"): string[] {
 }
 
 function decisionLines(receipt: DecisionReceiptV1): string[] {
+  const evidence =
+    receipt.action.family === "run" && receipt.action.operation === "admission"
+      ? "admission provenance only; no enforcement decision"
+      : receipt.enforcement.coverageState === "unknown" ||
+          receipt.enforcement.coverageState === "unsupported"
+        ? "evidence unavailable or corrupt; do not infer authorization"
+        : receipt.source.owner === "operator_approvals"
+          ? "authoritative owner-native SQLite record; retained 30 days"
+          : receipt.enforcement.coverageState === "enforced"
+            ? "validated immutable decision fact; retained 30 days"
+            : "attribution record only; no enforcement decision";
   return [
     `  ${safe(receipt.action.family)}.${safe(receipt.action.operation)}: ${safe(receipt.decision.outcome)}`,
     `    Coverage: ${safe(receipt.enforcement.coverageState)}`,
     `    Reason: ${safe(receipt.decision.reasonCode)}`,
     `    Source: ${safe(receipt.source.owner)} at ${safe(receipt.source.decisionBoundary)}`,
+    `    Evidence: ${evidence}`,
+    `    Policy refs: ${receipt.enforcement.policyRefs.length > 0 ? receipt.enforcement.policyRefs.map(safe).join(", ") : "none"}`,
+    `    Grant refs: ${receipt.enforcement.grantRefs.length > 0 ? receipt.enforcement.grantRefs.map(safe).join(", ") : "none"}`,
+    `    Context used: ${receipt.enforcement.contextFieldsUsed.length > 0 ? receipt.enforcement.contextFieldsUsed.map(safe).join(", ") : "none"}`,
     ...(receipt.action.summary ? [`    Summary: ${safe(receipt.action.summary)}`] : []),
   ];
 }
@@ -464,17 +472,25 @@ export async function auditListCommand(
         "--explain accepts only --run or --execution, plus --limit, --cursor, and --json; remove activity-list filters.",
       );
     }
-    const result = await queryAuditRunInspection({
-      ...(executionId
-        ? { executionId }
+    const decisionLimit = parseAuditDecisionLimit(options.limit);
+    const cursor = options.cursor;
+    const numericCursor = parsePositiveAuditCursor(cursor);
+    const runExecutionCursor =
+      numericCursor !== undefined && numericCursor !== null ? cursor : undefined;
+    const decisionPage = {
+      decisionLimit,
+      ...(cursor ? { decisionCursor: cursor } : {}),
+    };
+    const result = await queryAuditRunInspection(
+      executionId
+        ? { executionId, ...decisionPage }
         : {
             runId: runId!,
-            executionLimit: parseAuditExecutionLimit(options.limit),
-            ...(options.cursor ? { executionCursor: options.cursor } : {}),
-          }),
-      decisionLimit: parseAuditDecisionLimit(options.limit),
-      ...(options.cursor ? { decisionCursor: options.cursor } : {}),
-    });
+            executionLimit: Math.min(decisionLimit, MAX_AUDIT_EXECUTION_LIMIT),
+            ...(runExecutionCursor ? { executionCursor: runExecutionCursor } : {}),
+            ...decisionPage,
+          },
+    );
     if (options.json) {
       writeRuntimeJson(runtime, result);
       return;
@@ -517,24 +533,4 @@ export async function auditListCommand(
   if (result.nextCursor) {
     runtime.log(`More records: --cursor ${result.nextCursor}`);
   }
-}
-
-const testApi = {
-  formatAuditRows,
-  hasMessageSpecificFilters,
-  isUnsupportedActivityMethodError,
-  isUnsupportedRunInspectMethodError,
-  formatAuditRunInspection,
-  hasExplainIncompatibleFilters,
-  parseAuditDecisionLimit,
-  parseAuditExecutionLimit,
-  parseAuditLimit,
-  parseAuditTimestamp,
-  toLegacyAuditListParams,
-  validateAuditKind,
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.auditCommandTestApi")] =
-    testApi;
 }

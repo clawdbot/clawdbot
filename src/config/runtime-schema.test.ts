@@ -21,7 +21,7 @@ let readBestEffortRuntimeConfigSchema: typeof import("./runtime-schema.js").read
 let loadGatewayRuntimeConfigSchema: typeof import("./runtime-schema.js").loadGatewayRuntimeConfigSchema;
 
 function explicitMainRoster(): OpenClawConfig {
-  return { agents: { list: [{ id: "main", default: true }] } };
+  return { agents: { list: [{ id: "main" }] } };
 }
 
 vi.mock("./config.js", () => {
@@ -34,7 +34,7 @@ vi.mock("./config.js", () => {
 });
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
+  loadPluginManifestRegistryCore: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
 }));
 
 vi.mock("../plugins/plugin-registry.js", () => ({

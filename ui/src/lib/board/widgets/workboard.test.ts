@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
-import type { BoardViewWidget } from "../view-types.ts";
+import type { BoardWidget } from "../types.ts";
 import "./workboard-card.ts";
 import "./workboard-mini.ts";
 
@@ -42,7 +42,7 @@ const cards = [
   },
 ] as const;
 
-function pluginWidget(pluginKind: string, props: Record<string, unknown>): BoardViewWidget {
+function pluginWidget(pluginKind: string, props: Record<string, unknown>): BoardWidget {
   return {
     name: pluginKind.replace(":", "-"),
     tabId: "main",

@@ -369,7 +369,14 @@ export function renderUsage(props: UsageProps) {
       : data.costDaily;
 
   const insightStats = buildUsageInsightStats(aggregateSessions, insightTotals, insightAggregates);
-  const isEmpty = !data.loading && !data.totals && data.sessions.length === 0;
+  // The gateway always returns a totals object (all-zero when idle), so key
+  // the empty state off content — and never render it under an error callout,
+  // where "no usage data yet" would misexplain the failure.
+  const isEmpty =
+    !data.loading &&
+    !data.error &&
+    data.sessions.length === 0 &&
+    (data.totals?.totalTokens ?? 0) === 0;
   const cacheStatusTitle = getUsageCacheRefreshTitle(data.cacheStatus);
   const hasMissingCost =
     (insightTotals?.missingCostEntries ?? 0) > 0 ||

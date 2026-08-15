@@ -188,7 +188,7 @@ describe("deliverReplies identity passthrough", () => {
       teamId: "T1",
       client: listenerClient,
     };
-    const enterpriseCfg = { channels: { slack: { enterpriseOrgInstall: true } } };
+    const enterpriseCfg = { channels: { slack: {} } };
 
     const result = await deliverReplies(
       baseParams({
@@ -289,7 +289,7 @@ describe("deliverReplies identity passthrough", () => {
 
     await deliverReplies(
       baseParams({
-        cfg: { channels: { slack: { enterpriseOrgInstall: true } } },
+        cfg: { channels: { slack: {} } },
         eventScope,
         mediaMaxBytes: 1024,
       }),

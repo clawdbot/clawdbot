@@ -9,13 +9,16 @@ import {
   resolveSessionWorkStartError,
 } from "../../config/sessions/lifecycle.js";
 import { hasSessionAutoModelFallbackProvenance } from "../../config/sessions/model-override-provenance.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   evaluateSessionFreshness,
   resolveSessionResetPolicy,
   type SessionFreshness,
 } from "../../config/sessions/reset-policy.js";
-import { listSessionEntries, loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  listSessionEntriesCore,
+  loadSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -146,16 +149,15 @@ export function resolveCronSession(params: {
   store?: Record<string, SessionEntry>;
 }) {
   const sessionCfg = params.cfg.session;
-  const storePath = resolveStorePath(sessionCfg?.store, {
+  const storePath = resolveSessionStorePathCore(sessionCfg?.store, {
     agentId: params.agentId,
   });
   const store =
     params.store ??
     Object.fromEntries(
-      listSessionEntries({ agentId: params.agentId, storePath }).map(({ sessionKey, entry }) => [
-        sessionKey,
-        entry,
-      ]),
+      listSessionEntriesCore({ agentId: params.agentId, storePath }).map(
+        ({ sessionKey, entry }) => [sessionKey, entry],
+      ),
     );
   const sourceSessionKey = params.sourceSessionKey?.trim();
   const sourceSessionDiffers = Boolean(sourceSessionKey && sourceSessionKey !== params.sessionKey);
@@ -178,7 +180,6 @@ export function resolveCronSession(params: {
   let isNewSession: boolean;
   let systemSent: boolean;
   let resetBoundaryPending: { reason: "cron-stale"; sessionFile: string } | undefined;
-  let staleBoundaryReset = false;
 
   if (!params.forceNew && entry?.sessionId) {
     // Cron/webhook sessions follow the direct reset policy so scheduled turns
@@ -211,7 +212,6 @@ export function resolveCronSession(params: {
       isNewSession = true;
       systemSent = false;
       if (!sourceSessionDiffers) {
-        staleBoundaryReset = true;
         resetBoundaryPending = { reason: "cron-stale", sessionFile: params.sessionKey };
       }
     }
@@ -222,7 +222,7 @@ export function resolveCronSession(params: {
   }
 
   const previousSessionId =
-    isNewSession && !sourceSessionDiffers && !staleBoundaryReset ? entry?.sessionId : undefined;
+    isNewSession && !sourceSessionDiffers && !resetBoundaryPending ? entry?.sessionId : undefined;
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey: params.sessionKey,
     previousSessionId,

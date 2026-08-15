@@ -37,6 +37,8 @@ function hasScriptSrcAttribute(openTag: string): boolean {
 /** Build the CSP header applied to Gateway-served Control UI HTML. */
 export function buildControlUiCspHeader(opts?: {
   inlineScriptHashes?: string[];
+  /** Current document Host header, used only to permit cross-port portal probes. */
+  portalHost?: string;
   /**
    * Relax the policy just enough for the embedded terminal's ghostty-web engine.
    * `'wasm-unsafe-eval'` permits WebAssembly compilation. Gated on the terminal
@@ -62,6 +64,22 @@ export function buildControlUiCspHeader(opts?: {
     "https://api.openai.com",
     "https://tweakcn.com",
   ];
+  if (opts?.portalHost) {
+    try {
+      const parsed = new URL(`http://${opts.portalHost}`);
+      const isHostOnly =
+        !parsed.username &&
+        !parsed.password &&
+        parsed.pathname === "/" &&
+        !parsed.search &&
+        !parsed.hash;
+      if (isHostOnly && parsed.hostname) {
+        connectTokens.push(`http://${parsed.hostname}:*`, `https://${parsed.hostname}:*`);
+      }
+    } catch {
+      // Invalid Host headers do not relax the baseline policy.
+    }
+  }
   return [
     "default-src 'self'",
     "base-uri 'none'",

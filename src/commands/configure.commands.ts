@@ -63,7 +63,7 @@ export async function configureCommandFromSectionsArg(
   const { sections, invalid } = parseConfigureWizardSections(rawSections);
   if (invalid.length > 0) {
     runtime.error(
-      `Invalid --section: ${invalid.join(", ")}. Expected one of: ${CONFIGURE_WIZARD_SECTIONS.join(", ")}. Run ${formatCliCommand("openclaw configure")} without --section to use the full wizard.`,
+      `Invalid --section: ${invalid.map((section) => section || '""').join(", ")}. Expected one of: ${CONFIGURE_WIZARD_SECTIONS.join(", ")}. Run ${formatCliCommand("openclaw configure")} without --section to use the full wizard.`,
     );
     runtime.exit(1);
     return;

@@ -26,7 +26,7 @@ export <PROVIDER>_API_KEY="..."
 ./scripts/k8s/deploy.sh
 
 kubectl port-forward svc/openclaw 18789:18789 -n openclaw
-open http://localhost:18789
+open http://127.0.0.1:18789
 ```
 
 `deploy.sh` creates token auth by default. Retrieve the generated gateway token for the Control UI:
@@ -76,7 +76,7 @@ Add `--show-token` to either command to print the token to stdout for local test
 
 ```bash
 kubectl port-forward svc/openclaw 18789:18789 -n openclaw
-open http://localhost:18789
+open http://127.0.0.1:18789
 ```
 
 ## What gets deployed
@@ -89,6 +89,10 @@ Namespace: openclaw (configurable via OPENCLAW_NAMESPACE)
 ├── ConfigMap/openclaw-config  # openclaw.json + AGENTS.md
 └── Secret/openclaw-secrets    # Gateway token + API keys
 ```
+
+The Deployment probes `/readyz` for startup and traffic readiness with a five-minute startup budget, and `/healthz` for liveness. Every probe asserts the JSON probe contract rather than the status code alone, because the Control UI answers unknown paths with a catch-all `200`; a status-only check would pass forever against an image whose probe route does not exist yet.
+
+`/startupz` is the better traffic-admission probe because it ignores channel health, so one failing channel account cannot evict an otherwise healthy Gateway from Service endpoints. It requires an image built from the release that introduced it, which is newer than the tag pinned above. After pinning such an image, switch the startup and readiness probes to `/startupz` and keep `/readyz` for monitoring that should include channel-account health.
 
 ## Customization
 
@@ -103,6 +107,15 @@ Edit the `AGENTS.md` in `scripts/k8s/manifests/configmap.yaml` and redeploy:
 ### Gateway config
 
 Edit `openclaw.json` in `scripts/k8s/manifests/configmap.yaml`. See [Gateway configuration](/gateway/configuration) for the full reference.
+
+The init container seeds `openclaw.json` and workspace `AGENTS.md` only when each file is missing from the PVC. The persisted copy is the source of truth after first boot: changes made through OpenClaw (`onboard`, `channels add`, `doctor --fix`, Control UI) survive pod restarts, and updating the ConfigMap does not overwrite an existing PVC copy. To intentionally reseed a file from an updated ConfigMap, delete the persisted copy and restart:
+
+```bash
+kubectl exec -n openclaw deploy/openclaw -- rm /home/node/.openclaw/openclaw.json
+kubectl rollout restart -n openclaw deploy/openclaw
+```
+
+Deployments created from the previous template applied ConfigMap edits on every pod start (and discarded any config changes made through OpenClaw). If you relied on that flow, use the reseed commands above after ConfigMap edits.
 
 ### Add providers
 
@@ -136,7 +149,8 @@ OPENCLAW_NAMESPACE=my-namespace ./scripts/k8s/deploy.sh
 Edit the `image` field in `scripts/k8s/manifests/deployment.yaml`:
 
 ```yaml
-image: ghcr.io/openclaw/openclaw:slim # primary; official Docker Hub mirror: openclaw/openclaw
+# Bump this immutable versioned tag when upgrading OpenClaw.
+image: ghcr.io/openclaw/openclaw:2026.7.1-2-slim
 ```
 
 ### Expose beyond port-forward

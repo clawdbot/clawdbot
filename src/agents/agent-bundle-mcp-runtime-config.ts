@@ -331,3 +331,18 @@ export function resolveSessionMcpConfigSummary(params: {
   });
   return { fingerprint: bareRuntimeFingerprint, serverNames };
 }
+
+/** Reads the enabled static MCP server set without opening transports or listing tools. */
+export function resolveStaticSessionMcpServerNames(params: {
+  workspaceDir: string;
+  cfg?: OpenClawConfig;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
+}): string[] {
+  const { loaded } = loadSessionMcpConfig({
+    ...params,
+    logDiagnostics: false,
+  });
+  const { staticServers } = partitionMcpServersByConnectionScope(loaded.mcpServers);
+  return Object.keys(staticServers).toSorted((left, right) => left.localeCompare(right));
+}

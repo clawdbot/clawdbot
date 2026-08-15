@@ -23,7 +23,7 @@ vi.mock("./bash-tools.exec-host-node.js", () => ({
   },
 }));
 
-vi.mock("../utils/delivery-context.js", () => ({
+vi.mock("../utils/delivery-context.shared.js", () => ({
   normalizeDeliveryContext: (value: unknown) => value,
 }));
 

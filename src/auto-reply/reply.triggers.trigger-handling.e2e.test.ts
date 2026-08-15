@@ -16,6 +16,7 @@ import {
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { renderControlUiAgentFailureCopy } from "../agents/failover/user-copy.js";
 import { resolveSessionKey } from "../config/sessions.js";
 import {
   loadExactSessionEntry,
@@ -24,7 +25,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
-import { buildControlUiAgentFailureText } from "./reply/agent-runner-failure-copy.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
 import type { MsgContext } from "./templating.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
@@ -65,7 +65,7 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
       if (/context window exceeded/i.test(message)) {
         return "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.";
       }
-      return buildControlUiAgentFailureText(message);
+      return renderControlUiAgentFailureCopy(message);
     };
     const stripHeartbeat = (text?: string) => {
       const trimmed = text?.trim();
@@ -361,7 +361,7 @@ describe("trigger handling", () => {
   for (const testCase of [
     {
       error: "sandbox is not defined.",
-      expected: buildControlUiAgentFailureText("sandbox is not defined."),
+      expected: renderControlUiAgentFailureCopy("sandbox is not defined."),
     },
     {
       error: "Context window exceeded",

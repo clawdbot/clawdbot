@@ -103,6 +103,7 @@ class MockGatewayClient {
         phase: "pre-hello",
         socketOpened: gatewayClientState.socketOpened,
         transportValidated: gatewayClientState.transportValidated,
+        connectRequestSent: true,
         transientPreHelloCleanClose: false,
       });
     }
@@ -674,6 +675,7 @@ describe("probeGateway", () => {
   it("prefers the structured connect error over the generic close reason", async () => {
     gatewayClientState.startMode = "connect-error-close";
     gatewayClientState.socketOpened = true;
+    gatewayClientState.close = { code: 1008, reason: "connect failed" };
 
     const result = await runTokenLightweightProbe({
       timeoutMs: 5_000,
@@ -682,9 +684,23 @@ describe("probeGateway", () => {
     expectProbeResultFields(result, {
       ok: false,
       error: "scope upgrade pending approval (requestId: req-123)",
-      close: { code: 1008, reason: "pairing required" },
+      close: { code: 1008, reason: "connect failed" },
     });
+    expectProbeAuthFields(result, { capability: "pairing_pending" });
     expect(result.connectLatencyMs).not.toBeNull();
+  });
+
+  it("keeps probe capability unknown for temporary authentication lockouts", async () => {
+    gatewayClientState.startMode = "connect-error-close";
+    gatewayClientState.connectError =
+      "unauthorized: too many failed authentication attempts (retry later)";
+    gatewayClientState.connectErrorDetails = { code: "AUTH_RATE_LIMITED" };
+    gatewayClientState.close = { code: 1008, reason: "connect failed" };
+
+    const result = await runTokenLightweightProbe({ timeoutMs: 5_000 });
+
+    expectProbeResultFields(result, { ok: false });
+    expectProbeAuthFields(result, { capability: "unknown" });
   });
 
   it("keeps latency unknown when the opened transport fails validation", async () => {

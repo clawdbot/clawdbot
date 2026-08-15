@@ -136,10 +136,8 @@ suite.define(() => {
       await page.getByText("Current session placeholder.").waitFor({ timeout: 10_000 });
       const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
       await sessionLink(sessionB).click();
-      await expect
-        .poll(async () => (await gateway.getRequests("chat.history")).length)
-        .toBeGreaterThan(historyRequestsBeforeReturn);
       await expectTrace();
+      expect(await gateway.getRequests("chat.history")).toHaveLength(historyRequestsBeforeReturn);
       if (artifactDir) {
         await page.screenshot({
           fullPage: true,
@@ -252,10 +250,11 @@ suite.define(() => {
       expect(requireRecord(historyRequest.params)).toMatchObject({
         sessionKey: "agent:main:session-b",
       });
-      await page.locator(".chat-thread").getByText("User history question 68").waitFor({
+      const activeThread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+      await activeThread.getByText("User history question 68").waitFor({
         timeout: 10_000,
       });
-      await page.locator(".chat-thread").getByText("Assistant history answer 69").waitFor({
+      await activeThread.getByText("Assistant history answer 69").waitFor({
         timeout: 10_000,
       });
       await expect
@@ -273,11 +272,11 @@ suite.define(() => {
 
       await waitForChatScrollIdle(page);
       await scrollChatThreadToTop(page);
-      await page.locator(".chat-thread").getByText("User history question 10").waitFor({
+      await activeThread.getByText("User history question 10").waitFor({
         timeout: 10_000,
       });
       await scrollChatThreadToTop(page);
-      await page.locator(".chat-thread").getByText("User history question 0").waitFor({
+      await activeThread.getByText("User history question 0").waitFor({
         timeout: 10_000,
       });
       await scrollChatThreadToTop(page);
@@ -407,18 +406,17 @@ suite.define(() => {
       );
       await sessionB.click();
       await page.getByText(/^recent retained message 140\n/).waitFor({ timeout: 10_000 });
-      const thread = page.locator(".chat-thread");
+      const activePane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+      const thread = activePane.locator(".chat-thread");
       await thread.hover();
       await page.mouse.wheel(0, -1_000_000);
       await expect
         .poll(() =>
-          page
-            .locator("openclaw-chat-pane")
-            .evaluate(
-              (element) =>
-                (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
-                  .length,
-            ),
+          activePane.evaluate(
+            (element) =>
+              (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
+                .length,
+          ),
         )
         .toBe(140);
       // Prepending preserves the visible anchor. A renewed upward gesture
@@ -445,15 +443,15 @@ suite.define(() => {
         ).chatSessionReturnSamples = samples;
         const deadline = performance.now() + 750;
         const sample = () => {
-          const pane = document.querySelector("openclaw-chat-pane") as
+          const pane = document.querySelector('openclaw-chat-pane[aria-hidden="false"]') as
             | (HTMLElement & {
                 state?: { chatMessages?: unknown[]; sessionKey?: string };
               })
             | null;
-          const rows = Array.from(document.querySelectorAll<HTMLElement>("[data-chat-row-key]"));
+          const rows = Array.from(pane?.querySelectorAll<HTMLElement>("[data-chat-row-key]") ?? []);
           samples.push({
-            hiddenNotice: document.body.textContent?.includes("Showing last") ?? false,
-            loading: document.querySelector(".chat-history-loading") !== null,
+            hiddenNotice: pane?.textContent?.includes("Showing last") ?? false,
+            loading: pane?.querySelector(".chat-history-loading") !== null,
             messageCount: pane?.state?.chatMessages?.length ?? 0,
             minOpacity: rows.reduce(
               (minimum, row) => Math.min(minimum, Number.parseFloat(getComputedStyle(row).opacity)),
@@ -501,7 +499,7 @@ suite.define(() => {
       expect(returnedSamples.every((sample) => !sample.hiddenNotice)).toBe(true);
       expect(returnedSamples.every((sample) => !sample.loading)).toBe(true);
       expect(await page.getByRole("button", { name: "Load older" }).count()).toBe(0);
-      await expectRequestCountStable(gateway, "chat.history", historyRequestsBeforeReturn + 1);
+      await expectRequestCountStable(gateway, "chat.history", historyRequestsBeforeReturn);
       if (artifactDir) {
         await page.screenshot({
           path: `${artifactDir}/retained-history-return.png`,

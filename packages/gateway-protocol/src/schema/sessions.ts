@@ -7,8 +7,10 @@ import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionsCreateParamsSchema } from "./sessions-create.js";
+import { SessionsRecoverParamsSchema, SessionsRecoverResultSchema } from "./sessions-recover.js";
 
 export { SessionsCreateParamsSchema };
+export { SessionsRecoverParamsSchema, SessionsRecoverResultSchema };
 export { SessionsResolveParamsSchema, type SessionsResolveParams } from "./sessions-resolve.js";
 export {
   SESSIONS_PATCH_MANY_MAX_TARGETS,
@@ -93,6 +95,7 @@ export const SessionCompanionExchangeSchema = closedObject({
 /** Asks the read-only companion about one session and its workspace. */
 export const SessionsCompanionAskParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   question: Type.String({ minLength: 1, maxLength: 400 }),
 });
 
@@ -105,6 +108,7 @@ export const SessionsCompanionAskResultSchema = closedObject({
 /** Selects the in-memory companion thread for one session. */
 export const SessionsCompanionStateParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
 });
 
 /** Current bounded exchanges for one session companion thread. */
@@ -115,6 +119,7 @@ export const SessionsCompanionStateResultSchema = closedObject({
 /** Selects the in-memory companion thread to clear. */
 export const SessionsCompanionResetParamsSchema = closedObject({
   sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
 });
 
 /** Acknowledges clearing one companion thread. */
@@ -321,10 +326,25 @@ export const SessionDiffFileSchema = closedObject({
   truncated: Type.Optional(Type.Boolean()),
 });
 
+/** One commit shown in session diff branch metadata. */
+export const SessionDiffCommitSchema = closedObject({
+  sha: NonEmptyString,
+  subject: Type.String(),
+});
+
+/** Selects the session checkout state represented by the diff. */
+export const SessionDiffScopeSchema = Type.Union([
+  Type.Literal("all"),
+  Type.Literal("uncommitted"),
+  Type.Literal("commit"),
+]);
+
 /** Reads the git diff of a session checkout against its base branch. */
 export const SessionsDiffParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  scope: Type.Optional(SessionDiffScopeSchema),
+  commit: Type.Optional(NonEmptyString),
 });
 
 /** Branch + working-tree diff for one session checkout. */
@@ -334,12 +354,22 @@ export const SessionsDiffResultSchema = closedObject({
   branch: Type.Optional(NonEmptyString),
   /** Display label of the diff base: the default branch name or "HEAD". */
   baseRef: Type.Optional(NonEmptyString),
+  /** Number of commits between the resolved branch merge base and HEAD. */
+  aheadCount: Type.Optional(Type.Integer({ minimum: 0 })),
+  /** Newest-first commits between the resolved branch merge base and HEAD. */
+  commits: Type.Optional(Type.Array(SessionDiffCommitSchema, { maxItems: 50 })),
+  /** The resolved branch merge-base commit. */
+  mergeBase: Type.Optional(SessionDiffCommitSchema),
   files: Type.Array(SessionDiffFileSchema),
   additions: Type.Integer({ minimum: 0 }),
   deletions: Type.Integer({ minimum: 0 }),
   truncated: Type.Optional(Type.Boolean()),
   unavailableReason: Type.Optional(
-    Type.Union([Type.Literal("unknown_session"), Type.Literal("not_git")]),
+    Type.Union([
+      Type.Literal("unknown_session"),
+      Type.Literal("not_git"),
+      Type.Literal("unknown_commit"),
+    ]),
   ),
 });
 
@@ -490,6 +520,7 @@ export const SessionsAbortParamsSchema = closedObject({
 /** Updates or clears one plugin namespace value on a session record. */
 export const SessionsPluginPatchParamsSchema = closedObject({
   key: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   pluginId: NonEmptyString,
   namespace: NonEmptyString,
   value: Type.Optional(PluginJsonValueSchema),
@@ -582,13 +613,6 @@ export const SessionsCompactionListParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
 });
 
-/** Reads one compaction checkpoint by id. */
-export const SessionsCompactionGetParamsSchema = closedObject({
-  key: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-  checkpointId: NonEmptyString,
-});
-
 /** Creates a new branch from a compaction checkpoint. */
 export const SessionsCompactionBranchParamsSchema = closedObject({
   key: NonEmptyString,
@@ -665,13 +689,6 @@ export const SessionsCompactionListResultSchema = closedObject({
   ok: Type.Literal(true),
   key: NonEmptyString,
   checkpoints: Type.Array(SessionCompactionCheckpointSchema),
-});
-
-/** Get response for a single compaction checkpoint. */
-export const SessionsCompactionGetResultSchema = closedObject({
-  ok: Type.Literal(true),
-  key: NonEmptyString,
-  checkpoint: SessionCompactionCheckpointSchema,
 });
 
 /** Branch response with the newly created session key and entry metadata. */
@@ -784,11 +801,9 @@ export type SessionsCompanionStateResult = Static<typeof SessionsCompanionStateR
 export type SessionsCompanionResetParams = Static<typeof SessionsCompanionResetParamsSchema>;
 export type SessionsCompanionResetResult = Static<typeof SessionsCompanionResetResultSchema>;
 export type SessionsCompactionListParams = Static<typeof SessionsCompactionListParamsSchema>;
-export type SessionsCompactionGetParams = Static<typeof SessionsCompactionGetParamsSchema>;
 export type SessionsCompactionBranchParams = Static<typeof SessionsCompactionBranchParamsSchema>;
 export type SessionsCompactionRestoreParams = Static<typeof SessionsCompactionRestoreParamsSchema>;
 export type SessionsCompactionListResult = Static<typeof SessionsCompactionListResultSchema>;
-export type SessionsCompactionGetResult = Static<typeof SessionsCompactionGetResultSchema>;
 export type SessionsCompactionBranchResult = Static<typeof SessionsCompactionBranchResultSchema>;
 export type SessionsCompactionRestoreResult = Static<typeof SessionsCompactionRestoreResultSchema>;
 export type SessionsRewindParams = Static<typeof SessionsRewindParamsSchema>;
@@ -803,6 +818,8 @@ export type SessionsBranchesSwitchResult = Static<typeof SessionsBranchesSwitchR
 export type SessionWorktreeInfo = Static<typeof SessionWorktreeInfoSchema>;
 export type SessionsCreateParams = Static<typeof SessionsCreateParamsSchema>;
 export type SessionsCreateResult = Static<typeof SessionsCreateResultSchema>;
+export type SessionsRecoverParams = Static<typeof SessionsRecoverParamsSchema>;
+export type SessionsRecoverResult = Static<typeof SessionsRecoverResultSchema>;
 export type SessionsSendParams = Static<typeof SessionsSendParamsSchema>;
 export type SessionsMessagesSubscribeParams = Static<typeof SessionsMessagesSubscribeParamsSchema>;
 export type SessionsMessagesUnsubscribeParams = Static<
@@ -839,5 +856,7 @@ export type SessionsFilesRevealParams = Static<typeof SessionsFilesRevealParamsS
 export type SessionsFilesRevealResult = Static<typeof SessionsFilesRevealResultSchema>;
 export type SessionDiffFileStatus = Static<typeof SessionDiffFileStatusSchema>;
 export type SessionDiffFile = Static<typeof SessionDiffFileSchema>;
+export type SessionDiffCommit = Static<typeof SessionDiffCommitSchema>;
+export type SessionDiffScope = Static<typeof SessionDiffScopeSchema>;
 export type SessionsDiffParams = Static<typeof SessionsDiffParamsSchema>;
 export type SessionsDiffResult = Static<typeof SessionsDiffResultSchema>;

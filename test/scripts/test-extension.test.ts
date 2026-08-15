@@ -11,7 +11,7 @@ import {
   detectChangedExtensionIds,
   listAvailableExtensionIds,
   listChangedExtensionIds,
-} from "../../scripts/lib/changed-extensions.mjs";
+} from "../../scripts/lib/changed-extensions.mts";
 import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   createExtensionTestProcessTargetChunks,
@@ -21,20 +21,21 @@ import {
   resolveExtensionBatchPlan,
   resolveExtensionTestConfig,
   resolveExtensionTestPlan,
-} from "../../scripts/lib/extension-test-plan.mjs";
-import { relativizeExtensionVitestArgs } from "../../scripts/lib/extension-vitest-paths.mjs";
-import type { VitestBatchRunParams } from "../../scripts/lib/vitest-batch-runner.mjs";
-import { buildVitestBatchPnpmArgs } from "../../scripts/lib/vitest-batch-runner.mjs";
+} from "../../scripts/lib/extension-test-plan.mts";
+import { relativizeExtensionVitestArgs } from "../../scripts/lib/extension-vitest-paths.mts";
+import type { VitestBatchRunParams } from "../../scripts/lib/vitest-batch-runner.mts";
+import { buildVitestBatchPnpmArgs } from "../../scripts/lib/vitest-batch-runner.mts";
 import {
   parseExtensionIds,
   parseExactVitestExcludePaths,
   resolveExtensionBatchParallelism,
   runExtensionBatchPlan,
-} from "../../scripts/test-extension-batch.mjs";
+} from "../../scripts/test-extension-batch.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
+import { waitForPidFile } from "../helpers/process-wait.js";
 import { extensionCatchAllExcludedTestRoots } from "../vitest/vitest.extensions.config.ts";
 
-const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mjs");
+const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mts");
 const posixIt = process.platform === "win32" ? it.skip : it;
 const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
 
@@ -63,7 +64,7 @@ function createConcurrentExtensionBatchPlan() {
 }
 
 function runScriptResult(args: string[], cwd = process.cwd()) {
-  return spawnSync(process.execPath, [scriptPath, ...args], {
+  return spawnSync(process.execPath, ["--import", "tsx", scriptPath, ...args], {
     cwd,
     encoding: "utf8",
   });
@@ -106,7 +107,7 @@ function expectPositiveIntegerMetric(value: number) {
   expect(value).toBeGreaterThan(0);
 }
 
-describe("scripts/test-extension.mjs", () => {
+describe("scripts/test-extension.mts", () => {
   let balancedExtensionShards: ReturnType<typeof createExtensionTestShards>;
   let balancedExpectedExtensionIds: string[];
 
@@ -169,14 +170,26 @@ describe("scripts/test-extension.mjs", () => {
     expect(plan.hasTests).toBe(true);
   });
 
-  it("bounds Matrix test files across balanced process lifetimes", () => {
-    const config = "test/vitest/vitest.extension-matrix.config.ts";
-    const roots = [bundledPluginRoot("matrix")];
+  it.each([
+    {
+      name: "Matrix",
+      config: "test/vitest/vitest.extension-matrix.config.ts",
+      root: "matrix",
+      limit: 40,
+    },
+    {
+      name: "Telegram",
+      config: "test/vitest/vitest.extension-telegram.config.ts",
+      root: "telegram",
+      limit: 1,
+    },
+  ])("bounds $name test files across balanced process lifetimes", ({ config, root, limit }) => {
+    const roots = [bundledPluginRoot(root)];
     const expectedFiles = listExtensionTestFilesForRoots(roots);
     const chunks = createExtensionTestProcessTargetChunks(config, roots);
 
-    expect(chunks).toHaveLength(expectedMatrixTestProcessCount());
-    expect(chunks.every((chunk) => chunk.length <= MATRIX_TEST_PROCESS_FILE_LIMIT)).toBe(true);
+    expect(chunks).toHaveLength(Math.max(1, Math.ceil(expectedFiles.length / limit)));
+    expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
     expect(Math.max(...chunks.map((chunk) => chunk.length))).toBeLessThanOrEqual(
       Math.min(...chunks.map((chunk) => chunk.length)) + 1,
     );
@@ -294,7 +307,7 @@ describe("scripts/test-extension.mjs", () => {
       ids: number;
     }>(`
       const { detectChangedExtensionIds, listAvailableExtensionIds } =
-        await import("./scripts/lib/changed-extensions.mjs");
+        await import("./scripts/lib/changed-extensions.mts");
       const ids = listAvailableExtensionIds();
       const changed = detectChangedExtensionIds([
         "extensions/slack/src/channel.ts",
@@ -506,7 +519,7 @@ describe("scripts/test-extension.mjs", () => {
     }>(
       `
         const { createExtensionTestShards, resolveExtensionBatchPlan } =
-          await import("./scripts/lib/extension-test-plan.mjs");
+          await import("./scripts/lib/extension-test-plan.mts");
         const extensionIds = ["matrix", "openai", "slack", "telegram"];
         const batch = resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds });
         const shards = createExtensionTestShards({ cwd: process.cwd(), extensionIds, shardCount: 2 });
@@ -770,7 +783,7 @@ describe("scripts/test-extension.mjs", () => {
 
     writeFakePnpm(fakePnpmPath);
     try {
-      const result = spawnSync(process.execPath, [scriptPath, "matrix"], {
+      const result = spawnSync(process.execPath, ["--import", "tsx", scriptPath, "matrix"], {
         cwd: process.cwd(),
         encoding: "utf8",
         env: {
@@ -800,7 +813,7 @@ describe("scripts/test-extension.mjs", () => {
       const signaledPath = path.join(root, "signaled");
 
       writeFakePnpm(fakePnpmPath);
-      const runner = spawn(process.execPath, [scriptPath, "firecrawl"], {
+      const runner = spawn(process.execPath, ["--import", "tsx", scriptPath, "firecrawl"], {
         cwd: process.cwd(),
         env: {
           ...process.env,
@@ -815,10 +828,8 @@ describe("scripts/test-extension.mjs", () => {
       let descendantPid = 0;
 
       try {
-        await waitFor(() => fileExists(childPidPath), 5_000);
-        await waitFor(() => fileExists(descendantPidPath), 5_000);
-        childPid = Number(readFileSync(childPidPath, "utf8"));
-        descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
+        childPid = await waitForPidFile(childPidPath, 5_000);
+        descendantPid = await waitForPidFile(descendantPidPath, 5_000);
         expect(Number.isInteger(childPid)).toBe(true);
         expect(Number.isInteger(descendantPid)).toBe(true);
 

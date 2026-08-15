@@ -12,13 +12,12 @@ import {
   archiveLegacyStateSource,
   legacyStateFileExists,
   type PluginDoctorStateMigration,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   canonicalPathFromExistingAncestor,
   isPathInside,
   pathExists,
 } from "openclaw/plugin-sdk/security-runtime";
-import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -97,9 +96,17 @@ type MigratedBindingRow =
     };
 
 async function collectSessionSurfaces(params: MigrationEnvironment): Promise<SessionSurface[]> {
+  // Doctor enumeration cold-loads this closure; session-store-runtime pulls the
+  // session-accessor/kysely graph, so it stays behind lazy imports in async bodies.
+  const { resolveStorePath } = await import("openclaw/plugin-sdk/session-store-runtime");
   const surfaces = new Map<string, SessionSurface>();
   const stateRoot = await canonicalPathFromExistingAncestor(params.stateDir);
-  const add = async (root: string, storePath: string, agentId: string, scan: boolean) => {
+  const add = async (
+    root: string,
+    storePath: string,
+    agentId: string | undefined,
+    scan: boolean,
+  ) => {
     const canonicalRoot = await canonicalPathFromExistingAncestor(root);
     const surface = surfaces.get(canonicalRoot) ?? {
       root: canonicalRoot,
@@ -111,7 +118,9 @@ async function collectSessionSurfaces(params: MigrationEnvironment): Promise<Ses
     // A store's configured path defines how relative sessionFile locators are
     // resolved. Keep it intact; canonicalize only when deduplicating aliases.
     surface.storePaths.add(path.resolve(storePath));
-    surface.agentIds.add(agentId);
+    if (agentId) {
+      surface.agentIds.add(agentId);
+    }
     surfaces.set(canonicalRoot, surface);
   };
 
@@ -145,8 +154,11 @@ async function collectSessionSurfaces(params: MigrationEnvironment): Promise<Ses
   }
 
   const legacyRoot = path.join(params.stateDir, "sessions");
-  const defaultAgentId = resolveSessionAgentIds({ config: params.config }).defaultAgentId;
-  await add(legacyRoot, path.join(legacyRoot, "sessions.json"), defaultAgentId, true);
+  const legacyOwner = tryResolveLegacyBindingOwnerAgentId({
+    sessionKey: "",
+    config: params.config,
+  });
+  await add(legacyRoot, path.join(legacyRoot, "sessions.json"), legacyOwner, true);
   return [...surfaces.values()].toSorted((a, b) => a.root.localeCompare(b.root));
 }
 
@@ -305,6 +317,7 @@ async function collectBindingOwners(
   surfaces: SessionSurface[],
   params: MigrationEnvironment,
 ): Promise<BindingOwnerCollection> {
+  const { resolveStorePath } = await import("openclaw/plugin-sdk/session-store-runtime");
   const sourcePaths = new Set(
     await Promise.all(
       sources.map((source) => canonicalPathFromExistingAncestor(source.transcriptPath)),
@@ -333,11 +346,15 @@ async function collectBindingOwners(
     const sessionsDir = path.dirname(storePath);
     for (const { sessionKey, entry } of index.entries) {
       const sessionId = entry.sessionId;
-      const agentId = resolveLegacyBindingOwnerAgentId({
+      const agentId = tryResolveLegacyBindingOwnerAgentId({
         sessionKey,
         config: params.config,
         storeAgentIds: storeAgentIds.get(storePath),
       });
+      if (!agentId) {
+        failures.push(`session index ${storePath} has an ambiguous owner for ${sessionKey}`);
+        continue;
+      }
       let legacyTranscriptPath: string;
       let canonicalLegacyTranscriptPath: string;
       try {
@@ -423,6 +440,19 @@ function resolveLegacyBindingOwnerAgentId(params: {
     config: params.config,
     ...(storeAgentId ? { agentId: storeAgentId } : {}),
   }).sessionAgentId;
+}
+
+function tryResolveLegacyBindingOwnerAgentId(
+  params: Parameters<typeof resolveLegacyBindingOwnerAgentId>[0],
+): string | undefined {
+  try {
+    return resolveLegacyBindingOwnerAgentId(params);
+  } catch (error) {
+    if ((error as { code?: unknown }).code === "AGENT_SELECTION_REQUIRED") {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 function copyBindingForSession(stored: MigratedBindingRow, sessionId: string): MigratedBindingRow {
@@ -679,6 +709,7 @@ async function recordSessionOwner(
   owner: LegacyBindingOwner,
   env: NodeJS.ProcessEnv,
 ): Promise<string | undefined> {
+  const { patchSessionEntry } = await import("openclaw/plugin-sdk/session-store-runtime");
   const currentIndex = await readLegacySessionIndex(owner.storePath);
   if ("failure" in currentIndex) {
     return "its legacy session owner could not be revalidated";

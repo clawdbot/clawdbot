@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   panelTabStripStyles,
   renderPanelTabStrip,
@@ -17,16 +17,19 @@ const TAB: PanelTabStripTab = {
 
 function renderStrip(options: {
   tabs?: PanelTabStripTab[];
+  activeId?: string | null;
   onClose?: (id: string) => void;
   onNew?: () => void;
+  onSelect?: (id: string) => void;
+  container?: HTMLDivElement;
 }) {
-  const container = document.createElement("div");
+  const container = options.container ?? document.createElement("div");
   render(
     renderPanelTabStrip({
       tabs: options.tabs ?? [],
-      activeId: options.tabs?.[0]?.id ?? null,
+      activeId: options.activeId ?? options.tabs?.[0]?.id ?? null,
       ariaControls: "test-tab-panel",
-      onSelect: vi.fn(),
+      onSelect: options.onSelect ?? vi.fn(),
       onClose: options.onClose ?? vi.fn(),
       onNew: options.onNew ?? vi.fn(),
       newLabel: "New tab",
@@ -35,6 +38,10 @@ function renderStrip(options: {
   );
   return container;
 }
+
+afterEach(() => {
+  document.body.replaceChildren();
+});
 
 describe("renderPanelTabStrip", () => {
   it("keeps the new-tab control from shrinking when the strip overflows", () => {

@@ -2,7 +2,7 @@ import { html, type TemplateResult } from "lit";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { t } from "../../../i18n/index.ts";
 import { WORKBOARD_STATUSES, type WorkboardCard } from "../../workboard/types.ts";
-import type { BoardViewWidget } from "../view-types.ts";
+import type { BoardWidget } from "../types.ts";
 import type { PluginBoardWidgetRenderer } from "./index.ts";
 import { WorkboardWidgetElement } from "./workboard-widget.ts";
 
@@ -88,7 +88,7 @@ export const renderWorkboardMiniWidget: PluginBoardWidgetRenderer = ({
   active,
   requestUpdate,
 }: {
-  widget: BoardViewWidget;
+  widget: BoardWidget;
   sessionKey: string;
   active: boolean;
   requestUpdate: () => void;

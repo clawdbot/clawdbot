@@ -1,8 +1,7 @@
 {
   "id": "matrix",
   "doctorContract": {
-    "legacyConfigRules": true,
-    "normalizeCompatibilityConfig": true,
+    "configRepair": true,
     "stateMigrations": true
   },
   "name": "Matrix",

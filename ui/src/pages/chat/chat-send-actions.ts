@@ -1,5 +1,10 @@
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import {
+  chatQueueMovableSegments,
+  isMovableChatQueueItem,
+  reorderChatQueueItems,
+} from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { loadChatBranches, loadChatHistory, type ChatState } from "./chat-history.ts";
@@ -11,7 +16,10 @@ import {
 import {
   admitQueuedMessageForSession,
   isVolatileQueuedMessage,
+  readChatQueueForScope,
+  readQueuedMessageById,
   updateQueuedMessage,
+  updateQueuedMessageForSession,
   updateVolatileQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
@@ -78,6 +86,7 @@ export async function sendChatMessageWithGeneratedRunId(
           : {}),
       ...(options.expectedRunId ? { expectedRunId: options.expectedRunId } : {}),
       ...(options.queueMode ? { queueMode: options.queueMode } : {}),
+      ...(options.replyToId ? { replyToId: options.replyToId } : {}),
     });
   } catch (err) {
     const error = applyChatSendError(state, err, canApplyError);
@@ -128,8 +137,38 @@ export const flushChatQueueForEvent = (host: ChatHost) =>
 
 export const retryReconnectableQueuedChatSends = resumeStoredChatOutboxes;
 
+/**
+ * Moves a queued row to `toIndex` within its own movable segment. A locked row
+ * ends that segment, so the move can never carry a message past work the drain
+ * is still waiting on. Each changed row is persisted individually so a partial
+ * storage failure leaves a readable queue and a visible error instead of a
+ * silent reshuffle.
+ */
+export function moveQueuedChatMessage(host: ChatHost, id: string, toIndex: number): void {
+  const item = readQueuedMessageById(host, id);
+  if (!item || !isMovableChatQueueItem(item)) {
+    return;
+  }
+  const sessionKey = item.sessionKey ?? host.sessionKey;
+  const scope = readChatQueueForScope(host, sessionKey, item.agentId);
+  const segment = chatQueueMovableSegments(scope).find((rows) => rows.some((row) => row.id === id));
+  for (const moved of reorderChatQueueItems(segment ?? [], id, toIndex)) {
+    const applied = updateQueuedMessageForSession(
+      host,
+      moved.sessionKey ?? sessionKey,
+      moved.id,
+      (entry) => ({ ...entry, orderKey: moved.orderKey }),
+      moved.agentId,
+    );
+    if (!applied) {
+      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+      return;
+    }
+  }
+}
+
 export async function retryQueuedChatMessage(host: ChatHost, id: string) {
-  const item = host.chatQueue.find((entry) => entry.id === id);
+  let item = host.chatQueue.find((entry) => entry.id === id);
   if (
     !item ||
     item.pendingRunId ||
@@ -141,23 +180,39 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
     return;
   }
   if (item.kind === "steered") {
-    if (!host.connected || !host.client || !hasAbortableSessionRun(host)) {
+    if (!host.connected || !host.client) {
       setChatError(host, t("chat.sendErrors.steerRunNoLongerActive"));
       return;
     }
-    const retry = updateQueuedMessage(host, id, (entry) => ({
-      ...entry,
-      sendAttempts: 0,
-      sendError: undefined,
-      sendRequestStartedAtMs: undefined,
-      sendState: "waiting-idle",
-    }));
-    if (!retry) {
+    if (hasAbortableSessionRun(host)) {
+      const retry = updateQueuedMessage(host, id, (entry) => ({
+        ...entry,
+        sendAttempts: 0,
+        sendError: undefined,
+        sendRequestStartedAtMs: undefined,
+        sendState: "waiting-idle",
+      }));
+      if (!retry) {
+        setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+        return;
+      }
+      await steerQueuedChatMessageLifecycle(host, id, steerSendDependencies);
+      return;
+    }
+    const converted = updateQueuedMessage(host, id, (entry) => {
+      const {
+        kind: _kind,
+        pendingRunId: _pendingRunId,
+        steerTargetRunId: _steerTargetRunId,
+        ...queued
+      } = entry;
+      return resetRetryState(queued, reconnectSafeQueuedSendState(host));
+    });
+    if (!converted) {
       setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
       return;
     }
-    await steerQueuedChatMessageLifecycle(host, id, steerSendDependencies);
-    return;
+    item = converted;
   }
   let outbox = findStoredOutbox(host, item.id);
   if (!outbox) {

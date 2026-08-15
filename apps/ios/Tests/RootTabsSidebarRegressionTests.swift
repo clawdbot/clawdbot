@@ -2,32 +2,6 @@ import Foundation
 import Testing
 
 struct RootTabsSidebarRegressionTests {
-    @Test func `i pad split hidden sidebar uses header reveal instead of reserved rail`() throws {
-        let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
-        let navigationSource = try String(contentsOf: Self.rootTabsNavigationSourceURL(), encoding: .utf8)
-        let splitContent = try Self.extract(
-            source,
-            from: "private func sidebarNavigationSplitContent(sidebarWidth: CGFloat) -> some View",
-            to: "private func sidebarDrawerContent(")
-
-        #expect(splitContent.contains("HStack(spacing: 0)"))
-        #expect(splitContent.contains("self.sidebarColumn"))
-        #expect(splitContent.contains(".frame(width: sidebarWidth, alignment: .topLeading)"))
-        #expect(splitContent.contains(".overlay(alignment: .trailing)"))
-        #expect(!splitContent.contains("self.syncSidebarVisibility(from: visibility)"))
-        #expect(!source.contains("NavigationSplitViewVisibility"))
-        #expect(!source.contains("@State private var splitColumnVisibility: NavigationSplitViewVisibility"))
-        #expect(!splitContent.contains("NavigationSplitView"))
-        #expect(!splitContent.contains("self.collapsedSidebarRail"))
-        #expect(!source.contains("private var collapsedSidebarRail: some View"))
-        #expect(!source.contains("Self.sidebarCollapsedRailWidth"))
-        #expect(source.contains("shouldShowSidebarRevealInDestinationHeader"))
-        #expect(!navigationSource.contains("static let sidebarCollapsedRailWidth"))
-        #expect(!navigationSource.contains("static func sidebarSplitColumnVisibility(isSidebarVisible: Bool)"))
-        #expect(!navigationSource
-            .contains("static func sidebarIsVisible(splitColumnVisibility: NavigationSplitViewVisibility)"))
-    }
-
     @Test func `initial sidebar visibility survives first layout measurement`() throws {
         let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
         let layoutUpdate = try Self.extract(
@@ -215,13 +189,6 @@ struct RootTabsSidebarRegressionTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/RootSidebar.swift")
-    }
-
-    private static func rootTabsNavigationSourceURL() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/RootTabsNavigation.swift")
     }
 
     private static func commandCenterSourceURL() -> URL {

@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { createTrustedCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
@@ -340,7 +341,7 @@ export async function installClawCronJobs(
         throw new Error("cron.add returned no scheduler job id");
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = coerceErrorMessage(error);
       refs[refs.length - 1] = updateRef(pending, { status: "pending", error: message }, options);
       throw new ClawCronInstallError("cron_install_failed", message, refs);
     }
@@ -351,7 +352,7 @@ export async function installClawCronJobs(
         options,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = coerceErrorMessage(error);
       throw new ClawCronInstallError(
         "cron_provenance_failed",
         `cron.add succeeded, but its scheduler id could not be persisted: ${message}`,

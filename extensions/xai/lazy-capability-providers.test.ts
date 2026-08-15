@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
@@ -86,16 +87,6 @@ vi.mock("./realtime-transcription-provider.js", () => ({
 vi.mock("./realtime-voice-provider.js", () => ({
   buildXaiRealtimeVoiceProvider: runtimeMocks.buildVoiceProvider,
 }));
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-}
 
 async function loadLazyProviders() {
   return await import("./lazy-capability-providers.js");

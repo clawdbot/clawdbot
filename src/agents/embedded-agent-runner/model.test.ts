@@ -97,7 +97,7 @@ vi.mock("../model-suppression.js", () => {
   }
 
   return {
-    shouldSuppressBuiltInModel: ({
+    shouldSuppressBuiltInModelCore: ({
       provider,
       id,
       baseUrl,
@@ -380,7 +380,6 @@ function resolveModelAsyncForTest(
   options?: {
     allowBundledStaticCatalogFallback?: boolean;
     preferBundledStaticCatalogTransport?: boolean;
-    retryTransientProviderRuntimeMiss?: boolean;
     runtimeHooks?: ReturnType<typeof createRuntimeHooks>;
     skipAgentDiscovery?: boolean;
   },
@@ -973,6 +972,7 @@ describe("resolveModel", () => {
       activeProjectKeys: [],
       allowGatewaySubagentBinding: false,
       config: cfg,
+      authModes: {},
       metadataSnapshot: { plugins: [] } as never,
       modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: [

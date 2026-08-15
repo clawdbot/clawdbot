@@ -22,8 +22,8 @@ import { summarizeTranscripts } from "../../transcripts/summary.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   activeSessions,
-  createSessionId,
-  readStringParam,
+  createTranscriptSessionId,
+  readTranscriptStringParam,
   resolveSourceProvider,
   sourceFromParams,
   startTranscripts,
@@ -131,7 +131,7 @@ async function stopTranscripts(params: {
   store: TranscriptsStore;
   rawParams: Record<string, unknown>;
 }) {
-  const sessionSelector = readStringParam(params.rawParams, "sessionId", {
+  const sessionSelector = readTranscriptStringParam(params.rawParams, "sessionId", {
     required: true,
     trim: true,
   });
@@ -231,14 +231,16 @@ async function importTranscripts(params: {
     throw new Error(`transcripts provider ${providerSource.providerId} cannot import transcripts`);
   }
   const session: TranscriptSessionDescriptor = {
-    sessionId: readStringParam(params.rawParams, "sessionId", { trim: true }) ?? createSessionId(),
-    title: readStringParam(params.rawParams, "title", { trim: true }),
+    sessionId:
+      readTranscriptStringParam(params.rawParams, "sessionId", { trim: true }) ??
+      createTranscriptSessionId(),
+    title: readTranscriptStringParam(params.rawParams, "title", { trim: true }),
     source: sanitizeTranscriptSourceLocator(providerSource),
     startedAt: new Date().toISOString(),
     stoppedAt: new Date().toISOString(),
     ...(params.ctx.agentId ? { metadata: { agentId: params.ctx.agentId } } : {}),
   };
-  const transcript = readStringParam(params.rawParams, "transcript", {
+  const transcript = readTranscriptStringParam(params.rawParams, "transcript", {
     required: true,
     trim: false,
   });
@@ -247,7 +249,7 @@ async function importTranscripts(params: {
     cfg: params.ctx.config,
     session: { ...session, source: providerSource },
     text: transcript,
-    speakerLabel: readStringParam(params.rawParams, "speakerLabel", { trim: true }),
+    speakerLabel: readTranscriptStringParam(params.rawParams, "speakerLabel", { trim: true }),
   });
   for (const utterance of utterances) {
     await params.store.appendUtteranceForSession(session, utterance);
@@ -277,7 +279,7 @@ async function summarizeExisting(params: {
   store: TranscriptsStore;
   rawParams: Record<string, unknown>;
 }) {
-  const sessionId = readStringParam(params.rawParams, "sessionId", {
+  const sessionId = readTranscriptStringParam(params.rawParams, "sessionId", {
     required: true,
     trim: true,
   });
@@ -352,7 +354,7 @@ export function createTranscriptsTool(options?: {
         throw new Error("transcripts are disabled");
       }
       const params = asOptionalRecord(rawParams) ?? {};
-      const action = readStringParam(params, "action", { required: true, trim: true });
+      const action = readTranscriptStringParam(params, "action", { required: true, trim: true });
       const store = createStore(ctx);
       switch (action) {
         case "start":
@@ -411,7 +413,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
       rawParams: {
         action: "start",
         ...entry,
-        sessionId: entry.sessionId ?? createSessionId(),
+        sessionId: entry.sessionId ?? createTranscriptSessionId(),
       },
     })
       .then((result) => {
@@ -452,7 +454,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
         startEntry(
           {
             ...entry,
-            sessionId: entry.sessionId ?? createSessionId(),
+            sessionId: entry.sessionId ?? createTranscriptSessionId(),
           },
           1,
           store,

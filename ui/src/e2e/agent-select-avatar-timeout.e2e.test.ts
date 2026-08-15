@@ -60,10 +60,35 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "agent.identity.get": {
-              agentId: "main",
-              avatar: "/avatar/main",
-              avatarStatus: "local",
-              name: "Main agent",
+              cases: [
+                {
+                  match: { agentId: "main" },
+                  response: {
+                    agentId: "main",
+                    avatar: "/avatar/main",
+                    avatarStatus: "local",
+                    name: "Main agent",
+                  },
+                },
+                {
+                  match: { agentId: "writer" },
+                  response: {
+                    agentId: "writer",
+                    avatar: "",
+                    avatarStatus: "none",
+                    name: "Writer",
+                  },
+                },
+              ],
+            },
+            "agents.list": {
+              agents: [
+                { id: "main", name: "OpenClaw" },
+                { id: "writer", name: "Writer" },
+              ],
+              defaultId: "main",
+              mainKey: "main",
+              scope: "agent",
             },
           },
         });

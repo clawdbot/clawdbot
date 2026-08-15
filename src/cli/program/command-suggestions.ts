@@ -1,7 +1,7 @@
 import { levenshteinDistance } from "../../shared/levenshtein-distance.js";
 import { formatCliCommand } from "../command-format.js";
-import { getCoreCliCommandNames } from "./core-command-descriptors.js";
-import { getSubCliEntries } from "./subcli-descriptors.js";
+import { getCoreCliCommandNamesCore } from "./core-command-descriptors.js";
+import { getSubCliEntriesCore } from "./subcli-descriptors.js";
 
 const EXPLICIT_COMMAND_ALIASES = new Map<string, string>([
   ["upgrade", "update"],
@@ -23,8 +23,8 @@ export function formatCliCommandSuggestions(input: string): string | undefined {
   }
 
   const knownCommands = uniqueSortedCommandNames([
-    ...getCoreCliCommandNames(),
-    ...getSubCliEntries().map((entry) => entry.name),
+    ...getCoreCliCommandNamesCore(),
+    ...getSubCliEntriesCore().map((entry) => entry.name),
   ]);
   const explicitAlias = EXPLICIT_COMMAND_ALIASES.get(normalizedInput);
   if (explicitAlias && knownCommands.includes(explicitAlias)) {

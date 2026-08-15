@@ -31,7 +31,7 @@ import {
   type SecretAssignment,
 } from "./runtime-shared.js";
 import {
-  getActiveSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeSnapshotState,
   hasSameSecretProviderDefinition,
 } from "./runtime-state.js";
 
@@ -44,8 +44,12 @@ export function classifySecretOwnerDegradationState(params: {
   refs: SecretRef[];
   config: OpenClawConfig;
   contractDigest?: string;
+  forceColdRefKeys?: ReadonlySet<string>;
 }): "cold" | "stale" {
-  const active = getActiveSecretsRuntimeSnapshot();
+  if (params.refs.some((ref) => params.forceColdRefKeys?.has(secretRefKey(ref)))) {
+    return "cold";
+  }
+  const active = getActiveSecretsRuntimeSnapshotState();
   if (
     !active ||
     active.degradedOwners?.some(
@@ -185,6 +189,7 @@ function associateAssignmentFailureOwners(params: {
   assignments: SecretAssignment[];
   error: unknown;
   config: OpenClawConfig;
+  forceColdRefKeys?: ReadonlySet<string>;
 }): void {
   const validationFailures = getSecretAssignmentValidationFailures(params.error);
   const validationFailureRefKeys = new Set(validationFailures.map((failure) => failure.refKey));
@@ -245,6 +250,7 @@ function associateAssignmentFailureOwners(params: {
               assignment.ownerContractDigest ? [assignment.ownerContractDigest] : [],
             ),
           ),
+          forceColdRefKeys: params.forceColdRefKeys,
         }),
         failureMatched,
         source: getSecretAssignmentSource(assignments[0]!),
@@ -271,7 +277,7 @@ function associateAssignmentFailureOwners(params: {
     owners.map((owner) => `${owner.source}\0${owner.ownerKind}\0${owner.ownerId}`),
   );
   const collectedOwnerKeys = new Set(params.assignments.map(assignmentOwnerKey));
-  const activeSnapshot = getActiveSecretsRuntimeSnapshot();
+  const activeSnapshot = getActiveSecretsRuntimeSnapshotState();
   const activeAuthOwnerIds = new Set(
     (activeSnapshot?.authStores ?? []).flatMap(({ agentDir, store }) =>
       Object.keys(store.profiles).map((profileId) =>
@@ -331,6 +337,7 @@ function associateAssignmentFailureOwners(params: {
           refs,
           config: params.config,
           contractDigest: owner.contractDigest,
+          forceColdRefKeys: params.forceColdRefKeys,
         }),
         failureMatched: true,
         source,
@@ -357,6 +364,7 @@ export function warnDegradedSecretOwner(
 async function resolveStrictAssignments(params: {
   assignments: SecretAssignment[];
   options: SecretResolutionOptions;
+  forceColdRefKeys?: ReadonlySet<string>;
 }): Promise<Map<string, unknown>> {
   try {
     const resolved = await resolveSecretRefValues(
@@ -371,6 +379,7 @@ async function resolveStrictAssignments(params: {
       assignments: params.assignments,
       error,
       config: params.options.config,
+      forceColdRefKeys: params.forceColdRefKeys,
     });
     throw error;
   }
@@ -418,6 +427,7 @@ export async function resolveAndApplySecretAssignments(params: {
   context: ResolverContext;
   options: SecretResolutionOptions;
   allowOwnerIsolation?: boolean;
+  forceColdRefKeys?: ReadonlySet<string>;
 }): Promise<{ degradedOwners: DegradedSecretOwner[]; resolvedValues: Map<string, unknown> }> {
   if (!params.allowOwnerIsolation) {
     return {
@@ -449,6 +459,7 @@ export async function resolveAndApplySecretAssignments(params: {
         assignments: pendingOwners.flat(),
         error: failure.error,
         config: params.options.config,
+        forceColdRefKeys: params.forceColdRefKeys,
       });
       const matchingOwners = pendingOwners.filter((assignments) =>
         assignments.some((assignment) =>
@@ -506,6 +517,7 @@ export async function resolveAndApplySecretAssignments(params: {
           assignments: readyAssignments,
           error,
           config: params.options.config,
+          forceColdRefKeys: params.forceColdRefKeys,
         });
         throw error;
       }
@@ -526,10 +538,11 @@ export async function resolveAndApplySecretAssignments(params: {
               assignment.ownerContractDigest ? [assignment.ownerContractDigest] : [],
             ),
           ),
+          forceColdRefKeys: params.forceColdRefKeys,
         });
         const activeOwner =
           degradationState === "stale"
-            ? getActiveSecretsRuntimeSnapshot()?.secretOwners?.find(
+            ? getActiveSecretsRuntimeSnapshotState()?.secretOwners?.find(
                 (entry) => entry.ownerKind === owner.ownerKind && entry.ownerId === owner.ownerId,
               )
             : undefined;

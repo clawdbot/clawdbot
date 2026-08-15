@@ -17,7 +17,7 @@ import {
   resolveAgentMainSessionKey,
   resolveMainSessionKey,
 } from "../config/sessions/main-session.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { preserveTemporarySessionMapping } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -137,7 +137,7 @@ export async function runBootOnce(params: {
   const message = buildBootPrompt(result.content ?? "");
   const sessionId = generateBootSessionId();
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
 
   const mappingPreservation = await preserveTemporarySessionMapping(
     { storePath, sessionKey },

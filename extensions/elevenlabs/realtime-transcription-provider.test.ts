@@ -23,12 +23,14 @@ async function createRealtimeServer(
   options?: {
     initialEvent?: Record<string, unknown>;
     events?: readonly Record<string, unknown>[];
+    eventsByConnection?: readonly (readonly Record<string, unknown>[])[];
     closeAfterEvents?: boolean;
   },
 ) {
   const server = createServer();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const clients = new Set<WebSocket>();
+  let connectionCount = 0;
   server.on("upgrade", (request, socket, head) => {
     onRequest(new URL(request.url ?? "/", "http://127.0.0.1"));
     wss.handleUpgrade(request, socket, head, (ws) => {
@@ -37,7 +39,9 @@ async function createRealtimeServer(
         clients.delete(ws);
       });
       ws.send(JSON.stringify(options?.initialEvent ?? { message_type: "session_started" }));
-      for (const event of options?.events ?? []) {
+      const events = options?.eventsByConnection?.[connectionCount] ?? options?.events ?? [];
+      connectionCount += 1;
+      for (const event of events) {
         ws.send(JSON.stringify(event));
       }
       if (options?.closeAfterEvents) {
@@ -264,6 +268,144 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
       expect(onTranscript).toHaveBeenCalledExactlyOnceWith("hello there");
     });
     expect(onError).not.toHaveBeenCalled();
+    session.close();
+  });
+
+  it.each([
+    {
+      name: "delivers identical committed words from separate speech turns",
+      events: [
+        { message_type: "partial_transcript", text: "yes" },
+        { message_type: "committed_transcript", text: "yes" },
+        { message_type: "partial_transcript", text: "yes" },
+        { message_type: "committed_transcript", text: "yes" },
+      ],
+      transcripts: ["yes", "yes"],
+    },
+    {
+      name: "treats adjacent identical committed transcripts as separate segments",
+      events: [
+        { message_type: "committed_transcript", text: "yes" },
+        { message_type: "committed_transcript", text: "yes" },
+      ],
+      transcripts: ["yes", "yes"],
+    },
+    {
+      name: "suppresses a matching timestamp companion for the same committed segment",
+      events: [
+        { message_type: "committed_transcript", text: "yes" },
+        { message_type: "committed_transcript_with_timestamps", text: "yes" },
+      ],
+      transcripts: ["yes"],
+    },
+    {
+      name: "consumes the timestamp companion at most once",
+      events: [
+        { message_type: "committed_transcript", text: "yes" },
+        { message_type: "committed_transcript_with_timestamps", text: "yes" },
+        { message_type: "committed_transcript_with_timestamps", text: "yes" },
+      ],
+      transcripts: ["yes", "yes"],
+    },
+    {
+      name: "preserves identical consecutive timestamp-only segments",
+      events: [
+        { message_type: "committed_transcript_with_timestamps", text: "yes" },
+        { message_type: "committed_transcript_with_timestamps", text: "yes" },
+      ],
+      transcripts: ["yes", "yes"],
+    },
+    {
+      name: "emits a timestamp-only segment without an earlier plain commit",
+      events: [{ message_type: "committed_transcript_with_timestamps", text: "yes" }],
+      transcripts: ["yes"],
+    },
+    {
+      name: "does not suppress a timestamp transcript that differs from its commit",
+      events: [
+        { message_type: "committed_transcript", text: "yes" },
+        { message_type: "committed_transcript_with_timestamps", text: "no" },
+      ],
+      transcripts: ["yes", "no"],
+    },
+    {
+      name: "preserves a delayed timestamp companion across an interleaved partial",
+      events: [
+        { message_type: "committed_transcript", text: "yes" },
+        { message_type: "partial_transcript", text: "next turn" },
+        { message_type: "committed_transcript_with_timestamps", text: "yes" },
+        { message_type: "committed_transcript", text: "yes" },
+        { message_type: "committed_transcript_with_timestamps", text: "yes" },
+      ],
+      transcripts: ["yes", "yes"],
+    },
+    {
+      name: "keeps timestamp companions attached to alternating committed segments",
+      events: [
+        { message_type: "committed_transcript", text: "yes" },
+        { message_type: "committed_transcript_with_timestamps", text: "yes" },
+        { message_type: "committed_transcript", text: "no" },
+        { message_type: "committed_transcript_with_timestamps", text: "no" },
+        { message_type: "committed_transcript", text: "yes" },
+        { message_type: "committed_transcript_with_timestamps", text: "yes" },
+      ],
+      transcripts: ["yes", "no", "yes"],
+    },
+  ])("$name", async ({ events, transcripts }) => {
+    const deliveryMarker = "transcript frames delivered";
+    const baseUrl = await createRealtimeServer(() => undefined, {
+      events: [...events, { message_type: "partial_transcript", text: deliveryMarker }],
+    });
+    const onError = vi.fn();
+    const onPartial = vi.fn();
+    const onSpeechStart = vi.fn();
+    const onTranscript = vi.fn();
+    const session = buildElevenLabsRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "fixture-value", baseUrl },
+      onError,
+      onPartial,
+      onSpeechStart,
+      onTranscript,
+    });
+
+    await session.connect();
+    await vi.waitFor(() => expect(onPartial).toHaveBeenCalledWith(deliveryMarker));
+    expect(onTranscript.mock.calls.map(([text]) => text)).toEqual(transcripts);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onSpeechStart).not.toHaveBeenCalled();
+    session.close();
+  });
+
+  it("does not suppress a timestamp-only transcript from a replacement session", async () => {
+    const firstMarker = "first session delivered";
+    const secondMarker = "replacement session delivered";
+    const baseUrl = await createRealtimeServer(() => undefined, {
+      eventsByConnection: [
+        [
+          { message_type: "committed_transcript", text: "yes" },
+          { message_type: "partial_transcript", text: firstMarker },
+        ],
+        [
+          { message_type: "committed_transcript_with_timestamps", text: "yes" },
+          { message_type: "partial_transcript", text: secondMarker },
+        ],
+      ],
+    });
+    const onPartial = vi.fn();
+    const onTranscript = vi.fn();
+    const session = buildElevenLabsRealtimeTranscriptionProvider().createSession({
+      providerConfig: { apiKey: "fixture-value", baseUrl },
+      onPartial,
+      onTranscript,
+    });
+
+    await session.connect();
+    await vi.waitFor(() => expect(onPartial).toHaveBeenCalledWith(firstMarker));
+    expect(onTranscript).toHaveBeenCalledExactlyOnceWith("yes");
+
+    await session.connect();
+    await vi.waitFor(() => expect(onPartial).toHaveBeenCalledWith(secondMarker));
+    expect(onTranscript.mock.calls).toEqual([["yes"], ["yes"]]);
     session.close();
   });
 
