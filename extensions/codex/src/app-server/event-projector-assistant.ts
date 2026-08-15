@@ -1,5 +1,6 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
+import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createAssistantCommentaryMessage as buildAssistantCommentaryMessage,
@@ -40,6 +41,10 @@ export class CodexAssistantProjection {
   private responseModel: string | undefined;
   private streamedPartialAssistantItemId: string | undefined;
   private streamedPartialAssistantItemReplaceable = false;
+  // turn/completed.items is a Summary of last_agent_message only. Native-tool
+  // invalidation has to be recorded from item notifications, or a later coda
+  // would revive every pre-tool final.
+  private persistableAssistantBarrier = 0;
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
@@ -155,6 +160,7 @@ export class CodexAssistantProjection {
   }
 
   recordItemStarted(item: CodexThreadItem | undefined, itemId: string | undefined): void {
+    this.noteNativeWorkBarrier(item);
     if (
       item?.type === "agentMessage" &&
       itemId &&
@@ -181,6 +187,7 @@ export class CodexAssistantProjection {
     itemId: string | undefined,
     activeItemIds: ReadonlySet<string>,
   ): void {
+    this.noteNativeWorkBarrier(item);
     if (
       item?.type === "agentMessage" &&
       itemId &&
@@ -304,39 +311,39 @@ export class CodexAssistantProjection {
     }
   }
 
-  collectAssistantTexts(turnItems?: readonly CodexThreadItem[]): string[] {
-    const lastNativeWorkIndex = lastNativeWorkItemIndex(turnItems);
+  collectAssistantTexts(): string[] {
     const texts: string[] = [];
     let seenLaterPersistable = false;
-    // Phase-less agentMessages are replaceable coordination text; a later
-    // persistable item supersedes them. Explicit final_answer items stay unless
-    // they sit before later native tool work.
+    let seenLaterUnphased = false;
+    // Phase-less agentMessages are replaceable coordination text. Explicit
+    // final_answer items stay unless later native work or a later unphased
+    // message supersedes them.
     for (let index = this.assistantItemOrder.length - 1; index >= 0; index -= 1) {
       const itemId = this.assistantItemOrder[index];
-      if (!itemId || this.assistantPhaseByItem.get(itemId) === "commentary") {
+      if (
+        !itemId ||
+        index < this.persistableAssistantBarrier ||
+        this.assistantPhaseByItem.get(itemId) === "commentary"
+      ) {
         continue;
-      }
-      if (turnItems && lastNativeWorkIndex >= 0) {
-        const itemIndex = turnItems.findIndex(
-          (item) => item?.type === "agentMessage" && item.id === itemId,
-        );
-        if (itemIndex >= 0 && itemIndex < lastNativeWorkIndex) {
-          continue;
-        }
       }
       const text = this.assistantTextByItem.get(itemId)?.trim();
       if (!text || this.isToolProgressEchoText(itemId, text)) {
         continue;
       }
       const isTerminalFinal = this.assistantPhaseByItem.get(itemId) === "final_answer";
-      if (!isTerminalFinal && seenLaterPersistable) {
+      if (seenLaterUnphased || (!isTerminalFinal && seenLaterPersistable)) {
         continue;
       }
       texts.push(text);
       seenLaterPersistable = true;
+      if (!isTerminalFinal) {
+        seenLaterUnphased = true;
+      }
     }
     texts.reverse();
-    return texts;
+    const audible = texts.filter((text) => !isSilentReplyText(text));
+    return audible.length > 0 ? audible : texts;
   }
 
   collectCommentaryMessages(): Array<{ itemId: string; message: AssistantMessage }> {
@@ -576,6 +583,13 @@ export class CodexAssistantProjection {
     return undefined;
   }
 
+  private noteNativeWorkBarrier(item: CodexThreadItem | undefined): void {
+    if (!item || !shouldClearTerminalPresentationForNativeItem(item)) {
+      return;
+    }
+    this.persistableAssistantBarrier = this.assistantItemOrder.length;
+  }
+
   private rememberAssistantItem(itemId: string): void {
     if (!itemId || this.assistantItemOrder.includes(itemId)) {
       return;
@@ -587,17 +601,4 @@ export class CodexAssistantProjection {
   private isToolProgressEchoText(itemId: string, text: string): boolean {
     return this.rawPromotedAssistantItemIds.has(itemId) && this.matchesToolProgressEcho(text);
   }
-}
-
-function lastNativeWorkItemIndex(turnItems: readonly CodexThreadItem[] | undefined): number {
-  if (!turnItems) {
-    return -1;
-  }
-  for (let index = turnItems.length - 1; index >= 0; index -= 1) {
-    const item = turnItems[index];
-    if (item && shouldClearTerminalPresentationForNativeItem(item)) {
-      return index;
-    }
-  }
-  return -1;
 }

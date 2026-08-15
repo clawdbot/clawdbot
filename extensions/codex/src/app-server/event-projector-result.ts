@@ -83,9 +83,7 @@ export function buildCodexAttemptResult(
   // Result construction runs after the notification queue drains. Close any
   // tool lacking a terminal item so audit consumers never retain an open action.
   input.nativeToolLifecycleProjection.finalizeActive();
-  const assistantTexts = input.assistantProjection.collectAssistantTexts(
-    input.completedTurn?.items,
-  );
+  const assistantTexts = input.assistantProjection.collectAssistantTexts();
   const commentaryMessages = input.assistantProjection.collectCommentaryMessages();
   const reasoningText = input.reasoningProjection.reasoningText();
   const planText = input.reasoningProjection.planText();
