@@ -286,6 +286,7 @@ openclaw-chat-sidebar-region,
 }
 
 .side-panel__header {
+  --rail-header-action-glyph-size: 15px;
   margin-bottom: 0;
   padding-left: 0;
   border-bottom: 0;
