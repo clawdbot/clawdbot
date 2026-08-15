@@ -339,7 +339,7 @@ openclaw-chat-sidebar-region,
 
 .side-panel__header .tabstrip-separator {
   width: 1px;
-  height: 14px;
+  height: 12px;
   margin: 0 5px;
   background: color-mix(in srgb, var(--muted) 20%, transparent);
 }
@@ -436,8 +436,8 @@ openclaw-chat-sidebar-region,
 }
 
 .side-panel__header .tabstrip-tab__tooltip-trigger.has-label-overflow {
-  -webkit-mask-image: linear-gradient(to right, black calc(100% - 16px), transparent 100%);
-  mask-image: linear-gradient(to right, black calc(100% - 16px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 11px), transparent 100%);
+  mask-image: linear-gradient(to right, black calc(100% - 11px), transparent 100%);
   -webkit-mask-repeat: no-repeat;
   mask-repeat: no-repeat;
 }
