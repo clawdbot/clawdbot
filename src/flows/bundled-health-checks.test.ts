@@ -6,12 +6,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerBundledHealthChecks } from "./bundled-health-checks.js";
 
 const mocks = vi.hoisted(() => ({
+  inspectLlamaCppManagedSetup: vi.fn(),
   registerCuaDriverDoctorChecks: vi.fn(),
+  registerMemoryCoreDoctorChecks: vi.fn(),
   registerPolicyDoctorChecks: vi.fn(),
   loadBundledPluginPublicArtifactModuleSync: vi.fn(({ dirName }: { dirName: string }) =>
-    dirName === "cua-computer"
-      ? { registerCuaDriverDoctorChecks: mocks.registerCuaDriverDoctorChecks }
-      : { registerPolicyDoctorChecks: mocks.registerPolicyDoctorChecks },
+    dirName === "llama-cpp"
+      ? { inspectLlamaCppManagedSetup: mocks.inspectLlamaCppManagedSetup }
+      : dirName === "memory-core"
+        ? { registerMemoryCoreDoctorChecks: mocks.registerMemoryCoreDoctorChecks }
+        : dirName === "cua-computer"
+          ? { registerCuaDriverDoctorChecks: mocks.registerCuaDriverDoctorChecks }
+          : { registerPolicyDoctorChecks: mocks.registerPolicyDoctorChecks },
   ),
 }));
 
@@ -32,10 +38,23 @@ describe("registerBundledHealthChecks", () => {
     rmSync(workspaceDir, { recursive: true, force: true });
   });
 
-  it("does not load bundled policy health checks without policy opt-in", () => {
+  it("always registers passive memory provider readiness without policy opt-in", () => {
     registerBundledHealthChecks({ cfg: {}, cwd: workspaceDir });
 
-    expect(mocks.loadBundledPluginPublicArtifactModuleSync).not.toHaveBeenCalled();
+    expect(mocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
+      dirName: "llama-cpp",
+      artifactBasename: "doctor-contract-api.js",
+    });
+    expect(mocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
+      dirName: "memory-core",
+      artifactBasename: "api.js",
+    });
+    expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledWith({
+      registerHealthCheck: expect.any(Function),
+      inspectManagedLocalEmbeddingSetup: mocks.inspectLlamaCppManagedSetup,
+    });
+    expect(mocks.registerPolicyDoctorChecks).not.toHaveBeenCalled();
+    expect(mocks.registerCuaDriverDoctorChecks).not.toHaveBeenCalled();
   });
 
   it("loads bundled policy health checks when policy extension is enabled", () => {
@@ -73,7 +92,7 @@ describe("registerBundledHealthChecks", () => {
 
     registerBundledHealthChecks({ cfg: {}, cwd: workspaceDir });
 
-    expect(mocks.loadBundledPluginPublicArtifactModuleSync).not.toHaveBeenCalled();
+    expect(mocks.registerPolicyDoctorChecks).not.toHaveBeenCalled();
   });
 
   it("honors explicit policy disablement", () => {
@@ -82,7 +101,7 @@ describe("registerBundledHealthChecks", () => {
       cwd: workspaceDir,
     });
 
-    expect(mocks.loadBundledPluginPublicArtifactModuleSync).not.toHaveBeenCalled();
+    expect(mocks.registerPolicyDoctorChecks).not.toHaveBeenCalled();
   });
 
   it("honors plugin control-plane disablement for policy checks", () => {
@@ -95,7 +114,7 @@ describe("registerBundledHealthChecks", () => {
 
       registerBundledHealthChecks({ cfg: { plugins }, cwd: workspaceDir });
 
-      expect(mocks.loadBundledPluginPublicArtifactModuleSync).not.toHaveBeenCalled();
+      expect(mocks.registerPolicyDoctorChecks).not.toHaveBeenCalled();
     }
   });
 });

@@ -11,11 +11,52 @@ type BundledHealthApi = {
   registerCuaDriverDoctorChecks?: (host: {
     registerHealthCheck: typeof registerHealthCheck;
   }) => void;
+  registerMemoryCoreDoctorChecks?: (host: {
+    registerHealthCheck: typeof registerHealthCheck;
+    inspectManagedLocalEmbeddingSetup: NonNullable<
+      LlamaCppDoctorContractApi["inspectLlamaCppManagedSetup"]
+    >;
+  }) => void;
   registerPolicyDoctorChecks?: (host: { registerHealthCheck: typeof registerHealthCheck }) => void;
+};
+
+type LlamaCppDoctorContractApi = {
+  inspectLlamaCppManagedSetup?: (params: {
+    config: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+    agentId: string;
+    provider: string;
+  }) =>
+    | {
+        provider: string;
+        reason: string;
+        requirement?: string;
+        fixHint?: string;
+      }
+    | null
+    | Promise<{
+        provider: string;
+        reason: string;
+        requirement?: string;
+        fixHint?: string;
+      } | null>;
 };
 
 /** Registers bundled health checks that are explicitly enabled by config and owner policy. */
 export function registerBundledHealthChecks(params: { cfg: OpenClawConfig; cwd?: string }): void {
+  const llamaCppDoctor = loadBundledPluginPublicArtifactModuleSync<LlamaCppDoctorContractApi>({
+    dirName: "llama-cpp",
+    artifactBasename: "doctor-contract-api.js",
+  });
+  if (llamaCppDoctor.inspectLlamaCppManagedSetup) {
+    loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
+      dirName: "memory-core",
+      artifactBasename: "api.js",
+    }).registerMemoryCoreDoctorChecks?.({
+      registerHealthCheck,
+      inspectManagedLocalEmbeddingSetup: llamaCppDoctor.inspectLlamaCppManagedSetup,
+    });
+  }
   if (shouldRegisterPolicyHealth(params)) {
     loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
       dirName: "policy",

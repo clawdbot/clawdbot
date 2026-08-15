@@ -5,8 +5,13 @@ import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doc
 
 const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
 
-type ProviderFailure = { provider: string; reason: string };
-type VectorProviderFinding = ProviderFailure & {
+export type ProviderFailure = {
+  provider: string;
+  reason: string;
+  requirement?: string;
+  fixHint?: string;
+};
+export type VectorProviderFinding = ProviderFailure & {
   agentId: string;
   model: string;
   configPrefix: string;
@@ -70,7 +75,7 @@ function hasConfiguredMemorySecretRef(config: OpenClawConfig, agentId: string): 
   return apiKey !== null && typeof apiKey === "object";
 }
 
-async function collectVectorProviderFindings(
+export async function collectVectorProviderFindings(
   params: {
     config: OpenClawConfig;
     env: NodeJS.ProcessEnv;
