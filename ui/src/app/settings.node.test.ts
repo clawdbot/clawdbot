@@ -881,7 +881,15 @@ describe("loadSettings default gateway URL derivation", () => {
 
     saveSettings({ ...settings, sidebarSessionLayouts });
 
-    expect(loadSettings().sidebarSessionLayouts).toEqual(sidebarSessionLayouts);
+    // Loading normalizes to the canonical shape, filling the dock and
+    // expanded defaults the raw openSlot result omits.
+    expect(loadSettings().sidebarSessionLayouts).toEqual({
+      "agent:main:main": {
+        ...sidebarSessionLayouts["agent:main:main"],
+        dock: "right",
+        expanded: false,
+      },
+    });
   });
 
   it("normalizes corrupt stored sidebar layouts to empty columns", () => {
@@ -896,7 +904,7 @@ describe("loadSettings default gateway URL derivation", () => {
     );
 
     expect(loadSettings().sidebarSessionLayouts).toEqual({
-      "agent:main:main": { columns: [] },
+      "agent:main:main": { columns: [], open: false, expanded: false },
     });
   });
 

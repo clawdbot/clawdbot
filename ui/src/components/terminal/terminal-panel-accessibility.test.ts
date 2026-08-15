@@ -47,17 +47,20 @@ describe("OpenClawTerminalPanel accessibility", () => {
     await i18n.setLocale("en");
   });
 
-  it("labels the terminal placement switcher and all three modes", async () => {
+  it("labels the placement switcher with the alternative destinations only", async () => {
     const panel = createPanel(createPickerClient());
     await waitForFast(() => expect(panel.renderRoot.querySelector(".tp-actions")).not.toBeNull());
 
+    // The occupied dock (bottom by default) has nowhere to move to, so its
+    // button drops out of the cluster instead of rendering a pressed state.
     const switcher = panel.renderRoot.querySelector('[role="group"]');
     expect(switcher?.getAttribute("aria-label")).toBe("Terminal panel position");
     expect(
-      ["Dock to bottom", "Dock to right", "Fill main content area"].every((label) =>
+      ["Dock to right", "Fill main content area"].every((label) =>
         switcher?.querySelector(`[aria-label="${label}"]`),
       ),
     ).toBe(true);
+    expect(switcher?.querySelector('[aria-label="Dock to bottom"]')).toBeNull();
   });
 
   it("offers bottom docking from an embedded terminal", async () => {

@@ -92,9 +92,12 @@ describe("OpenClawTerminalPanel", () => {
     await waitForFast(() => expect(panel.terminalPanelOpen).toBe(true));
   });
 
-  it.each(["bottom", "right"] as const)(
-    "toggles main content placement back to the persisted %s dock",
-    async (dock) => {
+  it.each([
+    { dock: "bottom", label: "Dock to bottom" },
+    { dock: "right", label: "Dock to right" },
+  ] as const)(
+    "moves the persisted $dock dock into main content and back by destination",
+    async ({ dock, label }) => {
       localStorage.setItem(
         "openclaw.terminal.panel.v1",
         JSON.stringify({ open: true, dock, height: 320, width: 520 }),
@@ -114,7 +117,6 @@ describe("OpenClawTerminalPanel", () => {
       expect(JSON.parse(localStorage.getItem("openclaw.terminal.panel.v1") ?? "{}")).toMatchObject({
         open: true,
         dock: "main",
-        previousDock: dock,
       });
 
       panel.remove();
@@ -122,17 +124,15 @@ describe("OpenClawTerminalPanel", () => {
       restored.available = true;
       document.body.append(restored);
       await restored.updateComplete;
-      restored.renderRoot
-        .querySelector<HTMLButtonElement>('[aria-label="Fill main content area"]')
-        ?.click();
+      // Destinations only: the occupied main placement drops out of the
+      // cluster, and leaving it is an explicit destination pick.
+      expect(restored.renderRoot.querySelector('[aria-label="Fill main content area"]')).toBeNull();
+      restored.renderRoot.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)?.click();
       await restored.updateComplete;
 
       expect(restored.renderRoot.querySelector(".tp")?.classList.contains(`tp--${dock}`)).toBe(
         true,
       );
-      expect(
-        restored.renderRoot.querySelector('[aria-label="Fill main content area"]')?.classList,
-      ).not.toContain("is-active");
       restored.remove();
     },
   );
@@ -399,7 +399,6 @@ describe("OpenClawTerminalPanel", () => {
     expect(JSON.parse(localStorage.getItem("openclaw.terminal.panel.v1") ?? "{}")).toMatchObject({
       open: true,
       dock: "main",
-      previousDock: "bottom",
     });
 
     await waitForFast(() => {
@@ -412,9 +411,7 @@ describe("OpenClawTerminalPanel", () => {
     expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
       JSON.stringify(["persisted-1"]),
     );
-    panel.renderRoot
-      .querySelector<HTMLButtonElement>('[aria-label="Fill main content area"]')
-      ?.click();
+    panel.renderRoot.querySelector<HTMLButtonElement>('[aria-label="Dock to bottom"]')?.click();
     await panel.updateComplete;
     expect(panel.renderRoot.querySelector(".tp")?.classList.contains("tp--bottom")).toBe(true);
   });

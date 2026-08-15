@@ -179,10 +179,8 @@ describe("chat sidebar region", () => {
     const region = await createRegion({ columns: [], open: true, expanded: false });
     const selector = root(region).querySelector(".side-panel-empty--selector");
 
-    expect(selector?.querySelector(".side-panel-empty__title")?.textContent).toBe("Open a surface");
-    expect(selector?.querySelector(".side-panel-empty__description")?.textContent).toBe(
-      "Choose what to show in the right panel.",
-    );
+    expect(selector?.querySelector(".side-panel-empty__title")?.textContent).toBe("Open a tab");
+    expect(selector?.querySelector(".side-panel-empty__description")).toBeNull();
     expect(selector?.querySelector(":scope > .side-panel-empty__icon")).toBeNull();
     expect(
       Array.from(selector?.querySelectorAll(".side-panel-empty__type") ?? [], (item) =>
