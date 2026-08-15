@@ -67,6 +67,7 @@ import type {
 import { CONFIG_DIR } from "../utils.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
+import { inheritOptionFromParent } from "./command-options.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
@@ -934,10 +935,10 @@ export function registerSkillsCli(program: Command) {
     .description("Inspect and manage skill lifecycle curation")
     .option("--json", "Output as JSON", false);
 
-  const showCuratorStatus = async () => {
+  const showCuratorStatus = async (opts: { json?: boolean }, command: Command) => {
     try {
       const status = await loadSkillCuratorStatus();
-      if (hasJsonOutput(curator.opts<{ json?: boolean }>())) {
+      if (hasJsonOutput(opts) || inheritOptionFromParent<boolean>(command, "json")) {
         defaultRuntime.writeJson(status);
         return;
       }
@@ -958,10 +959,10 @@ export function registerSkillsCli(program: Command) {
       .command(action)
       .description(`${action} a curated skill`)
       .argument("<skill>", "Skill name or key")
-      .action(async (skill: string) => {
+      .action(async (skill: string, opts: { json?: boolean }, command: Command) => {
         try {
           const result = await runSkillCuratorMutation(action, skill);
-          if (hasJsonOutput(curator.opts<{ json?: boolean }>())) {
+          if (hasJsonOutput(opts) || inheritOptionFromParent<boolean>(command, "json")) {
             defaultRuntime.writeJson(result);
             return;
           }
@@ -974,8 +975,11 @@ export function registerSkillsCli(program: Command) {
         }
       });
   }
+  for (const command of curator.commands) {
+    command.option("--json", "Output as JSON", false);
+  }
 
-  curator.action(showCuratorStatus);
+  curator.action(() => showCuratorStatus(curator.opts(), curator));
 
   const workshop = skills
     .command("workshop")
@@ -987,11 +991,12 @@ export function registerSkillsCli(program: Command) {
 
   const runWorkshopAction = async <T>(
     opts: { agent?: string; json?: boolean },
+    command: Command,
     action: (resolved: ResolvedSkillsWorkspace) => Promise<T>,
     format: (result: T) => string,
   ): Promise<void> => {
     try {
-      const result = await action(resolveSkillsWorkspaceForCommand(workshop, opts));
+      const result = await action(resolveSkillsWorkspaceForCommand(command, opts));
       if (hasJsonOutput(opts)) {
         defaultRuntime.writeJson(result);
         return;
@@ -1005,6 +1010,7 @@ export function registerSkillsCli(program: Command) {
 
   const runWorkshopDraftAction = (
     opts: SkillProposalDraftCliOptions,
+    command: Command,
     action: (
       input: Omit<Parameters<typeof proposeUpdateSkill>[0], "skillName" | "content"> & {
         content: string;
@@ -1014,6 +1020,7 @@ export function registerSkillsCli(program: Command) {
   ): Promise<void> =>
     runWorkshopAction(
       opts,
+      command,
       async ({ config, workspaceDir, agentId }) => {
         const draft = await readSkillProposalInput(opts);
         return await action({
@@ -1035,9 +1042,10 @@ export function registerSkillsCli(program: Command) {
     .command("list")
     .description("List pending and completed skill proposals")
     .option("--json", "Output as JSON", false)
-    .action((opts: { json?: boolean; agent?: string }) =>
+    .action((opts: { json?: boolean; agent?: string }, command: Command) =>
       runWorkshopAction(
         opts,
+        command,
         ({ agentId, workspaceDir }) => listSkillProposals({ agentId, workspaceDir }),
         formatSkillProposalList,
       ),
@@ -1048,25 +1056,27 @@ export function registerSkillsCli(program: Command) {
     .description("Inspect a skill proposal")
     .argument("<proposal-id>", "Skill proposal id")
     .option("--json", "Output as JSON", false)
-    .action(async (proposalId: string, opts: { json?: boolean; agent?: string }) => {
-      try {
-        const { agentId, workspaceDir } = resolveSkillsWorkspaceForCommand(workshop, opts);
-        const proposal = await inspectSkillProposal(proposalId, { agentId, workspaceDir });
-        if (!proposal) {
-          defaultRuntime.error(`Skill proposal not found: ${proposalId}`);
+    .action(
+      async (proposalId: string, opts: { json?: boolean; agent?: string }, command: Command) => {
+        try {
+          const { agentId, workspaceDir } = resolveSkillsWorkspaceForCommand(command, opts);
+          const proposal = await inspectSkillProposal(proposalId, { agentId, workspaceDir });
+          if (!proposal) {
+            defaultRuntime.error(`Skill proposal not found: ${proposalId}`);
+            defaultRuntime.exit(1);
+            return;
+          }
+          if (hasJsonOutput(opts)) {
+            defaultRuntime.writeJson(proposal);
+            return;
+          }
+          defaultRuntime.writeStdout(formatSkillProposalInspect(proposal));
+        } catch (err) {
+          defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
-          return;
         }
-        if (hasJsonOutput(opts)) {
-          defaultRuntime.writeJson(proposal);
-          return;
-        }
-        defaultRuntime.writeStdout(formatSkillProposalInspect(proposal));
-      } catch (err) {
-        defaultRuntime.error(formatErrorMessage(err));
-        defaultRuntime.exit(1);
-      }
-    });
+      },
+    );
 
   workshop
     .command("propose-create")
@@ -1081,15 +1091,19 @@ export function registerSkillsCli(program: Command) {
     .option("--goal <text>", "Proposal or improvement goal")
     .option("--evidence <text>", "Evidence or notes for the proposal")
     .option("--json", "Output as JSON", false)
-    .action((opts: SkillProposalDraftCliOptions & { name: string; description: string }) =>
-      runWorkshopDraftAction(opts, (input) =>
-        proposeCreateSkill({
-          ...input,
-          name: opts.name,
-          description: opts.description,
-          createdBy: "cli",
-        }),
-      ),
+    .action(
+      (
+        opts: SkillProposalDraftCliOptions & { name: string; description: string },
+        command: Command,
+      ) =>
+        runWorkshopDraftAction(opts, command, (input) =>
+          proposeCreateSkill({
+            ...input,
+            name: opts.name,
+            description: opts.description,
+            createdBy: "cli",
+          }),
+        ),
     );
 
   workshop
@@ -1105,8 +1119,8 @@ export function registerSkillsCli(program: Command) {
     .option("--goal <text>", "Proposal or improvement goal")
     .option("--evidence <text>", "Evidence or notes for the proposal")
     .option("--json", "Output as JSON", false)
-    .action((skill: string, opts: SkillProposalDraftCliOptions) =>
-      runWorkshopDraftAction(opts, (input) =>
+    .action((skill: string, opts: SkillProposalDraftCliOptions, command: Command) =>
+      runWorkshopDraftAction(opts, command, (input) =>
         proposeUpdateSkill({ ...input, skillName: skill, createdBy: "cli" }),
       ),
     );
@@ -1124,9 +1138,10 @@ export function registerSkillsCli(program: Command) {
     .option("--goal <text>", "Replacement research or improvement goal")
     .option("--evidence <text>", "Replacement evidence or notes for the proposal")
     .option("--json", "Output as JSON", false)
-    .action((proposalId: string, opts: SkillProposalDraftCliOptions) =>
+    .action((proposalId: string, opts: SkillProposalDraftCliOptions, command: Command) =>
       runWorkshopDraftAction(
         opts,
+        command,
         (input) => reviseSkillProposal({ ...input, proposalId }),
         (proposal) => `Revised ${proposal.record.id} ${proposal.record.proposedVersion}\n`,
       ),
@@ -1139,9 +1154,14 @@ export function registerSkillsCli(program: Command) {
     .option("--correlation-id <id>", "External run or experiment correlation id")
     .option("--json", "Output as JSON", false)
     .action(
-      (proposalId: string, opts: { correlationId?: string; json?: boolean; agent?: string }) =>
+      (
+        proposalId: string,
+        opts: { correlationId?: string; json?: boolean; agent?: string },
+        command: Command,
+      ) =>
         runWorkshopAction(
           opts,
+          command,
           (resolved) =>
             runSkillProposalEvaluate(
               resolved,
@@ -1157,9 +1177,10 @@ export function registerSkillsCli(program: Command) {
     .description("Apply a pending skill proposal")
     .argument("<proposal-id>", "Skill proposal id")
     .option("--json", "Output as JSON", false)
-    .action((proposalId: string, opts: { json?: boolean; agent?: string }) =>
+    .action((proposalId: string, opts: { json?: boolean; agent?: string }, command: Command) =>
       runWorkshopAction(
         opts,
+        command,
         (resolved) => runSkillProposalApply(resolved, proposalId),
         (applied) => `Applied ${applied.record.id} -> ${applied.targetSkillFile}\n`,
       ),
@@ -1187,22 +1208,34 @@ export function registerSkillsCli(program: Command) {
       .argument("<proposal-id>", "Skill proposal id")
       .option("--reason <text>", reasonDescription)
       .option("--json", "Output as JSON", false)
-      .action((proposalId: string, opts: { reason?: string; json?: boolean; agent?: string }) =>
-        runWorkshopAction(
-          opts,
-          ({ agentId, workspaceDir }) =>
-            action({
-              agentId,
-              eventActor: { type: "system", id: "cli" },
-              workspaceDir,
-              proposalId,
-              reason: opts.reason,
-            }),
-          (record) => `${verb} ${record.id}\n`,
-        ),
+      .action(
+        (
+          proposalId: string,
+          opts: { reason?: string; json?: boolean; agent?: string },
+          command: Command,
+        ) =>
+          runWorkshopAction(
+            opts,
+            command,
+            ({ agentId, workspaceDir }) =>
+              action({
+                agentId,
+                eventActor: { type: "system", id: "cli" },
+                workspaceDir,
+                proposalId,
+                reason: opts.reason,
+              }),
+            (record) => `${verb} ${record.id}\n`,
+          ),
       );
   }
 
+  for (const command of workshop.commands) {
+    command.option(
+      "--agent <id>",
+      "Target agent workspace (defaults to cwd-inferred, then default agent)",
+    );
+  }
   applyParentDefaultHelpAction(workshop);
 
   skills

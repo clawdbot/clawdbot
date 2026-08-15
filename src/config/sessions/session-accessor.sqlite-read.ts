@@ -19,6 +19,8 @@ import type {
   SessionTranscriptStats,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
+import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
+import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import {
   getSessionKysely,
@@ -56,6 +58,26 @@ export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): Tra
     {
       databaseLabel: database.path,
       operationLabel: "session transcript fenced read",
+    },
+  );
+}
+
+/** Reads a complete transcript and its lifecycle snapshot from one SQLite read transaction. */
+export function inspectTranscriptEventsSync(scope: SessionTranscriptReadScope): {
+  events: TranscriptEvent[];
+  snapshot: SessionStateDeleteSnapshot;
+} {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  return runSqliteDeferredTransactionSync(
+    database.db,
+    () => ({
+      events: readTranscriptSnapshot(database, resolved.sessionId).events,
+      snapshot: readSessionStateDeleteSnapshot(database.db, resolved.sessionId),
+    }),
+    {
+      databaseLabel: database.path,
+      operationLabel: "session transcript inspection",
     },
   );
 }

@@ -154,6 +154,19 @@ async function getBoundingBox(page: Page, selector: string) {
   return box;
 }
 
+/**
+ * Corner radii are expressed as their base step times the live corner scale,
+ * so these expectations stay true on engines that draw continuous curvature
+ * (`--openclaw-corner-radius-scale: 1.25`) and on engines that do not.
+ */
+async function readCornerScale(page: Page): Promise<number> {
+  return await page.evaluate(() =>
+    Number.parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue("--openclaw-corner-radius-scale"),
+    ),
+  );
+}
+
 function expectControlRect(rect: ControlRect | null, label: string): ControlRect {
   if (rect === null) {
     throw new Error(`Expected ${label} control rect`);
@@ -752,10 +765,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         return { chat: radii(chat), search: radii(search) };
       });
 
+      const searchRadius = `${14 * (await readCornerScale(page))}px`;
       expect(searchBar.height).toBeLessThan(64);
       expect(cornerRadii).toEqual({
         chat: ["0px", "0px", "0px", "0px"],
-        search: ["0px", "0px", "14px", "14px"],
+        search: ["0px", "0px", searchRadius, searchRadius],
       });
       expect(icons).toHaveLength(2);
       for (const icon of icons) {
@@ -937,11 +951,14 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         });
 
       const styles = await readGatewayMenuStyles();
+      const menuRadius = 10 * (await readCornerScale(page));
 
       expect(styles).toEqual({
-        menu: { borderRadius: "10px", padding: "4px" },
+        menu: { borderRadius: `${menuRadius}px`, padding: "4px" },
         item: {
-          borderRadius: "6px",
+          // Item radius plus the 4px menu padding equals the panel radius, so
+          // the item edge stays optically parallel to the menu edge.
+          borderRadius: `${menuRadius - 4}px`,
           fontSize: "13px",
           minHeight: "28px",
           padding: "0px 8px",
@@ -1954,7 +1971,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(geometry.footer).not.toBeNull();
       expect(geometry.textarea).not.toBeNull();
 
-      expect(geometry.bubble?.borderRadius).toBe(10);
+      const mediumRadius = 10 * (await readCornerScale(page));
+      expect(geometry.bubble?.borderRadius).toBe(mediumRadius);
       expect(
         new Set([
           geometry.bubble?.paddingTop,
@@ -1967,7 +1985,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       // keeps the text on the tool-row left edge.
       expect(geometry.assistantBubble?.paddingLeft).toBe(0);
       expect(geometry.assistantBubble?.paddingRight).toBe(0);
-      expect(geometry.composer?.borderRadius).toBe(10);
+      expect(geometry.composer?.borderRadius).toBe(mediumRadius);
 
       const composerInset = width <= 768 ? 4 : 8;
       const textareaBlockInset = width <= 768 ? 10 : composerInset;

@@ -32,8 +32,8 @@ const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS = new Map<string, nu
   ["@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts", 1],
   ["@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts", 1],
   ["@openclaw/discord:dangerous-exec:src/voice/audio.ts", 1],
-  ["@openclaw/google-meet:dangerous-exec:src/node-host.ts", 1],
   ["@openclaw/imessage:dangerous-exec:src/client.ts", 1],
+  ["@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-install.ts", 1],
   ["@openclaw/mxc-sandbox:dangerous-exec:src/readiness.ts", 2],
   ["@openclaw/opencode-provider:dangerous-exec:session-catalog.ts", 1],
   ["@openclaw/raft:dangerous-exec:src/gateway.ts", 1],
@@ -49,7 +49,7 @@ const OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDING_COUNTS = new Map<strin
   ["@openclaw/codex:dangerous-exec:dist/run-attempt-<hash>.js", 2],
   ["@openclaw/codex:dangerous-exec:dist/session-catalog-<hash>.js", 1],
   ["@openclaw/codex:dangerous-exec:dist/transport-stdio-<hash>.js", 1],
-  ["@openclaw/google-meet:dangerous-exec:dist/index.js", 1],
+  ["@openclaw/llama-cpp-provider:dangerous-exec:dist/index.js", 1],
   ["@openclaw/slack:dynamic-code-execution:dist/outbound-payload.test-harness-<hash>.js", 1],
   ["@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js", 1],
 ]);

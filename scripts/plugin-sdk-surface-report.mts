@@ -284,7 +284,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +6: load-only bridges for published pre-split plugin artifacts
       //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
       //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
-      4330,
+      // -1: remove the orphan diagnostic traceparent propagation export.
+      4329,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -357,7 +358,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: load-only bridges for published pre-split plugin artifacts
       //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
       //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
-      2577,
+      // -1: remove the orphan diagnostic traceparent propagation export.
+      2576,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

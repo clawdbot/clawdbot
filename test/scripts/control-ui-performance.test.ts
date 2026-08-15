@@ -216,7 +216,7 @@ describe("Control UI performance budgets", () => {
   });
 
   it("fails startup JS growth over the ratchet tolerance with update guidance", () => {
-    const metrics = createMetrics(326_700);
+    const metrics = createMetrics(326_732);
     const baseline = startupBaseline(325_675);
     const budgets = {
       ...looseBudgets,
@@ -228,10 +228,10 @@ describe("Control UI performance budgets", () => {
       evaluateControlUiPerformanceBudgets(metrics, budgets, baseline).map((entry) => entry.metric),
     ).toContain("startup JS gzip");
     expect(formatControlUiPerformanceReport(metrics, budgets, baseline)).toContain(
-      "startup JS gzip: 319.0 KiB exceeds 319.0 KiB (326700 B vs 326699 B)",
+      "startup JS gzip: 319.1 KiB exceeds 319.1 KiB (326732 B vs 326731 B)",
     );
     expect(formatControlUiPerformanceReport(metrics, budgets, baseline)).toContain(
-      "limits: 10 requests, 319.0 KiB gzip",
+      "limits: 10 requests, 319.1 KiB gzip",
     );
   });
 
@@ -260,7 +260,7 @@ describe("Control UI performance budgets", () => {
 
     expect(
       evaluateControlUiPerformanceBudgets(
-        createMetrics(320 * 1024 + 1),
+        createMetrics(319 * 1024 + 1057),
         budgets,
         startupBaseline(319 * 1024),
       ).map((entry) => entry.metric),

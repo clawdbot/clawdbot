@@ -360,10 +360,18 @@ describe("agentCliCommand", () => {
     expect(zeroTimeoutGatewayRequestMs).toBe(2_147_000_000);
   });
 
-  it("clamps oversized gateway timeout seconds", () => {
-    expect(agentViaGatewayTesting.resolveGatewayAgentTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
+  it("clamps oversized gateway timeout seconds at the command boundary", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand(
+        { message: "hi", to: "+1555", timeout: String(Number.MAX_SAFE_INTEGER) },
+        runtime,
+      );
+
+      const request = requireFirstCallArg(callGateway, "gateway") as { timeoutMs?: number };
+      expect(request.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    });
   });
 
   it("rejects partial gateway timeout values", async () => {
