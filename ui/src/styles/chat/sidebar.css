@@ -376,7 +376,9 @@ openclaw-chat-sidebar-region,
   min-width: 0;
   flex: 1 1 auto;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 14px), transparent);
+  mask-image: linear-gradient(to right, black calc(100% - 14px), transparent);
 }
 
 .side-panel__header .tabstrip-tab__close {
