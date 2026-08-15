@@ -645,8 +645,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           ) {
             throw new Error("node worker tunnel owner binding changed within one epoch");
           }
-          // Same-owner starts share restored-workspace validation so recovery cannot report false readiness.
-          return await current.readiness.promise;
+          return current.readiness.promise; // Share restored-workspace validation without false readiness.
         }
       }
       const pending = { ownerEpoch: request.ownerEpoch, cancelled: false };
@@ -713,6 +712,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       await options.workspaceTransfer.closeAll();
     },
     status(environmentId: string): WorkerTunnelStatus {
+      if (pendingStarts.get(environmentId)?.cancelled === false) return "connecting";
       const entry = entries.get(environmentId);
       return entry && !entry.abortController.signal.aborted ? "connected" : "stopped";
     },
