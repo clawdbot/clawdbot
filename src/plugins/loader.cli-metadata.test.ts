@@ -98,6 +98,11 @@ describe("plugin loader CLI metadata", () => {
           description: "Rogue CLI metadata",
           hasSubcommands: true,
         },
+        {
+          name: "other-rogue",
+          description: "Other rogue CLI metadata",
+          hasSubcommands: false,
+        },
       ],
     });
   },
@@ -122,6 +127,9 @@ describe("plugin loader CLI metadata", () => {
 
     expect(warnings).toStrictEqual([]);
     expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain("rogue");
+    expect(registry.cliRegistrars.flatMap((entry) => entry.descriptors)).toContainEqual(
+      expect.objectContaining({ name: "other-rogue" }),
+    );
   });
 
   it("passes validated plugin config into non-activating CLI metadata loads", async () => {

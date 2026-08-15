@@ -13,7 +13,6 @@ import { getSubCliEntriesCore } from "./subcli-descriptors.js";
 
 const RESERVED_CATALOG_ROOTS = {
   tool: "reserved so plugin registration cannot claim this unregistered root",
-  tools: "reserved so plugin registration cannot claim this unregistered root",
 } as const;
 
 const PLUGIN_CATALOG_PATHS = {
@@ -95,6 +94,8 @@ const JSON_NOT_APPLICABLE = {
       "models auth order",
       "tasks flow",
       "skills workshop",
+      "tools",
+      "tools commands",
     ],
   },
   interactive: {
