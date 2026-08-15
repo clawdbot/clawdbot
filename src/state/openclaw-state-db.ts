@@ -65,7 +65,7 @@ import {
   ensureAdditiveStateColumns,
   ensureFirstUseAdditiveStateColumnsForStrictMigration,
 } from "./openclaw-state-db-schema-additive.js";
-import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   type AgentDatabasePathMigrationSummary as AgentPathSummary,
   assertCanonicalStateSchemaShape,
@@ -75,7 +75,6 @@ import {
   migrateAgentDatabaseRelativePaths as migrateAgentPaths,
   migrateRetiredCommitmentsSchema,
   migrateWorkerPlacementExecutionModeSchema,
-  migrateWorkerWorkspaceRetentionV8,
   repairAgentDatabasesCompositePrimaryKey,
   repairLegacyGatewayRestartHandoffsForStrictMigration,
 } from "./openclaw-state-db-schema-repair.js";
@@ -179,14 +178,6 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
         const applied: string[] = [];
         const previousVersion = readSqliteUserVersion(db);
         if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
-          if (
-            tableExists(db, "worker_workspace_reconciliations") &&
-            !tableHasColumn(db, "worker_workspace_reconciliations", "forced_abandonment_retained")
-          ) {
-            throw new Error(
-              `OpenClaw state database ${pathname} is missing column worker_workspace_reconciliations.forced_abandonment_retained`,
-            );
-          }
           for (const name of repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
             allowMissingColumns: true,
           })) {
@@ -238,7 +229,6 @@ function repairOpenClawStateDatabaseSchemaWithWriteAccess(
         assertCanonicalStateSchemaShape(db, pathname);
         if (tableExists(db, "audit_events")) {
           ensureAdditiveStateColumns(db);
-          migrateWorkerWorkspaceRetentionV8(db, previousVersion);
           executeCanonicalStateSchema(db, {
             includeVersionLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
           });
@@ -411,7 +401,6 @@ function ensureSchema(db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv
         migrateWorkerPlacementExecutionModeSchema(db, previousVersion);
         const pathMigration: AgentPathSummary = migrateAgentPaths(db, previousVersion, pathname);
         ensureAdditiveStateColumns(db);
-        migrateWorkerWorkspaceRetentionV8(db, previousVersion);
         sessionWatchMigration.migrateSessionWatchCursorProvenance(db);
         assertCanonicalStateSchemaShape(db, pathname);
         executeCanonicalStateSchema(db, {

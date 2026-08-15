@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { ensureWorkspaceRetentionSchema } from "../../state/openclaw-state-db-schema-additive.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import { find, getRequired } from "./placement-row-codec.js";
@@ -70,6 +71,7 @@ export function retainWorkerWorkspaceReconciliation(
   db: DatabaseSync,
   owner: WorkerWorkspaceJournalOwner,
 ): void {
+  ensureWorkspaceRetentionSchema(db);
   executeSqliteQuerySync(
     db,
     query(db)
@@ -114,6 +116,7 @@ export function createPlacementWorkspaceJournalOps(
       owner: WorkerWorkspaceJournalOwner,
     ): boolean {
       const db = read();
+      ensureWorkspaceRetentionSchema(db);
       const row = executeSqliteQuerySync(
         db,
         query(db)
@@ -129,6 +132,7 @@ export function createPlacementWorkspaceJournalOps(
 
     isWorkspaceReconciliationRetainedForPendingResult(owner: WorkerWorkspaceJournalOwner): boolean {
       const db = read();
+      ensureWorkspaceRetentionSchema(db);
       const row = executeSqliteQuerySync(
         db,
         query(db)
@@ -147,6 +151,7 @@ export function createPlacementWorkspaceJournalOps(
 
     retainWorkspaceReconciliationForForcedAbandonment(owner: WorkerWorkspaceJournalOwner): void {
       write((db) => {
+        ensureWorkspaceRetentionSchema(db);
         const placement = find(db, owner.sessionId);
         const row = executeSqliteQuerySync(
           db,
@@ -187,6 +192,7 @@ export function createPlacementWorkspaceJournalOps(
 
     pruneOrphanedWorkspaceReconciliations(): WorkerWorkspaceJournalOwner[] {
       return write((db) => {
+        ensureWorkspaceRetentionSchema(db);
         const rows = executeSqliteQuerySync(
           db,
           query(db)

@@ -3084,7 +3084,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
   });
 
   it.each(["runtime open", "doctor repair"] as const)(
-    "rejects a current v8 database missing its retention marker through %s",
+    "leaves a current v8 database without its lazy retention marker untouched through %s",
     (migrationPath) => {
       const stateDir = createTempStateDir();
       const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -3098,17 +3098,12 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       damaged.close();
 
       if (migrationPath === "runtime open") {
-        expect(() => openOpenClawStateDatabase(options)).toThrow(
-          /missing column worker_workspace_reconciliations\.forced_abandonment_retained|column definitions differ for worker_workspace_reconciliations/iu,
-        );
+        expect(() => openOpenClawStateDatabase(options)).not.toThrow();
+        closeOpenClawStateDatabaseForTest();
       } else {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
           changes: [],
-          warnings: [
-            expect.stringContaining(
-              "missing column worker_workspace_reconciliations.forced_abandonment_retained",
-            ),
-          ],
+          warnings: [],
         });
       }
 
@@ -3319,51 +3314,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       { name: "worker_turn_tool_authorities" },
     ]);
   });
-
-  it.each(
-    ["worker_session_tool_operations", "worker_turn_tool_authorities"].flatMap((tableName) =>
-      (["runtime open", "doctor repair"] as const).map((migrationPath) => ({
-        migrationPath,
-        tableName,
-      })),
-    ),
-  )(
-    "rejects v7 with missing stable $tableName through $migrationPath",
-    ({ migrationPath, tableName }) => {
-      const stateDir = createTempStateDir();
-      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-      const databasePath = materializeCurrentStateDatabase(stateDir);
-
-      const { DatabaseSync } = requireNodeSqlite();
-      const damaged = new DatabaseSync(databasePath);
-      damaged.exec(`DROP TABLE ${tableName};`);
-      markStateDatabaseVersion(damaged, 7);
-      damaged.close();
-
-      if (migrationPath === "runtime open") {
-        expect(() => openOpenClawStateDatabase(options)).toThrow(
-          new RegExp(`missing table ${tableName}`, "iu"),
-        );
-      } else {
-        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-          changes: [],
-          warnings: [expect.stringContaining(`missing table ${tableName}`)],
-        });
-      }
-
-      const after = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        expect(
-          after
-            .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-            .get(tableName),
-        ).toBeUndefined();
-        expect(readSqliteNumberPragma(after, "user_version")).toBe(7);
-      } finally {
-        after.close();
-      }
-    },
-  );
 
   it("rejects an inline unique constraint hidden behind a SQLite autoindex", () => {
     const stateDir = createTempStateDir();
@@ -4531,7 +4481,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
   });
 
-  it("adds worker workspace recovery columns during the v5 state migration", () => {
+  it("adds staged worker-result refs during the v5 state migration", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const databasePath = materializeCurrentStateDatabase(stateDir);
@@ -4554,7 +4504,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const reconciliationColumns = reopened.db
       .prepare("PRAGMA table_info(worker_workspace_reconciliations)")
       .all() as Array<{ name?: string }>;
-    expect(reconciliationColumns.map((column) => column.name)).toContain(
+    expect(reconciliationColumns.map((column) => column.name)).not.toContain(
       "forced_abandonment_retained",
     );
     expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
@@ -4564,155 +4514,6 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         .get(),
     ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
   });
-
-  it.each([
-    { migrationPath: "runtime open", previousVersion: 5 },
-    { migrationPath: "runtime open", previousVersion: 6 },
-    { migrationPath: "runtime open", previousVersion: 7 },
-    { migrationPath: "doctor repair", previousVersion: 5 },
-    { migrationPath: "doctor repair", previousVersion: 6 },
-    { migrationPath: "doctor repair", previousVersion: 7 },
-  ] as const)(
-    "backfills retained forced-abandonment journals while migrating v$previousVersion state through $migrationPath",
-    ({ migrationPath, previousVersion }) => {
-      const stateDir = createTempStateDir();
-      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-      const databasePath = materializeCurrentStateDatabase(stateDir);
-
-      const { DatabaseSync } = requireNodeSqlite();
-      const legacyDb = new DatabaseSync(databasePath);
-      legacyDb.exec(`
-      ALTER TABLE worker_workspace_reconciliations DROP COLUMN forced_abandonment_retained;
-      INSERT INTO worker_session_placements (
-        session_id,
-        agent_id,
-        session_key,
-        state,
-        environment_id,
-        transition_generation,
-        active_owner_epoch,
-        recovery_error,
-        created_at_ms,
-        updated_at_ms,
-        state_changed_at_ms
-      ) VALUES (
-        'legacy-forced-session',
-        'main',
-        'agent:main:legacy-forced-session',
-        'failed',
-        'legacy-forced-environment',
-        3,
-        7,
-        'Cloud worker result abandoned by forced operator teardown: rollback failed',
-        100,
-        200,
-        200
-      );
-      INSERT INTO worker_workspace_reconciliations (
-        session_id,
-        environment_id,
-        owner_epoch,
-        placement_generation,
-        base_manifest_ref,
-        current_manifest_ref,
-        plan_json,
-        base_pack,
-        created_at_ms
-      ) VALUES (
-        'legacy-forced-session',
-        'legacy-forced-environment',
-        7,
-        2,
-        'sha256:legacy-base',
-        'sha256:legacy-current',
-        '{}',
-        X'00',
-        150
-      );
-    `);
-      markStateDatabaseVersion(legacyDb, previousVersion);
-      legacyDb.close();
-
-      if (migrationPath === "doctor repair") {
-        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-      }
-      const reopened = openOpenClawStateDatabase(options);
-      expect(
-        reopened.db
-          .prepare(
-            `SELECT forced_abandonment_retained
-           FROM worker_workspace_reconciliations
-           WHERE session_id = 'legacy-forced-session'`,
-          )
-          .get(),
-      ).toEqual({ forced_abandonment_retained: 1 });
-      expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(
-        OPENCLAW_STATE_SCHEMA_VERSION,
-      );
-      reopened.db.exec(`
-      INSERT INTO worker_session_placements (
-        session_id,
-        agent_id,
-        session_key,
-        state,
-        environment_id,
-        transition_generation,
-        active_owner_epoch,
-        recovery_error,
-        created_at_ms,
-        updated_at_ms,
-        state_changed_at_ms
-      ) VALUES (
-        'current-prefix-session',
-        'main',
-        'agent:main:current-prefix-session',
-        'failed',
-        'current-prefix-environment',
-        3,
-        8,
-        'Cloud worker result abandoned by forced operator teardown: current row',
-        300,
-        400,
-        400
-      );
-      INSERT INTO worker_workspace_reconciliations (
-        session_id,
-        environment_id,
-        owner_epoch,
-        placement_generation,
-        base_manifest_ref,
-        current_manifest_ref,
-        plan_json,
-        base_pack,
-        forced_abandonment_retained,
-        created_at_ms
-      ) VALUES (
-        'current-prefix-session',
-        'current-prefix-environment',
-        8,
-        2,
-        'sha256:current-base',
-        'sha256:current-current',
-        '{}',
-        X'00',
-        NULL,
-        350
-      );
-    `);
-      closeOpenClawStateDatabaseForTest();
-
-      const reopenedAgain = openOpenClawStateDatabase(options);
-      expect(
-        reopenedAgain.db
-          .prepare(
-            `SELECT forced_abandonment_retained
-           FROM worker_workspace_reconciliations
-           WHERE session_id = 'current-prefix-session'`,
-          )
-          .get(),
-      ).toEqual({ forced_abandonment_retained: null });
-    },
-  );
 
   it("adds worker transcript commit tables to existing state databases", () => {
     const stateDir = createTempStateDir();

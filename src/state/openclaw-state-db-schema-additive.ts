@@ -30,6 +30,9 @@ const MCP_OAUTH_PENDING_SCHEMA_END = "\n) STRICT;";
 const DEVICE_PAIRING_JOIN_CODE_SCHEMA_START =
   "CREATE TABLE IF NOT EXISTS device_pairing_join_codes (";
 const DEVICE_PAIRING_JOIN_CODE_SCHEMA_END = "\n) STRICT;";
+const LEGACY_FORCED_WORKER_ABANDONMENT_ERROR =
+  "Cloud worker result abandoned by forced operator teardown";
+const workspaceRetentionSchemaConnections = new WeakSet<DatabaseSync>();
 
 function secretStoreSchemaSql(): string {
   const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(SECRET_STORE_SCHEMA_START);
@@ -130,6 +133,32 @@ export function ensureDevicePairSetupCompletionSchema(database: DatabaseSync): v
 /** Lazily add setup correlation only when setup pairing first writes or consumes a token. */
 export function ensureDevicePairSetupBootstrapSchema(database: DatabaseSync): void {
   ensureColumn(database, "device_bootstrap_tokens", "setup_id TEXT");
+}
+
+/** Lazily add durable forced-abandonment ownership before journal retention first runs. */
+export function ensureWorkspaceRetentionSchema(database: DatabaseSync): void {
+  if (workspaceRetentionSchemaConnections.has(database)) {
+    return;
+  }
+  ensureColumn(database, "worker_workspace_reconciliations", "forced_abandonment_retained INTEGER");
+  database
+    .prepare(
+      `UPDATE worker_workspace_reconciliations
+       SET forced_abandonment_retained = 1
+       WHERE forced_abandonment_retained IS NULL
+         AND EXISTS (
+           SELECT 1
+           FROM worker_session_placements AS placement
+           WHERE placement.session_id = worker_workspace_reconciliations.session_id
+             AND placement.state = 'failed'
+             AND placement.environment_id = worker_workspace_reconciliations.environment_id
+             AND placement.active_owner_epoch = worker_workspace_reconciliations.owner_epoch
+             AND placement.transition_generation > worker_workspace_reconciliations.placement_generation
+             AND instr(placement.recovery_error, ?) = 1
+         )`,
+    )
+    .run(LEGACY_FORCED_WORKER_ABANDONMENT_ERROR);
+  workspaceRetentionSchemaConnections.add(database);
 }
 
 function resolveLegacyManagedImageRoot(recordJson: unknown): string | null {

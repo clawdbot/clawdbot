@@ -8,12 +8,14 @@ import {
 } from "./openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
+  CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS,
   CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS,
   CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
 } from "./openclaw-state-db-additive-columns.js";
 import {
   ensureAdditiveStateColumns,
   ensureDevicePairSetupBootstrapSchema,
+  ensureWorkspaceRetentionSchema,
 } from "./openclaw-state-db-schema-additive.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
@@ -186,6 +188,7 @@ describe("OpenClaw database maintenance schema validation", () => {
       "worker_environments.shared_host INTEGER",
       "worker_session_placements.terminal_reason TEXT",
       "worker_session_placements.terminal_at_ms INTEGER",
+      "worker_workspace_reconciliations.forced_abandonment_retained INTEGER",
       "worktrees.run_end_cleanup_json TEXT",
       "device_bootstrap_tokens.setup_id TEXT",
       "session_groups.cwd TEXT",
@@ -232,17 +235,26 @@ describe("OpenClaw database maintenance schema validation", () => {
           type: dataType,
         });
       }
-      expect(readColumnContract(database, "device_bootstrap_tokens", "setup_id")).toBeUndefined();
+      for (const { columnName, tableName } of CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+        expect(readColumnContract(database, tableName, columnName)).toBeUndefined();
+      }
 
       ensureDevicePairSetupBootstrapSchema(database);
-      expect(readColumnContract(database, "device_bootstrap_tokens", "setup_id")).toEqual({
-        dflt_value: null,
-        hidden: 0,
-        name: "setup_id",
-        notnull: 0,
-        pk: 0,
-        type: "TEXT",
-      });
+      ensureWorkspaceRetentionSchema(database);
+      for (const {
+        columnName,
+        dataType,
+        tableName,
+      } of CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS) {
+        expect(readColumnContract(database, tableName, columnName)).toEqual({
+          dflt_value: null,
+          hidden: 0,
+          name: columnName,
+          notnull: 0,
+          pk: 0,
+          type: dataType,
+        });
+      }
     } finally {
       database.close();
     }

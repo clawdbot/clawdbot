@@ -21,6 +21,11 @@ export const CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS = [
   { columnName: "shared_host", dataType: "INTEGER", tableName: "worker_environments" },
   { columnName: "terminal_reason", dataType: "TEXT", tableName: "worker_session_placements" },
   { columnName: "terminal_at_ms", dataType: "INTEGER", tableName: "worker_session_placements" },
+  {
+    columnName: "forced_abandonment_retained",
+    dataType: "INTEGER",
+    tableName: "worker_workspace_reconciliations",
+  },
   { columnName: "run_end_cleanup_json", dataType: "TEXT", tableName: "worktrees" },
   { columnName: "setup_id", dataType: "TEXT", tableName: "device_bootstrap_tokens" },
   { columnName: "cwd", dataType: "TEXT", tableName: "session_groups" },
@@ -35,12 +40,14 @@ function isFirstUseAdditiveStateColumn({
 }: LazyAdditiveStateColumnDefinition): boolean {
   return (
     (tableName === "device_bootstrap_tokens" && columnName === "setup_id") ||
-    (tableName === "session_groups" && (columnName === "cwd" || columnName === "worktree"))
+    (tableName === "session_groups" && (columnName === "cwd" || columnName === "worktree")) ||
+    (tableName === "worker_workspace_reconciliations" &&
+      columnName === "forced_abandonment_retained")
   );
 }
 
 // Most same-version columns repair during a writable shared-state open. These
-// feature-owned columns stay absent until setup or group defaults first uses them.
+// feature-owned columns stay absent until setup, group defaults, or recovery first uses them.
 export const CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS =
   CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS.filter(
     (definition) => !isFirstUseAdditiveStateColumn(definition),

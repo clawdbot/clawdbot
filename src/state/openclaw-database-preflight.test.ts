@@ -236,7 +236,7 @@ describe("OpenClaw database schema preflight", () => {
     },
   );
 
-  it("classifies a current v8 database without its retention marker as incompatible", async () => {
+  it("accepts a current v8 database before retention first use", async () => {
     const databasePath = createExplicitStateDatabase(
       OPENCLAW_STATE_SCHEMA_SQL.replace(
         "  forced_abandonment_retained INTEGER,\n  created_at_ms INTEGER NOT NULL,\n",
@@ -244,16 +244,15 @@ describe("OpenClaw database schema preflight", () => {
       ),
     );
 
-    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toMatchObject({
+    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toEqual({
+      schema: "openclaw.state-schema-preflight.v1",
+      databasePath,
+      targetVersion: OPENCLAW_STATE_SCHEMA_VERSION,
       foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-      status: "incompatible",
+      ownership: null,
+      status: "exact",
       requiresWrite: false,
-      issues: [
-        {
-          code: "missing-column",
-          objectName: "worker_workspace_reconciliations.forced_abandonment_retained",
-        },
-      ],
+      issues: [],
     });
   });
 

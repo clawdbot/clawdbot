@@ -161,7 +161,21 @@ describe("worker placement workspace journal", () => {
 
     database = openOpenClawStateDatabase({ path: databasePath });
     store = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+    expect(
+      database.db
+        .prepare(
+          "SELECT name FROM pragma_table_info('worker_workspace_reconciliations') WHERE name = 'forced_abandonment_retained'",
+        )
+        .get(),
+    ).toBeUndefined();
     expect(prune()).toEqual([]);
+    expect(
+      database.db
+        .prepare(
+          "SELECT forced_abandonment_retained FROM worker_workspace_reconciliations WHERE session_id = ?",
+        )
+        .get(owner.sessionId),
+    ).toEqual({ forced_abandonment_retained: 1 });
     expect(store.isWorkspaceReconciliationRetainedForForcedAbandonment(owner)).toBe(true);
     expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
   });

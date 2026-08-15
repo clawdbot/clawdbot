@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -53,11 +55,14 @@ describe("forced worker environment abandonment", () => {
   beforeEach(async () => {
     effects.workerPlacementError.mockClear();
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-force-worker-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
   });
 
   afterEach(async () => {
     closeOpenClawStateDatabaseForTest();
+    closeOpenClawAgentDatabasesForTest();
+    vi.unstubAllEnvs();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -359,6 +364,10 @@ describe("forced worker environment abandonment", () => {
     closeOpenClawStateDatabaseForTest();
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     store = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+    await upsertSessionEntryCore(
+      { agentId: active.agentId, sessionKey: active.sessionKey },
+      { sessionId: active.sessionId, updatedAt: 2_000 },
+    );
     const restartedHarness = createHarness(store, { workspacePath });
     const environments = {
       ...restartedHarness.environments,
@@ -368,7 +377,7 @@ describe("forced worker environment abandonment", () => {
     const runtime = createGatewayWorkerPlacementRuntime({
       placements: store,
       environments,
-      admitNewPlacements: false,
+      gatewayNamespace: "gateway-test",
       revokeSessionAuthority: vi.fn(),
       warn: vi.fn(),
     });
