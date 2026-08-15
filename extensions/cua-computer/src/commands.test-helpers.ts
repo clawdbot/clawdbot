@@ -86,6 +86,7 @@ export function driver(
   const typeText = vi.fn(async () => result({}));
   const pressKey = vi.fn(async () => result({}));
   const callTool = vi.fn<CuaDriverSession["callTool"]>(async () => result({}));
+  const callDesktopTool = vi.fn<CuaDriverSession["callDesktopTool"]>(async () => result({}));
   const escalateScope = vi.fn(async () => ({
     session: "openclaw-test",
     captureScope: 2,
@@ -100,6 +101,7 @@ export function driver(
     isAvailable: () => true,
     resetAvailabilityCache: () => {},
     callTool,
+    callDesktopTool,
     escalateScope,
     getDesktopState,
     getScreenSize,
@@ -120,6 +122,7 @@ export function driver(
     moveCursor,
     scroll,
     callTool,
+    callDesktopTool,
     escalateScope,
     dispose,
     typeText,

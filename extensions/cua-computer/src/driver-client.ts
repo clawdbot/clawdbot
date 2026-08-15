@@ -57,6 +57,11 @@ export interface CuaDriverSession {
     args: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<CuaToolResult>;
+  callDesktopTool(
+    name: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<CuaToolResult>;
   escalateScope(reason: EscalationReason, signal?: AbortSignal): Promise<CuaSessionState>;
   getDesktopState(signal?: AbortSignal): Promise<CuaToolResult>;
   getScreenSize(signal?: AbortSignal): Promise<CuaToolResult>;
@@ -181,6 +186,15 @@ class DirectCuaDriverSession implements CuaDriverSession {
       this.windowSession.callTool(
         name,
         JSON.stringify({ ...args, session: this.windowPublicSession }),
+        asyncOptions(signal),
+      ),
+    );
+  }
+  async callDesktopTool(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
+    return await this.invoke("desktop", signal, () =>
+      this.desktopSession.callTool(
+        name,
+        JSON.stringify({ ...args, session: this.desktopPublicSession }),
         asyncOptions(signal),
       ),
     );
