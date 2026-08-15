@@ -2756,6 +2756,54 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(workerSidecar.stop).toHaveBeenCalledTimes(1);
   });
 
+  it("continues channel startup when worker placement startup is unavailable", async () => {
+    const startupError = new Error("worker environment startup failed");
+    const startGatewaySidecarsValue = vi.fn(async () => ({
+      pluginServices: null,
+      postReadySidecars: [],
+    }));
+    const onSidecarsReady = vi.fn();
+
+    await startGatewayPostAttachRuntime(
+      {
+        ...createPostAttachParams({ sidecarStartup: "defer" }),
+        startWorkerEnvironmentRuntime: vi.fn(async () => {
+          throw startupError;
+        }),
+        onSidecarsReady,
+      },
+      createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsValue }),
+    );
+
+    await waitForGatewayTestState(() => {
+      expect(startGatewaySidecarsValue).toHaveBeenCalledTimes(1);
+      expect(onSidecarsReady).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("unlocks core methods when deferred sidecar startup fails", async () => {
+    const unavailableGatewayMethods = new Set<string>(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
+    const onSidecarsReady = vi.fn();
+
+    await startGatewayPostAttachRuntime(
+      {
+        ...createPostAttachParams({ sidecarStartup: "defer" }),
+        unlockStartupMethods: () => unavailableGatewayMethods.clear(),
+        onSidecarsReady,
+      },
+      createPostAttachRuntimeDeps({
+        startGatewaySidecars: vi.fn(async () => {
+          throw new Error("channel startup failed");
+        }),
+      }),
+    );
+
+    await waitForGatewayTestState(() => {
+      expect(unavailableGatewayMethods).toEqual(new Set());
+      expect(onSidecarsReady).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("does not start the worker environment sidecar after close begins", async () => {
     const startWorkerEnvironmentRuntime = vi.fn(() => ({ stop: vi.fn() }));
     const startGatewaySidecarsValue = vi.fn(async () => ({
@@ -2777,7 +2825,7 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(startWorkerEnvironmentRuntime).not.toHaveBeenCalled();
   });
 
-  it("loads startup plugins before returning with deferred sidecars", async () => {
+  it("defers startup plugin loading with deferred sidecars", async () => {
     const pluginRegistry = {
       plugins: [{ id: "lazy", status: "loaded" }],
       typedHooks: [],
@@ -2801,12 +2849,42 @@ describe("startGatewayPostAttachRuntime", () => {
       createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsLocal }),
     );
 
-    expect(loadStartupPlugins).toHaveBeenCalledTimes(1);
-    expect(onStartupPluginsLoaded).toHaveBeenCalledWith(loaded);
+    expect(loadStartupPlugins).not.toHaveBeenCalled();
     expect(startGatewaySidecarsLocal).not.toHaveBeenCalled();
 
     await waitForGatewayTestState(() => {
+      expect(loadStartupPlugins).toHaveBeenCalledTimes(1);
+      expect(onStartupPluginsLoaded).toHaveBeenCalledWith(loaded);
       expect(startGatewaySidecarsLocal).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("keeps core startup available when deferred startup plugin loading fails", async () => {
+    const unavailableGatewayMethods = new Set<string>(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
+    const startGatewaySidecarsLocal = vi.fn(async () => ({
+      pluginServices: null,
+      postReadySidecars: [],
+    }));
+    const onSidecarsReady = vi.fn();
+
+    await startGatewayPostAttachRuntime(
+      {
+        ...createPostAttachParams({
+          sidecarStartup: "defer",
+          loadStartupPlugins: vi.fn(async () => {
+            throw new Error("bundled plugin dependencies unavailable");
+          }),
+          unlockStartupMethods: () => unavailableGatewayMethods.clear(),
+          onSidecarsReady,
+        }),
+      },
+      createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsLocal }),
+    );
+
+    await waitForGatewayTestState(() => {
+      expect(startGatewaySidecarsLocal).toHaveBeenCalledTimes(1);
+      expect(unavailableGatewayMethods).toEqual(new Set());
+      expect(onSidecarsReady).toHaveBeenCalledTimes(1);
     });
   });
 

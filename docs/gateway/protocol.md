@@ -219,10 +219,13 @@ accepted by the active Gateway runtime. Clients can compare it with
 needs a restart. `config.get.hash` remains the raw root-file revision used by
 config write conflict guards.
 
-While the gateway is still finishing startup sidecars, `connect` can return a
-retryable `UNAVAILABLE` error with `details.reason: "startup-sidecars"` and
-`retryAfterMs`. Retry within your connection budget instead of treating it as
-a terminal handshake failure.
+Once the core Gateway transport is bound, `connect` succeeds while optional
+startup sidecars continue to initialize. Methods that depend on those sidecars
+return a retryable `UNAVAILABLE` error with `details.reason: "startup-sidecars"`
+and `retryAfterMs`. Retry those requests within your connection budget instead
+of treating them as terminal failures. Callers that explicitly select the
+legacy synchronous sidecar-start mode can still receive the retryable connect
+error while startup is pending.
 
 When a device token is issued, `hello-ok.auth` adds it:
 

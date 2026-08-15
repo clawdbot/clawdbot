@@ -45,6 +45,19 @@ describe("worker environment service", () => {
     expect(prune).toHaveBeenCalledOnce();
   });
 
+  it("does not abort startup reconciliation when terminal cleanup is temporarily unavailable", async () => {
+    const prune = vi
+      .spyOn(support.testState.store, "pruneTerminalEnvironments")
+      .mockImplementation(() => {
+        throw new Error("SQLite transaction lock wait failed");
+      });
+
+    await expect(
+      support.createService(support.createProvider()).reconcileOnce(),
+    ).resolves.toBeUndefined();
+    expect(prune).toHaveBeenCalledOnce();
+  });
+
   it("waits for timed-out provider work during shutdown", async () => {
     let finishProvision: (() => void) | undefined;
     const provisionPending = new Promise<void>((resolve) => {

@@ -349,7 +349,11 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
           ),
       );
     await runTasksWithConcurrency({ tasks, limit: 8 });
-    store.pruneTerminalEnvironments();
+    try {
+      store.pruneTerminalEnvironments();
+    } catch (error) {
+      warn(`Worker environment terminal cleanup failed: ${String(error)}`);
+    }
   };
 
   const reconcileOnce = () => {

@@ -1182,12 +1182,16 @@ export async function startGatewayPostAttachRuntime(
     start: loadStartupPluginsIfNeeded,
     stop: () => {},
   });
-  await startupPluginsResident.start();
-
-  const startupOutcomes = createGatewayStartupOutcomeRecorder({
-    cfg: params.gatewayPluginConfigAtStart,
-    gatewayStartHooks: hasGatewayStartHooks(pluginRegistry),
-  });
+  let startupOutcomes: ReturnType<typeof createGatewayStartupOutcomeRecorder> | undefined;
+  const ensureStartupOutcomes = () =>
+    (startupOutcomes ??= createGatewayStartupOutcomeRecorder({
+      cfg: params.gatewayPluginConfigAtStart,
+      gatewayStartHooks: hasGatewayStartHooks(pluginRegistry),
+    }));
+  if (params.sidecarStartup !== "defer") {
+    await startupPluginsResident.start();
+    ensureStartupOutcomes();
+  }
 
   const startupLogPromise = measureStartup(params.startupTrace, "post-attach.log", () =>
     runtimeDeps.logGatewayStartup({
@@ -1283,10 +1287,23 @@ export async function startGatewayPostAttachRuntime(
           gatewayLifetimeSidecars: [],
         })
       : waitForSidecarStartTurn().then(async () => {
-          await startupPluginsResident.start();
-          const workerEnvironmentSidecar = params.isClosing?.()
-            ? null
-            : ((await params.startWorkerEnvironmentRuntime?.()) ?? null);
+          try {
+            await startupPluginsResident.start();
+          } catch (error) {
+            if (params.sidecarStartup !== "defer") {
+              throw error;
+            }
+            params.log.warn(`optional startup plugin load failed: ${String(error)}`);
+          }
+          const sidecarStartupOutcomes = ensureStartupOutcomes();
+          let workerEnvironmentSidecar: GatewayPostReadySidecarHandle | null = null;
+          if (params.isClosing?.() !== true) {
+            try {
+              workerEnvironmentSidecar = (await params.startWorkerEnvironmentRuntime?.()) ?? null;
+            } catch (error) {
+              params.log.warn(`worker environment sidecar failed to start: ${String(error)}`);
+            }
+          }
           params.log.info("starting channels and sidecars...");
           const loaderStatsBefore = getPluginModuleLoaderStats();
           const result = await (async () => {
@@ -1307,13 +1324,17 @@ export async function startGatewayPostAttachRuntime(
                   onPluginServices: reportPluginServices,
                   shouldStartPluginServices: () => params.isClosing?.() !== true,
                   broadcastPluginEvent: params.broadcastPluginEvent,
-                  startupOutcomes,
+                  startupOutcomes: sidecarStartupOutcomes,
                   waitForPostReadyWork: params.waitForPostReadyWork,
                 }),
               );
             } catch (error) {
               await workerEnvironmentSidecar?.stop();
-              throw error;
+              if (params.sidecarStartup !== "defer") {
+                throw error;
+              }
+              params.log.warn(`optional gateway sidecars failed to start: ${String(error)}`);
+              return { pluginServices: null, postReadySidecars: [] };
             }
           })();
           const loaderStatsAfter = getPluginModuleLoaderStats();
@@ -1396,7 +1417,7 @@ export async function startGatewayPostAttachRuntime(
           }
           params.onPostReadySidecars?.(postReadySidecars);
           params.onGatewayLifetimeSidecars?.(gatewayLifetimeSidecars);
-          params.log.info(formatGatewayStartupOutcomes(startupOutcomes.snapshot()));
+          params.log.info(formatGatewayStartupOutcomes(sidecarStartupOutcomes.snapshot()));
           params.onSidecarsReady?.();
           params.startupTrace?.detail("sidecars.ready", [
             [

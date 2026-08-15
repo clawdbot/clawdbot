@@ -56,13 +56,13 @@ Channel connectivity and inbound admission are separate failure domains. A chann
 
 The Gateway exposes three unauthenticated `GET`/`HEAD` probe pairs:
 
-| Endpoints               | Meaning                                                                                                       | Use                                                            |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `/health`, `/healthz`   | The HTTP server is live.                                                                                      | Process liveness and restart decisions.                        |
-| `/startup`, `/startupz` | Startup work is complete and the Gateway is not draining. Channel health is not consulted.                    | Orchestrator startup and traffic admission.                    |
-| `/ready`, `/readyz`     | Startup is complete, the Gateway is not draining, and configured channel accounts pass deep readiness checks. | Operator monitoring that should surface hard channel failures. |
+| Endpoints               | Meaning                                                                                                              | Use                                                            |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `/health`, `/healthz`   | The HTTP server is live.                                                                                             | Process liveness and restart decisions.                        |
+| `/startup`, `/startupz` | Core Gateway startup is complete and the Gateway is not draining. Channel and plugin sidecars may still be starting. | Orchestrator startup and traffic admission.                    |
+| `/ready`, `/readyz`     | Startup is complete, the Gateway is not draining, and configured channel accounts pass deep readiness checks.        | Operator monitoring that should surface hard channel failures. |
 
-`/startupz` returns `503` with `status: "starting"` while startup sidecars are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. Use it for Kubernetes, Fly, Render, and similar traffic admission. A broken Telegram or other channel account can make `/readyz` return `503` without taking a healthy Control UI out of service through `/startupz`.
+In normal Gateway mode, `/startupz` returns `503` with `status: "starting"` until the core Gateway is bound, `503` with `status: "draining"` during drain, and `200` with `status: "started"` once core startup is complete. Channel and plugin sidecars can continue starting after `/startupz` becomes healthy; use `/readyz` when those downstream surfaces must also be healthy. Callers that explicitly select synchronous sidecar startup retain the legacy startup boundary. A broken Telegram or other channel account can make `/readyz` return `503` without taking a healthy Control UI out of service through `/startupz`.
 
 Remote unauthenticated startup responses contain only `ok` and `status`. Local-direct and authenticated callers also receive `version`, `uptimeMs`, and `pendingReason` while startup is pending. Readiness details follow the same local-or-authenticated gate because they can name failing subsystems.
 
