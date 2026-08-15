@@ -275,7 +275,7 @@ export function createSessionCatalogAdoptionCoordinator<TResult extends { sessio
   const operations = new Map<string, Promise<TResult>>();
   return async (params: {
     sourceKey: string;
-    findExisting: () => string | undefined;
+    findExisting: () => string | undefined | Promise<string | undefined>;
     create: () => Promise<{ sessionKey: string }>;
     complete: (continued: { sessionKey: string }) => Promise<TResult>;
   }): Promise<TResult> => {
@@ -284,14 +284,14 @@ export function createSessionCatalogAdoptionCoordinator<TResult extends { sessio
       return await pending;
     }
     const operation = (async () => {
-      const existing = params.findExisting();
+      const existing = await params.findExisting();
       if (existing) {
         // The gateway's same-source link upsert preserves its active marker. Re-running
         // completion only supplies a new baseline after that link was removed.
         return await params.complete({ sessionKey: existing });
       }
-      const continued = await params.create().catch((error: unknown) => {
-        const raced = params.findExisting();
+      const continued = await params.create().catch(async (error: unknown) => {
+        const raced = await params.findExisting();
         if (raced) {
           return { sessionKey: raced };
         }
