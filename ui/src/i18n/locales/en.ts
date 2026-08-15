@@ -739,6 +739,8 @@ export const en: TranslationMap = {
     neverConnected: "Never connected",
     offlineFor: "Offline for {duration}",
     lastSeen: "Last seen {time}",
+    nodeUpdateRequired:
+      "Update required: run {updateCommand}, then reconnect. For a headless node, run {restartCommand}.",
     capabilityCamera: "Camera",
     capabilityLocation: "Location",
     capabilityTalk: "Talk",

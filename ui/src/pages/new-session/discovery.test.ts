@@ -52,6 +52,28 @@ describe("readDraftNodes", () => {
       },
     ]);
   });
+
+  it("keeps only the exact structured update-required issue", () => {
+    const issue = {
+      code: "update-required",
+      action: "update-and-reconnect",
+      updateCommand: "openclaw update",
+      headlessReconnectCommand: "openclaw node restart",
+    };
+    expect(
+      readDraftNodes([
+        {
+          nodeId: "outdated",
+          connected: true,
+          commands: ["system.run"],
+          issues: [issue, { ...issue, headlessReconnectCommand: "legacy restart" }],
+        },
+      ])[0]?.issues,
+    ).toEqual([issue]);
+    expect(
+      readDraftEnvironments([{ id: "node:outdated", type: "node", issues: [issue] }])[0]?.issues,
+    ).toEqual([issue]);
+  });
 });
 describe("readDraftCloudProfiles", () => {
   it("keeps closed profile summaries in stable order", () => {

@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { RuntimeTargetIssue } from "../../../../packages/gateway-protocol/src/schema/environments.ts";
 
 export type DraftBranches = {
   repoRoot: string;
@@ -26,6 +27,7 @@ export type DraftNode = {
   connected: boolean;
   canExec: boolean;
   canBrowse: boolean;
+  issues?: RuntimeTargetIssue[];
 };
 
 export type DraftCloudProfile = {
@@ -45,6 +47,7 @@ export type DraftEnvironment = {
   lastSeenReason?: string;
   trust?: "persistent" | "disposable";
   capabilities?: string[];
+  issues?: RuntimeTargetIssue[];
 };
 
 export type BrowserTarget = { nodeId: string; label: string };
@@ -53,6 +56,21 @@ function normalizeTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.trunc(value)
     : undefined;
+}
+
+function readRuntimeTargetIssues(value: unknown): RuntimeTargetIssue[] | undefined {
+  const issues = (Array.isArray(value) ? value : []).flatMap<RuntimeTargetIssue>((raw) => {
+    if (!isRecord(raw)) {
+      return [];
+    }
+    return raw.code === "update-required" &&
+      raw.action === "update-and-reconnect" &&
+      raw.updateCommand === "openclaw update" &&
+      raw.headlessReconnectCommand === "openclaw node restart"
+      ? [raw as RuntimeTargetIssue]
+      : [];
+  });
+  return issues.length > 0 ? issues : undefined;
 }
 
 export function readDraftNodes(value: unknown): DraftNode[] {
@@ -71,6 +89,7 @@ export function readDraftNodes(value: unknown): DraftNode[] {
         remoteIp?: unknown;
         connected?: unknown;
         commands?: unknown;
+        issues?: unknown;
       };
       const nodeId = normalizeOptionalString(node.nodeId);
       const commands = Array.isArray(node.commands)
@@ -81,6 +100,7 @@ export function readDraftNodes(value: unknown): DraftNode[] {
       }
       const connected = node.connected === true;
       const canExec = commands.includes("system.run");
+      const issues = readRuntimeTargetIssues(node.issues);
       return [
         {
           nodeId,
@@ -92,6 +112,7 @@ export function readDraftNodes(value: unknown): DraftNode[] {
           connected,
           canExec,
           canBrowse: connected && canExec && commands.includes("fs.listDir"),
+          ...(issues ? { issues } : {}),
         },
       ];
     })
@@ -140,6 +161,7 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
         lastSeenReason?: unknown;
         trust?: unknown;
         capabilities?: unknown;
+        issues?: unknown;
       };
       const id = normalizeOptionalString(environment.id);
       const type = normalizeOptionalString(environment.type);
@@ -156,6 +178,7 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
       const lastDisconnectedAtMs = normalizeTimestamp(environment.lastDisconnectedAtMs);
       const lastSeenAtMs = normalizeTimestamp(environment.lastSeenAtMs);
       const lastSeenReason = normalizeOptionalString(environment.lastSeenReason);
+      const issues = readRuntimeTargetIssues(environment.issues);
       return [
         {
           id,
@@ -170,6 +193,7 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
           ...(lastSeenReason ? { lastSeenReason } : {}),
           ...(trust ? { trust } : {}),
           ...(capabilities ? { capabilities } : {}),
+          ...(issues ? { issues } : {}),
         },
       ];
     })

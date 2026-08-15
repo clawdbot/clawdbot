@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { formatNodeRunnerUpdateRequired } from "../../infra/node-runner-inventory.js";
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
-import { DEVICE_WORKER_PROVIDER_ID, isDeviceWorkerAvailable } from "./device-provider.js";
+import { DEVICE_WORKER_PROVIDER_ID, resolveDeviceWorkerAvailability } from "./device-provider.js";
 import {
   createPlacementFailureActions,
   isUnavailableEnvironment,
@@ -183,9 +184,14 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           return placement;
         },
       });
-      if (request.deviceId && !(await isDeviceWorkerAvailable(environments, request.deviceId))) {
+      const deviceAvailability = request.deviceId
+        ? await resolveDeviceWorkerAvailability(environments, request.deviceId)
+        : undefined;
+      if (request.deviceId && !deviceAvailability?.available) {
         throw new Error(
-          `device worker requires a connected current node host; reconnect or reprovision: ${request.deviceId}`,
+          deviceAvailability?.issue
+            ? formatNodeRunnerUpdateRequired(request.deviceId, deviceAvailability.issue)
+            : `device worker requires a connected current node host; reconnect or reprovision: ${request.deviceId}`,
         );
       }
       const localPath = await options.resolveWorkspacePath(request);

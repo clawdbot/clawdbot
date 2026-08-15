@@ -18,6 +18,16 @@ type WhereChipState = Readonly<{
   cloudProfiles: readonly DraftCloudProfile[];
 }>;
 
+function nodeUpdateIssueCopy(node: DraftNode): string | undefined {
+  const issue = node.issues?.find((candidate) => candidate.code === "update-required");
+  return issue
+    ? t("newSession.nodeUpdateRequired", {
+        updateCommand: issue.updateCommand,
+        restartCommand: issue.headlessReconnectCommand,
+      })
+    : undefined;
+}
+
 export function resolveWhereChip(params: {
   execNodes: readonly DraftNode[];
   environments: readonly DraftEnvironment[] | null;
@@ -132,8 +142,9 @@ export function renderWhereChip(params: {
         ${params.state.deviceNodes.length > 0
           ? html`
               <div class="new-session-page__menu-title">${t("newSession.yourDevices")}</div>
-              ${params.state.deviceNodes.map((node, index) =>
-                renderSessionMenuItem(
+              ${params.state.deviceNodes.map((node, index) => {
+                const updateIssue = nodeUpdateIssueCopy(node);
+                return renderSessionMenuItem(
                   {
                     value: `node:${node.nodeId}`,
                     label: node.displayName,
@@ -141,15 +152,15 @@ export function renderWhereChip(params: {
                       ? icons.monitorSmartphone
                       : icons.monitor,
                     sub: nodeSuffixes[index],
-                    facts: params.state.deviceFacts.get(node.nodeId),
+                    facts: updateIssue ? [updateIssue] : params.state.deviceFacts.get(node.nodeId),
                     checked: params.execNode === node.nodeId,
-                    disabled: !node.connected,
-                    title: nodeTooltip(node),
+                    disabled: !node.connected || Boolean(updateIssue),
+                    title: updateIssue ?? nodeTooltip(node),
                     onSelect: () => params.onSelectExecNode(node.nodeId),
                   },
                   params.submitting,
-                ),
-              )}
+                );
+              })}
             `
           : nothing}
         ${params.state.cloudProfiles.length > 0 || params.cloudProfileId

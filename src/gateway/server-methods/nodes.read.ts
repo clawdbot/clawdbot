@@ -17,7 +17,11 @@ import type { NodeListNode } from "../../shared/node-list-types.js";
 import { replaceRemoteNodeSkills } from "../../skills/runtime/remote-skills.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../skills/runtime/remote.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
-import { isNodeRunnerSessionHost, updateNodeRunnerInventory } from "../node-registry-private.js";
+import {
+  getNodeRunnerInventoryIssue,
+  isNodeRunnerSessionHost,
+  updateNodeRunnerInventory,
+} from "../node-registry-private.js";
 import type { NodeSession } from "../node-registry.js";
 import {
   hasAuthorizedClientPluginNodeCapabilityUrl,
@@ -89,12 +93,23 @@ async function listNodesForClient(params: {
     connectedNodes: params.connectedNodes,
     nodeRegistry: params.context.nodeRegistry,
   });
+  const issuesByNodeId = new Map(
+    params.connectedNodes.flatMap((node) => {
+      const issue = getNodeRunnerInventoryIssue({
+        registry: params.context.nodeRegistry,
+        nodeId: node.nodeId,
+        connId: node.connId,
+      });
+      return issue ? [[node.nodeId, [issue]] as const] : [];
+    }),
+  );
   const catalog = createKnownNodeCatalog({
     pairedDevices: params.pairedDevices,
     pairedNodes: params.pairedNodes,
     pendingNodes: params.pendingNodes,
     connectedNodes: params.connectedNodes,
     sessionHostNodeIds,
+    issuesByNodeId,
   });
   const localNodeId = await resolveLocalNodeId().catch((error: unknown) => {
     params.context.logGateway.warn(
