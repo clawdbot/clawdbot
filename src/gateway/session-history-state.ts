@@ -145,7 +145,16 @@ function paginateSessionMessages(
       endExclusive = messages.length;
     }
   }
-  const start = typeof limit === "number" && limit > 0 ? Math.max(0, endExclusive - limit) : 0;
+  let start = typeof limit === "number" && limit > 0 ? Math.max(0, endExclusive - limit) : 0;
+  const boundarySeq = resolveMessageSeq(messages[start]);
+  // Projection can expand one transcript record into several display rows.
+  // Keep equal-seq runs atomic because the public cursor cannot address a row within the run.
+  while (start > 0) {
+    if (boundarySeq === undefined || resolveMessageSeq(messages[start - 1]) !== boundarySeq) {
+      break;
+    }
+    start -= 1;
+  }
   const paginatedMessages = messages.slice(start, endExclusive);
   const firstSeq = resolveMessageSeq(paginatedMessages[0]);
   return buildPaginatedSessionHistory({
