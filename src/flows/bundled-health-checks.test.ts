@@ -61,6 +61,7 @@ describe("registerBundledHealthChecks", () => {
     );
     const host = mocks.registerMemoryCoreDoctorChecks.mock.calls[0]?.[0];
     expect(host).toMatchObject({
+      getHealthCheck: expect.any(Function),
       registerHealthCheck: expect.any(Function),
       resolveEmbeddingProviderSetupInspector: expect.any(Function),
       memoryCoreActive: true,

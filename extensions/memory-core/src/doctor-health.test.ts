@@ -39,15 +39,16 @@ function captureCheck(
   inspectManagedLocalEmbeddingSetup?: InspectManagedLocalEmbeddingSetup,
   memoryCoreActive = true,
 ): HealthCheck {
-  const checks: HealthCheck[] = [];
+  const checks = new Map<string, HealthCheck>();
   registerMemoryCoreDoctorChecks({
     registerHealthCheck(check) {
-      checks.push(check);
+      checks.set(check.id, check);
     },
+    getHealthCheck: (id) => checks.get(id),
     resolveEmbeddingProviderSetupInspector: () => inspectManagedLocalEmbeddingSetup,
     memoryCoreActive,
   });
-  const check = checks[0];
+  const check = checks.get(MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID);
   if (!check) {
     throw new Error("expected managed local embedding setup check");
   }
@@ -73,6 +74,63 @@ function context(stateDir: string, provider: string): HealthCheckContext {
 describe("managed local embedding setup health check", () => {
   it("stays opt-in outside an explicit pre-cutover selection", () => {
     expect(captureCheck()).toMatchObject({ defaultEnabled: false });
+  });
+
+  it("refreshes current host state and re-registers after a registry reset", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-registration-"));
+    roots.add(stateDir);
+    await createSemanticIndex(stateDir);
+    const checks = new Map<string, HealthCheck>();
+    const registerHealthCheck = vi.fn((check: HealthCheck) => {
+      if (checks.has(check.id)) {
+        throw new Error(`duplicate check: ${check.id}`);
+      }
+      checks.set(check.id, check);
+    });
+    const getHealthCheck = (id: string) => checks.get(id);
+    const staleInspect = vi.fn<InspectManagedLocalEmbeddingSetup>(async () => null);
+    const currentInspect = vi.fn<InspectManagedLocalEmbeddingSetup>(async (params) => ({
+      provider: params.provider,
+      reason: "Local embeddings need the managed llama.cpp server config.",
+      requirement: "managed-llama-cpp-setup",
+    }));
+
+    registerMemoryCoreDoctorChecks({
+      registerHealthCheck,
+      getHealthCheck,
+      resolveEmbeddingProviderSetupInspector: () => staleInspect,
+      memoryCoreActive: false,
+    });
+    const check = checks.get(MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID);
+    if (!check) {
+      throw new Error("expected managed local embedding setup check");
+    }
+
+    registerMemoryCoreDoctorChecks({
+      registerHealthCheck,
+      getHealthCheck,
+      resolveEmbeddingProviderSetupInspector: () => currentInspect,
+      memoryCoreActive: true,
+    });
+    expect(registerHealthCheck).toHaveBeenCalledOnce();
+    await expect(check.detect(context(stateDir, "local"))).resolves.toEqual([
+      expect.objectContaining({
+        requirement: "managed-llama-cpp-setup",
+        target: "main/local",
+      }),
+    ]);
+    expect(staleInspect).not.toHaveBeenCalled();
+    expect(currentInspect).toHaveBeenCalledOnce();
+
+    checks.clear();
+    registerMemoryCoreDoctorChecks({
+      registerHealthCheck,
+      getHealthCheck,
+      resolveEmbeddingProviderSetupInspector: () => currentInspect,
+      memoryCoreActive: true,
+    });
+    expect(checks.get(MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID)).toBe(check);
+    expect(registerHealthCheck).toHaveBeenCalledTimes(2);
   });
 
   it("reports a structured blocker without mutating config or the semantic index", async () => {

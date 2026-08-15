@@ -8,7 +8,7 @@ import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-r
 import type { InspectEmbeddingProviderSetup } from "../plugins/provider-policy-surface.js";
 import { resolveProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
-import { registerHealthCheck } from "./health-check-registry.js";
+import { getHealthCheck, registerHealthCheck } from "./health-check-registry.js";
 
 // Bridges bundled plugin doctor checks into the core health registry.
 type BundledHealthApi = {
@@ -16,6 +16,7 @@ type BundledHealthApi = {
     registerHealthCheck: typeof registerHealthCheck;
   }) => void;
   registerMemoryCoreDoctorChecks?: (host: {
+    getHealthCheck: typeof getHealthCheck;
     registerHealthCheck: typeof registerHealthCheck;
     resolveEmbeddingProviderSetupInspector: (
       provider: string,
@@ -37,6 +38,7 @@ export function registerBundledHealthChecks(params: {
     dirName: "memory-core",
     artifactBasename: "api.js",
   }).registerMemoryCoreDoctorChecks?.({
+    getHealthCheck,
     registerHealthCheck,
     resolveEmbeddingProviderSetupInspector(provider) {
       manifestRegistry ??= loadPluginManifestRegistryForPluginRegistry({
