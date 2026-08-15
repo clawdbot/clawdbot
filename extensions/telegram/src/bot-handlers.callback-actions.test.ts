@@ -26,11 +26,13 @@ function buildBot(
   params: { rawEditMessageText?: ReturnType<typeof vi.fn<RichEditMessageText>> } = {},
 ) {
   const editMessageText = vi.fn(async () => true as const);
-  const api: Record<string, unknown> = { editMessageText };
+  const deleteMessage = vi.fn(async () => true as const);
+  const sendMessage = vi.fn(async () => ({ message_id: 333 }) as unknown as Message);
+  const api: Record<string, unknown> = { editMessageText, deleteMessage, sendMessage };
   if (params.rawEditMessageText) {
     api.raw = { editMessageText: params.rawEditMessageText };
   }
-  return { bot: { api } as never, api, editMessageText };
+  return { bot: { api } as never, api, editMessageText, deleteMessage, sendMessage };
 }
 
 describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
@@ -85,11 +87,15 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
     expect(rawEditMessageText).not.toHaveBeenCalled();
   });
 
-  it("falls back to the legacy edit when the rich edit fails for a non-terminal reason", async () => {
+  it("deletes and replies instead of legacy-editing when the rich edit fails for a non-terminal reason", async () => {
+    // Regression for ClawSweeper's follow-up P2 finding: richTextOverride is only ever
+    // supplied for a message that was itself sent as rich (the /model picker's
+    // confirmation), so a legacy-text retry on raw-edit failure would reproduce the exact
+    // stale-rich-markup symptom #123886 reported. Delete-and-reply must be used instead.
     const rawEditMessageText = vi.fn(async () => {
       throw new Error("400: Bad Request: some other failure");
     });
-    const { bot, editMessageText } = buildBot({ rawEditMessageText });
+    const { bot, editMessageText, deleteMessage, sendMessage } = buildBot({ rawEditMessageText });
     const actions = createTelegramCallbackMessageActions({
       bot,
       callbackMessage,
@@ -100,7 +106,9 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
     await actions.editCallbackMessage("hello", undefined, helloBlocksOverride);
 
     expect(rawEditMessageText).toHaveBeenCalledOnce();
-    expect(editMessageText).toHaveBeenCalledWith(111, 222, "hello", undefined);
+    expect(deleteMessage).toHaveBeenCalledWith(111, 222);
+    expect(sendMessage).toHaveBeenCalledWith(111, "hello", {});
+    expect(editMessageText).not.toHaveBeenCalled();
   });
 
   it("re-raises 'message is not modified' from a rich edit without a legacy retry", async () => {
@@ -121,8 +129,8 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
     expect(editMessageText).not.toHaveBeenCalled();
   });
 
-  it("falls back to the legacy edit when the rich raw API is unavailable", async () => {
-    const { bot, editMessageText } = buildBot();
+  it("deletes and replies instead of legacy-editing when the rich raw API is unavailable", async () => {
+    const { bot, editMessageText, deleteMessage, sendMessage } = buildBot();
     const actions = createTelegramCallbackMessageActions({
       bot,
       callbackMessage,
@@ -132,7 +140,9 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
 
     await actions.editCallbackMessage("hello", undefined, helloBlocksOverride);
 
-    expect(editMessageText).toHaveBeenCalledWith(111, 222, "hello", undefined);
+    expect(deleteMessage).toHaveBeenCalledWith(111, 222);
+    expect(sendMessage).toHaveBeenCalledWith(111, "hello", {});
+    expect(editMessageText).not.toHaveBeenCalled();
   });
 
   it("routes a parse_mode HTML edit through the rich raw API when richTextOverride is supplied", async () => {
@@ -164,6 +174,37 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
       message_id: 222,
       rich_message: { blocks: [{ type: "paragraph", text: "hello" }] },
     });
+    expect(editMessageText).not.toHaveBeenCalled();
+  });
+});
+
+describe("createTelegramCallbackMessageActions editCallbackMessageWithButtons", () => {
+  it("deletes and replies, through the real /model-picker-confirmation call shape, when the rich edit fails", async () => {
+    // editCallbackMessageWithButtons is what bot-handlers.model-callback.ts's final
+    // confirmation actually calls (with richTextOverride, parse_mode: "HTML", and an empty
+    // buttons array). Its own catch block must not re-introduce a legacy-edit fallback for
+    // that path once editCallbackMessage's inner catch stops doing so.
+    const rawEditMessageText = vi.fn(async () => {
+      throw new Error("400: Bad Request: some other failure");
+    });
+    const { bot, editMessageText, deleteMessage, sendMessage } = buildBot({ rawEditMessageText });
+    const actions = createTelegramCallbackMessageActions({
+      bot,
+      callbackMessage,
+      isForum: false,
+      richMessages: true,
+    });
+
+    await actions.editCallbackMessageWithButtons(
+      "hello",
+      [],
+      { parse_mode: "HTML" },
+      helloBlocksOverride,
+    );
+
+    expect(rawEditMessageText).toHaveBeenCalledOnce();
+    expect(deleteMessage).toHaveBeenCalledWith(111, 222);
+    expect(sendMessage).toHaveBeenCalledWith(111, "hello", { parse_mode: "HTML" });
     expect(editMessageText).not.toHaveBeenCalled();
   });
 });

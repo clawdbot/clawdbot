@@ -84,6 +84,25 @@ export function createTelegramCallbackMessageActions(params: {
     );
   };
 
+  // Representation-safe fallback for a message that can no longer be edited in
+  // place without leaving stale content behind: Telegram's "no text in the
+  // message" edit rejection, or a rich-edit failure on a message that was
+  // itself sent as rich (legacy-editing that leaves the prior rich body's
+  // markup visible underneath the new text — the #123886 symptom). Deleting
+  // then replying guarantees the visible result is exactly `text`, never a
+  // legacy edit overlapping the message's prior body. Delete failures (e.g.
+  // insufficient rights, message already gone) are swallowed so the reply
+  // still goes out instead of leaving the user with nothing.
+  const deleteAndReplyCallbackMessage = async (
+    text: string,
+    replyParams?: TelegramCallbackReplyParams,
+  ) => {
+    try {
+      await deleteCallbackMessage();
+    } catch {}
+    return await replyToCallbackChat(text, replyParams);
+  };
+
   const editCallbackMessage = async (
     text: string,
     editParams?: Parameters<typeof bot.api.editMessageText>[3],
@@ -124,7 +143,15 @@ export function createTelegramCallbackMessageActions(params: {
       if (isTelegramMessageNotModifiedError(richErr)) {
         throw richErr;
       }
-      return await legacyEditCallbackMessage(text, editParams);
+      // A legacy retry is not safe here: richTextOverride is only ever supplied for a
+      // message that was itself sent as rich, and this file's own invariant (see the
+      // comment above) is that legacy-editing such a message leaves its prior rich body
+      // visible underneath the new text — exactly the #123886 bug this override exists to
+      // avoid. Delete-and-reply sidesteps that by never editing the rich-sent message.
+      return await deleteAndReplyCallbackMessage(text, {
+        ...(editParams?.reply_markup ? { reply_markup: editParams.reply_markup } : {}),
+        ...(editParams?.parse_mode ? { parse_mode: editParams.parse_mode } : {}),
+      });
     }
   };
 
@@ -176,10 +203,10 @@ export function createTelegramCallbackMessageActions(params: {
     } catch (editErr) {
       const errStr = String(editErr);
       if (errStr.includes("no text in the message")) {
-        try {
-          await deleteCallbackMessage();
-        } catch {}
-        await replyToCallbackChat(text, keyboard ? { reply_markup: keyboard, ...extra } : extra);
+        await deleteAndReplyCallbackMessage(
+          text,
+          keyboard ? { reply_markup: keyboard, ...extra } : extra,
+        );
       } else if (!errStr.includes("message is not modified")) {
         throw editErr;
       }
