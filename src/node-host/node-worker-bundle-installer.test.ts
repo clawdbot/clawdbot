@@ -95,13 +95,14 @@ describe("node worker bundle installer", () => {
     return { gatewayUrl: `ws://127.0.0.1:${address.port}`, requests };
   }
 
-  it("atomically installs and reuses an exact namespaced bundle", async () => {
+  it("atomically installs, reuses, and cleans prior-hash crash staging", async () => {
     const fixture = await bundleFixture();
+    const staleBundleHash = "f".repeat(64);
     const staleStaging = path.join(
       root,
       fixture.input.gatewayNamespace,
       "bundles",
-      `.staging-${fixture.input.build.bundleHash}-crashed`,
+      `.staging-${staleBundleHash}-crashed`,
     );
     await fs.mkdir(staleStaging, { recursive: true });
     const served = await serve(fixture.archive, fixture.input.archive.token);

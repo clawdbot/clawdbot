@@ -165,12 +165,11 @@ async function validateInstalledBundle(
   }
 }
 
-async function removeStaleInstallStaging(bundlesRoot: string, bundleHash: string): Promise<void> {
-  const prefix = `.staging-${bundleHash}-`;
+async function removeStaleInstallStaging(bundlesRoot: string): Promise<void> {
   const entries = await fsp.readdir(bundlesRoot, { withFileTypes: true });
   await Promise.all(
     entries.map(async (entry) => {
-      if (entry.name.startsWith(prefix) && entry.isDirectory() && !entry.isSymbolicLink()) {
+      if (entry.name.startsWith(".staging-") && entry.isDirectory() && !entry.isSymbolicLink()) {
         await fsp.rm(path.join(bundlesRoot, entry.name), { recursive: true, force: true });
       }
     }),
@@ -227,7 +226,8 @@ export class NodeWorkerBundleInstaller {
     signal?: AbortSignal;
   }): Promise<WorkerAdmissionHandshake> {
     const { input } = params;
-    const key = `${input.gatewayNamespace}\0${input.build.bundleHash}`;
+    // One namespace owns every staging sibling, so serialize it before sweeping crash residue.
+    const key = input.gatewayNamespace;
     return await this.#operations.enqueue(key, async () => {
       try {
         params.signal?.throwIfAborted();
@@ -237,7 +237,7 @@ export class NodeWorkerBundleInstaller {
           return structuredClone(input.build);
         }
         await fsp.mkdir(bundlesRoot, { recursive: true, mode: 0o700 });
-        await removeStaleInstallStaging(bundlesRoot, input.build.bundleHash);
+        await removeStaleInstallStaging(bundlesRoot);
         const operationRoot = await fsp.mkdtemp(
           path.join(bundlesRoot, `.staging-${input.build.bundleHash}-`),
         );
