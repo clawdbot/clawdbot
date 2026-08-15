@@ -280,7 +280,14 @@ export async function deleteSessionsBatch(
   });
   // A reconnect or a replaced sessions capability can land while the modal is
   // open, so the captured scope is revalidated before any delete leaves here.
-  if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  // Checked ahead of `confirmed`: a retired scope aborts the dialog to `false`
+  // too, so without this order the operator's lost intent would look like an
+  // ordinary cancel instead of the reconnect that actually dropped it.
+  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    showToast({ message: t("sessionsView.deleteSessionsStale", { count: String(rows.length) }) });
+    return;
+  }
+  if (!confirmed) {
     return;
   }
   const requests = rows.map((row) => ({
@@ -506,7 +513,14 @@ export async function stopCloudWorker(
     danger: true,
     signal: scope.signal,
   });
-  if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  // Checked ahead of `confirmed`: a retired scope aborts the dialog to `false`
+  // too, so without this order the operator's lost intent would look like an
+  // ordinary cancel instead of the reconnect that actually dropped it.
+  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    showToast({ message: t("sessionsView.stopCloudWorkerStale", { session: session.label }) });
+    return;
+  }
+  if (!confirmed) {
     return;
   }
   if (!requireSessionMutationAccess(host, scope, stopAction)) {
@@ -550,7 +564,14 @@ export async function deleteSession(
     ...(options.offerSkip ? { skipPreference: sessionDeleteSkipPreference(scope) } : {}),
     signal: scope.signal,
   });
-  if (!confirmed || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  // Checked ahead of `confirmed`: a retired scope aborts the dialog to `false`
+  // too, so without this order the operator's lost intent would look like an
+  // ordinary cancel instead of the reconnect that actually dropped it.
+  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    showToast({ message: t("sessionsView.deleteSessionStale", { session: session.label }) });
+    return;
+  }
+  if (!confirmed) {
     return;
   }
   const agentId = parseAgentSessionKey(session.key)?.agentId ?? scope.selectedAgentId;
@@ -604,7 +625,15 @@ export async function deleteSession(
         });
         // Cancel needs this guard too: the delete already landed, so a scope
         // retired while the modal was open must not drive the navigation below.
+        // A retired scope leaves the worktree exactly like the no-access branch
+        // above, so it earns the same visible outcome instead of vanishing quietly.
         if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+          showToast({
+            message: t("sessionsView.deletePreservedWorktrees", {
+              count: "1",
+              branches: preserved.branch,
+            }),
+          });
           return;
         }
         if (removeWorktree) {
