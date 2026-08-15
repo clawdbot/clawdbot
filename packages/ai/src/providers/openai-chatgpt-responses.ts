@@ -748,10 +748,11 @@ function buildRequestBody(
   }
 
   if (options?.reasoningEffort !== undefined || options?.reasoningSummary !== undefined) {
+    const requestedEffort = options.reasoningEffort ?? "medium";
     const effort =
-      options.reasoningEffort === "none"
+      requestedEffort === "none"
         ? (model.thinkingLevelMap?.off ?? "none")
-        : (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort);
+        : (model.thinkingLevelMap?.[requestedEffort] ?? requestedEffort);
     if (effort !== null) {
       body.reasoning = {
         effort,
