@@ -37,6 +37,8 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -913,8 +915,12 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun resumingRealtimeCaptureFailsClosedWithoutAWireAudioContract() =
+  fun resumingRealtimeCaptureFailsClosedWhenWireAudioContractNeverResolved() =
     runTest {
+      // Distinct from an absent talk.session.create `audio` field (which now resolves to
+      // the legacy pcm16/24kHz contract, see parseRealtimeWireAudioContract tests below):
+      // this is the fields simply never having been populated at all, which must still
+      // fail closed rather than silently guess a rate.
       val manager =
         createManager(
           scope = this,
@@ -933,6 +939,61 @@ class TalkModeManagerTest {
       assertFalse(manager.isEnabled.value)
       assertNull(readPrivateField(manager, "realtimeCaptureJob"))
     }
+
+  @Test
+  fun absentAudioContractParsesToTheLegacyPcm16TwentyFourKhzWireFormat() {
+    // talk.session.create's `audio` field is optional (TalkSessionCreateResultSchema);
+    // older/simpler Gateway peers omit it, and iOS's RealtimeTalkRelaySession still
+    // defaults to this exact pcm16/24kHz contract in that case. Android must match, not
+    // treat an absent field as an unsupported contract.
+    val root = Json.parseToJsonElement("""{"relaySessionId":"relay-1"}""").jsonObject
+
+    val contract = parseRealtimeWireAudioContract(root)
+
+    assertEquals("pcm16", contract.encoding)
+    assertEquals(24_000, contract.sampleRateHz)
+  }
+
+  @Test
+  fun presentAudioContractIsParsedAsDeclared() {
+    val root =
+      Json
+        .parseToJsonElement(
+          """{"relaySessionId":"relay-1","audio":{"inputEncoding":"pcm16","inputSampleRateHz":48000}}""",
+        ).jsonObject
+
+    val contract = parseRealtimeWireAudioContract(root)
+
+    assertEquals("pcm16", contract.encoding)
+    assertEquals(48_000, contract.sampleRateHz)
+  }
+
+  @Test
+  fun malformedAudioContractStaysUnresolvedForFailClosed() {
+    // Present but not an object at all -- an explicitly unsupported shape, not an
+    // omission, so it must not fall back to the legacy contract.
+    val notAnObject = Json.parseToJsonElement("""{"relaySessionId":"relay-1","audio":"unsupported"}""").jsonObject
+    // Present as an object but missing the fields this client understands.
+    val emptyObject = Json.parseToJsonElement("""{"relaySessionId":"relay-1","audio":{}}""").jsonObject
+
+    for (root in listOf(notAnObject, emptyObject)) {
+      val contract = parseRealtimeWireAudioContract(root)
+      assertNull(contract.encoding)
+      assertNull(contract.sampleRateHz)
+    }
+  }
+
+  @Test
+  fun legacyFallbackWireRateResolvesToTheSame48kTo24kResamplerPath() {
+    // Locks the composition end to end: an absent audio contract must land on exactly
+    // the same capture-portable-rate -> wire-rate conversion already proven correct by
+    // RealtimeCaptureResamplerTest, not a rate the resampler rejects.
+    val contract = parseRealtimeWireAudioContract(Json.parseToJsonElement("""{"relaySessionId":"relay-1"}""").jsonObject)
+
+    val resampler = resolveRealtimeCaptureResampler(48_000, contract.sampleRateHz!!)
+
+    assertTrue(resampler != null)
+  }
 
   @Test
   fun replacementRelayPublishedDuringPushToTalkResumesCapture() =

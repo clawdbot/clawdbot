@@ -125,6 +125,27 @@ internal suspend fun requestPhoneRealtimeSessionWithLanguageFallback(
     request(null)
   }
 
+internal data class RealtimeWireAudioContract(
+  val encoding: String?,
+  val sampleRateHz: Int?,
+)
+
+/**
+ * TalkSessionCreateResultSchema.audio is optional (older/simpler Gateway peers omit it
+ * entirely); an absent field is the established legacy PCM16/24kHz relay format iOS also
+ * still defaults to (RealtimeTalkRelaySession.configureAudioContract), not an unsupported
+ * contract. A field that IS present but doesn't parse as a usable pcm16 rate stays
+ * fail-closed via the caller's existing null checks.
+ */
+internal fun parseRealtimeWireAudioContract(root: JsonObject?): RealtimeWireAudioContract {
+  val rawAudioContract = root?.get("audio") ?: return RealtimeWireAudioContract("pcm16", 24_000)
+  val audioContract = rawAudioContract.asObjectOrNull()
+  return RealtimeWireAudioContract(
+    encoding = audioContract?.get("inputEncoding").asStringOrNull(),
+    sampleRateHz = audioContract?.get("inputSampleRateHz").asIntOrNull(),
+  )
+}
+
 private enum class TalkStatusState {
   Off,
   Active,
@@ -1150,9 +1171,9 @@ class TalkModeManager internal constructor(
 
     // Capture must resample to whatever wire rate the Gateway declares here,
     // never a rate Android assumes on its own (see realtimeCapturePortableSampleRateHz).
-    val audioContract = root?.get("audio").asObjectOrNull()
-    realtimeWireAudioEncoding = audioContract?.get("inputEncoding").asStringOrNull()
-    realtimeWireAudioSampleRateHz = audioContract?.get("inputSampleRateHz").asIntOrNull()
+    val wireAudioContract = parseRealtimeWireAudioContract(root)
+    realtimeWireAudioEncoding = wireAudioContract.encoding
+    realtimeWireAudioSampleRateHz = wireAudioContract.sampleRateHz
 
     val capturePaused =
       synchronized(realtimeCapturePauseLock) {
