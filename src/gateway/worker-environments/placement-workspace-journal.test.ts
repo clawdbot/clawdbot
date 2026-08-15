@@ -7,11 +7,8 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import {
-  FORCED_WORKER_ABANDONMENT_ERROR,
-  REQUEST,
-  seedActivePlacement,
-} from "./placement-dispatch-test-fixtures.js";
+import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
+import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-force-abandon.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,

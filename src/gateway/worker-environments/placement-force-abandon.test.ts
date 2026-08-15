@@ -14,12 +14,14 @@ import {
 import { createGatewayWorkerPlacementRuntime } from "../server-worker-placement-startup.js";
 import {
   createDispatchEnvironmentFixtures,
-  FORCED_WORKER_ABANDONMENT_ERROR,
   REQUEST,
   seedActivePlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
-import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
+import {
+  FORCED_WORKER_ABANDONMENT_ERROR,
+  forceAbandonWorkerEnvironment,
+} from "./placement-force-abandon.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import {
