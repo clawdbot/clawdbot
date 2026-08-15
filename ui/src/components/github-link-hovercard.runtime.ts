@@ -10,7 +10,9 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import {
   GITHUB_HOVERCARD_OPEN_DELAY_MS,
+  gitHubFilesChangedUrl,
   githubLinkAnchorFromEvent,
+  gitHubProfileUrl,
   parseGitHubLinkTarget,
   type GitHubLinkTarget,
 } from "./github-link-target.ts";
@@ -126,23 +128,39 @@ function appendMetric(parent: HTMLElement, className: string, text: string): voi
   appendTextElement(parent, "span", `github-link-hovercard__metric ${className}`, text);
 }
 
+function appendCardLink(
+  parent: HTMLElement,
+  className: string,
+  href: string,
+  text: string,
+): HTMLAnchorElement {
+  const link = document.createElement("a");
+  link.className = className;
+  link.href = href;
+  link.target = EXTERNAL_LINK_TARGET;
+  link.rel = buildExternalLinkRel();
+  link.textContent = text;
+  parent.append(link);
+  return link;
+}
+
 function renderLoading(card: HTMLDivElement): void {
   card.replaceChildren();
   card.dataset.loading = "true";
   card.removeAttribute("data-state");
-  appendTextElement(card, "div", "github-link-hovercard__loading", t("githubPreview.loading"));
+  const label = t("githubPreview.loading");
+  // The card is a dialog, so every render state has to leave it with a name.
+  card.setAttribute("aria-label", label);
+  appendTextElement(card, "div", "github-link-hovercard__loading", label);
 }
 
 function renderUnavailable(card: HTMLDivElement): void {
   card.replaceChildren();
   card.dataset.loading = "false";
   card.dataset.state = "unavailable";
-  appendTextElement(
-    card,
-    "div",
-    "github-link-hovercard__unavailable",
-    t("githubPreview.unavailable"),
-  );
+  const label = t("githubPreview.unavailable");
+  card.setAttribute("aria-label", label);
+  appendTextElement(card, "div", "github-link-hovercard__unavailable", label);
 }
 
 function renderPreview(card: HTMLDivElement, preview: GitHubPreview): void {
@@ -161,10 +179,12 @@ function renderPreview(card: HTMLDivElement, preview: GitHubPreview): void {
   stateDot.setAttribute("aria-hidden", "true");
   badge.append(stateDot, document.createTextNode(state.label));
   header.append(badge);
-  appendTextElement(
+  // Every link on the card reuses the href it was activated with; that target is
+  // already resolved and validated by parseGitHubLinkTarget, so no reparsing here.
+  appendCardLink(
     header,
-    "span",
     "github-link-hovercard__repo",
+    preview.href,
     `${preview.owner}/${preview.repo} #${preview.number}`,
   );
   appendTextElement(
@@ -174,19 +194,14 @@ function renderPreview(card: HTMLDivElement, preview: GitHubPreview): void {
     formatRelativeTimestamp(Date.parse(preview.updatedAt)),
   );
 
-  const title = document.createElement("a");
-  title.className = "github-link-hovercard__title";
-  // Reuse the href the card was activated with; the target is already
-  // resolved and validated by parseGitHubLinkTarget, so no new parsing here.
-  title.href = preview.href;
-  title.target = EXTERNAL_LINK_TARGET;
-  title.rel = buildExternalLinkRel();
-  title.textContent = preview.title;
-
   const footer = document.createElement("div");
   footer.className = "github-link-hovercard__footer";
-  const author = document.createElement("span");
-  author.className = "github-link-hovercard__author";
+  const author = appendCardLink(
+    footer,
+    "github-link-hovercard__author",
+    gitHubProfileUrl(preview.login),
+    preview.login,
+  );
   if (preview.avatarDataUrl) {
     const avatar = document.createElement("img");
     avatar.className = "github-link-hovercard__avatar";
@@ -194,10 +209,8 @@ function renderPreview(card: HTMLDivElement, preview: GitHubPreview): void {
     avatar.decoding = "async";
     avatar.referrerPolicy = "no-referrer";
     avatar.src = preview.avatarDataUrl;
-    author.append(avatar);
+    author.prepend(avatar);
   }
-  author.append(document.createTextNode(preview.login));
-  footer.append(author);
 
   const metrics = document.createElement("span");
   metrics.className = "github-link-hovercard__metrics";
@@ -205,9 +218,12 @@ function renderPreview(card: HTMLDivElement, preview: GitHubPreview): void {
     appendMetric(metrics, "github-link-hovercard__metric--additions", `+${preview.additions ?? 0}`);
     appendMetric(metrics, "github-link-hovercard__metric--deletions", `−${preview.deletions ?? 0}`);
     const files = preview.changedFiles ?? 0;
-    appendMetric(
+    // The diff-size chip's natural next step is the files-changed view; issues
+    // have no such view, so their comment count stays plain text.
+    appendCardLink(
       metrics,
-      "",
+      "github-link-hovercard__metric github-link-hovercard__metric--files",
+      gitHubFilesChangedUrl(preview),
       t(files === 1 ? "githubPreview.file" : "githubPreview.files", {
         count: String(files),
       }),
@@ -223,7 +239,9 @@ function renderPreview(card: HTMLDivElement, preview: GitHubPreview): void {
     );
   }
   footer.append(metrics);
-  card.append(header, title, footer);
+  card.append(header);
+  appendCardLink(card, "github-link-hovercard__title", preview.href, preview.title);
+  card.append(footer);
   card.setAttribute(
     "aria-label",
     t("githubPreview.ariaLabel", {
@@ -250,7 +268,6 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   private card: HTMLDivElement | null = null;
   private cardFocusInside = false;
   private closeTimer: number | null = null;
-  private describedBy: string | null = null;
   private focusInside = false;
   private openTimer: number | null = null;
   private pointerInside = false;
@@ -258,6 +275,9 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   private renderedPreview: GitHubPreview | null = null;
   private renderedUnavailable = false;
   private stopI18n: (() => void) | null = null;
+  // Spans the synchronous focus() that hands focus back to the trigger, so the
+  // card the user just dismissed cannot reopen under them (handleCardKeyDown).
+  private suppressFocusOpen = false;
   private readonly previewTask = new Task(this, {
     autoRun: false,
     args: () => [this.activeTarget] as const,
@@ -392,6 +412,9 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   };
 
   private readonly handleFocusIn = (event: Event) => {
+    if (this.suppressFocusOpen) {
+      return;
+    }
     const anchor = githubLinkAnchorFromEvent(event);
     const target = anchor ? parseGitHubLinkTarget(anchor.href) : null;
     if (!anchor || !target) {
@@ -447,8 +470,45 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   private readonly handleKeyDown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
       this.close();
+      return;
     }
+    // The card is portaled to document.body and never lands next to its trigger
+    // in the tab sequence; forward Tab in, and let the card hand focus back
+    // (handleCardKeyDown), so its links stay keyboard-reachable at all.
+    if (event.key !== "Tab" || event.shiftKey || event.target !== this.activeAnchor) {
+      return;
+    }
+    const [first] = this.cardFocusables();
+    if (!first) {
+      return;
+    }
+    event.preventDefault();
+    first.focus();
   };
+
+  private readonly handleCardKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== "Escape" && event.key !== "Tab") {
+      return;
+    }
+    // Tab moves between the card's own links normally and only exits at the edge
+    // of that run: the card has no tab-sequence neighbour, so leaving it lands on
+    // the trigger like Escape does instead of dropping focus to the document.
+    const focusables = this.cardFocusables();
+    const edge = event.shiftKey ? focusables[0] : focusables.at(-1);
+    if (event.key === "Tab" && document.activeElement !== edge) {
+      return;
+    }
+    event.preventDefault();
+    const anchor = this.activeAnchor;
+    this.close();
+    this.suppressFocusOpen = true;
+    anchor?.focus({ preventScroll: true });
+    this.suppressFocusOpen = false;
+  };
+
+  private cardFocusables(): HTMLElement[] {
+    return [...(this.card?.querySelectorAll<HTMLElement>("a[href]") ?? [])];
+  }
 
   private readonly handleClick = () => {
     this.close();
@@ -476,7 +536,10 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     this.close();
     this.activeAnchor = anchor;
     this.activeTarget = target;
-    this.describedBy = anchor.getAttribute("aria-describedby");
+    // Announce the popup affordance as soon as the link is recognized; show()
+    // flips the state once the card exists, close() takes the whole set away.
+    anchor.setAttribute("aria-haspopup", "dialog");
+    anchor.setAttribute("aria-expanded", "false");
     this.activeAnchorObserver.observe(this, { childList: true, subtree: true });
     this.openTimer = window.setTimeout(() => {
       this.openTimer = null;
@@ -493,8 +556,9 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     card.id = `openclaw-github-hovercard-${nextHovercardId}`;
     card.className = "github-link-hovercard";
     card.dataset.open = "true";
-    card.setAttribute("role", "tooltip");
-    card.setAttribute("aria-live", "polite");
+    // A tooltip may not own controls: its content is flattened and unreachable.
+    // The card is a non-modal dialog instead, named by the render functions.
+    card.setAttribute("role", "dialog");
     this.renderedPreview = null;
     this.renderedUnavailable = false;
     renderLoading(card);
@@ -504,12 +568,11 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     card.addEventListener("pointerleave", this.handleCardPointerLeave);
     card.addEventListener("focusin", this.handleCardFocusIn);
     card.addEventListener("focusout", this.handleCardFocusOut);
+    card.addEventListener("keydown", this.handleCardKeyDown);
     document.body.append(card);
     this.card = card;
-    anchor.setAttribute(
-      "aria-describedby",
-      this.describedBy ? `${this.describedBy} ${card.id}` : card.id,
-    );
+    anchor.setAttribute("aria-controls", card.id);
+    anchor.setAttribute("aria-expanded", "true");
     this.listenForViewportChanges();
     this.positionCard();
 
@@ -575,11 +638,9 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     this.activeAnchorObserver.disconnect();
     void this.previewTask.run([null]);
     if (this.activeAnchor) {
-      if (this.describedBy === null) {
-        this.activeAnchor.removeAttribute("aria-describedby");
-      } else {
-        this.activeAnchor.setAttribute("aria-describedby", this.describedBy);
-      }
+      this.activeAnchor.removeAttribute("aria-controls");
+      this.activeAnchor.removeAttribute("aria-expanded");
+      this.activeAnchor.removeAttribute("aria-haspopup");
     }
     this.card?.remove();
     this.card = null;
@@ -588,7 +649,6 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     this.activeAnchor = null;
     this.activeTarget = null;
     this.activeTrigger = null;
-    this.describedBy = null;
     this.cardFocusInside = false;
     this.focusInside = false;
     this.pointerInside = false;

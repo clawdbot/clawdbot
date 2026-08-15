@@ -39,6 +39,15 @@ async function expectText(locator: Locator, text: string): Promise<void> {
   await expect.poll(() => locator.textContent()).toContain(text);
 }
 
+async function captureArtifact(page: Page, name: string): Promise<void> {
+  const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+  if (!artifactDir) {
+    return;
+  }
+  await mkdir(artifactDir, { recursive: true });
+  await page.screenshot({ path: path.join(artifactDir, `${name}.png`) });
+}
+
 const pullPreviewResponse = {
   additions: 101,
   avatarDataUrl:
@@ -333,6 +342,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
     await page.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + 4);
     await page.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + cardBox!.height / 2);
     expect(await card.count()).toBe(1);
+    await captureArtifact(page, "github-hovercard-pointer-open");
 
     // Staying on the card holds it open regardless of elapsed time, mirroring
     // the unit test's ten-grace-window persistence check.
@@ -346,6 +356,39 @@ describeControlUiE2e("GitHub link hover cards", () => {
     await expect.poll(() => card.count()).toBe(0);
   });
 
+  it("exposes the card as a dialog whose title link Tab reaches and Escape leaves", async () => {
+    const { card, page, pullLink } = await openPullPreviewPage();
+
+    await pullLink.focus();
+    await expectText(card, "openclaw/openclaw #99816");
+    // The real accessibility tree has to report a dialog, not a tooltip: the card
+    // owns a link, which tooltip semantics may not contain.
+    await expect.poll(() => page.getByRole("dialog").count()).toBe(1);
+    await expect.poll(() => pullLink.getAttribute("aria-expanded")).toBe("true");
+    await expect
+      .poll(() => pullLink.getAttribute("aria-controls"))
+      .toBe(await card.getAttribute("id"));
+
+    // Tab enters the card at its first link and then walks the rest natively.
+    const focused = () => page.evaluate(() => document.activeElement?.className ?? "");
+    await page.keyboard.press("Tab");
+    await expect.poll(focused).toBe("github-link-hovercard__repo");
+    await page.keyboard.press("Tab");
+    await expect.poll(focused).toBe("github-link-hovercard__title");
+    await captureArtifact(page, "github-hovercard-keyboard-focus");
+    await page.keyboard.press("Tab");
+    await expect.poll(focused).toBe("github-link-hovercard__author");
+
+    await page.keyboard.press("Escape");
+    await expect.poll(() => card.count()).toBe(0);
+    await expect
+      .poll(() => pullLink.evaluate((element) => element === document.activeElement))
+      .toBe(true);
+    // Returning focus to the trigger must not reopen what Escape just dismissed.
+    await page.waitForTimeout(300);
+    expect(await card.count()).toBe(0);
+  });
+
   it("opens the linked pull request when the card's title link is clicked", async () => {
     const { card, page, pullLink } = await openPullPreviewPage();
 
@@ -354,6 +397,18 @@ describeControlUiE2e("GitHub link hover cards", () => {
     const titleLink = card.locator(".github-link-hovercard__title");
     await expectText(titleLink, pullPreviewResponse.title);
 
+    // The title owns the card's only underline; the other links stay quiet even
+    // under the pointer, so the card keeps reading as a preview and not a menu.
+    for (const quiet of ["repo", "author", "metric--files"]) {
+      const link = card.locator(`.github-link-hovercard__${quiet}`);
+      await link.hover();
+      expect(await link.evaluate((el) => getComputedStyle(el).textDecorationLine)).toBe("none");
+    }
+    await titleLink.hover();
+    expect(await titleLink.evaluate((el) => getComputedStyle(el).textDecorationLine)).toBe(
+      "underline",
+    );
+
     // Mirrors the source-link popup assertion above: the title anchor reuses
     // the same validated href, target="_blank", and safe rel.
     const popupPromise = page.waitForEvent("popup");
@@ -361,6 +416,14 @@ describeControlUiE2e("GitHub link hover cards", () => {
     const popup = await popupPromise;
     await popup.waitForLoadState("domcontentloaded");
     expect(popup.url()).toBe("https://github.com/openclaw/openclaw/pull/99816");
+
+    // The diff-size chip is the card's deep link into the files-changed view.
+    const filesPopupPromise = page.waitForEvent("popup");
+    await card.locator(".github-link-hovercard__metric--files").click();
+    const filesPopup = await filesPopupPromise;
+    await filesPopup.waitForLoadState("domcontentloaded");
+    expect(filesPopup.url()).toBe("https://github.com/openclaw/openclaw/pull/99816/files");
+    await filesPopup.close();
 
     // The click focused the title link inside the card; leaving the card still
     // dismisses it with no click-outside required (github-link-hovercard.runtime.ts
