@@ -2,21 +2,18 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  readBrowserLinkPreference,
-  writeBrowserLinkPreference,
-} from "../../components/browser/browser-link-preference.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { renderBrowserLinkPreferencesRow } from "./browser-link-preferences.ts";
 
 describe("Control UI browser link preferences row", () => {
-  afterEach(() => writeBrowserLinkPreference(false));
+  afterEach(() => patchSettings({ openLinksInControlUiBrowser: false }));
 
   it("persists an explicit browser-local opt-in and defaults off", () => {
-    expect(readBrowserLinkPreference()).toBe(false);
-    writeBrowserLinkPreference(true);
-    expect(readBrowserLinkPreference()).toBe(true);
-    writeBrowserLinkPreference(false);
-    expect(readBrowserLinkPreference()).toBe(false);
+    expect(loadSettings().openLinksInControlUiBrowser).not.toBe(true);
+    patchSettings({ openLinksInControlUiBrowser: true });
+    expect(loadSettings().openLinksInControlUiBrowser).toBe(true);
+    patchSettings({ openLinksInControlUiBrowser: false });
+    expect(loadSettings().openLinksInControlUiBrowser).not.toBe(true);
   });
 
   it("renders an accessible default-off toggle and publishes changes", () => {

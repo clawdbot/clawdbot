@@ -1,13 +1,10 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { writeBrowserLinkPreference } from "../components/browser/browser-link-preference.ts";
 import { BROWSER_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
-import "../components/browser/browser-panel.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 
 let nativeRouting: ReturnType<typeof startNativeLinkRouting> | undefined;
-let stopBrowserLinkRouting: (() => void) | undefined;
 let stopCollectingBrowserRequests: (() => void) | undefined;
 
 function appendLink(href: string, attributes: Record<string, string> = {}) {
@@ -31,11 +28,10 @@ function mouseEvent(type: "click" | "auxclick", init: MouseEventInit = {}) {
   });
 }
 
-function startBrowserLinkRouting(methods: string[] = ["browser.request"]) {
-  const panel = document.createElement("openclaw-browser-panel");
-  panel.available = methods.includes("browser.request");
-  document.body.append(panel);
-  stopBrowserLinkRouting = () => panel.remove();
+function startBrowserLinkRouting(available = true) {
+  nativeRouting = startNativeLinkRouting({
+    shouldOpenInControlUiBrowser: () => available,
+  });
 }
 
 function collectBrowserRequests(urls: string[]) {
@@ -49,33 +45,22 @@ function collectBrowserRequests(urls: string[]) {
 }
 
 beforeEach(() => {
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      disconnect() {}
-    },
-  );
   document.body.replaceChildren();
-  writeBrowserLinkPreference(false);
 });
 
 afterEach(() => {
   nativeRouting?.dispose();
   nativeRouting = undefined;
-  stopBrowserLinkRouting?.();
-  stopBrowserLinkRouting = undefined;
   stopCollectingBrowserRequests?.();
   stopCollectingBrowserRequests = undefined;
   document.body.replaceChildren();
-  writeBrowserLinkPreference(false);
   Reflect.deleteProperty(window, "webkit");
   vi.unstubAllGlobals();
 });
 
 describe("Control UI browser link routing", () => {
   it("preserves existing browser behavior by default", () => {
-    startBrowserLinkRouting();
+    startBrowserLinkRouting(false);
     const event = mouseEvent("click");
 
     appendLink("https://example.com/report").dispatchEvent(event);
@@ -84,7 +69,6 @@ describe("Control UI browser link routing", () => {
   });
 
   it("routes primary, modified, middle, and new-window links to new browser-panel tabs", () => {
-    writeBrowserLinkPreference(true);
     const urls: string[] = [];
     collectBrowserRequests(urls);
     startBrowserLinkRouting();
@@ -111,7 +95,6 @@ describe("Control UI browser link routing", () => {
   });
 
   it("preserves link handlers that cancel navigation", () => {
-    writeBrowserLinkPreference(true);
     const urls: string[] = [];
     collectBrowserRequests(urls);
     startBrowserLinkRouting();
@@ -126,8 +109,7 @@ describe("Control UI browser link routing", () => {
   });
 
   it("preserves host behavior when the browser panel is unavailable", () => {
-    writeBrowserLinkPreference(true);
-    startBrowserLinkRouting([]);
+    startBrowserLinkRouting(false);
     const event = mouseEvent("click");
 
     appendLink("https://example.com/report").dispatchEvent(event);
@@ -136,14 +118,12 @@ describe("Control UI browser link routing", () => {
   });
 
   it("falls through to existing app routing when the Control UI panel is unavailable", () => {
-    writeBrowserLinkPreference(true);
     const postMessage = vi.fn();
     Object.defineProperty(window, "webkit", {
       configurable: true,
       value: { messageHandlers: { openclawLink: { postMessage } } },
     });
-    startBrowserLinkRouting([]);
-    nativeRouting = startNativeLinkRouting();
+    startBrowserLinkRouting(false);
     const event = mouseEvent("click");
 
     appendLink("https://example.com/report").dispatchEvent(event);
@@ -156,8 +136,7 @@ describe("Control UI browser link routing", () => {
     });
   });
 
-  it("ignores local, download, file, non-web, alt-click, and right-click targets", () => {
-    writeBrowserLinkPreference(true);
+  it("ignores local, download, file, non-web, Shift/Alt, and right-click targets", () => {
     const urls: string[] = [];
     collectBrowserRequests(urls);
     startBrowserLinkRouting();
@@ -173,6 +152,7 @@ describe("Control UI browser link routing", () => {
       ],
       [appendLink("mailto:hello@example.com"), mouseEvent("click")],
       [appendLink("tel:+15555550123"), mouseEvent("click")],
+      [appendLink("https://example.com/shift"), mouseEvent("click", { shiftKey: true })],
       [appendLink("https://example.com/alt"), mouseEvent("click", { altKey: true })],
       [appendLink("https://example.com/context"), mouseEvent("auxclick", { button: 2 })],
     ];

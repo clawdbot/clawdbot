@@ -334,13 +334,10 @@ suite.define(() => {
                 const panel = document.querySelector<HTMLElement & { available?: boolean }>(
                   "openclaw-browser-panel",
                 );
-                return {
-                  available: panel?.available === true,
-                  preference: localStorage.getItem("openclaw.browser.openLinksInControlUi.v1"),
-                };
+                return { available: panel?.available === true };
               }),
             )
-            .toEqual({ available: true, preference: "1" });
+            .toEqual({ available: true });
           await page.evaluate(() => {
             const link = document.createElement("a");
             link.href = "https://example.com/application-handled";

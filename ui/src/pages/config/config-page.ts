@@ -45,10 +45,6 @@ import {
   SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
   setStoredSessionCatalogHidden,
 } from "../../components/app-sidebar-session-types.ts";
-import {
-  readBrowserLinkPreference,
-  writeBrowserLinkPreference,
-} from "../../components/browser/browser-link-preference.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
@@ -107,7 +103,8 @@ type ConfigPageSetting =
   | "chatSendShortcut"
   | "chatFollowUpMode"
   | "catalogOpenTarget"
-  | "composerHoldToRecord";
+  | "composerHoldToRecord"
+  | "openLinksInControlUiBrowser";
 
 // Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
 // Kept so pre-restructure bookmarks and generated links still land somewhere
@@ -1341,11 +1338,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       sectionPrelude:
         activeSection === "browser" && browserPanelAvailable
           ? renderBrowserLinkPreferencesRow({
-              enabled: readBrowserLinkPreference(),
-              onChange: (enabled) => {
-                writeBrowserLinkPreference(enabled);
-                this.requestUpdate();
-              },
+              enabled: this.settings.openLinksInControlUiBrowser === true,
+              onChange: (enabled) => this.setSetting("openLinksInControlUiBrowser", enabled),
             })
           : undefined,
       showRootTab: !includeSections?.length,
