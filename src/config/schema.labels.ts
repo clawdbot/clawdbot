@@ -431,6 +431,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "skills.load.watch": "Watch Skills",
   "skills.workshop.autonomous.mode": "Skill Workshop Autonomous Mode",
   "skills.workshop.allowSymlinkTargetWrites": "Allow Skill Workshop Symlink Writes",
+  "skills.workshop.writableRoots": "Skill Workshop Writable Roots",
   "agents.defaults.skills": "Skills",
   "agents.defaults.subagents.delegationMode": "Sub-agent Delegation Mode",
   "agents.entries.*.subagents.delegationMode": "Sub-agent Delegation Mode",

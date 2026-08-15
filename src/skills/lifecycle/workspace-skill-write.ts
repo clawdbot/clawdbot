@@ -13,6 +13,7 @@ export const MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES = 256 * 1024;
 type WorkspaceSkillSymlinkWritePolicy = {
   allowWrites: boolean;
   allowedTargetRealPaths: readonly string[];
+  allowedExternalRootRealPaths?: readonly string[];
 };
 type WorkspaceSkillSupportFileWrite = { path: string; content: string };
 type WorkspaceSkillSupportFileRestoration = {
@@ -128,7 +129,12 @@ export async function prepareWorkspaceSkillMutation(params: {
   mode: "create" | "update";
   symlinkPolicy: WorkspaceSkillSymlinkWritePolicy;
 }): Promise<PreparedWorkspaceSkillMutation> {
-  assertInsideWorkspace(params.workspaceDir, params.skillDir, "skill directory");
+  assertWorkspaceSkillPathAllowed(
+    params.workspaceDir,
+    params.skillDir,
+    "skill directory",
+    params.symlinkPolicy.allowedExternalRootRealPaths ?? [],
+  );
   const supportFiles = normalizeSupportFiles(params.supportFiles ?? []);
   const skillTarget = await resolveWorkspaceSkillWriteTarget({
     workspaceDir: params.workspaceDir,
@@ -193,7 +199,12 @@ export async function prepareWorkspaceSkillRestoration(params: {
   mode: "create" | "update";
   symlinkPolicy: WorkspaceSkillSymlinkWritePolicy;
 }): Promise<PreparedWorkspaceSkillMutation> {
-  assertInsideWorkspace(params.workspaceDir, params.skillDir, "skill directory");
+  assertWorkspaceSkillPathAllowed(
+    params.workspaceDir,
+    params.skillDir,
+    "skill directory",
+    params.symlinkPolicy.allowedExternalRootRealPaths ?? [],
+  );
   const supportFiles = (params.supportFiles ?? []).map((file) => ({
     path: normalizeWorkspaceSkillSupportPath(file.path),
     previousContent: file.previousContent,
@@ -420,19 +431,25 @@ async function readPreparedWorkspaceFile(
 async function resolveWorkspaceSkillWriteTarget(
   params: WorkspaceSkillWriteTargetParams,
 ): Promise<{ rootDir: string; relativePath: string }> {
-  assertInsideWorkspace(params.workspaceDir, params.filePath, "skill file");
+  assertWorkspaceSkillPathAllowed(
+    params.workspaceDir,
+    params.filePath,
+    "skill file",
+    params.symlinkPolicy.allowedExternalRootRealPaths ?? [],
+  );
   const workspaceDir = path.resolve(params.workspaceDir);
   const filePath = path.resolve(params.filePath);
   const aliasTarget = await resolveWorkspaceAliasTarget({ workspaceDir, filePath });
   if (!aliasTarget) {
     return { rootDir: workspaceDir, relativePath: path.relative(workspaceDir, filePath) };
   }
-  const allowedRoot = params.symlinkPolicy.allowWrites
-    ? findContainingAllowedSkillSymlinkTarget(
-        params.symlinkPolicy.allowedTargetRealPaths,
-        aliasTarget.realTarget,
-      )
-    : null;
+  const allowedRoot = findContainingAllowedSkillSymlinkTarget(
+    [
+      ...(params.symlinkPolicy.allowWrites ? params.symlinkPolicy.allowedTargetRealPaths : []),
+      ...(params.symlinkPolicy.allowedExternalRootRealPaths ?? []),
+    ],
+    aliasTarget.realTarget,
+  );
   if (!allowedRoot) {
     throw new Error(
       `Skill file resolves through an untrusted symlink target: ${params.filePath}. Configure skills.load.allowSymlinkTargets and enable skills.workshop.allowSymlinkTargetWrites for intentional Skill Workshop symlink writes.`,
@@ -490,5 +507,27 @@ export function assertInsideWorkspace(
     !isPathInside(resolvedWorkspaceDir, resolvedTarget)
   ) {
     throw new Error(`${label} must stay inside the workspace.`);
+  }
+}
+
+function assertWorkspaceSkillPathAllowed(
+  workspaceDir: string,
+  targetPath: string,
+  label: string,
+  allowedExternalRootRealPaths: readonly string[],
+): void {
+  try {
+    assertInsideWorkspace(workspaceDir, targetPath, label);
+    return;
+  } catch (error) {
+    const targetRealPath = path.resolve(targetPath);
+    if (
+      allowedExternalRootRealPaths.some((rootRealPath) =>
+        isPathInside(path.resolve(rootRealPath), targetRealPath),
+      )
+    ) {
+      return;
+    }
+    throw error;
   }
 }

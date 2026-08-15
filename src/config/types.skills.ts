@@ -65,6 +65,8 @@ export type SkillsWorkshopConfig = {
   };
   /** Allow Skill Workshop apply to write through trusted skill symlink targets. */
   allowSymlinkTargetWrites?: boolean;
+  /** Explicit skill roots that Skill Workshop may update. */
+  writableRoots?: string[];
   /** Whether proposal lifecycle actions need explicit approval. */
   approvalPolicy?: "pending" | "auto";
   /** Maximum pending/quarantined proposals retained per workspace. */

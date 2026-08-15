@@ -119,6 +119,8 @@ type SkillProposalTarget = {
   skillDir: string;
   skillFile: string;
   source?: string;
+  /** Real path of the configured root that authorized an external update target. */
+  authorizedRootRealPath?: string;
   currentContentHash?: string;
 };
 

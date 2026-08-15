@@ -212,6 +212,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
     },
     workshop: {
       allowSymlinkTargetWrites: false,
+      writableRoots: [],
     },
     entries: {
       "image-lab": {
@@ -231,6 +232,8 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
   resolve into when the link lives outside its configured source root.
 - `workshop.allowSymlinkTargetWrites`: allows Skill Workshop apply to write
   through already-trusted symlink targets (default: false).
+- `workshop.writableRoots`: explicit real skill roots that update proposals may
+  target. Canonical roots are preferred over shadow copies; the default is empty.
 - `install.preferBrew`: when true, prefer Homebrew installers when `brew` is
   available before falling back to other installer kinds.
 - `install.nodeManager`: node installer preference for `metadata.openclaw.install`

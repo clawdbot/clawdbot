@@ -7,7 +7,6 @@ import {
 } from "../lifecycle/skill-change-hook.js";
 import {
   applyWorkspaceSkillMutation,
-  assertInsideWorkspace,
   isWorkspaceSkillMutationApplied,
   isWorkspaceSkillMutationRestored,
   prepareWorkspaceSkillMutation,
@@ -34,6 +33,7 @@ import {
   type PendingSkillProposalTransitionCommit,
 } from "./store-sqlite-transition.js";
 import { withSkillProposalCommitLock, withSkillProposalTargetLock } from "./target-lock.js";
+import { assertWritableProposalTarget } from "./target.js";
 import {
   SKILL_WORKSHOP_ROLLBACK_SCHEMA,
   type SkillProposalActionInput,
@@ -224,14 +224,18 @@ export async function applySkillProposalTransition(
         await quarantineSkillProposalAfterScan({ input, record, scan });
       }
 
-      assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
-      assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
+      const authorizedExternalRootRealPaths = assertWritableProposalTarget({
+        workspaceDir: input.workspaceDir,
+        target: record.target,
+        config: input.config,
+      });
       const workshopConfig = resolveSkillWorkshopConfig(input.config);
       const symlinkPolicy = {
         allowWrites: workshopConfig.allowSymlinkTargetWrites,
         allowedTargetRealPaths: workshopConfig.allowSymlinkTargetWrites
           ? resolveAllowedSkillSymlinkTargetRealPaths(input.config)
           : [],
+        allowedExternalRootRealPaths: authorizedExternalRootRealPaths,
       };
       if (record.evaluation?.id !== evaluated.evaluation.id) {
         throw new Error("Skill proposal evaluation changed before apply; retry the operation.");

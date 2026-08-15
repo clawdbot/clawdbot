@@ -20,6 +20,7 @@ import {
   applySkillProposal,
   getSkillProposalRunProgress,
   inspectSkillProposal,
+  listWritableWorkspaceSkillSummaries,
   listSkillProposals,
   proposeCreateSkill,
   proposeUpdateSkill,
@@ -205,6 +206,84 @@ describe("skill workshop proposals", () => {
     });
     expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("applied");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "resolves and applies updates to an explicitly configured canonical root ahead of shadows",
+    async () => {
+      const workspaceDir = await makeWorkspace();
+      const canonicalRoot = await tempDirs.make("openclaw-skill-workshop-canonical-");
+      const config = { skills: { workshop: { writableRoots: [canonicalRoot] } } };
+      await writeSkill({
+        dir: path.join(workspaceDir, "skills", "canonical-skill"),
+        name: "canonical-skill",
+        description: "Workspace shadow",
+        body: "# Shadow\n\nThis copy must not be selected.\n",
+      });
+      await writeSkill({
+        dir: path.join(canonicalRoot, "canonical-skill"),
+        name: "canonical-skill",
+        description: "Canonical source",
+        body: "# Canonical\n\nThis copy is authoritative.\n",
+      });
+
+      const listed = listWritableWorkspaceSkillSummaries(workspaceDir, { config });
+      expect(listed).toContainEqual({
+        name: "canonical-skill",
+        description: "Canonical source",
+        filePath: path.join(await fs.realpath(canonicalRoot), "canonical-skill", "SKILL.md"),
+      });
+
+      const proposal = await proposeUpdateSkill({
+        workspaceDir,
+        config,
+        skillName: "canonical-skill",
+        content: "# Canonical\n\nUpdated at the authoritative root.\n",
+      });
+      expect(proposal.record.target.source).toBe("openclaw-workshop");
+      expect(proposal.record.target.authorizedRootRealPath).toBe(await fs.realpath(canonicalRoot));
+
+      await applySkillProposal({ workspaceDir, config, proposalId: proposal.record.id });
+      await expect(
+        fs.readFile(path.join(canonicalRoot, "canonical-skill", "SKILL.md"), "utf8"),
+      ).resolves.toContain("Updated at the authoritative root.");
+      await expect(
+        fs.readFile(path.join(workspaceDir, "skills", "canonical-skill", "SKILL.md"), "utf8"),
+      ).resolves.toContain("This copy must not be selected.");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed when a canonical proposal root is no longer authorized",
+    async () => {
+      const workspaceDir = await makeWorkspace();
+      const originalRoot = await tempDirs.make("openclaw-skill-workshop-root-original-");
+      const replacementRoot = await tempDirs.make("openclaw-skill-workshop-root-replacement-");
+      await writeSkill({
+        dir: path.join(originalRoot, "root-bound-skill"),
+        name: "root-bound-skill",
+        description: "Bound target",
+        body: "# Bound\n\nOriginal.\n",
+      });
+      const originalConfig = { skills: { workshop: { writableRoots: [originalRoot] } } };
+      const proposal = await proposeUpdateSkill({
+        workspaceDir,
+        config: originalConfig,
+        skillName: "root-bound-skill",
+        content: "# Bound\n\nUpdated.\n",
+      });
+
+      await expect(
+        applySkillProposal({
+          workspaceDir,
+          config: { skills: { workshop: { writableRoots: [replacementRoot] } } },
+          proposalId: proposal.record.id,
+        }),
+      ).rejects.toThrow("no longer authorized");
+      await expect(
+        fs.readFile(path.join(originalRoot, "root-bound-skill", "SKILL.md"), "utf8"),
+      ).resolves.toContain("Original.");
+    },
+  );
 
   it("persists the reason when applying a proposal", async () => {
     const workspaceDir = await makeWorkspace();

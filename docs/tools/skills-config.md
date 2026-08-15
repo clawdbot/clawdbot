@@ -29,6 +29,7 @@ Most skills configuration lives under `skills` in
     workshop: {
       autonomous: { mode: "auto" },
       allowSymlinkTargetWrites: false,
+      writableRoots: [],
       approvalPolicy: "auto",
       maxPending: 50,
       maxSkillBytes: 40000,
@@ -381,6 +382,12 @@ proposal-only permissions, and troubleshooting.
   real target is already trusted by `skills.load.allowSymlinkTargets`. Keep
   this disabled unless generated proposal applies should mutate that shared
   skill root.
+</ParamField>
+
+<ParamField path="skills.workshop.writableRoots" type="string[]" default="[]">
+  Explicit canonical skill roots that Skill Workshop may update. A configured
+  root wins over personal, project, and workspace shadow copies. This is a
+  narrow write allowlist and does not make other skill sources writable.
 </ParamField>
 
 <ParamField path="skills.workshop.maxPending" type="number" default="50">

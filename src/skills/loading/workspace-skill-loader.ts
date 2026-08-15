@@ -21,6 +21,7 @@ import type {
   SkillEligibilityContext,
   SkillEntry,
 } from "../types.js";
+import { resolveSkillWorkshopConfig } from "../workshop/config.js";
 import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
@@ -366,6 +367,11 @@ function loadSkillEntries(
     ? []
     : loadSkills({ dir: projectAgentsSkillsDir, source: "agents-skills-project" });
   const workspaceSkills = loadSkills({ dir: workspaceSkillsDir, source: "openclaw-workspace" });
+  const workshopWritableSkills = workspaceOnly
+    ? []
+    : resolveSkillWorkshopConfig(opts?.config).writableRoots.flatMap((dir) =>
+        loadSkills({ dir, source: "openclaw-workshop" }),
+      );
 
   const merged = new Map<string, LoadedSkillRecord>();
   const archivedSkillFiles = opts?.includeArchived ? null : getArchivedSkillFiles();
@@ -391,6 +397,9 @@ function loadSkillEntries(
     mergeRecord(record);
   }
   for (const record of workspaceSkills) {
+    mergeRecord(record);
+  }
+  for (const record of workshopWritableSkills) {
     mergeRecord(record);
   }
 

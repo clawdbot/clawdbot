@@ -7,23 +7,16 @@ import {
   resolveSkillStatusEntry,
   type SkillStatusEntry,
 } from "../discovery/status.js";
-import {
-  assertInsideWorkspace,
-  readWorkspaceSkillFile,
-} from "../lifecycle/workspace-skill-write.js";
+import { readWorkspaceSkillFile } from "../lifecycle/workspace-skill-write.js";
 import { tryRealpath } from "../loading/symlink-targets.js";
+import { isWritableSkillStatusEntry, resolveWritableSkillTarget } from "./target.js";
 
-const WRITABLE_WORKSPACE_SOURCES = new Set(["openclaw-workspace", "agents-skills-project"]);
-
-export function assertWritableSkillTarget(workspaceDir: string, skill: SkillStatusEntry): void {
-  if (!WRITABLE_WORKSPACE_SOURCES.has(skill.source)) {
-    throw new Error(`Skill source is not writable by Skill Workshop: ${skill.source}`);
-  }
-  assertInsideWorkspace(workspaceDir, skill.filePath, "skill file");
-  assertInsideWorkspace(workspaceDir, skill.baseDir, "skill directory");
-  if (path.basename(skill.filePath) !== "SKILL.md") {
-    throw new Error("Skill Workshop can only update SKILL.md targets.");
-  }
+export function assertWritableSkillTarget(
+  workspaceDir: string,
+  skill: SkillStatusEntry,
+  config?: OpenClawConfig,
+): void {
+  resolveWritableSkillTarget({ workspaceDir, skill, config });
 }
 
 export function isWorkspaceOwnedSkillTarget(
@@ -58,7 +51,7 @@ export function listWritableWorkspaceSkillSummaries(
   });
   const summaries: WritableWorkspaceSkillSummary[] = [];
   for (const skill of status.skills) {
-    if (!WRITABLE_WORKSPACE_SOURCES.has(skill.source)) {
+    if (!isWritableSkillStatusEntry({ workspaceDir, skill, config: opts?.config })) {
       continue;
     }
     summaries.push(
@@ -88,7 +81,7 @@ export async function readWritableWorkspaceSkill(
   if (!targetSkill) {
     throw new Error(`Skill not found: ${name}`);
   }
-  assertWritableSkillTarget(workspaceDir, targetSkill);
+  assertWritableSkillTarget(workspaceDir, targetSkill, opts?.config);
   const content = await readWorkspaceSkillFile(targetSkill.filePath);
   if (content === null) {
     throw new Error(`Skill file is missing: ${targetSkill.filePath}`);

@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { buildWorkspaceSkillStatus, resolveSkillStatusEntry } from "../discovery/status.js";
 import {
-  assertInsideWorkspace,
   readWorkspaceSkillFile,
   readWorkspaceSupportFile,
 } from "../lifecycle/workspace-skill-write.js";
@@ -42,7 +41,9 @@ import {
   withSkillProposalTargetLock,
   type PreparedSkillProposalSupportFile,
 } from "./store.js";
+import { assertWritableProposalTarget, resolveWritableSkillTarget } from "./target.js";
 import { assertWritableSkillTarget } from "./workspace-skill-read.js";
+export { listWritableWorkspaceSkillSummaries } from "./workspace-skill-read.js";
 export {
   getSkillProposalRunProgress,
   inspectSkillProposal,
@@ -262,7 +263,12 @@ export async function proposeUpdateSkill(
   if (!targetSkill) {
     throw new Error(`Skill not found: ${skillName}`);
   }
-  assertWritableSkillTarget(input.workspaceDir, targetSkill);
+  assertWritableSkillTarget(input.workspaceDir, targetSkill, input.config);
+  const authorizedRootRealPath = resolveWritableSkillTarget({
+    workspaceDir: input.workspaceDir,
+    skill: targetSkill,
+    config: input.config,
+  });
   const currentContent = await readWorkspaceSkillFile(targetSkill.filePath);
   if (currentContent === null) {
     throw new Error(`Skill file is missing: ${targetSkill.filePath}`);
@@ -337,6 +343,7 @@ export async function proposeUpdateSkill(
       skillDir: targetSkill.baseDir,
       skillFile: targetSkill.filePath,
       source: targetSkill.source,
+      ...(authorizedRootRealPath ? { authorizedRootRealPath } : {}),
       currentContentHash: hashSkillProposalContent(currentContent),
     },
     scan,
@@ -386,8 +393,11 @@ export async function reviseSkillProposal(
   const config = resolveSkillWorkshopConfig(input.config);
   const revision = withPendingSkillProposalMutation(input, "revised", async (read) => {
     const { record } = read;
-    assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
-    assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
+    assertWritableProposalTarget({
+      workspaceDir: input.workspaceDir,
+      target: record.target,
+      config: input.config,
+    });
 
     if (record.kind === "create") {
       const currentContent = await readWorkspaceSkillFile(record.target.skillFile);
