@@ -32,10 +32,9 @@ function readTargetModelIds(targetRoot) {
     if (defaults.size !== 1) {
       throw new Error(`cannot read one frozen Codex harness default from ${harnessPath}`);
     }
-    const modelId = [...defaults][0];
-    // The Luna default changed with the complete GPT-5.6 cohort migration and
-    // remains available after the fallback catalog was removed.
-    return new Set(modelId === "gpt-5.6-luna" ? [modelId, "gpt-5.6-sol"] : [modelId]);
+    // The harness default proves only the generic lane's model. Specialized
+    // lanes need the explicit cohort declaration from the historical catalog.
+    return { modelIds: new Set(defaults), supportsGpt56Cohort: false };
   }
   const source = readFileSync(catalogPath, "utf8");
   const start = source.indexOf("export const FALLBACK_CODEX_MODELS = [");
@@ -43,22 +42,22 @@ function readTargetModelIds(targetRoot) {
   if (start < 0 || end < 0) {
     throw new Error(`cannot read the frozen Codex fallback catalog from ${catalogPath}`);
   }
-  return new Set(
+  const modelIds = new Set(
     [...source.slice(start, end).matchAll(/\bid:\s*["']([^"']+)["']/gu)].map((match) => match[1]),
   );
-}
-
-function resolveFrozenCodexCompatibility({ suiteId, targetRoot }) {
-  const modelIds = readTargetModelIds(targetRoot);
   const hasSol = modelIds.has("gpt-5.6-sol");
   const hasLuna = modelIds.has("gpt-5.6-luna");
   if (hasSol !== hasLuna) {
     throw new Error("frozen Codex GPT-5.6 capability marker is incomplete; refusing to guess");
   }
-  const supportsGpt56Cohort = hasSol && hasLuna;
+  return { modelIds, supportsGpt56Cohort: hasSol && hasLuna };
+}
+
+function resolveFrozenCodexCompatibility({ suiteId, targetRoot }) {
+  const { modelIds, supportsGpt56Cohort } = readTargetModelIds(targetRoot);
 
   if (suiteId === GENERIC_CODEX_SUITE) {
-    const model = supportsGpt56Cohort
+    const model = modelIds.has("gpt-5.6-luna")
       ? "openai/gpt-5.6-luna"
       : modelIds.has("gpt-5.5")
         ? "openai/gpt-5.5"

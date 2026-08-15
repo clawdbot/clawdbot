@@ -114,6 +114,19 @@ describe("frozen Codex live-suite resolver", () => {
     expect(result.envFile).toBe("OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/gpt-5.6-luna\n");
   });
 
+  it("does not infer specialized GPT-5.6 support from a catalog-free harness default", () => {
+    const result = runResolver({
+      catalog: false,
+      harnessModel: "openai/gpt-5.6-luna",
+      suiteId: "live-codex-harness-gpt56-sol-docker",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.output).toBe("run_lane=false\n");
+    expect(result.envFile).toBe("");
+    expect(result.summary).toContain("omitted unsupported current-only suite");
+  });
+
   it("omits GPT-5.6 suites for a catalog-free target with the older harness default", () => {
     const result = runResolver({
       catalog: false,
