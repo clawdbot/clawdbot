@@ -2,26 +2,21 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
-import { resolveActivePluginInstallRoots } from "../plugins/install-root-context.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 
 const mocks = vi.hoisted(() => ({
-  createConfigIO: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   resolveDoctorContributionHealthChecks: vi.fn(),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
-  mocks.createConfigIO.mockImplementation(actual.createConfigIO);
   return {
     ...actual,
-    createConfigIO: (...args: unknown[]) => mocks.createConfigIO(...args),
     readConfigFileSnapshot: mocks.readConfigFileSnapshot,
   };
 });
@@ -338,58 +333,21 @@ describe("runDoctorLintCli", () => {
     }
   });
 
-  it("reads plugin state through a private snapshot without changing the source database", async () => {
+  it("does not require shared state inspection for an unrelated selected check", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-lint-state-"));
     const stateDir = path.join(rootDir, "operator-state");
     const originalStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = stateDir;
     const databasePath = resolveOpenClawStateSqlitePath(process.env);
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-    const database = new DatabaseSync(databasePath);
-    database.exec(
-      "PRAGMA journal_mode = WAL; CREATE TABLE fixture (id INTEGER PRIMARY KEY, value TEXT); INSERT INTO fixture (value) VALUES ('stable');",
-    );
-    database.close();
-    const sourcePluginInstallRoots = resolveActivePluginInstallRoots(process.env);
+    fs.writeFileSync(databasePath, "not a sqlite database");
     const sourceContents = fs.readFileSync(databasePath);
     const sourceEntries = fs.readdirSync(path.dirname(databasePath)).toSorted();
-    let configIoEnv: NodeJS.ProcessEnv | undefined;
-    let observedPluginInstallRoots: ReturnType<typeof resolveActivePluginInstallRoots> | undefined;
-    mocks.createConfigIO.mockImplementationOnce((options: { env?: NodeJS.ProcessEnv }) => {
-      configIoEnv = options.env;
-      return {
-        readConfigFileSnapshot: () => mocks.readConfigFileSnapshot(),
-      };
-    });
-    mocks.readConfigFileSnapshot.mockImplementation(async () => {
-      observedPluginInstallRoots = resolveActivePluginInstallRoots(process.env);
-      expect(observedPluginInstallRoots.stateDir).not.toBe(stateDir);
-      expect(observedPluginInstallRoots.extensionsDir).toBe(sourcePluginInstallRoots.extensionsDir);
-      expect(observedPluginInstallRoots.gitDir).toBe(sourcePluginInstallRoots.gitDir);
-      expect(observedPluginInstallRoots.npmDir).toBe(sourcePluginInstallRoots.npmDir);
-      expect(
-        fs.existsSync(
-          resolveOpenClawStateSqlitePath({
-            ...process.env,
-            OPENCLAW_STATE_DIR: observedPluginInstallRoots.stateDir,
-          }),
-        ),
-      ).toBe(true);
-      return {
-        exists: true,
-        valid: true,
-        config: {},
-        path: "/tmp/openclaw.json",
-      };
-    });
-    registerHealthCheck({
-      id: "plugin/example/read-only-state",
-      kind: "plugin",
-      description: "read-only state fixture",
-      async detect(ctx) {
-        expect(ctx.env?.OPENCLAW_STATE_DIR).toBe(stateDir);
-        return [];
-      },
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      path: "/tmp/openclaw.json",
     });
 
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -397,13 +355,15 @@ describe("runDoctorLintCli", () => {
       await expect(
         runDoctorLintCli(runtime, {
           json: true,
-          onlyIds: ["plugin/example/read-only-state"],
+          severityMin: "error",
+          onlyIds: ["core/doctor/final-config-validation"],
         }),
       ).resolves.toBe(0);
-      expect(observedPluginInstallRoots).toBeDefined();
-      expect(configIoEnv?.OPENCLAW_STATE_DIR).toBe(observedPluginInstallRoots?.stateDir);
-      expect(configIoEnv?.OPENCLAW_CONFIG_PATH).toBe(path.join(stateDir, "openclaw.json"));
-      expect(resolveActivePluginInstallRoots(process.env)).toEqual(sourcePluginInstallRoots);
+      expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
+        ok: true,
+        checksRun: 1,
+        findings: [],
+      });
       expect(fs.readFileSync(databasePath)).toEqual(sourceContents);
       expect(fs.readdirSync(path.dirname(databasePath)).toSorted()).toEqual(sourceEntries);
     } finally {

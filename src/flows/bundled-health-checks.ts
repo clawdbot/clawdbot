@@ -10,6 +10,10 @@ import { resolveProviderPolicySurface } from "../plugins/provider-public-artifac
 import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 import { getHealthCheck, registerHealthCheck } from "./health-check-registry.js";
 
+type EmbeddingProviderSetupInspectionResult =
+  | Awaited<ReturnType<InspectEmbeddingProviderSetup>>
+  | undefined;
+
 // Bridges bundled plugin doctor checks into the core health registry.
 type BundledHealthApi = {
   registerCuaDriverDoctorChecks?: (host: {
@@ -18,9 +22,9 @@ type BundledHealthApi = {
   registerMemoryCoreDoctorChecks?: (host: {
     getHealthCheck: typeof getHealthCheck;
     registerHealthCheck: typeof registerHealthCheck;
-    resolveEmbeddingProviderSetupInspector: (
-      provider: string,
-    ) => InspectEmbeddingProviderSetup | undefined;
+    inspectEmbeddingProviderSetup: (
+      params: Parameters<InspectEmbeddingProviderSetup>[0],
+    ) => EmbeddingProviderSetupInspectionResult | Promise<EmbeddingProviderSetupInspectionResult>;
     memoryCoreActive: boolean;
   }) => void;
   registerPolicyDoctorChecks?: (host: { registerHealthCheck: typeof registerHealthCheck }) => void;
@@ -31,23 +35,35 @@ export function registerBundledHealthChecks(params: {
   cfg: OpenClawConfig;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  runWithPluginStateSnapshot?: <T>(
+    run: (pluginMetadataEnv: NodeJS.ProcessEnv) => Promise<T>,
+  ) => Promise<T>;
 }): void {
   const env = params.env ?? process.env;
-  let manifestRegistry: PluginManifestRegistry | undefined;
   loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
     dirName: "memory-core",
     artifactBasename: "api.js",
   }).registerMemoryCoreDoctorChecks?.({
     getHealthCheck,
     registerHealthCheck,
-    resolveEmbeddingProviderSetupInspector(provider) {
-      manifestRegistry ??= loadPluginManifestRegistryForPluginRegistry({
-        config: params.cfg,
-        workspaceDir: params.cwd,
-        env,
-      });
-      return resolveProviderPolicySurface(provider, { manifestRegistry })
-        ?.inspectEmbeddingProviderSetup;
+    async inspectEmbeddingProviderSetup(providerParams) {
+      const inspect = async (pluginMetadataEnv: NodeJS.ProcessEnv) => {
+        const manifestRegistry: PluginManifestRegistry =
+          loadPluginManifestRegistryForPluginRegistry({
+            config: params.cfg,
+            workspaceDir: params.cwd,
+            env: pluginMetadataEnv,
+          });
+        const inspector = resolveProviderPolicySurface(providerParams.provider, {
+          manifestRegistry,
+        })?.inspectEmbeddingProviderSetup;
+        return inspector
+          ? await inspector({ ...providerParams, env: pluginMetadataEnv })
+          : undefined;
+      };
+      return params.runWithPluginStateSnapshot
+        ? await params.runWithPluginStateSnapshot(inspect)
+        : await inspect(env);
     },
     memoryCoreActive: isMemoryCoreActive(params.cfg),
   });

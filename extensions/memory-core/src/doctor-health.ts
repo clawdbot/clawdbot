@@ -20,20 +20,18 @@ type InspectManagedLocalEmbeddingSetup = (params: {
   env: NodeJS.ProcessEnv;
   agentId: string;
   provider: string;
-}) => ProviderFailure | null | Promise<ProviderFailure | null>;
+}) => ProviderFailure | null | undefined | Promise<ProviderFailure | null | undefined>;
 
 type MemoryCoreDoctorRegistrationHost = {
   registerHealthCheck: (check: HealthCheck) => void;
   getHealthCheck: (id: string) => HealthCheck | undefined;
-  resolveEmbeddingProviderSetupInspector: (
-    provider: string,
-  ) => InspectManagedLocalEmbeddingSetup | undefined;
+  inspectEmbeddingProviderSetup: InspectManagedLocalEmbeddingSetup;
   memoryCoreActive: boolean;
 };
 
 type MemoryCoreDoctorRegistrationState = Pick<
   MemoryCoreDoctorRegistrationHost,
-  "resolveEmbeddingProviderSetupInspector" | "memoryCoreActive"
+  "inspectEmbeddingProviderSetup" | "memoryCoreActive"
 >;
 
 const registrationsByHost = new WeakMap<
@@ -90,9 +88,13 @@ function createManagedLocalEmbeddingSetupCheck(
             if (provider !== LOCAL_MEMORY_EMBEDDING_PROVIDER_ID) {
               return null;
             }
-            const inspectManagedLocalEmbeddingSetup =
-              state.resolveEmbeddingProviderSetupInspector(provider);
-            if (!inspectManagedLocalEmbeddingSetup) {
+            const failure = await state.inspectEmbeddingProviderSetup({
+              config: params.config,
+              env: params.env,
+              agentId: params.agentId,
+              provider,
+            });
+            if (failure === undefined) {
               return {
                 provider,
                 reason: MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE,
@@ -102,12 +104,7 @@ function createManagedLocalEmbeddingSetupCheck(
                   "then rerun this check.",
               };
             }
-            return await inspectManagedLocalEmbeddingSetup({
-              config: params.config,
-              env: params.env,
-              agentId: params.agentId,
-              provider,
-            });
+            return failure;
           },
           {
             indexInspectionMode: "readiness",
@@ -149,12 +146,11 @@ function createManagedLocalEmbeddingSetupCheck(
 export function registerMemoryCoreDoctorChecks(host: MemoryCoreDoctorRegistrationHost): void {
   let registration = registrationsByHost.get(host.registerHealthCheck);
   if (registration) {
-    registration.state.resolveEmbeddingProviderSetupInspector =
-      host.resolveEmbeddingProviderSetupInspector;
+    registration.state.inspectEmbeddingProviderSetup = host.inspectEmbeddingProviderSetup;
     registration.state.memoryCoreActive = host.memoryCoreActive;
   } else {
     const state: MemoryCoreDoctorRegistrationState = {
-      resolveEmbeddingProviderSetupInspector: host.resolveEmbeddingProviderSetupInspector,
+      inspectEmbeddingProviderSetup: host.inspectEmbeddingProviderSetup,
       memoryCoreActive: host.memoryCoreActive,
     };
     registration = {

@@ -50,7 +50,7 @@ describe("registerBundledHealthChecks", () => {
     rmSync(workspaceDir, { recursive: true, force: true });
   });
 
-  it("always registers passive memory provider readiness without policy opt-in", () => {
+  it("always registers passive memory provider readiness without policy opt-in", async () => {
     registerBundledHealthChecks({ cfg: {}, cwd: workspaceDir });
 
     expect(mocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
@@ -64,12 +64,17 @@ describe("registerBundledHealthChecks", () => {
     expect(host).toMatchObject({
       getHealthCheck: expect.any(Function),
       registerHealthCheck: expect.any(Function),
-      resolveEmbeddingProviderSetupInspector: expect.any(Function),
+      inspectEmbeddingProviderSetup: expect.any(Function),
       memoryCoreActive: true,
     });
-    expect(host?.resolveEmbeddingProviderSetupInspector("local")).toBe(
-      mocks.inspectEmbeddingProviderSetup,
-    );
+    await expect(
+      host?.inspectEmbeddingProviderSetup({
+        config: {},
+        env: process.env,
+        agentId: "main",
+        provider: "local",
+      }),
+    ).resolves.toBeUndefined();
     expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledWith({
       config: {},
       workspaceDir,
@@ -77,6 +82,12 @@ describe("registerBundledHealthChecks", () => {
     });
     expect(mocks.resolveProviderPolicySurface).toHaveBeenCalledWith("local", {
       manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+    expect(mocks.inspectEmbeddingProviderSetup).toHaveBeenCalledWith({
+      config: {},
+      env: process.env,
+      agentId: "main",
+      provider: "local",
     });
     expect(mocks.registerPolicyDoctorChecks).not.toHaveBeenCalled();
     expect(mocks.registerCuaDriverDoctorChecks).not.toHaveBeenCalled();
@@ -95,7 +106,7 @@ describe("registerBundledHealthChecks", () => {
     expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledWith(
       expect.objectContaining({
         registerHealthCheck: expect.any(Function),
-        resolveEmbeddingProviderSetupInspector: expect.any(Function),
+        inspectEmbeddingProviderSetup: expect.any(Function),
         memoryCoreActive: false,
       }),
     );
@@ -115,18 +126,71 @@ describe("registerBundledHealthChecks", () => {
     expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledWith(
       expect.objectContaining({
         registerHealthCheck: expect.any(Function),
-        resolveEmbeddingProviderSetupInspector: expect.any(Function),
+        inspectEmbeddingProviderSetup: expect.any(Function),
         memoryCoreActive: true,
       }),
     );
   });
 
-  it("returns no inspector when the selected provider exposes no policy surface", () => {
+  it("returns no inspector when the selected provider exposes no policy surface", async () => {
     mocks.resolveProviderPolicySurface.mockReturnValueOnce(null);
     registerBundledHealthChecks({ cfg: {}, cwd: workspaceDir });
 
     const host = mocks.registerMemoryCoreDoctorChecks.mock.calls[0]?.[0];
-    expect(host?.resolveEmbeddingProviderSetupInspector("local")).toBeUndefined();
+    await expect(
+      host?.inspectEmbeddingProviderSetup({
+        config: {},
+        env: process.env,
+        agentId: "main",
+        provider: "local",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("scopes plugin state only while the selected provider setup is inspected", async () => {
+    const sourceEnv = { ...process.env, OPENCLAW_STATE_DIR: "/operator/state" };
+    const pluginMetadataEnv = {
+      ...sourceEnv,
+      OPENCLAW_STATE_DIR: "/private/read-only-state",
+    };
+    let snapshotRuns = 0;
+    const runWithPluginStateSnapshot = async <T>(
+      run: (env: NodeJS.ProcessEnv) => Promise<T>,
+    ): Promise<T> => {
+      snapshotRuns += 1;
+      return await run(pluginMetadataEnv);
+    };
+    mocks.inspectEmbeddingProviderSetup.mockResolvedValueOnce(null);
+
+    registerBundledHealthChecks({
+      cfg: {},
+      cwd: workspaceDir,
+      env: sourceEnv,
+      runWithPluginStateSnapshot,
+    });
+
+    expect(snapshotRuns).toBe(0);
+    const host = mocks.registerMemoryCoreDoctorChecks.mock.calls[0]?.[0];
+    await expect(
+      host?.inspectEmbeddingProviderSetup({
+        config: {},
+        env: sourceEnv,
+        agentId: "main",
+        provider: "local",
+      }),
+    ).resolves.toBeNull();
+    expect(snapshotRuns).toBe(1);
+    expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledWith({
+      config: {},
+      workspaceDir,
+      env: pluginMetadataEnv,
+    });
+    expect(mocks.inspectEmbeddingProviderSetup).toHaveBeenCalledWith({
+      config: {},
+      env: pluginMetadataEnv,
+      agentId: "main",
+      provider: "local",
+    });
   });
 
   it("loads bundled policy health checks when policy extension is enabled", () => {

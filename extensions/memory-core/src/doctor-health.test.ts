@@ -11,9 +11,7 @@ import {
 
 type InspectManagedLocalEmbeddingSetup = Parameters<
   typeof registerMemoryCoreDoctorChecks
->[0]["resolveEmbeddingProviderSetupInspector"] extends (provider: string) => infer T
-  ? Exclude<T, undefined>
-  : never;
+>[0]["inspectEmbeddingProviderSetup"];
 
 const roots = new Set<string>();
 
@@ -45,7 +43,7 @@ function captureCheck(
       checks.set(check.id, check);
     },
     getHealthCheck: (id) => checks.get(id),
-    resolveEmbeddingProviderSetupInspector: () => inspectManagedLocalEmbeddingSetup,
+    inspectEmbeddingProviderSetup: inspectManagedLocalEmbeddingSetup ?? (async () => undefined),
     memoryCoreActive,
   });
   const check = checks.get(MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID);
@@ -98,7 +96,7 @@ describe("managed local embedding setup health check", () => {
     registerMemoryCoreDoctorChecks({
       registerHealthCheck,
       getHealthCheck,
-      resolveEmbeddingProviderSetupInspector: () => staleInspect,
+      inspectEmbeddingProviderSetup: staleInspect,
       memoryCoreActive: false,
     });
     const check = checks.get(MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID);
@@ -109,7 +107,7 @@ describe("managed local embedding setup health check", () => {
     registerMemoryCoreDoctorChecks({
       registerHealthCheck,
       getHealthCheck,
-      resolveEmbeddingProviderSetupInspector: () => currentInspect,
+      inspectEmbeddingProviderSetup: currentInspect,
       memoryCoreActive: true,
     });
     expect(registerHealthCheck).toHaveBeenCalledOnce();
@@ -126,7 +124,7 @@ describe("managed local embedding setup health check", () => {
     registerMemoryCoreDoctorChecks({
       registerHealthCheck,
       getHealthCheck,
-      resolveEmbeddingProviderSetupInspector: () => currentInspect,
+      inspectEmbeddingProviderSetup: currentInspect,
       memoryCoreActive: true,
     });
     expect(checks.get(MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID)).toBe(check);
@@ -335,6 +333,28 @@ describe("managed local embedding setup health check", () => {
         message: expect.stringContaining(
           "Memory Core semantic-index readiness could not be verified",
         ),
+        fixHint:
+          "Keep the current Gateway running, resolve the database inspection error, then rerun this check.",
+      },
+    ]);
+  });
+
+  it("returns a structured non-ready result when provider setup cannot be inspected", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-provider-state-"));
+    roots.add(stateDir);
+    await createSemanticIndex(stateDir);
+    const check = captureCheck(async () => {
+      throw new Error("shared plugin state did not stabilize");
+    });
+
+    await expect(check.detect(context(stateDir, "local"))).resolves.toEqual([
+      {
+        checkId: MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
+        severity: "error",
+        source: "memory-core",
+        target: "memory-core",
+        requirement: "memory-index-inspection",
+        message: expect.stringContaining("shared plugin state did not stabilize"),
         fixHint:
           "Keep the current Gateway running, resolve the database inspection error, then rerun this check.",
       },
