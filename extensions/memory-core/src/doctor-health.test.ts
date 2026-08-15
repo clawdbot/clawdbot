@@ -115,6 +115,26 @@ describe("managed local embedding setup health check", () => {
     expect(inspect.mock.calls.map(([params]) => params.provider)).toEqual(["local", "openai"]);
   });
 
+  it("normalizes selected provider IDs like Gateway startup", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-normalized-"));
+    roots.add(stateDir);
+    await createSemanticIndex(stateDir);
+    const inspect = vi.fn<InspectManagedLocalEmbeddingSetup>(async (params) => ({
+      provider: params.provider,
+      reason: "Local embeddings need the managed llama.cpp server config.",
+      requirement: "managed-llama-cpp-setup",
+    }));
+    const check = captureCheck(inspect);
+
+    await expect(check.detect(context(stateDir, " LOCAL "))).resolves.toEqual([
+      expect.objectContaining({
+        requirement: "managed-llama-cpp-setup",
+        target: "main/local",
+      }),
+    ]);
+    expect(inspect).toHaveBeenCalledWith(expect.objectContaining({ provider: "local" }));
+  });
+
   it("ignores stale built-in indexes when another plugin owns the memory slot", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-setup-alternate-slot-"));
     roots.add(stateDir);

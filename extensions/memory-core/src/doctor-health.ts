@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { HealthCheck } from "openclaw/plugin-sdk/health";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   collectVectorProviderFindings,
   type ProviderFailure,
@@ -36,7 +37,7 @@ function resolveSelectedMemoryProvider(
     return null;
   }
   const configured = overrides?.provider ?? defaults?.provider;
-  const provider = configured?.trim();
+  const provider = normalizeOptionalLowercaseString(configured);
   return !provider || provider === "auto" ? "openai" : provider;
 }
 
