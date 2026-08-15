@@ -27,7 +27,7 @@ import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compa
 import { type AgentSession, estimateTokens, SessionManager } from "../sessions/index.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { createAgentSessionForEmbeddedRunner } from "../sessions/sdk.js";
-import { classifyCompactionReason, resolveCompactionFailureReason } from "./compact-reasons.js";
+import { resolveCompactionFailureReason } from "./compact-reasons.js";
 import { compactionCheckpointStore, persistCompactionCheckpoint } from "./compaction-checkpoint.js";
 import {
   containsRealConversationMessages,
@@ -562,20 +562,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       reason: formatErrorMessage(err),
       safeguardCancelReason: consumeCompactionSafeguardCancelReason(compactionSessionManager),
     });
-    // A token-budget preflight that reports "already compacted" leaves the
-    // over-budget session unresolved; surface a distinct failure so the gate
-    // rejects instead of skipping (openclaw#121617). Byte-only preflights keep
-    // the benign skip: their model context may still fit.
-    if (
-      params.preflightRequired === true &&
-      params.preflightTokenPressure === true &&
-      classifyCompactionReason(reason) === "already_compacted"
-    ) {
-      return fail(
-        "Context still exceeds target budget after the latest compaction; nothing new to compact (overflow is driven by fixed per-turn overhead)",
-        err,
-      );
-    }
     return fail(reason, err);
   } finally {
     if (!checkpointSnapshotRetained) {

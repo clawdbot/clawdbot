@@ -12,7 +12,10 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
-import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import {
+  classifyCompactionReason,
+  isBenignCompactionSkipResult,
+} from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -94,6 +97,14 @@ type UpdateSessionEntryParams = {
 const MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS = 600;
 const MAX_FLUSH_FAILURES = 3;
 const MAX_FLUSH_ERROR_LENGTH = 200;
+
+/**
+ * Rejection reason when a required token preflight reports "already compacted"
+ * while the session stays over budget: fixed per-turn overhead drives the
+ * overflow, so compacting again can never resolve it (openclaw#121617).
+ */
+const UNRESOLVED_TOKEN_PREFLIGHT_REASON =
+  "Context still exceeds target budget after the latest compaction; nothing new to compact (overflow is driven by fixed per-turn overhead)";
 
 const embeddedAgentRuntimeLoader = createLazyImportLoader<EmbeddedAgentRuntime>(
   () => import("../../agents/embedded-agent.js"),
@@ -942,13 +953,32 @@ export async function runPreflightCompactionIfNeeded(params: {
       forcePreflight: true,
       preflightRequired: true,
       preflightCompactionTrigger: compactionTrigger,
-      preflightTokenPressure: shouldCompactByTokens,
       deferOwningContextEngineCompaction: false,
       contextTokenBudget: contextWindowTokens,
       currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
       ownerNumbers: params.followupRun.run.ownerNumbers,
       abortSignal: params.replyOperation.abortSignal,
     });
+
+    // A token-pressure preflight that reports "already compacted" leaves the
+    // over-budget session unresolved; reject with the fixed-overhead reason
+    // instead of benign-skipping into a later generic auto-compaction failure
+    // (openclaw#121617). Byte-only preflights keep the benign skip: their model
+    // context may still fit. Classified at this gate because it owns
+    // shouldCompactByTokens; the trigger label prefers transcript_bytes when
+    // both guards fire.
+    if (
+      shouldCompactByTokens &&
+      result != null &&
+      !result.compacted &&
+      classifyCompactionReason(result.reason) === "already_compacted"
+    ) {
+      await notifyTerminalCompaction("incomplete");
+      logVerbose(
+        `preflightCompaction unresolved: sessionKey=${params.sessionKey} reason=${result.reason ?? "not_compacted"}`,
+      );
+      throw new Error(`Preflight compaction required but failed: ${UNRESOLVED_TOKEN_PREFLIGHT_REASON}`);
+    }
 
     if (!result?.ok) {
       const reason = result?.reason ?? "not_compacted";

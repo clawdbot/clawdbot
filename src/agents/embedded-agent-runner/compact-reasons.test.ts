@@ -128,27 +128,6 @@ describe("isBenignCompactionSkipReason", () => {
   );
 });
 
-describe("unresolved-overflow preflight reason classification", () => {
-  // The token-preflight producer in compaction-session-execution.ts emits this
-  // message when nothing new compacts over budget; it must stay non-benign so
-  // the mandatory gate rejects instead of skipping (openclaw#121617).
-  const unresolvedOverflowReason =
-    "Context still exceeds target budget after the latest compaction; nothing new to compact (overflow is driven by fixed per-turn overhead)";
-
-  it("classifies the unresolved-overflow reason as a hard failure, not a benign skip", () => {
-    expect(classifyCompactionReason(unresolvedOverflowReason)).toBe(
-      "live_context_still_exceeds_target",
-    );
-    expect(
-      isBenignCompactionSkipResult({
-        ok: false,
-        compacted: false,
-        reason: unresolvedOverflowReason,
-      }),
-    ).toBe(false);
-  });
-});
-
 describe("formatUnknownCompactionReasonDetail", () => {
   it("formats unknown reasons as single-token diagnostic detail", () => {
     expect(formatUnknownCompactionReasonDetail("No API provider registered for api: ollama")).toBe(
