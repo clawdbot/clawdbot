@@ -321,7 +321,8 @@
   .cmd-palette.cmd-palette,
   .login-gate__card.login-gate__card,
   .card.card,
-  .settings-group.settings-group {
+  .settings-group.settings-group,
+  .option-card__choice.option-card__choice {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
@@ -347,13 +348,17 @@
   }
 
   /* The transcript search bar's bottom corners round with its .card ancestor
-     so the two edges stay optically parallel; it carries no corner-shape of
-     its own (only two corners are rounded, and .chat:has(> .agent-chat__search-bar)
-     zeroes .card's own radius while the search bar is present — see
-     chat/layout.css). */
+     so the two edges stay optically parallel; only two corners are rounded,
+     and .chat:has(> .agent-chat__search-bar) zeroes .card's own radius while
+     the search bar is present (see chat/layout.css). corner-shape still
+     needs to be set here even though the top two corners are 0 (a 0-radius
+     corner draws no curve either way): the bottom two are standing in for
+     .card's own squircle corner at the seam, so they need the same shape,
+     not just the same radius, to actually match it. */
   .agent-chat__search-bar.agent-chat__search-bar {
     border-radius: 0 0 calc(14px * var(--openclaw-corner-radius-scale))
       calc(14px * var(--openclaw-corner-radius-scale));
+    corner-shape: superellipse(1.5);
   }
 
   /* These two add a fixed cosmetic offset on top of the --radius-xl step in
@@ -379,10 +384,15 @@
     corner-shape: superellipse(1.5);
   }
 
+  /* Items pick up corner-shape too, not just the scaled radius: corner-shape
+     doesn't inherit, and a bigger round radius sitting inside a squircle
+     panel with no shape of its own reads as an unrelated smaller circle
+     poking out of a superellipse, not a coherent nested row. */
   .slash-menu-item.slash-menu-item,
   .chat-reply-context-menu.chat-reply-context-menu button,
   .chat-selection-popup.chat-selection-popup button {
     border-radius: calc(10px * var(--openclaw-corner-radius-scale) - 4px);
+    corner-shape: superellipse(1.5);
   }
 
   /* wa-dropdown/wa-popover/wa-select: the panel gets the same direct

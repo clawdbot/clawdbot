@@ -24,6 +24,11 @@ const UNSUPPORTED_CONDITION = "@supports (corner-shape: openclaw-unsupported-sha
 type CornerCase = {
   /** Corner radius an engine without `corner-shape` keeps drawing. */
   readonly circular: string;
+  /** Which physical corner to probe; most fixtures round all four equally,
+   * so "topLeft" (the default) stands in for the rest. Only a directional
+   * shorthand like .agent-chat__search-bar's `0 0 var(...) var(...)` needs
+   * "bottomLeft" — its top corners are permanently 0 either way. */
+  readonly corner?: "bottomLeft" | "topLeft";
   readonly markup: string;
   readonly selector: string;
   /** Radius once the 1.25 corner scale applies. */
@@ -47,10 +52,22 @@ const CORNER_CASES: readonly CornerCase[] = [
     superelliptical: "17.5px",
   },
   {
+    // Real DOM shape from option-card.ts: .option-card__choice is a button
+    // nested two levels inside .option-card, not a synthetic flat div. The
+    // .option-card__choice case below reuses this same markup — an empty
+    // markup string there, not a duplicate copy of it.
     circular: "20px",
-    markup: '<div class="option-card">Option</div>',
+    markup:
+      '<section class="option-card" role="group"><div class="option-card__choices">' +
+      '<button type="button" class="option-card__choice">Choice</button></div></section>',
     selector: ".option-card",
     superelliptical: "25px",
+  },
+  {
+    circular: "14px",
+    markup: "",
+    selector: ".option-card__choice",
+    superelliptical: "17.5px",
   },
   {
     circular: "14px",
@@ -80,6 +97,59 @@ const CORNER_CASES: readonly CornerCase[] = [
     circular: "14px",
     markup: '<div class="settings-group">Group</div>',
     selector: ".settings-group",
+    superelliptical: "17.5px",
+  },
+  {
+    // Real DOM shape from chat-composer-slash-menu.ts: .slash-menu-item is a
+    // div two levels below .slash-menu (through .slash-menu__scroll and
+    // .slash-menu-group), not a direct child. Item radius is panel radius
+    // minus 4px (calc(10px * scale - 4px) in base.css), so it reads a
+    // different number from the panel at both scales — a real assertion,
+    // not a copy of the panel's own expected value.
+    circular: "10px",
+    markup:
+      '<div class="slash-menu" role="listbox"><div class="slash-menu__scroll">' +
+      '<div class="slash-menu-group"><div class="slash-menu-item" role="option">Item</div>' +
+      "</div></div></div>",
+    selector: ".slash-menu",
+    superelliptical: "12.5px",
+  },
+  {
+    circular: "6px",
+    markup: "",
+    selector: ".slash-menu-item",
+    superelliptical: "8.5px",
+  },
+  {
+    // Real DOM shape from chat-thread-interactions.ts: the item is a plain
+    // <button>, matched by the base.css descendant tag selector
+    // `.chat-reply-context-menu button`, not a class carried on the item
+    // itself the way .slash-menu-item is.
+    circular: "10px",
+    markup:
+      '<div class="chat-reply-context-menu" role="menu">' +
+      '<button type="button" role="menuitem">Reply</button></div>',
+    selector: ".chat-reply-context-menu",
+    superelliptical: "12.5px",
+  },
+  {
+    circular: "6px",
+    markup: "",
+    selector: ".chat-reply-context-menu button",
+    superelliptical: "8.5px",
+  },
+  {
+    // Real DOM shape from chat-thread-interactions.ts. Found and fixed
+    // alongside the two P2s above during a final invariant sweep of every
+    // selector in the base.css corner block: this one already scaled its
+    // (bottom-only) radius but never carried corner-shape, same "radius
+    // grew, shape didn't follow" gap as the menu items. Its only non-zero
+    // corners are the bottom two (`border-radius: 0 0 var(...) var(...)`),
+    // so this is the one case that needs the bottom-left probe.
+    circular: "14px",
+    corner: "bottomLeft",
+    markup: '<div class="agent-chat__search-bar"><input type="text" /></div>',
+    selector: ".agent-chat__search-bar",
     superelliptical: "17.5px",
   },
 ];
@@ -173,22 +243,24 @@ async function probeCorners(browser: Browser, fixtureFile: string): Promise<Corn
   try {
     await page.goto(`file://${fixtureFile}`);
     return await page.evaluate(
-      (selectors: readonly string[]) => {
+      (probes: readonly { selector: string; corner: "bottomLeft" | "topLeft" }[]) => {
         return Object.fromEntries(
-          selectors.map((selector) => {
+          probes.map(({ selector, corner }) => {
             const element = document.querySelector(selector);
             if (!element) {
               throw new Error(`Missing corner fixture element for ${selector}`);
             }
             const style = getComputedStyle(element);
-            return [
-              selector,
-              { radius: style.borderTopLeftRadius, shape: style.getPropertyValue("corner-shape") },
-            ];
+            const radius =
+              corner === "bottomLeft" ? style.borderBottomLeftRadius : style.borderTopLeftRadius;
+            return [selector, { radius, shape: style.getPropertyValue("corner-shape") }];
           }),
         );
       },
-      ALL_CASES.map((corner) => corner.selector),
+      ALL_CASES.map((corner) => ({
+        selector: corner.selector,
+        corner: corner.corner ?? "topLeft",
+      })),
     );
   } finally {
     await page.close().catch(() => {});
