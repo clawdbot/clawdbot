@@ -55,6 +55,13 @@ suite.define(() => {
         )
         .click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionB));
+      await expect
+        .poll(() =>
+          page
+            .locator(".chat-pane-cache__pane--visible")
+            .evaluate((pane) => (pane as HTMLElement & { sessionKey?: string }).sessionKey),
+        )
+        .toBe(sessionB);
       await gateway.resolveDeferred("sessions.files.reveal", {
         ok: false,
         error: "Stale reveal failure must stay retired.",
@@ -72,6 +79,13 @@ suite.define(() => {
         )
         .click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionA));
+      await expect
+        .poll(() =>
+          page
+            .locator(".chat-pane-cache__pane--visible")
+            .evaluate((pane) => (pane as HTMLElement & { sessionKey?: string }).sessionKey),
+        )
+        .toBe(sessionA);
       await expect
         .poll(() => page.getByText("Stale reveal failure must stay retired.").count())
         .toBe(0);
