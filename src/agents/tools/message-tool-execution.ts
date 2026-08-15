@@ -32,8 +32,10 @@ import type {
   MessageActionResult,
 } from "../../infra/outbound/message-action-contracts.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
-import { resolveActionDeliveryTargetAlias } from "../../infra/outbound/message-action-spec.js";
-import { shouldApplyCrossContextMarker } from "../../infra/outbound/outbound-policy.js";
+import {
+  actionRequiresTarget,
+  resolveActionDeliveryTargetAlias,
+} from "../../infra/outbound/message-action-spec.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
@@ -77,7 +79,7 @@ import {
 import { isPollVoteEchoText } from "./poll-vote-echo.js";
 
 function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
-  return action === "broadcast" || shouldApplyCrossContextMarker(action);
+  return action === "broadcast" || actionRequiresTarget(action);
 }
 
 type ExplicitMessageTargetContext = {

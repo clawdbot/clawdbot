@@ -2765,6 +2765,21 @@ describe("message tool explicit target guard", () => {
         stickerId: "sticker-1",
       },
     },
+    {
+      action: "thread-create",
+      params: {
+        action: "thread-create",
+        threadName: "Heartbeat follow-up",
+      },
+    },
+    {
+      action: "edit",
+      params: {
+        action: "edit",
+        messageId: "message-1",
+        message: "Corrected heartbeat alert",
+      },
+    },
   ] as const)("requires an explicit target for $action when configured", async ({ params }) => {
     const tool = createMessageTool({
       runMessageAction: mocks.runMessageAction as never,
