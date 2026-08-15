@@ -107,8 +107,8 @@ describe("tsdown config", () => {
       }
     ).version;
     expect(workerConfig?.define).toEqual({
-      __OPENCLAW_WORKER_DEPLOY__: "true",
-      __OPENCLAW_WORKER_VERSION__: JSON.stringify(packageVersion),
+      __WORKER_DEPLOY_BUILD__: "true",
+      __WORKER_DEPLOY_VERSION__: JSON.stringify(packageVersion),
     });
     expect(workerConfig?.alias).toMatchObject({
       bufferutil: path.resolve("src/worker/worker-deploy-optional-native.ts"),

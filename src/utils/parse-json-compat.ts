@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 type Json5Parser = { parse: (value: string) => unknown };
 let json5Runtime: Json5Parser | undefined;
 // oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled worker builds replace this compile-time define.
-declare const __OPENCLAW_WORKER_DEPLOY__: boolean;
+declare const __WORKER_DEPLOY_BUILD__: boolean;
 
 function isJson5Parser(value: unknown): value is Json5Parser {
   return (
@@ -36,7 +36,7 @@ function loadJson5Parser(): Json5Parser {
     return json5Runtime;
   }
   // oxlint-disable-next-line unicorn/no-typeof-undefined -- The build define is absent in source runtimes.
-  if (typeof __OPENCLAW_WORKER_DEPLOY__ !== "undefined" && __OPENCLAW_WORKER_DEPLOY__) {
+  if (typeof __WORKER_DEPLOY_BUILD__ !== "undefined" && __WORKER_DEPLOY_BUILD__) {
     throw new Error("worker JSON5 runtime was not registered before use");
   }
   registerJson5Runtime(createRequire(import.meta.url)("json5"));

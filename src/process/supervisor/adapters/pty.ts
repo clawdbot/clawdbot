@@ -12,7 +12,7 @@ import { toStringEnv } from "./env.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
 // oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled worker builds replace this compile-time define.
-declare const __OPENCLAW_WORKER_DEPLOY__: boolean;
+declare const __WORKER_DEPLOY_BUILD__: boolean;
 
 type PtyAdapter = SpawnProcessAdapter;
 
@@ -28,7 +28,7 @@ export async function createPtyAdapter(params: {
   // Worker deploys are portable JavaScript artifacts; exec falls back to the child adapter
   // instead of binding the Gateway host's native PTY binary into the bundle.
   // oxlint-disable-next-line unicorn/no-typeof-undefined -- The build define is absent in source runtimes.
-  if (typeof __OPENCLAW_WORKER_DEPLOY__ !== "undefined" && __OPENCLAW_WORKER_DEPLOY__) {
+  if (typeof __WORKER_DEPLOY_BUILD__ !== "undefined" && __WORKER_DEPLOY_BUILD__) {
     throw new Error("PTY is unavailable in the portable worker runtime");
   }
   const { spawn } = await import("@lydell/node-pty");

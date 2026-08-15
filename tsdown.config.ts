@@ -176,8 +176,8 @@ function workerDeployBuildConfig(): UserConfig {
     dts: false,
     env,
     define: {
-      __OPENCLAW_WORKER_DEPLOY__: "true",
-      __OPENCLAW_WORKER_VERSION__: JSON.stringify(workerDeployVersion),
+      __WORKER_DEPLOY_BUILD__: "true",
+      __WORKER_DEPLOY_VERSION__: JSON.stringify(workerDeployVersion),
     },
     alias: {
       bufferutil: path.resolve("src/worker/worker-deploy-optional-native.ts"),

@@ -18,7 +18,7 @@ type HighlightJs = {
 
 let highlightJsRuntime: HighlightJs | undefined;
 // oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled worker builds replace this compile-time define.
-declare const __OPENCLAW_WORKER_DEPLOY__: boolean;
+declare const __WORKER_DEPLOY_BUILD__: boolean;
 
 function isHighlightJs(value: unknown): value is HighlightJs {
   return (
@@ -46,7 +46,7 @@ function loadHighlightJsRuntime(): HighlightJs {
     return highlightJsRuntime;
   }
   // oxlint-disable-next-line unicorn/no-typeof-undefined -- The build define is absent in source runtimes.
-  if (typeof __OPENCLAW_WORKER_DEPLOY__ !== "undefined" && __OPENCLAW_WORKER_DEPLOY__) {
+  if (typeof __WORKER_DEPLOY_BUILD__ !== "undefined" && __WORKER_DEPLOY_BUILD__) {
     throw new Error("worker highlight.js runtime was not registered before use");
   }
   // highlight.js ships `/// <reference lib="dom" />` in its d.ts, which would
