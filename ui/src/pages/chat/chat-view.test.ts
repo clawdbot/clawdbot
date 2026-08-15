@@ -5852,7 +5852,8 @@ describe("chat model controls", () => {
         updatedAt: 1,
         model: "gpt-5.6-sol",
         modelProvider: "openai",
-        contextTokens: 272_000,
+        agentRuntime: { id: "openclaw", source: "model" },
+        contextTokens: 1_000_000,
       },
     ]);
     const container = renderModelControls(state);
@@ -5861,13 +5862,14 @@ describe("chat model controls", () => {
     );
 
     expect(modelOption?.querySelector(".chat-controls__model-option-meta")?.textContent).toBe(
-      "272k active · 1M max · OpenClaw",
+      "1M active · 1M max · OpenClaw",
     );
+    expect(modelOption?.textContent).not.toContain("700k");
     expect(getChatModelSelect(container).querySelector(".chat-controls__trigger-meta")).toBeNull();
     expect(modelOption?.closest("openclaw-tooltip")).toBeNull();
   });
 
-  it("does not pair a stale session budget with an optimistic model selection", () => {
+  it("uses the default selection runtime for an implicit Codex model", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.6-sol",
       modelProvider: "openai",
@@ -5878,7 +5880,6 @@ describe("chat model controls", () => {
           provider: "openai",
           contextWindow: 1_050_000,
         },
-        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", contextWindow: 400_000 },
       ],
     });
     state.sessionsResult = createSessionsResultFromRows([
@@ -5886,24 +5887,140 @@ describe("chat model controls", () => {
         key: "main",
         kind: "direct",
         updatedAt: 1,
-        model: "gpt-5.5",
+        model: "gpt-5.6-sol",
         modelProvider: "openai",
-        contextTokens: 272_000,
+        agentRuntime: { id: "codex", source: "implicit" },
+        contextTokens: 1_000_000,
       },
     ]);
+    state.sessionsResult.defaults = {
+      modelProvider: "openai",
+      model: "gpt-5.6-sol",
+      contextTokens: 1_000_000,
+      agentRuntime: { id: "codex", source: "implicit" },
+    };
 
-    const container = renderModelControls(state, {
-      modelOverrides: { main: "openai/gpt-5.6-sol" },
-      modelSwitching: true,
-    });
-    const selectedModelOption = container.querySelector<HTMLButtonElement>(
+    const container = renderModelControls(state);
+    const modelOption = container.querySelector<HTMLButtonElement>(
       '[data-chat-model-option="openai/gpt-5.6-sol"]',
     );
 
-    expect(
-      selectedModelOption?.querySelector(".chat-controls__model-option-meta")?.textContent,
-    ).toBe("1M");
+    expect(modelOption?.querySelector(".chat-controls__model-option-meta")?.textContent).toBe(
+      "1M active · 1M max",
+    );
+    expect(modelOption?.textContent).not.toContain("700k");
   });
+
+  it("rejects stale active context after an implicit default runtime change", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.6-sol",
+      modelProvider: "openai",
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          provider: "openai",
+          contextWindow: 1_050_000,
+        },
+      ],
+    });
+    state.sessionsResult = createSessionsResultFromRows([
+      {
+        key: "main",
+        kind: "direct",
+        updatedAt: 1,
+        model: "gpt-5.6-sol",
+        modelProvider: "openai",
+        agentRuntime: { id: "openclaw", source: "session" },
+        contextTokens: 272_000,
+      },
+    ]);
+    state.sessionsResult.defaults = {
+      modelProvider: "openai",
+      model: "gpt-5.6-sol",
+      contextTokens: 1_000_000,
+      agentRuntime: { id: "codex", source: "implicit" },
+    };
+
+    const container = renderModelControls(state);
+    const modelOption = container.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="openai/gpt-5.6-sol"]',
+    );
+
+    expect(modelOption?.querySelector(".chat-controls__model-option-meta")?.textContent).toBe("1M");
+    expect(modelOption?.textContent).not.toContain("272k active");
+  });
+
+  it.each([
+    {
+      name: "a pending same-model switch",
+      modelSwitching: true,
+      sessionRuntimeId: "codex",
+      optionRuntimeId: "codex",
+    },
+    {
+      name: "a different session runtime",
+      modelSwitching: false,
+      sessionRuntimeId: "openclaw",
+      optionRuntimeId: "codex",
+    },
+    {
+      name: "missing session runtime provenance",
+      modelSwitching: false,
+      sessionRuntimeId: undefined,
+      optionRuntimeId: "codex",
+    },
+    {
+      name: "missing catalog runtime provenance",
+      modelSwitching: false,
+      sessionRuntimeId: "codex",
+      optionRuntimeId: undefined,
+    },
+  ])(
+    "does not pair a stale session budget with $name",
+    ({ modelSwitching, optionRuntimeId, sessionRuntimeId }) => {
+      const { state } = createChatHeaderState({
+        model: "gpt-5.6-sol",
+        modelProvider: "openai",
+        models: [
+          {
+            id: "gpt-5.6-sol",
+            name: "GPT-5.6 Sol",
+            provider: "openai",
+            contextWindow: 1_050_000,
+            ...(optionRuntimeId
+              ? { agentRuntime: { id: optionRuntimeId, source: "model" as const } }
+              : {}),
+          },
+        ],
+      });
+      state.sessionsResult = createSessionsResultFromRows([
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 1,
+          model: "gpt-5.6-sol",
+          modelProvider: "openai",
+          ...(sessionRuntimeId
+            ? { agentRuntime: { id: sessionRuntimeId, source: "session" as const } }
+            : {}),
+          contextTokens: 272_000,
+        },
+      ]);
+
+      const container = renderModelControls(state, {
+        modelOverrides: { main: "openai/gpt-5.6-sol" },
+        modelSwitching,
+      });
+      const selectedModelOption = container.querySelector<HTMLButtonElement>(
+        '[data-chat-model-option="openai/gpt-5.6-sol"]',
+      );
+
+      expect(
+        selectedModelOption?.querySelector(".chat-controls__model-option-meta")?.textContent,
+      ).toBe(optionRuntimeId ? "1M · Codex" : "1M");
+    },
+  );
 
   it("synthesizes a selectable row for a persisted override missing from the catalog", () => {
     const { state } = createChatHeaderState({
@@ -6147,19 +6264,21 @@ describe("chat model controls", () => {
     });
   });
 
-  it("uses the session provider for slash-containing raw model ids without metadata", () => {
+  it("uses the session provider for slash-containing raw model ids", () => {
     const { state } = createChatHeaderState();
     state.chatModelCatalog = [
       {
         id: "google/gemma-4-26b-a4b-it",
         name: "Gemma 4",
         provider: "google",
+        agentRuntime: { id: "openclaw", source: "implicit" },
       },
       {
         id: "google/gemma-4-26b-a4b-it",
         name: "Gemma 4",
         provider: "openrouter",
         contextWindow: 1_000_000,
+        agentRuntime: { id: "openclaw", source: "implicit" },
       },
     ];
     state.sessionsResult = createSessionsListResult({
@@ -6168,6 +6287,10 @@ describe("chat model controls", () => {
       defaultsModel: "google/gemma-4-26b-a4b-it",
       defaultsProvider: "openrouter",
     });
+    state.sessionsResult.sessions[0]!.agentRuntime = {
+      id: "openclaw",
+      source: "implicit",
+    };
     state.sessionsResult.sessions[0]!.contextTokens = 272_000;
     const container = renderModelControls(state);
 

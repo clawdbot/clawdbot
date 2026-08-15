@@ -292,9 +292,22 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const activeOptionModel = activeModelOption
     ? resolveChatModelCatalogEntry(activeModelOption.value, props.modelCatalog)
     : undefined;
+  const activeSessionRuntime = activeSession?.agentRuntime?.id.trim().toLowerCase();
+  const activeOptionRuntime = (
+    activeOptionModel?.agentRuntime?.id ??
+    (activeModelOption?.isDefault ? props.sessionsResult?.defaults?.agentRuntime?.id : undefined)
+  )
+    ?.trim()
+    .toLowerCase();
+  const activeRuntimeMatches =
+    Boolean(activeSessionRuntime) && activeSessionRuntime === activeOptionRuntime;
+  // Missing or mismatched current-selection provenance cannot bind the cached
+  // session window. Even matching provenance is useful only after the switch settles.
   if (
+    !props.modelSwitching &&
     activeModelOption &&
     activeSession?.contextTokens &&
+    activeRuntimeMatches &&
     activeSessionModel !== undefined &&
     activeSessionModel === activeOptionModel
   ) {
