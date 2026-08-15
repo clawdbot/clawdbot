@@ -392,6 +392,7 @@ struct SettingsSkillsDestination: View {
                     isBusy: self.reviewingSlug == skill.reference || self.installingSlug.map {
                         SkillManagementContract.sameClawHubSkill($0, skill.reference)
                     } == true,
+                    canAct: skill.canReadDetails ? self.canRead : self.canAdmin,
                     onAction: { Task { await self.act(on: skill) } })
             }
         }
@@ -518,7 +519,7 @@ struct SettingsSkillsDestination: View {
     /// Routes a row to the only action its source supports. Install-only results skip review and
     /// install the exact reference search returned, so the picked source is the installed source.
     private func act(on skill: ClawHubSkillSummary) async {
-        guard let detailReference = skill.detailReference else {
+        guard skill.canReadDetails else {
             guard let route = try? await gatewayRoute() else { return }
             await self.install(
                 ClawHubSkillInstallReview(directInstall: skill),
@@ -526,10 +527,10 @@ struct SettingsSkillsDestination: View {
                 acknowledgeRisk: false)
             return
         }
-        await self.review(skill, detailReference: detailReference)
+        await self.review(skill)
     }
 
-    private func review(_ skill: ClawHubSkillSummary, detailReference: String) async {
+    private func review(_ skill: ClawHubSkillSummary) async {
         guard self.canRead,
               self.loadedGatewayID == self.appModel.connectedGatewayID,
               self.reviewID == nil
@@ -549,7 +550,7 @@ struct SettingsSkillsDestination: View {
             let route = try await gatewayRoute()
             let data = try await request(
                 method: "skills.detail",
-                params: ClawHubDetailRequest(slug: detailReference),
+                params: ClawHubDetailRequest(slug: skill.reference),
                 timeoutSeconds: 20,
                 route: route)
             let detail = try JSONDecoder().decode(ClawHubSkillDetail.self, from: data)
@@ -910,6 +911,9 @@ private struct ClawHubSkillRow: View {
     let skill: ClawHubSkillSummary
     let installed: Bool
     let isBusy: Bool
+    /// Reviewing only needs read access, but an install-only row installs on the first tap, so the
+    /// row is disabled without admin rather than presenting an action that silently does nothing.
+    let canAct: Bool
     let onAction: () -> Void
 
     private var actionTitle: String {
@@ -937,7 +941,7 @@ private struct ClawHubSkillRow: View {
                 }
                 if self.skill.isUnscannedSource {
                     // This row never opens a review card, so the trust warning has to live here.
-                    Text(verbatim: ClawHubSkillSummary.unscannedTrustLabel)
+                    Text("Not scanned by ClawHub")
                         .font(OpenClawType.caption)
                         .foregroundStyle(OpenClawBrand.warn)
                 }
@@ -947,7 +951,7 @@ private struct ClawHubSkillRow: View {
                 Text(self.actionTitle).font(OpenClawType.captionSemiBold)
             }
             .buttonStyle(.bordered)
-            .disabled(self.isBusy || self.installed)
+            .disabled(self.isBusy || self.installed || !self.canAct)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -1123,9 +1127,12 @@ private struct ClawHubSearchRequest: Encodable {
 
 private struct ClawHubDetailRequest: Encodable { let slug: String }
 
-/// An install-only source resolves to a commit, not a release, so confirmation checks the tracked
-/// skill rather than a version the operator never chose.
+/// An install-only source resolves to a commit, not a release, and its reference is not a
+/// `@owner/slug` spelling, so confirmation matches the reference the Gateway recorded.
 private func skillsInstalledAfter(_ skills: [SkillStatus], review: ClawHubSkillInstallReview) -> Bool {
+    if let requestedReference = review.requestedReference {
+        return SkillManagementContract.installed(skills, requestedReference: requestedReference)
+    }
     guard let version = review.version else {
         return SkillManagementContract.installed(skills, slug: review.slug)
     }

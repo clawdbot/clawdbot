@@ -6491,8 +6491,7 @@ class NodeRuntime private constructor(
         )
     }
     try {
-      val detailReference = skill.detailReference ?: skill.reference
-      val response = requestGatewayData(gatewayScope, "skills.detail", clawHubDetailParams(detailReference))
+      val response = requestGatewayData(gatewayScope, "skills.detail", clawHubDetailParams(skill.reference))
       val review = parseClawHubInstallReview(response, skill, json)
       publishGatewayData(gatewayScope) {
         if (clawHubSkillReviewSeq.get() == reviewSeq) {
@@ -6662,10 +6661,10 @@ class NodeRuntime private constructor(
   ): Boolean {
     if (!refreshSkillsFromGateway() || !isGatewayDataScopeCurrent(gatewayScope)) return false
     val skills = _skillsSummary.value.skills
-    // An install-only source resolves to a commit, not a release, so confirmation checks the
-    // tracked skill rather than a version the operator never chose.
+    // Only an install-only source installs without a version. Its reference is not a `@owner/slug`
+    // spelling, so the slug comparison never matches it; the Gateway records the exact reference.
     return version?.let { isClawHubSkillInstalled(skills, slug, it) }
-      ?: isClawHubSkillInstalled(skills, slug)
+      ?: isClawHubSkillInstalledByReference(skills, slug)
   }
 
   private suspend fun releaseClawHubInstallClaim(
@@ -7986,6 +7985,12 @@ class NodeRuntime private constructor(
               ?.trim()
               ?.takeIf(String::isNotEmpty),
           clawHubValid = clawHub?.boolean("valid") == true,
+          clawHubRequestedReference =
+            clawHub
+              ?.get("requestedReference")
+              .asStringOrNull()
+              ?.trim()
+              ?.takeIf(String::isNotEmpty),
           clawHubOwnerHandle =
             clawHub
               ?.get("ownerHandle")
@@ -8838,6 +8843,8 @@ data class GatewaySkillSummary(
   val installCount: Int,
   val clawHubSlug: String? = null,
   val clawHubValid: Boolean = false,
+  /** Exact reference this skill was installed from; an install-only source keeps its identity. */
+  val clawHubRequestedReference: String? = null,
   val clawHubOwnerHandle: String? = null,
   val clawHubInstalledVersion: String? = null,
 )

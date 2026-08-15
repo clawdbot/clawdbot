@@ -138,7 +138,7 @@ private struct ClawHubSkillResultRow: View {
         }
         parts.append(self.skill.reference)
         if self.skill.isUnscannedSource {
-            parts.append(ClawHubSkillSummary.unscannedTrustLabel)
+            parts.append(String(localized: "Not scanned by ClawHub"))
         }
         return parts.joined(separator: " · ")
     }
@@ -318,7 +318,7 @@ private final class ClawHubSkillsBrowserModel {
     /// Routes a row to the only action its source supports. Install-only results skip review and
     /// install the exact reference search returned, so the picked source is the installed source.
     func act(on skill: ClawHubSkillSummary) async -> [SkillStatus]? {
-        guard let detailReference = skill.detailReference else {
+        guard skill.canReadDetails else {
             guard let route = await GatewayConnection.shared.captureRoute() else {
                 self.notice = Notice(
                     title: "Could not install skill",
@@ -332,11 +332,11 @@ private final class ClawHubSkillsBrowserModel {
                 route: route,
                 acknowledgeRisk: false)
         }
-        await self.review(skill, detailReference: detailReference)
+        await self.review(skill)
         return nil
     }
 
-    func review(_ skill: ClawHubSkillSummary, detailReference: String) async {
+    func review(_ skill: ClawHubSkillSummary) async {
         guard self.reviewingSlug == nil else { return }
         self.reviewingSlug = skill.reference
         self.notice = nil
@@ -345,7 +345,7 @@ private final class ClawHubSkillsBrowserModel {
             guard let route = await GatewayConnection.shared.captureRoute() else {
                 throw ClawHubSkillsBrowserError.gatewayUnavailable
             }
-            let detail = try await GatewayConnection.shared.skillsDetail(slug: detailReference, on: route)
+            let detail = try await GatewayConnection.shared.skillsDetail(slug: skill.reference, on: route)
             guard let review = ClawHubSkillInstallReview(detail: detail, fallback: skill) else {
                 throw ClawHubSkillsBrowserError.missingInstallVersion
             }
@@ -433,9 +433,12 @@ private final class ClawHubSkillsBrowserModel {
     }
 }
 
-/// An install-only source resolves to a commit, not a release, so confirmation checks the tracked
-/// skill rather than a version the operator never chose.
+/// An install-only source resolves to a commit, not a release, and its reference is not a
+/// `@owner/slug` spelling, so confirmation matches the reference the Gateway recorded.
 private func installedAfter(_ skills: [SkillStatus], review: ClawHubSkillInstallReview) -> Bool {
+    if let requestedReference = review.requestedReference {
+        return SkillManagementContract.installed(skills, requestedReference: requestedReference)
+    }
     guard let version = review.version else {
         return SkillManagementContract.installed(skills, slug: review.slug)
     }

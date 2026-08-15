@@ -452,11 +452,10 @@ export const SkillsSearchResultSchema = closedObject({
             "Source-qualified reference for this result. Send it as `slug` to skills.install; several publishers can share one slug.",
         }),
       ),
-      detailRef: Type.Optional(
-        Type.String({
-          minLength: 1,
+      installOnly: Type.Optional(
+        Type.Literal(true, {
           description:
-            "Send it as `slug` to skills.detail. Absent when the result comes from an external source ClawHub serves install-only; offer install directly instead of a detail card.",
+            "Present when ClawHub serves this result install-only: offer install directly with `installRef`, because skills.detail cannot answer for it. Absence means the ordinary review-then-install flow, so results from servers that predate this field keep their existing behavior.",
         }),
       ),
       trustState: Type.Optional(

@@ -175,7 +175,7 @@ extension AgentProTab {
                     .lineLimit(2)
                 if result.isUnscannedSource {
                     // No review card on this surface, so the trust warning has to live in the row.
-                    Text(verbatim: ClawHubSkillSummary.unscannedTrustLabel)
+                    Text("Not scanned by ClawHub")
                         .font(OpenClawType.caption)
                         .foregroundStyle(OpenClawBrand.warn)
                 }

@@ -5,6 +5,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 
@@ -13,7 +14,6 @@ internal const val CLAWHUB_INSTALL_REQUEST_TIMEOUT_MS = 125_000L
 internal const val CLAWHUB_SKILL_GATEWAY_UNAVAILABLE = "Update the Gateway to search and install ClawHub skills from Android."
 internal val CLAWHUB_SKILL_GATEWAY_METHODS = setOf("skills.search", "skills.detail", "skills.install")
 internal const val CLAWHUB_UNSCANNED_TRUST_STATE = "not-scanned-by-clawhub"
-internal const val CLAWHUB_UNSCANNED_TRUST_LABEL = "Not scanned by ClawHub"
 
 data class GatewayClawHubSkillSearchState(
   val query: String = "",
@@ -31,7 +31,7 @@ data class GatewayClawHubSkillSearchState(
 data class GatewayClawHubSkillSummary(
   val slug: String,
   val installRef: String?,
-  val detailRef: String?,
+  val installOnly: Boolean?,
   val trustState: String?,
   val displayName: String,
   val summary: String?,
@@ -46,15 +46,12 @@ data class GatewayClawHubSkillSummary(
     get() = installRef?.trim()?.takeIf(String::isNotEmpty) ?: slug
 
   /**
-   * Reference the Gateway can serve a detail card for. External sources are install-only, so the
-   * Gateway omits it and this surface installs directly instead of offering a review that fails.
+   * Drives the affordance, so no client has to recognize external reference spellings itself.
+   * Only an explicit install-only result skips review: a Gateway that predates this field omits
+   * it, and those results must keep the reviewed-version flow they have always used.
    */
-  val detailReference: String?
-    get() = detailRef?.trim()?.takeIf(String::isNotEmpty)
-
-  /** Drives the affordance, so no client has to recognize external reference spellings itself. */
   val canReadDetails: Boolean
-    get() = detailReference != null
+    get() = installOnly != true
 
   val isUnscannedSource: Boolean
     get() = trustState == CLAWHUB_UNSCANNED_TRUST_STATE
@@ -70,6 +67,11 @@ data class GatewayClawHubInstallReview(
    */
   val version: String?,
   val author: String,
+  /**
+   * Set for an install-only target. Its canonical slug differs from this reference, so install
+   * readback matches the Gateway's recorded reference instead of the slug that was sent.
+   */
+  val requestedReference: String? = null,
 ) {
   companion object {
     /**
@@ -82,7 +84,8 @@ data class GatewayClawHubInstallReview(
         displayName = skill.displayName,
         summary = skill.summary,
         version = null,
-        author = if (skill.isUnscannedSource) CLAWHUB_UNSCANNED_TRUST_LABEL else "Unknown publisher",
+        author = "Unknown publisher",
+        requestedReference = skill.reference,
       )
   }
 }
@@ -107,7 +110,7 @@ internal fun parseClawHubSearchResults(
       GatewayClawHubSkillSummary(
         slug = slug,
         installRef = value.string("installRef"),
-        detailRef = value.string("detailRef"),
+        installOnly = (value["installOnly"] as? JsonPrimitive)?.booleanOrNull,
         trustState = value.string("trustState"),
         displayName = displayName,
         summary = value.string("summary"),
@@ -219,6 +222,19 @@ internal fun isClawHubSkillInstalled(
 ): Boolean {
   val reference = parseClawHubSkillReference(slug) ?: return false
   return skills.any { it.matchesClawHubReference(reference) }
+}
+
+/**
+ * Readback for an install-only source. Its reference is not a `@owner/slug` spelling, so the slug
+ * comparison never matches it; the Gateway records the exact reference instead.
+ */
+internal fun isClawHubSkillInstalledByReference(
+  skills: List<GatewaySkillSummary>,
+  requestedReference: String,
+): Boolean {
+  val reference = requestedReference.trim()
+  if (reference.isEmpty()) return false
+  return skills.any { it.clawHubValid && it.clawHubRequestedReference == reference }
 }
 
 internal fun isClawHubSkillInstalled(

@@ -29,7 +29,7 @@ class SkillManagementTest {
         GatewayClawHubSkillSummary(
           slug = "alpha",
           installRef = "@alice/alpha",
-          detailRef = null,
+          installOnly = null,
           trustState = null,
           displayName = "Alpha",
           summary = "Useful",
@@ -55,23 +55,67 @@ class SkillManagementTest {
   fun installOnlyResultsKeepTheirSourceAndExposeNoDetailAction() {
     val results =
       parseClawHubSearchResults(
-        """{"results":[{"slug":"pdf","installRef":"skills-sh:anthropics/skills/pdf","trustState":"not-scanned-by-clawhub","displayName":"Pdf"},{"slug":"pdf","installRef":"@awspace/pdf","detailRef":"@awspace/pdf","displayName":"Pdf"}]}""",
+        """{"results":[{"slug":"pdf","installRef":"skills-sh:openai/skills/pdf","installOnly":true,"trustState":"not-scanned-by-clawhub","displayName":"Pdf"},{"slug":"pdf","installRef":"@awspace/pdf","displayName":"Pdf"}]}""",
         json,
       )
 
     val external = results.first()
     val native = results.last()
-    // Rewriting the external reference to @anthropics/pdf would install a different skill.
-    assertEquals("skills-sh:anthropics/skills/pdf", external.reference)
+    // Rewriting the external reference to @openai/pdf would install a different skill.
+    assertEquals("skills-sh:openai/skills/pdf", external.reference)
     assertFalse(external.canReadDetails)
     assertTrue(external.isUnscannedSource)
     assertTrue(native.canReadDetails)
-    assertEquals("@awspace/pdf", native.detailReference)
 
     val review = GatewayClawHubInstallReview.directInstall(external)
-    assertEquals("skills-sh:anthropics/skills/pdf", review.slug)
+    assertEquals("skills-sh:openai/skills/pdf", review.slug)
     // The Gateway pins external sources to a commit and rejects a version selector.
     assertNull(review.version)
+    assertEquals("skills-sh:openai/skills/pdf", review.requestedReference)
+  }
+
+  @Test
+  fun resultsWithoutTheInstallOnlyFlagKeepTheReviewFlow() {
+    // A Gateway released before the flag existed omits it from every row.
+    val results =
+      parseClawHubSearchResults(
+        """{"results":[{"slug":"email","installRef":"@alice/email","displayName":"Email"}]}""",
+        json,
+      )
+
+    // Treating omission as install-only would bypass the reviewed-version step those Gateways
+    // still expect.
+    assertTrue(results.first().canReadDetails)
+    assertFalse(results.first().isUnscannedSource)
+  }
+
+  @Test
+  fun installOnlyReadbackMatchesTheRecordedReference() {
+    val installed =
+      listOf(
+        GatewaySkillSummary(
+          skillKey = "pdf",
+          name = "pdf",
+          description = null,
+          source = "clawhub",
+          emoji = null,
+          disabled = false,
+          eligible = true,
+          blockedByAllowlist = false,
+          blockedByAgentFilter = false,
+          bundled = false,
+          missingCount = 0,
+          installCount = 0,
+          clawHubSlug = "pdf",
+          clawHubValid = true,
+          clawHubRequestedReference = "skills-sh:openai/skills/pdf",
+        ),
+      )
+
+    // The canonical slug is "pdf", so matching by the sent reference is the only readback that
+    // identifies this install without colliding with a registry skill of the same slug.
+    assertTrue(isClawHubSkillInstalledByReference(installed, "skills-sh:openai/skills/pdf"))
+    assertFalse(isClawHubSkillInstalledByReference(installed, "skills-sh:other/skills/pdf"))
   }
 
   @Test

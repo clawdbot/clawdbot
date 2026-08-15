@@ -1885,6 +1885,7 @@ export const en: TranslationMap = {
     disconnected: "Not connected to gateway.",
     empty: "No skills found.",
     noClawHubResults: "No skills found on ClawHub.",
+    notScannedByClawHub: "Not scanned by ClawHub",
     install: "Install",
     installing: "Installing…",
     close: "Close",

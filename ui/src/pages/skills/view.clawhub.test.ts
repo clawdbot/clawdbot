@@ -73,7 +73,6 @@ describe("renderSkills ClawHub", () => {
             {
               score: 0.95,
               slug: "github",
-              detailRef: "github",
               displayName: "GitHub",
               summary: "GitHub integration for OpenClaw",
               icon: `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`,
@@ -188,7 +187,6 @@ describe("renderSkills ClawHub", () => {
             score: 1,
             slug: "imap-smtp-email",
             installRef: `@${ownerHandle}/imap-smtp-email`,
-            detailRef: `@${ownerHandle}/imap-smtp-email`,
             displayName: "imap-smtp-email",
           })),
           onClawHubDetailOpen,
@@ -241,8 +239,9 @@ describe("renderSkills ClawHub", () => {
             {
               score: 1,
               slug: "pdf",
-              // External sources carry no detailRef: the Gateway serves them install-only.
-              installRef: "skills-sh:anthropics/skills/pdf",
+              // The Gateway marks external sources install-only; it serves no card for them.
+              installRef: "skills-sh:openai/skills/pdf",
+              installOnly: true,
               trustState: "not-scanned-by-clawhub",
               displayName: "Pdf",
             },
@@ -250,7 +249,6 @@ describe("renderSkills ClawHub", () => {
               score: 1,
               slug: "pdf",
               installRef: "@awspace/pdf",
-              detailRef: "@awspace/pdf",
               displayName: "Pdf",
             },
           ],
@@ -282,10 +280,42 @@ describe("renderSkills ClawHub", () => {
 
     // Install keeps the exact source the operator picked instead of a same-slug native skill.
     expect(onClawHubInstall.mock.calls.flat()).toEqual([
-      "skills-sh:anthropics/skills/pdf",
+      "skills-sh:openai/skills/pdf",
       "@awspace/pdf",
     ]);
     expect(onClawHubDetailOpen).not.toHaveBeenCalled();
+  });
+
+  it("keeps the review flow for results from a gateway that predates the install-only flag", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    const onClawHubDetailOpen = vi.fn();
+
+    render(
+      renderSkills(
+        createProps({
+          clawhubQuery: "email",
+          // An older gateway sends installRef with no capability field at all.
+          clawhubResults: [
+            { score: 1, slug: "email", installRef: "@alice/email", displayName: "Email" },
+          ],
+          onClawHubDetailOpen,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const row = container
+      .querySelector<HTMLElement>(".clawhub-skill-result__button")!
+      .closest<HTMLElement>(".plugins-item")!;
+    // Reading omission as install-only would silently drop the reviewed-version step that every
+    // released gateway still expects.
+    const detailButton = row.querySelector<HTMLButtonElement>(".plugins-item__detail-button");
+    expect(detailButton).not.toBeNull();
+    detailButton!.click();
+    expect(onClawHubDetailOpen).toHaveBeenCalledWith("@alice/email");
   });
 
   it("sizes the ClawHub detail dialog to a refusal message instead of a reader", async () => {

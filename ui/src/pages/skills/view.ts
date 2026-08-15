@@ -35,11 +35,7 @@ import {
   isSkillAvailable,
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
-import {
-  CLAWHUB_UNSCANNED_TRUST_LABEL,
-  clawHubSkillRef,
-  type ClawHubSearchResult,
-} from "../../lib/skills/clawhub-search.ts";
+import { clawHubSkillRef, type ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
 import {
   clawhubVerdictKey,
   type ClawHubSkillSecurityVerdict,
@@ -462,10 +458,10 @@ function renderClawHubResults(props: SkillsProps) {
       // Same slug can appear once per publisher, so the reference is the only thing that tells
       // otherwise identical rows apart — and it is what install sends back.
       const ref = clawHubSkillRef(r);
-      // Only rows ClawHub can also serve a card for carry detailRef; the rest are install-only,
-      // so opening a detail dialog for them would always fail.
-      const detailRef = r.detailRef;
-      const trustSuffix = r.trustState ? ` · ${CLAWHUB_UNSCANNED_TRUST_LABEL}` : "";
+      // Detail stays available unless the result is explicitly install-only, so results from a
+      // gateway that predates the flag keep the review-then-install flow.
+      const detailRef = r.installOnly ? undefined : ref;
+      const trustSuffix = r.trustState ? ` · ${t("skillsPage.notScannedByClawHub")}` : "";
       const rowCopy = html`
         ${iconUrl
           ? html`<img class="clawhub-skill-icon" src=${iconUrl} alt="" loading="lazy" />`

@@ -1,7 +1,6 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.CLAWHUB_SKILL_GATEWAY_UNAVAILABLE
-import ai.openclaw.app.CLAWHUB_UNSCANNED_TRUST_LABEL
 import ai.openclaw.app.GatewayClawHubInstallReview
 import ai.openclaw.app.GatewayClawHubSkillSearchState
 import ai.openclaw.app.GatewayClawHubSkillSummary
@@ -608,7 +607,7 @@ private fun ClawHubSkillSearchPanel(
           skill.reference,
           skill.version?.let { nativeString("Version \$it", it) },
           // An install-only row never opens a review dialog, so the warning has to show here.
-          CLAWHUB_UNSCANNED_TRUST_LABEL.takeIf { skill.isUnscannedSource },
+          nativeString("Not scanned by ClawHub").takeIf { skill.isUnscannedSource },
         )
       ClawDetailRow(
         title = skill.displayName,
@@ -628,7 +627,10 @@ private fun ClawHubSkillSearchPanel(
                 else -> nativeString("Install")
               },
             onClick = { onReviewInstall(skill) },
-            enabled = isConnected && methodsAvailable && !installed && !reviewing && !installing,
+            // Reviewing only needs read access, but an install-only row installs on the first tap,
+            // so it stays disabled without admin instead of erroring after the tap.
+            enabled = isConnected && methodsAvailable && !installed && !reviewing && !installing &&
+              (skill.canReadDetails || canManageSkills),
           )
         },
       )

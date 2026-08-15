@@ -32,11 +32,11 @@ export type ClawHubSkillSearchResult = {
    */
   installRef?: string;
   /**
-   * Same identity as `installRef`, present only while ClawHub can also serve a detail card for
-   * it. External sources are install-only, so clients offer install directly instead of opening
-   * a card that cannot resolve.
+   * Set only for sources ClawHub serves install-only, so clients install directly instead of
+   * opening a detail card that cannot resolve. Absence means the ordinary review-then-install
+   * flow, which is what every released Gateway already implies by omitting this field.
    */
-  detailRef?: string;
+  installOnly?: true;
   trustState?: ClawHubSkillsShTrustState;
   // Search may return the same slug for multiple publishers; exact install refs need this handle.
   ownerHandle?: string | null;
@@ -47,14 +47,19 @@ export type ClawHubSkillSearchResult = {
   updatedAt?: number;
 };
 
+/** Source variants ClawHub resolves search results from. Anything else is unidentifiable. */
+const CLAWHUB_NATIVE_SOURCE_KIND = "clawhub";
+const CLAWHUB_SKILLS_SH_SOURCE_KIND = "skills-sh";
+
 /**
  * Wire shape of one `/api/v1/search` row. ClawHub reports each result's origin under `install`,
  * never as a flat `installRef`, so the mapping below is what keeps search identity honest.
  */
 type ClawHubSkillSearchWireEntry = Omit<
   ClawHubSkillSearchResult,
-  "installRef" | "detailRef" | "trustState"
+  "installRef" | "installOnly" | "trustState"
 > & {
+  source?: string | null;
   install?: { kind?: string | null; reference?: string | null } | null;
 };
 
@@ -222,32 +227,49 @@ export async function searchClawHubSkills(params: {
       limit: params.limit ? String(params.limit) : undefined,
     },
   });
-  return (result.results ?? []).map((entry) => toClawHubSkillSearchResult(entry, params.baseUrl));
+  return (result.results ?? []).flatMap((entry) => {
+    const mapped = toClawHubSkillSearchResult(entry, params.baseUrl);
+    return mapped ? [mapped] : [];
+  });
 }
 
 /**
- * Records each result's own source once, here, so no consumer rebuilds it. An external row keeps
- * the registry's reference: rewriting it to `@owner/slug` would point install at a different
- * publisher's skill, and ClawHub serves no detail card for that identity.
+ * Records each result's own source once, here, so no consumer rebuilds it. A row whose source is
+ * unknown, or whose external reference is missing, is dropped rather than published under
+ * `@owner/slug`: that spelling would point install at a different publisher's skill.
  */
 function toClawHubSkillSearchResult(
   entry: ClawHubSkillSearchWireEntry,
   baseUrl?: string,
-): ClawHubSkillSearchResult {
-  const { install: _install, ...rest } = entry;
+): ClawHubSkillSearchResult | undefined {
+  const { install: _install, source: _source, ...rest } = entry;
   const base = { ...rest, icon: resolveClawHubImageUrl(entry.icon, baseUrl) };
+  const kind =
+    normalizeOptionalString(entry.install?.kind) ?? normalizeOptionalString(entry.source);
   const reference = normalizeOptionalString(entry.install?.reference);
-  if (reference?.startsWith(CLAWHUB_SKILLS_SH_REF_PREFIX)) {
-    return { ...base, installRef: reference, trustState: CLAWHUB_SKILLS_SH_TRUST_STATE };
+  switch (kind) {
+    case CLAWHUB_SKILLS_SH_SOURCE_KIND: {
+      // An external row is only installable as itself. Without its own reference there is no
+      // identity to install, so the row cannot be offered at all.
+      if (!reference?.startsWith(CLAWHUB_SKILLS_SH_REF_PREFIX)) {
+        return undefined;
+      }
+      return {
+        ...base,
+        installRef: reference,
+        installOnly: true,
+        trustState: CLAWHUB_SKILLS_SH_TRUST_STATE,
+      };
+    }
+    case CLAWHUB_NATIVE_SOURCE_KIND: {
+      // Native rows report `owner/slug`; this repo's reference grammar is `@owner/slug`. Without
+      // a publisher the bare slug answers 409 AMBIGUOUS_SKILL_SLUG for every action.
+      const ownerHandle = normalizeOptionalString(entry.ownerHandle);
+      return ownerHandle ? { ...base, installRef: `@${ownerHandle}/${entry.slug}` } : undefined;
+    }
+    default:
+      return undefined;
   }
-  // ClawHub-native rows report `owner/slug`; this repo's reference grammar is `@owner/slug`, and
-  // that one identity answers both detail and install.
-  const ownerHandle = normalizeOptionalString(entry.ownerHandle);
-  if (!ownerHandle) {
-    return base;
-  }
-  const nativeRef = `@${ownerHandle}/${entry.slug}`;
-  return { ...base, installRef: nativeRef, detailRef: nativeRef };
 }
 
 export async function fetchClawHubSkillDetail(params: {
