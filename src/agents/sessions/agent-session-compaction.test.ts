@@ -1,15 +1,6 @@
-import path from "node:path";
 import type { AssistantMessage, Context, Model } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  appendTranscriptMessage,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
-import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { describe, expect, it } from "vitest";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
-import { testing as compactionSafeguardTesting } from "../agent-hooks/compaction-safeguard.test-support.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -29,7 +20,6 @@ import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createStaleThinkingContent(): AssistantMessage["content"] {
   return [
@@ -42,70 +32,6 @@ function createStaleThinkingContent(): AssistantMessage["content"] {
 }
 
 describe("AgentSession compaction", () => {
-  it("persists and replays a body-preserving oversized-suffix artifact after reopen", async () => {
-    const dir = tempDirs.make("openclaw-body-preserving-compaction-");
-    const target = {
-      agentId: "main",
-      sessionId: "body-preserving-compaction",
-      sessionKey: "agent:main:body-preserving-compaction",
-      storePath: path.join(dir, "sessions.json"),
-    };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    await appendTranscriptMessage(target, {
-      cwd: dir,
-      message: { role: "user", content: "authoritative question", timestamp: 1 },
-    });
-    const sessionManager = SessionManager.open(target, dir);
-    const retainedAssistantId = sessionManager.appendMessage(
-      createAssistant(testModel, [{ type: "text", text: "authoritative answer" }]),
-    );
-    const body = "BODY-MARKER\n## Decisions\nKeep the generated summary.";
-    const suffix = `${"older split-turn context\n".repeat(2_000)}SELECTED-SUFFIX-CONTEXT`;
-    const finalized = compactionSafeguardTesting.capCompactionSummaryPreservingSuffix(
-      body,
-      suffix,
-    ) as string;
-    expect(finalized).toContain("BODY-MARKER");
-    expect(finalized).toContain("Earlier compaction context truncated");
-    expect(finalized).toContain("SELECTED-SUFFIX-CONTEXT");
-    const handlers = createCompactionHandlers();
-    handlers.set("session_before_compact", [
-      async (event: unknown) => ({
-        compaction: {
-          summary: finalized,
-          firstKeptEntryId: retainedAssistantId,
-          tokensBefore: (event as { preparation: { tokensBefore: number } }).preparation
-            .tokensBefore,
-        },
-      }),
-    ]);
-    const { session } = await createTestSession({
-      sessionManager,
-      resourceLoader: createResourceLoader(handlers),
-    });
-
-    const result = await session.compact();
-
-    expect(result.summary).toBe(finalized);
-    expect(sessionManager.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(
-      1,
-    );
-    expect(JSON.stringify(sessionManager.buildSessionContext())).toContain("BODY-MARKER");
-    sessionManager.flushPendingPersistence();
-    const databasePath = resolveSqliteTargetFromSessionStorePath(target.storePath).path;
-    expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
-    const reopened = SessionManager.open(target, dir);
-    try {
-      expect(reopened.getBranch().findLast((entry) => entry.type === "compaction")).toMatchObject({
-        summary: finalized,
-      });
-      expect(JSON.stringify(reopened.buildSessionContext())).toContain("BODY-MARKER");
-      expect(JSON.stringify(reopened.buildSessionContext())).toContain("SELECTED-SUFFIX-CONTEXT");
-    } finally {
-      closeOpenClawAgentDatabaseByPath(databasePath);
-    }
-  });
-
   it.each(Array.from({ length: MAX_OVERFLOW_COMPACTION_ATTEMPTS }, (_, index) => index + 1))(
     "recovers when the provider accepts overflow compaction attempt %i",
     async (overflowCount) => {

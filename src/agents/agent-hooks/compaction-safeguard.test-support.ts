@@ -7,7 +7,6 @@ type CompactionSafeguardTestApi = {
   formatToolFailuresSection: CallableFunction;
   splitPreservedRecentTurns: CallableFunction;
   formatPreservedTurnsSection: CallableFunction;
-  formatSplitTurnContextSection: CallableFunction;
   buildCompactionStructureInstructions: CallableFunction;
   buildStructuredFallbackSummary: CallableFunction;
   prependPreviousSummaryForRedistill: CallableFunction;
@@ -33,7 +32,6 @@ type CompactionSafeguardTestApi = {
   SUMMARY_TRUNCATED_MARKER: string;
   CONTEXT_TRUNCATED_MARKER: string;
   MAX_SPLIT_TURN_CONTEXT_CHARS: number;
-  SPLIT_TURN_TRUNCATED_MARKER: string;
 };
 
 function getTestApi(): CompactionSafeguardTestApi {

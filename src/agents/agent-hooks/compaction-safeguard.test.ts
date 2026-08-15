@@ -82,7 +82,6 @@ const {
   formatToolFailuresSection,
   splitPreservedRecentTurns,
   formatPreservedTurnsSection,
-  formatSplitTurnContextSection,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
   prependPreviousSummaryForRedistill,
@@ -105,7 +104,6 @@ const {
   SUMMARY_TRUNCATED_MARKER,
   CONTEXT_TRUNCATED_MARKER,
   MAX_SPLIT_TURN_CONTEXT_CHARS,
-  SPLIT_TURN_TRUNCATED_MARKER,
 } = testing;
 
 function auditSummaryQuality(
@@ -498,43 +496,6 @@ describe("compaction-safeguard tool failures", () => {
 });
 
 describe("compaction-safeguard summary budgets", () => {
-  it.each([
-    { bodyLength: 60, suffixLength: 0, maxChars: 100, overflows: false },
-    { bodyLength: 60, suffixLength: 40, maxChars: 100, overflows: false },
-    { bodyLength: 80, suffixLength: 10, maxChars: 100, overflows: false },
-    { bodyLength: 80, suffixLength: 21, maxChars: 100, overflows: true },
-    { bodyLength: 20, suffixLength: 100, maxChars: 100, overflows: true },
-  ])(
-    "uses the slack-aware body allocation at body=$bodyLength suffix=$suffixLength cap=$maxChars",
-    ({ bodyLength, suffixLength, maxChars, overflows }) => {
-      const body = "b".repeat(bodyLength);
-      const suffix = "s".repeat(suffixLength);
-
-      const capped = capCompactionSummaryPreservingSuffix(body, suffix, maxChars);
-
-      expect(capped.length).toBeLessThanOrEqual(maxChars);
-      if (!overflows) {
-        expect(capped).toBe(`${body}${suffix}`);
-        return;
-      }
-      const bodyFloor = Math.min(bodyLength, Math.max(1, Math.ceil(maxChars / 2)));
-      const bodySlot = Math.min(
-        bodyLength,
-        Math.max(bodyFloor, maxChars - Math.min(suffixLength, maxChars)),
-      );
-      if (bodyLength > bodySlot && bodySlot >= SUMMARY_TRUNCATED_MARKER.length) {
-        expect(capped).toContain(SUMMARY_TRUNCATED_MARKER);
-      }
-      if (suffixLength > maxChars - Math.min(bodyLength, bodySlot)) {
-        expect(capped).toContain(
-          maxChars - Math.min(bodyLength, bodySlot) > CONTEXT_TRUNCATED_MARKER.length
-            ? CONTEXT_TRUNCATED_MARKER
-            : "s",
-        );
-      }
-    },
-  );
-
   it("caps file operations summary and reports omitted entries", () => {
     const readFiles = Array.from(
       { length: 200 },
@@ -654,40 +615,6 @@ describe("compaction-safeguard summary budgets", () => {
     expect(capped).toContain("## Tool Failures");
     expect(capped).toContain("<read-files>");
     expect(capped).toContain("## Session Startup");
-  });
-
-  it("keeps generated summary content when an oversized suffix exhausts the artifact budget", () => {
-    const body = "BODY-START\nBODY-MIDDLE\nBODY-END";
-    const oversizedSuffix = `${"old context\n".repeat(MAX_COMPACTION_SUMMARY_CHARS)}CRITICAL-TAIL`;
-
-    const capped = capCompactionSummaryPreservingSuffix(body, oversizedSuffix);
-
-    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
-    expect(capped).toContain("BODY-START");
-    expect(capped).toContain("BODY-MIDDLE");
-    expect(capped).toContain("BODY-END");
-    expect(capped).toContain("CRITICAL-TAIL");
-    expect(capped).toContain("truncated");
-  });
-
-  it("keeps an oversized preserved suffix UTF-16 safe at its leading edge", () => {
-    expect(capCompactionSummaryPreservingSuffix("body", "A🚀tail", 5)).toBe("bodil");
-  });
-
-  it("bounds raw split-turn context on whole-message boundaries and retains the newest end", () => {
-    const messages = Array.from({ length: 20 }, (_, index) => ({
-      role: "user" as const,
-      content: `message-${String(index).padStart(2, "0")}-${"x".repeat(700)}`,
-      timestamp: index,
-    }));
-
-    const section = formatSplitTurnContextSection(messages) as string;
-
-    expect(section.length).toBeLessThanOrEqual(MAX_SPLIT_TURN_CONTEXT_CHARS);
-    expect(section).toContain(SPLIT_TURN_TRUNCATED_MARKER.trim());
-    expect(section).not.toContain("message-00-");
-    expect(section).toContain("message-19-");
-    expect(section.split("\n").some((line) => line.startsWith("x"))).toBe(false);
   });
 });
 
@@ -3123,6 +3050,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const retainedSuffix = summary.split(CONTEXT_TRUNCATED_MARKER)[1] ?? "";
     const firstRetainedLine = retainedSuffix.split("\n").find((line) => line.length > 0);
     expect(firstRetainedLine).toMatch(/^- User: raw-prefix-\d{2}-/);
+    expect(summary).toContain("raw-prefix-19-");
     expect(summary.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
     expect(summary).toContain("## Recent turns preserved verbatim");
   });

@@ -965,10 +965,6 @@ function buildSplitTurnContextSection(
   });
 }
 
-function formatSplitTurnContextSection(messages: AgentMessage[], onTruncated?: () => void): string {
-  return buildSplitTurnContextSection(messages, onTruncated).text;
-}
-
 function formatGeneratedSplitTurnSection(summary: string, onTruncated?: () => void): string {
   const heading = "**Turn Context (split turn):**\n\n";
   const summaryBudget = MAX_SPLIT_TURN_CONTEXT_CHARS - heading.length;
@@ -1512,7 +1508,6 @@ const testing = {
   formatToolFailuresSection,
   splitPreservedRecentTurns,
   formatPreservedTurnsSection,
-  formatSplitTurnContextSection,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
   prependPreviousSummaryForRedistill,
@@ -1538,7 +1533,6 @@ const testing = {
   SUMMARY_TRUNCATED_MARKER,
   CONTEXT_TRUNCATED_MARKER,
   MAX_SPLIT_TURN_CONTEXT_CHARS,
-  SPLIT_TURN_TRUNCATED_MARKER,
 } as const;
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
