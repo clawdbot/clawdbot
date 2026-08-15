@@ -80,7 +80,7 @@ describe("registerBundledHealthChecks", () => {
       cfg: {
         plugins: {
           allow: ["browser"],
-          slots: { memory: "Memory-Core" },
+          slots: { memory: "memory-core" },
         },
       },
       cwd: workspaceDir,
