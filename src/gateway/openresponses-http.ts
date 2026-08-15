@@ -709,6 +709,9 @@ export async function handleOpenResponsesHttpRequest(
         return true;
       }
 
+      if ((result as { meta?: { error?: unknown } } | null)?.meta?.error) {
+        throw new Error("agent run failed");
+      }
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
       const usage = extractUsageFromResult(result);
       const meta = (result as { meta?: unknown } | null)?.meta;
@@ -1168,6 +1171,9 @@ export async function handleOpenResponsesHttpRequest(
         abortSignal: abortController.signal,
       });
 
+      if (closed) {
+        return;
+      }
       finalUsage = extractUsageFromResult(result);
 
       if (unrepresentableAssistantReplacement) {
