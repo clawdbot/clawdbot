@@ -107,9 +107,13 @@ function records(value: unknown): JsonRecord[] {
   return Array.isArray(value) ? value.map(record).filter((entry) => entry !== undefined) : [];
 }
 
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
 function summarizeResult(result: ToolResult): JsonRecord {
   const raw = wireResult(result);
-  const observation = record(raw.observation);
+  const observed = record(raw.observation);
   const details = record(raw.details);
   return {
     action: raw.action,
@@ -117,14 +121,14 @@ function summarizeResult(result: ToolResult): JsonRecord {
     effect: raw.effect,
     error: raw.error,
     details,
-    observation: observation
+    observation: observed
       ? {
-          kind: observation.kind,
-          format: observation.format,
-          width: observation.width,
-          height: observation.height,
-          observationId: observation.observationId,
-          elements: records(observation.elements).map((element) => ({
+          kind: observed.kind,
+          format: observed.format,
+          width: observed.width,
+          height: observed.height,
+          observationId: observed.observationId,
+          elements: records(observed.elements).map((element) => ({
             elementRef: element.elementRef,
             role: element.role,
             label: element.label,
@@ -165,21 +169,19 @@ function cursor(result: ToolResult): { x: unknown; y: unknown } {
 
 function observation(result: ToolResult): JsonRecord {
   const value = record(wireResult(result).observation);
-  if (!value) throw new Error(`missing observation: ${resultText(result)}`);
+  if (!value) {
+    throw new Error(`missing observation: ${resultText(result)}`);
+  }
   return value;
 }
 
 function selectElement(result: ToolResult): JsonRecord {
   const elements = records(observation(result).elements);
   const editable = elements.filter((element) =>
-    ["AXTextArea", "AXTextField", "text_area", "text_field"].includes(String(element.role)),
+    ["AXTextArea", "AXTextField", "text_area", "text_field"].includes(stringValue(element.role)),
   );
   const selected = elementLabel
-    ? editable.find((element) =>
-        String(element.label ?? "")
-          .toLowerCase()
-          .includes(elementLabel),
-      )
+    ? editable.find((element) => stringValue(element.label).toLowerCase().includes(elementLabel))
     : editable[0];
   if (!selected) {
     throw new Error(`no editable element matched ${elementLabel ?? "the target window"}`);
@@ -192,7 +194,9 @@ function structuredOutcome(outcome: ActionOutcome): boolean {
     return typeof outcome.error.code === "string" || typeof outcome.error.gatewayCode === "string";
   }
   const raw = wireResult(outcome.result);
-  if (raw.effect === "confirmed") return true;
+  if (raw.effect === "confirmed") {
+    return true;
+  }
   const error = record(raw.error);
   return raw.ok === false && typeof error?.code === "string" && error.code.length > 0;
 }
@@ -201,7 +205,7 @@ await mkdir(artifactDirectory, { recursive: true });
 const screenshot = await call("screenshot");
 const listed = await call("list_windows");
 const windows = records(record(wireResult(listed).details)?.windows);
-const target = windows.find((window) => String(window.title ?? "").includes(windowTitle));
+const target = windows.find((window) => stringValue(window.title).includes(windowTitle));
 if (!target || typeof target.windowRef !== "string") {
   throw new Error(`window containing ${JSON.stringify(windowTitle)} was not found`);
 }
@@ -224,7 +228,7 @@ const targetFields = {
 const frontmostBefore = await frontmostApp();
 if (frontmostBefore === target.appName) {
   throw new Error(
-    `target app ${String(target.appName)} is frontmost; foreground another app and retry`,
+    `target app ${stringValue(target.appName) || "<unknown>"} is frontmost; foreground another app and retry`,
   );
 }
 const cursorBeforeResult = await call("get_cursor_position");

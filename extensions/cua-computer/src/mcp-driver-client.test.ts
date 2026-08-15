@@ -237,7 +237,11 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
         (request) => request.method === "tools/call" && request.params?.name === "start_session",
       );
       expect(startCalls).toHaveLength(2);
-      expect(startCalls.map((request) => request.params?.arguments?.capture_scope).sort()).toEqual([
+      const captureScopes = startCalls.flatMap((request) => {
+        const scope = request.params?.arguments?.capture_scope;
+        return typeof scope === "string" ? [scope] : [];
+      });
+      expect(captureScopes.toSorted((left, right) => left.localeCompare(right))).toEqual([
         "desktop",
         "window",
       ]);
