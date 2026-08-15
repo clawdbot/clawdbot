@@ -13,6 +13,14 @@ import {
 const EXTENSION_ROOT = "extensions";
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const EXTENSION_RUNTIME_FILE_EXTENSIONS = new Set([".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"]);
+// These sources produce static browser assets and do not execute in the packaged plugin runtime.
+const BUNDLED_BUILD_SOURCE_ROOTS = new Set([
+  "extensions/canvas/scripts",
+  "extensions/canvas/src/host/a2ui-app",
+]);
+const BUNDLED_BUILD_ONLY_DEPENDENCIES = new Map<string, Set<string>>([
+  ["extensions/canvas", new Set(["@a2ui/lit", "@lit/context", "lit"])],
+]);
 const BUILTIN_MODULES = new Set(builtinModules.map((moduleId) => moduleId.replace(/^node:/, "")));
 const OPTIONAL_UNDECLARED_RUNTIME_IMPORTS = new Map<string, Set<string>>([
   [
@@ -128,6 +136,13 @@ function listPackageManifests(root: string): string[] {
 
 function shouldSkipRuntimeFile(filePath: string): boolean {
   const normalized = toRepoPath(filePath);
+  if (
+    [...BUNDLED_BUILD_SOURCE_ROOTS].some(
+      (root) => normalized === root || normalized.startsWith(`${root}/`),
+    )
+  ) {
+    return true;
+  }
   if (
     normalized.includes("/node_modules/") ||
     normalized.includes("/dist/") ||
@@ -332,6 +347,17 @@ describe("extension runtime dependency manifests", () => {
       expect([...dependencies].filter((dependencyName) => !declared.has(dependencyName))).toEqual(
         [],
       );
+    });
+  }
+
+  for (const [extensionDir, dependencies] of BUNDLED_BUILD_ONLY_DEPENDENCIES) {
+    it(`${extensionDir} keeps bundled browser dependencies build-only`, () => {
+      const manifest = readPackageManifest(path.join(extensionDir, "package.json"));
+      const runtimeDependencies = runtimeDependencyNames(manifest);
+      const devDependencies = new Set(Object.keys(manifest.devDependencies ?? {}));
+
+      expect([...dependencies].filter((name) => runtimeDependencies.has(name))).toStrictEqual([]);
+      expect([...dependencies].filter((name) => !devDependencies.has(name))).toStrictEqual([]);
     });
   }
 
