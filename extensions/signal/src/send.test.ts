@@ -18,14 +18,10 @@ vi.mock("./client-adapter.js", () => ({
   signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
 }));
 
-vi.mock("./client-container.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./client-container.js")>("./client-container.js");
-  return {
-    ...actual,
-    filesToBase64DataUris: (...args: unknown[]) => filesToBase64DataUrisMock(...args),
-  };
-});
+vi.mock("./client-container.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client-container.js")>()),
+  filesToBase64DataUris: (...args: unknown[]) => filesToBase64DataUrisMock(...args),
+}));
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
@@ -952,17 +948,7 @@ describe("Signal native JSON-RPC recipient delivery", () => {
       { timestamp: 1234567893, results: [{ type: "SUCCESS" }] },
       { timestamp: 1234567894 },
     ];
-    const requests: Array<{
-      method: string | undefined;
-      path: string | undefined;
-      contentType: string | undefined;
-      jsonrpc: unknown;
-      rpcMethod: unknown;
-      account: unknown;
-      recipient: unknown;
-      groupId: unknown;
-      message: unknown;
-    }> = [];
+    const requests: Array<Record<string, unknown>> = [];
     const server = http.createServer((request, response) => {
       let body = "";
       request.setEncoding("utf8");
@@ -974,12 +960,7 @@ describe("Signal native JSON-RPC recipient delivery", () => {
           id?: string;
           jsonrpc?: string;
           method?: string;
-          params?: {
-            account?: string;
-            recipient?: string[];
-            groupId?: string;
-            message?: string;
-          };
+          params?: Record<string, unknown>;
         };
         requests.push({
           method: request.method,

@@ -15,6 +15,17 @@ const SIGNAL_IMAGE = Buffer.from(
   "base64",
 );
 
+// External-native sends deliver outbound bytes as RFC 2397 data URIs (the
+// daemon may not share the gateway filesystem); container and managed-native
+// transports still send gateway-local paths.
+function resolveTestOutboundAttachment(attachment: string): Promise<Buffer> {
+  const base64Marker = ";base64,";
+  if (attachment.startsWith("data:") && attachment.includes(base64Marker)) {
+    return Promise.resolve(Buffer.from(attachment.split(base64Marker)[1] ?? "", "base64"));
+  }
+  return fs.readFile(attachment);
+}
+
 type SignalMediaContext = {
   cfg: OpenClawConfig;
   to: string;
@@ -97,7 +108,9 @@ describe("Signal host-owned outbound media access", () => {
           const attachmentPath = envelope.params?.attachments?.[0];
           requests.push({
             envelope,
-            attachment: attachmentPath ? await fs.readFile(attachmentPath) : undefined,
+            attachment: attachmentPath
+              ? await resolveTestOutboundAttachment(attachmentPath)
+              : undefined,
           });
           response.writeHead(200, { "content-type": "application/json" });
           response.end(
