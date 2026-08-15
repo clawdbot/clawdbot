@@ -816,7 +816,10 @@ export async function modelsAuthClearCooldownCommand(
       `Failed to clear cooldown state for auth profile "${profileId}". Wait a moment and retry.`,
     );
   }
-  if (resolveAuthProfileDatabasePath(ownerAgentDir) !== resolveAuthProfileDatabasePath(agentDir)) {
+  if (
+    !ownerAgentDir ||
+    resolveAuthProfileDatabasePath(ownerAgentDir) !== resolveAuthProfileDatabasePath(agentDir)
+  ) {
     const ownerStoreCleared = await clearAuthProfileCooldown({
       store,
       profileId,
