@@ -146,6 +146,10 @@ export async function pruneLegacyImportedSourceRows(params: {
       state,
     });
   }
+  // The prune above tracks each removed stale row in the state's deleteKeys,
+  // so this write takes the plan-based path: it deletes those rows from the
+  // raw store by key directly. The unscoped-row skip lives only in the
+  // plan-less full-write sweep and does not apply here.
   await writeMemoryWikiSourceSyncState(params.vaultRoot, state, store);
   return prunedCount;
 }
