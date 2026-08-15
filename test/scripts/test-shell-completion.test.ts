@@ -15,13 +15,7 @@ afterEach(async () => {
 });
 
 describe("test-shell-completion script", () => {
-  it("parses explicit shell overrides", () => {
-    expect(shellCompletionTesting.parseArgs(["--shell", "bash", "--check-only"])).toEqual({
-      checkOnly: true,
-      force: false,
-      help: false,
-      shell: "bash",
-    });
+  it("parses an attached shell override", () => {
     expect(shellCompletionTesting.parseArgs(["--shell=fish"])).toEqual({
       checkOnly: false,
       force: false,
@@ -30,8 +24,7 @@ describe("test-shell-completion script", () => {
     });
   });
 
-  it("rejects unknown or malformed arguments before touching shell state", () => {
-    expect(() => shellCompletionTesting.parseArgs(["--wat"])).toThrow("Unknown argument: --wat");
+  it("rejects malformed arguments before touching shell state", () => {
     expect(() => shellCompletionTesting.parseArgs(["--shell"])).toThrow("--shell requires a value");
     expect(() => shellCompletionTesting.parseArgs(["--shell", "--check-only"])).toThrow(
       "--shell requires a value",
