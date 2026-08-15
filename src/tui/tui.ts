@@ -499,10 +499,10 @@ export function beginTuiShutdown(params: {
   clearTimeoutFn?: (timer: TuiProcessExitTimer) => void;
   setTimeoutFn?: TuiProcessExitTimeout;
 }): TuiProcessExitTimer {
-  const setTimeoutFn =
-    params.setTimeoutFn ??
-    ((callback, timeoutMs) => setTimeout(callback, timeoutMs) as unknown as TuiProcessExitTimer);
-  const hardExitTimer = setTimeoutFn(params.forceExit, params.hardExitMs);
+  const hardExit = params.setTimeoutFn
+    ? { kind: "custom" as const, timer: params.setTimeoutFn(params.forceExit, params.hardExitMs) }
+    : { kind: "native" as const, timer: setTimeout(params.forceExit, params.hardExitMs) };
+  const hardExitTimer = hardExit.timer;
   hardExitTimer.unref?.();
   // Stop referenced animations before transport teardown can stall or redraw.
   params.disposeStatus();
@@ -529,10 +529,11 @@ export function beginTuiShutdown(params: {
     })
     .finally(() => {
       if (params.keepHardExitArmed !== true) {
-        const clearTimeoutFn =
-          params.clearTimeoutFn ??
-          ((timer) => clearTimeout(timer as unknown as ReturnType<typeof setTimeout>));
-        clearTimeoutFn(hardExitTimer);
+        if (params.clearTimeoutFn) {
+          params.clearTimeoutFn(hardExitTimer);
+        } else if (hardExit.kind === "native") {
+          clearTimeout(hardExit.timer);
+        }
       }
       params.disposeStatus();
     })
@@ -607,23 +608,23 @@ export function scheduleProcessExitAfterTuiReturn(
   } = {},
 ): TuiProcessExitTimer {
   const delayMs = Math.max(0, Math.floor(params.delayMs ?? TUI_PROCESS_EXIT_AFTER_RETURN_MS));
-  const setTimeoutFn =
-    params.setTimeoutFn ??
-    ((callback, timeoutMs) => setTimeout(callback, timeoutMs) as unknown as TuiProcessExitTimer);
   const exit = params.exit ?? ((code?: number) => process.exit(code));
   const writeStderr =
     params.writeStderr ??
     ((text: string) => {
       process.stderr.write(text);
     });
-  const timer = setTimeoutFn(() => {
+  const onTimeout = () => {
     try {
       writeStderr("openclaw tui forcing process exit after return\n");
     } catch {
       // Best effort only; forced exit must not depend on stderr.
     }
     exit(0);
-  }, delayMs);
+  };
+  const timer = params.setTimeoutFn
+    ? params.setTimeoutFn(onTimeout, delayMs)
+    : setTimeout(onTimeout, delayMs);
   timer.unref?.();
   return timer;
 }
