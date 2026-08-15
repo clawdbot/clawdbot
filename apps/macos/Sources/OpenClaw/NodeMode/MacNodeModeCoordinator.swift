@@ -843,8 +843,9 @@ final class MacNodeModeCoordinator: NSObject {
             throw MacNodeHostWorkerRetryPolicy.RetryBackoffPending()
         }
         let input = MacNodeHostWorkerRetryPolicy.Input(
-            launch: MacNodeHostWorkerLaunch(command: command),
-            configurationGeneration: self.nodeHostWorkerConfigurationGeneration)
+            launch: MacNodeHostWorkerLaunch(
+                command: command,
+                configurationGeneration: self.nodeHostWorkerConfigurationGeneration))
         try self.nodeHostWorkerRetryPolicy.prepareForStart(input)
         self.activeNodeHostWorkerInput = input
     }
@@ -960,9 +961,7 @@ extension MacNodeModeCoordinator {
             currentDirectoryURL: launch.currentDirectoryURL,
             environment: workerEnvironment,
             configurationGeneration: self.nodeHostWorkerConfigurationGeneration)
-        let input = MacNodeHostWorkerRetryPolicy.Input(
-            launch: effectiveLaunch,
-            configurationGeneration: self.nodeHostWorkerConfigurationGeneration)
+        let input = MacNodeHostWorkerRetryPolicy.Input(launch: effectiveLaunch)
         try self.nodeHostWorkerRetryPolicy.prepareForStart(input)
         self.activeNodeHostWorkerInput = input
         return try await nodeHostWorker.start(launch: effectiveLaunch)
