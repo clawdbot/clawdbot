@@ -524,10 +524,7 @@ suite.define(() => {
                 .evaluateAll((labels) =>
                   labels.some((label) => {
                     const element = label as HTMLElement;
-                    return (
-                      element.hasAttribute("data-tooltip-overflow") &&
-                      getComputedStyle(element).maskImage !== "none"
-                    );
+                    return element.hasAttribute("data-tooltip-overflow");
                   }),
                 ),
             )
@@ -786,7 +783,7 @@ suite.define(() => {
                 const element = label as HTMLElement;
                 return {
                   fits: element.scrollWidth <= element.clientWidth + 1,
-                  mask: getComputedStyle(element).maskImage,
+                  mask: getComputedStyle(element.parentElement!).maskImage,
                 };
               }),
             )
@@ -799,6 +796,33 @@ suite.define(() => {
               .locator("wa-tooltip")
               .evaluate((tooltip) => Reflect.get(tooltip, "open")),
           ).toBe(false);
+          await openFromPlus(page, "Review");
+          await openFromPlus(page, "Tasks");
+          await sidePanel(page)
+            .getByRole("button", { name: "Close Terminal", exact: true })
+            .click();
+          await expect.poll(() => tabLabels(page)).toEqual(["Review", "Tasks"]);
+          await expect
+            .poll(() =>
+              sidePanel(page)
+                .locator(":scope > .side-panel__header .tabstrip-tab__label")
+                .evaluateAll((labels) =>
+                  labels.every((label) => {
+                    const element = label as HTMLElement;
+                    const trigger = element.parentElement;
+                    const mask = trigger ? getComputedStyle(trigger).maskImage : "none";
+                    return (
+                      element.classList.contains("is-overflowing") &&
+                      trigger?.classList.contains("has-label-overflow") === true &&
+                      mask.includes("16px") &&
+                      mask.includes("rgba(0, 0, 0, 0)") &&
+                      getComputedStyle(element).maskImage === "none"
+                    );
+                  }),
+                ),
+            )
+            .toBe(true);
+          await captureRichPanel(page, `rails-tabs-fade-${themeMode}`);
         },
       );
     },

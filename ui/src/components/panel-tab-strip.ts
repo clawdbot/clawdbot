@@ -79,7 +79,9 @@ function panelTabLabelOverflowRef() {
           tabWidth > 0 &&
           tabWidth <= 28.5 &&
           Boolean(element.textContent?.trim()));
-      element.classList.toggle("is-overflowing", overflowing);
+      const visibleOverflow = overflowing && element.clientWidth > 0;
+      element.classList.toggle("is-overflowing", visibleOverflow);
+      element.parentElement?.classList.toggle("has-label-overflow", visibleOverflow);
       element.toggleAttribute("data-tooltip-overflow", overflowing);
     };
     update();
