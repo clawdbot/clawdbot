@@ -30,7 +30,11 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../embedded-agent-messaging.types.js";
-import { isCronAddAction } from "../embedded-agent-subscribe.handlers.tools.results.js";
+import {
+  isApprovalPromptToolResult,
+  isAsyncStartedToolResult,
+  isCronAddAction,
+} from "../embedded-agent-subscribe.handlers.tools.results.js";
 import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
@@ -79,12 +83,15 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   let yieldAcknowledgment: string | undefined;
   let didSendViaMessagingTool = false;
   let didDeliverSourceReplyViaMessageTool = false;
-  // Continuation evidence for a same-turn sessions_yield (mirrors the embedded runner's
-  // hasYieldContinuationEvidence dimensions that are observable from generic MCP loopback
-  // tool-call results: an accepted subagent spawn or a committed cron add both prove a
-  // future completion will resume this session, so a yield right after either is valid.
+  // Continuation evidence for a same-turn sessions_yield, mirroring every dimension the
+  // embedded runner's hasYieldContinuationEvidence checks that is observable from a generic
+  // MCP loopback tool-call result: an accepted subagent spawn, a committed cron add, an
+  // async-started tool, or a surfaced approval prompt all prove a future completion will
+  // resume this session, so a yield right after any of them is valid.
   const acceptedSessionSpawns: AcceptedSessionSpawn[] = [];
   let successfulCronAdds = 0;
+  let hadAsyncStartedTool = false;
+  let hadApprovalPromptTool = false;
   let inFlightUnclassifiedMcpRequests = 0;
   let inFlightMessagingToolCalls = 0;
   const inFlightPreparedMessagingCalls = new Set<McpLoopbackToolCallStart>();
@@ -463,6 +470,12 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
           if (isAutomationsToolName(call.toolName) && isCronAddAction(call.args)) {
             successfulCronAdds += 1;
           }
+          if (isAsyncStartedToolResult(call.result)) {
+            hadAsyncStartedTool = true;
+          }
+          if (isApprovalPromptToolResult(call.result)) {
+            hadApprovalPromptTool = true;
+          }
         }
       },
     });
@@ -637,6 +650,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     toolTrustedLocalMedia,
     acceptedSessionSpawns,
     successfulCronAdds,
+    hadAsyncStartedTool,
+    hadApprovalPromptTool,
   });
   return {
     beginGatewayCapture,
@@ -678,6 +693,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         ...(current.successfulCronAdds > 0
           ? { successfulCronAdds: current.successfulCronAdds }
           : {}),
+        ...(current.hadAsyncStartedTool ? { hadAsyncStartedTool: true } : {}),
+        ...(current.hadApprovalPromptTool ? { hadApprovalPromptTool: true } : {}),
       };
     },
     attachDeliveryEvidence(error: unknown) {

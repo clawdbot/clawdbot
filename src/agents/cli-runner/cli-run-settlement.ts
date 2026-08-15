@@ -249,19 +249,18 @@ export async function settlePreparedCliRun(params: {
 /**
  * Whether a yielded CLI turn has a same-turn continuation that will resume the session.
  * sessions_yield is meant to pause a turn only when a subagent/async/cron/approval
- * completion will resume it later. CLI backends can observe messaging delivery,
- * accepted subagent spawns, and successful cron adds via the generic MCP loopback
- * tool-call result (see execute-tool-tracking.ts); async-tool and approval-prompt
- * evidence aren't captured yet (those require signals the embedded runner gets from
- * its own tool-execution wrapper, not from a generic result payload) — a yield right
- * after one of those two would still show the no-continuation diagnostic even though
- * it's valid.
+ * completion will resume it later. CLI backends observe every one of those dimensions —
+ * messaging delivery, accepted subagent spawns, successful cron adds, async-started tools,
+ * and surfaced approval prompts — via the generic MCP loopback tool-call result (see
+ * execute-tool-tracking.ts), mirroring the embedded runner's hasYieldContinuationEvidence.
  */
 export function hasCliYieldContinuationEvidence(output: CliOutput): boolean {
   return (
     hasCommittedMessagingToolDeliveryEvidence(output) ||
     hasAcceptedSessionSpawn(output.acceptedSessionSpawns) ||
-    (output.successfulCronAdds ?? 0) > 0
+    (output.successfulCronAdds ?? 0) > 0 ||
+    output.hadAsyncStartedTool === true ||
+    output.hadApprovalPromptTool === true
   );
 }
 

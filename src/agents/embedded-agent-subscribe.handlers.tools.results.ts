@@ -218,6 +218,18 @@ export function isAsyncStartedToolResult(result: unknown): boolean {
   return details?.async === true && details.status === "started";
 }
 
+/**
+ * Whether a tool result surfaced an approval prompt (pending or unavailable). This is a
+ * lighter sibling of readExecApprovalPendingDetails/readExecApprovalUnavailableDetails
+ * below: those extract the full payload needed to render the prompt message, while callers
+ * that only need the yes/no continuation fact (e.g. CLI-backed yield tracking, which has no
+ * reason to render the prompt itself) can use this instead of duplicating the field shape.
+ */
+export function isApprovalPromptToolResult(result: unknown): boolean {
+  const details = readToolResultDetails(result);
+  return details?.status === "approval-pending" || details?.status === "approval-unavailable";
+}
+
 export function readAsyncStartedTaskIds(result: unknown): {
   asyncTaskRunId?: string;
   asyncTaskId?: string;

@@ -62,6 +62,8 @@ export type CliOutput = {
   /** Same-turn continuation evidence beyond messaging delivery — see execute-tool-tracking.ts. */
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   successfulCronAdds?: number;
+  hadAsyncStartedTool?: boolean;
+  hadApprovalPromptTool?: boolean;
   yielded?: true;
   yieldAcknowledgment?: string;
 };

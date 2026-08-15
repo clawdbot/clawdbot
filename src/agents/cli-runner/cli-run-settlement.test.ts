@@ -188,4 +188,44 @@ describe("hasCliYieldContinuationEvidence", () => {
       }),
     ).toBe(false);
   });
+
+  it("recognizes an async-started tool as continuation evidence", () => {
+    // Regression: ClawSweeper flagged that a CLI yield right after an async-start (no
+    // messaging/spawn/cron involved) still showed the no-continuation diagnostic.
+    expect(
+      hasCliYieldContinuationEvidence({
+        ...baseOutput,
+        hadAsyncStartedTool: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not count hadAsyncStartedTool=false as continuation evidence", () => {
+    expect(
+      hasCliYieldContinuationEvidence({
+        ...baseOutput,
+        hadAsyncStartedTool: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("recognizes a surfaced approval prompt as continuation evidence", () => {
+    // Regression: ClawSweeper flagged that a CLI yield right after an approval-pending or
+    // approval-unavailable tool result still showed the no-continuation diagnostic.
+    expect(
+      hasCliYieldContinuationEvidence({
+        ...baseOutput,
+        hadApprovalPromptTool: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not count hadApprovalPromptTool=false as continuation evidence", () => {
+    expect(
+      hasCliYieldContinuationEvidence({
+        ...baseOutput,
+        hadApprovalPromptTool: false,
+      }),
+    ).toBe(false);
+  });
 });
