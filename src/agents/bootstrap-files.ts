@@ -324,7 +324,7 @@ export async function resolveBootstrapFilesForRunWithTiming(params: {
   runKind?: BootstrapContextRunKind;
   readOnlyState?: boolean;
   onBootstrapSubstageTiming?: (
-    name: "workspace-file-load" | "hook-overrides",
+    name: "workspace-setup-state" | "workspace-file-load" | "hook-overrides",
     durationMs: number,
   ) => void;
 };
@@ -355,9 +355,14 @@ async function resolveBootstrapFiles(
     chatType: params.chatType,
     workspaceDir: params.workspaceDir,
   };
+  const setupStateStartedAt = performance.now();
   const workspaceSetupCompleted = await isWorkspaceSetupCompletedForContext(
     params.workspaceDir,
     params.readOnlyState,
+  );
+  params.onBootstrapSubstageTiming?.(
+    "workspace-setup-state",
+    performance.now() - setupStateStartedAt,
   );
   const fileLoadStartedAt = performance.now();
   const rawFiles = params.sessionKey

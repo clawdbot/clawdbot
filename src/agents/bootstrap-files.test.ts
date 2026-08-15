@@ -32,6 +32,7 @@ import {
   makeBootstrapWarn,
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
+  resolveBootstrapFilesForRunWithTiming,
   resolveContextInjectionMode,
 } from "./bootstrap-files.js";
 import { SessionManager } from "./sessions/session-manager.js";
@@ -652,6 +653,28 @@ describe("resolveBootstrapFilesForRun", () => {
       expect(files.map((file) => file.path)).not.toContain(rootMemoryPath);
     },
   );
+
+  it("emits a distinct workspace-setup-state substage timing", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await writeCompletedWorkspaceState(workspaceDir);
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
+
+    const substages: Array<{ name: string; durationMs: number }> = [];
+    await resolveBootstrapFilesForRunWithTiming({
+      workspaceDir,
+      onBootstrapSubstageTiming: (name, durationMs) => substages.push({ name, durationMs }),
+    });
+
+    expect(substages.map((entry) => entry.name)).toStrictEqual([
+      "workspace-setup-state",
+      "workspace-file-load",
+      "hook-overrides",
+    ]);
+    for (const entry of substages) {
+      expect(Number.isFinite(entry.durationMs)).toBe(true);
+      expect(entry.durationMs).toBeGreaterThanOrEqual(0);
+    }
+  });
 });
 
 describe("resolveBootstrapContextForRun", () => {
