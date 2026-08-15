@@ -35,11 +35,13 @@ openclaw skills install ./path/to/skill --as custom-name
 openclaw skills install @owner/<slug> --force
 openclaw skills install @owner/<slug> --force-install
 openclaw skills install @owner/<slug> --acknowledge-clawhub-risk
+openclaw skills install @owner/<slug> --acknowledge-install-policy-warning
 openclaw skills install @owner/<slug> --agent <id>
 openclaw skills install @owner/<slug> --global
 openclaw skills update @owner/<slug>
 openclaw skills update @owner/<slug> --force-install
 openclaw skills update @owner/<slug> --acknowledge-clawhub-risk
+openclaw skills update @owner/<slug> --acknowledge-install-policy-warning
 openclaw skills update @owner/<slug> --global
 openclaw skills update --all
 openclaw skills update --all --agent <id>
@@ -97,6 +99,20 @@ installs only.
 
 Gateway-backed skill dependency installs triggered from onboarding or Skills
 settings use the separate `skills.install` request path instead.
+
+When `security.installPolicy` returns `warn` in an interactive terminal,
+OpenClaw prints the reason and findings, then asks `type: '<skill>' to install
+anyway` (or `update anyway`). If the fully rendered review exceeds 4,000
+characters, OpenClaw fails closed before prompting; reduce or coalesce the
+policy output first. A matching answer evaluates the staged skill
+again before continuing. Declined and non-interactive direct CLI commands stop
+before commit; after review, `--acknowledge-install-policy-warning` is the
+explicit noninteractive approval for every warning in that command invocation.
+Every approved warning is re-evaluated before continuing. Automatic and managed
+skill installs cannot use that flag themselves. Use an equivalent direct CLI
+command when one exists; otherwise, change `security.installPolicy` to return
+`allow` for the reviewed request, then retry the managed flow. Neither `--force`
+nor the acknowledgement overrides `block` or a policy failure.
 
 Notes:
 

@@ -413,6 +413,7 @@ class ChatControllerCommandControlsTest {
       val create = requests.first { it.first == "sessions.create" }.second.orEmpty()
       assertTrue(create.contains("\"parentSessionKey\":\"main\""))
       assertTrue(create.contains("\"fork\":true"))
+      assertFalse(create.contains("\"forkFrom\""))
       // The active unqualified parent keeps the captured default-agent owner.
       assertTrue(create.contains("\"agentId\":\"main\""))
 
@@ -427,6 +428,10 @@ class ChatControllerCommandControlsTest {
       val capturedOwnerCreate = requests.last { it.first == "sessions.create" }.second.orEmpty()
       assertTrue(capturedOwnerCreate.contains("\"parentSessionKey\":\"custom\""))
       assertTrue(capturedOwnerCreate.contains("\"agentId\":\"owner-a\""))
+
+      controller.forkSession("main", fromLastCompleted = true)
+      val activeCreate = requests.last { it.first == "sessions.create" }.second.orEmpty()
+      assertTrue(activeCreate.contains("\"forkFrom\":\"last-completed\""))
       assertTrue(requests.any { it.first == "sessions.list" })
       assertEquals(
         false,

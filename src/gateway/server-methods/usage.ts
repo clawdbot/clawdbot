@@ -8,7 +8,7 @@ import {
   errorShape,
   validateSessionsUsageParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listAgentIds, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSessionFilePathCore,
@@ -1068,7 +1068,11 @@ async function loadAllAgentCostUsageSummary(params: {
   dayBucket?: UsageDailyBucket;
   config: OpenClawConfig;
 }): Promise<CostUsageSummary> {
-  const agentIds = listAgentIds(params.config).map((agentId) => normalizeAgentId(agentId));
+  // Same agent universe as discoverAllSessionsForUsage: enumerating configured
+  // ids only would list system-agent sessions whose cost never reaches totals.
+  const agentIds = listGatewayAgentsBasic(params.config).agents.map((agent) =>
+    normalizeAgentId(agent.id),
+  );
   const summaries = await runUsageAgentTasks(
     agentIds.map(
       (agentId) => () =>

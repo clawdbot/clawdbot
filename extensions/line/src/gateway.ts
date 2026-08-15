@@ -1,4 +1,5 @@
 // Line plugin module implements gateway behavior.
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveLineAccount } from "./accounts.js";
@@ -61,6 +62,8 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
       accountId: account.accountId,
       config: ctx.cfg,
       runtime: ctx.runtime,
+      buildContext: (ctx.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
+        .buildContext,
       abortSignal: ctx.abortSignal,
       webhookPath: account.config.webhookPath,
       statusSink,

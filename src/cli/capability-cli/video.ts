@@ -39,6 +39,7 @@ import {
   parseOptionalTimeoutMs,
   providerHasGenericConfig,
   requireProviderModelOverride,
+  resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,
   resolveSelectedProviderFromModelRef,
 } from "./shared.js";
@@ -310,10 +311,12 @@ export function registerVideoCapabilityCommands(capability: Command): void {
   video
     .command("providers")
     .description("List video generation and description providers")
+    .option("--agent <id>", "Agent whose provider state should be inspected")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = getRuntimeConfig();
+        const agentId = resolveCapabilityProviderAgentId(cfg, opts.agent as string | undefined);
         const selectedGenerationProvider = resolveSelectedProviderFromModelRef(
           resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.video),
         );
@@ -322,7 +325,7 @@ export function registerVideoCapabilityCommands(capability: Command): void {
             available: true,
             configured:
               selectedGenerationProvider === provider.id ||
-              providerHasGenericConfig({ cfg, providerId: provider.id }),
+              providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
             selected: selectedGenerationProvider === provider.id,
             id: provider.id,
             label: provider.label,
@@ -334,7 +337,7 @@ export function registerVideoCapabilityCommands(capability: Command): void {
             .filter((provider) => provider.capabilities?.includes("video"))
             .map((provider) => ({
               available: true,
-              configured: providerHasGenericConfig({ cfg, providerId: provider.id }),
+              configured: providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
               selected: false,
               id: provider.id,
               capabilities: provider.capabilities,

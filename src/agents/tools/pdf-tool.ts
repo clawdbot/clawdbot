@@ -19,7 +19,6 @@ import {
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
 import { resolveUserPath } from "../../utils.js";
-import { resolveDefaultAgentDir } from "../agent-scope.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { abortable } from "../embedded-agent-runner/run/abortable.js";
 import { applySecretRefHeaderSentinels } from "../model-auth.js";
@@ -175,7 +174,6 @@ async function runPdfPrompt(params: {
       agentDir: params.agentDir,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       config: requestedCfg ?? {},
-      inheritedAuthDir: resolveDefaultAgentDir(requestedCfg ?? {}),
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     });
     try {

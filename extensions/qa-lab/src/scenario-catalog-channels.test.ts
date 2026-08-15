@@ -69,6 +69,23 @@ describe("qa scenario catalog channel contracts", () => {
     expect(readQaScenarioById("memory-tools-channel-context").execution.channel).toBe("qa-channel");
   });
 
+  it("keeps channel participant identity proof on isolated QA Channel lifecycle owners", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("channel-participant-identity-inspection"),
+    );
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(scenario.execution.channel).toBe("qa-channel");
+    expect(scenario.execution.suiteIsolation).toBe("isolated");
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      logging: { audit: { executionIdentity: true } },
+      messages: { queue: { mode: "collect", debounceMsByChannel: { "qa-channel": 1000 } } },
+      channels: { "qa-channel": { groupPolicy: "allowlist" } },
+    });
+    expect(flow).toContain("inspectQaExecutionIdentityStorage");
+    expect(flow).toContain("env.gateway.restartAfterStateMutation");
+  });
+
   it("keeps stored inbound audio proof on the real QA Channel and Gateway flow", () => {
     const scenario = requireFlowScenario(
       readQaScenarioById("inbound-media-store-audio-transcription"),

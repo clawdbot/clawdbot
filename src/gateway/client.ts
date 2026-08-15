@@ -124,7 +124,11 @@ export class GatewayClient {
     return this.#client.getConnectionMetadata();
   }
 
-  updateNodeManifest(manifest: { caps: string[]; commands: string[] }): void {
+  updateNodeManifest(manifest: {
+    caps: string[];
+    commands: string[];
+    computerUse?: BaseGatewayClientOptions["computerUse"];
+  }): void {
     this.#client.updateNodeManifest(manifest);
   }
 }

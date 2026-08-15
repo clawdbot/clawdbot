@@ -10,7 +10,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
+import { NodeWorkerLaunchStore, type NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import {
   inspectNodeWorkerProcessIdentity,
   requireNodeWorkerProcessIdentity,
@@ -217,6 +217,34 @@ describe("node worker supervisor recovery", () => {
     await supervisor.close();
   });
 
+  it("releases a stale pending slot during restart reconciliation", async () => {
+    const { bundleRoot, env, workspaceDir } = fixture("node-worker-restart-pending-");
+    new NodeWorkerLaunchStore({ env }).get("schema-probe");
+    const input = testWorkerLaunchInput(workspaceDir, "restart-pending-launch");
+    insertLaunch({
+      env,
+      input,
+      state: "pending",
+      supervisor: { pid: 2_147_483_647, startTime: 1 },
+    });
+    const availability: boolean[] = [];
+    const supervisor = createNodeWorkerSupervisor({
+      bundleRoot,
+      env,
+      capacity: 1,
+      onAvailabilityChanged: (available) => availability.push(available),
+    });
+
+    await supervisor.initialize();
+
+    expect(await supervisor.status(input.launchId)).toMatchObject({
+      state: "interrupted",
+      worker: null,
+    });
+    expect(availability).toEqual([false, true]);
+    await supervisor.close();
+  });
+
   it.runIf(process.platform !== "win32").each([
     { operation: "replay" as const, state: "interrupted" as const },
     { operation: "cancel" as const, state: "cancelled" as const },
@@ -374,6 +402,7 @@ describe("node worker supervisor recovery", () => {
         const result = store.claim(
           JSON.parse(fs.readFileSync(claimPath, "utf8")),
           requireNodeWorkerProcessIdentity(process.pid),
+          2,
         );
         process.stdout.write(JSON.stringify(result.receipt) + "\\n");
         setInterval(() => {}, 1000);

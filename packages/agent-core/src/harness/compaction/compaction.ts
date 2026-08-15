@@ -227,13 +227,14 @@ export function shouldCompact(
   contextWindow: number,
   settings: CompactionSettings,
 ): boolean {
-  if (!settings.enabled) {
+  if (!settings.enabled || !Number.isFinite(contextWindow) || contextWindow <= 0) {
     return false;
   }
   return contextTokens > contextWindow - settings.reserveTokens;
 }
 
-const IMAGE_BLOCK_CHARS = 4800;
+export const IMAGE_BLOCK_TOKENS = 2_000;
+const IMAGE_BLOCK_CHARS = IMAGE_BLOCK_TOKENS * CHARS_PER_TOKEN_ESTIMATE;
 
 function countContentBlockChars(
   content: Array<{ type: string; content?: unknown; text?: string }>,

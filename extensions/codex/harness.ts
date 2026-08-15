@@ -48,6 +48,7 @@ const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
 ] as const satisfies readonly ContextEngineHostCapability[];
 
 type CodexAppServerAgentHarness = AgentHarnessV2 & {
+  cloudPlacement?: { mode: "remote-exec" };
   compactAfterContextEngine?(
     params: AgentHarnessCompactParams,
   ): Promise<AgentHarnessCompactResult | undefined>;
@@ -120,6 +121,7 @@ export function createCodexAppServerAgentHarness(options: {
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
     autoSelection: { providerIds: [...providerIds] },
+    cloudPlacement: { mode: "remote-exec" },
     delegatedExecutionPluginIds: ["voice-call"],
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     conversationToolPolicySupport: "exact",

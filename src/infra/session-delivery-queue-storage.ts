@@ -91,6 +91,7 @@ export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
   acknowledgedAt?: number;
   settlementOutcome?: SessionDeliverySettledOutcome;
   availableAt?: number;
+  retainOnFailure?: true;
 };
 
 export function prepareClaimedSessionDelivery(
@@ -100,6 +101,7 @@ export function prepareClaimedSessionDelivery(
 ): QueuedSessionDelivery {
   return {
     ...params,
+    retainOnFailure: true,
     id: buildEntryId(params.idempotencyKey),
     enqueuedAt: now,
     retryCount: 0,
@@ -147,6 +149,7 @@ export async function enqueueSessionDelivery(
 
   const entry: QueuedSessionDelivery = {
     ...params,
+    ...(params.completionRetention === "permanent" ? { retainOnFailure: true as const } : {}),
     id,
     enqueuedAt: Date.now(),
     retryCount: 0,
@@ -155,9 +158,7 @@ export async function enqueueSessionDelivery(
     queueName: SESSION_DELIVERY_QUEUE_NAME,
     entry,
     stateDir,
-    ...(params.completionRetention === "permanent"
-      ? { insertOnly: true }
-      : { reviveFailedOrCorruptPending: Boolean(params.idempotencyKey) }),
+    insertOnly: true,
   });
   return id;
 }
