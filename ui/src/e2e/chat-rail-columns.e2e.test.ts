@@ -166,6 +166,29 @@ async function seedSettings(page: Page, themeMode: "light" | "dark") {
   );
 }
 
+async function seedDockReservationRegression(page: Page, dock: "bottom" | "right") {
+  const key = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
+  await page.addInitScript(
+    ({ dock, key, sessionKey }) => {
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          theme: "claw",
+          themeMode: "light",
+          sidebarSessionLayouts: {
+            [sessionKey]: { columns: [], dock, open: false, expanded: false },
+          },
+        }),
+      );
+      localStorage.setItem(
+        "openclaw.browser.panel.v1",
+        JSON.stringify({ open: true, dock: "right", height: 420, width: 560 }),
+      );
+    },
+    { dock, key, sessionKey },
+  );
+}
+
 function sidePanel(page: Page): Locator {
   return page.locator(".sidebar-region__right-runtime .side-panel");
 }
@@ -226,6 +249,72 @@ async function captureRichPanel(page: Page, name: string) {
 }
 
 suite.define(() => {
+  it.each(["right", "bottom"] as const)(
+    "opens topbar surfaces without reserving a stale right dock while the rail is %s-docked",
+    async (dock) => {
+      await suite.withPage(
+        {
+          colorScheme: "light",
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport: { height: 900, width: 1600 },
+        },
+        async ({ page }) => {
+          await seedDockReservationRegression(page, dock);
+          await installMockGateway(page, scenario());
+          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.locator(".chat-group").first().waitFor();
+
+          await page.locator(".chat-browser-panel-toggle").click();
+          await sidePanel(page).locator('[data-panel-slot="browser"]:not([hidden])').waitFor();
+          await expect
+            .poll(() =>
+              page.evaluate(() => ({
+                marginRight: getComputedStyle(
+                  document.querySelector<HTMLElement>(".content--chat")!,
+                ).marginRight,
+                reservation: document.documentElement.style.getPropertyValue(
+                  "--oc-browser-reserve-right",
+                ),
+              })),
+            )
+            .toEqual({ marginRight: "0px", reservation: "0px" });
+          await expect
+            .poll(() =>
+              sidePanel(page).evaluate((panel) => panel.classList.contains("side-panel--bottom")),
+            )
+            .toBe(dock === "bottom");
+
+          await page.locator(".chat-tasks-toggle").click();
+          await sidePanel(page).locator('[data-panel-slot="tasks"]:not([hidden])').waitFor();
+          await expect
+            .poll(() =>
+              page.evaluate(() => {
+                const content = document.querySelector<HTMLElement>(".content--chat")!;
+                const panel = document.querySelector<HTMLElement>(".side-panel")!;
+                const region = document.querySelector<HTMLElement>(".sidebar-region")!;
+                return {
+                  marginRight: getComputedStyle(content).marginRight,
+                  reservation: document.documentElement.style.getPropertyValue(
+                    "--oc-browser-reserve-right",
+                  ),
+                  spansRegion:
+                    Math.abs(
+                      panel.getBoundingClientRect().width - region.getBoundingClientRect().width,
+                    ) < 1,
+                };
+              }),
+            )
+            .toEqual({
+              marginRight: "0px",
+              reservation: "0px",
+              spansRegion: dock === "bottom",
+            });
+        },
+      );
+    },
+  );
+
   it.each(["light", "dark"] as const)(
     "navigates and persists one tabbed side panel in %s theme",
     async (themeMode) => {
