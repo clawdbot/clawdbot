@@ -76,6 +76,12 @@ const CORNER_CASES: readonly CornerCase[] = [
     selector: ".nav-item",
     superelliptical: "12.5px",
   },
+  {
+    circular: "14px",
+    markup: '<div class="settings-group">Group</div>',
+    selector: ".settings-group",
+    superelliptical: "17.5px",
+  },
 ];
 
 const ROUND_CASES: readonly CornerCase[] = [
@@ -100,16 +106,27 @@ const ROUND_CASES: readonly CornerCase[] = [
 ];
 
 // Consumers of the shared --radius-* tokens that are NOT named in the base.css
-// corner block. The 1.25 scale must stay scoped to the opted-in selector list
-// (declared as a local custom-property override, not at :root) or these
-// unrelated surfaces inflate their radius while staying `round` — a regressed
-// look with no matching corner-shape. .run-inspector__panel stands in for the
-// whole excluded class: any --radius-md consumer outside the opted list.
+// corner block. The 1.25 scale must stay scoped to the opted-in selectors
+// (set as a direct border-radius, not an inheritable custom property) or
+// these unrelated surfaces inflate their radius while staying `round` — a
+// regressed look with no matching corner-shape. .run-inspector__panel is a
+// sibling of every opted surface, standing in for any --radius-md consumer
+// outside the opted list entirely. .settings-segmented is nested INSIDE the
+// opted .settings-group instead: border-radius does not inherit, so even a
+// non-opted descendant of an opted container must keep its canonical radius
+// and initial `round` shape — a redeclared --radius-* custom property on the
+// container would leak into it, which is exactly the regression this proves.
 const EXCLUDED_CASES: readonly CornerCase[] = [
   {
     circular: "10px",
     markup: '<div class="run-inspector__panel">Panel</div>',
     selector: ".run-inspector__panel",
+    superelliptical: "10px",
+  },
+  {
+    circular: "10px",
+    markup: '<div class="settings-group"><div class="settings-segmented">Segmented</div></div>',
+    selector: ".settings-segmented",
     superelliptical: "10px",
   },
 ];
@@ -136,6 +153,7 @@ function readUiCss(): string {
     "ui/src/styles/layout.css",
     "ui/src/styles/option-card.css",
     "ui/src/styles/chat/layout.css",
+    "ui/src/styles/settings.css",
     "ui/src/pages/activity/run-inspector.css",
   ]
     .map((file) => readStyleSheet(file))
