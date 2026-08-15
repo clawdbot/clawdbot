@@ -312,7 +312,7 @@ openclaw-chat-sidebar-region,
   width: 100%;
   min-width: 0;
   align-items: center;
-  overflow: hidden;
+  overflow: visible;
   padding-left: 6px;
 }
 
@@ -323,9 +323,10 @@ openclaw-chat-sidebar-region,
 .side-panel__header .tabstrip-tab {
   position: relative;
   width: max-content;
-  min-width: 28px;
+  min-width: 63px;
   max-width: 160px;
   flex: 0 1 auto;
+  scroll-margin-inline-end: 18px;
 }
 
 .side-panel__header .tabstrip-tab:not(:first-of-type) {
@@ -417,7 +418,7 @@ openclaw-chat-sidebar-region,
 }
 
 .side-panel__header .tabstrip-tab__label {
-  min-width: 0;
+  min-width: 24px;
   flex: 1 1 auto;
   overflow: hidden;
   text-overflow: clip;
@@ -425,9 +426,10 @@ openclaw-chat-sidebar-region,
 
 .side-panel__header .tabstrip-tab__tooltip-trigger {
   display: inline-flex;
-  width: 100%;
+  width: max-content;
+  max-width: 100%;
   height: 100%;
-  min-width: 0;
+  min-width: 24px;
   align-items: center;
   gap: 7px;
   overflow: hidden;
@@ -442,7 +444,9 @@ openclaw-chat-sidebar-region,
 
 .side-panel__header .tabstrip-tab__label-tooltip {
   display: inline-flex !important;
-  min-width: 0;
+  width: max-content;
+  max-width: 100%;
+  min-width: 24px;
   align-self: stretch;
   align-items: center;
   flex: 1 1 auto;

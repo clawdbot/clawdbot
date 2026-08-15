@@ -224,6 +224,14 @@ async function tabLabels(page: Page): Promise<string[]> {
     .evaluateAll((elements) => elements.map((element) => element.textContent?.trim() ?? ""));
 }
 
+async function narrowestRailTabLabel(page: Page): Promise<number> {
+  return sidePanel(page)
+    .locator(":scope > .side-panel__header > .tabstrip .tabstrip-tab__label")
+    .evaluateAll((labels) =>
+      Math.min(...labels.map((label) => (label as HTMLElement).getBoundingClientRect().width)),
+    );
+}
+
 async function captureRichPanel(page: Page, name: string) {
   if (!proofDir) {
     return;
@@ -424,6 +432,7 @@ suite.define(() => {
             "Side chat",
             "Desktop",
           ]);
+          await expect.poll(() => narrowestRailTabLabel(page)).toBeGreaterThanOrEqual(24);
           await expect
             .poll(() =>
               sidePanel(page)
@@ -627,6 +636,7 @@ suite.define(() => {
           await expect
             .poll(() => divider.evaluate((element) => element.orientation))
             .toBe("horizontal");
+          await expect.poll(() => narrowestRailTabLabel(page)).toBeGreaterThanOrEqual(24);
           const bottomHeight = await sidePanel(page).evaluate(
             (element) => element.getBoundingClientRect().height,
           );
@@ -788,6 +798,19 @@ suite.define(() => {
               }),
             )
             .toEqual({ fits: true, mask: "none" });
+          const terminalTabGeometry = await terminalLabel.evaluate((label) => {
+            const tab = label.closest<HTMLElement>("wa-tab");
+            const group = tab?.closest("wa-tab-group");
+            const tabs = group?.shadowRoot?.querySelector<HTMLElement>('[part~="tabs"]');
+            return {
+              availableWidth: tabs?.getBoundingClientRect().width ?? 0,
+              tabWidth: tab?.getBoundingClientRect().width ?? 0,
+            };
+          });
+          expect(terminalTabGeometry.tabWidth).toBeLessThan(
+            terminalTabGeometry.availableWidth - 12,
+          );
+          await captureRichPanel(page, `rails-tabs-single-${themeMode}`);
           const terminalTooltip = terminalLabel.locator("../..");
           await terminalLabel.locator("..").hover();
           await page.waitForTimeout(200);
@@ -845,6 +868,7 @@ suite.define(() => {
         await openFromEmpty(page, "Files");
         await openFromPlus(page, "Terminal");
         await expect.poll(async () => tabLabels(page)).toEqual(["Files", "Terminal"]);
+        await expect.poll(() => narrowestRailTabLabel(page)).toBeGreaterThanOrEqual(24);
 
         const geometry = await sidePanel(page).evaluate((element) => {
           const rect = element.getBoundingClientRect();

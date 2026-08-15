@@ -72,16 +72,9 @@ function panelTabLabelOverflowRef() {
       return;
     }
     const update = () => {
-      const tabWidth = element.closest<HTMLElement>("wa-tab")?.getBoundingClientRect().width ?? 0;
-      const overflowing =
-        element.scrollWidth > element.clientWidth + 1 ||
-        (element.clientWidth === 0 &&
-          tabWidth > 0 &&
-          tabWidth <= 28.5 &&
-          Boolean(element.textContent?.trim()));
-      const visibleOverflow = overflowing && element.clientWidth > 0;
-      element.classList.toggle("is-overflowing", visibleOverflow);
-      element.parentElement?.classList.toggle("has-label-overflow", visibleOverflow);
+      const overflowing = element.scrollWidth > element.clientWidth + 1;
+      element.classList.toggle("is-overflowing", overflowing);
+      element.parentElement?.classList.toggle("has-label-overflow", overflowing);
       element.toggleAttribute("data-tooltip-overflow", overflowing);
     };
     update();
