@@ -663,15 +663,29 @@ describe("reply turn admission", () => {
         },
       });
 
-      await expect(
-        admitTestReplyTurn({
+      // Regression: the generic "changed while starting work" message gave no indication
+      // this condition never self-resolves on retry (a real incident: the same tombstoned
+      // session silently failed every admission attempt, including a 30-minute heartbeat,
+      // for 9+ days). The tombstone's own reason already names the fix — surface it, and
+      // mark the error so channel handlers can distinguish this from a transient race.
+      let caught: unknown;
+      try {
+        await admitTestReplyTurn({
           sessionKey,
           sessionId,
           expectedSessionId: sessionId,
           storePath,
           kind,
-        }),
-      ).rejects.toThrow(/changed while starting work/i);
+        });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toContain("automatic recovery exhausted");
+      expect((caught as Error).message).not.toMatch(/changed while starting work/i);
+      expect((caught as { mainSessionRecoveryBlocked?: boolean }).mainSessionRecoveryBlocked).toBe(
+        true,
+      );
     },
   );
 

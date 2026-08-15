@@ -622,6 +622,24 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         draftController.markDraftRetained();
       }
       runtime.error?.(`matrix handler failed: ${String(err)}`);
+      // A tombstoned main-session recovery cycle never self-resolves on retry — every
+      // future message to this room would otherwise fail the same way forever with no
+      // visible sign anything is wrong (this is what silently blocked a real room for
+      // 9+ days). Surface the actionable error once per occurrence instead of only logging.
+      if (
+        (err as { mainSessionRecoveryBlocked?: boolean } | undefined)?.mainSessionRecoveryBlocked
+      ) {
+        await client
+          .sendMessage(roomId, {
+            msgtype: "m.notice",
+            body: `⚠️ ${err instanceof Error ? err.message : String(err)}`,
+          })
+          .catch((sendErr: unknown) => {
+            logVerboseMessage(
+              `matrix: failed sending main-session-recovery-blocked notice room=${roomId}: ${String(sendErr)}`,
+            );
+          });
+      }
     } finally {
       // Stop the draft stream timer so partial drafts don't leak if the
       // model run throws or times out mid-stream.

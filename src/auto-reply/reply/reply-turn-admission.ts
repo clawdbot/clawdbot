@@ -87,11 +87,30 @@ export async function runWithReplyOperationLifecycleAdmission<T>(
   return admission ? await admission.run(run) : await run();
 }
 
-function rejectLifecycleInvalidatedWork(params: { kind: ReplyTurnKind; message: string }): never {
+function rejectLifecycleInvalidatedWork(params: {
+  kind: ReplyTurnKind;
+  message: string;
+  /**
+   * Set when a tombstoned main-session recovery cycle — not a transient admission
+   * race — caused the rejection. This condition never self-resolves on retry, so
+   * channel handlers can check this duck-typed marker (no shared type import needed
+   * across the plugin boundary) to surface a visible notice instead of silently
+   * retrying forever.
+   */
+  mainSessionRecoveryBlocked?: boolean;
+}): never {
   if (params.kind === "queued_followup") {
-    throw new QueuedFollowupLifecycleInvalidatedError(params.message);
+    const err = new QueuedFollowupLifecycleInvalidatedError(params.message);
+    if (params.mainSessionRecoveryBlocked) {
+      (err as Error & { mainSessionRecoveryBlocked?: boolean }).mainSessionRecoveryBlocked = true;
+    }
+    throw err;
   }
-  throw new Error(params.message);
+  const err = new Error(params.message);
+  if (params.mainSessionRecoveryBlocked) {
+    (err as Error & { mainSessionRecoveryBlocked?: boolean }).mainSessionRecoveryBlocked = true;
+  }
+  throw err;
 }
 
 function isAbortSignalAborted(signal: AbortSignal | undefined): boolean {
@@ -311,9 +330,18 @@ async function admitReplyTurnWithWaitSignal(
             target: { sessionKey: params.sessionKey, storePath },
           });
           if (ownerClaim.kind === "invalidated") {
+            // A tombstoned recovery cycle will never self-resolve on retry — every future
+            // admission attempt (including the recurring heartbeat) hits this same block
+            // forever. The tombstone reason already names the fix (/new or reset); surface
+            // it instead of the generic message so it reaches whatever eventually logs or
+            // displays this error, rather than getting silently discarded at the throw site.
+            const tombstoneReason = admittedSessionEntry.mainRestartRecovery?.tombstone?.reason;
             rejectLifecycleInvalidatedWork({
               kind: params.kind,
-              message: `Session "${params.sessionKey}" changed while starting work. Retry.`,
+              message: tombstoneReason
+                ? `Session "${params.sessionKey}" is blocked: ${tombstoneReason}`
+                : `Session "${params.sessionKey}" changed while starting work. Retry.`,
+              mainSessionRecoveryBlocked: tombstoneReason !== undefined,
             });
           }
           recoveryOwnerLease = ownerClaim.kind === "claimed" ? ownerClaim.lease : undefined;
