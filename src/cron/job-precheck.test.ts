@@ -114,6 +114,39 @@ describe("authorizeCronJobPrecheckCommand", () => {
     });
     expect(result).toEqual({ allowed: true });
   });
+
+  it("denies when tools.exec.security=deny even if approvals would default full", async () => {
+    // Regression for ClawSweeper P1: config tools.exec must be layered before
+    // resolveExecApprovalsLocked (which defaults security=full when no file).
+    const result = await authorizeCronJobPrecheckCommand({
+      command: "exit 0",
+      authz: {
+        triggersEnabled: true,
+        // No securityOverrideOnly — exercise live approvals path with config layer.
+        toolsExec: { security: "deny" },
+      },
+    });
+    expect(result.allowed).toBe(false);
+    if (!result.allowed) {
+      expect(result.reason).toContain(PRECHECK_POLICY_DENIED_REASON);
+      expect(result.reason).toMatch(/security=deny/i);
+    }
+  });
+
+  it("denies when agent tools.exec.security=deny tightens global full", async () => {
+    const result = await authorizeCronJobPrecheckCommand({
+      command: "exit 0",
+      authz: {
+        triggersEnabled: true,
+        toolsExec: { security: "full" },
+        agentToolsExec: { security: "deny" },
+      },
+    });
+    expect(result.allowed).toBe(false);
+    if (!result.allowed) {
+      expect(result.reason).toMatch(/security=deny/i);
+    }
+  });
 });
 
 describe("runCronJobPrecheck", () => {

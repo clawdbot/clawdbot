@@ -3,8 +3,13 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   evaluateShellAllowlistWithAuthorization,
   resolveExecApprovalsLocked,
+  resolveExecModePolicy,
+  minSecurity,
+  type ExecAsk,
+  type ExecMode,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
+import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { evaluateSystemRunPolicy } from "../node-host/exec-policy.js";
 import { createCronRunDiagnosticsFromError } from "./run-diagnostics.js";
@@ -161,6 +166,12 @@ export function interpretPrecheckOutput(params: {
   };
 }
 
+type ExecToolConfigLayer = {
+  mode?: ExecMode;
+  security?: ExecSecurity;
+  ask?: ExecAsk;
+};
+
 type CronJobPrecheckAuthz = {
   /** Operator must enable unattended cron scripts/triggers (same gate as script payloads). */
   triggersEnabled: boolean;
@@ -172,6 +183,15 @@ type CronJobPrecheckAuthz = {
    * resolved approvals agent security when omitted.
    */
   security?: ExecSecurity;
+  /**
+   * Global `tools.exec` config layer (same as system.run). Applied before agent layer.
+   * When set, layered policy becomes the requested security ceiling (not approvals alone).
+   */
+  toolsExec?: ExecToolConfigLayer;
+  /**
+   * Per-agent `agents.entries.<id>.tools.exec` config layer (same as system.run).
+   */
+  agentToolsExec?: ExecToolConfigLayer;
   /**
    * When true, skip live approvals resolution and use `security` (or deny) only.
    * Tests inject this to assert policy denial without host file side effects.
@@ -249,21 +269,62 @@ export async function authorizeCronJobPrecheckCommand(params: {
     return { allowed: true };
   }
 
-  // Mirror resolveExecHostApprovalContext: caller security is a ceiling;
-  // approvals file can only tighten. Unattended → ask=off (no interactive path).
-  const approvals = await resolveExecApprovalsLocked(params.authz.agentId, {
-    security: requested,
+  // Mirror resolveEffectiveSystemRunExecPolicy / resolveExecHostApprovalContext:
+  // 1) start from OpenClaw defaults (full/off) or an explicit security ceiling
+  // 2) layer global + per-agent tools.exec (canonical system.run path)
+  // 3) resolveExecModePolicy
+  // 4) approvals file may only tighten via minSecurity
+  // Unattended cron → ask="off" (no interactive path).
+  const normalizeLayer = (
+    layer: ExecToolConfigLayer | undefined,
+  ): ExecToolConfigLayer | undefined => {
+    if (!layer) {
+      return undefined;
+    }
+    return {
+      mode:
+        layer.mode === "deny" ||
+        layer.mode === "allowlist" ||
+        layer.mode === "ask" ||
+        layer.mode === "auto" ||
+        layer.mode === "full"
+          ? layer.mode
+          : undefined,
+      security: normalizeExecSecurity(layer.security),
+      ask:
+        layer.ask === "off" || layer.ask === "on-miss" || layer.ask === "always"
+          ? layer.ask
+          : undefined,
+    };
+  };
+  const toolsExecLayer = normalizeLayer(params.authz.toolsExec);
+  const agentToolsExecLayer = normalizeLayer(params.authz.agentToolsExec);
+  const hasConfigLayers = toolsExecLayer !== undefined || agentToolsExecLayer !== undefined;
+  const basePolicy = {
+    security: (requested ?? "full") as ExecSecurity,
+    ask: "off" as const,
+  };
+  const layered = hasConfigLayers
+    ? applyExecPolicyLayer(applyExecPolicyLayer(basePolicy, toolsExecLayer), agentToolsExecLayer)
+    : basePolicy;
+  // Explicit authz.security remains a hard ceiling when config layers are also present.
+  const ceilingSecurity =
+    requested !== undefined
+      ? minSecurity(normalizeExecSecurity(layered.security) ?? "full", requested)
+      : (normalizeExecSecurity(layered.security) ?? (hasConfigLayers ? "full" : undefined));
+  const modePolicy = resolveExecModePolicy({
+    mode: layered.mode,
+    security: ceilingSecurity ?? "full",
     ask: "off",
   });
-  const approvalsSecurity = normalizeExecSecurity(approvals.agent.security) ?? "deny";
-  const hostSecurity =
-    requested === undefined
-      ? approvalsSecurity
-      : requested === "deny" || approvalsSecurity === "deny"
-        ? "deny"
-        : requested === "allowlist" || approvalsSecurity === "allowlist"
-          ? "allowlist"
-          : "full";
+  const approvals = await resolveExecApprovalsLocked(params.authz.agentId, {
+    security: modePolicy.security,
+    ask: "off",
+  });
+  const hostSecurity = minSecurity(
+    modePolicy.security,
+    normalizeExecSecurity(approvals.agent.security) ?? "deny",
+  );
 
   if (hostSecurity === "deny") {
     return {
