@@ -7,6 +7,7 @@ import {
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
+import { scrollActiveMenuOptionIntoView } from "./chat-composer-dom.ts";
 import { paneDomId } from "./chat-composer-slash-menu.ts";
 import { commitComposerDraft, getChatComposerState } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
@@ -183,24 +184,7 @@ export function scrollActiveSkillMenuOptionIntoView(
   state: ChatComposerState,
   paneId: string,
 ): void {
-  const activeId = getActiveSkillMenuOptionId(state, paneId);
-  if (!activeId) {
-    return;
-  }
-  requestAnimationFrame(() => {
-    const activeOption = document.getElementById(activeId);
-    const scrollRegion = activeOption?.closest<HTMLElement>(".slash-menu__scroll");
-    if (!activeOption || !scrollRegion) {
-      return;
-    }
-    const menuBounds = scrollRegion.getBoundingClientRect();
-    const optionBounds = activeOption.getBoundingClientRect();
-    if (optionBounds.top < menuBounds.top) {
-      scrollRegion.scrollTop -= menuBounds.top - optionBounds.top;
-    } else if (optionBounds.bottom > menuBounds.bottom) {
-      scrollRegion.scrollTop += optionBounds.bottom - menuBounds.bottom;
-    }
-  });
+  scrollActiveMenuOptionIntoView(getActiveSkillMenuOptionId(state, paneId));
 }
 
 export function selectSkillMention(
