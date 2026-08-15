@@ -30,6 +30,7 @@ const elementLabel = values["element-label"]?.trim().toLowerCase();
 if (!windowTitle || text === undefined || !artifacts) {
   throw new Error("--window-title, --text, and --artifacts are required");
 }
+const artifactDirectory = artifacts;
 
 type ToolResult = Awaited<ReturnType<ReturnType<typeof createComputerTool>["execute"]>>;
 type JsonRecord = Record<string, unknown>;
@@ -145,7 +146,7 @@ async function saveImage(name: string, result: ToolResult): Promise<string> {
     throw new Error(`missing model-visible image in ${name}`);
   }
   const extension = image.mimeType === "image/jpeg" ? "jpeg" : "png";
-  const output = path.join(artifacts, `${name}.${extension}`);
+  const output = path.join(artifactDirectory, `${name}.${extension}`);
   await writeFile(output, Buffer.from(image.data, "base64"));
   return output;
 }
@@ -196,7 +197,7 @@ function structuredOutcome(outcome: ActionOutcome): boolean {
   return raw.ok === false && typeof error?.code === "string" && error.code.length > 0;
 }
 
-await mkdir(artifacts, { recursive: true });
+await mkdir(artifactDirectory, { recursive: true });
 const screenshot = await call("screenshot");
 const listed = await call("list_windows");
 const windows = records(record(wireResult(listed).details)?.windows);
@@ -287,7 +288,7 @@ const evidence = {
   },
 };
 
-const output = path.join(artifacts, "result.json");
+const output = path.join(artifactDirectory, "result.json");
 await writeFile(output, `${JSON.stringify(evidence, null, 2)}\n`);
 console.log(JSON.stringify(evidence, null, 2));
 
