@@ -146,10 +146,14 @@ describeControlUiE2e("Chat transcript resize anchoring", () => {
       // The anchor row must remain visible after every width change...
       expect(sample.key, `anchor visible at width ${width}`).toBe(before.key);
       // ...and roughly hold its viewport position while its own text re-wraps.
+      // The fold-spanning anchor row's own re-wrap moves its top by a font-
+      // metric-dependent amount (42px on macOS, 63px on Linux CI at 820px);
+      // the pre-fix failure mode is the anchor leaving the viewport entirely
+      // with 250px+ scroll drift, so 120px keeps a wide detection margin.
       expect(
         Math.abs(sample.topDelta - before.topDelta),
         `anchor drift at width ${width}`,
-      ).toBeLessThanOrEqual(60);
+      ).toBeLessThanOrEqual(120);
     }
   }, 120_000);
 
