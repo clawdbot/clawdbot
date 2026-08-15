@@ -8,7 +8,9 @@ import type {
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { loadSettings, patchSettings } from "../app/settings.ts";
+import { t } from "../i18n/index.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import { showToast } from "../lib/toast.ts";
 import {
   answerConfirmDialog,
   installDialogPolyfill,
@@ -22,9 +24,12 @@ import { patchSessionRows } from "./session-organizer-batch-mutations.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
 import {
   deleteSession,
+  deleteSessionGroup,
   deleteSessionsBatch,
   stopCloudWorker,
 } from "./session-organizer-operations.runtime.ts";
+
+vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
 
 function sessionRow(index: number): SidebarRecentSession {
   return {
@@ -48,6 +53,10 @@ function createHarness(
 ) {
   let current = params.current ?? true;
   let requestCount = 0;
+  // Mirrors SessionDataController's own controller: retiring the scope aborts
+  // it so a dialog wired to `scope.signal` dismisses itself for real, and
+  // renewing stands in for the next `beginSessionMutation()` after a reconnect.
+  let abortController = new AbortController();
   const request = vi.fn(async (_method: string, rawParams?: unknown, _options?: unknown) => {
     const patchParams = rawParams as SessionsPatchManyParams;
     const requestFailure = params.requestFailure;
@@ -88,6 +97,7 @@ function createHarness(
   const refreshTheme = vi.fn();
   const deleteMany = vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] }));
   const deleteOne = vi.fn(async () => ({ deleted: true }));
+  const groupsDelete = vi.fn(async () => "completed" as const);
   const scope = {
     epoch: 1,
     context: { agents: { state: { agentsList: null } }, theme: { refresh: refreshTheme } },
@@ -96,9 +106,11 @@ function createHarness(
       refreshReplacement,
       delete: deleteOne,
       deleteMany,
+      groupsDelete,
     } as unknown as SessionCapability,
     client,
     selectedAgentId: "main",
+    signal: abortController.signal,
   } as unknown as SidebarSessionMutationScope;
   const publishSessionMutationError = vi.fn();
   const pruneSidebarSessionEntry = vi.fn();
@@ -116,6 +128,7 @@ function createHarness(
   return {
     deleteMany,
     deleteOne,
+    groupsDelete,
     host,
     pruneSidebarSessionEntry,
     publishSessionMutationError,
@@ -126,6 +139,13 @@ function createHarness(
     // Stands in for a reconnect or agent switch landing while a confirm is open.
     retireScope: () => {
       current = false;
+      abortController.abort();
+    },
+    // Stands in for the next beginSessionMutation() a reconnect issues.
+    renewScope: () => {
+      current = true;
+      abortController = new AbortController();
+      scope.signal = abortController.signal;
     },
     scope,
   };
@@ -394,7 +414,7 @@ describe("patchSessionRows", () => {
 type OperationsHarness = ReturnType<typeof createHarness>;
 
 const destructiveHarness = {
-  methods: ["sessions.delete", "sessions.reclaim"],
+  methods: ["sessions.delete", "sessions.reclaim", "sessions.groups.delete"],
   scopes: ["operator.write", "operator.admin"],
 };
 
@@ -412,17 +432,26 @@ const destructiveOperations = [
     run: (harness: OperationsHarness) =>
       deleteSessionsBatch(harness.host, [sessionRow(0), sessionRow(1)], harness.scope),
     mutation: (harness: OperationsHarness) => harness.deleteMany,
+    staleMessage: t("sessionsView.deleteSessionsStale", { count: "2" }),
   },
   {
     name: "session delete",
     run: (harness: OperationsHarness) => deleteSession(harness.host, sessionRow(0), harness.scope),
     mutation: (harness: OperationsHarness) => harness.deleteOne,
+    staleMessage: t("sessionsView.deleteSessionStale", { session: sessionRow(0).label }),
   },
   {
     name: "cloud worker stop",
     run: (harness: OperationsHarness) =>
       stopCloudWorker(harness.host, cloudWorkerRow(false), harness.scope),
     mutation: (harness: OperationsHarness) => harness.request,
+    staleMessage: t("sessionsView.stopCloudWorkerStale", { session: cloudWorkerRow(false).label }),
+  },
+  {
+    name: "session-group delete",
+    run: (harness: OperationsHarness) => deleteSessionGroup(harness.host, "Group A", harness.scope),
+    mutation: (harness: OperationsHarness) => harness.groupsDelete,
+    staleMessage: t("sessionsView.deleteGroupStale", { group: "Group A" }),
   },
 ] as const;
 
@@ -431,6 +460,7 @@ describe("session organizer destructive confirmations", () => {
 
   beforeEach(() => {
     restoreDialogPolyfill = installDialogPolyfill();
+    vi.mocked(showToast).mockClear();
   });
 
   afterEach(() => {
@@ -466,20 +496,38 @@ describe("session organizer destructive confirmations", () => {
 
     expect(operation.mutation(harness)).not.toHaveBeenCalled();
     expect(harness.publishSessionMutationError).not.toHaveBeenCalled();
+    // An ordinary cancel is expected UX and needs no announcement; only a
+    // reconnect-driven abort earns the retry notice below.
+    expect(showToast).not.toHaveBeenCalled();
   });
 
   it.each(destructiveOperations)(
-    "abandons the $name when the connection is replaced while its confirm is open",
+    "aborts the $name confirm and releases the lock for a fresh one when the connection is replaced while it is open",
     async (operation) => {
       const harness = createHarness(destructiveHarness);
 
       const pending = operation.run(harness);
-      const actions = await waitForConfirmDialogActions();
+      await waitForConfirmDialogActions();
       harness.retireScope();
-      answerConfirmDialog(actions, "confirm");
       await pending;
 
       expect(operation.mutation(harness)).not.toHaveBeenCalled();
+      // The stale dialog must dismiss itself, not merely stop sending its request.
+      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+      // The abort resolves the dialog to `false`, same as a user cancel, so the
+      // operator needs a distinct, visible outcome or their lost intent reads
+      // as a click that simply did nothing.
+      expect(showToast).toHaveBeenCalledWith({ message: operation.staleMessage });
+
+      // A fresh confirmation (the reconnect's own retry) must be able to open
+      // immediately; a stale dialog holding the shared lock would block it.
+      harness.renewScope();
+      const reopened = operation.run(harness);
+      const freshActions = await waitForConfirmDialogActions();
+      answerConfirmDialog(freshActions, "confirm");
+      await reopened;
+
+      expect(operation.mutation(harness)).toHaveBeenCalledOnce();
     },
   );
 
@@ -503,6 +551,11 @@ describe("session organizer destructive confirmations", () => {
 
     expect(harness.request).not.toHaveBeenCalled();
     expect(harness.replaceCurrentSession).not.toHaveBeenCalled();
+    // The session delete already landed; the worktree just stays put, same as
+    // the no-access branch, so the operator learns where it went.
+    expect(showToast).toHaveBeenCalledWith({
+      message: t("sessionsView.deletePreservedWorktrees", { count: "1", branches: "feature" }),
+    });
   });
 
   it("skips the delete confirm entirely once the operator opted out", async () => {
