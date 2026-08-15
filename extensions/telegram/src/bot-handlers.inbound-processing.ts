@@ -27,7 +27,10 @@ import type {
   RegisterTelegramHandlerParams,
   TelegramInboundDisposition,
 } from "./bot-handlers.types.js";
-import type { TelegramAmbientTranscriptWatermark } from "./bot-message-context.types.js";
+import type {
+  TelegramAmbientTranscriptWatermark,
+  TelegramChannelIngressResolver,
+} from "./bot-message-context.types.js";
 import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
@@ -61,6 +64,7 @@ type TelegramInboundMessage = {
   senderId: string;
   effectiveGroupAllow: NormalizedAllowFrom;
   effectiveDmAllow: NormalizedAllowFrom;
+  channelIngressResolver: TelegramChannelIngressResolver;
   groupConfig?: TelegramGroupConfig;
   topicConfig?: TelegramTopicConfig;
   sendOversizeWarning: boolean;
@@ -132,6 +136,7 @@ export function createTelegramInboundProcessing({
       senderId,
       effectiveGroupAllow,
       effectiveDmAllow,
+      channelIngressResolver,
       groupConfig,
       topicConfig,
       sendOversizeWarning,
@@ -182,6 +187,7 @@ export function createTelegramInboundProcessing({
         promptContextMinTimestampMs,
         promptContextAmbientWatermark,
         dispatchDedupeClaims,
+        channelIngressResolver,
       })
     ) {
       return { kind: "buffered", buffer: "text-fragment" };
@@ -206,6 +212,7 @@ export function createTelegramInboundProcessing({
         promptContextMinTimestampMs,
         promptContextAmbientWatermark,
         dispatchDedupeClaims,
+        channelIngressResolvers: [channelIngressResolver],
       })
     ) {
       return { kind: "buffered", buffer: "media-group" };
@@ -349,6 +356,7 @@ export function createTelegramInboundProcessing({
       botUsername,
       ...promptContextBoundaryOptions(promptContextMinTimestampMs, promptContextAmbientWatermark),
       dispatchDedupeClaims,
+      channelIngressResolvers: [channelIngressResolver],
     };
     const shouldBufferDebounce = Boolean(
       debounceEntry.debounceKey &&

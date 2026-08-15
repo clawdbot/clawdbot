@@ -25,6 +25,26 @@ import {
   parseSent,
 } from "./realtime-quicksilver.test-helpers.js";
 
+type LibopusModule = typeof import("libopus-wasm");
+type LibopusDecoder = Awaited<ReturnType<LibopusModule["createDecoder"]>>;
+type LibopusEncoder = Awaited<ReturnType<LibopusModule["createEncoder"]>>;
+
+const libopusFactoryOverrides = vi.hoisted(() => ({
+  createDecoder: undefined as LibopusModule["createDecoder"] | undefined,
+  createEncoder: undefined as LibopusModule["createEncoder"] | undefined,
+}));
+
+vi.mock("libopus-wasm", async (importOriginal) => {
+  const actual = await importOriginal<LibopusModule>();
+  return {
+    ...actual,
+    createDecoder: (...args: Parameters<LibopusModule["createDecoder"]>) =>
+      (libopusFactoryOverrides.createDecoder ?? actual.createDecoder)(...args),
+    createEncoder: (...args: Parameters<LibopusModule["createEncoder"]>) =>
+      (libopusFactoryOverrides.createEncoder ?? actual.createEncoder)(...args),
+  };
+});
+
 function createRelayTone(): Buffer {
   const pcm = Buffer.alloc(480 * 2);
   for (let index = 0; index < 480; index += 1) {
@@ -503,24 +523,15 @@ describe("GPT-Live werift audio peer", () => {
 
   it("releases the encoder and peer when decoder initialization fails", async () => {
     const encoder = { free: vi.fn() };
-    vi.doMock("libopus-wasm", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("libopus-wasm")>();
-      return {
-        ...actual,
-        createEncoder: vi.fn(async () => encoder),
-        createDecoder: vi.fn(async () => {
-          throw new Error("decoder init failed");
-        }),
-      };
-    });
-    vi.resetModules();
+    libopusFactoryOverrides.createEncoder = async () => encoder as unknown as LibopusEncoder;
+    libopusFactoryOverrides.createDecoder = async () => {
+      throw new Error("decoder init failed");
+    };
     const { RTCPeerConnection } = await import("werift");
     const closePeer = vi.spyOn(RTCPeerConnection.prototype, "close");
     try {
-      const { OpenAIQuicksilverAudioPeer: ReloadedPeer } =
-        await import("./realtime-quicksilver-peer.runtime.js");
       await expect(
-        ReloadedPeer.create({
+        OpenAIQuicksilverAudioPeer.create({
           callbacks: { onAudio: vi.fn(), onError: vi.fn() },
           iceServers: [],
         }),
@@ -529,8 +540,8 @@ describe("GPT-Live werift audio peer", () => {
       expect(closePeer).toHaveBeenCalled();
     } finally {
       closePeer.mockRestore();
-      vi.doUnmock("libopus-wasm");
-      vi.resetModules();
+      libopusFactoryOverrides.createEncoder = undefined;
+      libopusFactoryOverrides.createDecoder = undefined;
     }
   });
 
@@ -544,22 +555,14 @@ describe("GPT-Live werift audio peer", () => {
           resolveDecoder = resolve;
         }),
     );
-    vi.doMock("libopus-wasm", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("libopus-wasm")>();
-      return {
-        ...actual,
-        createEncoder: vi.fn(async () => encoder),
-        createDecoder,
-      };
-    });
-    vi.resetModules();
+    libopusFactoryOverrides.createEncoder = async () => encoder as unknown as LibopusEncoder;
+    libopusFactoryOverrides.createDecoder = async () =>
+      (await createDecoder()) as unknown as LibopusDecoder;
     const { RTCPeerConnection } = await import("werift");
     const closePeer = vi.spyOn(RTCPeerConnection.prototype, "close");
     const controller = new AbortController();
     try {
-      const { OpenAIQuicksilverAudioPeer: ReloadedPeer } =
-        await import("./realtime-quicksilver-peer.runtime.js");
-      const creation = ReloadedPeer.create({
+      const creation = OpenAIQuicksilverAudioPeer.create({
         callbacks: { onAudio: vi.fn(), onError: vi.fn() },
         iceServers: [],
         signal: controller.signal,
@@ -574,8 +577,8 @@ describe("GPT-Live werift audio peer", () => {
       expect(encoder.free).toHaveBeenCalledOnce();
     } finally {
       closePeer.mockRestore();
-      vi.doUnmock("libopus-wasm");
-      vi.resetModules();
+      libopusFactoryOverrides.createEncoder = undefined;
+      libopusFactoryOverrides.createDecoder = undefined;
     }
   });
 });

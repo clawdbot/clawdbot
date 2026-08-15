@@ -268,6 +268,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           return;
         }
         await dispatchInboundDirectDm({
+          channelIngress: "unsupported",
           cfg: ctx.cfg,
           channel: "reef",
           channelLabel: "Reef",
@@ -325,6 +326,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           let resendText = "";
           let dispatchFailure: Error | undefined;
           await dispatchInboundDirectDm({
+            channelIngress: "unsupported",
             cfg: ctx.cfg,
             channel: "reef",
             channelLabel: "Reef",

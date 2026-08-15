@@ -48,7 +48,7 @@ function toProtocolStoreEntry(
     }
     return { ...metadata, kind: "env", value: entry.valuePreview };
   }
-  return { ...metadata, kind: "secret" };
+  return { ...metadata, kind: "secret", allowedHosts: entry.allowedHosts ?? [] };
 }
 
 function storeUpdatedBy(client: GatewayClient | null): string {
@@ -285,6 +285,9 @@ export function createSecretsHandlers(params: {
           name: requestParams.name,
           value: requestParams.value,
           kind: requestParams.kind,
+          ...(requestParams.allowedHosts !== undefined
+            ? { allowedHosts: requestParams.allowedHosts }
+            : {}),
           updatedBy: storeUpdatedBy(client),
         });
         stored = true;

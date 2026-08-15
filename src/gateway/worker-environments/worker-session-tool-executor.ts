@@ -259,6 +259,7 @@ export function createWorkerSessionToolExecutor(params: {
               sessionKey: operation.childSessionKey,
               agentId: targetAgentId,
               profileId: sourceEnvironment.profileId,
+              executionMode: "worker-turn",
               inheritedProfile: {
                 providerId: sourceEnvironment.providerId,
                 profileSnapshot: sourceEnvironment.profileSnapshot,

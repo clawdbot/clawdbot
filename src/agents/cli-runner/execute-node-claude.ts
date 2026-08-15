@@ -201,6 +201,7 @@ export async function executeNodeClaudeRun(params: {
     ? {
         kind: "cli" as const,
         runId: contextParams.runId,
+        toolAuthorityFingerprint: contextParams.toolAuthorityFingerprint,
         cancel: abortNodeRun,
       }
     : undefined;

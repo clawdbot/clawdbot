@@ -196,6 +196,7 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
           cloudWorkerStopAction: session.cloudWorkerStopAction,
         })}
         .forkDisabled=${host.sessionData.sessionsLoading || session.modelSelectionLocked}
+        .forkFromLastCompleted=${session.gatewayHasActiveRun ?? session.hasActiveRun}
         .archiveAllowed=${archiveAllowed}
         .deleteAllowed=${deleteAllowed}
         .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}

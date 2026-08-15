@@ -102,7 +102,12 @@ const state = vi.hoisted(() => ({
   resolveSupportedThinkingLevelMock: vi.fn(({ level }: { level?: string }) => level),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
   loadManifestModelCatalogMock: vi.fn(() => []),
-  loadProviderScopedThinkingCatalogMock: vi.fn((_params: unknown) => undefined),
+  loadProviderScopedThinkingCatalogMock: vi.fn(
+    async (_params: unknown): Promise<ModelCatalogSnapshot["entries"] | undefined> => undefined,
+  ),
+  loadFullModelCatalogMock: vi.fn(async () => {
+    throw new Error("full model catalog should not materialize");
+  }),
   loadPreparedModelCatalogSnapshotMock: vi.fn(
     async (): Promise<ModelCatalogSnapshot> => ({
       entries: [],
@@ -577,7 +582,10 @@ vi.mock("./model-catalog.js", () => ({
 vi.mock("./model-catalog.runtime.js", () => ({
   // The scoped thinking catalog hydrates from the same runtime snapshot the test controls.
   loadProviderScopedThinkingCatalog: async (params: unknown) => {
-    state.loadProviderScopedThinkingCatalogMock(params);
+    const scoped = await state.loadProviderScopedThinkingCatalogMock(params);
+    if (scoped !== undefined) {
+      return scoped;
+    }
     return (await state.loadPreparedModelCatalogSnapshotMock()).entries;
   },
   loadPreparedModelCatalogSnapshot: state.loadPreparedModelCatalogSnapshotMock,
@@ -916,6 +924,8 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveThinkingDefaultMock.mockReturnValue("low");
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
     state.loadManifestModelCatalogMock.mockReturnValue([]);
+    state.loadProviderScopedThinkingCatalogMock.mockReset().mockResolvedValue(undefined);
+    state.loadFullModelCatalogMock.mockClear();
     state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
       entries: [],
       routeVariants: [],
@@ -2471,16 +2481,17 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       }
       return "low";
     });
-    state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
-      entries: [
-        {
-          provider: "OpenAI",
-          id: "gpt-5.6-terra",
-          name: "GPT 5.6 Terra",
-          reasoning: true,
-        },
-      ],
-      routeVariants: [],
+    state.loadProviderScopedThinkingCatalogMock.mockResolvedValue([
+      {
+        provider: "OpenAI",
+        id: "gpt-5.6-terra",
+        name: "GPT 5.6 Terra",
+        reasoning: true,
+      },
+    ]);
+    state.loadPreparedModelCatalogSnapshotMock.mockImplementation(async () => {
+      await state.loadFullModelCatalogMock();
+      return { entries: [], routeVariants: [] };
     });
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       await params.run(params.provider, params.model);
@@ -2507,7 +2518,17 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       modelOverride: "gpt-5.6-terra",
       resolvedThinkLevel: "medium",
     });
-    expect(state.loadPreparedModelCatalogSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(state.loadProviderScopedThinkingCatalogMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: state.runtimeConfigMock,
+        provider: "openai",
+        model: "gpt-5.6-terra",
+        agentId: "default",
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+    expect(state.loadPreparedModelCatalogSnapshotMock).not.toHaveBeenCalled();
+    expect(state.loadFullModelCatalogMock).not.toHaveBeenCalled();
   });
 
   it("persists and clears current run delivery context for restart recovery", async () => {

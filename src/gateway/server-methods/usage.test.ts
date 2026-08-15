@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 
 vi.mock("../../infra/session-cost-usage.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
@@ -686,6 +687,32 @@ describe("gateway usage helpers", () => {
     expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "research" }),
     );
+  });
+
+  it("aggregates all-agent cost over the gateway agent universe, including on-disk system agents", async () => {
+    await withTestDir({ prefix: "openclaw-usage-universe-" }, async (stateDir) => {
+      await fs.mkdir(`${stateDir}/agents/openclaw`, { recursive: true });
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await expectDefined(
+          usageHandlers["usage.cost"],
+          'usageHandlers["usage.cost"] test invariant',
+        )({
+          respond: vi.fn(),
+          params: { startDate: "2026-02-03", endDate: "2026-02-04", agentScope: "all" },
+          context: {
+            getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
+          },
+        } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+      });
+
+      const loadedAgentIds = vi
+        .mocked(loadCostUsageSummaryFromCache)
+        .mock.calls.map((call) => (call[0] as { agentId?: string }).agentId);
+      expect(loadedAgentIds).toContain("main");
+      // sessions.usage discovers this on-disk system agent's sessions; cost
+      // totals must cover the same agent set or the two views diverge.
+      expect(loadedAgentIds).toContain("openclaw");
+    });
   });
 
   it("does not project local avatar bytes for usage-only agent enumeration", async () => {

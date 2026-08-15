@@ -155,6 +155,15 @@ type TurnRecapWatch = {
    * run's, so such a watch is consumed unresolved at settle. */
   baselineKnown: boolean;
   baselineEndedAt: number | null;
+  /** The previous run's persisted token count. The terminal stamp and the
+   * usage persist are separate gateway writes, so a fresh-endedAt row can
+   * still carry the PREVIOUS turn's outputTokens; an unchanged value at
+   * resolve is treated as that lag, not this turn's count. */
+  baselineOutputTokens: number | null;
+  /** Highest live usage-stream counter observed for the watched run. Fills
+   * in when the row's outputTokens hasn't been rewritten yet (see above);
+   * attributed by chatRunId upstream, so it cannot be another run's. */
+  liveOutputTokens: number | null;
   /** A terminal stamp changed while the claw was still up: some run's
    * terminal (this one's early, or an interleaved older patch) already
    * passed, so settle cannot attribute later stamps and must consume the
@@ -187,6 +196,10 @@ type TurnRecapSessionRow = {
   outputTokens?: number;
 };
 
+function rowOutputTokens(row: TurnRecapSessionRow | undefined): number | null {
+  return typeof row?.outputTokens === "number" ? row.outputTokens : null;
+}
+
 /** Post-turn recap for the bottom-of-thread status row. While the working
  * indicator is visible the session is "watched" (and any older recap hides);
  * once it settles, the first session row carrying a fresh terminal stamp
@@ -196,15 +209,23 @@ export function resolveTurnRecap(
   sessionKey: string,
   indicatorVisible: boolean,
   row: TurnRecapSessionRow | undefined,
+  liveOutputTokens: number | null = null,
 ): TurnRecap | null {
   const watch = turnRecapWatchBySession.get(sessionKey);
   const rowEndedAt = typeof row?.endedAt === "number" ? row.endedAt : null;
+  if (watch && liveOutputTokens !== null && liveOutputTokens > (watch.liveOutputTokens ?? -1)) {
+    // Monotonic max: the usage map entry is dropped at lifecycle end, so the
+    // last counter seen while watching/settling is the run's final total.
+    watch.liveOutputTokens = liveOutputTokens;
+  }
   if (indicatorVisible) {
     if (!watch || !watch.watching) {
       turnRecapWatchBySession.set(sessionKey, {
         watching: true,
         baselineKnown: row !== undefined,
         baselineEndedAt: rowEndedAt,
+        baselineOutputTokens: rowOutputTokens(row),
+        liveOutputTokens,
         absorbedTerminal: false,
         settleStartedAt: null,
         settled: null,
@@ -213,6 +234,7 @@ export function resolveTurnRecap(
       if (row !== undefined) {
         watch.baselineKnown = true;
         watch.baselineEndedAt = rowEndedAt;
+        watch.baselineOutputTokens = rowOutputTokens(row);
       }
     } else if (rowEndedAt !== null && rowEndedAt !== watch.baselineEndedAt) {
       watch.baselineEndedAt = rowEndedAt;
@@ -254,9 +276,17 @@ export function resolveTurnRecap(
   if (row?.status !== "done" || typeof runtimeMs !== "number" || !Number.isFinite(runtimeMs)) {
     return null;
   }
+  // The terminal stamp and the usage persist are separate gateway writes, so
+  // this fresh-endedAt row can still carry the previous turn's outputTokens.
+  // An unchanged-from-baseline value is that lag: fall back to the watched
+  // run's live counter (or show none) rather than the stale number.
+  const rowTokens = rowOutputTokens(row);
   const settled: TurnRecap = {
     runtimeMs,
-    outputTokens: typeof row.outputTokens === "number" ? row.outputTokens : null,
+    outputTokens:
+      rowTokens !== null && rowTokens !== watch.baselineOutputTokens
+        ? rowTokens
+        : watch.liveOutputTokens,
   };
   turnRecapWatchBySession.set(sessionKey, { ...watch, settled });
   return settled;

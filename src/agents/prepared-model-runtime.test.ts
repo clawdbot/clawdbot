@@ -896,7 +896,7 @@ describe("prepared model runtime snapshots", () => {
     const skippedConfig = { agents: { defaults: { model: "openai/gpt-5.4" } } };
     const latestConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
     await refreshPreparedModelRuntimeSnapshots(initialConfig);
-    let finishLatestBuild!: () => void;
+    let finishLatestBuild: (() => void) | undefined;
     mocks.ensureOpenClawModelsJson.mockImplementationOnce(
       async () =>
         await new Promise<{ agentDir: string; wrote: boolean }>((resolve) => {
@@ -927,7 +927,8 @@ describe("prepared model runtime snapshots", () => {
         Promise.resolve("pending"),
       ]),
     ).resolves.toBe("pending");
-    finishLatestBuild();
+    await vi.waitFor(() => expect(finishLatestBuild).toEqual(expect.any(Function)));
+    finishLatestBuild?.();
     await latest;
     await expect(read).resolves.toMatchObject({ config: latestConfig });
   });

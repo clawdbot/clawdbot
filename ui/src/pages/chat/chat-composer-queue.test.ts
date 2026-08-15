@@ -37,6 +37,38 @@ describe("chat composer steering queue", () => {
     const badges = container.querySelectorAll(".chat-queue__badge");
     expect(badges).toHaveLength(1);
     expect(badges[0]?.textContent?.trim()).toBe(t("chat.queue.states.steering"));
+    const icon = container.querySelector(".chat-queue__icon");
+    expect(icon?.querySelector('polyline[points="15 10 20 15 15 20"]')).not.toBeNull();
+    expect(icon?.querySelector("circle")).toBeNull();
+  });
+
+  it("keeps a failed steer visually classified as an error", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderChatQueue({
+        queue: [
+          {
+            id: "failed-steer",
+            text: "change course",
+            createdAt: 1,
+            kind: "steered",
+            sendState: "failed",
+            sendError: "steer rejected",
+          },
+        ],
+        onQueueRemove: vi.fn(),
+      }),
+      container,
+    );
+
+    const row = container.querySelector(".chat-queue__item");
+    expect(row?.classList.contains("chat-queue__item--failed")).toBe(true);
+    expect(row?.classList.contains("chat-queue__item--steered")).toBe(false);
+    const icon = row?.querySelector(".chat-queue__icon");
+    expect(icon?.querySelector('path[d^="m21.73 18"]')).not.toBeNull();
+    expect(icon?.querySelector('polyline[points="15 10 20 15 15 20"]')).toBeNull();
+    expect(container.querySelector(".chat-queue__badge--steered")).toBeNull();
   });
 });
 

@@ -112,15 +112,21 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
 };
 
 const CHANNEL_NAMESPACE_PREFIX = "channels.";
-const CHANNEL_KERNEL_HINT_PREFIXES = ["channels.defaults", "channels.modelByChannel"] as const;
+const CHANNEL_KERNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
+
+/** Return whether a channel config key names a kernel-owned namespace. */
+export function isKernelOwnedChannelConfigKey(key: string): boolean {
+  return CHANNEL_KERNEL_CONFIG_KEYS.has(key);
+}
 
 function isKernelOwnedChannelHintPath(path: string): boolean {
   if (path === "channels") {
     return true;
   }
-  return CHANNEL_KERNEL_HINT_PREFIXES.some(
-    (prefix) => path === prefix || path.startsWith(`${prefix}.`),
-  );
+  const channelKey = path.startsWith(CHANNEL_NAMESPACE_PREFIX)
+    ? path.slice(CHANNEL_NAMESPACE_PREFIX.length).split(".", 1)[0]
+    : undefined;
+  return channelKey !== undefined && isKernelOwnedChannelConfigKey(channelKey);
 }
 
 /** Return whether a channel hint path belongs to a plugin-owned channel namespace. */

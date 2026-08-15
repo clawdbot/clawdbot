@@ -39,6 +39,7 @@ import { normalizeReplyPayload } from "./normalize-reply.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./queue.js";
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
+import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import { type ReplyOperation, runAfterReplyOperationClear } from "./reply-run-registry.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import type { TypingController } from "./typing.js";
@@ -312,6 +313,9 @@ export async function handleReplyAgentRunError(
     sessionCtx,
   } = context;
 
+  if (isReplyOperationSuperseded(replyOperation)) {
+    return { text: SILENT_REPLY_TOKEN };
+  }
   if (
     replyOperation.result?.kind === "aborted" &&
     replyOperation.result.code === "aborted_by_user"

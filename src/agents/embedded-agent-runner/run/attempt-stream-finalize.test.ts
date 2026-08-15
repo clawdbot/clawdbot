@@ -43,7 +43,7 @@ type FixtureOverrides = {
   activeSession?: SettledInput["prepared"]["sessionRuntime"]["agentSession"]["activeSession"];
   getBeforeAgentFinalizeRevisionEntryId?: () => string | undefined;
   getBeforeAgentFinalizeRevisionReason?: () => string | undefined;
-  repairedRejectedThinkingReplay?: boolean;
+  repairedRejectedProviderReplay?: boolean;
   runAbortController?: AbortController;
   sessionManager?: SettledInput["prepared"]["sessionRuntime"]["sessionManager"];
   waitForPendingEvents?: () => Promise<void>;
@@ -176,7 +176,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
         yieldMessage: null,
       }),
     },
-    getRepairedRejectedThinkingReplay: () => overrides.repairedRejectedThinkingReplay ?? true,
+    getRepairedRejectedProviderReplay: () => overrides.repairedRejectedProviderReplay ?? true,
     preparedStreamRuntime: {
       abortable: async <T>(promise: Promise<T>) => await promise,
       cache: { observabilityEnabled: false, promptTools: [] },
@@ -311,7 +311,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
     const fixture = createFixture({
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
-      repairedRejectedThinkingReplay: false,
+      repairedRejectedProviderReplay: false,
       getBeforeAgentFinalizeRevisionEntryId: () => rejectedId,
     });
     const settledStream = {
@@ -513,7 +513,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
 
   it("settles an aborted run with its recorded cancellation reason", async () => {
     const cancellationReason = new Error("cancelled by operator");
-    const fixture = createFixture({ repairedRejectedThinkingReplay: false });
+    const fixture = createFixture({ repairedRejectedProviderReplay: false });
     fixture.state.terminal = { kind: "aborted", source: "external" };
     mocks.settleStream.mockImplementation(async (settleInput) => {
       expect(settleInput.readLifecycleState()).toEqual(
@@ -549,7 +549,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
   });
 
   it("publishes mutated settlement error state before rethrowing", async () => {
-    const fixture = createFixture({ repairedRejectedThinkingReplay: false });
+    const fixture = createFixture({ repairedRejectedProviderReplay: false });
     const settlementError = new Error("settlement failed");
     const promptError = new Error("prompt failed");
     mocks.settleStream.mockImplementation(async (settleInput: SettleMockInput) => {
@@ -590,7 +590,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
     const fixture = createFixture({
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
-      repairedRejectedThinkingReplay: false,
+      repairedRejectedProviderReplay: false,
       getBeforeAgentFinalizeRevisionEntryId: () => rejectedId,
     });
     const settlementError = new Error("settlement failed");

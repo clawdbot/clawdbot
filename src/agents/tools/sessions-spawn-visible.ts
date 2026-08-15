@@ -1,10 +1,13 @@
 import { Type } from "typebox";
+import { readMissingScopeErrorDetails } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import {
   DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
 } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
+import { resolveWorkspacePathContainment } from "../../gateway/server-methods/workspace-path-containment.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
@@ -292,26 +295,45 @@ export async function maybeSpawnVisibleSession(params: {
             deny: [...(params.options?.inheritedToolDenylist ?? [])],
           },
         }));
-    const response = await createGatewayCall<{
+    let response: {
       key?: string;
       runStarted?: boolean;
       runId?: string;
       runError?: unknown;
-    }>("sessions.create", {
-      agentId: targetAgentId,
-      ...(params.label ? { label: params.label } : {}),
-      model: resolvedModel,
-      task: params.task,
-      parentSessionKey: requesterKey,
-      // Declared spawn lineage: without it the child persists as a depth-0 root
-      // and could spawn past maxSpawnDepth.
-      spawnDepth: callerDepth + 1,
-      ...(params.raw.context === "fork" ? { fork: true } : {}),
-      ...(spawnedCwd ? { cwd: spawnedCwd } : {}),
-      ...(worktree ? { worktree: true } : {}),
-      ...(worktreeName ? { worktreeName } : {}),
-      ...(worktreeBaseRef ? { worktreeBaseRef } : {}),
-    });
+    };
+    try {
+      response = await createGatewayCall("sessions.create", {
+        agentId: targetAgentId,
+        ...(params.label ? { label: params.label } : {}),
+        model: resolvedModel,
+        task: params.task,
+        parentSessionKey: requesterKey,
+        // Declared spawn lineage: without it the child persists as a depth-0 root
+        // and could spawn past maxSpawnDepth.
+        spawnDepth: callerDepth + 1,
+        ...(params.raw.context === "fork" ? { fork: true } : {}),
+        ...(spawnedCwd ? { cwd: spawnedCwd } : {}),
+        ...(worktree ? { worktree: true } : {}),
+        ...(worktreeName ? { worktreeName } : {}),
+        ...(worktreeBaseRef ? { worktreeBaseRef } : {}),
+      });
+    } catch (error) {
+      const missingScope = readMissingScopeErrorDetails(
+        error && typeof error === "object" && "details" in error ? error.details : undefined,
+      );
+      if (
+        spawnedCwd &&
+        missingScope?.missingScope === ADMIN_SCOPE &&
+        missingScope.requiredScopes.includes(ADMIN_SCOPE) &&
+        !(await resolveWorkspacePathContainment(spawnedCwd, cfg))
+      ) {
+        return {
+          status: "forbidden",
+          error: `Visible session cwd "${spawnedCwd}" is outside configured agent workspaces and requires operator.admin. Omit cwd to use the target agent workspace, or ask the operator to start the session from a registered project. Do not substitute the synchronous \`openclaw agent\` CLI for a persistent visible session.`,
+        };
+      }
+      throw error;
+    }
     const childSessionKey = response.key?.trim();
     const runId = response.runId?.trim();
     const runError = response.runError

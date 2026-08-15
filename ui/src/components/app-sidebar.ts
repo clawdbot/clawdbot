@@ -26,10 +26,8 @@ import {
   renderAppSidebarFooterBar,
   renderAppSidebarHomeRow,
   renderAppSidebarPagesHead,
-  renderAppSidebarPinnedHead,
   renderAppSidebarPluginTabEntry,
   renderAppSidebarZoneEntry,
-  renderAppSidebarZoneGroup,
 } from "./app-sidebar-render.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
@@ -87,6 +85,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private projectedSessionRows: SidebarRecentSession[] | undefined;
   private readonly narrationSubscriptions = this.createNarrationSubscriptions();
   private readonly nativeGatewaysChanged = () => this.requestUpdate();
+  private readonly refreshAppearanceSettings = () => this.context?.theme.refresh();
   private readonly hiddenSessionCatalogsChanged = () => {
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
   };
@@ -109,7 +108,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   );
 
   @state() catalogProjectGrouping = loadStoredSidebarCatalogGrouping();
-  @state() hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
 
   constructor() {
     super();
@@ -418,9 +416,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       ...Object.values(this.sessionData.sessionRowsByAgent).flat(),
     ];
     const { sections: allSections } = this.zonedVisibleSections(visibleSessions);
-    const catalogs = this.sessionData.sessionCatalogs.filter(
-      (catalog) => !this.hiddenSessionCatalogIds.has(catalog.id),
-    );
+    const catalogs = this.visibleSessionCatalogs();
     const visibleCatalogIds = new Set(catalogs.map((catalog) => catalog.id));
     const sections = allSections.filter(
       (section) => !section.id.startsWith("catalog:") || visibleCatalogIds.has(section.id.slice(8)),
@@ -457,10 +453,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override render() {
     const sidebarZone = this.reconciledSidebarZone();
-    // Pinned sessions keep their slot in the canonical entry order but render as
-    // their own group, so navigation entries stay a contiguous Pages list.
-    const pinnedEntries = sidebarZone.entries.filter((entry) => entry.type === "session");
-    const navEntries = sidebarZone.entries.filter((entry) => entry.type !== "session");
     return html`
       <aside
         class="sidebar"
@@ -481,37 +473,27 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
           >
             <nav class="sidebar-nav" @contextmenu=${this.sidebarMenus.openCustomizeMenuFromContext}>
               ${renderAppSidebarPagesHead(this)}
-              ${renderAppSidebarZoneGroup(
-                this,
-                html`
-                  ${renderAppSidebarHomeRow(this)}
-                  ${navEntries.map((entry) =>
-                    renderAppSidebarZoneEntry(
-                      this,
-                      entry,
-                      sidebarZone.sessionRows,
-                      sidebarZone.workboardRows,
-                    ),
-                  )}
-                  ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs).map(
-                    (tab) => renderAppSidebarPluginTabEntry(this, tab),
-                  )}
-                `,
-              )}
-              ${pinnedEntries.length > 0
-                ? html`${renderAppSidebarPinnedHead()}
-                  ${renderAppSidebarZoneGroup(
+              <div
+                class="nav-section__items"
+                @dragover=${(event: DragEvent) =>
+                  this.sessionOrganizer.handleSidebarZoneDragOver(event)}
+                @dragleave=${(event: DragEvent) =>
+                  this.sessionOrganizer.handleSidebarZoneDragLeave(event)}
+                @drop=${(event: DragEvent) => this.sessionOrganizer.handleSidebarZoneDrop(event)}
+              >
+                ${renderAppSidebarHomeRow(this)}
+                ${sidebarZone.entries.map((entry) =>
+                  renderAppSidebarZoneEntry(
                     this,
-                    pinnedEntries.map((entry) =>
-                      renderAppSidebarZoneEntry(
-                        this,
-                        entry,
-                        sidebarZone.sessionRows,
-                        sidebarZone.workboardRows,
-                      ),
-                    ),
-                  )}`
-                : nothing}
+                    entry,
+                    sidebarZone.sessionRows,
+                    sidebarZone.workboardRows,
+                  ),
+                )}
+                ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs).map(
+                  (tab) => renderAppSidebarPluginTabEntry(this, tab),
+                )}
+              </div>
             </nav>
             ${this.renderSessions()}
           </div>
@@ -541,6 +523,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
               .visitsEnabled=${this.lobsterPetVisits}
               .soundsEnabled=${this.lobsterPetSounds}
               .gatewayVersion=${this.gatewayVersion}
+              .onVisitsDisabled=${this.refreshAppearanceSettings}
             ></openclaw-lobster-pet>
             ${this.devGitBranch
               ? html`<openclaw-tooltip .content=${this.devGitBranch}>

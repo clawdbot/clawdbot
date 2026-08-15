@@ -25,6 +25,12 @@ export const SessionsCreateParamsSchema = closedObject({
   fork: Type.Optional(
     Type.Boolean({ description: "Fork the parent transcript; requires parentSessionKey." }),
   ),
+  forkFrom: Type.Optional(
+    Type.Literal("last-completed", {
+      description:
+        "Fork through the parent's last completed assistant message; requires fork=true.",
+    }),
+  ),
   emitCommandHooks: Type.Optional(Type.Boolean()),
   succeedsParent: Type.Optional(
     Type.Boolean({

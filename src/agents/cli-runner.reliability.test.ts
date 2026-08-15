@@ -4538,9 +4538,97 @@ describe("runCliAgent reliability", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("keeps native control operations out of restrictive prompt preparation", async () => {
+    const { dir, sessionFile } = createSessionFile({
+      history: [{ role: "user", content: "earlier ask" }],
+    });
+    const config: OpenClawConfig = { agents: { defaults: { workspace: dir } } };
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "control-cli",
+          pluginId: "test-control",
+          config: {
+            command: "claude",
+            args: ["-p"],
+            resumeArgs: ["-p", "--resume", "{sessionId}"],
+            output: "jsonl",
+            input: "arg",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+      runBeforePromptBuild: vi.fn(async () => ({
+        prependContext: "mutated",
+        toolsAllow: [],
+      })),
+    };
+    setHookRunnerForTest(hookRunner);
+
+    try {
+      const context = await prepareCliRunContext({
+        admittedRunContext: createTestAdmittedRunContext("run-native-compact"),
+        sessionId: "s1",
+        sessionFile,
+        workspaceDir: dir,
+        config,
+        prompt: "/compact",
+        extraSystemPrompt: "must not attach to a control operation",
+        finalizePromptForResolvedTools: () => "mutated",
+        provider: "control-cli",
+        model: "model",
+        timeoutMs: 180_000,
+        runId: "run-native-compact",
+        cliSessionId: "native-session",
+        cliSessionBinding: {
+          sessionId: "native-session",
+          mcpConfigHash: "persisted-mcp-config",
+          mcpResumeHash: "persisted-mcp-resume",
+        },
+        controlOperation: "compact",
+      });
+
+      expect(hookRunner.runBeforePromptBuild).not.toHaveBeenCalled();
+      expect(context.params.prompt).toBe("/compact");
+      expect(context.params.cliToolAvailability).toBeUndefined();
+      expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "native-session" });
+      expect(context.systemPrompt).toBe("");
+      expect(context.contextEngine).toBeUndefined();
+      expect(context.claudeSkillsPluginArgs).toEqual([]);
+      expect(context.bootstrapPromptWarningLines).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("resolveCliNoOutputTimeoutMs", () => {
+  it("gives expected-quiet controls the caller-owned overall timeout budget", () => {
+    expect(
+      resolveCliNoOutputTimeoutMs({
+        backend: { command: "claude" },
+        timeoutMs: 180_000,
+        useResume: true,
+        expectedQuiet: true,
+        trigger: "manual",
+      }),
+    ).toBe(180_000);
+    expect(
+      resolveCliNoOutputTimeoutMs({
+        backend: { command: "claude" },
+        timeoutMs: 600_000,
+        useResume: true,
+        expectedQuiet: true,
+        trigger: "manual",
+      }),
+    ).toBe(600_000);
+  });
+
   it("lets explicit cron timeouts lift the default resume no-output ceiling", () => {
     const timeoutMs = resolveCliNoOutputTimeoutMs({
       backend: { command: "codex" },

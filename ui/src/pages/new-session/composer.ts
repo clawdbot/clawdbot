@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { icons } from "../../components/icons.ts";
+import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
@@ -22,6 +23,7 @@ import type { NewSessionVisibility } from "./create-params.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
 
 type NewSessionComposerOptions = {
+  attachmentLimits?: { maxBytes: number; maxImageBytes: number };
   attachments: ChatAttachment[];
   canSubmit: boolean;
   getAttachments: () => ChatAttachment[];
@@ -45,6 +47,7 @@ type NewSessionComposerOptions = {
   onAttachmentsChange: (attachments: ChatAttachment[]) => void;
   onPendingReadsChange: (delta: 1 | -1) => void;
   onInput: (message: string) => void;
+  onOpenImage?: (item: ImageLightboxItem) => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
 };
@@ -197,6 +200,7 @@ function handleComposerKeydown(event: KeyboardEvent, options: NewSessionComposer
 /** Draft message box styled as the chat composer shell so both pickers match. */
 function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const attachmentProps = {
+    attachmentLimits: options.attachmentLimits,
     attachments: options.attachments,
     disabled: options.submitting || options.messageLocked,
     getAttachments: options.getAttachments,
@@ -205,6 +209,7 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
     onAttachmentsChange: options.onAttachmentsChange,
     onDraftChange: options.onInput,
     onPendingReadsChange: options.onPendingReadsChange,
+    onOpenImage: options.onOpenImage,
     readSignal: options.readSignal,
   };
   const attachmentDropHandlers = createChatAttachmentDropHandlers({
@@ -302,11 +307,13 @@ export function renderNewSessionDraftComposer(options: {
   messageLocked?: boolean;
   incognitoDisabledReason?: string;
   onInput: (message: string) => void;
+  onOpenImage?: (item: ImageLightboxItem) => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
 }) {
   const readSignal = options.attachmentDraft.readSignal;
   return renderNewSessionComposer({
+    attachmentLimits: options.context?.gateway.snapshot.hello?.policy?.attachments,
     attachments: options.attachmentDraft.attachments,
     canSubmit: options.canSubmit,
     getAttachments: () => options.attachmentDraft.attachments,
@@ -337,6 +344,7 @@ export function renderNewSessionDraftComposer(options: {
     },
     onPendingReadsChange: (delta) => options.attachmentDraft.updatePending(readSignal, delta),
     onInput: options.onInput,
+    onOpenImage: options.onOpenImage,
     onVisibilityChange: options.onVisibilityChange,
     onSubmit: options.onSubmit,
   });

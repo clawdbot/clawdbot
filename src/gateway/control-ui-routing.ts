@@ -3,6 +3,7 @@ import { acceptsControlUiHtmlResponse, isReadHttpMethod } from "./control-ui-htt
 import {
   classifyGatewayProbePath,
   classifyMcpAppStandalonePath,
+  classifyNodeWorkspaceTransferPath,
   classifyWorkerGatewayPath,
 } from "./gateway-http-route-contracts.js";
 
@@ -74,6 +75,11 @@ export function classifyControlUiRequest(params: {
     // Worker admission is upgrade-only; never let the root SPA turn a plain GET
     // or a malformed descendant into an apparently successful HTML response.
     if (classifyWorkerGatewayPath(pathname) !== "outside") {
+      return { kind: "not-control-ui" };
+    }
+    // Node workspace transfers are authenticated core routes. Reserve malformed
+    // descendants too, so the SPA never turns a transfer failure into HTML.
+    if (classifyNodeWorkspaceTransferPath(pathname) !== "outside") {
       return { kind: "not-control-ui" };
     }
     // Keep plugin-owned HTTP routes outside the root-mounted Control UI SPA

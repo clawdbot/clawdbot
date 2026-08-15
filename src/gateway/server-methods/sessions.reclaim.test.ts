@@ -88,6 +88,47 @@ describe("sessions.reclaim", () => {
     );
   });
 
+  it("delegates a failed placement to the reclaim owner", async () => {
+    const failed = {
+      ...makeReclaimedPlacement(),
+      state: "failed",
+      environmentId: null,
+      activeOwnerEpoch: null,
+      workspaceBaseManifestRef: null,
+      remoteWorkspaceDir: null,
+      workerBundleHash: null,
+      recoveryError: "device worker is offline",
+      terminalReason: "device worker is offline",
+    } as WorkerSessionPlacementRecord;
+    const local = {
+      ...failed,
+      state: "local",
+      generation: failed.generation + 1,
+      recoveryError: null,
+      terminalReason: null,
+      terminalAtMs: null,
+    } as WorkerSessionPlacementRecord;
+    const reclaim = vi.fn().mockResolvedValue(local);
+    const respond = await invokeSessionReclaim(
+      makeDispatchTestContext({
+        workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
+        workerSessionPlacementService: {
+          getMany: () => new Map([[dispatchTestSessionId, failed]]),
+        },
+      }),
+    );
+
+    expect(reclaim).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        ok: true,
+        placement: expect.objectContaining({ state: "local" }),
+      }),
+      undefined,
+    );
+  });
+
   it("rejects a missing placement", async () => {
     const reclaim = vi.fn();
     const respond = await invokeSessionReclaim(

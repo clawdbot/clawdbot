@@ -290,11 +290,13 @@ jobs:
             echo "Failed to resolve selected ref SHA." >&2
             exit 1
           fi
-          if [[ -n "${EXPECTED_SHA// }" ]] && [[ "${selected_sha,,}" != "${EXPECTED_SHA,,}" ]]; then
+          normalized_selected_sha="$(printf '%s' "$selected_sha" | tr '[:upper:]' '[:lower:]')"
+          normalized_expected_sha="$(printf '%s' "$EXPECTED_SHA" | tr '[:upper:]' '[:lower:]')"
+          if [[ -n "${normalized_expected_sha// }" ]] && [[ "$normalized_selected_sha" != "$normalized_expected_sha" ]]; then
             echo "Ref resolved to ${selected_sha}, expected ${EXPECTED_SHA}." >&2
             exit 1
           fi
-          echo "sha=${selected_sha,,}" >> "$GITHUB_OUTPUT"
+          echo "sha=${normalized_selected_sha}" >> "$GITHUB_OUTPUT"
 
       - name: Validate Tideclaw alpha target matches workflow branch
         if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
