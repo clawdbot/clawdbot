@@ -30,7 +30,7 @@ function resolveSelectedMemoryProvider(
     config.agents?.entries?.[agentId] ?? config.agents?.list?.find((entry) => entry.id === agentId);
   const defaults = config.memory?.search;
   const overrides = agent?.memory?.search;
-  if ((overrides?.enabled ?? defaults?.enabled ?? true) === false) {
+  if (!(overrides?.enabled ?? defaults?.enabled ?? true)) {
     return null;
   }
   const configured = overrides?.provider ?? defaults?.provider;
