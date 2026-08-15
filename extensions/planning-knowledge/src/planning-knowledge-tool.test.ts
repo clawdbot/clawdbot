@@ -10,10 +10,12 @@ import {
   planningKnowledgeCaptureParameters,
   planningKnowledgeConfigSchema,
   resolvePlanningKnowledgeConfig,
-  type PlanningKnowledgeCommandRunner,
 } from "./planning-knowledge-tool.js";
 
 const execFileAsync = promisify(execFile);
+type PlanningKnowledgeCommandRunner = NonNullable<
+  Parameters<typeof createPlanningKnowledgeSearchTool>[1]
+>;
 
 const config = {
   scriptPath: "/opt/OneLibrary/Browser-Tracker/scripts/planning_knowledge_index.py",

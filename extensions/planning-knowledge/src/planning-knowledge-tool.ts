@@ -46,7 +46,7 @@ export const planningKnowledgeConfigSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export type PlanningKnowledgeConfig = Static<typeof planningKnowledgeConfigSchema>;
+type PlanningKnowledgeConfig = Static<typeof planningKnowledgeConfigSchema>;
 
 export const planningKnowledgeSearchParameters = Type.Object(
   {
@@ -59,7 +59,7 @@ export const planningKnowledgeSearchParameters = Type.Object(
   { additionalProperties: false },
 );
 
-export type PlanningKnowledgeSearchParams = Static<typeof planningKnowledgeSearchParameters>;
+type PlanningKnowledgeSearchParams = Static<typeof planningKnowledgeSearchParameters>;
 
 export const planningKnowledgeCaptureParameters = Type.Object(
   {
@@ -119,7 +119,7 @@ export const planningKnowledgeCaptureParameters = Type.Object(
   { additionalProperties: false },
 );
 
-export type PlanningKnowledgeCaptureParams = Static<typeof planningKnowledgeCaptureParameters>;
+type PlanningKnowledgeCaptureParams = Static<typeof planningKnowledgeCaptureParameters>;
 
 type ResolvedPlanningKnowledgeConfig = {
   scriptPath: string;
@@ -136,7 +136,7 @@ type CommandResult = {
   exitCode: number | null;
 };
 
-export type PlanningKnowledgeCommandRunner = (request: {
+type PlanningKnowledgeCommandRunner = (request: {
   executable: string;
   args: string[];
   stdin?: string;
