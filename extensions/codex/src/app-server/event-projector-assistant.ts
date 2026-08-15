@@ -1,6 +1,6 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
+import { isSilentReplyPayloadText } from "openclaw/plugin-sdk/reply-chunking";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createAssistantCommentaryMessage as buildAssistantCommentaryMessage,
@@ -314,7 +314,7 @@ export class CodexAssistantProjection {
 
   collectAssistantTexts(): string[] {
     const afterHandoff = this.collectPersistableAssistantTexts(this.persistableAssistantBarrier);
-    const audibleAfterHandoff = afterHandoff.filter((text) => !isSilentReplyText(text));
+    const audibleAfterHandoff = afterHandoff.filter((text) => !isSilentReplyPayloadText(text));
     if (audibleAfterHandoff.length > 0) {
       return audibleAfterHandoff;
     }
@@ -324,7 +324,7 @@ export class CodexAssistantProjection {
       return afterHandoff.slice(-1);
     }
     const recoveredAudible = this.collectPersistableAssistantTexts(0).filter(
-      (text) => !isSilentReplyText(text),
+      (text) => !isSilentReplyPayloadText(text),
     );
     if (recoveredAudible.length > 0) {
       return recoveredAudible.slice(-1);

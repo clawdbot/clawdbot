@@ -354,6 +354,53 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("NO_REPLY");
   });
 
+  it("drops a trailing JSON silent payload when an earlier audible final remains", async () => {
+    const projector = await createProjector(await createParams());
+    const jsonSilent = '{"action":"NO_REPLY"}';
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta("Keep this answer", "answer-1"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-1",
+          phase: "final_answer",
+          text: "Keep this answer",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "answer-2", phase: "final_answer", text: "" },
+      }),
+    );
+    await projector.handleNotification(agentMessageDelta(jsonSilent, "answer-2"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "answer-2",
+          phase: "final_answer",
+          text: jsonSilent,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        { type: "agentMessage", id: "answer-2", phase: "final_answer", text: jsonSilent },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual(["Keep this answer"]);
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain(jsonSilent);
+  });
+
   it("keeps a final answer that arrives while an earlier native tool is still active", async () => {
     const projector = await createProjector(await createParams());
 
