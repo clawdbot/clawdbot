@@ -433,7 +433,9 @@ class Tooltip extends OpenClawLitElement {
       this.descriptionCaptured = true;
     }
     if (!this.descriptionElement) {
-      const description = document.createElement("span");
+      // ownerDocument, not the global: slotchange can fire after a test
+      // environment tears down its window, where bare `document` throws.
+      const description = this.ownerDocument.createElement("span");
       description.id = this.descriptionId;
       description.hidden = true;
       this.append(description);
