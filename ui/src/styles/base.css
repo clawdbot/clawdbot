@@ -226,20 +226,23 @@
      surfaces. Board layout math mirrors this value numerically. */
   --widget-frame-inset: var(--space-3);
 
-  /* Radii - Slightly larger for modern feel */
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 20px;
+  /* Radii - Slightly larger for modern feel. Every step runs through one scale
+     so the corner refinement below can widen the whole app from a single knob;
+     --radius-full is shape, not scale, and stays fully round. */
+  --openclaw-corner-radius-scale: 1;
+  --radius-sm: calc(6px * var(--openclaw-corner-radius-scale));
+  --radius-md: calc(10px * var(--openclaw-corner-radius-scale));
+  --radius-lg: calc(14px * var(--openclaw-corner-radius-scale));
+  --radius-xl: calc(20px * var(--openclaw-corner-radius-scale));
   --radius-full: 9999px;
-  --radius: 10px;
+  --radius: var(--radius-md);
 
-  /* Menu items stay optically parallel to their panel edge: radius 6 + padding 4
-     = panel radius 10. Shared knobs keep transient menus from drifting again. */
-  --menu-radius: var(--radius-md);
-  --menu-item-radius: var(--radius-sm);
-  --menu-item-height: 28px;
+  /* Menu items stay optically parallel to their panel edge: item radius +
+     padding = panel radius. Deriving the item keeps that true at any scale. */
   --menu-padding: 4px;
+  --menu-radius: var(--radius-md);
+  --menu-item-radius: calc(var(--menu-radius) - var(--menu-padding));
+  --menu-item-height: 28px;
 
   /* Transitions - Crisp and responsive */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -268,6 +271,59 @@
 @media (pointer: coarse) {
   :root {
     --menu-item-height: 44px;
+  }
+}
+
+/* Continuous corner curvature. Where the engine can draw a superellipse the
+   corner keeps curving into the edge instead of stopping on a tangent, which
+   reads as a shorter arc than a circular corner of the same radius — the 1.25
+   scale gives that back. Border, shadow, outline and overflow clipping all
+   follow the drawn shape, so this stays a paint-level refinement.
+   The whole thing is gated: engines without corner-shape keep today's radii
+   and today's arcs, unchanged.
+   The shape is opt-in per surface rather than universal because a superellipse
+   flattens the ends of anything fully rounded, and pills, circles, avatars and
+   status dots are a third of this app's corners. Add new shared surfaces to
+   the list below; leaving one out only keeps its current corner. */
+@supports (corner-shape: superellipse(1.5)) {
+  :root {
+    --openclaw-corner-radius-scale: 1.25;
+  }
+
+  /* Dialogs and overlays */
+  .exec-approval-card,
+  .exec-approval-list,
+  .cmd-palette,
+  .login-gate__card,
+  .md-preview-dialog__panel,
+  .md-preview-dialog__reader,
+  /* Menus, popovers and select panels */
+  wa-dropdown::part(menu),
+  wa-popover::part(body),
+  wa-select::part(listbox),
+  wa-select::part(combobox),
+  .slash-menu,
+  .chat-reply-context-menu,
+  .chat-selection-popup,
+  /* Panels, cards and message surfaces */
+  .card,
+  .settings-group,
+  .option-card,
+  .agent-tool-card,
+  .chat-thread,
+  .chat-bubble,
+  /* Composer */
+  .agent-chat__input,
+  /* Navigation and list rows */
+  .nav-item,
+  .list-item,
+  .sidebar-recent-session,
+  .settings-sidebar__item,
+  /* Buttons and text controls */
+  .btn,
+  .settings-input,
+  .field :is(input, textarea, select) {
+    corner-shape: superellipse(1.5);
   }
 }
 
