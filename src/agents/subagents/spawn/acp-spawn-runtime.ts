@@ -25,10 +25,7 @@ import {
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
 import { resolveAgentConfig } from "../../agent-scope.js";
-import {
-  resolveConfiguredSubagentSpawnModelSelection,
-  resolveThinkingDefault,
-} from "../../model-selection.js";
+import { resolveConfiguredSubagentSpawnModelSelection } from "../../model-selection.js";
 import type { PreparedSpawnThreadBinding } from "../../spawn-plan.js";
 import { persistAcpSpawnSessionFileBestEffort } from "./acp-spawn-requester.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
@@ -117,17 +114,7 @@ export function resolveAcpSpawnRuntimeOptions(params: {
     };
   }
 
-  let thinking = thinkingPlan.thinkingOverride;
-  if (!thinking && model) {
-    const { provider, model: modelId } = splitModelRef(model);
-    if (provider && modelId) {
-      thinking = resolveThinkingDefault({
-        cfg: params.cfg,
-        provider,
-        model: modelId,
-      });
-    }
-  }
+  const thinking = params.thinking ? thinkingPlan.thinkingOverride : undefined;
 
   const timeoutSeconds = resolveAcpRuntimeTimeoutSeconds(params.runTimeoutSeconds);
   const runtimeOptions =

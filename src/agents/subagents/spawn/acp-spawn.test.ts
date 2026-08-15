@@ -1041,7 +1041,7 @@ describe("spawnAcpDirect", () => {
     expect(initInput.sessionKey).toMatch(/^agent:codex:acp:/);
   });
 
-  it("applies existing subagent model and model-profile thinking defaults to ACP runtime options", async () => {
+  it("does not apply model-profile thinking defaults to ACP runtime options", async () => {
     replaceSpawnConfig({
       ...createDefaultSpawnConfig(),
       agents: {
@@ -1075,12 +1075,11 @@ describe("spawnAcpDirect", () => {
       agent: "codex",
       runtimeOptions: {
         model: "openai/gpt-5.4",
-        thinking: "high",
       },
     });
   });
 
-  it("uses configured runtime=acp agent defaults before launching the external ACP agent", async () => {
+  it("does not apply configured runtime=acp agent thinking defaults", async () => {
     replaceSpawnConfig({
       ...createDefaultSpawnConfig(),
       agents: {
@@ -1121,7 +1120,6 @@ describe("spawnAcpDirect", () => {
       agent: "codex",
       runtimeOptions: {
         model: "openai/gpt-5.5",
-        thinking: "low",
       },
     });
   });
@@ -1165,7 +1163,6 @@ describe("spawnAcpDirect", () => {
       agent: "codex",
       runtimeOptions: {
         model: "anthropic/claude-sonnet-4-6",
-        thinking: "off",
       },
     });
   });
