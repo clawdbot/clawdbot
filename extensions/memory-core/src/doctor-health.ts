@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { HealthCheck } from "openclaw/plugin-sdk/health";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
@@ -18,6 +19,7 @@ type InspectManagedLocalEmbeddingSetup = (params: {
 type MemoryCoreDoctorRegistrationHost = {
   registerHealthCheck: (check: HealthCheck) => void;
   inspectManagedLocalEmbeddingSetup: InspectManagedLocalEmbeddingSetup;
+  memoryCoreActive: boolean;
 };
 
 const registeredHosts = new WeakSet<MemoryCoreDoctorRegistrationHost["registerHealthCheck"]>();
@@ -40,6 +42,7 @@ function resolveSelectedMemoryProvider(
 
 function createManagedLocalEmbeddingSetupCheck(
   inspectManagedLocalEmbeddingSetup: InspectManagedLocalEmbeddingSetup,
+  memoryCoreActive: boolean,
 ): HealthCheck {
   return {
     id: MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
@@ -47,27 +50,51 @@ function createManagedLocalEmbeddingSetupCheck(
     source: "memory-core",
     description: "Checks existing semantic indexes for required managed local embedding setup.",
     async detect(ctx) {
+      if (!memoryCoreActive) {
+        return [];
+      }
       const env = ctx.env ?? process.env;
-      const findings = await collectVectorProviderFindings(
-        {
-          config: ctx.cfg,
-          env,
-          stateDir: resolveStateDir(env),
-        },
-        async (params) => {
-          const provider = resolveSelectedMemoryProvider(params.config, params.agentId);
-          if (!provider || provider === "none") {
-            return null;
-          }
-          return await inspectManagedLocalEmbeddingSetup({
-            config: params.config,
-            env: params.env,
-            agentId: params.agentId,
-            provider,
-          });
-        },
-        { inspectConfiguredMemorySecretRefs: true },
-      );
+      let findings: Awaited<ReturnType<typeof collectVectorProviderFindings>>;
+      try {
+        findings = await collectVectorProviderFindings(
+          {
+            config: ctx.cfg,
+            env,
+            stateDir: resolveStateDir(env),
+          },
+          async (params) => {
+            const provider = resolveSelectedMemoryProvider(params.config, params.agentId);
+            if (!provider || provider === "none") {
+              return null;
+            }
+            return await inspectManagedLocalEmbeddingSetup({
+              config: params.config,
+              env: params.env,
+              agentId: params.agentId,
+              provider,
+            });
+          },
+          {
+            indexInspectionMode: "readiness",
+            inspectConfiguredMemorySecretRefs: true,
+          },
+        );
+      } catch (error) {
+        return [
+          {
+            checkId: MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
+            severity: "error",
+            source: "memory-core",
+            target: "memory-core",
+            requirement: "memory-index-inspection",
+            message:
+              "Memory Core semantic-index readiness could not be verified " +
+              `(${formatErrorMessage(error)}).`,
+            fixHint:
+              "Keep the current Gateway running, resolve the database inspection error, then rerun this check.",
+          },
+        ];
+      }
       return findings.map((finding) => ({
         checkId: MEMORY_MANAGED_LOCAL_EMBEDDING_SETUP_CHECK_ID,
         severity: "error" as const,
@@ -89,7 +116,10 @@ export function registerMemoryCoreDoctorChecks(host: MemoryCoreDoctorRegistratio
     return;
   }
   host.registerHealthCheck(
-    createManagedLocalEmbeddingSetupCheck(host.inspectManagedLocalEmbeddingSetup),
+    createManagedLocalEmbeddingSetupCheck(
+      host.inspectManagedLocalEmbeddingSetup,
+      host.memoryCoreActive,
+    ),
   );
   registeredHosts.add(host.registerHealthCheck);
 }

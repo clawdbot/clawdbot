@@ -16,6 +16,7 @@ type BundledHealthApi = {
     inspectManagedLocalEmbeddingSetup: NonNullable<
       LlamaCppDoctorContractApi["inspectLlamaCppManagedSetup"]
     >;
+    memoryCoreActive: boolean;
   }) => void;
   registerPolicyDoctorChecks?: (host: { registerHealthCheck: typeof registerHealthCheck }) => void;
 };
@@ -55,6 +56,7 @@ export function registerBundledHealthChecks(params: { cfg: OpenClawConfig; cwd?:
     }).registerMemoryCoreDoctorChecks?.({
       registerHealthCheck,
       inspectManagedLocalEmbeddingSetup: llamaCppDoctor.inspectLlamaCppManagedSetup,
+      memoryCoreActive: isMemoryCoreActive(params.cfg),
     });
   }
   if (shouldRegisterPolicyHealth(params)) {
@@ -69,6 +71,16 @@ export function registerBundledHealthChecks(params: { cfg: OpenClawConfig; cwd?:
       artifactBasename: "api.js",
     }).registerCuaDriverDoctorChecks?.({ registerHealthCheck });
   }
+}
+
+function isMemoryCoreActive(cfg: OpenClawConfig): boolean {
+  const plugins = normalizePluginsConfig(cfg.plugins);
+  return (
+    plugins.enabled &&
+    plugins.slots.memory === "memory-core" &&
+    !plugins.deny.includes("memory-core") &&
+    plugins.entries["memory-core"]?.enabled !== false
+  );
 }
 
 function shouldRegisterPluginHealth(cfg: OpenClawConfig, pluginId: string): boolean {

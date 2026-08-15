@@ -34,29 +34,57 @@ function listConfiguredAgentIds(config: OpenClawConfig): string[] {
   return ids.size > 0 ? [...ids] : ["main"];
 }
 
-async function readExistingVectorModel(databasePath: string): Promise<string | null> {
+async function readExistingVectorModel(
+  databasePath: string,
+  inspectionMode: "best-effort" | "readiness",
+): Promise<string | null> {
   if (!fs.existsSync(databasePath)) {
     return null;
   }
-  const { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } =
+  const { openNodeSqliteDatabase, prepareSqliteReadOnlyLocationSync } =
     await import("openclaw/plugin-sdk/sqlite-runtime");
+  let prepared: ReturnType<typeof prepareSqliteReadOnlyLocationSync> | undefined;
   let db: ReturnType<typeof openNodeSqliteDatabase> | undefined;
+  let failure: unknown;
+  let model: string | null = null;
   try {
-    db = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(databasePath), { readOnly: true });
-    const row = db
-      .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
-      .get(MEMORY_INDEX_META_KEY) as { value?: unknown } | undefined;
-    const parsed = typeof row?.value === "string" ? JSON.parse(row.value) : null;
-    const model =
-      parsed && typeof parsed === "object" && typeof parsed.model === "string"
-        ? parsed.model.trim()
-        : "";
-    return model && model !== "fts-only" ? model : null;
-  } catch {
-    return null;
+    prepared =
+      inspectionMode === "readiness" ? prepareSqliteReadOnlyLocationSync(databasePath) : undefined;
+    db = openNodeSqliteDatabase(prepared?.location ?? databasePath, { readOnly: true });
+    const table = db
+      .prepare(
+        "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'memory_index_meta'",
+      )
+      .get();
+    if (table) {
+      const row = db
+        .prepare("SELECT value FROM memory_index_meta WHERE key = ?")
+        .get(MEMORY_INDEX_META_KEY) as { value?: unknown } | undefined;
+      const parsed = typeof row?.value === "string" ? JSON.parse(row.value) : null;
+      const configuredModel =
+        parsed && typeof parsed === "object" && typeof parsed.model === "string"
+          ? parsed.model.trim()
+          : "";
+      model = configuredModel && configuredModel !== "fts-only" ? configuredModel : null;
+    }
+  } catch (error) {
+    failure = error;
   } finally {
-    db?.close();
+    try {
+      db?.close();
+    } catch (error) {
+      failure ??= error;
+    }
+    if (prepared && !prepared.cleanup()) {
+      failure ??= new Error("Temporary SQLite inspection snapshot cleanup did not complete.");
+    }
   }
+  if (failure && inspectionMode === "readiness") {
+    throw failure instanceof Error
+      ? failure
+      : new Error("Memory index inspection failed.", { cause: failure });
+  }
+  return failure ? null : model;
 }
 
 function resolveConfigPrefix(config: OpenClawConfig, agentId: string): string {
@@ -83,7 +111,10 @@ export async function collectVectorProviderFindings(
     stateDir: string;
   },
   inspectProvider: InspectConfiguredProvider,
-  options?: { inspectConfiguredMemorySecretRefs?: boolean },
+  options?: {
+    indexInspectionMode?: "best-effort" | "readiness";
+    inspectConfiguredMemorySecretRefs?: boolean;
+  },
 ): Promise<VectorProviderFinding[]> {
   const findings: VectorProviderFinding[] = [];
   for (const agentId of listConfiguredAgentIds(params.config)) {
@@ -96,7 +127,10 @@ export async function collectVectorProviderFindings(
       "agent",
       "openclaw-agent.sqlite",
     );
-    const model = await readExistingVectorModel(agentDatabasePath);
+    const model = await readExistingVectorModel(
+      agentDatabasePath,
+      options?.indexInspectionMode ?? "best-effort",
+    );
     if (!model) {
       continue;
     }

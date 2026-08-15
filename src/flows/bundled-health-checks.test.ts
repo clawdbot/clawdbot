@@ -52,9 +52,26 @@ describe("registerBundledHealthChecks", () => {
     expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledWith({
       registerHealthCheck: expect.any(Function),
       inspectManagedLocalEmbeddingSetup: mocks.inspectLlamaCppManagedSetup,
+      memoryCoreActive: true,
     });
     expect(mocks.registerPolicyDoctorChecks).not.toHaveBeenCalled();
     expect(mocks.registerCuaDriverDoctorChecks).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { slots: { memory: "memory-lancedb" } },
+    { slots: { memory: "none" } },
+    { enabled: false },
+    { deny: ["memory-core"] },
+    { entries: { "memory-core": { enabled: false } } },
+  ])("keeps the check addressable but inactive when memory-core does not own memory", (plugins) => {
+    registerBundledHealthChecks({ cfg: { plugins }, cwd: workspaceDir });
+
+    expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledWith({
+      registerHealthCheck: expect.any(Function),
+      inspectManagedLocalEmbeddingSetup: mocks.inspectLlamaCppManagedSetup,
+      memoryCoreActive: false,
+    });
   });
 
   it("loads bundled policy health checks when policy extension is enabled", () => {
