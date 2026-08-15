@@ -117,7 +117,12 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     sendFrame,
   } = context;
 
-  if (isStartupPending?.()) {
+  const startupScope =
+    (connectParams.role ?? "operator") === "operator" &&
+    connectParams.client.mode !== GATEWAY_CLIENT_MODES.PROBE
+      ? "core"
+      : "full";
+  if (isStartupPending?.(startupScope)) {
     markHandshakeFailure(GATEWAY_STARTUP_PENDING_CLOSE_CAUSE);
     await sendFrame({
       type: "res",

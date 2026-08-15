@@ -23,7 +23,7 @@ import {
 } from "./ws-connection.test-helpers.js";
 
 describe("attachGatewayWsConnectionHandler startup readiness", () => {
-  it("admits only one of two connect frames that race during lazy handler loading", async () => {
+  it("admits only one of two operator connect frames while sidecars are pending", async () => {
     const sent: unknown[] = [];
     const clients = new Set<unknown>();
     const socket = createGatewayWsTestSocket({
@@ -38,6 +38,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       socket,
       options: {
         getResolvedAuth: () => ({ mode: "token", allowTailscale: false, token: "test-token" }),
+        isStartupPending: (scope) => scope !== "core",
         buildRequestContext: () => createGatewayWsTestRequestContext() as never,
       },
     });
@@ -50,10 +51,10 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
           minProtocol: PROTOCOL_VERSION,
           maxProtocol: PROTOCOL_VERSION,
           client: {
-            id: "gateway-client",
+            id: GATEWAY_CLIENT_NAMES.CLI,
             version: "dev",
             platform: "test",
-            mode: GATEWAY_CLIENT_MODES.BACKEND,
+            mode: GATEWAY_CLIENT_MODES.CLI,
           },
           role: "operator",
           scopes: [],
@@ -132,10 +133,10 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
             minProtocol: PROTOCOL_VERSION,
             maxProtocol: PROTOCOL_VERSION,
             client: {
-              id: GATEWAY_CLIENT_NAMES.CLI,
+              id: GATEWAY_CLIENT_NAMES.PROBE,
               version: "dev",
               platform: "test",
-              mode: GATEWAY_CLIENT_MODES.CLI,
+              mode: GATEWAY_CLIENT_MODES.PROBE,
             },
             role: "operator",
             scopes: ["operator.read"],

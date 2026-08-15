@@ -95,7 +95,7 @@ type GatewayWsSharedHandlerParams = {
   browserRateLimiter?: AuthRateLimiter;
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
   preauthHandshakeTimeoutMs?: number;
-  isStartupPending?: () => boolean;
+  isStartupPending?: (scope?: "core" | "full") => boolean;
   isControlUiDeviceAuthMigrationPending?: () => boolean;
   gatewayMethods: string[];
   events: string[];
