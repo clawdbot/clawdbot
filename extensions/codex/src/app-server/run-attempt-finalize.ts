@@ -494,6 +494,7 @@ export async function finalizeCodexAttempt(
     ...(terminalAnchor ? { contextEngineTerminalAnchor: terminalAnchor } : {}),
     ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     ...(resourceState.runtimeArtifact ? { runtimeArtifact: resourceState.runtimeArtifact } : {}),
+    ...(resourceState.runtimeContinuationStarted ? { runtimeContinuationStarted: true } : {}),
     ...(!finalAborted && !effectiveTimedOut && !finalPromptError && preparedAuthBinding
       ? { authBindingFingerprint: preparedAuthBinding.fingerprint }
       : {}),
