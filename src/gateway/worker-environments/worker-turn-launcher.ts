@@ -47,10 +47,7 @@ import {
   windowInitialMessages,
 } from "./worker-turn-payload.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
-import {
-  createWorkerWorkspaceOperationCoordinator,
-  type WorkerWorkspaceOperationCoordinator,
-} from "./workspace-operation-coordinator.js";
+import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import {
   executeRemoteExecTurn,
   reconcileWorkspaceAfterTurn,
@@ -61,13 +58,12 @@ import {
 type ReclaimedWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "reclaimed" }>;
 
 type WorkerTurnLauncherOptions = {
-  admitNewPlacements?: boolean;
   environments: WorkerTurnEnvironmentService;
   placements: WorkerSessionPlacementStore;
   resolveWorkspacePath: (identity: ReturnType<typeof resolvePlacementIdentity>) => Promise<string>;
-  recoverPendingWorkspaceResult?: (environmentId: string) => Promise<void>;
-  workspaceOperations?: WorkerWorkspaceOperationCoordinator;
-  redispatchReclaimed?: (placement: ReclaimedWorkerPlacement) => Promise<ActiveWorkerPlacement>;
+  recoverPendingWorkspaceResult: (environmentId: string) => Promise<void>;
+  workspaceOperations: WorkerWorkspaceOperationCoordinator;
+  redispatchReclaimed: (placement: ReclaimedWorkerPlacement) => Promise<ActiveWorkerPlacement>;
 };
 
 async function executeLocalTurn<T>(params: {
@@ -382,8 +378,6 @@ async function executeWorkerTurn(params: {
 }
 
 export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLauncherOptions) {
-  const workspaceOperations =
-    options.workspaceOperations ?? createWorkerWorkspaceOperationCoordinator();
   const provider: SessionPlacementAdmissionProvider & {
     resolveSandbox(params: {
       agentId: string;
@@ -433,18 +427,11 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       return sandbox;
     },
     async executeLocalTurn<T>(claim: LocalTurnPlacementClaim, runLocal: () => Promise<T>) {
-      if (!options.placements.get(claim.sessionId) && options.admitNewPlacements === false) {
-        return await runLocal();
-      }
       return await executeLocalTurn({ claim, placements: options.placements, runLocal });
     },
     async executeTurn(claim, turn, runLocal, onAdmitted) {
       const current = options.placements.get(claim.sessionId);
-      if (
-        !current &&
-        (options.admitNewPlacements === false ||
-          (turn.modelRun === true && !claim.sessionKey?.trim()))
-      ) {
+      if (!current && turn.modelRun === true && !claim.sessionKey?.trim()) {
         return await runLocal();
       }
       if (!current || current.state === "local") {
@@ -452,9 +439,6 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       }
       let routablePlacement = current;
       if (routablePlacement.state === "reclaimed") {
-        if (!options.redispatchReclaimed) {
-          throw new Error("Reclaimed worker placement requires redispatch");
-        }
         emitAgentRunStatusEvent({
           runId: claim.runId,
           phase: "provisioning_environment",
@@ -516,7 +500,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           placement,
           placements: options.placements,
           localWorkspaceDir,
-          workspaceOperations,
+          workspaceOperations: options.workspaceOperations,
           turn,
           turnClaim,
         };
@@ -537,7 +521,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           // A recovery sweep owns the still-live worker claim. Teardown here
           // could discard the terminal event's durably fenced file results.
           options.placements.handoffWorkspaceResultRecovery(turnClaim);
-          await options.recoverPendingWorkspaceResult?.(placement.environmentId);
+          await options.recoverPendingWorkspaceResult(placement.environmentId);
           throw error;
         }
         if (error instanceof WorkerRunnerUnavailableError && !handedOff) {

@@ -123,57 +123,6 @@ describe("worker turn launcher local placement", () => {
     expect(placements.list()).toEqual([]);
   });
 
-  it("keeps recovery-only admission invisible for sessions without durable placement", async () => {
-    const provider = createWorkerSessionTurnPlacementProvider({
-      admitNewPlacements: false,
-      environments: unusedEnvironments(),
-      placements,
-    });
-
-    await provider.executeTurn(
-      { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-local" },
-      turn("run-local"),
-      async () => ({ meta: { durationMs: 1 } }),
-    );
-    await provider.executeLocalTurn(
-      { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-cli" },
-      async () => ({ kind: "cli" }),
-    );
-
-    expect(placements.list()).toEqual([]);
-  });
-
-  it("still admits an existing local placement in recovery-only mode", async () => {
-    const seedClaim = placements.claimTurn({
-      sessionId: SESSION_ID,
-      sessionKey: SESSION_KEY,
-      agentId: "main",
-      claimId: "seed-local-placement",
-      runId: "seed-local-placement",
-      owner: { kind: "local" },
-    });
-    placements.releaseTurn(seedClaim);
-    const provider = createWorkerSessionTurnPlacementProvider({
-      admitNewPlacements: false,
-      environments: unusedEnvironments(),
-      placements,
-    });
-
-    await provider.executeTurn(
-      { sessionId: SESSION_ID, runId: "run-existing-local" },
-      turn("run-existing-local"),
-      async () => {
-        expect(placements.get(SESSION_ID)?.turnClaim).toMatchObject({
-          owner: "local",
-          runId: "run-existing-local",
-        });
-        return { meta: { durationMs: 1 } };
-      },
-    );
-
-    expect(placements.get(SESSION_ID)).toMatchObject({ state: "local", turnClaim: null });
-  });
-
   it("holds a local placement claim around CLI execution", async () => {
     const environments = unusedEnvironments();
     const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
