@@ -693,8 +693,10 @@ openclaw-chat-pane {
    shed through 800px of container content; restoration then has 8px+ slack.
    The close action survives at the 320px pane floor. */
 @container (max-width: 800px) {
-  .chat-pane__split-down,
-  .chat-pane__split-right,
+  /* Scoped to the actions row so this hide outranks the 0,2,0 icon-button
+     styling rule above; a bare class here silently loses that cascade. */
+  .chat-pane__actions .chat-pane__split-down,
+  .chat-pane__actions .chat-pane__split-right,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-side-panel-toggle,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__dock-caret,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__sharing-menu,
