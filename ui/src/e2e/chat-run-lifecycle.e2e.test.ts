@@ -11,10 +11,6 @@ const suite = createControlUiE2eSuite({
   name: "Control UI chat run lifecycle",
 });
 
-// Home mirrors the sidebar leading-slot contract: an active run rings the Home
-// glyph instead of adding a trailing spinner (see app-sidebar-render.ts).
-const HOME_RUN_RING_SELECTOR = ".session-glyph--running .session-glyph__ring";
-
 // Browser contexts preserve test isolation; keep one process warm for this file.
 let page: Page | undefined;
 suite.define(() => {
@@ -182,7 +178,10 @@ suite.define(() => {
 
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
     const mainSession = currentPage.locator(".nav-item--home");
-    const mainSessionRunRing = mainSession.locator(HOME_RUN_RING_SELECTOR);
+    // Home mirrors session rows: active-run state lives in the trailing metadata endcap.
+    const mainSessionRunIndicator = mainSession
+      .locator(".nav-item__state")
+      .getByRole("img", { name: "Active run" });
     await mainSession.waitFor({ state: "visible" });
     const sessionListsBeforeActive = (await gateway.getRequests("sessions.list")).length;
     await gateway.deferNext("sessions.list");
@@ -201,11 +200,11 @@ suite.define(() => {
     await expect
       .poll(async () => (await gateway.getRequests("sessions.list")).length)
       .toBeGreaterThan(sessionListsBeforeActive);
-    await mainSessionRunRing.waitFor();
+    await mainSessionRunIndicator.waitFor();
 
     await gateway.emitChatFinal({ runId, text: "Run complete." });
     await currentPage.locator(".chat-bubble").getByText("Run complete.", { exact: true }).waitFor();
-    await expect.poll(() => mainSessionRunRing.count()).toBe(0);
+    await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
     const staleActiveLabel = "Main stale active snapshot";
     await gateway.resolveDeferred("sessions.list", {
       count: 1,
@@ -230,7 +229,7 @@ suite.define(() => {
     });
     await currentPage.locator(".chat-pane__session-title", { hasText: staleActiveLabel }).waitFor();
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    await expect.poll(() => mainSessionRunRing.count()).toBe(0);
+    await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
 
     const sessionListsBeforeStaleActive = (await gateway.getRequests("sessions.list")).length;
     await gateway.deferNext("sessions.list");
@@ -248,12 +247,12 @@ suite.define(() => {
       .poll(async () => (await gateway.getRequests("sessions.list")).length)
       .toBeGreaterThan(sessionListsBeforeStaleActive);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    await expect.poll(() => mainSessionRunRing.count()).toBe(0);
+    await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
     await gateway.resolveDeferred("sessions.list");
 
     await currentPage.clock.fastForward(CHAT_RUN_STATUS_TOAST_DURATION_MS + 250);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    expect(await mainSessionRunRing.count()).toBe(0);
+    expect(await mainSessionRunIndicator.count()).toBe(0);
 
     // Event timestamps must follow the page's virtual clock so freshness checks
     // see the same elapsed suppression window that the UI just observed.
@@ -271,7 +270,7 @@ suite.define(() => {
       .poll(async () => (await gateway.getRequests("sessions.list")).length)
       .toBeGreaterThan(sessionListsBeforeOtherSession);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    await expect.poll(() => mainSessionRunRing.count()).toBe(0);
+    await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
     await gateway.resolveDeferred("sessions.list");
 
     // Re-publish after the former 10-second suppression window. The completed
@@ -294,7 +293,7 @@ suite.define(() => {
       .poll(async () => (await gateway.getRequests("sessions.list")).length)
       .toBeGreaterThan(sessionListsBeforeLateStaleActive);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    await expect.poll(() => mainSessionRunRing.count()).toBe(0);
+    await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
     await gateway.resolveDeferred("sessions.list");
   });
 
@@ -326,7 +325,10 @@ suite.define(() => {
 
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
     const mainSession = currentPage.locator(".nav-item--home");
-    const mainSessionRunRing = mainSession.locator(HOME_RUN_RING_SELECTOR);
+    // Home mirrors session rows: active-run state lives in the trailing metadata endcap.
+    const mainSessionRunIndicator = mainSession
+      .locator(".nav-item__state")
+      .getByRole("img", { name: "Active run" });
     await mainSession.waitFor({ state: "visible" });
     const sessionListsBeforeActive = (await gateway.getRequests("sessions.list")).length;
     await gateway.deferNext("sessions.list");
@@ -343,7 +345,7 @@ suite.define(() => {
     await expect
       .poll(async () => (await gateway.getRequests("sessions.list")).length)
       .toBeGreaterThan(sessionListsBeforeActive);
-    await mainSessionRunRing.waitFor();
+    await mainSessionRunIndicator.waitFor();
 
     const finalText = "The gateway will restart; I will resume verification afterward.";
     await gateway.emitGatewayEvent("chat", {
@@ -361,7 +363,7 @@ suite.define(() => {
 
     await currentPage.locator(".chat-thread-inner").getByText(finalText, { exact: true }).waitFor();
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    await expect.poll(() => mainSessionRunRing.count()).toBe(0);
+    await expect.poll(() => mainSessionRunIndicator.count()).toBe(0);
     await expect
       .poll(() => currentPage.locator(".agent-chat__run-status-announcement").textContent())
       .toBe("");

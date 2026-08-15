@@ -70,6 +70,9 @@ async function resolveCollectorOutputModelError(params: {
       config: params.cfg,
       agentDir: params.targetAgentDir,
       workspaceDir: params.workspaceDir,
+      readOnly: true,
+      providerDiscoveryProviderIds: [provider],
+      scopedLiveProviderDiscovery: true,
     });
   } catch (error) {
     return `sessions_spawn could not verify outputSchema model capabilities: ${summarizeSpawnError(error)}`;

@@ -97,7 +97,7 @@ export async function deleteSessionGroup(
   // follows the access check so nobody is asked about a delete that cannot run.
   const confirmed = await showConfirmDialog({
     title: t("sessionsView.deleteGroupTitle", { group }),
-    message: t("sessionsView.deleteGroupConfirm", { group }),
+    message: t("sessionsView.deleteGroupConfirm"),
     confirmLabel: t("common.delete"),
     danger: true,
   });

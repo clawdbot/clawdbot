@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   projectInferenceRoute,
@@ -235,7 +235,7 @@ export async function verifySetupInferenceConfig(params: {
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
   };
   const cfg = params.config;
-  const routeAgentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(cfg));
+  const routeAgentId = resolveSystemAgentTargetAgentId(cfg, params.agentId);
   if (!resolveAgentEffectiveModelPrimary(cfg, routeAgentId)) {
     return {
       ok: false,
@@ -464,6 +464,7 @@ export async function verifySetupInferenceConfig(params: {
 /** Run one tool-free completion through the configured setup inference route. */
 export async function completeSetupInference(params: {
   prompt: string;
+  agentId?: string;
   runtime: RuntimeEnv;
   timeoutMs?: number;
   deps?: ActivateSetupInferenceDeps;
@@ -481,6 +482,7 @@ export async function completeSetupInference(params: {
   return await completeSetupInferenceConfig({
     config: snapshot.runtimeConfig ?? snapshot.config,
     prompt: params.prompt,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     runtime: params.runtime,
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
     ...(params.deps ? { deps: params.deps } : {}),
@@ -491,6 +493,7 @@ export async function completeSetupInference(params: {
 export async function completeSetupInferenceConfig(params: {
   config: OpenClawConfig;
   prompt: string;
+  agentId?: string;
   runtime: RuntimeEnv;
   timeoutMs?: number;
   deps?: ActivateSetupInferenceDeps;
@@ -499,7 +502,7 @@ export async function completeSetupInferenceConfig(params: {
     ...params.deps,
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
   };
-  const routeAgentId = normalizeAgentId(resolveDefaultAgentId(params.config));
+  const routeAgentId = resolveSystemAgentTargetAgentId(params.config, params.agentId);
   if (!resolveAgentEffectiveModelPrimary(params.config, routeAgentId)) {
     return { ok: false, status: "unavailable", error: "No agent model is configured." };
   }

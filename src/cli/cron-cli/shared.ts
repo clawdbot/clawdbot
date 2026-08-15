@@ -540,28 +540,31 @@ export function printCronShow(
   opts?: { deliveryPreview?: CronDeliveryPreview },
 ) {
   const preview = opts?.deliveryPreview ?? { label: "-", detail: "unavailable" };
-  runtime.log(`id: ${job.id}`);
-  runtime.log(`declaration: ${job.declarationKey ?? "-"}`);
-  runtime.log(`name: ${job.name}`);
-  runtime.log(`display name: ${job.displayName ?? "-"}`);
-  runtime.log(`owner agent: ${job.owner?.agentId ?? "-"}`);
-  runtime.log(`owner session: ${job.owner?.sessionKey ?? "-"}`);
+  const showValue = (value: unknown) => sanitizeTerminalText(stringifyCell(value));
+  runtime.log(`id: ${showValue(job.id)}`);
+  runtime.log(`declaration: ${showValue(job.declarationKey)}`);
+  runtime.log(`name: ${showValue(job.name)}`);
+  runtime.log(`display name: ${showValue(job.displayName)}`);
+  runtime.log(`owner agent: ${showValue(job.owner?.agentId)}`);
+  runtime.log(`owner session: ${showValue(job.owner?.sessionKey)}`);
   runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);
-  runtime.log(`schedule: ${formatSchedule(job.schedule, job.trigger !== undefined)}`);
+  runtime.log(`schedule: ${showValue(formatSchedule(job.schedule, job.trigger !== undefined))}`);
   runtime.log(
     `trigger: ${job.trigger ? `once=${job.trigger.once === true ? "yes" : "no"}; evals=${job.state.triggerEvalCount ?? 0}; last eval=${formatRelative(job.state.lastTriggerEvalAtMs, Date.now())}; last fire=${formatRelative(job.state.lastTriggerFireAtMs, Date.now())}` : "-"}`,
   );
-  runtime.log(`session: ${job.sessionTarget ?? "-"}`);
-  runtime.log(`agent: ${job.agentId ?? "-"}`);
-  runtime.log(`model: ${job.payload.kind === "agentTurn" ? (job.payload.model ?? "-") : "-"}`);
-  runtime.log(`delivery: ${preview.label} (${preview.detail})`);
+  runtime.log(`session: ${showValue(job.sessionTarget)}`);
+  runtime.log(`agent: ${showValue(job.agentId)}`);
+  runtime.log(
+    `model: ${showValue(job.payload.kind === "agentTurn" ? job.payload.model : undefined)}`,
+  );
+  runtime.log(`delivery: ${showValue(preview.label)} (${showValue(preview.detail)})`);
   runtime.log(`next: ${formatRelative(job.state.nextRunAtMs, Date.now())}`);
   runtime.log(`last: ${formatRelative(job.state.lastRunAtMs, Date.now())}`);
-  runtime.log(`status: ${formatCronStatusForDisplay(job)}`);
+  runtime.log(`status: ${showValue(formatCronStatusForDisplay(job))}`);
   // lastError is the run/schedule failure message; the diagnostic line below is
   // the run-diagnostics summary and can be empty when only lastError is set.
-  runtime.log(`last error: ${job.state.lastError ?? "-"}`);
-  runtime.log(`last delivery: ${job.state.lastDeliveryStatus ?? "-"}`);
-  runtime.log(`last delivery error: ${job.state.lastDeliveryError ?? "-"}`);
-  runtime.log(`diagnostic: ${job.state.lastDiagnosticSummary ?? "-"}`);
+  runtime.log(`last error: ${showValue(job.state.lastError)}`);
+  runtime.log(`last delivery: ${showValue(job.state.lastDeliveryStatus)}`);
+  runtime.log(`last delivery error: ${showValue(job.state.lastDeliveryError)}`);
+  runtime.log(`diagnostic: ${showValue(job.state.lastDiagnosticSummary)}`);
 }

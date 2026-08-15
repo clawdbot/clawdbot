@@ -244,6 +244,42 @@ describe("registerDirectoryCli", () => {
     );
   });
 
+  it("sanitizes plugin directory entries only for terminal output", async () => {
+    const entry = {
+      id: "user:\u001B]0;directory-id\u0007🦞\nforged-row",
+      name: "Alice\u001B[31m\r\nadmin\tbadge",
+    };
+    const listPeers = vi.fn().mockResolvedValue([entry]);
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: { slack: {} } },
+      channelId: "slack",
+      plugin: { id: "slack", directory: { listPeers } },
+      configChanged: false,
+    });
+
+    const textProgram = new Command().name("openclaw");
+    registerDirectoryCli(textProgram);
+    await textProgram.parseAsync(["directory", "peers", "list", "--channel", "slack"], {
+      from: "user",
+    });
+
+    const textOutput = runtimeState.defaultRuntime.log.mock.calls.flat().join("\n");
+    expect(textOutput).not.toContain("\u001B");
+    expect(textOutput).not.toContain("\nforged-row");
+    expect(textOutput).toContain("\\nforged-row");
+    expect(textOutput).toContain("\\r\\nadmin\\tbadge");
+    expect(textOutput).toContain("🦞");
+
+    runtimeState.defaultRuntime.writeJson.mockClear();
+    const jsonProgram = new Command().name("openclaw");
+    registerDirectoryCli(jsonProgram);
+    await jsonProgram.parseAsync(["directory", "peers", "list", "--channel", "slack", "--json"], {
+      from: "user",
+    });
+
+    expect(runtimeState.defaultRuntime.writeJson).toHaveBeenCalledWith([entry]);
+  });
+
   it("reports unsupported directory capability instead of continuing setup for installed plugins", async () => {
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: { channels: { "openclaw-weixin": {} } },

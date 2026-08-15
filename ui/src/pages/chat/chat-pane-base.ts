@@ -57,7 +57,6 @@ import {
   ChatSessionCompanionThreads,
   requestSessionCompanionAnswer,
   requestSessionCompanionState,
-  resetSessionCompanion,
 } from "./chat-session-companion.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -409,16 +408,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     );
   }
 
-  protected readonly clearSessionCompanion = async () => {
-    const state = this.state;
-    if (!state?.connected || !state.client || !state.sessionKey) {
-      return;
-    }
-    const agentId = resolveChatAgentId(state);
-    await this.sessionCompanionThreads
-      .reset(state.sessionKey, (key) => resetSessionCompanion(state.client!, key, agentId), agentId)
-      .catch(() => undefined);
-  };
   protected resetConfirmation:
     | {
         sessionKey: string;

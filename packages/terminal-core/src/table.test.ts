@@ -22,6 +22,43 @@ function expectIntroducersToStartCompleteSequences(
   }
 }
 
+const pluginListColumns = [
+  { key: "Name", header: "Name", minWidth: 14, flex: true },
+  { key: "ID", header: "ID", minWidth: 10, flex: true },
+  { key: "Format", header: "Format", minWidth: 9 },
+  { key: "Status", header: "Status", minWidth: 10 },
+  { key: "Source", header: "Source", minWidth: 26, flex: true },
+  { key: "Version", header: "Version", minWidth: 8 },
+];
+
+const pluginListRows = [
+  {
+    Name: "Amazon Bedrock",
+    ID: "amazon-bedrock",
+    Format: "openclaw",
+    Status: "enabled",
+    Source: "~/Projects/openclaw/extensions/amazon-bedrock/index.ts",
+    Version: "2026.8.1",
+  },
+  {
+    Name: "N".repeat(40),
+    ID: "i".repeat(22),
+    Format: "openclaw",
+    Status: "disabled",
+    Source: `/${"s".repeat(80)}`,
+    Version: "2026.8.1",
+  },
+];
+
+function renderPluginListTable(width: number): string {
+  return renderTable({
+    width,
+    border: "unicode",
+    columns: pluginListColumns,
+    rows: pluginListRows,
+  });
+}
+
 describe("renderTable", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -59,6 +96,30 @@ describe("renderTable", () => {
     expect(out).toContain("Dashboard");
     expect(out).toMatch(/[│|] Dashboard\s+[│|]/);
   });
+
+  it("keeps identifier columns intact when wider flex columns can absorb the shrink", () => {
+    const out = renderPluginListTable(120);
+
+    expect(out).toMatch(/│ Amazon Bedrock\s+│ amazon-bedrock\s+│/);
+  });
+
+  it.each([60, 80, 120, 160, 200])(
+    "keeps the plugin-list shape deterministic and within %i columns",
+    (width) => {
+      const out = renderPluginListTable(width);
+      const lines = out.trimEnd().split("\n");
+      const headerCells = (lines[1] ?? "").split("│").slice(1, -1);
+
+      expect(out).toBe(renderPluginListTable(width));
+      expect(Math.max(...lines.map(visibleWidth))).toBeLessThanOrEqual(width);
+      expect(headerCells).toHaveLength(pluginListColumns.length);
+      for (const [index, column] of pluginListColumns.entries()) {
+        expect(visibleWidth(headerCells[index] ?? "")).toBeGreaterThanOrEqual(
+          visibleWidth(column.header) + 2,
+        );
+      }
+    },
+  );
 
   it("expands flex columns to fill available width", () => {
     const width = 60;
@@ -532,18 +593,19 @@ describe("renderTable", () => {
     }
   });
 
-  it("keeps borders aligned when a narrow flex column receives wide content", () => {
+  it("terminates with aligned borders when a flex column starts at its floor", () => {
     const out = renderTable({
       width: 10,
       border: "ascii",
       columns: [
         { key: "A", header: "long header here" },
-        { key: "B", header: "", flex: true },
+        { key: "B", header: "", flex: true, maxWidth: 3 },
       ],
       rows: [{ A: "data", B: "📸" }],
     });
     const lines = out.trimEnd().split("\n");
     const headerWidth = visibleWidth(lines[0] ?? "");
+    expect(headerWidth).toBeGreaterThan(10);
     for (const line of lines) {
       expect(visibleWidth(line)).toBe(headerWidth);
     }

@@ -28,6 +28,35 @@ describe("AppSidebar session pagination", () => {
     expect(sidebar.querySelector(".sidebar-session-pagination")).toBeNull();
   });
 
+  it("shows a newly discovered session above the created-sort pagination boundary", async () => {
+    const olderKeys = Array.from({ length: 10 }, (_, index) => `agent:main:older-${index}`);
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const sessions = createSessionsHarness("main", olderKeys);
+    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+    const refreshed = createSessionState("main", [...olderKeys, "agent:main:external-new"]);
+    const rows = refreshed.result?.sessions;
+    if (!rows) {
+      throw new Error("expected refreshed session rows");
+    }
+    const newestRow = rows.at(-1);
+    if (!newestRow) {
+      throw new Error("expected newest session row");
+    }
+    newestRow.createdAt = 2_000;
+
+    sessions.publishList({ result: refreshed.result, agentId: refreshed.agentId });
+    await sidebar.updateComplete;
+
+    expect(
+      Array.from(
+        sidebar.querySelectorAll<HTMLElement>("[data-session-key]"),
+        (row) => row.dataset.sessionKey,
+      ),
+    ).toEqual(["agent:main:external-new", ...olderKeys.slice(0, 9)]);
+    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(10);
+    expect(sidebar.querySelector('button[aria-label="Show more"]')).not.toBeNull();
+  });
+
   it("reveals sessions ten at a time and offers Collapse after thirty", async () => {
     const keys = [
       "agent:main:session-0",
@@ -148,6 +177,46 @@ describe("AppSidebar session source lifecycle", () => {
     await menu.updateComplete;
     expect(menu.forkDisabled).toBe(true);
     expect(menu.querySelector<HTMLButtonElement>('[data-shortcut="f"]')?.disabled).toBe(true);
+  });
+
+  it("forks from stable history when Gateway liveness outlives display status", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const sessions = createSessionsHarness("main", ["agent:main:active"]);
+    const state = createSessionState("main", ["agent:main:active"]);
+    const row = state.result?.sessions[0];
+    if (!row) {
+      throw new Error("Expected active session row");
+    }
+    row.status = "done";
+    row.hasActiveRun = true;
+    sessions.publishList({ result: state.result, agentId: state.agentId });
+    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    sidebar
+      .querySelector<HTMLButtonElement>(
+        '[data-session-key="agent:main:active"] [data-session-menu="true"]',
+      )
+      ?.click();
+    await sidebar.updateComplete;
+
+    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+    if (!menu) {
+      throw new Error("Expected sidebar session menu");
+    }
+    await menu.updateComplete;
+    expect(menu.forkFromLastCompleted).toBe(true);
+    menu.onAction({ kind: "fork" });
+
+    await vi.waitFor(() =>
+      expect(sessions.create).toHaveBeenCalledWith({
+        parentSessionKey: "agent:main:active",
+        fork: true,
+        forkFrom: "last-completed",
+        agentId: "main",
+      }),
+    );
   });
 
   it("resets cached rows and creation order when the sessions source changes", async () => {

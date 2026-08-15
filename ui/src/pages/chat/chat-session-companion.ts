@@ -229,11 +229,15 @@ export class ChatSessionCompanionThreads {
     if (!targetSessionKey) {
       return;
     }
-    const key = companionThreadKey(targetSessionKey, agentId);
     await clear(targetSessionKey);
-    this.hydrationTokens.delete(key);
-    this.submissionTokens.delete(key);
-    this.threads.set(key, createThread());
+    this.retire(targetSessionKey, agentId);
+  }
+
+  retire(sessionKey?: string, agentId?: string | null): void {
+    const key = sessionKey ? companionThreadKey(sessionKey, agentId) : null;
+    for (const store of [this.threads, this.hydrationTokens, this.submissionTokens]) {
+      void (key ? store.delete(key) : store.clear());
+    }
     this.notify();
   }
 

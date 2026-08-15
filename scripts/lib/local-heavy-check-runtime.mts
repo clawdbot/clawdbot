@@ -143,6 +143,21 @@ function hasOxlintFormatArg(args: string[]) {
   );
 }
 
+/** Apply the shared memory and scheduler limits for Go-backed check helpers. */
+function applyThrottledGoRuntimeEnv(env: Env, hostResources: Resources) {
+  if (!env.GOMAXPROCS) {
+    env.GOMAXPROCS = String(
+      Math.min(DEFAULT_LOCAL_GO_MAX_PROCS, Math.max(1, hostResources.logicalCpuCount)),
+    );
+  }
+  if (!env.GOGC) {
+    env.GOGC = DEFAULT_LOCAL_GO_GC;
+  }
+  if (!env.GOMEMLIMIT) {
+    env.GOMEMLIMIT = DEFAULT_LOCAL_GO_MEMORY_LIMIT;
+  }
+}
+
 /** Apply local tsgo defaults for declaration skipping, caching, throttling, and profiling. */
 export function applyLocalTsgoPolicy(args: string[], env: Env, hostResources: Resources) {
   const nextEnv = { ...env };
@@ -170,18 +185,7 @@ export function applyLocalTsgoPolicy(args: string[], env: Env, hostResources: Re
   if (shouldThrottleLocalHeavyChecks(nextEnv, resolvedHostResources, "auto")) {
     insertBeforeSeparator(nextArgs, "--singleThreaded");
     insertBeforeSeparator(nextArgs, "--checkers", "1");
-
-    if (!nextEnv.GOMAXPROCS) {
-      nextEnv.GOMAXPROCS = String(
-        Math.min(DEFAULT_LOCAL_GO_MAX_PROCS, Math.max(1, resolvedHostResources.logicalCpuCount)),
-      );
-    }
-    if (!nextEnv.GOGC) {
-      nextEnv.GOGC = DEFAULT_LOCAL_GO_GC;
-    }
-    if (!nextEnv.GOMEMLIMIT) {
-      nextEnv.GOMEMLIMIT = DEFAULT_LOCAL_GO_MEMORY_LIMIT;
-    }
+    applyThrottledGoRuntimeEnv(nextEnv, resolvedHostResources);
   }
   if (nextEnv.OPENCLAW_TSGO_PPROF_DIR && !hasFlag(nextArgs, "--pprofDir")) {
     insertBeforeSeparator(nextArgs, "--pprofDir", nextEnv.OPENCLAW_TSGO_PPROF_DIR);
@@ -211,12 +215,8 @@ export function applyLocalOxlintPolicy(args: string[], env: Env, hostResources: 
     if (!hasFlag(nextArgs, "--threads")) {
       insertBeforeSeparator(nextArgs, "--threads=1");
     }
-    if (!nextEnv.GOGC) {
-      nextEnv.GOGC = DEFAULT_LOCAL_GO_GC;
-    }
-    if (!nextEnv.GOMEMLIMIT) {
-      nextEnv.GOMEMLIMIT = DEFAULT_LOCAL_GO_MEMORY_LIMIT;
-    }
+    // Oxlint's thread flag does not govern the Go tsgolint helper.
+    applyThrottledGoRuntimeEnv(nextEnv, hostResources);
   }
 
   return { env: nextEnv, args: nextArgs };

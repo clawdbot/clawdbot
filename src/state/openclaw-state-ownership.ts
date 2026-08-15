@@ -16,6 +16,7 @@ import {
   runWithSqliteCoordinator,
   SqliteCoordinatorError,
 } from "../infra/sqlite-coordinator.js";
+import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
@@ -244,6 +245,7 @@ function acquireOpenClawStateWriteAccess(options: {
   const resolvedPath = path.resolve(options.databasePath);
   const access = acquireOpenClawStateOwnershipCoordinator(resolvedPath);
   try {
+    quarantineOrphanedSqliteSidecars(resolvedPath);
     assertOwnershipAllowsWrite(
       inspectOpenClawStateOwnershipAtPathWhileCoordinatorHeld(resolvedPath),
       resolvedPath,
@@ -288,6 +290,7 @@ export async function assertOpenClawStateWriteAllowedAtPath(options: {
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   const databasePath = path.resolve(options.databasePath);
+  quarantineOrphanedSqliteSidecars(databasePath);
   if (!existsSync(databasePath)) {
     return;
   }

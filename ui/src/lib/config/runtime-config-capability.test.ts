@@ -321,13 +321,24 @@ describe("runtime config capability", () => {
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
     expect(server.submissions).toHaveLength(0);
     expect(runtimeConfig.state.configFormDirty).toBe(true);
+    // The latch must be operator-visible: without a rendered state the form
+    // looks normal while every subsequent edit silently never saves.
+    expect(runtimeConfig.state.configAutoSaveStatus).toBe("paused");
+
+    // Further edits do not clear the latch state.
+    runtimeConfig.patchForm(["count"], 3);
+    await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
+    expect(server.submissions).toHaveLength(0);
+    expect(runtimeConfig.state.configAutoSaveStatus).toBe("paused");
 
     await expect(runtimeConfig.save()).resolves.toBe(true);
     expect(server.submissions).toEqual([
-      { method: "config.set", raw: '{\n  "count": 2\n}\n', baseHash: "hash-1" },
+      { method: "config.set", raw: '{\n  "count": 3\n}\n', baseHash: "hash-1" },
     ]);
     expect(runtimeConfig.state.configFormDirty).toBe(false);
     expect(runtimeConfig.state.configNeedsApply).toBe(true);
+    // Explicit save rebinds the draft and clears the paused indicator.
+    expect(runtimeConfig.state.configAutoSaveStatus).not.toBe("paused");
     runtimeConfig.dispose();
   });
 

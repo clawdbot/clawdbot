@@ -16,6 +16,7 @@ import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
 import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
+import { resolveModelsTargetAgent } from "./shared.js";
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
@@ -47,6 +48,7 @@ export async function modelsListCommand(
     all?: boolean;
     local?: boolean;
     provider?: string;
+    agent?: string;
     json?: boolean;
     plain?: boolean;
   },
@@ -74,7 +76,7 @@ export async function modelsListCommand(
   const humanReadable = !opts.json && !opts.plain;
   const [
     { loadAuthProfileStoreWithoutExternalProfiles },
-    { resolveAgentWorkspaceDir, resolveDefaultAgentDir, resolveDefaultAgentId },
+    { resolveAgentWorkspaceDir },
     { resolveDefaultAgentWorkspaceDir },
   ] = await Promise.all([
     import("../../agents/auth-profiles/store.js"),
@@ -85,8 +87,7 @@ export async function modelsListCommand(
     commandName: "models list",
     runtime,
   });
-  const agentId = resolveDefaultAgentId(cfg);
-  const agentDir = resolveDefaultAgentDir(cfg);
+  const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent);
   const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const metadataSnapshot = loadManifestMetadataSnapshot({
