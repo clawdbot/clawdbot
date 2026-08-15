@@ -137,6 +137,16 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   // A crashed gateway can leak local turn claims; drop them before workers re-admit turns.
   params.startup.placementStore.clearLocalTurnClaimsAfterRestart();
   const placementGate = createWorkerSessionPlacementGate(params.startup.placementStore);
+  const workerEnvironmentLog = params.log.child("worker-environments");
+  const listRetainedBundleHashes = () =>
+    uniqueStrings([
+      ...params.startup.store
+        .list()
+        .flatMap((record) => (record.bootstrapReceipt ? [record.bootstrapReceipt.bundleHash] : [])),
+      ...params.startup.placementStore
+        .list()
+        .flatMap((placement) => (placement.workerBundleHash ? [placement.workerBundleHash] : [])),
+    ]);
   let workerBundleProducer: WorkerBundleProducer | undefined;
   let workerNpmArtifact: Promise<WorkerNpmArtifact> | undefined;
   const prepareInstallation = async (install: "bundle" | "npm") => {
@@ -144,10 +154,15 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       loadWorkerEnvironmentRuntimeModule(),
       import("../../packages/gateway-protocol/src/schema/worker-admission.js"),
     ]);
-    workerBundleProducer ??= workerRuntime.createWorkerBundleProducer({
+    const producer = (workerBundleProducer ??= workerRuntime.createWorkerBundleProducer({
       protocolFeatures: WORKER_PROTOCOL_FEATURES,
-    });
-    const bundle = await workerBundleProducer.prepare();
+      cacheOwnership: "exclusive",
+      onCacheCleanupError: (error) => {
+        workerEnvironmentLog.warn(`Worker bundle cache cleanup failed: ${String(error)}`);
+      },
+    }));
+    const bundle = await producer.prepare();
+    await producer.prune(listRetainedBundleHashes());
     if (install === "bundle") {
       return bundle;
     }
@@ -200,7 +215,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   let dispatchChild: WorkerPlacementDispatchContract["dispatch"] = async () => {
     throw new Error("Worker session dispatch is unavailable");
   };
-  const workerEnvironmentLog = params.log.child("worker-environments");
   const workerEnvironmentServiceBase = createWorkerEnvironmentService({
     store: params.startup.store,
     getConfig: getRuntimeConfig,

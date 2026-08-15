@@ -378,6 +378,104 @@ describe("worker bundle producer", () => {
     });
   });
 
+  it("prunes unreferenced bundles only for an exclusive cache owner", async () => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-prune-" }, async (root) => {
+      const packageRoot = path.join(root, "package");
+      const cacheDir = path.join(root, "cache");
+      await writeFixture(packageRoot, [["dist/entry.js", "export const value = 1;\n"]]);
+      const previous = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
+      await fs.writeFile(
+        path.join(packageRoot, "dist/entry.js"),
+        "export const value = 2;\n",
+        "utf8",
+      );
+      const owner = createWorkerBundleProducer({
+        packageRoot,
+        cacheDir,
+        cacheOwnership: "exclusive",
+      });
+      const current = await owner.prepare();
+
+      await owner.prune([]);
+
+      await expect(fs.stat(previous.tarballPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
+    });
+  });
+
+  it("retains durable hashes while pruning an exclusive cache", async () => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-retain-" }, async (root) => {
+      const packageRoot = path.join(root, "package");
+      const cacheDir = path.join(root, "cache");
+      await writeFixture(packageRoot, [["dist/entry.js", "export const value = 1;\n"]]);
+      const previous = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
+      await fs.writeFile(
+        path.join(packageRoot, "dist/entry.js"),
+        "export const value = 2;\n",
+        "utf8",
+      );
+      const owner = createWorkerBundleProducer({
+        packageRoot,
+        cacheDir,
+        cacheOwnership: "exclusive",
+      });
+      const current = await owner.prepare();
+
+      await owner.prune([previous.bundleHash]);
+
+      await expect(fs.stat(previous.tarballPath)).resolves.toBeDefined();
+      await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
+    });
+  });
+
+  it("reclaims recognized crash artifacts but preserves unknown cache entries", async () => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-crash-cleanup-" }, async (root) => {
+      const packageRoot = path.join(root, "package");
+      const cacheDir = path.join(root, "cache");
+      await writeFixture(packageRoot, [["dist/entry.js", "export {};\n"]]);
+      const owner = createWorkerBundleProducer({
+        packageRoot,
+        cacheDir,
+        cacheOwnership: "exclusive",
+      });
+      const current = await owner.prepare();
+      const staging = path.join(cacheDir, ".staging-stale");
+      const temporary = path.join(
+        cacheDir,
+        `${"b".repeat(64)}.tgz.123.123e4567-e89b-12d3-a456-426614174000.tmp`,
+      );
+      const unknown = path.join(cacheDir, "keep-me.txt");
+      await fs.mkdir(staging);
+      await fs.writeFile(temporary, "partial", "utf8");
+      await fs.writeFile(unknown, "operator-owned", "utf8");
+
+      await owner.prune([]);
+
+      await expect(fs.stat(staging)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(temporary)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(unknown, "utf8")).resolves.toBe("operator-owned");
+      await expect(fs.stat(current.tarballPath)).resolves.toBeDefined();
+    });
+  });
+
+  it("keeps custom caches non-destructive and failed preparations non-destructive", async () => {
+    await withTestDir({ prefix: "openclaw-worker-bundle-shared-cache-" }, async (root) => {
+      const cacheDir = path.join(root, "cache");
+      await fs.mkdir(cacheDir);
+      const historical = path.join(cacheDir, `${"c".repeat(64)}.tgz`);
+      await fs.writeFile(historical, "historical", "utf8");
+      const shared = createWorkerBundleProducer({
+        packageRoot: path.join(root, "missing-package"),
+        cacheDir,
+      });
+
+      await expect(shared.prepare()).rejects.toBeDefined();
+      await shared.prune([]);
+
+      await expect(fs.readFile(historical, "utf8")).resolves.toBe("historical");
+    });
+  });
+
   it("archives the staged bytes when the source changes during packaging", async () => {
     await withTestDir({ prefix: "openclaw-worker-bundle-mutation-" }, async (root) => {
       const baselineRoot = path.join(root, "baseline");

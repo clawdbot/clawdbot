@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -23,6 +23,9 @@ export { WORKER_BUNDLE_MANIFEST_VERSION };
 const OPENCLAW_NPM_REGISTRY = "https://registry.npmjs.org/";
 const NPM_RELEASE_PROOF_TIMEOUT_MS = 60_000;
 const NPM_SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
+const BUNDLE_TARBALL_NAME_PATTERN = /^([a-f0-9]{64})\.tgz$/u;
+const BUNDLE_STAGING_NAME_PATTERN = /^\.staging-[A-Za-z0-9_-]+$/u;
+const BUNDLE_TEMP_NAME_PATTERN = /^[a-f0-9]{64}\.tgz\.[0-9]+\.[0-9a-f-]{36}\.tmp$/u;
 type WorkerInstallationArtifactBase = {
   bundleHash: string;
   openclawVersion: string;
@@ -45,6 +48,7 @@ export type WorkerInstallationArtifact = WorkerBundleArtifact | WorkerNpmArtifac
 
 export type WorkerBundleProducer = {
   prepare: () => Promise<WorkerBundleArtifact>;
+  prune: (retainedBundleHashes: readonly string[]) => Promise<void>;
 };
 
 type WorkerBundleProducerOptions = {
@@ -52,6 +56,8 @@ type WorkerBundleProducerOptions = {
   cacheDir?: string;
   openclawVersion?: string;
   protocolFeatures?: readonly string[];
+  cacheOwnership?: "exclusive";
+  onCacheCleanupError?: (error: unknown) => void;
 };
 
 type WorkerNpmPackageInstallCheck = (packageRoot: string) => Promise<boolean>;
@@ -67,6 +73,12 @@ function normalizeProtocolFeatures(features: readonly string[]): string[] {
     throw new Error("Worker protocol features must be non-empty strings");
   }
   return [...new Set(normalized)].toSorted(comparePaths);
+}
+
+function resolveBundleCacheDir(cacheDir: string | undefined): string {
+  return cacheDir
+    ? path.resolve(cacheDir)
+    : path.join(resolveStateDir(), "cache", "worker-bundles");
 }
 
 function resolvePackageRoot(packageRoot: string | undefined): string {
@@ -427,13 +439,57 @@ async function writeTarball(params: {
   }
 }
 
+async function pruneWorkerBundleCache(params: {
+  cacheDir: string;
+  currentBundleHash: string;
+  retainedBundleHashes: readonly string[];
+  onError?: (error: unknown) => void;
+}): Promise<void> {
+  const retained = new Set(
+    [params.currentBundleHash, ...params.retainedBundleHashes].filter((hash) =>
+      /^[a-f0-9]{64}$/u.test(hash),
+    ),
+  );
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(params.cacheDir, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      params.onError?.(error);
+    }
+    return;
+  }
+  for (const entry of entries.toSorted((left, right) => comparePaths(left.name, right.name))) {
+    const tarball = BUNDLE_TARBALL_NAME_PATTERN.exec(entry.name);
+    const removableTarball = tarball && !retained.has(tarball[1]!);
+    const removableStaging = BUNDLE_STAGING_NAME_PATTERN.test(entry.name);
+    const removableTemp = BUNDLE_TEMP_NAME_PATTERN.test(entry.name);
+    if (!removableTarball && !removableStaging && !removableTemp) {
+      continue;
+    }
+    const target = path.join(params.cacheDir, entry.name);
+    try {
+      const stats = await fs.lstat(target);
+      if (stats.isSymbolicLink()) {
+        continue;
+      }
+      if (removableStaging ? !stats.isDirectory() : !stats.isFile()) {
+        continue;
+      }
+      await fs.rm(target, { recursive: removableStaging, force: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        params.onError?.(error);
+      }
+    }
+  }
+}
+
 async function prepareWorkerBundle(
   options: WorkerBundleProducerOptions,
 ): Promise<WorkerBundleArtifact> {
   const packageRoot = resolvePackageRoot(options.packageRoot);
-  const cacheDir = options.cacheDir
-    ? path.resolve(options.cacheDir)
-    : path.join(resolveStateDir(), "cache", "worker-bundles");
+  const cacheDir = resolveBundleCacheDir(options.cacheDir);
   const openclawVersion = (options.openclawVersion ?? VERSION).trim();
   if (!openclawVersion) {
     throw new Error("Worker bundle requires a non-empty OpenClaw version");
@@ -468,18 +524,41 @@ export function createWorkerBundleProducer(
   options: WorkerBundleProducerOptions = {},
 ): WorkerBundleProducer {
   let prepared: Promise<WorkerBundleArtifact> | undefined;
+  let currentArtifact: WorkerBundleArtifact | undefined;
+  let pruning = Promise.resolve();
   return {
     prepare() {
       if (!prepared) {
-        const pending = prepareWorkerBundle(options).catch((error: unknown) => {
-          if (prepared === pending) {
-            prepared = undefined;
-          }
-          throw error;
-        });
+        const pending = prepareWorkerBundle(options)
+          .then((artifact) => {
+            currentArtifact = artifact;
+            return artifact;
+          })
+          .catch((error: unknown) => {
+            if (prepared === pending) {
+              prepared = undefined;
+            }
+            throw error;
+          });
         prepared = pending;
       }
       return prepared;
+    },
+    async prune(retainedBundleHashes) {
+      const artifact = currentArtifact;
+      if (options.cacheOwnership !== "exclusive" || !artifact) {
+        return;
+      }
+      const operation = pruning.then(async () => {
+        await pruneWorkerBundleCache({
+          cacheDir: resolveBundleCacheDir(options.cacheDir),
+          currentBundleHash: artifact.bundleHash,
+          retainedBundleHashes,
+          onError: options.onCacheCleanupError,
+        });
+      });
+      pruning = operation.catch(() => undefined);
+      await operation;
     },
   };
 }
