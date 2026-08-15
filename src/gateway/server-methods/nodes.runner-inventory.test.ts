@@ -193,7 +193,14 @@ describe("nodeHandlers node.runnerInventory.update", () => {
 
     await runnerInventoryHandler(legacy);
 
-    expect(legacy.respond).toHaveBeenCalledWith(true, { nodeId: "node-1" }, undefined);
+    expect(legacy.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("openclaw update"),
+      }),
+    );
     expect(inventoryChanged).toHaveBeenLastCalledWith("node-1");
     expect(runtime.nodeWorkerSupervisorTransport.getIssue?.("node-1")).toEqual(
       NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
