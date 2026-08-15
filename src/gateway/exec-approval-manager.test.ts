@@ -477,6 +477,40 @@ describe("ExecApprovalManager", () => {
     });
   });
 
+  it("publishes timer-driven timeout expiry through onExpired", async () => {
+    const timers = installTimerMocks();
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const expirations: Array<{ recordId: string; status: string; requestCommand?: string }> = [];
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-expired-"));
+    tempDirs.push(dir);
+    const manager = new ExecApprovalManager<ExecApprovalRequestPayload>({
+      approvalKind: "exec",
+      persistence: {
+        runtimeEpoch: "runtime-a",
+        databaseOptions: { path: path.join(dir, "s.sqlite") },
+      },
+      resolveAllowedDecisions: () => ["allow-once", "deny"],
+      onExpired: (record, liveRecord) =>
+        expirations.push({
+          recordId: record.id,
+          status: record.status,
+          requestCommand: liveRecord.request.command,
+        }),
+    });
+    const record = manager.create({ command: "echo expired" }, 60_000, "approval-on-expired");
+    const decisionPromise = manager.register(record, 60_000);
+    vi.mocked(Date.now).mockReturnValue(record.expiresAtMs);
+
+    runTimer(timers[0]);
+
+    await expect(decisionPromise).resolves.toBeNull();
+    // The gateway clock owns expiry: reviewer surfaces get the terminal fact
+    // (with the live request for the event payload) instead of inferring it.
+    expect(expirations).toEqual([
+      { recordId: record.id, status: "expired", requestCommand: "echo expired" },
+    ]);
+  });
+
   it("emits a terminal event for an explicit force-deny transition", async () => {
     const lifecycleEvents: OperatorApprovalLifecycleEvent[] = [];
     const { manager } = createPersistentManager({
