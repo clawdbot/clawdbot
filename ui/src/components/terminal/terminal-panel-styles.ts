@@ -29,26 +29,22 @@ export const terminalPanelStyles = css`
     width: 100%;
     height: 100%;
   }
-  .tp-header .tabstrip {
-    height: 100%;
-    align-self: stretch;
-  }
-  .tp-header .tabstrip::part(base) {
-    height: 100%;
-  }
+  /* The whole row shares one axis: every level of the strip stretches to the
+     rail height so a tab's underline lands on the rail's bottom edge, which puts
+     its centred content on the same line as the management icons. */
+  .tp-header .tabstrip,
+  .tp-header .tabstrip::part(base),
   .tp-header .tabstrip::part(nav),
-  .tp-header .tabstrip::part(tabs) {
-    height: 100%;
-    align-items: stretch;
-  }
-  /* The whole row shares one axis: tabs stretch the full rail height so their
-     underline lands on the rail's bottom edge, which puts their centred content
-     on the same line as the management icons on the right. */
+  .tp-header .tabstrip::part(tabs),
   .tp-header .tabstrip-tab,
   .tp-header .tabstrip-tab__close,
   .tp-header .tabstrip-new {
     height: 100%;
     align-self: stretch;
+  }
+  .tp-header .tabstrip::part(nav),
+  .tp-header .tabstrip::part(tabs) {
+    align-items: stretch;
   }
   .tp-header .tabstrip-tab::part(base) {
     box-sizing: border-box;
@@ -75,8 +71,6 @@ export const terminalPanelStyles = css`
   }
   .tp-header .tabstrip-tab__close {
     box-sizing: border-box;
-    height: 100%;
-    align-self: stretch;
     border-bottom: 2px solid transparent;
     border-radius: 0;
   }
