@@ -3,7 +3,10 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
-import { parseSqliteSessionEntryRecord } from "../config/sessions/session-entry-json.js";
+import {
+  parseSqliteSessionEntryRecord,
+  hasValidSessionEntryIdentity,
+} from "../config/sessions/session-entry-json.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { buildConversationRef, normalizeConversationPeerId } from "../routing/conversation-ref.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
@@ -301,22 +304,17 @@ export function ensureSessionEntryValidityProjection(db: DatabaseSync): void {
       "ALTER TABLE session_nodes ADD COLUMN entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1))",
     );
   }
+  // The entry_valid write-triggers were retired: they raced every session_nodes write
+  // against a pending (0) marker that only well-formed write paths settled. Interrupted
+  // paths (shutdown drain, aborted turns) left rows stuck at 0, which the canonical-key
+  // runtime validation then rejected with SessionCanonicalKeyMigrationRequiredError —
+  // including rejecting doctor's own repair pass. All current write paths set
+  // entry_valid explicitly (1 for entries, -1 for cleared shells), so the triggers are
+  // redundant; drop any installed by older binaries.
   db.exec(`
-    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_insert
-    AFTER INSERT ON session_nodes
-    BEGIN
-      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
-    END;
-    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_entry_update
-    AFTER UPDATE OF entry_json ON session_nodes
-    BEGIN
-      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
-    END;
-    CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_identity_update
-    AFTER UPDATE OF current_session_id, updated_at ON session_nodes
-    BEGIN
-      UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
-    END;
+    DROP TRIGGER IF EXISTS session_nodes_entry_valid_after_insert;
+    DROP TRIGGER IF EXISTS session_nodes_entry_valid_after_entry_update;
+    DROP TRIGGER IF EXISTS session_nodes_entry_valid_after_identity_update;
   `);
   const selectPending = db.prepare(
     "SELECT current_session_id, entry_json, session_key, updated_at FROM session_nodes WHERE entry_valid = 0 ORDER BY session_key LIMIT 256",
@@ -336,6 +334,30 @@ export function ensureSessionEntryValidityProjection(db: DatabaseSync): void {
     }
     for (const row of rows) {
       update.run(parseSqliteSessionEntryRecord(row) ? 1 : -1, row.session_key);
+    }
+  }
+  // Rows left by older writers can carry an explicit -1 with a non-{} entry_json (e.g. a
+  // legacy cleared shell serialized as {"delivery":{"kind":"none"}}). The canonical-key
+  // validator only accepts -1 paired with "{}" plus a retained window, so normalize any
+  // -1 row whose entry_json has no valid entry identity into the canonical cleared shell.
+  const selectShells = db.prepare(
+    "SELECT session_key, entry_json FROM session_nodes WHERE entry_valid = -1 AND entry_json != '{}'",
+  );
+  const settleShell = db.prepare(
+    "UPDATE session_nodes SET entry_valid = -1, entry_json = ? WHERE session_key = ?",
+  );
+  for (const row of selectShells.all() as Array<{ session_key: string; entry_json: string }>) {
+    let hasIdentity: boolean;
+    try {
+      const parsed = JSON.parse(row.entry_json) as unknown;
+      hasIdentity = hasValidSessionEntryIdentity(
+        (parsed ?? {}) as { sessionId?: unknown; updatedAt?: unknown },
+      );
+    } catch {
+      hasIdentity = false;
+    }
+    if (!hasIdentity) {
+      settleShell.run("{}", row.session_key);
     }
   }
 }

@@ -40,9 +40,6 @@ describe("legacy media persistence additive schema repair", () => {
     const { DatabaseSync } = requireNodeSqlite();
     const database = new DatabaseSync(databasePath);
     database.exec(`
-      DROP TRIGGER session_nodes_entry_valid_after_insert;
-      DROP TRIGGER session_nodes_entry_valid_after_entry_update;
-      DROP TRIGGER session_nodes_entry_valid_after_identity_update;
       DROP INDEX idx_agent_session_nodes_entry_valid_pending;
       DROP TABLE session_key_contract;
       ALTER TABLE session_nodes DROP COLUMN entry_valid;

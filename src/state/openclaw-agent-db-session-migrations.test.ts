@@ -3,6 +3,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
 import {
   backfillSessionConversations,
+  ensureSessionEntryValidityProjection,
   migrateConversationDeliveryTargetColumn,
 } from "./openclaw-agent-db-session-migrations.js";
 
@@ -385,5 +386,105 @@ describe("agent DB conversation migration", () => {
         )
         .get(),
     ).toEqual({ count: 0 });
+  });
+
+  it("does not install entry_valid write-triggers and drops triggers left by older binaries", () => {
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(":memory:");
+    databases.push(database);
+    database.exec(`
+      CREATE TABLE session_nodes (
+        session_key TEXT PRIMARY KEY,
+        current_session_id TEXT NOT NULL,
+        entry_json TEXT NOT NULL,
+        entry_valid INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TRIGGER session_nodes_entry_valid_after_insert
+      AFTER INSERT ON session_nodes
+      BEGIN
+        UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
+      END;
+      CREATE TRIGGER session_nodes_entry_valid_after_entry_update
+      AFTER UPDATE OF entry_json ON session_nodes
+      BEGIN
+        UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
+      END;
+      CREATE TRIGGER session_nodes_entry_valid_after_identity_update
+      AFTER UPDATE OF current_session_id, updated_at ON session_nodes
+      BEGIN
+        UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
+      END;
+    `);
+
+    ensureSessionEntryValidityProjection(database);
+
+    const remaining = database
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'session_nodes_entry_valid_%'",
+      )
+      .all();
+    expect(remaining).toEqual([]);
+  });
+
+  it("settles legacy pending rows and normalizes legacy cleared shells", () => {
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(":memory:");
+    databases.push(database);
+    database.exec(`
+      CREATE TABLE session_nodes (
+        session_key TEXT PRIMARY KEY,
+        current_session_id TEXT NOT NULL,
+        entry_json TEXT NOT NULL,
+        entry_valid INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+    const insert = database.prepare(
+      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, entry_valid, updated_at) VALUES (?, ?, ?, ?, ?)",
+    );
+    insert.run(
+      "agent:main:main",
+      "session-main",
+      JSON.stringify({ sessionId: "session-main", updatedAt: 100 }),
+      0,
+      100,
+    );
+    insert.run(
+      "agent:main:cron:legacy-run",
+      "session-cron",
+      JSON.stringify({ delivery: { kind: "none" } }),
+      -1,
+      100,
+    );
+    insert.run(
+      "agent:main:shell",
+      "session-shell",
+      JSON.stringify({ sessionId: "session-shell", updatedAt: 200 }),
+      -1,
+      200,
+    );
+
+    ensureSessionEntryValidityProjection(database);
+
+    expect(
+      database
+        .prepare(
+          "SELECT session_key, entry_valid, entry_json FROM session_nodes ORDER BY session_key",
+        )
+        .all(),
+    ).toEqual([
+      { session_key: "agent:main:cron:legacy-run", entry_valid: -1, entry_json: "{}" },
+      {
+        session_key: "agent:main:main",
+        entry_valid: 1,
+        entry_json: JSON.stringify({ sessionId: "session-main", updatedAt: 100 }),
+      },
+      {
+        session_key: "agent:main:shell",
+        entry_valid: -1,
+        entry_json: JSON.stringify({ sessionId: "session-shell", updatedAt: 200 }),
+      },
+    ]);
   });
 });

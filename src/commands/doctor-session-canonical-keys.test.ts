@@ -188,7 +188,7 @@ describe("doctor canonical session-key repair", () => {
         path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main", env }).path,
       });
       database.db
-        .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+        .prepare("UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?")
         .run(
           JSON.stringify({ sessionId: "\0invalid", subject: "legacy", updatedAt: 10 }),
           "agent:main:main",
@@ -690,14 +690,16 @@ describe("doctor canonical session-key repair", () => {
           .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
           .get("agent:main:child") as { entry_json: string }
       ).entry_json;
-      database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
-        JSON.stringify({
-          ...(JSON.parse(canonicalJson) as object),
-          icon: "archive",
-          spawnedBy: null,
-        }),
-        "agent:main:child",
-      );
+      database.db
+        .prepare("UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?")
+        .run(
+          JSON.stringify({
+            ...(JSON.parse(canonicalJson) as object),
+            icon: "archive",
+            spawnedBy: null,
+          }),
+          "agent:main:child",
+        );
       expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
         foundGroups: 1,
         repairedGroups: 1,
