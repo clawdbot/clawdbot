@@ -2,7 +2,7 @@
  * Contract suite for bundled plugin registration ownership and manifest auth metadata.
  */
 import { describe, expect, it } from "vitest";
-import { pluginRegistrationContractRegistry } from "../../plugins/contracts/registry.js";
+import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "../../plugins/contracts/inventory/bundled-capability-metadata.js";
 import { loadPluginManifestRegistryCore } from "../../plugins/manifest-registry.js";
 
 type PluginRegistrationContractParams = {
@@ -31,7 +31,7 @@ type PluginRegistrationContractParams = {
 };
 
 function findRegistration(pluginId: string) {
-  const entry = pluginRegistrationContractRegistry.find(
+  const entry = BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.find(
     (candidate) => candidate.pluginId === pluginId,
   );
   if (!entry) {
