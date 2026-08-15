@@ -1,4 +1,4 @@
-import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import { stableStringify } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   SkillProposalEvaluation,
