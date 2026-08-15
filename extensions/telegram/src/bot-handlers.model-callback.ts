@@ -283,10 +283,10 @@ export async function handleTelegramModelCallback(params: {
           ? "Compatible auth profile retained."
           : "Incompatible auth profile cleared."
         : undefined;
-    // The picker's provider/model-list steps already edit through the rich funnel when
-    // richMessages is enabled (createTelegramCallbackMessageActions); this final
-    // confirmation edits that same rich-sent message, so it must render as rich content
-    // too — a legacy-HTML edit here leaves the prior rich body's markup visible
+    // The picker's provider/model-list steps stay on the legacy HTML funnel (no
+    // richTextOverride supplied). This final confirmation edits the same rich-sent
+    // message, so it must explicitly opt into the rich funnel via richTextOverride --
+    // a legacy-HTML edit here would leave the prior rich body's markup visible
     // underneath the new text instead of replacing it (issue #123886).
     const confirmation = buildModelSelectionConfirmation({
       isDefaultSelection,
