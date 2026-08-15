@@ -2,8 +2,11 @@ import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import { createPlacementFailureActions } from "./placement-dispatch-failure.js";
-import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
-import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-force-abandon.js";
+import {
+  FORCED_WORKER_ABANDONMENT_ERROR,
+  REQUEST,
+  seedActivePlacement,
+} from "./placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
