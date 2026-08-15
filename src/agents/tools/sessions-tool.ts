@@ -103,6 +103,12 @@ const SessionsToolSchema = Type.Object(
     label: Type.Optional(
       Type.String({ description: "Sidebar title override. Empty string clears it." }),
     ),
+    icon: Type.Optional(
+      Type.String({
+        description:
+          "Persistent sidebar icon: a single emoji. Empty string clears it. Distinct from attention, which is temporary.",
+      }),
+    ),
     statusNote: Type.Optional(
       Type.String({
         maxLength: 120,
@@ -303,7 +309,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     label: "Sessions",
     name: "sessions",
     description:
-      "Session settings, reset, delete, and groups: patch label/status, pin, archive/restore, model/thinking override; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
+      "Session settings, reset, delete, and groups: patch label/icon/status, pin, archive/restore, model/thinking override; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
     parameters: SessionsToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
@@ -408,6 +414,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         key,
         ...lifecycleIdentity,
         ...(params.label !== undefined ? { label: readClearableString(params, "label") } : {}),
+        ...(params.icon !== undefined ? { icon: readClearableString(params, "icon") } : {}),
         ...(params.statusNote !== undefined
           ? { statusNote: readClearableString(params, "statusNote") }
           : {}),

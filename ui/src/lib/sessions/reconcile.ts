@@ -446,6 +446,9 @@ export function reconcileSessionChanged(
   if (rowFields.label === null) {
     delete row.label;
   }
+  if (rowFields.icon === null) {
+    delete row.icon;
+  }
   if (rowFields.category === null) {
     delete row.category;
   }

@@ -117,12 +117,26 @@ export function renderSessionLeadingState(
   const trailingIndicator = session.isChild
     ? nothing
     : renderSessionTrailingState(session, pullRequestState);
+  // Transient attention always outranks the persistent decorative icon.
   if (session.isChild) {
     if (session.attention.kind !== "none") {
       return {
         running,
         leadingIndicator: renderSessionGlyph({
           content: renderSessionAttentionIcon(session.attention),
+          running,
+          badge: renderGlyphBadge(session, pullRequestState),
+        }),
+        trailingIndicator,
+      };
+    }
+    if (session.icon) {
+      return {
+        running,
+        leadingIndicator: renderSessionGlyph({
+          content: html`<span class="session-glyph__emoji" aria-hidden="true"
+            >${session.icon}</span
+          >`,
           running,
           badge: renderGlyphBadge(session, pullRequestState),
         }),
@@ -156,6 +170,16 @@ export function renderSessionLeadingState(
       running,
       leadingIndicator: renderSessionGlyph({
         content: renderSessionAttentionIcon(session.attention),
+        running: false,
+      }),
+      trailingIndicator,
+    };
+  }
+  if (session.icon) {
+    return {
+      running,
+      leadingIndicator: renderSessionGlyph({
+        content: html`<span class="session-glyph__emoji" aria-hidden="true">${session.icon}</span>`,
         running: false,
       }),
       trailingIndicator,

@@ -17,6 +17,7 @@ type SessionMenuData = {
   unread: boolean;
   archived: boolean;
   category: string | null;
+  icon: string | null;
   categoryClearReturnsToGroups: boolean;
 };
 
@@ -37,6 +38,7 @@ export type SessionMenuAction =
   | { kind: "toggle-pin" }
   | { kind: "toggle-unread" }
   | { kind: "rename" }
+  | { kind: "set-icon"; icon: string | null }
   | { kind: "fork" }
   | { kind: "workboard" }
   | { kind: "move-to-group"; category: string | null }
@@ -53,8 +55,11 @@ const EMPTY_SESSION: SessionMenuData = {
   unread: false,
   archived: false,
   category: null,
+  icon: null,
   categoryClearReturnsToGroups: false,
 };
+
+const SESSION_ICON_CHOICES = ["🦞", "🚀", "🐛", "✅", "🔥", "📝", "⭐", "📦"] as const;
 
 class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) session: SessionMenuData = EMPTY_SESSION;
@@ -148,6 +153,14 @@ class SessionMenu extends OpenClawLightDomElement {
       this.runAction({
         kind: "move-to-group",
         category: encodedCategory ? decodeURIComponent(encodedCategory) : null,
+      });
+      return;
+    }
+    if (value.startsWith("set-icon:")) {
+      const encodedIcon = value.slice("set-icon:".length);
+      this.runAction({
+        kind: "set-icon",
+        icon: encodedIcon ? decodeURIComponent(encodedIcon) : null,
       });
     }
   };
@@ -259,6 +272,47 @@ class SessionMenu extends OpenClawLightDomElement {
     `;
   }
 
+  private renderIconSubmenu() {
+    const currentIcon = this.session.icon;
+    return html`
+      ${SESSION_ICON_CHOICES.map((icon) => {
+        const checked = currentIcon === icon;
+        return html`
+          <wa-dropdown-item
+            slot="submenu"
+            class="session-menu__item"
+            value=${`set-icon:${encodeURIComponent(icon)}`}
+            role="menuitemradio"
+            aria-checked=${String(checked)}
+            ${ref((element) => syncDropdownItemRadio(element, checked))}
+            ?disabled=${this.actionDisabled("set-icon")}
+            title=${this.actionTitle("set-icon")}
+          >
+            <span class="session-menu__text">${icon}</span>
+            ${checked
+              ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
+                  >${icons.check}</span
+                >`
+              : nothing}
+          </wa-dropdown-item>
+        `;
+      })}
+      ${currentIcon
+        ? html`
+            <wa-dropdown-item
+              slot="submenu"
+              class="session-menu__item"
+              value="set-icon:"
+              ?disabled=${this.actionDisabled("set-icon")}
+              title=${this.actionTitle("set-icon")}
+            >
+              <span class="session-menu__text">${t("sessionsView.removeIcon")}</span>
+            </wa-dropdown-item>
+          `
+        : nothing}
+    `;
+  }
+
   override render() {
     const menuWidth = 240;
     const menuMaxHeight = 460;
@@ -353,6 +407,17 @@ class SessionMenu extends OpenClawLightDomElement {
                 <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.edit}</span>
                 <span class="session-menu__text">${t("sessionsView.renameSessionMenu")}</span>
                 ${menuShortcutHint("r")}
+              </wa-dropdown-item>
+              <wa-dropdown-item
+                class="session-menu__item"
+                data-shortcut="i"
+                aria-keyshortcuts="I"
+                ?disabled=${this.actionDisabled("set-icon")}
+                title=${this.actionTitle("set-icon")}
+              >
+                <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.star}</span>
+                <span class="session-menu__text">${t("sessionsView.setIconMenu")}</span>
+                ${menuShortcutHint("i")} ${this.renderIconSubmenu()}
               </wa-dropdown-item>
               <wa-dropdown-item
                 class="session-menu__item"

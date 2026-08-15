@@ -113,8 +113,7 @@ export function bindSessionNode(params: {
     label: normalizeText(params.entry.label),
     display_name: normalizeText(params.entry.displayName),
     category: normalizeText(params.entry.category),
-    // The retired custom-icon column remains nullable until a future schema-version migration.
-    icon: null,
+    icon: normalizeText(canonicalEntry.icon),
     pinned_at: finiteSqliteNumber(params.entry.pinnedAt),
     archived_at: finiteSqliteNumber(params.entry.archivedAt),
     last_read_at: finiteSqliteNumber(params.entry.lastReadAt),
