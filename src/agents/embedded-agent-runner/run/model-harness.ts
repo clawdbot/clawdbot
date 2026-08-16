@@ -46,18 +46,17 @@ export function resolveEmbeddedRunEffectiveModel(
     runtimeModel: params.runtimeModel,
     nativeModelOwned: params.nativeModelOwned,
   });
-  if (params.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID) {
-    return resolved;
-  }
-  // Native transports own discovery and fixed-contract windows. Forward only
-  // the operator-authored cap so provider metadata cannot become a native override.
+  const authoredContextTokenCap =
+    params.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID
+      ? undefined
+      : resolveAuthoredModelContextTokens({
+          cfg: params.runParams.config,
+          provider: contextConfigProvider,
+          model: params.modelId,
+        });
   return {
     ...resolved,
-    contextTokenBudget: resolveAuthoredModelContextTokens({
-      cfg: params.runParams.config,
-      provider: contextConfigProvider,
-      model: params.modelId,
-    }),
+    ...(authoredContextTokenCap === undefined ? {} : { authoredContextTokenCap }),
   };
 }
 

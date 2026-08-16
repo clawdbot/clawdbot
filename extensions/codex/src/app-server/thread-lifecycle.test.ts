@@ -68,7 +68,7 @@ describe("Codex context window config", () => {
   it("forwards only a prepared cap on thread start and resume (#124702)", () => {
     const appServer = createAppServerOptions() as never;
     const capped = createAttemptParams({ provider: "openai" });
-    capped.contextTokenBudget = 32_000;
+    capped.authoredContextTokenCap = 32_000;
     const uncapped = createAttemptParams({ provider: "openai" });
     const build = (params: EmbeddedRunAttemptParams) => [
       buildThreadStartParams(params, {

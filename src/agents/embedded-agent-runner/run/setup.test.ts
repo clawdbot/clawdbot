@@ -298,7 +298,7 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
     expect(result.effectiveModel.contextWindow).toBe(272_000);
   });
 
-  it("prepares only an authored per-model cap for plugin-owned transports (#124702)", () => {
+  it("preserves the effective budget and adds an authored cap for plugin transports (#124702)", () => {
     const resolve = (models: ModelDefinitionConfig[]) =>
       resolveEmbeddedRunEffectiveModel({
         runParams: {
@@ -309,17 +309,18 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
         provider: "openai",
         modelConfigProvider: "openai",
         modelId: "gpt-5.5",
-        agentHarnessId: "codex",
+        agentHarnessId: "claude-cli",
         runtimeModel: createRuntimeModel(),
         nativeModelOwned: false,
       });
 
-    expect(resolve([createConfiguredModel({ contextTokens: 32_000 })]).contextTokenBudget).toBe(
-      32_000,
-    );
-    expect(
-      resolve([createConfiguredModel({ contextTokens: undefined })]).contextTokenBudget,
-    ).toBeUndefined();
+    const capped = resolve([createConfiguredModel({ contextTokens: 32_000 })]);
+    expect(capped.contextTokenBudget).toBe(32_000);
+    expect(capped.authoredContextTokenCap).toBe(32_000);
+
+    const discovered = resolve([]);
+    expect(discovered.contextTokenBudget).toBe(272_000);
+    expect(discovered).not.toHaveProperty("authoredContextTokenCap");
   });
 });
 
