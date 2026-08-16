@@ -1551,16 +1551,17 @@ function recordRuntimeAuthProfileStorePublicationEdge(
     owned.runtimeRevisionBeforePublication = runtime.runtimeRevision;
   }
   if (runtime.derivedRuntimeStores !== undefined) {
-    owned.derivedRuntimeRevisionsBeforePublication = runtime.derivedRuntimeStores.flatMap((entry) =>
-      typeof entry.runtimeRevision === "number"
-        ? [
-            {
-              databasePath: entry.databasePath,
-              agentDir: entry.agentDir,
-              runtimeRevision: entry.runtimeRevision,
-            },
-          ]
-        : [],
+    owned.derivedRuntimeRevisionsBeforePublication = runtime.derivedRuntimeStores.flatMap(
+      (entry) =>
+        typeof entry.runtimeRevision === "number"
+          ? [
+              {
+                databasePath: entry.databasePath,
+                agentDir: entry.agentDir,
+                runtimeRevision: entry.runtimeRevision,
+              },
+            ]
+          : [],
     );
   }
 }

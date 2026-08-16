@@ -350,7 +350,9 @@ vi.mock("../gateway/secret-input-paths.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../gateway/secret-input-paths.js")>();
   return {
     ...actual,
-    readGatewaySecretInputValue: (...args: Parameters<typeof actual.readGatewaySecretInputValue>) =>
+    readGatewaySecretInputValue: (
+      ...args: Parameters<typeof actual.readGatewaySecretInputValue>
+    ) =>
       mocks.readGatewaySecretInputValue.getMockImplementation()
         ? mocks.readGatewaySecretInputValue(...args)
         : actual.readGatewaySecretInputValue(...args),

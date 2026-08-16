@@ -64,8 +64,9 @@ function requireOnMessage(
 }
 
 function expectErrorContaining(errorFn: unknown, text: string): void {
-  const messages = ((errorFn as { mock?: { calls?: unknown[][] } }).mock?.calls ?? []).map((call) =>
-    typeof call[0] === "string" ? call[0] : call[0] instanceof Error ? call[0].message : "",
+  const messages = ((errorFn as { mock?: { calls?: unknown[][] } }).mock?.calls ?? []).map(
+    (call) =>
+      typeof call[0] === "string" ? call[0] : call[0] instanceof Error ? call[0].message : "",
   );
   expect(messages.join("\n")).toContain(text);
 }

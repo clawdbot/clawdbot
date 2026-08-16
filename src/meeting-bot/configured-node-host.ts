@@ -85,8 +85,8 @@ export function createMeetingConfiguredNodeHost(options: MeetingConfiguredNodeHo
       timeoutMs,
     });
     const commandNames = new Set(
-      [runtime.inputCommand, runtime.outputCommand, config.bargeInInputCommand].flatMap((command) =>
-        command?.[0] ? [command[0]] : [],
+      [runtime.inputCommand, runtime.outputCommand, config.bargeInInputCommand].flatMap(
+        (command) => (command?.[0] ? [command[0]] : []),
       ),
     );
     for (const command of commandNames) {
