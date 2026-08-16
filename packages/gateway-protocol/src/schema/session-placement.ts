@@ -252,7 +252,5 @@ export type SessionPlacementDiskSpace = Static<typeof SessionPlacementDiskSpaceS
 export type SessionsDispatchParams = Static<typeof SessionsDispatchParamsSchema>;
 export type SessionsDispatchResult = Static<typeof SessionsDispatchResultSchema>;
 export type SessionsReclaimParams = Static<typeof SessionsReclaimParamsSchema>;
-export type SessionsReclaimResultPlacement = Static<
-  typeof SessionsReclaimResultPlacementSchema
->;
+export type SessionsReclaimResultPlacement = Static<typeof SessionsReclaimResultPlacementSchema>;
 export type SessionsReclaimResult = Static<typeof SessionsReclaimResultSchema>;
