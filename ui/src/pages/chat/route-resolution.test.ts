@@ -786,8 +786,36 @@ describe("gateway-backed session route resolution", () => {
     );
 
     expect(loaded).not.toHaveProperty("kind", "session");
-    expect(list).not.toHaveBeenCalled();
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "roboclaw", search: "agent:roboclaw:deadbeef" }),
+    );
     expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("opens a mechanically composed single-segment UUID as its exact session key", async () => {
+    const literalKey = `agent:main:${uuid}`;
+    const literalRow = row({ key: literalKey, displayName: undefined });
+    const { context, list } = contextFor(({ agentId, search }) =>
+      agentId === "main" && search === literalKey ? result([literalRow]) : result([]),
+    );
+    const request = installShortResolver(context, [], { ok: false });
+
+    const loaded = await loadChatRoute(
+      context,
+      { pathname: `/chat/main/${uuid}`, search: "", hash: "" },
+      "chat",
+      new AbortController().signal,
+    );
+
+    expect(loaded).toMatchObject({
+      kind: "session",
+      sessionKey: literalKey,
+      canonicalLocation: { pathname: "/chat/main/12345678" },
+    });
+    expect(request).toHaveBeenCalledOnce();
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main", search: literalKey }),
+    );
   });
 
   it("prefers an exact literal key over slug matches", async () => {

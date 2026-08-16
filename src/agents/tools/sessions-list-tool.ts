@@ -148,12 +148,13 @@ export function createSessionsListTool(opts?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
+  sessionLinkBase?: string;
 }): AnyAgentTool {
   return {
     label: "Sessions",
     name: "sessions_list",
     displaySummary: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsListTool(),
+    description: describeSessionsListTool({ sessionLinkBase: opts?.sessionLinkBase }),
     parameters: SessionsListToolSchema,
     outputSchema: SessionsListOutputSchema,
     execute: async (_toolCallId, args) => {

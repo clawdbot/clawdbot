@@ -336,13 +336,14 @@ export function createSessionsSearchTool(opts?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
+  sessionLinkBase?: string;
 }): AnyAgentTool {
   const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
   return {
     label: "Sessions Search",
     name: "sessions_search",
     displaySummary: SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsSearchTool(),
+    description: describeSessionsSearchTool({ sessionLinkBase: opts?.sessionLinkBase }),
     parameters: SessionsSearchToolSchema,
     outputSchema: SessionsSearchOutputSchema,
     execute: async (_toolCallId, args) => {

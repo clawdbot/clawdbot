@@ -29,7 +29,13 @@ describe("parseControlUiSessionPath", () => {
     {
       name: "short ref",
       pathname: "/dashboard/main/12345678",
-      expected: { namespace: "dashboard", kind: "short", agentId: "main", shortId: "12345678" },
+      expected: {
+        namespace: "dashboard",
+        kind: "short",
+        agentId: "main",
+        shortId: "12345678",
+        literalSessionKey: "agent:main:12345678",
+      },
     },
     {
       name: "slugged short ref",
@@ -39,6 +45,7 @@ describe("parseControlUiSessionPath", () => {
         kind: "short",
         agentId: "wrong",
         shortId: "1234567890ab",
+        literalSessionKey: "agent:wrong:wrong-slug-1234567890AB",
         slugHint: "wrong-slug",
       },
     },
@@ -164,6 +171,7 @@ describe("parseControlUiSessionPath", () => {
           kind: "short",
           agentId: "main",
           shortId: "12345678",
+          literalSessionKey: "agent:main:deploy-monitor-12345678",
           slugHint: "deploy-monitor",
         },
       ],
@@ -175,5 +183,71 @@ describe("parseControlUiSessionPath", () => {
         expected,
       );
     }
+  });
+
+  it.each([
+    {
+      sessionKey: "agent:main:main",
+      expected: { namespace: "chat", kind: "main", agentId: "main" },
+    },
+    {
+      sessionKey: "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6",
+      expected: {
+        namespace: "chat",
+        kind: "literal",
+        agentId: "roboclaw",
+        sessionKey: "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6",
+      },
+    },
+    {
+      sessionKey: "agent:x:telegram:group:12345",
+      expected: {
+        namespace: "chat",
+        kind: "literal",
+        agentId: "x",
+        sessionKey: "agent:x:telegram:group:12345",
+      },
+    },
+    {
+      sessionKey: "agent:x:discord:direct:9",
+      expected: {
+        namespace: "chat",
+        kind: "literal",
+        agentId: "x",
+        sessionKey: "agent:x:discord:direct:9",
+      },
+    },
+    {
+      sessionKey: "agent:x:standup",
+      expected: {
+        namespace: "chat",
+        kind: "literal",
+        agentId: "x",
+        sessionKey: "agent:x:standup",
+        slugCandidate: "standup",
+      },
+    },
+    {
+      sessionKey: "agent:main:2139bddb-3211-4641-b993-10f619f124e6",
+      expected: {
+        namespace: "chat",
+        kind: "short",
+        agentId: "main",
+        shortId: "10f619f124e6",
+        slugHint: "2139bddb-3211-4641-b993",
+        literalSessionKey: "agent:main:2139bddb-3211-4641-b993-10f619f124e6",
+      },
+    },
+  ] satisfies ReadonlyArray<{
+    sessionKey: string;
+    expected: ControlUiSessionPathTarget;
+  }>)("parses the mechanically composed URL for $sessionKey", ({ sessionKey, expected }) => {
+    const base = "https://gateway.example/control";
+    const url =
+      sessionKey === "agent:main:main"
+        ? `${base}/chat/main`
+        : `${base}/chat/${sessionKey.slice("agent:".length).replaceAll(":", "/")}`;
+
+    expect(parseControlUiSessionPath(new URL(url).pathname, "/control")).toEqual(expected);
   });
 });

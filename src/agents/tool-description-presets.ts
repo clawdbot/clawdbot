@@ -55,28 +55,37 @@ export function describeSessionVisibilityScope(
   return SESSION_VISIBILITY_SCOPE_COPY[visibility];
 }
 
+type SessionLinkDescriptionOptions = { sessionLinkBase?: string };
+
+function describeSessionLinkLine(base: string): string {
+  return `When pointing the user at a session, cite its Control UI URL: main session -> \`${base}/chat/<agentId>\`; any other display session key -> \`${base}/chat/\` + key without leading \`agent:\`, with \`:\` replaced by \`/\`.`;
+}
+
 /** Describes the sessions_list tool for model-facing instructions. */
-export function describeSessionsListTool(): string {
+export function describeSessionsListTool(options?: SessionLinkDescriptionOptions): string {
   return [
     "List visible sessions; filter kind/label/agentId/search/activity/archive.",
     "Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles.",
     "Use before history/send target selection.",
+    ...(options?.sessionLinkBase ? [describeSessionLinkLine(options.sessionLinkBase)] : []),
   ].join(" ");
 }
 
 /** Describes the sessions_history tool for model-facing instructions. */
-export function describeSessionsHistoryTool(): string {
+export function describeSessionsHistoryTool(options?: SessionLinkDescriptionOptions): string {
   return [
     "Read sanitized visible-session history.",
     "Before reply/debug/resume. Supports limit, offset, search-result sessionId/messageId anchors, and tool messages.",
+    ...(options?.sessionLinkBase ? [describeSessionLinkLine(options.sessionLinkBase)] : []),
   ].join(" ");
 }
 
 /** Describes the sessions_search tool for model-facing instructions. */
-export function describeSessionsSearchTool(): string {
+export function describeSessionsSearchTool(options?: SessionLinkDescriptionOptions): string {
   return [
     "Search your own past sessions for matching user and assistant text.",
     "Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
+    ...(options?.sessionLinkBase ? [describeSessionLinkLine(options.sessionLinkBase)] : []),
   ].join(" ");
 }
 

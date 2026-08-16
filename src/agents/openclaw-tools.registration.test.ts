@@ -169,6 +169,25 @@ describe("openclaw-tools update_plan gating", () => {
     ).toBe(false);
   });
 
+  it("injects reachable Control UI session links into all session lookup tools", () => {
+    const tools = createTestOpenClawTools({
+      config: {
+        gateway: {
+          publicOrigin: "http://127.0.0.1:18789",
+          controlUi: { basePath: " /control/// " },
+        },
+      } as OpenClawConfig,
+      disablePluginTools: true,
+      wrapBeforeToolCallHook: false,
+    });
+    const guidance =
+      "When pointing the user at a session, cite its Control UI URL: main session -> `http://127.0.0.1:18789/control/chat/<agentId>`; any other display session key -> `http://127.0.0.1:18789/control/chat/` + key without leading `agent:`, with `:` replaced by `/`.";
+
+    for (const name of ["sessions_list", "sessions_history", "sessions_search"]) {
+      expect(expectToolNamed(tools, name).description).toContain(guidance);
+    }
+  });
+
   it("keeps message tool in embedded message-tool-only completions", () => {
     setEmbeddedMode(true);
     const tools = createTestOpenClawTools({

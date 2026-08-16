@@ -7,6 +7,8 @@ import {
   parseShortSessionRef,
 } from "./grammar.js";
 
+export { normalizeControlUiBasePath };
+
 // Control UI session URL grammar shared by browser and plugin consumers.
 export type ControlUiSessionNamespace = "chat" | "dashboard";
 

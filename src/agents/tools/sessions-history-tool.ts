@@ -363,12 +363,13 @@ export function createSessionsHistoryTool(opts?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
+  sessionLinkBase?: string;
 }): AnyAgentTool {
   return {
     label: "Session History",
     name: "sessions_history",
     displaySummary: SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsHistoryTool(),
+    description: describeSessionsHistoryTool({ sessionLinkBase: opts?.sessionLinkBase }),
     parameters: SessionsHistoryToolSchema,
     outputSchema: SessionsHistoryOutputSchema,
     execute: async (_toolCallId, args) => {
