@@ -51,7 +51,7 @@ import type { SidebarContent, SidebarFullMessageLoader } from "./components/chat
 import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
 import { renderChatTaskSuggestionTray } from "./components/chat-task-suggestions.ts";
 import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.ts";
-import type { ChatThreadProps, ReplyMessageAccess } from "./components/chat-thread-interactions.ts";
+import type { ReplyMessageAccess } from "./components/chat-thread-interactions.ts";
 import {
   renderTranscriptSearch,
   toggleTranscriptSearch,
@@ -101,7 +101,11 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     ) => void | Promise<void>;
     onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
     messages: unknown[];
-    historyPagination?: ChatThreadProps["historyPagination"];
+    historyPagination?: {
+      hasMore: boolean;
+      loading: boolean;
+      onShowEarlier: () => void;
+    };
     toolMessages: unknown[];
     streamSegments: ChatStreamSegment[];
     stream: string | null;
@@ -287,7 +291,7 @@ export function renderChat(props: ChatProps) {
       sessionKey: props.sessionKey,
       announceTranscript: props.announceTranscript,
       loading: props.loading,
-      historyPagination: props.historyPagination,
+      historyLoading: props.historyPagination?.loading,
       messages: props.messages,
       toolMessages: props.toolMessages,
       streamSegments: props.streamSegments,

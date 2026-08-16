@@ -60,11 +60,7 @@ export type ChatThreadProps = {
   boardProvider?: BoardProvider;
   announceTranscript?: boolean;
   loading: boolean;
-  historyPagination?: {
-    hasMore: boolean;
-    loading: boolean;
-    onShowEarlier: () => void;
-  };
+  historyLoading?: boolean;
   messages: unknown[];
   toolMessages: unknown[];
   streamSegments: ChatStreamSegment[];

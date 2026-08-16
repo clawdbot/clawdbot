@@ -23,7 +23,7 @@ export type ChatState = {
   currentSessionId?: string | null;
   reconnectResumeSessionId?: string | null;
   chatLoading: boolean;
-  chatHistoryPagination?: ChatHistoryPagination;
+  chatHistoryPagination: ChatHistoryPagination;
   chatMessages: unknown[];
   chatMessagesBySession?: ChatMessageCache;
   /** Active leaf of the history snapshot currently rendered by this pane. */

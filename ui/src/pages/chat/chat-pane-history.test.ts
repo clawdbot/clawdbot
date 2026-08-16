@@ -33,7 +33,6 @@ type TestChatPane = HTMLElement & {
   currentReplyNavigationId: (sessionKey: string) => string | null;
   hasOlderMessages: () => boolean;
   loadingOlder: boolean;
-  olderOffsetsSeen: Set<number>;
   resetOlderMessagesViewport: () => void;
   readonly updateComplete: Promise<boolean>;
   transcriptScrollTop: number | null;
@@ -688,9 +687,6 @@ describe("chat pane native history pagination", () => {
       nativeHistoryMessage(4),
     ];
     state.chatHistoryPagination = { hasMore: false, totalMessages: 4 };
-    pane.olderOffsetsSeen.add(2);
-    pane.olderOffsetsSeen.add(4);
-
     await loadChatHistory(state);
 
     expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]);
@@ -699,7 +695,6 @@ describe("chat pane native history pagination", () => {
       totalMessages: 4,
     });
     expect(pane.hasOlderMessages()).toBe(false);
-    expect(pane.olderOffsetsSeen).toEqual(new Set());
   });
 
   it("keeps projected siblings while replacing the overlapping tail", async () => {

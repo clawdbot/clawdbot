@@ -285,7 +285,7 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
     const attachmentReadSignal = attachmentReads.readSignal;
     const historyHasMore = catalogKey
       ? Boolean(this.catalogCursor)
-      : state.chatHistoryPagination?.hasMore === true;
+      : state.chatHistoryPagination.hasMore;
     const sessionActionCallbacks = createChatPaneSessionActionCallbacks({
       getSnapshot: () => this.context.gateway.snapshot,
       hasLocalRun: () => Boolean(state.chatRunId),
