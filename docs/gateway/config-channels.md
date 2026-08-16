@@ -122,7 +122,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       textChunkLimit: 4000,
       streaming: { chunkMode: "length" }, // length | newline
       mediaMaxMb: 50,
-      sendReadReceipts: true, // blue ticks (false in self-chat mode)
+      sendReadReceipts: true, // blue ticks (keep true if in groups; false in self-chat mode)
       groups: {
         "*": { requireMention: true },
       },
@@ -134,6 +134,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 ```
 
 - Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for WhatsApp DMs and groups. Use an E.164 direct number or WhatsApp group JID in `match.peer.id`. Field semantics are shared in [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
+- Disabling `sendReadReceipts` (`false`) suppresses all read receipts on the connection. On linked devices, WhatsApp servers mandate read receipts for groups; disabling them may cause WhatsApp servers to silently stop delivering group messages to the linked device while 1:1 DMs continue working. Keep `sendReadReceipts: true` if participating in WhatsApp groups.
 
 <Accordion title="Multi-account WhatsApp">
 

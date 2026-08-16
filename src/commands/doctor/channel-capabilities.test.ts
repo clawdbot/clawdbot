@@ -1,6 +1,8 @@
-// Doctor channel capability tests cover channel capability inspection and diagnostics.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { collectChannelDmPolicyDependencyWarnings } from "../../config/validation-channel-rules.js";
+import {
+  collectChannelDmPolicyDependencyWarnings,
+  collectWhatsAppReadReceiptsGroupWarnings,
+} from "../../config/validation-channel-rules.js";
 import {
   getDoctorChannelCapabilities,
   resolveDoctorChannelAccountIds,
@@ -138,5 +140,51 @@ describe("doctor channel capabilities", () => {
       configured: ["work"],
       runtime: ["default", "work"],
     });
+  });
+
+  it("warns when WhatsApp has sendReadReceipts: false with group messaging enabled", () => {
+    const warnings = collectWhatsAppReadReceiptsGroupWarnings({
+      channels: {
+        whatsapp: {
+          sendReadReceipts: false,
+          groupPolicy: "allowlist",
+          accounts: {
+            work: {
+              sendReadReceipts: false,
+              groupPolicy: "open",
+            },
+            personal: {
+              sendReadReceipts: false,
+              groupPolicy: "disabled",
+            },
+          },
+        },
+      },
+    });
+
+    expect(warnings.map(({ path }) => path)).toEqual([
+      "channels.whatsapp.sendReadReceipts",
+      "channels.whatsapp.accounts.work.sendReadReceipts",
+    ]);
+    expect(warnings[0]?.message).toContain("suppresses all read receipts");
+  });
+
+  it("does not warn when WhatsApp group messaging is disabled", () => {
+    const warnings = collectWhatsAppReadReceiptsGroupWarnings({
+      channels: {
+        whatsapp: {
+          sendReadReceipts: false,
+          groupPolicy: "disabled",
+          accounts: {
+            work: {
+              sendReadReceipts: false,
+              groupPolicy: "disabled",
+            },
+          },
+        },
+      },
+    });
+
+    expect(warnings).toEqual([]);
   });
 });
