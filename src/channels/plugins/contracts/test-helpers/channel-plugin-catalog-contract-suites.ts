@@ -5,9 +5,12 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../../test/helpers/temp-dir.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../../infra/tmp-openclaw-dir.js";
 import { listRawChannelPluginCatalogEntries } from "../../catalog.js";
+
+type MakeTempDir = (prefix: string, root?: string) => string;
 
 type CatalogQuery = {
   catalogPaths?: string[];
@@ -75,11 +78,12 @@ function writeCatalogFile(
 }
 
 function createTemporaryCatalogFile(
+  makeTempDir: MakeTempDir,
   prefix: string,
   entry: Record<string, unknown>,
   richManifest = false,
 ) {
-  const directory = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), prefix));
+  const directory = makeTempDir(prefix, resolvePreferredOpenClawTmpDir());
   const catalogPath = path.join(directory, "catalog.json");
   writeCatalogFile(catalogPath, entry, richManifest);
   return catalogPath;
@@ -122,12 +126,13 @@ function writeDiscoveredChannelPlugin(params: {
 
 function createRichExternalCatalogCase(
   fixture: RichExternalCatalogFixture,
+  makeTempDir: MakeTempDir,
 ): ChannelCatalogContractCase {
   return {
     name: fixture.name,
     setup: () => ({
       channelId: fixture.channelId,
-      catalogPaths: [createTemporaryCatalogFile(fixture.prefix, fixture.entry, true)],
+      catalogPaths: [createTemporaryCatalogFile(makeTempDir, fixture.prefix, fixture.entry, true)],
       expected: fixture.expected,
     }),
   };
@@ -300,6 +305,7 @@ const [richNpmCatalogFixture, clawhubCatalogFixture, yuanbaoCatalogFixture] = [
 
 /** Installs catalog entry tests shared by plugin registry and manifest suites. */
 export function describeChannelPluginCatalogEntriesContract() {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const cases: ChannelCatalogContractCase[] = [
     {
       name: "includes external catalog entries",
@@ -307,6 +313,7 @@ export function describeChannelPluginCatalogEntriesContract() {
         channelId: "demo-channel",
         catalogPaths: [
           createTemporaryCatalogFile(
+            tempDirs.make,
             "openclaw-catalog-",
             createCatalogEntry({
               packageName: "@openclaw/demo-channel",
@@ -323,8 +330,9 @@ export function describeChannelPluginCatalogEntriesContract() {
     {
       name: "preserves plugin ids when they differ from channel ids",
       setup: () => {
-        const stateDir = fs.mkdtempSync(
-          path.join(resolvePreferredOpenClawTmpDir(), "openclaw-channel-catalog-state-"),
+        const stateDir = tempDirs.make(
+          "openclaw-channel-catalog-state-",
+          resolvePreferredOpenClawTmpDir(),
         );
         writeDiscoveredChannelPlugin({
           stateDir,
@@ -347,9 +355,7 @@ export function describeChannelPluginCatalogEntriesContract() {
     {
       name: "keeps discovered plugins ahead of external catalog overrides",
       setup: () => {
-        const stateDir = fs.mkdtempSync(
-          path.join(resolvePreferredOpenClawTmpDir(), "openclaw-catalog-state-"),
-        );
+        const stateDir = tempDirs.make("openclaw-catalog-state-", resolvePreferredOpenClawTmpDir());
         const catalogPath = path.join(stateDir, "catalog.json");
         writeDiscoveredChannelPlugin({
           stateDir,
@@ -384,13 +390,13 @@ export function describeChannelPluginCatalogEntriesContract() {
         };
       },
     },
-    createRichExternalCatalogCase(richNpmCatalogFixture),
+    createRichExternalCatalogCase(richNpmCatalogFixture, tempDirs.make),
     {
       name: "pins bare external prerelease package specs to the entry version",
       setup: () => ({
         channelId: "prerelease-demo",
         catalogPaths: [
-          createTemporaryCatalogFile("openclaw-catalog-prerelease-", {
+          createTemporaryCatalogFile(tempDirs.make, "openclaw-catalog-prerelease-", {
             ...createCatalogEntry({
               packageName: "@openclaw/prerelease-demo-channel",
               channelId: "prerelease-demo",
@@ -414,8 +420,8 @@ export function describeChannelPluginCatalogEntriesContract() {
         },
       }),
     },
-    createRichExternalCatalogCase(clawhubCatalogFixture),
-    createRichExternalCatalogCase(yuanbaoCatalogFixture),
+    createRichExternalCatalogCase(clawhubCatalogFixture, tempDirs.make),
+    createRichExternalCatalogCase(yuanbaoCatalogFixture, tempDirs.make),
   ];
 
   describe("channel plugin catalog entries contract", () => {
@@ -430,14 +436,13 @@ export function describeChannelPluginCatalogEntriesContract() {
 
 /** Installs catalog path resolution tests that depend on env/home/state paths. */
 export function describeChannelPluginCatalogPathResolutionContract() {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   describe("channel plugin catalog path resolution contract", () => {
     it.each([
       {
         name: "uses the provided env for external catalog path resolution",
         setup: () => {
-          const home = fs.mkdtempSync(
-            path.join(resolvePreferredOpenClawTmpDir(), "openclaw-catalog-home-"),
-          );
+          const home = tempDirs.make("openclaw-catalog-home-", resolvePreferredOpenClawTmpDir());
           writeCatalogFile(
             path.join(home, "catalog.json"),
             createCatalogEntry({
@@ -462,8 +467,9 @@ export function describeChannelPluginCatalogPathResolutionContract() {
       {
         name: "uses the provided env for default catalog paths",
         setup: () => {
-          const stateDir = fs.mkdtempSync(
-            path.join(resolvePreferredOpenClawTmpDir(), "openclaw-catalog-state-"),
+          const stateDir = tempDirs.make(
+            "openclaw-catalog-state-",
+            resolvePreferredOpenClawTmpDir(),
           );
           const catalogPath = path.join(stateDir, "plugins", "catalog.json");
           fs.mkdirSync(path.dirname(catalogPath), { recursive: true });

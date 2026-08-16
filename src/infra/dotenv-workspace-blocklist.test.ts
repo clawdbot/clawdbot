@@ -1,8 +1,8 @@
 // Tests workspace dotenv blocklist completeness across shipped runtime controls.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
@@ -11,6 +11,8 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { loadDotEnv, loadWorkspaceDotEnvFile } from "./dotenv.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type DotEnvFixture = {
   base: string;
@@ -34,7 +36,7 @@ async function withIsolatedEnvAndCwd(run: () => Promise<void>) {
 }
 
 async function withDotEnvFixture(run: (fixture: DotEnvFixture) => Promise<void>) {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-test-"));
+  const base = tempDirs.make("openclaw-dotenv-test-");
   const cwdDir = path.join(base, "cwd");
   const stateDir = path.join(base, "state");
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);

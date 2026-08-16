@@ -1,6 +1,5 @@
 // Google tests cover transport stream plugin behavior.
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -8,6 +7,9 @@ import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-ru
 import type { Model, ProviderContext } from "openclaw/plugin-sdk/llm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetGoogleVertexAdcState } from "./google-oauth.test-support.js";
+import { useAutoCleanupTempDirTracker } from "./temp-dir.test-support.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const {
   buildGuardedModelFetchMock,
@@ -165,7 +167,7 @@ async function useGoogleAuthorizedUserCredentials(
   refreshToken: string,
   quotaProjectId?: string,
 ) {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), `openclaw-google-vertex-${label}-`));
+  const tempDir = tempDirs.make(`openclaw-google-vertex-${label}-`);
   const credentialsPath = path.join(tempDir, "application_default_credentials.json");
   await writeFile(
     credentialsPath,
@@ -183,7 +185,7 @@ async function useGoogleAuthorizedUserCredentials(
 }
 
 async function useGoogleAuthLibraryCredentials(label: string, token?: string): Promise<void> {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), `openclaw-google-vertex-${label}-`));
+  const tempDir = tempDirs.make(`openclaw-google-vertex-${label}-`);
   vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
   vi.stubEnv("HOME", path.join(tempDir, "home"));
   vi.stubEnv("APPDATA", "");
@@ -1590,7 +1592,7 @@ describe("google transport stream", () => {
   ])(
     "routes the %s Vertex multi-region through the production stream",
     async (location, origin) => {
-      const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-region-"));
+      const tempDir = tempDirs.make("openclaw-google-vertex-region-");
       vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
       vi.stubEnv("HOME", path.join(tempDir, "home"));
       vi.stubEnv("APPDATA", "");
@@ -1639,7 +1641,7 @@ describe("google transport stream", () => {
   });
 
   it("never refreshes stale home ADC when the selected Cloud SDK directory has no credentials", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-stale-home-"));
+    const tempDir = tempDirs.make("openclaw-google-vertex-stale-home-");
     const homeCredentialsDir = path.join(tempDir, "home", ".config", "gcloud");
     await mkdir(homeCredentialsDir, { recursive: true });
     await writeFile(
@@ -1670,7 +1672,7 @@ describe("google transport stream", () => {
   });
 
   it("bounds Google Vertex ADC files before google-auth-library reads them", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-file-"));
+    const tempDir = tempDirs.make("openclaw-google-vertex-adc-file-");
     const credentialsPath = path.join(tempDir, "application_default_credentials.json");
     const credentials = {
       type: "service_account",
@@ -1811,9 +1813,7 @@ describe("google transport stream", () => {
           }),
         );
       } else if (credentialType === "service_account") {
-        const tempDir = await mkdtemp(
-          path.join(os.tmpdir(), "openclaw-google-vertex-quota-service-"),
-        );
+        const tempDir = tempDirs.make("openclaw-google-vertex-quota-service-");
         const credentialsPath = path.join(tempDir, "application_default_credentials.json");
         await writeFile(
           credentialsPath,
@@ -1827,9 +1827,7 @@ describe("google transport stream", () => {
         vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
         googleAuthGetAccessTokenMock.mockResolvedValueOnce("fixture-vertex-token");
       } else {
-        const tempDir = await mkdtemp(
-          path.join(os.tmpdir(), "openclaw-google-vertex-quota-metadata-"),
-        );
+        const tempDir = tempDirs.make("openclaw-google-vertex-quota-metadata-");
         vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
         vi.stubEnv("HOME", path.join(tempDir, "home"));
         vi.stubEnv("APPDATA", "");
@@ -1854,7 +1852,7 @@ describe("google transport stream", () => {
   );
 
   it("strips redundant google provider prefixes from Google Vertex model paths", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-prefix-"));
+    const tempDir = tempDirs.make("openclaw-google-vertex-prefix-");
     vi.stubEnv("HOME", path.join(tempDir, "home"));
     vi.stubEnv("APPDATA", "");
     vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
@@ -2033,7 +2031,7 @@ describe("google transport stream", () => {
   });
 
   it("refreshes authorized_user ADC from the Windows APPDATA fallback for Google Vertex requests", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-appdata-adc-"));
+    const tempDir = tempDirs.make("openclaw-google-vertex-appdata-adc-");
     const homeDir = path.join(tempDir, "home");
     const appDataDir = path.join(tempDir, "AppData", "Roaming");
     const fallbackDir = path.join(appDataDir, "gcloud");

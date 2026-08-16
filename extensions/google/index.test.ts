@@ -1,6 +1,5 @@
 // Google tests cover index plugin behavior.
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
@@ -19,11 +18,14 @@ import type {
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import googlePlugin from "./index.js";
 import googleProviderDiscovery from "./provider-discovery.js";
 import { registerGoogleProvider } from "./provider-registration.js";
+import { useAutoCleanupTempDirTracker } from "./temp-dir.test-support.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const { createRealtimeBridgeMock } = vi.hoisted(() => ({
   createRealtimeBridgeMock: vi.fn<(req: RealtimeVoiceBridgeCreateRequest) => RealtimeVoiceBridge>(),
@@ -266,7 +268,7 @@ describe("google provider plugin hooks", () => {
   });
 
   it("resolves Google Vertex ADC auth evidence to the config marker", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-config-key-"));
+    const tempDir = tempDirs.make("openclaw-google-vertex-config-key-");
     const credentialsPath = path.join(tempDir, "application_default_credentials.json");
     await writeFile(
       credentialsPath,
@@ -319,7 +321,7 @@ describe("google provider plugin hooks", () => {
   });
 
   it("prefers relocated Google Cloud SDK ADC over the home fallback", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-cloud-sdk-"));
+    const tempDir = tempDirs.make("openclaw-google-vertex-cloud-sdk-");
     const cloudSdkDir = path.join(tempDir, "cloud-sdk");
     const homeCredentialsDir = path.join(tempDir, "home", ".config", "gcloud");
     await Promise.all([

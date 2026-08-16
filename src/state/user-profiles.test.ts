@@ -1,7 +1,7 @@
-import { mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db.js";
 import {
@@ -23,12 +23,11 @@ import {
   setDisplayName,
 } from "./user-profiles.js";
 
-const statePaths: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function stateOptions() {
-  const directory = mkdtempSync(join(tmpdir(), "openclaw-user-profiles-"));
+  const directory = tempDirs.make("openclaw-user-profiles-");
   const path = join(directory, "openclaw.sqlite");
-  statePaths.push(path);
   return { path };
 }
 
@@ -51,6 +50,8 @@ async function ensureTailscaleProfileWithAvatar(
   return await adoptTailscaleProfileAvatar(profile.id, identity.profilePic, options, fetchOptions);
 }
 
+// Vitest unwinds hooks in reverse registration order, so this closes the database
+// before the earlier tracker hook removes its directory.
 afterEach(() => {
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
