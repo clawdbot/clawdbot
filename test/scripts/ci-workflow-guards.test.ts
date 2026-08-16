@@ -7576,6 +7576,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       ],
     ]);
     for (const [job, codeStepNames] of selectedCodeSteps) {
+      expect(job.environment).toBe("qa-live-shared");
       const stepIndex = (name: string) =>
         job.steps.findIndex((step: WorkflowStep) => step.name === name);
       const trustedCheckout = job.steps[0];

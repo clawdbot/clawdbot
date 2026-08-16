@@ -280,6 +280,8 @@ jobs:
     name: Plan QA profile shards
     needs: validate_selected_ref
     runs-on: blacksmith-8vcpu-ubuntu-2404
+    # Every job executing selected-revision code stays behind the protected QA environment.
+    environment: qa-live-shared
     outputs:
       channel_driver: ${{ steps.plan.outputs.channel_driver }}
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -632,6 +634,8 @@ jobs:
     needs: [validate_selected_ref, plan_qa_profile, run_qa_profile_shard]
     if: ${{ always() && needs.validate_selected_ref.result == 'success' && needs.plan_qa_profile.result == 'success' }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
+    # Every job executing selected-revision code stays behind the protected QA environment.
+    environment: qa-live-shared
     timeout-minutes: 30
     outputs:
       artifact_name: ${{ steps.evidence.outputs.artifact_name }}
