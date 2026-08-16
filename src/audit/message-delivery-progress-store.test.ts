@@ -23,6 +23,22 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const PINNED_PRE_C04_READER_SHA = "65922f95070abd58684675349593a217b193fe0f";
 
+function ensurePinnedReaderCommit(repositoryRoot: string): void {
+  try {
+    execFileSync("git", ["cat-file", "-e", `${PINNED_PRE_C04_READER_SHA}^{commit}`], {
+      cwd: repositoryRoot,
+      stdio: "pipe",
+    });
+  } catch {
+    // CI checks out a depth-one synthetic merge. Fetch only the immutable proof
+    // reader when that object is absent; never substitute the moving base ref.
+    execFileSync("git", ["fetch", "--no-tags", "--depth=1", "origin", PINNED_PRE_C04_READER_SHA], {
+      cwd: repositoryRoot,
+      stdio: "pipe",
+    });
+  }
+}
+
 function databaseOptions() {
   return { env: { OPENCLAW_STATE_DIR: tempDirs.make("message-progress-") } };
 }
@@ -208,6 +224,7 @@ describe("outbound message progress companion", () => {
     closeOpenClawStateDatabaseForTest();
 
     const repositoryRoot = process.cwd();
+    ensurePinnedReaderCommit(repositoryRoot);
     const checkoutParent = tempDirs.make("message-progress-pinned-reader-");
     const pinnedCheckout = path.join(checkoutParent, "checkout");
     execFileSync(
@@ -219,7 +236,7 @@ describe("outbound message progress companion", () => {
       fs.symlinkSync(
         path.join(repositoryRoot, "node_modules"),
         path.join(pinnedCheckout, "node_modules"),
-        "dir",
+        process.platform === "win32" ? "junction" : "dir",
       );
       const pinnedResult = execFileSync(
         process.execPath,
