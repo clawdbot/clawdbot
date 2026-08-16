@@ -242,7 +242,7 @@ The sidebar organizes everything around the agent. The identity row at the top i
 
 ### Session icons
 
-Choose **Set icon** from a single session's context menu to give its sidebar row one persistent emoji. The `sessions` agent tool can set the same `icon` field; only one emoji grapheme is accepted, and an empty value removes it. This decoration replaces the owner avatar in the leading glyph slot, but temporary attention state always takes precedence so an operator request cannot be hidden.
+Choose **Set icon** from a single session's context menu to give its sidebar row one persistent emoji or monochrome icon. The picker includes common emoji and six named icons: `braces`, `book`, `monitor`, `bot`, `kanban`, and `coins`. Choose **Custom emoji…** to enter any single emoji; on macOS, press Control-Command-Space to open the system emoji picker, or press Windows-period on Windows. The `sessions` agent tool can set the same `icon` field. An empty value removes it. This decoration replaces the owner avatar in the leading glyph slot, but temporary attention state always takes precedence so an operator request cannot be hidden.
 
 ## New session page
 

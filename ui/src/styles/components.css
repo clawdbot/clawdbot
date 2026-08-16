@@ -98,6 +98,17 @@ openclaw-session-owner-chip {
   line-height: 1;
 }
 
+.session-glyph__icon,
+.session-glyph__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.session-glyph__icon {
+  display: inline-flex;
+  color: inherit;
+}
+
 /* The ring is a circle, so square artwork (page icons, thumbnails, arbitrary
    SVGs) must shrink to keep its corners inside it. A 16px square scaled below
    0.75 clears its 21px inner circle; 20px circular avatars fill their lead. */
