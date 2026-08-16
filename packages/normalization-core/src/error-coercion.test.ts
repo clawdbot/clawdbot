@@ -16,9 +16,14 @@ describe("formatErrorMessage", () => {
   it("walks and deduplicates Error cause chains while preserving codes", () => {
     const root = Object.assign(new Error("socket closed"), { code: "ECONNRESET" });
     const inner = new Error("request failed", { cause: root });
-    const outer = new Error("request failed", { cause: inner });
+    const outer = Object.assign(new Error("request failed", { cause: inner }), {
+      code: "REQUEST_FAILED",
+    });
 
     expect(format(outer)).toBe("request failed | socket closed | ECONNRESET");
+    expect(formatErrorMessage(outer, { includeCode: true, redact: keepText })).toBe(
+      "request failed | REQUEST_FAILED | socket closed | ECONNRESET",
+    );
   });
 
   it("formats status/code records and structured non-Error causes", () => {

@@ -545,6 +545,29 @@ describe("TerminalConnection", () => {
     ]);
   });
 
+  it.each([
+    ["terminal.input", (conn: TerminalConnection) => conn.input("s1", "echo lost\n")],
+    ["terminal.resize", (conn: TerminalConnection) => conn.resize("s1", 120, 40)],
+  ] as const)("marks the session unavailable when %s rejects its live owner", async (_, act) => {
+    const { client, conn } = makeHarness();
+    const exits: unknown[] = [];
+    await openSession(conn, { onExit: (info) => exits.push(info) });
+    client.nextResponse = { ok: false };
+
+    await act(conn);
+
+    expect(exits).toEqual([
+      {
+        exitCode: null,
+        signal: null,
+        reason: "disconnected",
+        error: "Terminal session is no longer available. Open a new terminal session.",
+      },
+    ]);
+    expect(conn.size).toBe(0);
+    expect(client.listenerCount()).toBe(0);
+  });
+
   it("buffers output that races ahead of sink registration and replays it in order", async () => {
     const { client, conn } = makeHarness();
     const data: string[] = [];

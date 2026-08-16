@@ -612,11 +612,25 @@ export class TerminalConnection {
   }
 
   async input(sessionId: string, data: string): Promise<void> {
-    await this.client.request("terminal.input", { sessionId, data }).catch(() => undefined);
+    await this.requestAction("terminal.input", sessionId, { sessionId, data });
   }
 
   async resize(sessionId: string, cols: number, rows: number): Promise<void> {
-    await this.client.request("terminal.resize", { sessionId, cols, rows }).catch(() => undefined);
+    await this.requestAction("terminal.resize", sessionId, { sessionId, cols, rows });
+  }
+
+  private async requestAction(method: string, sessionId: string, params: unknown): Promise<void> {
+    const stream = this.streams.get(sessionId);
+    const result = await this.client.request<{ ok: boolean }>(method, params).catch(() => null);
+    if (result?.ok !== false || !stream || this.streams.get(sessionId) !== stream) {
+      return;
+    }
+    this.deliverExit(sessionId, stream, {
+      exitCode: null,
+      signal: null,
+      reason: "disconnected",
+      error: "Terminal session is no longer available. Open a new terminal session.",
+    });
   }
 
   /** Closes a session server-side and drops its local stream state. */

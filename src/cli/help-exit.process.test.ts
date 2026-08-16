@@ -391,9 +391,7 @@ describe("rejected CLI process state isolation", () => {
       pristineHome: true,
     });
 
-    expect(result.stderr).toContain(
-      "Error: --gateway-port must be an integer between 1 and 65535.",
-    );
+    expect(result.stderr).toContain("--gateway-port must be an integer between 1 and 65535.");
     await expect(fs.access(path.join(result.root, `.openclaw-${profile}`))).rejects.toMatchObject({
       code: "ENOENT",
     });
