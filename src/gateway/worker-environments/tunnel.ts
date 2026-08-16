@@ -18,10 +18,11 @@ import {
   workerSshOptions,
   workerSshRemoteCommand,
 } from "./ssh.js";
-import type {
-  WorkerTunnelHandle,
-  WorkerTunnelRequest,
-  WorkerTunnelStatus,
+import {
+  WorkerTunnelOwnerDisconnectedError,
+  type WorkerTunnelHandle,
+  type WorkerTunnelRequest,
+  type WorkerTunnelStatus,
 } from "./tunnel-contract.js";
 import {
   createWorkerSshRunner,
@@ -233,12 +234,34 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
   };
 
   const createHandle = (entry: TunnelEntry): WorkerTunnelHandle => {
+    const getPrepared = () =>
+      isCurrent(entry) && entry.status === "connected" ? entry.prepared : undefined;
+    // Handles outlive individual SSH children. Wait only on this owner's current barrier;
+    // replacement or stop makes the entry non-current and must remain fail-closed.
+    const waitForPrepared = async (): Promise<PreparedWorkerSsh> => {
+      while (isCurrent(entry)) {
+        const prepared = getPrepared();
+        if (prepared) {
+          return prepared;
+        }
+        const readiness = entry.readiness;
+        try {
+          await readiness.promise;
+        } catch (error) {
+          if (!isCurrent(entry)) {
+            break;
+          }
+          throw error;
+        }
+      }
+      throw new WorkerTunnelOwnerDisconnectedError();
+    };
     const workspace = createWorkerWorkspaceActions({
       environmentId: entry.environmentId,
       sharedHost: entry.sharedHost,
       ownerSignal: entry.abortController.signal,
-      isConnected: () => isCurrent(entry) && entry.status === "connected",
-      getPrepared: () => entry.prepared,
+      getPrepared,
+      waitForPrepared,
       runner,
       tasks: entry.workspaceTasks,
       bundleHash: entry.bundleHash,
@@ -342,6 +365,15 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
             entry.readiness = readiness;
           }
         });
+        if (isCurrent(entry) && entry.workspaceTasks.size > 0) {
+          tunnelLog.warn("worker tunnel SSH child exited during workspace operation", {
+            environmentId: entry.environmentId,
+            ownerEpoch: entry.ownerEpoch,
+            code: exit.code,
+            signal: exit.signal,
+            workspaceTaskCount: entry.workspaceTasks.size,
+          });
+        }
         if (entry.prepared) {
           advanceWorkerSshAfterTransportExit(entry.prepared, childPort, exit);
         }

@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { withTimeout } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import { type PreparedWorkerSsh, runWorkerSshCandidates, workerSshCommandOptions } from "./ssh.js";
@@ -103,7 +104,7 @@ export function createWorkerWorkspaceActions(
 
   const requirePrepared = (): PreparedWorkerSsh => {
     const prepared = options.getPrepared();
-    if (!options.isConnected() || !prepared) {
+    if (!prepared) {
       throw new WorkerTunnelOwnerDisconnectedError();
     }
     return prepared;
@@ -119,11 +120,18 @@ export function createWorkerWorkspaceActions(
   const receiverEntryPath = workerWorkspaceRsyncReceiverEntryPath(options.bundleHash);
 
   const runWorkspaceCommand = async (command: WorkerWorkspaceCommand): Promise<SpawnResult> => {
-    const prepared = requirePrepared();
     const timeoutMs = command.timeoutMs ?? WORKSPACE_TIMEOUT_MS;
+    const deadlineMs = Date.now() + timeoutMs;
     const signal = command.signal
       ? AbortSignal.any([options.ownerSignal, command.signal])
       : options.ownerSignal;
+    const prepared =
+      command.transportRetry === "idempotent"
+        ? await withTimeout(options.waitForPrepared(), timeoutMs, {
+            message: "Worker tunnel did not reconnect within the workspace command timeout",
+          })
+        : requirePrepared();
+    const remainingCommandTimeoutMs = () => Math.max(0, deadlineMs - Date.now());
     const commandOptions = (remainingTimeoutMs: number): CommandOptions => {
       const base = workerSshCommandOptions({
         input: command.input,
@@ -139,14 +147,14 @@ export function createWorkerWorkspaceActions(
     if (command.transportRetry === "never") {
       const operation = runTask(
         workerWorkspaceSshArgv(prepared, command.argv),
-        commandOptions(timeoutMs),
+        commandOptions(remainingCommandTimeoutMs()),
       );
       command.onDispatchReady?.();
       return await operation;
     }
     return await runWorkerSshCandidates(
       prepared,
-      timeoutMs,
+      remainingCommandTimeoutMs(),
       async (port, remainingTimeoutMs) =>
         await runTask(
           workerWorkspaceSshArgv(prepared, command.argv, port),
@@ -418,7 +426,9 @@ export function createWorkerWorkspaceActions(
       request.remoteWorkspaceDir,
       request.baseManifestRef,
     );
-    const prepared = requirePrepared();
+    const prepared = await withTimeout(options.waitForPrepared(), WORKSPACE_TIMEOUT_MS, {
+      message: "Worker tunnel did not reconnect within the workspace reconciliation timeout",
+    });
     const temporaryDirectory = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-worker-workspace-reconcile-"),
     );

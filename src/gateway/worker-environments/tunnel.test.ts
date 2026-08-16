@@ -277,6 +277,46 @@ describe("worker tunnel manager", () => {
     await handle.stop();
   });
 
+  it("keeps stateful commands fail closed and aborts idempotent reconnect waits on stop", async () => {
+    const fake = fakeRunner();
+    const sleepStarted = deferred<AbortSignal>();
+    const { handle } = await startConnectedTunnel(fake, "worker:reconnect-command-policy", 1, {
+      manager: {
+        sleep: async (_ms, signal) => {
+          if (!signal) {
+            throw new Error("missing reconnect signal");
+          }
+          sleepStarted.resolve(signal);
+          await new Promise<void>((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () =>
+                reject(
+                  signal.reason instanceof Error
+                    ? signal.reason
+                    : new Error("reconnect sleep aborted"),
+                ),
+              { once: true },
+            );
+          });
+        },
+      },
+    });
+    fake.starts[0]!.process.exit(255);
+    await sleepStarted.promise;
+
+    const idempotent = handle.runWorkspaceCommand(PWD_COMMAND);
+    const idempotentResult = expect(idempotent).rejects.toThrow(
+      "Worker tunnel owner is no longer connected",
+    );
+    await expect(
+      handle.runWorkspaceCommand({ ...PWD_COMMAND, transportRetry: "never" }),
+    ).rejects.toThrow("Worker tunnel owner is no longer connected");
+
+    await handle.stop();
+    await idempotentResult;
+  });
+
   it("shares setup and best-effort stop cleanup deadlines across fallback candidates", async () => {
     let nowMs = 1_000;
     const dateNow = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
