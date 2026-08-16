@@ -4373,7 +4373,25 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     );
     expect(hostedLintCache.uses).toBe("actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae");
     expect(hostedLintCache.with).toEqual(boundaryCache.with);
-    expect(boundaryCache.with.key).toContain("src/agents/embedded-agent-runner/run/types.ts");
+    const fingerprintReference = "${{ steps.extension-boundary-inputs.outputs.fingerprint }}";
+    expect(boundaryCache.with.key).toBe(
+      "${{ runner.os }}-extension-package-boundary-v2-${{ steps.extension-boundary-inputs.outputs.fingerprint }}",
+    );
+    const fingerprintSteps = [additionalJob, checkShardJob].map((job) =>
+      expectDefined(
+        job.steps.find(
+          (step: WorkflowStep) => step.name === "Compute extension boundary input fingerprint",
+        ),
+        "extension boundary input fingerprint step",
+      ),
+    );
+    for (const step of fingerprintSteps) {
+      expect(step.id).toBe("extension-boundary-inputs");
+      expect(step.run).toContain(
+        "scripts/prepare-extension-package-boundary-artifacts.mts --print-input-fingerprint",
+      );
+    }
+    expect(fingerprintSteps[0]?.run).toBe(fingerprintSteps[1]?.run);
     // Single semantic writer: protected pushes commit explicitly (not
     // on-change/if-missing, whose allocated-byte heuristic can strand a stale
     // marker); PR clones and the lint consumer stay read-only.
@@ -4382,8 +4400,8 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     );
     expect(lintMount.with.commit).toBe("false");
 
-    // The key no longer hashes config/scripts/lockfile, so every gate must
-    // compose the identical marker fingerprint or restores silently tear.
+    // Every cache and sticky-disk consumer uses the script-owned fingerprint;
+    // no workflow-local source list can drift from declaration freshness.
     const restoreStep = additionalJob.steps.find(
       (step: WorkflowStep) => step.name === "Restore extension boundary artifacts from sticky disk",
     );
@@ -4393,14 +4411,11 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
     const seedStep = additionalJob.steps.find(
       (step: WorkflowStep) => step.name === "Seed extension boundary sticky disk",
     );
-    const configHash = seedStep.env.BOUNDARY_CONFIG_HASH;
-    expect(configHash).toContain("hashFiles(");
-    expect(configHash).toContain("pnpm-lock.yaml");
-    expect(restoreStep.env.BOUNDARY_CONFIG_HASH).toBe(configHash);
-    expect(lintRestoreStep.env.BOUNDARY_CONFIG_HASH).toBe(configHash);
     for (const gate of [restoreStep, lintRestoreStep, seedStep]) {
-      expect(gate.run).toContain('echo "$BOUNDARY_CONFIG_HASH"');
-      expect(gate.run).toContain("HEAD:src/agents/embedded-agent-runner/run/types.ts");
+      expect(gate.run).toContain(fingerprintReference);
+      expect(gate.run).toContain(".source-fingerprint");
+      expect(gate.run).not.toContain("git rev-parse HEAD:");
+      expect(gate.run).not.toContain("BOUNDARY_CONFIG_HASH");
       expect(gate.if).toContain("vars.OPENCLAW_CI_RUNNER_BACKEND != 'github'");
     }
     // Seeding is writer-only work: PR mounts never commit, so seeding there
