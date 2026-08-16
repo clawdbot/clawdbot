@@ -894,6 +894,37 @@ describe("deliverFollowupDecision", () => {
     expect(notice?.text).toContain("could not deliver");
   });
 
+  it("reports a later transcript-owned cross-channel failure after an earlier payload delivers", async () => {
+    const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
+    deliveryState.routeReply.mockReset();
+    deliveryState.routeReply
+      .mockResolvedValueOnce({ ok: true, delivered: true })
+      .mockResolvedValueOnce({ ok: false, delivered: false, error: "offline" });
+    const turn = createTurn();
+    turn.queued.run.messageProvider = "slack";
+    const finalPayload = setReplyPayloadMetadata(
+      { text: "transcript-owned final" },
+      { assistantTranscriptOwned: true },
+    );
+
+    await deliverFollowupDecision({
+      decision: {
+        kind: "deliver",
+        payloads: [{ text: "earlier status" }, finalPayload],
+      },
+      turn,
+      defaults: createDefaults(onBlockReply),
+      runId: "run-1",
+      runFollowup: vi.fn(async () => {}),
+    });
+
+    expect(deliveryState.routeReply).toHaveBeenCalledTimes(2);
+    expect(onBlockReply).toHaveBeenCalledOnce();
+    const notice = onBlockReply.mock.calls[0]?.[0];
+    expect(notice?.text).not.toContain("transcript-owned final");
+    expect(notice?.text).toContain("could not deliver");
+  });
+
   it("allows the latest same-channel dispatcher to recover a route failure", async () => {
     const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
     deliveryState.routeReply.mockReset();

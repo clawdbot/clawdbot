@@ -337,7 +337,6 @@ async function sendFollowupPayloads(params: {
     isHeartbeat: defaults.opts?.isHeartbeat === true,
   });
   let crossChannelFailure = false;
-  let deliveredCrossChannelOrigin = false;
   for (const payload of payloads) {
     const providerRoute = deliveryPlan.resolveFollowupRoute({
       payload,
@@ -404,15 +403,10 @@ async function sendFollowupPayloads(params: {
             }`,
           );
         }
-        const provider = resolveOriginMessageProvider({
-          provider: turn.queued.run.messageProvider,
-        });
-        const origin = resolveOriginMessageProvider({ originatingChannel });
-        deliveredCrossChannelOrigin ||= Boolean(origin && provider && origin !== provider);
       }
     }
   }
-  if (crossChannelFailure && !deliveredCrossChannelOrigin && defaults.opts?.onBlockReply) {
+  if (crossChannelFailure && defaults.opts?.onBlockReply) {
     await defaults.opts.onBlockReply({
       text:
         "Follow-up completed, but OpenClaw could not deliver it to the originating channel. " +
