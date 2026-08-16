@@ -151,8 +151,12 @@ class TerminalIntentQueue {
         }
       }
     }
+    const explicitIntentPending = this.actions.some((pending) => pending.kind !== "restore");
     const key = JSON.stringify(action);
-    if (!this.actions.some((pending) => JSON.stringify(pending) === key)) {
+    if (
+      !(action.kind === "restore" && explicitIntentPending) &&
+      !this.actions.some((pending) => JSON.stringify(pending) === key)
+    ) {
       this.actions.push(action);
       changed = true;
     }

@@ -91,6 +91,44 @@ describe("OpenClawTerminalPanel", () => {
     await waitForFast(() => expect(panel.terminalPanelOpen).toBe(true));
   });
 
+  it("does not append an automatic restore behind a persisted explicit catalog intent", async () => {
+    localStorage.setItem(
+      "openclaw.terminal.panel.v1",
+      JSON.stringify({ open: true, dock: "bottom", height: 320, width: 520 }),
+    );
+    const catalog = { catalogId: "codex", hostId: "gateway:local", threadId: "thread-1" };
+    sessionStorage.setItem(
+      "openclaw.terminal.actions.v1",
+      JSON.stringify([{ kind: "catalog", agentId: "research", catalog }]),
+    );
+    createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
+    const requests: Array<{ method: string; params: unknown }> = [];
+    const client: TerminalGatewayClient = {
+      forceReconnect: () => {},
+      request: async <T>(method: string, params?: unknown) => {
+        requests.push({ method, params });
+        return (method === "terminal.open" ? terminalOpenResult("catalog-session") : {}) as T;
+      },
+      addEventListener: () => () => {},
+    };
+    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    panel.client = client;
+    panel.available = true;
+    panel.agentId = "research";
+    document.body.append(panel);
+
+    await waitForFast(() =>
+      expect(sessionStorage.getItem("openclaw.terminal.actions.v1")).toBeNull(),
+    );
+
+    expect(requests.filter((entry) => entry.method === "terminal.open")).toEqual([
+      {
+        method: "terminal.open",
+        params: { agentId: "research", cols: 100, rows: 30, catalog },
+      },
+    ]);
+  });
+
   it.each([
     { dock: "bottom", label: "Dock to bottom" },
     { dock: "right", label: "Dock to right" },

@@ -1,10 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  DesktopPanelEmbeddedController,
-  type EmbeddedDesktopPanelHost,
-} from "./desktop-panel-embedded-controller.ts";
+import { DesktopPanelEmbeddedController } from "./desktop-panel-embedded-controller.ts";
+
+type EmbeddedDesktopPanelHost = ConstructorParameters<typeof DesktopPanelEmbeddedController>[0];
 
 function createHost(overrides: Partial<EmbeddedDesktopPanelHost> = {}) {
   return {

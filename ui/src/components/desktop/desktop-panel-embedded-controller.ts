@@ -1,6 +1,6 @@
 import type { DesktopPanelToggleDetail } from "../panel-toggle-contract.ts";
 
-export interface EmbeddedDesktopPanelHost {
+interface EmbeddedDesktopPanelHost {
   readonly available: boolean;
   readonly embedded: boolean;
   readonly isConnected: boolean;
