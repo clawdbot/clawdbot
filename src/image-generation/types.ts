@@ -61,6 +61,15 @@ export type ImageGenerationProviderConfiguredContext = {
   agentDir?: string;
 };
 
+export type ImageGenerationModelCapabilitiesContext = {
+  provider: string;
+  model: string;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  authStore?: AuthProfileStore;
+  timeoutMs?: number;
+};
+
 /** Runtime request passed to an image-generation provider implementation. */
 export type ImageGenerationRequest = {
   provider: string;
@@ -140,5 +149,11 @@ export type ImageGenerationProvider = {
   models?: string[];
   capabilities: ImageGenerationProviderCapabilities;
   isConfigured?: (ctx: ImageGenerationProviderConfiguredContext) => boolean;
+  resolveModelCapabilities?: (
+    ctx: ImageGenerationModelCapabilitiesContext,
+  ) =>
+    | ImageGenerationProviderCapabilities
+    | undefined
+    | Promise<ImageGenerationProviderCapabilities | undefined>;
   generateImage: (req: ImageGenerationRequest) => Promise<ImageGenerationResult>;
 };

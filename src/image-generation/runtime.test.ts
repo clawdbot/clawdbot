@@ -14,6 +14,7 @@ let providers: ImageGenerationProvider[] = [];
 let listedConfigs: Array<OpenClawConfig | undefined> = [];
 let providerEnvVars: Record<string, string[]> = {};
 let warnings: string[] = [];
+let debugs: string[] = [];
 
 const runtimeDeps: ImageGenerationRuntimeDeps = {
   getProvider: (providerId) => providers.find((provider) => provider.id === providerId),
@@ -25,6 +26,9 @@ const runtimeDeps: ImageGenerationRuntimeDeps = {
   log: {
     warn: (message) => {
       warnings.push(message);
+    },
+    debug: (message) => {
+      debugs.push(message);
     },
   },
 };
@@ -67,6 +71,7 @@ describe("image-generation runtime", () => {
     listedConfigs = [];
     providerEnvVars = {};
     warnings = [];
+    debugs = [];
   });
 
   it("generates images through the active image-generation provider", async () => {
@@ -1049,5 +1054,190 @@ describe("image-generation runtime", () => {
     ).rejects.toThrow(
       'No image-generation model configured. Set agents.defaults.mediaModels.image.primary to a provider/model like "vision-one/paint-v1". If you want a specific provider, also configure that provider\'s auth/API key first (vision-one: VISION_ONE_API_KEY; vision-two: VISION_TWO_API_KEY).',
     );
+  });
+
+  it("applies discovered per-model capabilities before override sanitization", async () => {
+    let seenRequest:
+      | {
+          aspectRatio?: string;
+          resolution?: string;
+          quality?: string;
+          background?: string;
+        }
+      | undefined;
+    providers = [
+      {
+        id: "openrouter",
+        capabilities: {
+          generate: { supportsAspectRatio: true, supportsResolution: true },
+          edit: { enabled: true, supportsAspectRatio: true, supportsResolution: true },
+          geometry: { aspectRatios: ["1:1", "16:9"], resolutions: ["1K", "2K", "4K"] },
+        },
+        resolveModelCapabilities: async () => ({
+          generate: { supportsAspectRatio: true, supportsResolution: false },
+          edit: { enabled: true, supportsAspectRatio: true, supportsResolution: false },
+          geometry: { aspectRatios: ["1:1", "16:9", "21:9"] },
+          output: { qualities: ["high"], backgrounds: ["opaque"] },
+        }),
+        async generateImage(req) {
+          seenRequest = {
+            aspectRatio: req.aspectRatio,
+            resolution: req.resolution,
+            quality: req.quality,
+            background: req.background,
+          };
+          return { images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }] };
+        },
+      },
+    ];
+
+    const result = await runGenerateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "openrouter/openai/gpt-5.4-image-2" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+      aspectRatio: "16:9",
+      resolution: "2K",
+      quality: "high",
+      background: "transparent",
+    });
+
+    expect(seenRequest).toEqual({
+      aspectRatio: "16:9",
+      resolution: undefined,
+      quality: "high",
+      background: undefined,
+    });
+    expect(result.ignoredOverrides).toEqual([
+      { key: "resolution", value: "2K" },
+      { key: "background", value: "transparent" },
+    ]);
+  });
+
+  it("keeps discovered capabilities request-local across fallback candidates", async () => {
+    const seen: Array<{ model: string; resolution?: string }> = [];
+    const staticCapabilities = {
+      generate: { supportsAspectRatio: true, supportsResolution: true },
+      edit: { enabled: true },
+      geometry: { resolutions: ["1K", "2K", "4K"] as Array<"1K" | "2K" | "4K"> },
+    };
+    providers = [
+      {
+        id: "openrouter",
+        capabilities: staticCapabilities,
+        resolveModelCapabilities: async (ctx) =>
+          ctx.model === "limited/model"
+            ? {
+                generate: { supportsResolution: false },
+                edit: { enabled: true, supportsResolution: false },
+              }
+            : undefined,
+        async generateImage(req) {
+          seen.push({ model: req.model, resolution: req.resolution });
+          if (req.model === "limited/model") {
+            throw new Error("limited model unavailable");
+          }
+          return { images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }] };
+        },
+      },
+    ];
+
+    // One request, two candidates on the same provider: the second candidate
+    // must not inherit the first candidate's discovered caps.
+    const result = await runGenerateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: {
+              primary: "openrouter/limited/model",
+              fallbacks: ["openrouter/other/model"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+      resolution: "2K",
+    });
+
+    expect(seen).toEqual([
+      { model: "limited/model", resolution: undefined },
+      { model: "other/model", resolution: "2K" },
+    ]);
+    expect(result.model).toBe("other/model");
+    expect(result.ignoredOverrides).toEqual([]);
+    // The overlay must never mutate the registered provider's static capabilities.
+    expect(staticCapabilities.generate.supportsResolution).toBe(true);
+  });
+
+  it("falls back to static capabilities when capability discovery fails", async () => {
+    let seenResolution: string | undefined;
+    providers = [
+      {
+        id: "openrouter",
+        capabilities: {
+          generate: { supportsAspectRatio: true, supportsResolution: true },
+          edit: { enabled: true },
+          geometry: { resolutions: ["1K", "2K", "4K"] },
+        },
+        resolveModelCapabilities: async () => {
+          throw new Error("catalog offline");
+        },
+        async generateImage(req) {
+          seenResolution = req.resolution;
+          return { images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }] };
+        },
+      },
+    ];
+
+    const result = await runGenerateImage({
+      cfg: {
+        agents: { defaults: { imageGenerationModel: { primary: "openrouter/some/model" } } },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+      resolution: "2K",
+    });
+
+    expect(result.images).toHaveLength(1);
+    expect(seenResolution).toBe("2K");
+    expect(debugs.some((message) => message.includes("catalog offline"))).toBe(true);
+  });
+
+  it("applies discovered reference-image limits before the input gate", async () => {
+    let seenInputImages: number | undefined;
+    providers = [
+      {
+        id: "openrouter",
+        capabilities: {
+          generate: {},
+          edit: { enabled: true, maxInputImages: 1 },
+        },
+        resolveModelCapabilities: async () => ({
+          generate: {},
+          edit: { enabled: true, maxInputImages: 3 },
+        }),
+        async generateImage(req) {
+          seenInputImages = req.inputImages?.length;
+          return { images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }] };
+        },
+      },
+    ];
+
+    const result = await runGenerateImage({
+      cfg: {
+        agents: { defaults: { imageGenerationModel: { primary: "openrouter/some/model" } } },
+      } as OpenClawConfig,
+      prompt: "combine these",
+      inputImages: [
+        { buffer: Buffer.from("one"), mimeType: "image/png" },
+        { buffer: Buffer.from("two"), mimeType: "image/png" },
+      ],
+    });
+
+    expect(result.images).toHaveLength(1);
+    expect(seenInputImages).toBe(2);
   });
 });

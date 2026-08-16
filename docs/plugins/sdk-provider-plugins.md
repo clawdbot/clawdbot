@@ -1039,6 +1039,13 @@ catalog, API-key auth, and dynamic model resolution.
         invoking provider code. Request-time capability lookup and enforcement
         still belong in `resolveModelCapabilities` and `generateVideo`; reuse
         the same capability constant for both paths when possible.
+
+        Image providers accept the same optional `resolveModelCapabilities`
+        hook: the runtime overlays its result onto the static `capabilities`
+        for the selected model before override sanitization, so unsupported
+        values surface as ignored overrides instead of being dropped silently.
+        A hook failure falls back to the static capabilities and never fails
+        the generation.
       </Tab>
       <Tab title="Web fetch and search">
         ```typescript
