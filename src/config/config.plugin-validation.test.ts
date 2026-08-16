@@ -1636,6 +1636,89 @@ describe("config plugin validation", () => {
     ).toBe(false);
   });
 
+  it("appends overridden copy path to duplicate plugin id warnings", () => {
+    const loserPath = path.join(suiteHome, "extensions", "loser-plugin", "openclaw.plugin.json");
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          entries: { "ekho-adapter": { enabled: true } },
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [
+              {
+                level: "warn",
+                pluginId: "ekho-adapter",
+                source: loserPath,
+                message:
+                  "duplicate plugin id detected; global plugin will be overridden by global plugin (/winner/path/index.js)",
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    const dupWarning = res.warnings.find((w) => w.message.includes("duplicate plugin id"));
+    expect(dupWarning).toBeDefined();
+    expect(dupWarning!.message).toContain(`overridden copy at ${loserPath}`);
+  });
+
+  it("does not append source hint for non-duplicate diagnostics with source", () => {
+    const blockedPath = path.join(
+      suiteHome,
+      "extensions",
+      "blocked-plugin",
+      "openclaw.plugin.json",
+    );
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          enabled: true,
+          load: { paths: [suiteHome] },
+          entries: { "blocked-plugin": { enabled: true } },
+          allow: ["blocked-plugin"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [
+              {
+                level: "warn",
+                pluginId: "blocked-plugin",
+                source: blockedPath,
+                message: `blocked plugin candidate: world-writable path (${suiteHome}, mode=0777)`,
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    const blockedWarning = res.warnings.find(
+      (w) => w.message.includes("blocked plugin") && w.message.includes("world-writable"),
+    );
+    expect(blockedWarning).toBeDefined();
+    expect(blockedWarning!.message).not.toContain("overridden copy at");
+  });
+
   it("warns instead of failing for stale channel config backed by missing plugin refs", () => {
     const res = validateInSuite({
       agents: { list: [{ id: "openclaw" }] },
