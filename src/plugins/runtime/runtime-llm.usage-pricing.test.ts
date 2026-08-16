@@ -1,5 +1,6 @@
 // Pricing provenance tests for runtime.llm.complete usage emission.
 import { describe, expect, it, vi } from "vitest";
+import { applyModelDefaults } from "../../config/defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 
@@ -226,5 +227,63 @@ describe("runtime.llm.complete pricing provenance", () => {
     });
 
     expect(requireRecord(result.usage, "completion usage").costUsd).toBe(0);
+  });
+
+  it("omits costUsd for a configured model whose cost block is omitted", async () => {
+    // The model schema permits an omitted cost block; materialization fills
+    // all-zero defaults. Those defaults are unknown pricing, not a confirmed
+    // $0, so the runtime completion path must omit costUsd.
+    const cfgWithOmittedCost = applyModelDefaults({
+      ...cfg,
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [
+              {
+                id: "unpriced-config-model",
+                name: "unpriced-config-model",
+                reasoning: false,
+                input: ["text"],
+                contextWindow: 128_000,
+                maxTokens: 4096,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig);
+    hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValue(
+      createPreparedModel("unpriced-config-model"),
+    );
+    hoisted.resolveSimpleCompletionSelectionForAgent.mockImplementation(
+      (params: { modelRef?: string; agentId: string }) => ({
+        provider: "openai",
+        modelId: "unpriced-config-model",
+        agentDir: `/tmp/${params.agentId}`,
+      }),
+    );
+    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
+      content: [{ type: "text", text: "done" }],
+      usage: {
+        input: 11,
+        output: 7,
+        cacheRead: 5,
+        cacheWrite: 2,
+        total: 25,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    });
+
+    const llm = createRuntimeLlm({
+      getConfig: () => cfgWithOmittedCost,
+      authority: { allowComplete: true },
+    });
+    const result = await llm.complete({
+      messages: [{ role: "user", content: "Ping" }],
+      purpose: "test-purpose",
+    });
+
+    expect(requireRecord(result.usage, "completion usage").costUsd).toBeUndefined();
   });
 });

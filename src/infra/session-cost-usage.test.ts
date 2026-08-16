@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { applyModelDefaults } from "../config/defaults.js";
 import { encodeSessionArchiveContent } from "../config/sessions/archive-compression.js";
 import {
   appendTranscriptMessage,
@@ -834,6 +835,57 @@ describe("session cost usage", () => {
       // Unmarked all-zero pricing is a confirmed free model, not unknown:
       // it must not be surfaced as missing cost.
       expect(summary.totals.missingCostEntries).toBe(0);
+    });
+  });
+
+  it("counts token usage for a configured model with an omitted cost block as missing", async () => {
+    const root = await makeSessionCostRoot("cost-configured-omitted-unknown");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const entry = {
+      type: "message",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "custom",
+        model: "no-cost-model",
+        usage: {
+          input: 881,
+          output: 6,
+          cacheRead: 22400,
+          cacheWrite: 0,
+          totalTokens: 23287,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    };
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-1.jsonl"),
+      transcriptText("sess-1", entry),
+      "utf-8",
+    );
+
+    // Mirror the materialize flow: a model declared without a cost block gets
+    // default zero rates, but those defaults are unknown pricing — the
+    // materialized entry must carry the marker so the rollup reports the turn
+    // as missing cost instead of a confident $0.
+    const config = applyModelDefaults({
+      models: {
+        providers: {
+          custom: {
+            models: [{ id: "no-cost-model" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ config });
+      expect(summary.totals.totalTokens).toBe(23287);
+      expect(summary.totals.totalCost).toBe(0);
+      expect(summary.totals.missingCostEntries).toBe(1);
     });
   });
 

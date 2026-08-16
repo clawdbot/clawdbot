@@ -71,8 +71,18 @@ function isPositiveNumber(value: unknown): value is number {
 }
 
 function resolveModelCost(
-  raw?: Partial<ModelDefinitionConfig["cost"]>,
+  raw?: Partial<ModelDefinitionConfig["cost"]> | null,
 ): ModelDefinitionConfig["cost"] {
+  // A cost block without any rates (omitted or empty) carries no pricing
+  // information: the all-zero defaults filled below are unknown pricing, not
+  // a confirmed free price.
+  const hasConfiguredRates =
+    raw != null &&
+    (typeof raw.input === "number" ||
+      typeof raw.output === "number" ||
+      typeof raw.cacheRead === "number" ||
+      typeof raw.cacheWrite === "number" ||
+      raw.tieredPricing !== undefined);
   return {
     input: typeof raw?.input === "number" ? raw.input : DEFAULT_MODEL_COST.input,
     output: typeof raw?.output === "number" ? raw.output : DEFAULT_MODEL_COST.output,
@@ -81,7 +91,9 @@ function resolveModelCost(
       typeof raw?.cacheWrite === "number" ? raw.cacheWrite : DEFAULT_MODEL_COST.cacheWrite,
     // Pricing provenance must survive defaulting, or placeholder-zero
     // pricing turns back into a confident $0 downstream.
-    ...(raw?.pricingUnavailable === true ? { pricingUnavailable: true } : {}),
+    ...(raw?.pricingUnavailable === true || !hasConfiguredRates
+      ? { pricingUnavailable: true }
+      : {}),
     ...(raw?.tieredPricing ? { tieredPricing: raw.tieredPricing } : {}),
   };
 }
