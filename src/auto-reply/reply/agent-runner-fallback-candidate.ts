@@ -117,7 +117,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
       useCliExecution,
     };
   };
-  return params.timing.measure("model_fallback", () =>
+  const fallbackResult = await params.timing.measure("model_fallback", () =>
     runEmbeddedAgentEntry<EmbeddedAgentRunResult>({
       selection: {
         cfg: selection.cfg,
@@ -298,6 +298,10 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
       },
     }),
   );
+  if (messageToolDeliveryState.completed) {
+    fallbackResult.result.didDeliverSourceReplyViaMessageTool = true;
+  }
+  return fallbackResult;
 }
 
 export type AgentFallbackCandidatesResult = Awaited<ReturnType<typeof runAgentFallbackCandidates>>;
