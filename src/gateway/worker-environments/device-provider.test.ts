@@ -118,7 +118,7 @@ describe("device worker provider", () => {
       name: "offline device",
       getPairedDevice: async () => pairedDevice(),
       listCurrentNodes: async () => [],
-      expectedMessage: `device worker node is not connected: ${DEVICE_ID}`,
+      expectedMessage: `device worker node is not connected: ${DEVICE_ID}; reconnect it before retrying`,
     },
     {
       name: "connected node at capacity",
