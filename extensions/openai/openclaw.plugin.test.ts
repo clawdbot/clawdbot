@@ -1,22 +1,13 @@
 // Openai tests cover openclaw.plugin plugin behavior.
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   OPENAI_GPT_55_MODEL_ID,
   OPENAI_GPT_55_PRO_MODEL_ID,
-  OPENAI_GPT_56_MODEL_ID,
   OPENAI_GPT_56_VARIANT_MODEL_IDS,
 } from "./model-route-contract.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildOpenAISetupProvider } from "./setup-api.js";
-
-const packageJson = JSON.parse(
-  readFileSync(new URL("./package.json", import.meta.url), "utf8"),
-) as {
-  dependencies?: Record<string, string>;
-  devDependencies?: Record<string, string>;
-};
 
 function manifestComparableWizardFields(choice: {
   choiceId?: string;
@@ -69,11 +60,6 @@ function expectWizardFields(
 }
 
 describe("OpenAI plugin manifest", () => {
-  it("keeps runtime dependencies in the package manifest", () => {
-    expect(packageJson.devDependencies?.["@openclaw/plugin-sdk"]).toBe("workspace:*");
-    expect(packageJson.dependencies?.ws).toBe("8.21.1");
-  });
-
   it("exposes only current OpenAI login choices", () => {
     const openAiLogin = manifest.providerAuthChoices?.find(
       (choice) => choice.choiceId === "openai",
@@ -115,7 +101,6 @@ describe("OpenAI plugin manifest", () => {
   it("keeps million-token OpenAI models on the ordinary runtime budget by default", () => {
     const models = manifest.modelCatalog?.providers?.openai?.models ?? [];
     for (const id of [
-      OPENAI_GPT_56_MODEL_ID,
       ...OPENAI_GPT_56_VARIANT_MODEL_IDS,
       OPENAI_GPT_55_MODEL_ID,
       OPENAI_GPT_55_PRO_MODEL_ID,
@@ -127,6 +112,13 @@ describe("OpenAI plugin manifest", () => {
         contextTokens: 272_000,
         maxTokens: 128_000,
       });
+    }
+  });
+
+  it("replaces deprecated GPT-5.5 models with canonical GPT-5.6 Sol", () => {
+    const models = manifest.modelCatalog?.providers?.openai?.models ?? [];
+    for (const id of [OPENAI_GPT_55_MODEL_ID, OPENAI_GPT_55_PRO_MODEL_ID]) {
+      expect(models.find((model) => model.id === id)?.replacedBy, id).toBe("gpt-5.6-sol");
     }
   });
 

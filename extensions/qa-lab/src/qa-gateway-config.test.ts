@@ -270,21 +270,43 @@ describe("buildQaGatewayConfig", () => {
       providerMode: "live-frontier",
       fastMode: true,
       primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-sol",
       ...createQaChannelTransportParams(),
     });
 
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("openai/gpt-5.6-luna");
     expect(getPrimaryModel(cfg.agents?.entries?.qa?.model)).toBe("openai/gpt-5.6-luna");
-    expect(getModelFallbacks(cfg.agents?.defaults?.model)).toBeUndefined();
-    expect(getModelFallbacks(cfg.agents?.entries?.qa?.model)).toBeUndefined();
+    expect(getModelFallbacks(cfg.agents?.defaults?.model)).toEqual(["openai/gpt-5.6-sol"]);
+    expect(getModelFallbacks(cfg.agents?.entries?.qa?.model)).toEqual(["openai/gpt-5.6-sol"]);
     expect(cfg.models).toBeUndefined();
     expect(cfg.memory?.search?.remote).toBeUndefined();
     expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-lab", "openai", "qa-channel"]);
+    expect(cfg.plugins?.allow).not.toContain("anthropic");
     expect(cfg.plugins?.entries?.openai).toEqual({ enabled: true });
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.6-luna"]).toEqual({
       params: { transport: "sse", openaiWsWarmup: false, fastMode: true },
     });
+  });
+
+  it.each([
+    ["openai/gpt-5.6", "openai/gpt-5.6-luna"],
+    ["openai/gpt-5.6-sol", "openai/gpt-5.6-luna"],
+    ["openai/gpt-5.6-luna", "openai/gpt-5.6-sol"],
+  ])("keeps an omitted live alternate on OpenAI for %s", (primary, alternate) => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      workspaceDir: "/tmp/qa-workspace",
+      providerMode: "live-frontier",
+      primaryModel: primary,
+      ...createQaChannelTransportParams(),
+    });
+
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe(primary);
+    expect(getModelFallbacks(cfg.agents?.defaults?.model)).toEqual([alternate]);
+    expect(cfg.plugins?.allow).toContain("openai");
+    expect(cfg.plugins?.allow).not.toContain("anthropic");
   });
 
   it("keeps inferred live providers when scenarios require additional plugins", () => {
@@ -350,7 +372,7 @@ describe("buildQaGatewayConfig", () => {
         providerMode,
         forcedRuntime: "codex",
         primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-sol",
       });
 
       expect(cfg.plugins?.allow).toContain("codex");
@@ -442,7 +464,7 @@ describe("buildQaGatewayConfig", () => {
       workspaceDir: "/tmp/qa-workspace",
       providerMode: "live-frontier",
       primaryModel: "codex-cli/test-model",
-      alternateModel: "codex-cli/test-model",
+      alternateModel: "codex-cli/test-model-alt",
       imageGenerationModel: null,
       enabledPluginIds: ["openai"],
       ...createQaChannelTransportParams(),
@@ -462,7 +484,7 @@ describe("buildQaGatewayConfig", () => {
       workspaceDir: "/tmp/qa-workspace",
       providerMode: "live-frontier",
       primaryModel: "custom-openai/model-a",
-      alternateModel: "custom-openai/model-a",
+      alternateModel: "custom-openai/model-b",
       imageGenerationModel: null,
       enabledPluginIds: ["openai"],
       ...createQaChannelTransportParams(),
@@ -500,13 +522,29 @@ describe("buildQaGatewayConfig", () => {
       workspaceDir: "/tmp/qa-workspace",
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-sol",
       thinkingDefault: "xhigh",
       ...createQaChannelTransportParams(),
     });
 
     expect(cfg.agents?.defaults?.thinkingDefault).toBe("xhigh");
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.6-luna"]?.params?.thinking).toBe("xhigh");
+  });
+
+  it("preserves an intentional explicit same-model pair without a fallback", () => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      workspaceDir: "/tmp/qa-workspace",
+      providerMode: "live-frontier",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
+      ...createQaChannelTransportParams(),
+    });
+
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("openai/gpt-5.4");
+    expect(getModelFallbacks(cfg.agents?.defaults?.model)).toBeUndefined();
   });
 
   it("can disable control ui for suite-only gateway children", () => {

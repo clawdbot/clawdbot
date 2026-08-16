@@ -1,6 +1,5 @@
 // Msteams plugin module dispatches prepared inbound turns and owns reply lifecycle handling.
 import {
-  buildChannelInboundEventContext,
   createChannelInboundEnvelopeBuilder,
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
@@ -18,6 +17,7 @@ import { createMSTeamsReplyDispatcher } from "../reply-dispatcher.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { recordMSTeamsSentMessage } from "../sent-message-cache.js";
 import type { admitMSTeamsMessage } from "./access.js";
+import { resolveMSTeamsSenderAccess } from "./access.js";
 import type { prepareMSTeamsInboundContent } from "./inbound-content.js";
 import type { assembleMSTeamsInboundFacts } from "./inbound-facts.js";
 import type { prepareMSTeamsThreadRouting, resolveMSTeamsThreadContext } from "./thread-context.js";
@@ -145,7 +145,22 @@ export async function dispatchMSTeamsInboundTurn(params: {
   // Teams channel actions need both the AAD group and Graph channel ids.
   const nativeChannelId =
     isChannel && teamAadGroupId ? `${teamAadGroupId}/${graphChannelId}` : undefined;
-  const ctxPayload = buildChannelInboundEventContext({
+  // Thread routing owns the final session key, so mint the bound result at dispatch preparation.
+  const boundIngress = await resolveMSTeamsSenderAccess({
+    cfg,
+    activity,
+    hasControlCommand: admission.isControlCommand,
+    conversationThreadId: facts.threadId,
+    contextBinding: {
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      ...(activity.id ? { messageId: activity.id } : {}),
+      ...(nativeChannelId ? { nativeChannelId } : {}),
+      inboundEventKind: "user_request",
+    },
+  });
+  const ctxPayload = core.channel.inbound.buildContext({
+    channelIngress: boundIngress.channelIngress,
     channel: "msteams",
     contextVisibility: contextVisibilityMode,
     supplemental: {

@@ -25,7 +25,7 @@
       "pluginApi": ">=2026.8.1"
     },
     "assetScripts": {
-      "build": "node ../../scripts/build-diffs-viewer-runtime.mjs full"
+      "build": "node --import tsx ../../scripts/build-diffs-viewer-runtime.mts full"
     },
     "build": {
       "openclawVersion": "2026.8.1",

@@ -5,7 +5,12 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord as asParamRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+
+export { asParamRecord };
 import { isGoogleMeetBrowserManualActionError } from "./browser-manual-action-error.js";
 import {
   resolveGoogleMeetGatewayOperationTimeoutMs,
@@ -43,10 +48,6 @@ type LoadGoogleMeetNodeInvokePolicy = (
 
 const loadGoogleMeetNodeInvokePolicy: LoadGoogleMeetNodeInvokePolicy = async (config) =>
   (await loadGoogleMeetNodeInvokePolicyModule()).createGoogleMeetChromeNodeInvokePolicy(config);
-
-export function asParamRecord(params: unknown): Record<string, unknown> {
-  return isRecord(params) ? params : {};
-}
 
 export function normalizeTransport(value: unknown): GoogleMeetTransport | undefined {
   return value === "chrome" || value === "chrome-node" || value === "twilio" ? value : undefined;
@@ -114,7 +115,7 @@ function isGoogleMeetAgentToolActionUnsupportedOnHost(params: {
   platform?: NodeJS.Platform;
 }): boolean {
   const platform = params.platform ?? googleMeetToolDeps.platform();
-  if (platform === "darwin") {
+  if (platform === "darwin" || platform === "linux") {
     return false;
   }
   const action = params.raw.action;
@@ -141,7 +142,7 @@ export function assertGoogleMeetAgentToolActionSupported(params: {
     return;
   }
   throw new Error(
-    "Google Meet local Chrome talk-back audio is macOS-only. On this host, use mode: transcribe, transport: twilio, or transport: chrome-node backed by a macOS node.",
+    "Google Meet local Chrome talk-back audio requires macOS with BlackHole 2ch or Linux with PipeWire-Pulse. On this host, use mode: transcribe, transport: twilio, or a supported chrome-node.",
   );
 }
 
@@ -281,5 +282,4 @@ export const testing = {
     googleMeetToolDeps.platform = next ?? (() => process.platform);
   },
   isGoogleMeetAgentToolActionUnsupportedOnHost,
-  resolveGoogleMeetGatewayOperationTimeoutMs,
 };

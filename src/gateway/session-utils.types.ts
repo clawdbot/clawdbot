@@ -89,6 +89,7 @@ export type GatewaySessionRow = {
   previousSessionId?: SessionEntry["previousSessionId"];
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
+  icon?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
   /** Preferred Control UI face for generic session navigation. */
@@ -108,7 +109,6 @@ export type GatewaySessionRow = {
   archivedBy?: SessionEntry["archivedBy"];
   pinned?: boolean;
   pinnedAt?: number;
-  icon?: string;
   unread?: boolean;
   lastReadAt?: number;
   agentStatus?: SessionEntry["agentStatus"];
@@ -123,6 +123,7 @@ export type GatewaySessionRow = {
   placement?: SessionPlacement;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  restartRecoveryStatus?: "tombstoned";
   thinkingLevel?: string;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];

@@ -12,6 +12,7 @@ import {
   type SessionTranscriptTargetParams,
   type TranscriptEntryAnchor,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AttemptParamsLike } from "./attempt-types.js";
 
 type TranscriptMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
@@ -606,9 +607,9 @@ function createPersistenceReceipt(): PersistenceReceipt {
 }
 
 function resolveTranscriptTarget(attempt: AttemptParamsLike): SessionTranscriptTargetParams {
-  const sessionId = readString(attempt.sessionTarget?.sessionId);
-  const sessionKey = readString(attempt.sessionTarget?.sessionKey);
-  const storePath = readString(attempt.sessionTarget?.storePath);
+  const sessionId = normalizeOptionalString(attempt.sessionTarget?.sessionId);
+  const sessionKey = normalizeOptionalString(attempt.sessionTarget?.sessionKey);
+  const storePath = normalizeOptionalString(attempt.sessionTarget?.storePath);
   if (!sessionId || !sessionKey || !storePath) {
     const error = new Error(
       "[copilot-attempt] canonical transcript persistence requires an exact runtime session target",
@@ -616,7 +617,7 @@ function resolveTranscriptTarget(attempt: AttemptParamsLike): SessionTranscriptT
     error.code = "transcript_persistence_failed";
     throw error;
   }
-  const agentId = readString(attempt.sessionTarget?.agentId ?? attempt.agentId);
+  const agentId = normalizeOptionalString(attempt.sessionTarget?.agentId ?? attempt.agentId);
   return { sessionId, sessionKey, storePath, ...(agentId ? { agentId } : {}) };
 }
 
@@ -737,8 +738,4 @@ function userText(content: unknown): string {
     }
   }
   return JSON.stringify(content) ?? "";
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }

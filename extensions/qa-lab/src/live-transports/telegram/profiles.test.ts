@@ -8,6 +8,7 @@ describe("Telegram QA profiles", () => {
     (providerMode) => {
       const scenarioIds = resolveTelegramQaScenarioIds({ providerMode });
 
+      expect(scenarioIds).toContain("channel-canary");
       expect(scenarioIds).toContain("telegram-other-bot-command-gating");
       expect(scenarioIds).not.toContain("telegram-startup-getme-live");
       expect(() =>
@@ -54,6 +55,13 @@ describe("Telegram QA profiles", () => {
         scenarioIds: ["telegram-startup-getme-live"],
       }),
     ).toThrow("execution.kind=flow");
+    expect(
+      resolveTelegramQaScenarioIds({
+        profile: "release",
+        providerMode: "mock-openai",
+        scenarioIds: ["channel-canary"],
+      }),
+    ).toEqual(["channel-canary"]);
   });
 
   it("selects the native queue-validation regression as an explicit live scenario", () => {

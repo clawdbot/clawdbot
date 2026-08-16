@@ -202,7 +202,13 @@ export async function handleApproveCommandFromContext(
       cfg: params.cfg,
       approvalId: parsed.id,
       decision: parsed.decision,
-      senderId: params.command.senderId,
+      ...(approvalCapability?.authorizeActorAction
+        ? {
+            channel: params.command.channel,
+            accountId: effectiveAccountId,
+            senderId: params.command.senderId,
+          }
+        : {}),
       resolveMethod,
       clientDisplayName: `Chat approval (${resolvedBy})`,
     });

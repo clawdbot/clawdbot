@@ -18,17 +18,18 @@ import type { PluginNodeCapabilitySurface } from "../../plugin-node-capability.j
 import type { GatewayRole } from "../../role-policy.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
-import type { resolveControlUiAuthPolicy } from "./connect-policy.js";
+import type { ControlUiPairingKind } from "./connect-policy.js";
 import type { resolvePairingLocality } from "./handshake-auth-helpers.js";
 import type { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
-type ControlUiAuthPolicy = ReturnType<typeof resolveControlUiAuthPolicy>;
 type PairingLocalityKind = ReturnType<typeof resolvePairingLocality>;
 
 export type WsOriginCheckMetrics = {
   hostHeaderFallbackAccepted: number;
 };
+
+type WsSendResult = { kind: "sent" | "unavailable" } | { kind: "serialization"; error: unknown };
 
 export type GatewayWsMessageHandlerParams = {
   socket: WebSocket;
@@ -55,7 +56,6 @@ export type GatewayWsMessageHandlerParams = {
   browserRateLimiter?: AuthRateLimiter;
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
   isStartupPending?: () => boolean;
-  isControlUiDeviceAuthMigrationPending?: () => boolean;
   gatewayMethods: string[];
   events: string[];
   extraHandlers: GatewayRequestHandlers;
@@ -63,7 +63,7 @@ export type GatewayWsMessageHandlerParams = {
   buildRequestContext: () => GatewayRequestContext;
   nodeLifecycleDispatch: GatewayNodeLifecycleDispatchTracker;
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
-  send: (obj: unknown) => void;
+  send: (obj: unknown) => WsSendResult;
   close: (code?: number, reason?: string) => void;
   isClosed: () => boolean;
   clearHandshakeTimer: () => void;
@@ -107,10 +107,10 @@ export type GatewayConnectPhaseContext = {
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   runDetachedConnectWork: (run: () => Promise<void>, onError: (error: unknown) => void) => void;
   pendingNodePairingCleanup: {
-    value?: import("../../../infra/node-pairing.js").NodePairingCleanupClaim;
+    value?: import("../../../infra/device-pairing-node.js").NodePairingCleanupClaim;
   };
   broadcastNodePairingResult: (
-    result: import("../../../infra/node-pairing.js").RequestNodePairingResult,
+    result: import("../../../infra/device-pairing-node.js").RequestNodePairingResult,
   ) => void;
   releasePendingNodePairingCleanup: () => Promise<void>;
 };
@@ -127,7 +127,6 @@ export type AuthenticatedGatewayConnect = {
   isBrowserOperatorUi: boolean;
   isWebchat: boolean;
   isNativeAppUi: boolean;
-  controlUiAuthPolicy: ControlUiAuthPolicy;
   device: ConnectParams["device"] | null | undefined;
   devicePublicKey: string | null;
   deviceAuthPayloadVersion: "v2" | "v3" | null;
@@ -145,15 +144,13 @@ export type AuthenticatedGatewayConnect = {
   issuedBootstrapProfile: DeviceBootstrapProfile | null;
   handoffBootstrapProfile: DeviceBootstrapProfile | null;
   trustedProxyAuthOk: boolean;
-  allowControlUiDeviceAuthMigration: boolean;
-  skipControlUiPairingForDevice: boolean;
+  controlUiPairingKind: ControlUiPairingKind;
   skipLocalBackendSelfPairing: boolean;
   rejectUnauthorized: (failedAuth: GatewayAuthResult) => void;
 };
 
 export type DeviceAuthorizedGatewayConnect = AuthenticatedGatewayConnect & {
   deviceToken: DeviceAuthToken | null;
-  controlUiDeviceAuthMigrationPending: boolean;
   bootstrapDeviceTokens: Array<{
     deviceToken: string;
     role: string;

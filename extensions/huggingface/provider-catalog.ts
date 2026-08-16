@@ -1,7 +1,6 @@
 // Huggingface provider module implements model/runtime integration.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
 import {
-  buildHuggingfaceModelDefinition,
   discoverHuggingfaceModels,
   HUGGINGFACE_BASE_URL,
   HUGGINGFACE_MODEL_CATALOG,
@@ -14,7 +13,7 @@ export async function buildHuggingfaceProvider(
   const models =
     resolvedSecret !== ""
       ? await discoverHuggingfaceModels(resolvedSecret)
-      : HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
+      : HUGGINGFACE_MODEL_CATALOG.map((model) => Object.assign({}, model));
   return {
     baseUrl: HUGGINGFACE_BASE_URL,
     api: "openai-completions",

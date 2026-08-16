@@ -8,6 +8,11 @@ on:
         required: true
         default: main
         type: string
+      expected_sha:
+        description: Optional full Validation SHA that ref must resolve to
+        required: false
+        default: ""
+        type: string
       target_context_ref:
         description: Optional canonical release branch or tag context for an exact-SHA target
         required: false
@@ -15,6 +20,11 @@ on:
         type: string
       allow_unreleased_changelog:
         description: Allow current-tree packaging to use Unreleased notes; release contexts require this explicit opt-in
+        required: false
+        default: false
+        type: boolean
+      skip_package_telegram_e2e:
+        description: Defer beta Package Acceptance Telegram E2E while preserving focused npm Telegram validation
         required: false
         default: false
         type: boolean
@@ -74,6 +84,11 @@ on:
           - qa-live
           - npm-telegram
           - performance
+      plugin_prerelease_node_exclude_patterns_json:
+        description: Exact Plugin Prerelease Node test paths omitted only for frozen-target validation
+        required: false
+        default: "[]"
+        type: string
       reuse_evidence:
         description: Reuse matching green product validation for the same target or a changelog-only Release SHA
         required: false
@@ -138,15 +153,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: full-release-validation-${{ inputs.ref }}-${{ inputs.rerun_group }}
-  cancel-in-progress: ${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') || startsWith(inputs.ref, 'release/') }}
+  group: full-release-validation-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   GH_REPO: ${{ github.repository }}
   # Read retries and one-shot dispatch recovery share this classifier; dispatch POSTs never retry.
   GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|invalid character .* looking for beginning of value|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|(^|[^A-Za-z0-9_])EOF([^A-Za-z0-9_]|$)|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
-  NODE_VERSION: "24.15.0"
+  NODE_VERSION: "24.16.0"
 
 jobs:
   resolve_target:
@@ -170,16 +185,29 @@ jobs:
         env:
           TARGET_REF: ${{ inputs.ref }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
         run: |
           bash workflow/scripts/github/resolve-openclaw-ref.sh \
             --ref "$TARGET_REF" \
+            --expected-sha "$EXPECTED_SHA" \
             --github-output "$GITHUB_OUTPUT"
+
+      - name: Validate release inputs
+        env:
+          RELEASE_PROFILE: ${{ inputs.release_profile }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP_PACKAGE_TELEGRAM_E2E" == "true" && "$RELEASE_PROFILE" != "beta" ]]; then
+            echo "skip_package_telegram_e2e is allowed only for release_profile=beta." >&2
+            exit 1
+          fi
 
       - name: Summarize target
         env:
           TARGET_REF: ${{ inputs.ref }}
           TARGET_SHA: ${{ steps.resolve.outputs.sha }}
-          CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+          TOOLING_SHA: ${{ github.sha }}
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           EVIDENCE_PACKAGE_SPEC: ${{ inputs.evidence_package_spec }}
@@ -188,19 +216,23 @@ jobs:
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
           FAIL_FAST: ${{ inputs.fail_fast }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
+          PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
         run: |
+          plugin_prerelease_node_exclusions="$(jq -c . <<< "$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON")"
           {
             echo "## Full release validation"
             echo
             echo "- Target ref: \`${TARGET_REF}\`"
-            echo "- Target SHA: \`${TARGET_SHA}\`"
-            echo "- Child workflow ref: \`${CHILD_WORKFLOW_REF}\`"
+            echo "- Validation SHA: \`${TARGET_SHA}\`"
+            echo "- Tooling SHA: \`${TOOLING_SHA}\`"
             echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
             echo "- Fail fast: \`${FAIL_FAST}\`"
+            echo "- Package Acceptance Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`"
             echo "- Allow Unreleased changelog packaging: \`${ALLOW_UNRELEASED_CHANGELOG}\`"
             echo "- Rerun group: \`${RERUN_GROUP}\`"
             if [[ -n "${LIVE_SUITE_FILTER// }" ]]; then
@@ -221,6 +253,7 @@ jobs:
             fi
             if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "plugin-prerelease" ]]; then
               echo "- Plugin prerelease: \`Plugin Prerelease\` with \`target_ref=${TARGET_SHA}\`"
+              echo "- Plugin prerelease Node exclusions: \`${plugin_prerelease_node_exclusions}\`"
             else
               echo "- Plugin prerelease: skipped by rerun group"
             fi
@@ -239,7 +272,11 @@ jobs:
             elif [[ "$RERUN_GROUP" == "npm-telegram" ]]; then
               echo "- Package Telegram E2E: focused rerun requires \`release_package_spec\` or \`npm_telegram_package_spec\`"
             elif [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "release-checks" || "$RERUN_GROUP" == "package" ]]; then
-              echo "- Package Telegram E2E: OpenClaw Release Checks Package Acceptance"
+              if [[ "$SKIP_PACKAGE_TELEGRAM_E2E" == "true" ]]; then
+                echo "- Package Telegram E2E: deferred by \`skip_package_telegram_e2e\`"
+              else
+                echo "- Package Telegram E2E: OpenClaw Release Checks Package Acceptance"
+              fi
             else
               echo "- Package Telegram E2E: skipped by rerun group"
             fi
@@ -311,7 +348,9 @@ jobs:
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
           NPM_TELEGRAM_PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
           NPM_TELEGRAM_SCENARIO: ${{ inputs.npm_telegram_scenario }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
+          PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
         run: |
           set -euo pipefail
           # Lane-selection inputs must match the prior run's manifest exactly;
@@ -328,7 +367,9 @@ jobs:
             --arg npmTelegramPackageSpec "$NPM_TELEGRAM_PACKAGE_SPEC" \
             --arg npmTelegramProviderMode "$NPM_TELEGRAM_PROVIDER_MODE" \
             --arg npmTelegramScenario "$NPM_TELEGRAM_SCENARIO" \
+            --arg skipPackageTelegramE2e "$SKIP_PACKAGE_TELEGRAM_E2E" \
             --arg allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
+            --arg pluginPrereleaseNodeExcludePatternsJson "$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON" \
             '{
               provider: $provider,
               mode: $mode,
@@ -341,7 +382,9 @@ jobs:
               npmTelegramPackageSpec: $npmTelegramPackageSpec,
               npmTelegramProviderMode: $npmTelegramProviderMode,
               npmTelegramScenario: $npmTelegramScenario,
-              allowUnreleasedChangelog: $allowUnreleasedChangelog
+              skipPackageTelegramE2e: $skipPackageTelegramE2e,
+              allowUnreleasedChangelog: $allowUnreleasedChangelog,
+              pluginPrereleaseNodeExcludePatternsJson: $pluginPrereleaseNodeExcludePatternsJson
             }')"
           bash workflow/scripts/github/find-reusable-release-validation.sh \
             --target-sha "$TARGET_SHA" \
@@ -431,7 +474,8 @@ jobs:
     needs: [resolve_target, evidence_reuse]
     if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.release_profile != 'beta' && 240 || 60 }}
+    # The child owns lane timeouts; this monitor also covers queue delay and iOS.
+    timeout-minutes: 240
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -653,23 +697,23 @@ jobs:
             fi
 
             cancel_child() {
-              if [[ -n "${active_child_run_id:-}" ]]; then
-                echo "Cancelling child workflow ${active_child_workflow}: ${active_child_run_id}" >&2
-                gh run cancel "$active_child_run_id" >/dev/null 2>&1 || true
+              if [[ -n "${run_id:-}" ]]; then
+                echo "Cancelling child workflow ${workflow}: ${run_id}" >&2
+                gh run cancel "$run_id" >/dev/null 2>&1 || true
               fi
             }
             run_json="$(validate_child_run "$run_id")"
-            # Identity fields prove cancellation ownership before workflow-SHA validation.
-            # EXIT traps run after function locals unwind; preserve only adopted child identity.
-            active_child_workflow="$workflow"
-            active_child_run_id="$run_id"
-            trap cancel_child EXIT INT TERM
+            # Generic monitor failures and parent cancellation leave an
+            # identity-checked child running for explicit operator recovery.
+            {
+              echo "- Adopted child: \`${workflow}\` run \`${run_id}\`"
+              echo "- Parent cancellation leaves this child running; cancel it explicitly if no longer needed."
+            } >> "$GITHUB_STEP_SUMMARY"
 
             child_head_sha="$(jq -r '.head_sha // ""' <<< "$run_json")"
             if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then
               echo "::error::${workflow} child run used workflow SHA ${child_head_sha}, expected parent workflow SHA ${PARENT_WORKFLOW_SHA}." >&2
               cancel_child
-              trap - EXIT INT TERM
               exit 1
             fi
 
@@ -735,7 +779,6 @@ jobs:
                 fi
                 jq '.[] | {name, conclusion, url: (.url // .html_url)}' <<< "$failed_jobs_json"
                 cancel_child
-                trap - EXIT INT TERM
                 exit 1
               fi
             }
@@ -756,7 +799,6 @@ jobs:
               fi
               sleep 60
             done
-            trap - EXIT INT TERM
 
             if [[ "$workflow" == "openclaw-release-checks.yml" ]]; then
               jobs_json="$(fetch_child_jobs | jq -s '{jobs: [.[] | {name, conclusion, url: .html_url}]}')"
@@ -812,20 +854,24 @@ jobs:
               elif [[ "$TARGET_CONTEXT_REF" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$ ]]; then
                 args+=(-f historical_target_tag="$TARGET_CONTEXT_REF")
               elif [[ "$TARGET_CONTEXT_REF" =~ ^(release/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable/[0-9]{4}\.[0-9]+\.33)$ ]]; then
-                args+=(-f release_candidate_ref="$TARGET_CONTEXT_REF")
+                args+=(-f target_context_ref="$TARGET_CONTEXT_REF")
               fi
               dispatch_and_wait ci.yml "$dispatch_run_name" "${args[@]}"
               ;;
             plugin-prerelease)
+              plugin_prerelease_node_exclusions="$(
+                jq -c . <<< "$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON"
+              )"
               {
                 echo "### Plugin prerelease"
                 echo
                 echo "- Target ref: \`${TARGET_REF}\`"
                 echo "- Target SHA: \`${TARGET_SHA}\`"
+                echo "- Frozen-target Node test omissions: \`${plugin_prerelease_node_exclusions}\`"
               } >> "$GITHUB_STEP_SUMMARY"
               dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-plugin-prerelease"
               dispatch_run_name="Plugin Prerelease ${dispatch_id}"
-              args=(-f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id")
+              args=(-f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id" -f node_test_exclude_patterns_json="$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON")
               if [[ -n "${CANDIDATE_ARTIFACT_JSON// }" ]]; then
                 args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")
               fi
@@ -857,14 +903,14 @@ jobs:
                 if [[ -n "${CODEX_PLUGIN_SPEC// }" ]]; then
                   echo "- Codex plugin spec: \`${CODEX_PLUGIN_SPEC}\`"
                 fi
+                echo "- Package Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`"
               } >> "$GITHUB_STEP_SUMMARY"
               child_rerun_group="$RERUN_GROUP"
               if [[ "$child_rerun_group" == "release-checks" ]]; then
                 child_rerun_group=all
               fi
-              release_checks_target_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"
               args=(
-                -f ref="$release_checks_target_ref"
+                -f ref="$TARGET_SHA"
                 -f expected_sha="$TARGET_SHA"
                 -f provider="$PROVIDER"
                 -f mode="$MODE"
@@ -872,9 +918,11 @@ jobs:
                 -f run_release_soak="$RUN_RELEASE_SOAK"
                 -f fail_fast="$FAIL_FAST"
                 -f allow_unreleased_changelog="$ALLOW_UNRELEASED_CHANGELOG"
+                -f skip_package_telegram_e2e="$SKIP_PACKAGE_TELEGRAM_E2E"
                 -f rerun_group="$child_rerun_group"
               )
               if [[ -n "${TARGET_CONTEXT_REF// }" ]]; then
+                args+=(-f target_context_ref="$TARGET_CONTEXT_REF")
                 args+=(-f allow_frozen_target_scenario_omissions=true)
               fi
               if [[ -n "${LIVE_SUITE_FILTER// }" ]]; then
@@ -956,7 +1004,8 @@ jobs:
     needs: [resolve_target, evidence_reuse, prepare_release_candidate]
     if: ${{ always() && needs.resolve_target.result == 'success' && (needs.prepare_release_candidate.result == 'success' || needs.prepare_release_candidate.result == 'skipped') && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.release_profile == 'full' && 300 || inputs.release_profile == 'stable' && 240 || 60 }}
+    # The child owns lane timeouts; this monitor also covers queue delay.
+    timeout-minutes: ${{ inputs.release_profile == 'full' && 300 || 240 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -972,6 +1021,7 @@ jobs:
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
           CANDIDATE_ARTIFACT_JSON: ${{ needs.prepare_release_candidate.outputs.candidate_artifact_json }}
+          PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
           FAIL_FAST: ${{ inputs.fail_fast }}
         run: *full_release_child_dispatch
 
@@ -979,10 +1029,10 @@ jobs:
     name: Run release/live/Docker/QA validation
     needs: [resolve_target, evidence_reuse, prepare_release_candidate]
     if: ${{ always() && needs.resolve_target.result == 'success' && (needs.prepare_release_candidate.result == 'success' || needs.prepare_release_candidate.result == 'skipped') && contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: ubuntu-24.04
-    # The child owns lane timeouts; this monitor must also tolerate queue delay
-    # so it does not cancel healthy release checks before their final verifier.
-    timeout-minutes: 240
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # The bounded package critical path tops out at 310 minutes; 420 leaves
+    # queue/API margin. Parent timeout preserves the adopted child for exact cancellation.
+    timeout-minutes: 420
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -1011,6 +1061,7 @@ jobs:
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
           CANDIDATE_ARTIFACT_JSON: ${{ needs.prepare_release_candidate.outputs.candidate_artifact_json }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
         run: *full_release_child_dispatch
 
   npm_telegram:
@@ -1019,7 +1070,8 @@ jobs:
     if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || inputs.release_package_spec != '') && needs.evidence_reuse.outputs.reuse != 'true' }}
     continue-on-error: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.release_profile == 'full' && 360 || 60 }}
+    # The child owns lane timeouts; this monitor also covers queue delay.
+    timeout-minutes: ${{ inputs.release_profile == 'full' && 360 || 120 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -1046,7 +1098,9 @@ jobs:
     # Keep this monitor off the four-slot GitHub-hosted pool so performance starts
     # with the other child workflows instead of extending the critical path.
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: ${{ inputs.release_profile == 'full' && 360 || 120 }}
+    # Artifact-only and publish paths top out at 255 and 280 minutes; 360 leaves
+    # queue/API margin. Parent timeout preserves the adopted child for exact cancellation.
+    timeout-minutes: 360
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -1099,6 +1153,7 @@ jobs:
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
           EVIDENCE_REUSE: ${{ needs.evidence_reuse.outputs.reuse }}
           EVIDENCE_ROOT_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_root_run_id }}
           EVIDENCE_RUN_URL: ${{ needs.evidence_reuse.outputs.evidence_run_url }}
@@ -1374,6 +1429,7 @@ jobs:
           if [[ "$RERUN_GROUP" == "npm-telegram" || ( "$RERUN_GROUP" == "all" && ( -n "${NPM_TELEGRAM_PACKAGE_SPEC// }" || -n "${RELEASE_PACKAGE_SPEC// }" ) ) ]]; then
             npm_telegram_required=1
           fi
+          echo "- Package Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`" >> "$GITHUB_STEP_SUMMARY"
           if [[ -z "${RELEASE_PACKAGE_SPEC// }" && -z "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
             case "$RERUN_GROUP" in
               all|plugin-prerelease|release-checks|cross-os|live-e2e|package)
@@ -1596,7 +1652,7 @@ jobs:
       - name: Write release validation manifest
         if: ${{ success() }}
         env:
-          TARGET_REF: ${{ inputs.ref }}
+          TARGET_REF: ${{ startsWith(github.ref, 'refs/heads/release-ci/') && needs.resolve_target.outputs.sha || inputs.ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
@@ -1625,7 +1681,9 @@ jobs:
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
           NPM_TELEGRAM_PROVIDER_MODE: ${{ inputs.npm_telegram_provider_mode }}
           NPM_TELEGRAM_SCENARIO: ${{ inputs.npm_telegram_scenario }}
+          SKIP_PACKAGE_TELEGRAM_E2E: ${{ inputs.skip_package_telegram_e2e }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
+          PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: ${{ inputs.plugin_prerelease_node_exclude_patterns_json }}
         run: |
           set -euo pipefail
           manifest_dir="${RUNNER_TEMP}/full-release-validation"
@@ -1700,7 +1758,9 @@ jobs:
             --arg npmTelegramPackageSpec "$NPM_TELEGRAM_PACKAGE_SPEC" \
             --arg npmTelegramProviderMode "$NPM_TELEGRAM_PROVIDER_MODE" \
             --arg npmTelegramScenario "$NPM_TELEGRAM_SCENARIO" \
+            --arg skipPackageTelegramE2e "$SKIP_PACKAGE_TELEGRAM_E2E" \
             --arg allowUnreleasedChangelog "$ALLOW_UNRELEASED_CHANGELOG" \
+            --arg pluginPrereleaseNodeExcludePatternsJson "$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON" \
             '{
               version: 3,
               workflowName: $workflowName,
@@ -1727,7 +1787,9 @@ jobs:
                 npmTelegramPackageSpec: $npmTelegramPackageSpec,
                 npmTelegramProviderMode: $npmTelegramProviderMode,
                 npmTelegramScenario: $npmTelegramScenario,
-                allowUnreleasedChangelog: $allowUnreleasedChangelog
+                skipPackageTelegramE2e: $skipPackageTelegramE2e,
+                allowUnreleasedChangelog: $allowUnreleasedChangelog,
+                pluginPrereleaseNodeExcludePatternsJson: $pluginPrereleaseNodeExcludePatternsJson
               },
               controls: {
                 stableSoakRequired: ($releaseProfile == "stable" or $releaseProfile == "full"),

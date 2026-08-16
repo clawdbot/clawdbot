@@ -2,7 +2,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -12,6 +11,7 @@ import { slugifySessionKey } from "../../agents/sandbox/shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { root as fsRoot, FsSafeError } from "../../infra/fs-safe.js";
+import { safeFileURLToPath } from "../../infra/local-file-access.js";
 import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
@@ -293,9 +293,9 @@ function resolveAbsolutePath(value: string): string | null {
   if (!resolved) {
     return null;
   }
-  if (resolved.startsWith("file://")) {
+  if (/^file:/iu.test(resolved)) {
     try {
-      resolved = fileURLToPath(resolved);
+      resolved = safeFileURLToPath(resolved);
     } catch {
       return null;
     }

@@ -1,4 +1,5 @@
 // Msteams plugin module implements sdk behavior.
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
 import { normalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
@@ -333,7 +334,7 @@ async function createFederatedApp(
   try {
     privateKey = await readSecretFile(creds.certificatePath, "Microsoft Teams certificate");
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = coerceErrorMessage(err);
     throw new Error(`Failed to read certificate file at '${creds.certificatePath}': ${msg}`, {
       cause: err,
     });

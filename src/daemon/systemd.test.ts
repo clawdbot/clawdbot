@@ -1009,6 +1009,64 @@ describe("readSystemdServiceRuntime", () => {
     });
   });
 
+  it("reports a missing unit without surfacing routine systemctl stderr", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        const detail = "Unit openclaw-gateway.service could not be found.";
+        cb(createExecFileError(detail, { stderr: detail }), "", detail);
+      });
+
+    await expect(readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME })).resolves.toEqual({
+      status: "stopped",
+      missingUnit: true,
+    });
+  });
+
+  it("keeps unexpected systemctl failures visible", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        const detail = "Permission denied while reading systemd state";
+        cb(createExecFileError(detail, { stderr: detail }), "", detail);
+      });
+
+    await expect(readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME })).resolves.toEqual({
+      status: "unknown",
+      detail: "Permission denied while reading systemd state",
+      missingUnit: false,
+    });
+  });
+
+  it("does not call an installed unit missing when systemd disagrees with its definition", async () => {
+    const accessSpy = vi.spyOn(fs, "access").mockImplementation(async (pathArg) => {
+      if (pathLikeToString(pathArg) === "/etc/systemd/system/openclaw-gateway.service") {
+        return;
+      }
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      const detail = "Unit openclaw-gateway.service could not be found.";
+      cb(createExecFileError(detail, { stderr: detail }), "", detail);
+    });
+
+    try {
+      await expect(readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME })).resolves.toEqual({
+        status: "unknown",
+        detail: "Unit openclaw-gateway.service could not be found.",
+        missingUnit: false,
+      });
+    } finally {
+      accessSpy.mockRestore();
+    }
+  });
+
   it("parses Result and the restart counter for crash-loop give-up detection", async () => {
     // Real systemd 249 give-up shape: a crash-looped unit keeps Result=exit-code
     // (start-limit-hit never overwrites an exec failure), so the counter reaching
@@ -1726,6 +1784,8 @@ describe("stageSystemdService", () => {
 
       const unit = await fs.readFile(unitPath, "utf8");
 
+      expect(unit).toContain("Description=OpenClaw Gateway");
+      expect(unit).not.toContain("OPENCLAW_SERVICE_VERSION");
       expect(unit).not.toContain("EnvironmentFile=");
       expect(unit).toContain("Environment=OPENCLAW_GATEWAY_PORT=18789");
       expect(unit).not.toContain("Environment=OPENCLAW_GATEWAY_TOKEN=dotenv-token");
@@ -2377,6 +2437,7 @@ describe("systemd service install and uninstall", () => {
         stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
         programArguments: ["/usr/bin/openclaw", "node", "run"],
         workingDirectory: "/tmp",
+        description: "OpenClaw Node Host",
         environment: {
           OPENCLAW_SYSTEMD_UNIT: "openclaw-node",
         },
@@ -2384,7 +2445,9 @@ describe("systemd service install and uninstall", () => {
 
       const unit = await fs.readFile(unitPath, "utf8");
       expect(unitPath).toMatch(/openclaw-node\.service$/);
+      expect(unit).toContain("Description=OpenClaw Node Host");
       expect(unit).toContain("openclaw node run");
+      expect(unit).not.toContain("OPENCLAW_SERVICE_VERSION");
       expect(execFileMock).toHaveBeenCalledTimes(4);
     });
   });

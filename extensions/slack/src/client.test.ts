@@ -32,7 +32,6 @@ let createSlackLookupClient: typeof import("./client.js").createSlackLookupClien
 let createSlackWriteClient: typeof import("./client.js").createSlackWriteClient;
 let createSlackTokenCacheKey: typeof import("./client.js").createSlackTokenCacheKey;
 let getSlackWriteClient: typeof import("./client.js").getSlackWriteClient;
-let clearSlackWriteClientCacheForTest: typeof import("./client.js").clearSlackWriteClientCacheForTest;
 let resolveSlackProxyDispatcher: typeof import("./client-options.js").resolveSlackProxyDispatcher;
 let resolveSlackWebClientOptions: typeof import("./client.js").resolveSlackWebClientOptions;
 let resolveSlackWriteClientOptions: typeof import("./client.js").resolveSlackWriteClientOptions;
@@ -114,7 +113,6 @@ beforeAll(async () => {
     createSlackWriteClient,
     createSlackTokenCacheKey,
     getSlackWriteClient,
-    clearSlackWriteClientCacheForTest,
     resolveSlackWebClientOptions,
     resolveSlackWriteClientOptions,
     SLACK_DEFAULT_RETRY_OPTIONS,
@@ -125,7 +123,6 @@ beforeAll(async () => {
 
 beforeEach(() => {
   WebClient.mockClear();
-  clearSlackWriteClientCacheForTest();
   clearSlackApiUrlEnvForTest();
   isDebugProxyGlobalFetchPatchInstalledMock.mockReturnValue(false);
 });
@@ -341,10 +338,33 @@ describe("slack web client config", () => {
     expect(WebClient).toHaveBeenCalledTimes(2);
   });
 
-  it("only exposes API-root options on cached write clients", () => {
+  it("limits cached write-client options to routing scopes", () => {
     expectTypeOf<NonNullable<Parameters<typeof getSlackWriteClient>[1]>>().toEqualTypeOf<
-      Pick<WebClientOptions, "slackApiUrl">
+      Pick<WebClientOptions, "slackApiUrl" | "teamId">
     >();
+  });
+
+  it("keeps one org token partitioned by workspace", () => {
+    clearProxyEnvForTest();
+    try {
+      const first = getSlackWriteClient("xoxb-org", { teamId: "T1" });
+      const reused = getSlackWriteClient("xoxb-org", { teamId: "T1" });
+      const second = getSlackWriteClient("xoxb-org", { teamId: "T2" });
+
+      expect(reused).toBe(first);
+      expect(second).not.toBe(first);
+      expect(WebClient).toHaveBeenCalledTimes(2);
+      expect(WebClient).toHaveBeenNthCalledWith(1, "xoxb-org", {
+        retryConfig: SLACK_WRITE_RETRY_OPTIONS,
+        teamId: "T1",
+      });
+      expect(WebClient).toHaveBeenNthCalledWith(2, "xoxb-org", {
+        retryConfig: SLACK_WRITE_RETRY_OPTIONS,
+        teamId: "T2",
+      });
+    } finally {
+      restoreProxyEnvForTest();
+    }
   });
 
   it("keeps write clients separated by Slack API URL client options", () => {
@@ -370,9 +390,9 @@ describe("slack web client config", () => {
     clearProxyEnvForTest();
     try {
       process.env.SLACK_API_URL = "http://127.0.0.1:49152/api/";
-      const first = getSlackWriteClient("xoxb-test");
+      const first = getSlackWriteClient("xoxb-env");
       process.env.SLACK_API_URL = "http://127.0.0.1:49153/api/";
-      const second = getSlackWriteClient("xoxb-test");
+      const second = getSlackWriteClient("xoxb-env");
 
       expect(second).not.toBe(first);
       expect(WebClient).toHaveBeenCalledTimes(2);

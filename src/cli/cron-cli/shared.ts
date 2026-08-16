@@ -3,7 +3,9 @@ import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readCronJobNotFoundError } from "../../../packages/gateway-protocol/src/index.js";
 import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
@@ -12,6 +14,7 @@ import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/types.js";
 import { danger } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
 import {
   isOffsetlessIsoDateTime,
@@ -19,6 +22,7 @@ import {
 } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { formatTimestamp } from "../../logging/timestamps.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { formatLookupMiss } from "../error-format.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
@@ -147,7 +151,7 @@ export function enrichCronJsonWithStatus(value: unknown): unknown {
 
   // Single job object (has 'state' and 'enabled')
   if ("state" in obj && "enabled" in obj) {
-    return { ...obj, status: computeStatus(obj as unknown as CronJob) };
+    return { ...obj, status: computeStatus(obj) };
   }
 
   // List response (has 'jobs' array)
@@ -162,15 +166,19 @@ export function enrichCronJsonWithStatus(value: unknown): unknown {
   return value;
 }
 
-function computeStatus(job: CronJob): string {
+function computeStatus(job: { enabled?: unknown; state?: unknown }): string {
   if (!job.enabled) {
     return "disabled";
   }
-  const state = job.state ?? {};
+  const state = asOptionalRecord(job.state) ?? {};
   if (state.runningAtMs) {
     return "running";
   }
-  return state.lastRunStatus ?? state.lastStatus ?? "idle";
+  return typeof state.lastRunStatus === "string"
+    ? state.lastRunStatus
+    : typeof state.lastStatus === "string"
+      ? state.lastStatus
+      : "idle";
 }
 
 // Human-facing decoration only: enrichCronJsonWithStatus() emits computeStatus()
@@ -196,7 +204,16 @@ function formatCronStatusForDisplay(job: CronJob): string {
 }
 
 export function handleCronCliError(err: unknown) {
-  defaultRuntime.error(danger(String(err)));
+  const missingJob = readCronJobNotFoundError(err);
+  const message = missingJob
+    ? formatLookupMiss({
+        noun: "Automation",
+        value: sanitizeTerminalText(missingJob.jobId),
+        listCommand: "openclaw cron list",
+        valueLabel: "automation id",
+      })
+    : formatErrorMessage(err);
+  defaultRuntime.error(danger(message));
   defaultRuntime.exit(1);
 }
 
@@ -540,28 +557,31 @@ export function printCronShow(
   opts?: { deliveryPreview?: CronDeliveryPreview },
 ) {
   const preview = opts?.deliveryPreview ?? { label: "-", detail: "unavailable" };
-  runtime.log(`id: ${job.id}`);
-  runtime.log(`declaration: ${job.declarationKey ?? "-"}`);
-  runtime.log(`name: ${job.name}`);
-  runtime.log(`display name: ${job.displayName ?? "-"}`);
-  runtime.log(`owner agent: ${job.owner?.agentId ?? "-"}`);
-  runtime.log(`owner session: ${job.owner?.sessionKey ?? "-"}`);
+  const showValue = (value: unknown) => sanitizeTerminalText(stringifyCell(value));
+  runtime.log(`id: ${showValue(job.id)}`);
+  runtime.log(`declaration: ${showValue(job.declarationKey)}`);
+  runtime.log(`name: ${showValue(job.name)}`);
+  runtime.log(`display name: ${showValue(job.displayName)}`);
+  runtime.log(`owner agent: ${showValue(job.owner?.agentId)}`);
+  runtime.log(`owner session: ${showValue(job.owner?.sessionKey)}`);
   runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);
-  runtime.log(`schedule: ${formatSchedule(job.schedule, job.trigger !== undefined)}`);
+  runtime.log(`schedule: ${showValue(formatSchedule(job.schedule, job.trigger !== undefined))}`);
   runtime.log(
     `trigger: ${job.trigger ? `once=${job.trigger.once === true ? "yes" : "no"}; evals=${job.state.triggerEvalCount ?? 0}; last eval=${formatRelative(job.state.lastTriggerEvalAtMs, Date.now())}; last fire=${formatRelative(job.state.lastTriggerFireAtMs, Date.now())}` : "-"}`,
   );
-  runtime.log(`session: ${job.sessionTarget ?? "-"}`);
-  runtime.log(`agent: ${job.agentId ?? "-"}`);
-  runtime.log(`model: ${job.payload.kind === "agentTurn" ? (job.payload.model ?? "-") : "-"}`);
-  runtime.log(`delivery: ${preview.label} (${preview.detail})`);
+  runtime.log(`session: ${showValue(job.sessionTarget)}`);
+  runtime.log(`agent: ${showValue(job.agentId)}`);
+  runtime.log(
+    `model: ${showValue(job.payload.kind === "agentTurn" ? job.payload.model : undefined)}`,
+  );
+  runtime.log(`delivery: ${showValue(preview.label)} (${showValue(preview.detail)})`);
   runtime.log(`next: ${formatRelative(job.state.nextRunAtMs, Date.now())}`);
   runtime.log(`last: ${formatRelative(job.state.lastRunAtMs, Date.now())}`);
-  runtime.log(`status: ${formatCronStatusForDisplay(job)}`);
+  runtime.log(`status: ${showValue(formatCronStatusForDisplay(job))}`);
   // lastError is the run/schedule failure message; the diagnostic line below is
   // the run-diagnostics summary and can be empty when only lastError is set.
-  runtime.log(`last error: ${job.state.lastError ?? "-"}`);
-  runtime.log(`last delivery: ${job.state.lastDeliveryStatus ?? "-"}`);
-  runtime.log(`last delivery error: ${job.state.lastDeliveryError ?? "-"}`);
-  runtime.log(`diagnostic: ${job.state.lastDiagnosticSummary ?? "-"}`);
+  runtime.log(`last error: ${showValue(job.state.lastError)}`);
+  runtime.log(`last delivery: ${showValue(job.state.lastDeliveryStatus)}`);
+  runtime.log(`last delivery error: ${showValue(job.state.lastDeliveryError)}`);
+  runtime.log(`diagnostic: ${showValue(job.state.lastDiagnosticSummary)}`);
 }

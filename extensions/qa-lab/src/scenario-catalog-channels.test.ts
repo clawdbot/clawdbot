@@ -27,7 +27,7 @@ describe("qa scenario catalog channel contracts", () => {
       (scenario) => scenario.execution.flowKind === "module",
     );
 
-    expect(moduleFlows).toHaveLength(143);
+    expect(moduleFlows).toHaveLength(145);
     expect(moduleFlows.every((scenario) => scenario.execution.flow)).toBe(true);
   });
 
@@ -67,6 +67,23 @@ describe("qa scenario catalog channel contracts", () => {
 
   it("keeps the memory channel-context proof on the internal QA channel", () => {
     expect(readQaScenarioById("memory-tools-channel-context").execution.channel).toBe("qa-channel");
+  });
+
+  it("keeps channel participant identity proof on isolated QA Channel lifecycle owners", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("channel-participant-identity-inspection"),
+    );
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(scenario.execution.channel).toBe("qa-channel");
+    expect(scenario.execution.suiteIsolation).toBe("isolated");
+    expect(scenario.gatewayConfigPatch).toMatchObject({
+      logging: { audit: { executionIdentity: true } },
+      messages: { queue: { mode: "collect", debounceMsByChannel: { "qa-channel": 1000 } } },
+      channels: { "qa-channel": { groupPolicy: "allowlist" } },
+    });
+    expect(flow).toContain("inspectQaExecutionIdentityStorage");
+    expect(flow).toContain("env.gateway.restartAfterStateMutation");
   });
 
   it("keeps stored inbound audio proof on the real QA Channel and Gateway flow", () => {
@@ -175,7 +192,11 @@ describe("qa scenario catalog channel contracts", () => {
         marker: "QA-SUBAGENT-TERMINAL-VISIBLE-OK",
         expectedSendCount: 1,
       },
-      { name: "silent", marker: "NO_REPLY", expectedSendCount: 0 },
+      {
+        name: "silent",
+        marker: "QA-SUBAGENT-TERMINAL-SILENT-REPRESENTED",
+        expectedSendCount: 1,
+      },
       {
         name: "fallback",
         marker: "QA-SUBAGENT-TERMINAL-FALLBACK-OK",
@@ -200,12 +221,19 @@ describe("qa scenario catalog channel contracts", () => {
 
     expect(scenario.execution.channel).toBeUndefined();
     expect(scenario.execution.channels).toEqual(["qa-channel", "telegram"]);
+    expect(scenario.execution.retryCount).toBe(0);
     expect(scenario.coverage?.primary).toEqual(["channels.streaming-final-reply"]);
     expect(scenario.coverage?.secondary).toEqual([`${agentRuntime}.streaming-replies-delivery`]);
     expect(scenario.gatewayConfigPatch).toMatchObject({
       channels: { telegram: { streaming: { mode: "partial" } } },
     });
     expect(scenario.gatewayConfigPatch).not.toHaveProperty("channels.telegram.groups");
+  });
+
+  it("keeps the shared channel canary eligible for its supported channels", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("channel-canary"));
+
+    expect(scenario.execution.channels).toEqual(["qa-channel", "telegram", "buzz", "msteams"]);
   });
 
   it("keeps transcript-role delivery on the Crabline driver", () => {

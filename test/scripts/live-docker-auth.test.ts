@@ -219,6 +219,7 @@ describe("scripts/lib/live-docker-auth.sh", () => {
       "42s",
       "docker",
       "run",
+      "--init",
       "--memory",
       "8g",
       "--cpus",
@@ -270,6 +271,7 @@ describe("scripts/lib/live-docker-auth.sh", () => {
       "42s",
       "docker",
       "run",
+      "--init",
       "--memory",
       "8g",
       "--cpus",
@@ -293,6 +295,7 @@ describe("scripts/lib/live-docker-auth.sh", () => {
       "42s",
       "docker",
       "run",
+      "--init",
       "--memory",
       "8g",
       "--cpus",
@@ -322,6 +325,7 @@ describe("scripts/lib/live-docker-auth.sh", () => {
       "42s",
       "docker",
       "run",
+      "--init",
       "--memory",
       "8g",
       "--cpus",
@@ -373,6 +377,7 @@ describe("scripts/lib/live-docker-auth.sh", () => {
       "42s",
       "docker",
       "run",
+      "--init",
     ]);
   });
 

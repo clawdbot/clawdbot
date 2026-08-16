@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  disableCronJobsBoundToSession,
+  disableCronJobsBoundToSessions,
   resolveCronJobBoundSessionKeys,
 } from "./job-session-bindings.js";
 import type { CronJob } from "./types.js";
@@ -13,6 +13,19 @@ function bindingKeys(
   defaultAgentId?: string,
 ) {
   return resolveCronJobBoundSessionKeys(job, { cfg, defaultAgentId });
+}
+
+async function disableCronJobsBoundToSession(
+  params: Omit<Parameters<typeof disableCronJobsBoundToSessions>[0], "sessionKeys"> & {
+    sessionKey: string;
+  },
+): Promise<string[]> {
+  const disabled = await disableCronJobsBoundToSessions({
+    cron: params.cron,
+    cfg: params.cfg,
+    sessionKeys: [params.sessionKey],
+  });
+  return disabled.get(params.sessionKey.trim()) ?? [];
 }
 
 describe("resolveCronJobBoundSessionKeys", () => {
@@ -162,5 +175,31 @@ describe("disableCronJobsBoundToSession", () => {
     ).rejects.toThrow(AggregateError);
     expect(update).toHaveBeenCalledTimes(2);
     expect(update.mock.calls.map((call) => call[0])).toEqual(["vanished", "bound"]);
+  });
+
+  test("scans once and updates each job once across a set of archived sessions", async () => {
+    const sessionKeys = Array.from({ length: 30 }, (_, index) => `agent:main:archive-${index}`);
+    const jobs = [
+      job({
+        id: "shared",
+        sessionTarget: `session:${sessionKeys[0]}`,
+        sessionKey: sessionKeys[1],
+      }),
+      job({ id: "last", sessionTarget: `session:${sessionKeys[29]}` }),
+    ];
+    const list = vi.fn(async () => jobs);
+    const update = fakeUpdateWithPrecondition(() => jobs);
+
+    const disabled = await disableCronJobsBoundToSessions({
+      cron: { list, updateWithPrecondition: update, getDefaultAgentId: () => "main" },
+      cfg,
+      sessionKeys,
+    });
+
+    expect(list).toHaveBeenCalledOnce();
+    expect(update.mock.calls.map((call) => call[0])).toEqual(["shared", "last"]);
+    expect(disabled.get(sessionKeys[0]!)).toEqual(["shared"]);
+    expect(disabled.get(sessionKeys[1]!)).toEqual(["shared"]);
+    expect(disabled.get(sessionKeys[29]!)).toEqual(["last"]);
   });
 });

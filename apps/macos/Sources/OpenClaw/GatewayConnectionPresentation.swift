@@ -66,8 +66,17 @@ struct GeneralStatusPresentation: Equatable {
     static func resolve(
         mode: AppState.ConnectionMode,
         isPaused: Bool,
-        controlState: ControlChannel.ConnectionState) -> Self
+        controlState: ControlChannel.ConnectionState,
+        localFailure: String? = nil) -> Self
     {
+        if mode == .local, let localFailure {
+            return Self(
+                title: String(localized: "OpenClaw needs attention"),
+                subtitle: localFailure,
+                symbolName: "exclamationmark.triangle.fill",
+                tone: .attention,
+                showsConnectionAction: true)
+        }
         if isPaused {
             return Self(
                 title: String(localized: "OpenClaw paused"),

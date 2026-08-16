@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 // Deep import on purpose: the protocol barrel carries typebox and every
 // schema, which must stay out of the Control UI startup bundle.
 import { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
+import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
@@ -10,12 +11,6 @@ import { icons } from "./icons.ts";
 export type SessionPlacementState = NonNullable<GatewaySessionRow["placement"]>["state"];
 
 export { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
-
-export function isStoppableCloudWorkerPlacement(
-  placement: GatewaySessionRow["placement"],
-): boolean {
-  return placement?.state === "active";
-}
 
 function pullRequestStateLabel(state: SessionCatalogPullRequestSummary["state"]): string {
   switch (state) {
@@ -44,6 +39,7 @@ function renderSessionRowBadge(
   count = 0,
   pullRequestState?: SessionCatalogPullRequestSummary["state"],
   placementState?: SessionPlacementState,
+  diskSpaceStatus?: SessionPlacementDiskSpace["status"],
   workspaceConflictCount = 0,
 ) {
   return html`<openclaw-tooltip .content=${label}>
@@ -51,6 +47,7 @@ function renderSessionRowBadge(
       class=${`session-row-badge${modifier ? ` ${modifier}` : ""}`}
       data-pull-request-state=${pullRequestState ?? nothing}
       data-placement-state=${placementState ?? nothing}
+      data-disk-space-status=${diskSpaceStatus ?? nothing}
       data-workspace-conflicts=${workspaceConflictCount ? String(workspaceConflictCount) : nothing}
       role="img"
       aria-label=${label}
@@ -66,7 +63,9 @@ export function renderSessionRowBadges(params: {
   pullRequest?: SessionCatalogPullRequestSummary;
   hasApproval?: boolean;
   outboxCount?: number;
+  hasComposerDraft?: boolean;
   placementState?: SessionPlacementState;
+  diskSpaceStatus?: SessionPlacementDiskSpace["status"];
   workspaceConflictCount?: number;
 }) {
   const hasAutomation = !params.isChild && params.hasAutomation;
@@ -83,6 +82,13 @@ export function renderSessionRowBadges(params: {
   const conflictPlacementState = workspaceConflictCount > 0 ? params.placementState : undefined;
   const displayedPlacementState = cloudPlacementState ?? conflictPlacementState;
   const hasWorkspaceConflict = workspaceConflictCount > 0;
+  const diskSpaceStatus = params.isChild ? undefined : params.diskSpaceStatus;
+  const diskSpaceLabel =
+    diskSpaceStatus === "critical"
+      ? t("sessionsView.cloudWorkerDiskCritical")
+      : diskSpaceStatus === "warning"
+        ? t("sessionsView.cloudWorkerDiskWarning")
+        : "";
   const outboxCount = Math.max(0, Math.floor(params.outboxCount ?? 0));
   const outboxLabel =
     outboxCount > 0
@@ -96,12 +102,13 @@ export function renderSessionRowBadges(params: {
     !pullRequestLabel &&
     !params.hasApproval &&
     outboxCount === 0 &&
+    !params.hasComposerDraft &&
     !displayedPlacementState &&
     !hasWorkspaceConflict
   ) {
     return nothing;
   }
-  const cloudLabel = hasWorkspaceConflict
+  const cloudPlacementLabel = hasWorkspaceConflict
     ? displayedPlacementState
       ? t(
           workspaceConflictCount === 1
@@ -121,6 +128,7 @@ export function renderSessionRowBadges(params: {
     : displayedPlacementState
       ? t("sessionsView.cloudWorkerPlacement", { state: displayedPlacementState })
       : "";
+  const cloudLabel = [cloudPlacementLabel, diskSpaceLabel].filter(Boolean).join(" · ");
   return html`<span class="session-row-badges">
     ${params.incognito
       ? renderSessionRowBadge(
@@ -151,6 +159,13 @@ export function renderSessionRowBadges(params: {
     ${outboxCount > 0
       ? renderSessionRowBadge(outboxLabel, icons.clock, "session-row-badge--queued", outboxCount)
       : nothing}
+    ${params.hasComposerDraft
+      ? renderSessionRowBadge(
+          t("sessionsView.unsentDraft"),
+          icons.pencil,
+          "session-row-badge--draft",
+        )
+      : nothing}
     ${displayedPlacementState || hasWorkspaceConflict
       ? renderSessionRowBadge(
           cloudLabel,
@@ -159,6 +174,7 @@ export function renderSessionRowBadges(params: {
           0,
           undefined,
           displayedPlacementState,
+          diskSpaceStatus,
           hasWorkspaceConflict ? workspaceConflictCount : 0,
         )
       : nothing}

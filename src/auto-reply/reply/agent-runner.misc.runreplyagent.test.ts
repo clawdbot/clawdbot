@@ -15,6 +15,10 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
+  onAgentEvent as subscribeAgentEvent,
+  type AgentEventPayload,
+} from "../../infra/agent-events.js";
+import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
@@ -198,10 +202,6 @@ vi.mock("../../agents/harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: async () => undefined,
 }));
 
-vi.mock("../../commitments/runtime.js", () => ({
-  enqueueCommitmentExtraction: () => false,
-}));
-
 vi.mock("./followup-runner.js", () => ({
   createFollowupRunner: () => vi.fn(async () => undefined),
 }));
@@ -229,16 +229,30 @@ vi.mock("../../acp/control-plane/manager.js", () => ({
   }),
 }));
 
-vi.mock("../../agents/subagent-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/subagent-registry.js")>();
+vi.mock("../../agents/subagents/registry/subagent-registry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../agents/subagents/registry/subagent-registry.js")>();
   return {
     ...actual,
     getSwarmRunByLaunchReplayKey: () => undefined,
-    getLatestSubagentRunByChildSessionKey: () => null,
-    listSubagentRunsForController: () => [],
     markSubagentRunTerminated: () => 0,
   };
 });
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../agents/subagents/registry/subagent-registry-read.js")
+  >()),
+  getLatestSubagentRunByChildSessionKey: () => null,
+  listSubagentRunsForController: () => [],
+}));
+
+vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../agents/subagents/registry/subagent-registry-read.js")
+  >()),
+  getLatestSubagentRunByChildSessionKey: () => null,
+  listSubagentRunsForController: () => [],
+}));
 
 // #85714: keep the real private-final decision but spy the WARN emitter so we
 // can assert it fires only through the substantive text suppression branch.
@@ -453,7 +467,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: false,
@@ -517,7 +530,6 @@ describe("runReplyAgent auto-compaction token update", () => {
         sessionKey,
         storePath,
         defaultModel: "anthropic/claude-opus-4-6",
-        agentCfgContextTokens: 200_000,
         resolvedVerboseLevel: "off",
         isNewSession: false,
         blockStreamingEnabled: false,
@@ -557,6 +569,8 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionId: "session",
       updatedAt: Date.now(),
       totalTokens: 200_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1 as const,
     };
     await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
     compactState.compactEmbeddedAgentSessionMock.mockRejectedValueOnce(new GatewayDrainingError());
@@ -580,7 +594,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionKey,
       storePath,
       defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: false,
@@ -719,7 +732,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: false,
@@ -775,7 +787,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: false,
@@ -797,80 +808,97 @@ describe("runReplyAgent auto-compaction token update", () => {
     expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
   });
 
-  it("records a settled fallback cancelled by its upstream signal as aborted", async () => {
-    const upstreamAbort = new AbortController();
-    const sessionKey = "upstream-cancelled-settled-fallback";
-    const sessionEntry = {
-      sessionId: "session-upstream-cancelled",
-      updatedAt: Date.now(),
-      totalTokens: 50_000,
-    };
-    const replyOperation = createReplyOperation({
-      sessionKey,
-      sessionId: sessionEntry.sessionId,
-      resetTriggered: false,
-      upstreamAbortSignal: upstreamAbort.signal,
-    });
-    let releaseFallback: () => void = () => undefined;
-    let markCandidateSettled: () => void = () => undefined;
-    const candidateSettled = new Promise<void>((resolve) => {
-      markCandidateSettled = resolve;
-    });
-    const fallbackRelease = new Promise<void>((resolve) => {
-      releaseFallback = resolve;
-    });
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "late reply" }],
-      meta: { agentMeta: {} },
-    });
-    runWithModelFallbackMock.mockImplementationOnce(
-      async ({ provider, model, run }: RunWithModelFallbackParams) => {
-        const result = await run(provider, model);
-        markCandidateSettled();
-        await fallbackRelease;
-        return { result, provider, model };
-      },
-    );
-    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
-      storePath: "",
-      sessionEntry,
-    });
-    followupRun.run.sessionKey = sessionKey;
-
-    try {
-      const pending = runReplyAgent({
-        commandBody: "hello",
-        followupRun,
-        queueKey: sessionKey,
-        resolvedQueue,
-        shouldSteer: false,
-        shouldFollowup: false,
-        isActive: false,
-        typing,
-        sessionCtx,
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
+  it.each([
+    {
+      label: "its upstream signal",
+      superseded: false,
+      expectedCode: "aborted_by_user" as const,
+    },
+    {
+      label: "a visible-turn supersession",
+      superseded: true,
+      expectedCode: "aborted_for_supersession" as const,
+    },
+  ])(
+    "records a settled fallback cancelled by $label as aborted",
+    async ({ superseded, expectedCode }) => {
+      const upstreamAbort = new AbortController();
+      const sessionKey = `${superseded ? "superseded" : "upstream-cancelled"}-settled-fallback`;
+      const sessionEntry = {
+        sessionId: "session-upstream-cancelled",
+        updatedAt: Date.now(),
+        totalTokens: 50_000,
+      };
+      const replyOperation = createReplyOperation({
         sessionKey,
-        defaultModel: "anthropic/claude-opus-4-6",
-        agentCfgContextTokens: 200_000,
-        resolvedVerboseLevel: "off",
-        isNewSession: false,
-        blockStreamingEnabled: false,
-        resolvedBlockStreamingBreak: "message_end",
-        shouldInjectGroupIntro: false,
-        typingMode: "instant",
-        replyOperation,
+        sessionId: sessionEntry.sessionId,
+        resetTriggered: false,
+        upstreamAbortSignal: upstreamAbort.signal,
       });
-      await candidateSettled;
-      upstreamAbort.abort(new Error("caller cancelled"));
-      releaseFallback();
+      let releaseFallback: () => void = () => undefined;
+      let markCandidateSettled: () => void = () => undefined;
+      const candidateSettled = new Promise<void>((resolve) => {
+        markCandidateSettled = resolve;
+      });
+      const fallbackRelease = new Promise<void>((resolve) => {
+        releaseFallback = resolve;
+      });
+      runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "late reply" }],
+        meta: { agentMeta: {} },
+      });
+      runWithModelFallbackMock.mockImplementationOnce(
+        async ({ provider, model, run }: RunWithModelFallbackParams) => {
+          const result = await run(provider, model);
+          markCandidateSettled();
+          await fallbackRelease;
+          return { result, provider, model };
+        },
+      );
+      const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+        storePath: "",
+        sessionEntry,
+      });
+      followupRun.run.sessionKey = sessionKey;
 
-      expectReplyText(await pending, SILENT_REPLY_TOKEN);
-      expect(replyOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
-    } finally {
-      replyOperation.complete();
-    }
-  });
+      try {
+        const pending = runReplyAgent({
+          commandBody: "hello",
+          followupRun,
+          queueKey: sessionKey,
+          resolvedQueue,
+          shouldSteer: false,
+          shouldFollowup: false,
+          isActive: false,
+          typing,
+          sessionCtx,
+          sessionEntry,
+          sessionStore: { [sessionKey]: sessionEntry },
+          sessionKey,
+          defaultModel: "anthropic/claude-opus-4-6",
+          resolvedVerboseLevel: "off",
+          isNewSession: false,
+          blockStreamingEnabled: false,
+          resolvedBlockStreamingBreak: "message_end",
+          shouldInjectGroupIntro: false,
+          typingMode: "instant",
+          replyOperation,
+        });
+        await candidateSettled;
+        if (superseded) {
+          replyOperation.supersede();
+        } else {
+          upstreamAbort.abort(new Error("caller cancelled"));
+        }
+        releaseFallback();
+
+        expectReplyText(await pending, SILENT_REPLY_TOKEN);
+        expect(replyOperation.result).toEqual({ kind: "aborted", code: expectedCode });
+      } finally {
+        replyOperation.complete();
+      }
+    },
+  );
 
   it("reports live diagnostic context from promptTokens, not provider usage totals", async () => {
     const { sessionKey, stored, usageEvent } = await runBaseReplyWithAgentMeta({
@@ -1910,7 +1938,6 @@ describe("runReplyAgent Active Memory inline debug", () => {
       sessionKey,
       storePath,
       defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: false,
@@ -2661,11 +2688,7 @@ describe("runReplyAgent fallback reasoning tags", () => {
     prompt?: string;
   };
 
-  function createRun(params?: {
-    sessionEntry?: SessionEntry;
-    sessionKey?: string;
-    agentCfgContextTokens?: number;
-  }) {
+  function createRun(params?: { sessionEntry?: SessionEntry; sessionKey?: string }) {
     const typing = createMockTypingController();
     const sessionCtx = {
       Provider: "whatsapp",
@@ -2716,7 +2739,6 @@ describe("runReplyAgent fallback reasoning tags", () => {
       sessionEntry: params?.sessionEntry,
       sessionKey,
       defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: params?.agentCfgContextTokens,
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: false,
@@ -2779,6 +2801,8 @@ describe("runReplyAgent fallback reasoning tags", () => {
         sessionId: "session",
         updatedAt: Date.now(),
         totalTokens: 1_000_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1 as const,
         compactionCount: 0,
       },
     });
@@ -3307,6 +3331,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     strandedReplyRetry?: boolean;
     sendPolicyDenied?: boolean;
     isHeartbeat?: boolean;
+    pendingContinuation?: boolean;
     onDeliberateSilentTerminalReply?: () => void;
     onObservedReplyDelivery?: () => Promise<void> | void;
     replyOperation?: ReturnType<typeof createReplyOperation>;
@@ -3334,6 +3359,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       meta: {
         agentMeta: {},
         finalAssistantVisibleText: finalAssistantText,
+        ...(params.pendingContinuation ? { yielded: true } : {}),
         ...(params.finalAssistantRawText
           ? { finalAssistantRawText: params.finalAssistantRawText }
           : {}),
@@ -3378,8 +3404,8 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
         messageProvider: "whatsapp",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: tmp,
-        // Direct chat + visibleReplies=message_tool resolves to message_tool_only,
-        // so the final text is kept private (no automatic delivery).
+        // Carry the canonical tool-only run fact and keep downstream policy aligned,
+        // so the private final is never eligible for automatic source delivery.
         config: { messages: { visibleReplies: "message_tool" } },
         skillsSnapshot: {},
         provider: "anthropic",
@@ -3391,6 +3417,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
         bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
         timeoutMs: 1_000,
         blockReplyBreak: "message_end",
+        sourceReplyDeliveryMode: "message_tool_only",
       },
     } as unknown as FollowupRun;
 
@@ -3400,48 +3427,56 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     // visibleReplies=message_tool config and mis-resolve delivery to automatic.
     clearRuntimeConfigSnapshot();
 
-    const result = await runReplyAgent({
-      commandBody: "hello",
-      followupRun,
-      queueKey: sessionKey,
-      resolvedQueue: { mode: "interrupt" } as unknown as QueueSettings,
-      shouldSteer: false,
-      shouldFollowup: false,
-      isActive: false,
-      typing: createMockTypingController(),
-      sessionCtx,
-      sessionEntry,
-      sessionStore: { [sessionKey]: sessionEntry },
-      sessionKey,
-      storePath,
-      defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 200_000,
-      resolvedVerboseLevel: params.resolvedVerboseLevel ?? "off",
-      isNewSession: params.isNewSession ?? false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      shouldInjectGroupIntro: false,
-      typingMode: "instant",
-      ...(params.isHeartbeat ||
-      params.onDeliberateSilentTerminalReply ||
-      params.onObservedReplyDelivery
-        ? {
-            opts: {
-              ...(params.isHeartbeat ? { isHeartbeat: true } : {}),
-              ...(params.onDeliberateSilentTerminalReply
-                ? {
-                    onDeliberateSilentTerminalReply: params.onDeliberateSilentTerminalReply,
-                  }
-                : {}),
-              ...(params.onObservedReplyDelivery
-                ? { onObservedReplyDelivery: params.onObservedReplyDelivery }
-                : {}),
-            },
-          }
-        : {}),
-      ...(params.replyOperation ? { replyOperation: params.replyOperation } : {}),
+    const runId = `stranded-${path.basename(tmp)}`;
+    const agentEvents: AgentEventPayload[] = [];
+    const unsubscribe = subscribeAgentEvent((event) => {
+      if (event.runId === runId) {
+        agentEvents.push(event);
+      }
     });
-    return { storePath, tmp, sessionKey, result, finalAssistantText };
+    try {
+      const result = await runReplyAgent({
+        commandBody: "hello",
+        followupRun,
+        queueKey: sessionKey,
+        resolvedQueue: { mode: "interrupt" } as unknown as QueueSettings,
+        shouldSteer: false,
+        shouldFollowup: false,
+        isActive: false,
+        typing: createMockTypingController(),
+        sessionCtx,
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        storePath,
+        defaultModel: "anthropic/claude-opus-4-6",
+        resolvedVerboseLevel: params.resolvedVerboseLevel ?? "off",
+        isNewSession: params.isNewSession ?? false,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        shouldInjectGroupIntro: false,
+        typingMode: "instant",
+        opts: {
+          runId,
+          ...(params.isHeartbeat ? { isHeartbeat: true } : {}),
+          ...(params.onDeliberateSilentTerminalReply
+            ? { onDeliberateSilentTerminalReply: params.onDeliberateSilentTerminalReply }
+            : {}),
+          ...(params.onObservedReplyDelivery
+            ? { onObservedReplyDelivery: params.onObservedReplyDelivery }
+            : {}),
+        },
+        ...(params.replyOperation ? { replyOperation: params.replyOperation } : {}),
+      });
+      const terminalEvent = agentEvents.find(
+        (event) =>
+          event.stream === "lifecycle" &&
+          (event.data.phase === "end" || event.data.phase === "error"),
+      );
+      return { storePath, tmp, sessionKey, result, finalAssistantText, terminalEvent };
+    } finally {
+      unsubscribe();
+    }
   }
 
   it("warns when a substantive private final reply never used the message tool", async () => {
@@ -3549,18 +3584,37 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[6]).toEqual({ position: "front" });
   });
 
-  it("does not warn or enqueue retry for a short private final reply", async () => {
-    await runPrivateFinalCase({ finalAssistantText: "Nothing to send here." });
+  it("records a short private final without a message call as non-delivery", async () => {
+    const { terminalEvent } = await runPrivateFinalCase({
+      finalAssistantText: "Nothing to send here.",
+    });
+    expect(terminalEvent?.data.terminalReply).toEqual({
+      disposition: "empty",
+      code: "message-tool-not-called",
+    });
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
   });
 
   it("does not warn or enqueue retry when the message tool delivered this turn", async () => {
-    await runPrivateFinalCase({
+    const { terminalEvent } = await runPrivateFinalCase({
       didDeliverSourceReplyViaMessageTool: true,
     });
+    expect((terminalEvent?.data.terminalReply as { code?: unknown } | undefined)?.code).not.toBe(
+      "message-tool-not-called",
+    );
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+  });
+
+  it("does not record message-tool non-delivery while the run has a continuation", async () => {
+    const { terminalEvent } = await runPrivateFinalCase({
+      finalAssistantText: "Nothing to send here.",
+      pendingContinuation: true,
+    });
+    expect((terminalEvent?.data.terminalReply as { code?: unknown } | undefined)?.code).not.toBe(
+      "message-tool-not-called",
+    );
   });
 
   it("still recovers a private final after only a message-tool progress delivery", async () => {
@@ -3616,24 +3670,33 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     // survives in finalPayloads. The warn must key off the assistant text, not
     // the payload bundle, so no private-final warning should fire.
     const onDeliberateSilentTerminalReply = vi.fn();
-    await runPrivateFinalCase({
+    const { terminalEvent } = await runPrivateFinalCase({
       finalAssistantText: "no_reply",
       onDeliberateSilentTerminalReply,
       payloadText: "Auto-compaction complete (count 1).",
     });
+    expect((terminalEvent?.data.terminalReply as { code?: unknown } | undefined)?.code).not.toBe(
+      "message-tool-not-called",
+    );
     expect(onDeliberateSilentTerminalReply).toHaveBeenCalledOnce();
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
   });
 
   it("does not warn or enqueue retry for room_event turns", async () => {
-    await runPrivateFinalCase({ inboundEventKind: "room_event" });
+    const { terminalEvent } = await runPrivateFinalCase({ inboundEventKind: "room_event" });
+    expect((terminalEvent?.data.terminalReply as { code?: unknown } | undefined)?.code).not.toBe(
+      "message-tool-not-called",
+    );
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
   });
 
   it("does not warn, enqueue retry, or emit diagnostic for heartbeat runs", async () => {
-    const { result } = await runPrivateFinalCase({ isHeartbeat: true });
+    const { result, terminalEvent } = await runPrivateFinalCase({ isHeartbeat: true });
+    expect((terminalEvent?.data.terminalReply as { code?: unknown } | undefined)?.code).not.toBe(
+      "message-tool-not-called",
+    );
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
     const payloads = result === undefined ? [] : normalizeReplyPayloads(result);
@@ -3641,7 +3704,10 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
   });
 
   it("does not warn or enqueue retry when send policy denied source delivery", async () => {
-    await runPrivateFinalCase({ sendPolicyDenied: true });
+    const { terminalEvent } = await runPrivateFinalCase({ sendPolicyDenied: true });
+    expect((terminalEvent?.data.terminalReply as { code?: unknown } | undefined)?.code).not.toBe(
+      "message-tool-not-called",
+    );
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
   });

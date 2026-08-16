@@ -95,34 +95,19 @@ export function resolveGatewayNativeServiceIdentityConflict(
   return null;
 }
 
-function formatGatewayServiceDescription(params?: { profile?: string; version?: string }): string {
-  const profile = normalizeGatewayProfile(params?.profile);
-  const version = params?.version?.trim();
-  const parts: string[] = [];
-  if (profile) {
-    parts.push(`profile: ${profile}`);
-  }
-  if (version) {
-    parts.push(`v${version}`);
-  }
-  if (parts.length === 0) {
+function formatGatewayServiceDescription(profile?: string): string {
+  const normalized = normalizeGatewayProfile(profile);
+  if (!normalized) {
     return "OpenClaw Gateway";
   }
-  return `OpenClaw Gateway (${parts.join(", ")})`;
+  return `OpenClaw Gateway (profile: ${normalized})`;
 }
 
 export function resolveGatewayServiceDescription(params: {
   env: Record<string, string | undefined>;
-  environment?: Record<string, string | undefined>;
   description?: string;
 }): string {
-  return (
-    params.description ??
-    formatGatewayServiceDescription({
-      profile: params.env.OPENCLAW_PROFILE,
-      version: params.environment?.OPENCLAW_SERVICE_VERSION ?? params.env.OPENCLAW_SERVICE_VERSION,
-    })
-  );
+  return params.description ?? formatGatewayServiceDescription(params.env.OPENCLAW_PROFILE);
 }
 
 export function resolveNodeLaunchAgentLabel(): string {
@@ -148,12 +133,4 @@ export function resolveNodeServiceIdentityEnvironment(): Record<string, string> 
     OPENCLAW_SERVICE_MARKER: NODE_SERVICE_MARKER,
     OPENCLAW_SERVICE_KIND: NODE_SERVICE_KIND,
   };
-}
-
-export function formatNodeServiceDescription(params?: { version?: string }): string {
-  const version = params?.version?.trim();
-  if (!version) {
-    return "OpenClaw Node Host";
-  }
-  return `OpenClaw Node Host (v${version})`;
 }

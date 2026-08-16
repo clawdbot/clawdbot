@@ -1,6 +1,9 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
+import type {
+  CodexSessionCatalogControl,
+  CodexSessionCatalogControlFactory,
+} from "../session-catalog-types.js";
 import type { CodexThreadForkParams, CodexTurn } from "./protocol.js";
 import type { CodexAppServerBindingStore } from "./session-binding.js";
 
@@ -79,7 +82,7 @@ function forkResponse(threadId = "thread-forked") {
     thread: {
       id: threadId,
       sessionId: "session-forked",
-      cliVersion: "0.146.1",
+      cliVersion: "0.147.0",
       createdAt: 1715299200,
       updatedAt: 1715299200,
       cwd: "/tmp",
@@ -115,16 +118,28 @@ function forkParams() {
 
 type ForkThreadStub = (params: CodexThreadForkParams) => Promise<unknown>;
 
-function forkControl(forkThread: ForkThreadStub = vi.fn(async () => forkResponse())) {
+function factoryForControl(control: CodexSessionCatalogControl): CodexSessionCatalogControlFactory {
+  return {
+    forRequest: () => control,
+    homesForAgent: () => [],
+    forUpstream: (_agentId, fingerprint) =>
+      fingerprint === control.connectionFingerprint ? control : undefined,
+  };
+}
+
+function forkControl(
+  forkThread: ForkThreadStub = vi.fn(async () => forkResponse()),
+  connectionFingerprint = "fingerprint",
+) {
   const archiveThread = vi.fn(async () => undefined);
   const control = {
     archiveThread,
     clientId: "client-pinned",
-    connectionFingerprint: "fingerprint",
+    connectionFingerprint,
     forkThread,
   } as unknown as CodexSessionCatalogControl;
   control.withPinnedConnection = async (run) => await run(control);
-  return { archiveThread, control, forkThread };
+  return { archiveThread, control, controlFactory: factoryForControl(control), forkThread };
 }
 
 beforeEach(() => {
@@ -143,7 +158,7 @@ describe("forkCodexUpstreamSession", () => {
     boundaryMocks.listTurns
       .mockResolvedValueOnce([turn("turn-2", "edit me")])
       .mockResolvedValueOnce([retainedTurn]);
-    const { archiveThread, control, forkThread } = forkControl();
+    const { archiveThread, control, controlFactory, forkThread } = forkControl();
     const events: string[] = [];
     linkMocks.upsert.mockImplementation(() => {
       events.push("link");
@@ -158,7 +173,7 @@ describe("forkCodexUpstreamSession", () => {
 
     const result = await forkCodexUpstreamSession(forkParams(), {
       bindingStore: { mutate } as unknown as CodexAppServerBindingStore,
-      control,
+      controlFactory,
       harnessRuntimeId: "codex-custom",
       resolveConfig: () => ({}),
       runtime,
@@ -199,6 +214,63 @@ describe("forkCodexUpstreamSession", () => {
     expect(archiveThread).not.toHaveBeenCalled();
   });
 
+  it("forks through the secondary home selected by the upstream fingerprint", async () => {
+    boundaryMocks.listTurns
+      .mockResolvedValueOnce([turn("turn-2", "edit me")])
+      .mockResolvedValueOnce([turn("turn-1", "one")]);
+    const primary = forkControl(undefined, "primary-fingerprint");
+    const secondary = forkControl(undefined, "secondary-fingerprint");
+    const forUpstream = vi.fn((_agentId: string, fingerprint: string) =>
+      fingerprint === secondary.control.connectionFingerprint ? secondary.control : undefined,
+    );
+    const factory = { ...primary.controlFactory, forUpstream };
+    const params = forkParams();
+    params.upstream.ref = {
+      connectionFingerprint: "secondary-fingerprint",
+      threadId: params.upstream.threadId,
+    };
+
+    await expect(
+      forkCodexUpstreamSession(params, {
+        bindingStore: { mutate: vi.fn(async () => true) } as unknown as CodexAppServerBindingStore,
+        controlFactory: factory,
+        harnessRuntimeId: "codex",
+        resolveConfig: () => ({}),
+        runtime: createPluginRuntimeMock(),
+      }),
+    ).resolves.toMatchObject({ status: "created", key: params.targetKey });
+
+    expect(forUpstream).toHaveBeenCalledWith("main", "secondary-fingerprint");
+    expect(secondary.forkThread).toHaveBeenCalledOnce();
+    expect(primary.forkThread).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the upstream fingerprint does not resolve to a known home", async () => {
+    const { controlFactory, forkThread } = forkControl();
+    const params = forkParams();
+    params.upstream.ref = {
+      connectionFingerprint: "unknown-fingerprint",
+      threadId: params.upstream.threadId,
+    };
+
+    await expect(
+      forkCodexUpstreamSession(params, {
+        bindingStore: {} as CodexAppServerBindingStore,
+        controlFactory,
+        harnessRuntimeId: "codex",
+        runtime: createPluginRuntimeMock(),
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      code: "upstream-unavailable",
+      message:
+        "This Codex thread is not available on the current connection. Reconnect to its host and try again.",
+    });
+
+    expect(forkThread).not.toHaveBeenCalled();
+    expect(boundaryMocks.listTurns).not.toHaveBeenCalled();
+  });
+
   it("forks incognito sessions ephemerally and imports history from the live response", async () => {
     const retainedTurn = turn("turn-1", "one");
     boundaryMocks.listTurns.mockResolvedValueOnce([turn("turn-2", "edit me")]);
@@ -209,7 +281,7 @@ describe("forkCodexUpstreamSession", () => {
         thread: { ...response.thread, ephemeral: true, turns: [retainedTurn] },
       };
     });
-    const { control } = forkControl(forkThread);
+    const { controlFactory } = forkControl(forkThread);
     const params = forkParams();
     params.targetKey = "agent:main:dashboard:incognito-forked";
     const mutate = vi.fn(async () => true);
@@ -217,7 +289,7 @@ describe("forkCodexUpstreamSession", () => {
     await expect(
       forkCodexUpstreamSession(params, {
         bindingStore: { mutate } as unknown as CodexAppServerBindingStore,
-        control,
+        controlFactory,
         harnessRuntimeId: "codex",
         resolveConfig: () => ({}),
         runtime: createPluginRuntimeMock(),
@@ -252,12 +324,12 @@ describe("forkCodexUpstreamSession", () => {
     boundaryMocks.listTurns
       .mockResolvedValueOnce([turn("turn-2", "edit me")])
       .mockResolvedValueOnce([turn("turn-1", "one"), turn("turn-2", "edit me")]);
-    const { archiveThread, control } = forkControl();
+    const { archiveThread, controlFactory } = forkControl();
     const runtime = createPluginRuntimeMock();
 
     const result = await forkCodexUpstreamSession(forkParams(), {
       bindingStore: { mutate: vi.fn() } as unknown as CodexAppServerBindingStore,
-      control,
+      controlFactory,
       harnessRuntimeId: "codex",
       runtime,
     });
@@ -276,12 +348,12 @@ describe("forkCodexUpstreamSession", () => {
     boundaryMocks.listTurns
       .mockResolvedValueOnce([turn("turn-2", "edit me")])
       .mockResolvedValueOnce([turn("turn-1", "one")]);
-    const { archiveThread, control } = forkControl();
+    const { archiveThread, controlFactory } = forkControl();
     const mutate = vi.fn(async () => false);
 
     const result = await forkCodexUpstreamSession(forkParams(), {
       bindingStore: { mutate } as unknown as CodexAppServerBindingStore,
-      control,
+      controlFactory,
       harnessRuntimeId: "codex",
       runtime: createPluginRuntimeMock(),
     });
@@ -297,13 +369,13 @@ describe("forkCodexUpstreamSession", () => {
 
   it("archives a recoverable orphan id when the fork response is invalid", async () => {
     boundaryMocks.listTurns.mockResolvedValueOnce([turn("turn-2", "edit me")]);
-    const { archiveThread, control } = forkControl(
+    const { archiveThread, controlFactory } = forkControl(
       vi.fn(async () => ({ thread: { id: "thread-orphan" } })),
     );
 
     const result = await forkCodexUpstreamSession(forkParams(), {
       bindingStore: {} as CodexAppServerBindingStore,
-      control,
+      controlFactory,
       harnessRuntimeId: "codex",
       runtime: createPluginRuntimeMock(),
     });
@@ -314,13 +386,13 @@ describe("forkCodexUpstreamSession", () => {
 
   it("rejects a fork response that reuses the source thread id", async () => {
     boundaryMocks.listTurns.mockResolvedValueOnce([turn("turn-2", "edit me")]);
-    const { archiveThread, control } = forkControl(
+    const { archiveThread, controlFactory } = forkControl(
       vi.fn(async () => forkResponse("thread-source")),
     );
 
     const result = await forkCodexUpstreamSession(forkParams(), {
       bindingStore: { mutate: vi.fn() } as unknown as CodexAppServerBindingStore,
-      control,
+      controlFactory,
       harnessRuntimeId: "codex",
       runtime: createPluginRuntimeMock(),
     });

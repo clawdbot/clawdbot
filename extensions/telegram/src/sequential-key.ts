@@ -13,8 +13,8 @@ import {
 import { hasTelegramApprovalCallbackPrefix } from "./approval-callback-data.js";
 import {
   resolveTelegramBotHasTopicsEnabled,
-  resolveTelegramForumThreadId,
   resolveTelegramMessageForumFlagHint,
+  resolveTelegramMessageThreadSpec,
   shouldUseTelegramDmThreadSession,
 } from "./bot/helpers.js";
 import { getPreparedTelegramPollAnswer } from "./poll-answer-context.js";
@@ -47,7 +47,7 @@ type TelegramSequentialKeyContext = {
     edited_channel_post?: Message;
     callback_query?: { message?: Message; data?: string };
     message_reaction?: {
-      chat?: { id?: number; type?: string; is_forum?: boolean };
+      chat?: { id?: number; type?: string; is_forum?: boolean; is_direct_messages?: boolean };
       message_id?: number;
     };
     poll_answer?: { poll_id?: string };
@@ -59,7 +59,7 @@ function getTelegramMessageReactionSequentialKey(
 ): string | undefined {
   const reaction = ctx.update?.message_reaction;
   if (
-    reaction?.chat?.is_forum === true &&
+    (reaction?.chat?.is_forum === true || reaction?.chat?.is_direct_messages === true) &&
     typeof reaction.chat.id === "number" &&
     typeof reaction.message_id === "number"
   ) {
@@ -79,7 +79,8 @@ function getTelegramMessageReactionSequentialKey(
     isForum: msg?.chat?.is_forum,
     isTopicMessage: msg?.is_topic_message,
   });
-  return isForum && typeof msg?.chat.id === "number" && typeof msg.message_id === "number"
+  const isScopedMessage = isForum || msg?.chat.is_direct_messages === true;
+  return isScopedMessage && typeof msg?.chat.id === "number" && typeof msg.message_id === "number"
     ? `telegram:${msg.chat.id}:message:${msg.message_id}`
     : undefined;
 }
@@ -195,7 +196,7 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     const prepared = getPreparedTelegramPollAnswer(update);
     const entry = prepared?.entry;
     if (entry) {
-      return getTelegramPollAnswerSequentialKey(entry, ctx.me);
+      return getTelegramPollAnswerSequentialKey(entry);
     }
     // Missing historical registry entries do no work, but keep duplicate answers
     // for the same unknown poll together while the handler records the miss.
@@ -246,41 +247,27 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     }
     return "telegram:approval";
   }
-  const isGroup = msg?.chat?.type === "group" || msg?.chat?.type === "supergroup";
-  const messageThreadId = msg?.message_thread_id;
-  const isForum = resolveTelegramMessageForumFlagHint({
-    chatType: msg?.chat?.type,
-    isForum: msg?.chat?.is_forum,
-    isTopicMessage: msg?.is_topic_message,
-  });
-  const threadId = isGroup
-    ? resolveTelegramForumThreadId({ isForum, messageThreadId })
-    : shouldUseTelegramDmThreadSession({
-          dmThreadId: messageThreadId,
+  // Raw durable-ingress fixtures and malformed updates can carry a partial
+  // message. Treat missing chat identity as an unknown lane instead of
+  // crashing before the queue records the update.
+  const threadSpec = msg?.chat ? resolveTelegramMessageThreadSpec(msg) : undefined;
+  const threadId =
+    threadSpec?.scope === "dm"
+      ? shouldUseTelegramDmThreadSession({
+          dmThreadId: threadSpec.id,
           botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
         })
-      ? messageThreadId
-      : undefined;
+        ? threadSpec.id
+        : undefined
+      : threadSpec?.id;
   if (typeof chatId === "number") {
     return threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
   }
   return "telegram:unknown";
 }
 
-function getTelegramPollAnswerSequentialKey(
-  entry: TelegramPollRegistryEntry,
-  botUser?: UserFromGetMe,
-): string {
-  const isGroup = entry.chat.type === "group" || entry.chat.type === "supergroup";
-  const isForum = entry.chat.type === "supergroup" && entry.chat.is_forum === true;
-  const threadId = isGroup
-    ? resolveTelegramForumThreadId({ isForum, messageThreadId: entry.messageThreadId })
-    : shouldUseTelegramDmThreadSession({
-          dmThreadId: entry.messageThreadId,
-          botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(botUser),
-        })
-      ? entry.messageThreadId
-      : undefined;
+function getTelegramPollAnswerSequentialKey(entry: TelegramPollRegistryEntry): string {
+  const threadId = "id" in entry.threadSpec ? entry.threadSpec.id : undefined;
   return threadId == null
     ? `telegram:${entry.chat.id}`
     : `telegram:${entry.chat.id}:topic:${threadId}`;
@@ -291,7 +278,10 @@ export function getTelegramSequentialConstraints(
 ): string | string[] {
   const key = getTelegramSequentialKey(ctx);
   const messageKey = getTelegramMessageReactionSequentialKey(ctx);
-  // A forum reaction reads the topic fact recorded by the message update it targets.
-  // Bridge that exact message without serializing unrelated forum topics.
+  if (ctx.update?.message_reaction && messageKey) {
+    return messageKey;
+  }
+  // Scoped reactions read the topic fact recorded by the message update they target.
+  // Bridge that exact message without serializing unrelated topics.
   return messageKey ? [key, messageKey] : key;
 }

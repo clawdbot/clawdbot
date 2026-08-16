@@ -32,6 +32,9 @@ describe("Zoom meetings node invoke policy", () => {
     expect(invokeNode).toHaveBeenCalledWith({
       params: {
         action: "setup",
+        audioBackend: "auto",
+        audioBufferBytes: 4_096,
+        audioFormat: "pcm16-24khz",
         audioInputCommand: ["trusted-input", "--read"],
         audioOutputCommand: ["trusted-output", "--write"],
         bargeInInputCommand: ["trusted-barge-in"],

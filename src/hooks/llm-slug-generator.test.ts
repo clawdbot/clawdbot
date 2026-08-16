@@ -40,6 +40,7 @@ describe("generateSlugViaLLM", () => {
     await generateSlugViaLLM({
       sessionContent: "hello",
       cfg: {} as OpenClawConfig,
+      agentId: "main",
     });
 
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
@@ -52,6 +53,7 @@ describe("generateSlugViaLLM", () => {
     await generateSlugViaLLM({
       sessionContent: "hello",
       cfg: {} as OpenClawConfig,
+      agentId: "main",
     });
 
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
@@ -68,6 +70,7 @@ describe("generateSlugViaLLM", () => {
           },
         },
       } as OpenClawConfig,
+      agentId: "main",
     });
 
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
@@ -84,6 +87,7 @@ describe("generateSlugViaLLM", () => {
           },
         },
       } as OpenClawConfig,
+      agentId: "main",
     });
 
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
@@ -92,12 +96,29 @@ describe("generateSlugViaLLM", () => {
     expect(options.model).toBeUndefined();
   });
 
+  it("runs the helper under the authoritative session owner", async () => {
+    await generateSlugViaLLM({
+      sessionContent: "hello",
+      cfg: {
+        agents: { list: [{ id: "main" }, { id: "molty" }] },
+      },
+      agentId: "molty",
+    });
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(requireFirstRunOptions()).toMatchObject({
+      agentId: "molty",
+      sessionKey: expect.stringMatching(/^agent:molty:helper:incognito-/),
+    });
+  });
+
   it.each(["gpt-5.5", "anthropic/claude-sonnet-4-6"])(
     "passes hook-level model %s to the embedded runner without a provider",
     async (model) => {
       await generateSlugViaLLM({
         sessionContent: "hello",
         cfg: {} as OpenClawConfig,
+        agentId: "main",
         model,
       });
 
@@ -122,6 +143,7 @@ describe("generateSlugViaLLM", () => {
       generateSlugViaLLM({
         sessionContent: "hello",
         cfg: {} as OpenClawConfig,
+        agentId: "main",
       }),
     ).resolves.toBeNull();
   });
@@ -140,6 +162,7 @@ describe("generateSlugViaLLM", () => {
       generateSlugViaLLM({
         sessionContent: "hello",
         cfg: {} as OpenClawConfig,
+        agentId: "main",
       }),
     ).resolves.toBeNull();
   });
@@ -153,6 +176,7 @@ describe("generateSlugViaLLM", () => {
       generateSlugViaLLM({
         sessionContent: "hello",
         cfg: {} as OpenClawConfig,
+        agentId: "main",
       }),
     ).resolves.toBe("auth-refresh");
   });
@@ -166,6 +190,7 @@ describe("generateSlugViaLLM", () => {
       generateSlugViaLLM({
         sessionContent: "hello",
         cfg: {} as OpenClawConfig,
+        agentId: "main",
       }),
     ).resolves.toBe("12345678901234567890123456789");
   });
@@ -176,6 +201,7 @@ describe("generateSlugViaLLM", () => {
     await generateSlugViaLLM({
       sessionContent: `${prefix}🚀tail`,
       cfg: {} as OpenClawConfig,
+      agentId: "main",
     });
 
     const prompt = requireFirstRunOptions().prompt as string;

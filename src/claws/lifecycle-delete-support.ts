@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
 import { listAgentEntries, resolveAgentDir } from "../agents/agent-scope.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
@@ -24,11 +25,13 @@ import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { root as fsSafeRoot, FsSafeError } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { unregisterOpenClawAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { deleteCachedClawInstallSchemaVersion } from "./provenance-runtime-read.js";
 import type { PersistedClawInstall } from "./provenance.js";
 import type { PersistedClawWorkspaceFile } from "./workspace.js";
 
@@ -268,7 +271,7 @@ export async function cleanupClawAgentFilesystem(params: {
         }
         deleteWorkspaceState(statePlan);
       } catch (error) {
-        errors.push(error instanceof Error ? error.message : String(error));
+        errors.push(coerceErrorMessage(error));
       }
     } else {
       errors.push(`Could not trash workspace ${params.targets.workspaceDir}.`);
@@ -347,7 +350,7 @@ async function inspectDigestOwnedWorkspaceFile(
     }
     return {
       state: "unsafe",
-      message: error instanceof Error ? error.message : String(error),
+      message: coerceErrorMessage(error),
     };
   }
 }
@@ -459,6 +462,10 @@ export function releaseClawRemoveRows(
   complete: boolean,
   options: OpenClawStateDatabaseOptions,
 ): void {
+  if (complete) {
+    // Keep the install record as the retry owner until database discovery is released.
+    unregisterOpenClawAgentDatabases({ agentId, env: options.env });
+  }
   runOpenClawStateWriteTransaction(({ db }) => {
     if (clawStateTableExists(db, "claw_workspace_files")) {
       for (const file of files.filter((candidate) => candidate.action !== "error")) {
@@ -481,4 +488,7 @@ export function releaseClawRemoveRows(
         .run(agentId);
     }
   }, options);
+  if (complete) {
+    deleteCachedClawInstallSchemaVersion(agentId, options);
+  }
 }

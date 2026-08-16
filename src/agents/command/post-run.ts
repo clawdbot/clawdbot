@@ -1,5 +1,6 @@
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { CliDeps } from "../../cli/deps.types.js";
+import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../../config/sessions/restart-recovery-types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
@@ -19,6 +20,7 @@ import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-mar
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
 import { persistAssistantTranscriptRepairRecord } from "./assistant-transcript-repair.js";
+import { persistAgentSession } from "./attempt-execution.shared.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
 import type { EmbeddedAgentAttempt } from "./run-embedded-attempt.js";
 import {
@@ -26,7 +28,7 @@ import {
   loadDeliveryRuntime,
   loadSessionStoreRuntime,
 } from "./runtime-loaders.js";
-import { clearPendingFinalDelivery, persistSessionEntry } from "./session-helpers.js";
+import { clearPendingFinalDelivery } from "./session-helpers.js";
 import type { EmbeddedSessionState } from "./session-preparation.js";
 import type { AgentCommandOpts } from "./types.js";
 
@@ -69,7 +71,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
     cwd,
     agentDir,
     outboundSession,
-    agentCfg,
+    runId,
   } = params.prepared;
   const {
     fallbackProvider,
@@ -143,7 +145,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
       const { updateSessionStoreAfterAgentRun } = await loadSessionStoreRuntime();
       await updateSessionStoreAfterAgentRun({
         cfg,
-        contextTokensOverride: agentCfg?.contextTokens,
+        agentDir,
         sessionId: effectiveSessionId,
         sessionKey,
         storePath,
@@ -162,6 +164,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
         touchActivity: !isHeartbeatLifecycleRun && !params.opts.internalEvents?.length,
         preserveRuntimeModel:
           fallbackExhausted ||
+          fallbackProvider !== provider ||
+          fallbackModel !== model ||
           isHeartbeatLifecycleRun ||
           params.preserveUserFacingSessionModelState,
         preserveUserFacingSessionModelState: params.preserveUserFacingSessionModelState,
@@ -174,15 +178,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
     publishSessionOwnership();
 
     const transcriptPersistenceRunner = result.meta.executionTrace?.runner;
-    const embeddedAssistantGapFill =
-      transcriptPersistenceRunner === "embedded" ||
-      (transcriptPersistenceRunner === undefined &&
-        Boolean(result.meta.finalAssistantVisibleText?.trim()));
     let persistedCliTurnTranscript = false;
-    if (
-      !sessionReboundDuringRun &&
-      (transcriptPersistenceRunner === "cli" || embeddedAssistantGapFill)
-    ) {
+    if (!sessionReboundDuringRun && transcriptPersistenceRunner === "cli") {
       try {
         const transcriptResult = await attemptExecutionRuntime.persistCliTurnTranscript({
           body,
@@ -197,7 +194,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
           threadId: params.opts.threadId,
           sessionCwd: effectiveCwd,
           config: cfg,
-          embeddedAssistantGapFill,
           skipAssistantTurn: assistantTranscriptOwned,
           skipUserTurn:
             suppressUserTurnPersistence ||
@@ -373,7 +369,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
       !params.suppressVisibleSessionEffects &&
       !sessionReboundDuringRun
     ) {
-      const entry = sessionStore[sessionKey] ?? sessionEntry;
+      const entry =
+        (await resolveFreshSessionEntryForDelivery?.()) ?? sessionStore[sessionKey] ?? sessionEntry;
       if (!entry) {
         throw new Error("Cannot clear pending delivery without a session entry");
       }
@@ -382,15 +379,55 @@ export async function finalizeEmbeddedAgentCommand(params: {
         params.opts.deliver === true &&
         !pendingFinalDeliveryMarker.hasSendableFinalPayload &&
         entry.pendingFinalDelivery?.kind === "transport-only";
-      if (deliveryResult?.deliverySucceeded === true || clearStaleTransportOnly) {
-        sessionEntry = await persistSessionEntry({
+      const clearOwnedPendingFinal =
+        deliveryResult?.deliverySucceeded === true &&
+        pendingFinalDeliveryMarker.pendingFinalDeliveryIntentId !== undefined;
+      // Preserve the exact local claim through sibling session writes so a delivered
+      // source is tombstoned before admission release can erase its ownership fields.
+      const recoveryClaimEntry =
+        entry.restartRecoveryDeliveryRunId === runId
+          ? entry
+          : sessionEntry?.restartRecoveryDeliveryRunId === runId
+            ? sessionEntry
+            : params.sessionEntry?.restartRecoveryDeliveryRunId === runId
+              ? params.sessionEntry
+              : undefined;
+      if (clearOwnedPendingFinal || clearStaleTransportOnly || recoveryClaimEntry) {
+        const now = Date.now();
+        sessionEntry = await persistAgentSession({
           sessionStore,
           sessionKey,
           storePath,
           initialEntry: entry,
-          entry: clearPendingFinalDelivery(entry, Date.now()),
+          entry: {
+            ...(clearOwnedPendingFinal || clearStaleTransportOnly
+              ? clearPendingFinalDelivery(entry, now)
+              : { ...entry, updatedAt: now }),
+            ...(recoveryClaimEntry
+              ? buildRestartRecoveryClaimCleanupPatch({
+                  entry: {
+                    ...recoveryClaimEntry,
+                    restartRecoveryTerminalDeliveryEvidence:
+                      entry.restartRecoveryTerminalDeliveryEvidence,
+                    restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
+                  },
+                  recordTerminalSource: true,
+                  terminalDeliveryEvidence: buildRestartRecoveryTerminalDeliveryEvidence(
+                    deliveryResult ?? result,
+                  ),
+                  terminalRunId: runId,
+                })
+              : {}),
+          },
           shouldPersist: (current) =>
-            shouldPersistCurrentRunSessionCleanup(current, runOwnedSessionId),
+            shouldPersistCurrentRunSessionCleanup(current, runOwnedSessionId) &&
+            (!recoveryClaimEntry ||
+              current?.restartRecoveryDeliveryRunId === undefined ||
+              current.restartRecoveryDeliveryRunId === runId) &&
+            (!clearOwnedPendingFinal ||
+              current?.pendingFinalDelivery?.intentId ===
+                pendingFinalDeliveryMarker.pendingFinalDeliveryIntentId) &&
+            (!clearStaleTransportOnly || current?.pendingFinalDelivery?.kind === "transport-only"),
         });
       }
     }

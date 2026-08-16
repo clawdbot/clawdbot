@@ -18,6 +18,7 @@ function bootstrapResponse(serverVersion: string): Response {
     assistantAgentId: "main",
     serverVersion,
     terminalEnabled: false,
+    cliAgentsEnabled: true,
     pluginFrameGrants: [],
   };
   return new Response(JSON.stringify(payload), {
@@ -49,5 +50,6 @@ describe("createApplicationConfigCapability", () => {
 
     await expect(firstRefresh).resolves.toBeNull();
     expect(config.current.serverVersion).toBe("new");
+    expect(config.current.cliAgentsEnabled).toBe(true);
   });
 });

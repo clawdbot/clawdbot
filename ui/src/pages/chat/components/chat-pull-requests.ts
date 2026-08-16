@@ -1,4 +1,5 @@
 // Chat UI chips for pull requests detected on the session's working branch.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import type {
   ControlUiSessionBranch,
@@ -21,7 +22,7 @@ export function chatPullRequestId(pullRequest: ControlUiSessionPullRequest): str
 function readDismissedStore(storage: Storage): Record<string, string[]> {
   try {
     const parsed: unknown = JSON.parse(storage.getItem(DISMISSED_STORAGE_KEY) ?? "{}");
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    if (!isRecord(parsed)) {
       return {};
     }
     const store: Record<string, string[]> = {};

@@ -58,7 +58,6 @@ describe("AI transport host configuration", () => {
     configureAiTransportHost({ registerCustomApi: registrar });
 
     const provider = registry.getApiProvider(CUSTOM_API);
-    expect(provider).toBeDefined();
     expect(registrar).toHaveBeenCalledOnce();
     expect(provider).toMatchObject({
       api: CUSTOM_API,

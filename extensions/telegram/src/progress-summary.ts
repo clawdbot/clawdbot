@@ -1,3 +1,8 @@
+import type {
+  TelegramProgressSummaryCounters,
+  TelegramProgressSummaryTracker,
+} from "./bot-message-dispatch.types.js";
+
 // Post-turn collapse summary for the Telegram progress window.
 //
 // Mirrors Discord's collapse-summary line (extensions/discord/src/monitor/
@@ -11,12 +16,6 @@
 // prefix: Discord wraps the line in its `-#` small-text syntax, which Telegram
 // markdown has no analog for, so the Telegram line is emitted plain.
 
-type TelegramProgressSummaryCounters = {
-  reasoningSteps: number;
-  commentaryNotes: number;
-  toolCalls: number;
-};
-
 // Tracks turn activity for the collapse summary. The summary reflects ONLY what
 // actually streamed to the progress window — never durable-delivered items
 // (per the user's spec: "only summarize messages that ACTUALLY streamed").
@@ -27,38 +26,6 @@ type TelegramProgressSummaryCounters = {
 // the next tool call, or the summary flush — because some models (e.g. deepseek)
 // do not emit a reliable thinking_end per burst, so counting on the end event
 // alone undercounts.
-type TelegramProgressSummaryTracker = {
-  /** A reasoning delta arrived; opens (or keeps open) the current burst. */
-  noteReasoningActivity(): void;
-  /** Reasoning-end fired; close and count the current burst if one is open. */
-  closeReasoningBurst(): void;
-  /**
-   * A window-rendered tool call started: it is the boundary for any open
-   * reasoning/commentary burst, so close+count those first, then count one tool.
-   * Callers count the tool only when it is suppressed (window-rendered); under
-   * verbose the tool persists durably and they close the bursts directly instead
-   * (closeReasoningBurst/closeCommentaryBurst) without calling this.
-   */
-  noteToolCall(): void;
-  /**
-   * A commentary/preamble note arrived for the window. Opens (or keeps open) a
-   * commentary burst — it is NOT counted here. The burst is counted once when it
-   * closes at the next boundary (tool start, reasoning-end, a different note, or
-   * the summary flush). Counting per-burst rather than per-id is deliberate: the
-   * anthropic core tags every note in a turn with the SAME turn-local id
-   * ("commentary-0"), so an id-Set dedup collapsed a multi-tool turn's notes to
-   * one (D3). A tool follows each note in a tool-using turn, closing its burst
-   * before the next note opens => N notes.
-   */
-  noteCommentary(itemId?: string, text?: string): void;
-  /** Close and count the current commentary burst if one is open. */
-  closeCommentaryBurst(): void;
-  /** Snapshot of the current counters (closes any open bursts into the tally). */
-  counts(): TelegramProgressSummaryCounters;
-  /** True when there is at least one thought, note, or tool call to summarize. */
-  hasActivity(): boolean;
-};
-
 export function createTelegramProgressSummaryTracker(): TelegramProgressSummaryTracker {
   let reasoningSteps = 0;
   let commentaryNotes = 0;

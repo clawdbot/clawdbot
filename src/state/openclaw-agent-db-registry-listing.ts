@@ -20,7 +20,8 @@ type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_da
 let registeredAgentDatabasesMemo:
   | {
       pathname: string;
-      entries: readonly OpenClawRegisteredAgentDatabase[];
+      token: symbol;
+      entries?: readonly OpenClawRegisteredAgentDatabase[];
     }
   | undefined;
 
@@ -28,12 +29,31 @@ function resolveAgentDatabaseRegistryPath(options: OpenClawStateDatabaseOptions)
   return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
 }
 
+function activateRegisteredAgentDatabasesMemo(
+  options: OpenClawStateDatabaseOptions,
+): NonNullable<typeof registeredAgentDatabasesMemo> {
+  const pathname = resolveAgentDatabaseRegistryPath(options);
+  if (registeredAgentDatabasesMemo?.pathname !== pathname) {
+    // One active pathname keeps registry metadata process-stable without retaining
+    // an unbounded generation map. Switching back creates a fresh generation.
+    registeredAgentDatabasesMemo = { pathname, token: Symbol(pathname) };
+  }
+  return registeredAgentDatabasesMemo;
+}
+
+/** Return the process-stable generation for the active agent database registry. */
+export function readOpenClawAgentDatabaseRegistryToken(
+  options: OpenClawStateDatabaseOptions = {},
+): symbol {
+  return activateRegisteredAgentDatabasesMemo(options).token;
+}
+
 export function invalidateRegisteredAgentDatabasesMemo(
   options: OpenClawStateDatabaseOptions,
 ): void {
   const pathname = resolveAgentDatabaseRegistryPath(options);
   if (registeredAgentDatabasesMemo?.pathname === pathname) {
-    registeredAgentDatabasesMemo = undefined;
+    registeredAgentDatabasesMemo = { pathname, token: Symbol(pathname) };
   }
 }
 
@@ -86,9 +106,10 @@ export function listOpenClawRegisteredAgentDatabases(
     includeIncompatibleSchemaVersions?: boolean;
   } = {},
 ): OpenClawRegisteredAgentDatabase[] {
-  const pathname = resolveAgentDatabaseRegistryPath(options);
-  if (registeredAgentDatabasesMemo?.pathname === pathname) {
-    const entries = cloneRegisteredAgentDatabases(registeredAgentDatabasesMemo.entries);
+  const memo = activateRegisteredAgentDatabasesMemo(options);
+  const { pathname } = memo;
+  if (memo.entries) {
+    const entries = cloneRegisteredAgentDatabases(memo.entries);
     return options.includeIncompatibleSchemaVersions
       ? entries
       : entries.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION);
@@ -97,7 +118,7 @@ export function listOpenClawRegisteredAgentDatabases(
     if (hasUnavailableMissingSqlitePath(pathname)) {
       throw new Error(`OpenClaw state database ${pathname} is unavailable.`);
     }
-    registeredAgentDatabasesMemo = { pathname, entries: [] };
+    memo.entries = [];
     return [];
   }
   // Discovery runs per row in list hot paths, so the legacy-schema gate and the
@@ -135,7 +156,7 @@ export function listOpenClawRegisteredAgentDatabases(
       sizeBytes: row.size_bytes,
     }));
   }, options);
-  registeredAgentDatabasesMemo = { pathname, entries };
+  memo.entries = entries;
   const cloned = cloneRegisteredAgentDatabases(entries);
   return options.includeIncompatibleSchemaVersions
     ? cloned

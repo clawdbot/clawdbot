@@ -3,6 +3,7 @@ import {
   isEmptyUserTextOnlyMessage,
   readTranscriptMediaEntries,
 } from "../../lib/chat/message-extract.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
 import { extractTranscriptAttachments } from "./components/chat-message-media.ts";
 
 const MANAGED_UUID = "43007e90-2ade-43f2-a781-42b843e9eca3";
@@ -19,7 +20,6 @@ describe("chat history canonical media filtering", () => {
   it.each([
     ["facts-only", [{ path: "/media/fact.png", contentType: "image/png" }]],
     ["sparse", [{}, { path: "/media/sparse.png", contentType: "image/png" }]],
-    ["type-only", [{ contentType: "image/png" }]],
     ["media-only", [{ url: "media://inbound/media-only.png", kind: "image" }]],
   ])("keeps an empty %s user row", (_name, media) => {
     expect(
@@ -31,8 +31,32 @@ describe("chat history canonical media filtering", () => {
     ).toBe(false);
   });
 
-  it("drops a truly empty user row", () => {
-    expect(isEmptyUserTextOnlyMessage({ role: "user", content: "" })).toBe(true);
+  it.each([
+    ["truly empty", { role: "user", content: "" }],
+    ["metadata-only media", userMessageWithMedia([{ contentType: "image/png" }])],
+  ])("drops a %s user row", (_name, message) => {
+    expect(isEmptyUserTextOnlyMessage(message)).toBe(true);
+  });
+
+  it("renders a safe media-only user turn without rendering metadata-only local media", () => {
+    const safeRef = "media://inbound/safe-history-image.png";
+    const items = buildChatItems({
+      paneId: "media-history",
+      sessionKey: "main",
+      messages: [
+        userMessageWithMedia([{ path: safeRef, contentType: "image/png" }]),
+        userMessageWithMedia([{ contentType: "image/png", fileName: "metadata-only-local.png" }]),
+      ],
+      toolMessages: [],
+      streamSegments: [],
+      stream: null,
+      streamStartedAt: null,
+      showToolCalls: true,
+    });
+    const serialized = JSON.stringify(items);
+
+    expect(serialized).toContain(safeRef);
+    expect(serialized).not.toContain("metadata-only-local.png");
   });
 });
 

@@ -1,177 +1,128 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import {
   addSessionSuggestion,
   listSessionSuggestions,
   SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
 } from "../../config/sessions/session-suggestion-store.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { sessionSuggestionHandlers } from "./sessions-suggestions.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import { getSessionSuggestionTestMocks } from "./sessions-suggestions.test-mocks.js";
+import {
+  call,
+  client,
+  context,
+  registerSessionSuggestionTestLifecycle,
+  responseSuggestionId,
+  sessionKey,
+  upsertDefaultSuggestionSession,
+} from "./sessions-suggestions.test-support.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
 
-const mocks = vi.hoisted(() => ({
-  appendSessionAudit: vi.fn(async () => undefined),
-  handleChatSend: vi.fn(),
-  suggestionMutationFailure: undefined as
-    | "claim"
-    | "release"
-    | "release-unexpected"
-    | "finalize"
-    | undefined,
-  presence: [] as Array<{
-    user?: { id: string; name?: string };
-    watchedSessions?: string[];
-  }>,
-}));
-
-vi.mock("./chat-send-handler.js", () => ({ handleChatSend: mocks.handleChatSend }));
-vi.mock("./session-audit.js", () => ({ appendSessionAudit: mocks.appendSessionAudit }));
-vi.mock("../../infra/system-presence.js", () => ({
-  listSystemPresence: () => mocks.presence,
-}));
-vi.mock("../../config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions.js")>();
-  const failIfRequested = (phase: "claim" | "release" | "finalize") => {
-    if (mocks.suggestionMutationFailure === phase) {
-      throw new actual.SessionWorkStartInvalidatedError("session changed in test");
-    }
-  };
-  return {
-    ...actual,
-    claimSessionSuggestionDispatch: (
-      ...args: Parameters<typeof actual.claimSessionSuggestionDispatch>
-    ) => {
-      failIfRequested("claim");
-      return actual.claimSessionSuggestionDispatch(...args);
-    },
-    finalizeSessionSuggestionClaim: (
-      ...args: Parameters<typeof actual.finalizeSessionSuggestionClaim>
-    ) => {
-      failIfRequested("finalize");
-      return actual.finalizeSessionSuggestionClaim(...args);
-    },
-    releaseSessionSuggestionDispatch: (
-      ...args: Parameters<typeof actual.releaseSessionSuggestionDispatch>
-    ) => {
-      failIfRequested("release");
-      if (mocks.suggestionMutationFailure === "release-unexpected") {
-        throw new Error("release storage failed");
-      }
-      return actual.releaseSessionSuggestionDispatch(...args);
-    },
-  };
-});
-
-const sessionKey = "agent:main:main";
-
-const defaultSuggestionSession = {
-  sessionId: "session-main",
-  updatedAt: 1,
-  createdActor: { type: "human", id: "owner" },
-  visibility: "suggest",
-} as const;
-
-function upsertDefaultSuggestionSession() {
-  return upsertSessionEntry({ agentId: "main", sessionKey }, defaultSuggestionSession);
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
-}
-
-function client(profileId: string, displayName: string, admin = false): GatewayClient {
-  return {
-    connId: `conn-${profileId}`,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: "openclaw-control-ui",
-        version: "test",
-        platform: "test",
-        mode: "webchat",
-        instanceId: `instance-${profileId}`,
-      },
-      role: "operator",
-      scopes: admin ? ["operator.admin"] : ["operator.read", "operator.write"],
-    },
-    authenticatedUserId: `${profileId}@example.com`,
-    authenticatedUserProfile: {
-      profileId,
-      displayName,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
-  };
-}
-
-function context(broadcast = vi.fn()): GatewayRequestContext {
-  return {
-    getRuntimeConfig: () => ({}),
-    broadcast,
-    broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
-    logGateway: { warn: vi.fn() },
-  } as unknown as GatewayRequestContext;
-}
-
-async function call(
-  method:
-    | "session.suggestions.add"
-    | "session.suggestions.list"
-    | "session.suggestions.resolve"
-    | "session.typing",
-  params: Record<string, unknown>,
-  requestClient: GatewayClient | null,
-  requestContext = context(),
-) {
-  const responses: Parameters<RespondFn>[] = [];
-  await sessionSuggestionHandlers[method]?.({
-    req: { type: "req", id: "request-1", method, params },
-    params,
-    client: requestClient,
-    context: requestContext,
-    isWebchatConnect: () => true,
-    respond: (...response: Parameters<RespondFn>) => responses.push(response),
-  });
-  return { responses, context: requestContext };
-}
-
-function responseSuggestionId(result: Awaited<ReturnType<typeof call>>): string {
-  const payload = result.responses[0]?.[1] as { suggestion?: { id?: string } } | undefined;
-  if (!payload?.suggestion?.id) {
-    throw new Error("suggestion response id missing");
-  }
-  return payload.suggestion.id;
-}
-
-beforeEach(() => {
-  mocks.appendSessionAudit.mockClear();
-  mocks.handleChatSend.mockReset();
-  mocks.handleChatSend.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
-    respond(true, { runId: "suggestion-run", status: "started" });
-  });
-  mocks.suggestionMutationFailure = undefined;
-  mocks.presence = [];
-});
-
-afterEach(() => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  closeOpenClawAgentDatabasesForTest();
-});
+const mocks = getSessionSuggestionTestMocks();
+registerSessionSuggestionTestLifecycle(mocks);
 
 describe("session suggestion handlers", () => {
+  it("admits bare fixed-store keys only through their persisted owner", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = state.path("shared-sessions.sqlite");
+      await upsertSessionEntryCore(
+        { agentId: "ops", sessionKey: "global", storePath },
+        {
+          sessionId: "session-ops-global",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "suggest",
+        },
+      );
+      const ownedConfig = {
+        session: { scope: "global", store: storePath },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+
+      const admitted = await call(
+        "session.suggestions.list",
+        { sessionKey: "global" },
+        client("owner", "Owner"),
+        context(vi.fn(), ownedConfig),
+      );
+      expect(admitted.responses[0]).toMatchObject([true, { role: "owner", suggestions: [] }]);
+
+      const ownerlessConfig = {
+        ...ownedConfig,
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+      const rejected = await call(
+        "session.suggestions.list",
+        { sessionKey: "global" },
+        client("owner", "Owner"),
+        context(vi.fn(), ownerlessConfig),
+      );
+      expect(rejected.responses[0]?.[2]).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("has no explicit owner"),
+      });
+    });
+  });
+
+  it("attributes an ownerless active run to the persisted bare-key owner", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = state.path("shared-sessions.sqlite");
+      await upsertSessionEntryCore(
+        { agentId: "ops", sessionKey: "global", storePath },
+        {
+          sessionId: "session-ops-global",
+          updatedAt: 1,
+          createdActor: { type: "human", id: "owner" },
+          visibility: "suggest",
+        },
+      );
+      const ownedConfig = {
+        session: { scope: "global", store: storePath },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+      const requestContext = context(vi.fn(), ownedConfig);
+      requestContext.chatAbortControllers.set("run-ops", {
+        sessionKey: "global",
+        sessionId: "session-ops-global",
+      } as never);
+      const added = await call(
+        "session.suggestions.add",
+        { sessionKey: "global", text: "steer the owner" },
+        client("alice", "Alice"),
+        requestContext,
+      );
+      const id = responseSuggestionId(added);
+
+      const resolved = await call(
+        "session.suggestions.resolve",
+        { sessionKey: "global", id, resolution: "send" },
+        client("owner", "Owner"),
+        requestContext,
+      );
+
+      expect(resolved.responses[0]?.[0]).toBe(true);
+      expect(mocks.handleChatSend.mock.calls[0]?.[0]?.params).toMatchObject({
+        agentId: "ops",
+        queueMode: "steer",
+        expectedRunId: "run-ops",
+      });
+    });
+  });
+
   it("lets a suggest viewer add and list only their own suggestion", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertDefaultSuggestionSession();
@@ -212,7 +163,7 @@ describe("session suggestion handlers", () => {
   it("hides draft suggestions from members while owner and admin can list", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const draftKey = "agent:main:draft-suggestions";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: draftKey },
         {
           sessionId: "session-draft",
@@ -294,7 +245,7 @@ describe("session suggestion handlers", () => {
   it("keeps incognito suggestion and typing surfaces admin-only", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const incognitoKey = "agent:main:dashboard:incognito-suggestions";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: incognitoKey },
         {
           sessionId: "session-incognito",
@@ -363,7 +314,7 @@ describe("session suggestion handlers", () => {
   it("rejects archived suggestion creation and non-dismiss resolutions", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const archivedKey = "agent:main:archived-suggestions";
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey: archivedKey },
         {
           sessionId: "session-archived",
@@ -714,7 +665,7 @@ describe("session suggestion handlers", () => {
       );
       expect(notViewing.responses[0]?.[1]).toEqual({ ok: true, broadcast: false });
 
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-main",
@@ -851,7 +802,7 @@ describe("session suggestion handlers", () => {
         client("alice", "Alice"),
       );
       const id = responseSuggestionId(added);
-      const gate = createDeferred<void>();
+      const gate = createDeferred();
       mocks.handleChatSend.mockImplementationOnce(async ({ respond }: { respond: RespondFn }) => {
         await gate.promise;
         respond(true, { runId: "suggestion-run", status: "started" });
@@ -877,7 +828,7 @@ describe("session suggestion handlers", () => {
 
   it("returns a structured error when the session is replaced after dispatch", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-before-dispatch",
@@ -891,7 +842,7 @@ describe("session suggestion handlers", () => {
         { sessionKey, text: "dispatch before reset" },
         client("alice", "Alice"),
       );
-      const dispatched = createDeferred<void>();
+      const dispatched = createDeferred();
       mocks.handleChatSend.mockImplementationOnce(async ({ respond }: { respond: RespondFn }) => {
         await dispatched.promise;
         respond(true, { runId: "suggestion-run", status: "started" });
@@ -905,7 +856,7 @@ describe("session suggestion handlers", () => {
       );
       await vi.waitFor(() => expect(mocks.handleChatSend).toHaveBeenCalledOnce());
 
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-after-dispatch",
@@ -936,7 +887,7 @@ describe("session suggestion handlers", () => {
     "maps a session replacement during %s to the structured terminal error",
     async (phase) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        await upsertSessionEntry(
+        await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
           {
             sessionId: "session-race",
@@ -991,7 +942,7 @@ describe("session suggestion handlers", () => {
 
   it("keeps an unexpected claim-release failure retryable", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntry(
+      await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
           sessionId: "session-release-failure",

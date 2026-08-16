@@ -5,6 +5,7 @@ import { sortUniqueStrings } from "@openclaw/normalization-core/string-normaliza
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
 import { resolveOpenClawPackageRootSync } from "../../../infra/openclaw-root.js";
+import { isPathInside } from "../../../infra/path-safety.js";
 import { shortenHomePath } from "../../../utils.js";
 
 const PLUGIN_RUNTIME_DEPS_MARKER = "plugin-runtime-deps";
@@ -184,11 +185,6 @@ function uniqueResolvedRoots(values: readonly string[]): string[] {
   return sortUniqueStrings(values.map((value) => path.resolve(value)));
 }
 
-function isPathInsideRoot(candidate: string, root: string): boolean {
-  const relativePath = path.relative(root, candidate);
-  return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
-}
-
 async function inspectCandidate(
   fullPath: string,
   fsApi: FsLike,
@@ -205,7 +201,7 @@ async function inspectCandidate(
   const resolvedTarget = path.isAbsolute(target)
     ? target
     : path.resolve(path.dirname(fullPath), target);
-  if (staleRoots.some((root) => isPathInsideRoot(resolvedTarget, root))) {
+  if (staleRoots.some((root) => isPathInside(root, resolvedTarget))) {
     return resolvedTarget;
   }
   try {

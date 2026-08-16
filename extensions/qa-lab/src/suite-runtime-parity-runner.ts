@@ -68,6 +68,7 @@ export async function runQaRuntimeParitySuite(params: {
   progressEnabled: boolean;
   scenarioIds?: readonly string[];
   runtimePair: [RuntimeId, RuntimeId];
+  mutateConfig?: QaSuiteRunParams["mutateConfig"];
   writeEvidenceFile?: boolean;
 }) {
   const ownsLab = !params.lab;
@@ -180,6 +181,7 @@ export async function runQaRuntimeParitySuite(params: {
               enabledPluginIds: params.enabledPluginIds,
               startLab,
               controlUiEnabled: params.controlUiEnabled ?? scenarioRequiresControlUi(scenario),
+              mutateConfig: params.mutateConfig,
               forcedRuntime: runtime,
               captureRuntimeParityCell: true,
               writeEvidenceFile: params.writeEvidenceFile,

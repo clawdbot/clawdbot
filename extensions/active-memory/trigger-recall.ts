@@ -172,7 +172,6 @@ async function loadTriggerRecallCandidates(params: TriggerLookupParams) {
         // Lane-1 runs on every eligible inbound message; it must stay
         // deterministic and local, so query embedding is disabled.
         lexicalOnly: true,
-        qmdSearchModeOverride: "search",
         activeProjectKeys: [...activeProjectKeys],
       })
       .catch(() => []),

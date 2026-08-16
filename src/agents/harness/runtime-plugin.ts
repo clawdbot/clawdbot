@@ -131,6 +131,8 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
   }
 
   if (!params.pluginRegistry?.agentHarnesses.some((entry) => entry.harness.id === runtime)) {
-    throw new Error(`Agent harness runtime "${runtime}" is not present in the prepared registry.`);
+    throw new Error(
+      `Agent harness runtime "${runtime}" is unavailable because its plugin registration is missing from this prepared run. Enable or reinstall the plugin that provides this runtime, restart the Gateway, then retry.`,
+    );
   }
 }

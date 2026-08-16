@@ -231,6 +231,258 @@ describe("redactTranscriptMessage", () => {
     expect(JSON.stringify(msgContent(result))).not.toContain("sk-abcdef1234567890xyz");
   });
 
+  it("preserves only validated OpenAI compaction replay state", () => {
+    const msg = {
+      role: "assistant",
+      api: "openclaw-openai-responses-transport",
+      model: "gpt-5.6-luna",
+      provider: "openai",
+      content: [{ type: "text", text: "visible" }],
+      providerReplay: {
+        v: 1,
+        type: "openai-responses-compaction",
+        id: "cmp_1",
+        data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+        replayIndex: 0,
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.6-luna",
+        baseUrlHash: "ozhevd1smnk8s",
+        sessionHash: "171dzdv17gum5g",
+        authProfileHash: "oe8bkr3r8947",
+        secret: "sk-abcdef1234567890xyz",
+      },
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+      providerReplay: Record<string, unknown>;
+    };
+
+    expect(result.providerReplay).toEqual({
+      v: 1,
+      type: "openai-responses-compaction",
+      id: "cmp_1",
+      data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+      replayIndex: 0,
+      provider: "openai",
+      api: "openai-responses",
+      model: "gpt-5.6-luna",
+      baseUrlHash: "ozhevd1smnk8s",
+      sessionHash: "171dzdv17gum5g",
+      authProfileHash: "oe8bkr3r8947",
+    });
+    expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
+  });
+
+  it("preserves validated OpenAI compaction suppression state", () => {
+    const msg = {
+      role: "assistant",
+      api: "openclaw-openai-responses-transport",
+      model: "gpt-5.6-luna",
+      provider: "openai",
+      content: [{ type: "text", text: "visible" }],
+      providerReplay: {
+        v: 1,
+        type: "openai-responses-compaction-suppression",
+        id: "unexpected-suppression-id",
+        data: "rejected",
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.6-luna",
+        baseUrlHash: "ozhevd1smnk8s",
+        sessionHash: "171dzdv17gum5g",
+        authProfileHash: "oe8bkr3r8947",
+        secret: "sk-abcdef1234567890xyz",
+      },
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+      providerReplay: Record<string, unknown>;
+    };
+
+    expect(result.providerReplay).toEqual({
+      v: 1,
+      type: "openai-responses-compaction-suppression",
+      data: "rejected",
+      provider: "openai",
+      api: "openai-responses",
+      model: "gpt-5.6-luna",
+      baseUrlHash: "ozhevd1smnk8s",
+      sessionHash: "171dzdv17gum5g",
+      authProfileHash: "oe8bkr3r8947",
+    });
+    expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
+  });
+
+  it("preserves validated Anthropic compaction state while redacting its summary", () => {
+    const msg = {
+      role: "assistant",
+      api: "anthropic-messages",
+      model: "claude-sonnet-4-6",
+      provider: "anthropic",
+      content: [{ type: "text", text: "visible" }],
+      providerReplay: {
+        v: 1,
+        type: "anthropic-compaction",
+        data: "summary containing sk-abcdef1234567890xyz",
+        replayIndex: 0,
+        provider: "anthropic",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4-6",
+        baseUrlHash: "ozhevd1smnk8s",
+        sessionHash: "171dzdv17gum5g",
+        authProfileHash: "oe8bkr3r8947",
+        secret: "sk-another-secret-value",
+      },
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+      providerReplay: Record<string, unknown>;
+    };
+
+    expect(result.providerReplay).toMatchObject({
+      v: 1,
+      type: "anthropic-compaction",
+      replayIndex: 0,
+      provider: "anthropic",
+      api: "anthropic-messages",
+      model: "claude-sonnet-4-6",
+      baseUrlHash: "ozhevd1smnk8s",
+      sessionHash: "171dzdv17gum5g",
+      authProfileHash: "oe8bkr3r8947",
+    });
+    expect(result.providerReplay.data).toContain("summary containing");
+    expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
+    expect(result.providerReplay).not.toHaveProperty("secret");
+  });
+
+  it("preserves Anthropic suppression and drops malformed or foreign replay state", () => {
+    const base = {
+      role: "assistant",
+      api: "anthropic-messages",
+      model: "claude-sonnet-4-6",
+      provider: "anthropic",
+      content: [{ type: "text", text: "visible" }],
+    };
+    const suppression = redactTranscriptMessage(
+      {
+        ...base,
+        providerReplay: {
+          v: 1,
+          type: "anthropic-compaction-suppression",
+          data: "rejected",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          model: "claude-sonnet-4-6",
+          baseUrlHash: "ozhevd1smnk8s",
+        },
+      } as unknown as AgentMessage,
+      cfg("tools"),
+    ) as unknown as { providerReplay: Record<string, unknown> };
+    expect(suppression.providerReplay).toMatchObject({
+      type: "anthropic-compaction-suppression",
+      data: "rejected",
+    });
+
+    for (const providerReplay of [
+      {
+        v: 1,
+        type: "anthropic-compaction",
+        data: "",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4-6",
+        baseUrlHash: "ozhevd1smnk8s",
+      },
+      {
+        v: 1,
+        type: "anthropic-compaction",
+        data: "summary",
+        provider: "other-provider",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4-6",
+        baseUrlHash: "ozhevd1smnk8s",
+      },
+    ]) {
+      const result = redactTranscriptMessage(
+        { ...base, providerReplay } as unknown as AgentMessage,
+        cfg("tools"),
+      );
+      expect(result).not.toHaveProperty("providerReplay");
+    }
+  });
+
+  it.each([
+    ["oversized", "i".repeat(10_000)],
+    ["non-string", 42],
+  ])("removes an %s optional OpenAI compaction id while preserving state", (_name, id) => {
+    const msg = {
+      role: "assistant",
+      api: "openclaw-openai-responses-transport",
+      model: "gpt-5.6-luna",
+      provider: "openai",
+      content: [{ type: "text", text: "visible" }],
+      providerReplay: {
+        v: 1,
+        type: "openai-responses-compaction",
+        id,
+        data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+        replayIndex: 0,
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.6-luna",
+        baseUrlHash: "ozhevd1smnk8s",
+      },
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+      providerReplay: Record<string, unknown>;
+    };
+
+    expect(result.providerReplay).toEqual({
+      v: 1,
+      type: "openai-responses-compaction",
+      data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+      replayIndex: 0,
+      provider: "openai",
+      api: "openai-responses",
+      model: "gpt-5.6-luna",
+      baseUrlHash: "ozhevd1smnk8s",
+    });
+  });
+
+  it.each([
+    ["malformed content", { data: "" }],
+    ["invalid replay index", { replayIndex: -1 }],
+    ["invalid context hash", { baseUrlHash: "not-a-context-hash" }],
+    ["foreign route", { provider: "azure" }],
+  ])("omits invalid OpenAI compaction replay state for %s", (_name, override) => {
+    const providerReplay = {
+      v: 1,
+      type: "openai-responses-compaction",
+      id: "cmp_1",
+      data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+      provider: "openai",
+      api: "openai-responses",
+      model: "gpt-5.6-luna",
+      baseUrlHash: "ozhevd1smnk8s",
+      ...override,
+    };
+    const msg = {
+      role: "assistant",
+      api: "openclaw-openai-responses-transport",
+      model: "gpt-5.6-luna",
+      provider: "openai",
+      content: [{ type: "text", text: "visible" }],
+      providerReplay,
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+
+    expect(result).not.toHaveProperty("providerReplay");
+    expect(msg).toHaveProperty("providerReplay", providerReplay);
+  });
+
   it("handles configured providers without explicit models", () => {
     const msg = {
       role: "assistant",

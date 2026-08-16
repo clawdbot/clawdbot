@@ -11,6 +11,7 @@ type TestDraftStream = {
   updateLazy: ReturnType<typeof vi.fn<(resolveText: () => string | undefined) => void>>;
   updatePreview: ReturnType<typeof vi.fn<(preview: TelegramDraftPreview) => void>>;
   flush: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  waitForInFlight: ReturnType<typeof vi.fn<() => Promise<void>>>;
   messageId: ReturnType<typeof vi.fn<() => number | undefined>>;
   lastDeliveredText: ReturnType<typeof vi.fn<() => string>>;
   currentMessageSnapshot: ReturnType<typeof vi.fn<() => TelegramDraftMessageSnapshot | undefined>>;
@@ -31,6 +32,7 @@ type TestDraftStream = {
 export function createTestDraftStream(params?: {
   messageId?: number;
   onUpdate?: (text: string) => void;
+  onWaitForInFlight?: () => void | Promise<void>;
   onStop?: () => void | Promise<void>;
   onDiscard?: () => void | Promise<void>;
   clearMessageIdOnForceNew?: boolean;
@@ -64,6 +66,9 @@ export function createTestDraftStream(params?: {
       params?.onUpdate?.(preview.text);
     }),
     flush: vi.fn().mockResolvedValue(undefined),
+    waitForInFlight: vi.fn().mockImplementation(async () => {
+      await params?.onWaitForInFlight?.();
+    }),
     messageId: vi.fn().mockImplementation(() => messageId),
     lastDeliveredText: vi.fn().mockImplementation(() => lastDeliveredText),
     currentMessageSnapshot: vi
@@ -142,6 +147,7 @@ export function createSequencedTestDraftStream(startMessageId = 1001): TestDraft
       lastDeliveredText = preview.text.trimEnd();
     }),
     flush: vi.fn().mockResolvedValue(undefined),
+    waitForInFlight: vi.fn().mockResolvedValue(undefined),
     messageId: vi.fn().mockImplementation(() => activeMessageId),
     lastDeliveredText: vi.fn().mockImplementation(() => lastDeliveredText),
     currentMessageSnapshot: vi

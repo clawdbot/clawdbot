@@ -62,6 +62,20 @@ describe("harness runtime plugins", () => {
     expect(pluginRegistry.agentHarnesses).toHaveLength(1);
   });
 
+  it("explains how to recover when the selected harness registration is missing", async () => {
+    await expect(
+      ensureSelectedAgentHarnessPlugin({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        agentHarnessRuntimeOverride: "codex",
+        workspaceDir: "/tmp/workspace",
+        pluginRegistry: createEmptyPluginRegistry(),
+      }),
+    ).rejects.toThrow(
+      'Agent harness runtime "codex" is unavailable because its plugin registration is missing from this prepared run. Enable or reinstall the plugin that provides this runtime, restart the Gateway, then retry.',
+    );
+  });
+
   it("force-activates a default-disabled harness owner selected for a run", () => {
     const plan = resolveAgentRuntimePluginLoadPlan({
       config: {},
@@ -71,6 +85,46 @@ describe("harness runtime plugins", () => {
 
     expect(plan.pluginIds).toContain("codex");
     expect(plan.config?.plugins?.entries?.codex).toEqual({ enabled: true });
+  });
+
+  it("includes the selected provider owner for the default runtime", () => {
+    mocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce(["openai"]);
+    mocks.resolveActivatableProviderOwnerPluginIds.mockReturnValueOnce(["openai"]);
+    const plan = resolveAgentRuntimePluginLoadPlan({
+      config: { plugins: { allow: ["openai"] } },
+      workspaceDir: "/tmp/workspace",
+      selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "openclaw" }],
+    });
+
+    expect(plan.pluginIds).toEqual(["openai"]);
+    expect(plan.config?.plugins?.entries?.openai).toEqual({ enabled: true });
+  });
+
+  it("includes the selected provider owner when policy selects an omitted harness", () => {
+    mocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce(["openai"]);
+    mocks.resolveActivatableProviderOwnerPluginIds.mockReturnValueOnce(["openai"]);
+    mocks.resolveManifestActivationPlan.mockReturnValueOnce({ entries: [] });
+    const plan = resolveAgentRuntimePluginLoadPlan({
+      config: { plugins: { allow: ["openai"] } },
+      workspaceDir: "/tmp/workspace",
+      selections: [{ provider: "openai", modelId: "gpt-5" }],
+    });
+
+    expect(plan.pluginIds).toEqual(["openai"]);
+    expect(plan.config?.plugins?.entries?.openai).toEqual({ enabled: true });
+  });
+
+  it("includes and enables the context-engine owner in the prepared load plan", () => {
+    const plan = resolveAgentRuntimePluginLoadPlan({
+      config: { plugins: { slots: { contextEngine: "custom-context-engine" } } },
+      workspaceDir: "/tmp/workspace",
+      basePluginIds: [],
+      selections: [],
+    });
+
+    expect(plan.pluginIds).toEqual(["custom-context-engine"]);
+    expect(plan.config?.plugins?.allow).toEqual(["custom-context-engine"]);
+    expect(plan.config?.plugins?.entries?.["custom-context-engine"]).toEqual({ enabled: true });
   });
 
   const memorySelectionCases: Array<{

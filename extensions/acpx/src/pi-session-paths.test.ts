@@ -36,6 +36,7 @@ describe("Pi session paths", () => {
     expect(piSessionStore({ PI_CODING_AGENT_DIR: `  ${agentDir}  ` })).toEqual({
       root: path.join(agentDir, "sessions"),
       flat: false,
+      usesProcessHomeFallback: false,
     });
   });
 
@@ -57,6 +58,7 @@ describe("Pi session paths", () => {
     expect(piSessionStore(env, projectDirectory)).toEqual({
       root: path.join(projectDirectory, ".pi", "sessions"),
       flat: true,
+      usesProcessHomeFallback: false,
     });
 
     await fs.rm(path.join(projectDirectory, ".pi", "settings.json"));
@@ -67,6 +69,16 @@ describe("Pi session paths", () => {
     expect(piSessionStore(env, projectDirectory)).toEqual({
       root: path.join(agentDirectory, "custom-sessions"),
       flat: true,
+      usesProcessHomeFallback: false,
     });
+  });
+
+  it("marks only the default home-derived store as a process-HOME fallback", () => {
+    const home = path.join(os.tmpdir(), "pi-home");
+    expect(piSessionStore({ HOME: home }).usesProcessHomeFallback).toBe(true);
+    expect(
+      piSessionStore({ HOME: home, PI_CODING_AGENT_SESSION_DIR: path.join(home, "sessions") })
+        .usesProcessHomeFallback,
+    ).toBe(false);
   });
 });

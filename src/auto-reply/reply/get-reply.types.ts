@@ -1,8 +1,9 @@
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 // Shared get-reply type contracts for command, directive, and runtime layers.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ReplyOptionsWithHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
+import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
@@ -18,6 +19,8 @@ export type ReplySessionBinding = {
 };
 
 type InternalReplySessionOptions = {
+  /** Host-stamped exact-run capability for late Codex creator-authority capture. */
+  cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
   expectedExistingSessionId?: string;
   onDeliberateSilentTerminalReply?: () => void;
   onPendingContinuation?: () => void;
@@ -27,8 +30,6 @@ type InternalReplySessionOptions = {
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   sessionPromptSourceReplyDeliveryMode?: GetReplyOptions["sourceReplyDeliveryMode"];
-  /** Marks when this reply is waiting to own its session's reply lane. */
-  onReplyAdmissionWaitChange?: (waiting: boolean) => void;
   /** Receives terminal queue-cap outcomes without widening the public reply API. */
   onFollowupQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /** Overrides persisted queue mode for this reply only. */
@@ -39,8 +40,8 @@ type InternalReplySessionOptions = {
 };
 
 export type InternalGetReplyOptions = GetReplyOptions &
+  PluginCommandReplyOptions &
   InternalReplySessionOptions &
-  ReplyOptionsWithHeartbeatRunScope &
   ReplyOptionsWithOperationRunState &
   ReplyOptionsWithAdmissionTicket;
 

@@ -18,7 +18,7 @@ import type {
   TelegramSendOpts,
 } from "./send-message-types.js";
 import { prepareTelegramOutbound } from "./send-outbound.js";
-import { parseTelegramTarget } from "./targets.js";
+import { parseTelegramTarget, type TelegramTarget } from "./targets.js";
 
 type TelegramReactionOpts = TelegramApiCallOpts & {
   remove?: boolean;
@@ -31,17 +31,24 @@ export async function sendTypingTelegram(
   to: string,
   opts: TelegramTypingOpts,
 ): Promise<{ ok: true }> {
+  const target = parseTelegramTarget(to);
+  if (target.directMessagesTopicId != null) {
+    throw new Error("Telegram typing is not supported in channel Direct Messages chats.");
+  }
   const context = resolveTelegramApiContext(opts);
-  return withTelegramApiContextLease(context, sendTypingTelegramWithContext(to, opts, context));
+  return withTelegramApiContextLease(
+    context,
+    sendTypingTelegramWithContext(to, target, opts, context),
+  );
 }
 
 async function sendTypingTelegramWithContext(
   to: string,
+  target: TelegramTarget,
   opts: TelegramTypingOpts,
   context: TelegramApiContext,
 ): Promise<{ ok: true }> {
   const { cfg, account, api } = context;
-  const target = parseTelegramTarget(to);
   const chatId = await resolveAndPersistChatId({
     cfg,
     api,

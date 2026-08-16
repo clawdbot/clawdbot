@@ -246,6 +246,7 @@ export interface SessionNodes {
   last_read_at: number | null;
   parent_session_key: string | null;
   pinned_at: number | null;
+  project_id: string | null;
   session_key: string;
   spawned_by: string | null;
   status: string | null;
@@ -270,6 +271,22 @@ export interface SessionTranscriptActiveEvents {
   event_seq: number;
   message_position: number | null;
   session_id: string;
+}
+
+export interface SessionTranscriptArchives {
+  archive_blob: Uint8Array;
+  archive_name: string;
+  archive_sha256: string;
+  created_at: number;
+  encoding: string;
+  generation: string;
+  last_publish_attempt_at: number | null;
+  last_publish_error: string | null;
+  publish_attempts: Generated<number>;
+  published_at: number | null;
+  reason: string;
+  session_id: string;
+  session_key: string;
 }
 
 export interface SessionTranscriptFts {
@@ -393,17 +410,6 @@ export interface StandingIntentsFtsIdx {
   term: string;
 }
 
-export interface StateLeases {
-  created_at: number;
-  expires_at: number | null;
-  heartbeat_at: number | null;
-  lease_key: string;
-  owner: string;
-  payload_json: string | null;
-  scope: string;
-  updated_at: number;
-}
-
 export interface TrajectoryRuntimeEvents {
   created_at: number;
   event_json: string;
@@ -460,6 +466,7 @@ export interface DB {
   session_nodes: SessionNodes;
   session_suggestions: SessionSuggestions;
   session_transcript_active_events: SessionTranscriptActiveEvents;
+  session_transcript_archives: SessionTranscriptArchives;
   session_transcript_fts: SessionTranscriptFts;
   session_transcript_fts_config: SessionTranscriptFtsConfig;
   session_transcript_fts_content: SessionTranscriptFtsContent;
@@ -474,7 +481,6 @@ export interface DB {
   standing_intents_fts_data: StandingIntentsFtsData;
   standing_intents_fts_docsize: StandingIntentsFtsDocsize;
   standing_intents_fts_idx: StandingIntentsFtsIdx;
-  state_leases: StateLeases;
   trajectory_runtime_events: TrajectoryRuntimeEvents;
   transcript_event_identities: TranscriptEventIdentities;
   transcript_events: TranscriptEvents;

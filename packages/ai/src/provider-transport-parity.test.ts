@@ -52,7 +52,7 @@ type ParityFixture = {
   name: string;
   provider: "anthropic" | "openai";
   outcome: "success" | "error";
-  snapshot: string;
+  snapshot?: string;
 };
 
 const anthropicModel = {
@@ -340,7 +340,6 @@ const fixtures: ParityFixture[] = [
     name: "Anthropic structured request failure",
     provider: "anthropic",
     outcome: "error",
-    snapshot: "anthropic-error.snap.txt",
   },
   {
     name: "OpenAI successful request and event trace",
@@ -352,7 +351,6 @@ const fixtures: ParityFixture[] = [
     name: "OpenAI structured request failure",
     provider: "openai",
     outcome: "error",
-    snapshot: "openai-error.snap.txt",
   },
 ];
 
@@ -375,9 +373,26 @@ describe("provider and transport observable parity fixtures", () => {
     const run = provider === "anthropic" ? runAnthropic : runOpenAi;
     const providerResult = await run("provider", outcome);
     const transportResult = await run("transport", outcome);
-    // Stage 1 freezes both observable baselines, including the known gaps that
-    // stages 3-4 will close. Equality here would either start those later stages
-    // or hide the exact request/event differences this safety net must preserve.
+    if (outcome === "error") {
+      for (const result of [providerResult, transportResult]) {
+        expect(result.terminal.stopReason).toBe("error");
+        expect(result.errorFields.errorMessage).toEqual(expect.any(String));
+      }
+      if (provider === "openai") {
+        expect(providerResult.errorFields).toEqual(transportResult.errorFields);
+      } else {
+        expect(providerResult.errorFields).toMatchObject({
+          errorCode: "429",
+          errorType: "rate_limit_error",
+          errorBody: expect.stringContaining("synthetic Anthropic rejection"),
+        });
+        expect(transportResult.errorFields.errorMessage).toContain("Retry-After: 2 seconds");
+      }
+      return;
+    }
+    if (!snapshot) {
+      throw new Error("success parity fixture requires a snapshot");
+    }
     await expect(
       `${JSON.stringify({ provider: providerResult, transport: transportResult }, null, 2)}\n`,
     ).toMatchFileSnapshot(

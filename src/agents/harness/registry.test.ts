@@ -9,6 +9,7 @@ import {
   getRegisteredAgentHarness,
   listRegisteredAgentHarnesses,
   registerAgentHarness,
+  resolveCodexAgentHarnessNativeCompaction,
   resetRegisteredAgentHarnessSessions,
 } from "./registry.js";
 import { selectAgentHarness } from "./selection.js";
@@ -80,6 +81,13 @@ function providerRuntimeConfig(provider: string, runtime: string): OpenClawConfi
 }
 
 describe("agent harness registry", () => {
+  it("rejects the built-in runtime id before mutating the registry", () => {
+    expect(() =>
+      registerAgentHarness(makeHarness("openclaw"), { ownerPluginId: "untrusted-plugin" }),
+    ).toThrow('agent harness id "openclaw" is reserved for the built-in runtime');
+    expect(listRegisteredAgentHarnesses()).toEqual([]);
+  });
+
   it("registers and retrieves a harness with owner metadata", () => {
     const harness = makeHarness("custom");
     registerAgentHarness(harness, { ownerPluginId: "plugin-a" });
@@ -100,6 +108,33 @@ describe("agent harness registry", () => {
       ownerPluginId: "registry-owner",
     });
     expect(listRegisteredAgentHarnesses()).toEqual([{ harness, ownerPluginId: "registry-owner" }]);
+  });
+
+  it("resolves native compaction only from the exact registry-owned Codex harness", () => {
+    const nativeCompaction = vi.fn(async () => ({ ok: true, compacted: true }));
+    registerAgentHarness(makeHarness("codex"), {
+      ownerPluginId: "codex",
+      nativeCompaction,
+    });
+    const registered = getRegisteredAgentHarness("codex")?.harness;
+
+    expect(registered).toBeDefined();
+    expect(resolveCodexAgentHarnessNativeCompaction(registered as AgentHarness)).toBe(
+      nativeCompaction,
+    );
+    expect(() => resolveCodexAgentHarnessNativeCompaction(makeHarness("codex"))).toThrow(
+      "Agent harness codex changed during native compaction resolution",
+    );
+  });
+
+  it("rejects native compaction registered by a foreign harness owner", () => {
+    expect(() =>
+      registerAgentHarness(makeHarness("codex"), {
+        ownerPluginId: "copilot",
+        nativeCompaction: vi.fn(async () => ({ ok: true, compacted: true })),
+      }),
+    ).toThrow("native compaction requires the registry-owned Codex harness");
+    expect(listRegisteredAgentHarnesses()).toEqual([]);
   });
 
   it("uses builder ownership and preserves a harness registered by another plugin", () => {

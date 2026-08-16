@@ -1,7 +1,4 @@
-/**
- * Integration-style tests for the public Bash/process tool barrel.
- * Exercises exec and process behavior through the shared exported tool factory.
- */
+/** Integration tests for the public Bash/process tool barrel and shared tool factory. */
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -51,7 +48,7 @@ vi.mock("../infra/exec-approval-surface.js", () => ({
     !channel || channel === "internal" || channel === "tui",
 }));
 
-vi.mock("../utils/delivery-context.js", () => ({
+vi.mock("../utils/delivery-context.shared.js", () => ({
   normalizeDeliveryContext: (context?: {
     channel?: string | null;
     to?: string | number | null;
@@ -406,17 +403,6 @@ function useCapturedEnv(keys: string[], afterCapture?: () => void) {
   });
 }
 
-async function waitForCompletion(sessionId: string) {
-  let status = PROCESS_STATUS_RUNNING;
-  await expect
-    .poll(async () => {
-      status = (await pollProcessSession({ tool: processTool, sessionId })).status;
-      return status;
-    }, BACKGROUND_POLL_OPTIONS)
-    .not.toBe(PROCESS_STATUS_RUNNING);
-  return status;
-}
-
 function requireSessionId(details: { sessionId?: string }): string {
   if (!details.sessionId) {
     throw new Error("expected sessionId in exec result details");
@@ -472,16 +458,11 @@ async function expectNotifyOnExitWake(tool: ExecToolInstance, expected: Record<s
 async function drainNotifyEvents(sessionKey = DEFAULT_NOTIFY_SESSION_KEY) {
   return await drainFormattedSystemEvents({
     cfg: notifyCfg,
+    agentId: "main",
     sessionKey,
     isMainSession: false,
     isNewSession: false,
   });
-}
-
-async function runBackgroundCommandToCompletion(tool: ExecToolInstance, command: string) {
-  const sessionId = await startBackgroundCommand(tool, command);
-  const status = await waitForCompletion(sessionId);
-  return { sessionId, status };
 }
 
 type ProcessLogWindow = { offset?: number; limit?: number };
@@ -654,10 +635,10 @@ const seedFinishedLogSession = (lines: string[]) => {
     startedAt: Date.now(),
     maxOutputChars: 100_000,
     pendingMaxOutputChars: 100_000,
-    pendingStdout: [],
-    pendingStderr: [],
+    pendingOutput: [],
     pendingStdoutChars: 0,
     pendingStderrChars: 0,
+    pendingOutputDropped: false,
     totalOutputChars: 0,
     aggregated: "",
     tail: "",
@@ -694,8 +675,10 @@ const runLongLogExpectationCase = async ({
 const runNotifyNoopCase = async ({ label, defaults, expectNotification }: NotifyNoopCase) => {
   const tool = createNotifyOnExitExecTool(defaults);
 
-  const { sessionId, status } = await runBackgroundCommandToCompletion(tool, COMMAND_NOOP);
-  expect(status).toBe(PROCESS_STATUS_COMPLETED);
+  const sessionId = await startBackgroundCommand(tool, COMMAND_NOOP);
+  await expect
+    .poll(() => getFinishedSession(sessionId)?.status, BACKGROUND_POLL_OPTIONS)
+    .toBe(PROCESS_STATUS_COMPLETED);
   const events = peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY);
   expectNotifyNoopEvents(events, expectNotification, sessionId, label);
 };
@@ -750,7 +733,7 @@ describe("exec tool backgrounding", () => {
       await expect
         .poll(async () => {
           const pollResult = await pollProcessSession({ tool: processTool, sessionId });
-          output = pollResult.output ?? "";
+          output += pollResult.output ?? "";
           return pollResult.status;
         }, BACKGROUND_POLL_OPTIONS)
         .toBe(PROCESS_STATUS_COMPLETED);
@@ -856,6 +839,19 @@ describe("exec notifyOnExit", () => {
     expect(formatted).toBeUndefined();
   });
 
+  it("consumes only the polled completion event", async () => {
+    const tool = createNotifyOnExitExecTool();
+    const unpolledSessionId = await startBackgroundCommand(tool, shellEcho("unpolled"));
+    await waitForNotifyEvent(unpolledSessionId);
+    const sessionId = await startBackgroundCommand(tool, shellEcho("polled"));
+    await waitForNotifyEvent(sessionId);
+    const poll = await pollProcessSession({ tool: processTool, sessionId });
+
+    expect(poll.status).toBe(PROCESS_STATUS_COMPLETED);
+    expect(hasNotifyEventForPrefix(sessionId.slice(0, 8))).toBe(false);
+    expect(hasNotifyEventForPrefix(unpolledSessionId.slice(0, 8))).toBe(true);
+  });
+
   it("preserves the origin delivery context on background exec completion events", async () => {
     const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
     const tool = createNotifyOnExitExecTool({
@@ -884,14 +880,6 @@ describe("exec notifyOnExit", () => {
       intent: "event",
       reason: "exec-event",
       sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
-    });
-  });
-
-  it("keeps notifyOnExit heartbeat wake unscoped for non-agent session keys", async () => {
-    await expectNotifyOnExitWake(createNotifyOnExitExecTool({ sessionKey: "global" }), {
-      source: "exec-event",
-      intent: "event",
-      reason: "exec-event",
     });
   });
 

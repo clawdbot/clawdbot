@@ -33,9 +33,9 @@ vi.mock("../../media/store.js", async (importOriginal) => {
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -68,7 +68,7 @@ beforeEach(async () => {
   });
   setActivePluginRegistry(createEmptyPluginRegistry());
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-rewind-handler-"));
-  await upsertSessionEntry(
+  await upsertSessionEntryCore(
     { agentId: "main", sessionKey },
     {
       sessionId: sourceSessionId,
@@ -454,21 +454,21 @@ describe("session message-cut methods", () => {
     );
   });
 
-  it("rejects externally owned conversations", async () => {
+  it("rejects mutation but lists empty branches for externally owned conversations", async () => {
     linkToUpstreamConversation();
     const respond = await invoke("sessions.branches.switch", "off-path-entry");
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringContaining("external agent harness"),
+      }),
+    );
+    // Listing is read-only: "no local branches" is the truthful steady state,
+    // not an error to latch into the UI.
     const listed = await invoke("sessions.branches.list");
-
-    for (const response of [respond, listed]) {
-      expect(response).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: ErrorCodes.INVALID_REQUEST,
-          message: expect.stringContaining("external agent harness"),
-        }),
-      );
-    }
+    expect(listed).toHaveBeenCalledWith(true, { branches: [] }, undefined);
   });
 
   it.each(["sessions.rewind", "sessions.branches.switch"] as const)(
@@ -528,7 +528,7 @@ describe("session message-cut methods", () => {
       message: "Codex is offline. Try again.",
     });
 
-    const entryCount = listSessionEntries({ agentId: "main" }).length;
+    const entryCount = listSessionEntriesCore({ agentId: "main" }).length;
     const respond = await invoke("sessions.fork", "user-entry");
 
     expect(respond).toHaveBeenCalledWith(
@@ -539,7 +539,7 @@ describe("session message-cut methods", () => {
         details: { reason: "upstream-unavailable" },
       }),
     );
-    expect(listSessionEntries({ agentId: "main" })).toHaveLength(entryCount);
+    expect(listSessionEntriesCore({ agentId: "main" })).toHaveLength(entryCount);
   });
 
   it.each(["steer-message", "in-progress-turn", "drift-mismatch"] as const)(

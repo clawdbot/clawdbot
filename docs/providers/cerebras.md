@@ -40,7 +40,7 @@ openclaw onboard --auth-choice cerebras-api-key
 ```
 
 ```bash Direct flag
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice cerebras-api-key \
   --cerebras-api-key "$CEREBRAS_API_KEY"
 ```
@@ -65,7 +65,7 @@ export CEREBRAS_API_KEY=csk-...
 ## Non-interactive setup
 
 ```bash
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --mode local \
   --auth-choice cerebras-api-key \
   --cerebras-api-key "$CEREBRAS_API_KEY"
@@ -89,7 +89,7 @@ Most setups only need the API key. Use explicit `models.providers.cerebras` conf
 
 ```json5
 {
-  env: { CEREBRAS_API_KEY: "csk-..." },
+  env: { vars: { CEREBRAS_API_KEY: "csk-..." } },
   agents: {
     defaults: {
       model: { primary: "cerebras/gemma-4-31b" },

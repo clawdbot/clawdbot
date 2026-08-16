@@ -19,19 +19,17 @@ type OpenAIStrictToolModel = {
   compat?: unknown;
 };
 
-const optionalString = readStringValue;
-
 function resolvesToNativeOpenAIStrictTools(
   model: OpenAIStrictToolModel,
   transport: OpenAITransportKind,
 ): boolean {
   const capabilities = resolveProviderRequestCapabilities({
-    provider: optionalString(model.provider),
-    api: optionalString(model.api),
-    baseUrl: optionalString(model.baseUrl),
+    provider: readStringValue(model.provider),
+    api: readStringValue(model.api),
+    baseUrl: readStringValue(model.baseUrl),
     capability: "llm",
     transport,
-    modelId: optionalString(model.id),
+    modelId: readStringValue(model.id),
     compat: model.compat,
   });
   if (!capabilities.usesKnownNativeOpenAIRoute) {

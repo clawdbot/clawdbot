@@ -1,4 +1,8 @@
-import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import {
+  isValidAgentId,
+  normalizeAgentId,
+  normalizeAgentIdStrict,
+} from "@openclaw/normalization-core/agent-id";
 // Routing session key helpers build stable session keys from route targets.
 import {
   normalizeLowercaseStringOrEmpty,
@@ -29,7 +33,7 @@ export {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "./account-id.js";
-export { isValidAgentId, normalizeAgentId };
+export { isValidAgentId, normalizeAgentId, normalizeAgentIdStrict };
 
 /** Legacy on-disk identity used only by doctor/migration and their fixtures. */
 export const LEGACY_IMPLICIT_AGENT_ID = "main";
@@ -226,7 +230,7 @@ export function buildAgentPeerSessionKey(params: {
     const linkedPeerId =
       dmScope === "main"
         ? null
-        : resolveLinkedPeerId({
+        : resolveLinkedDirectPeerId({
             identityLinks: params.identityLinks,
             channel: params.channel,
             peerId,
@@ -262,7 +266,8 @@ export function buildAgentPeerSessionKey(params: {
   return `agent:${normalizeAgentId(params.agentId)}:${channel}:${peerKind}:${peerId}`;
 }
 
-function resolveLinkedPeerId(params: {
+/** @internal Resolves a declared cross-channel identity for one direct peer. */
+export function resolveLinkedDirectPeerId(params: {
   identityLinks?: Record<string, string[]>;
   channel: string;
   peerId: string;

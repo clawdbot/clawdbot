@@ -22,6 +22,7 @@ import { toAIFriendlyError } from "./pw-tools-core.shared.js";
 
 export type InteractionTargetOptions = {
   cdpUrl: string;
+  browserFilesystemLocal?: boolean;
   targetId?: string;
 };
 

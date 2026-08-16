@@ -22,6 +22,7 @@ import {
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
+import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import {
   resolveAgentWorkspaceDir,
@@ -29,6 +30,7 @@ import {
   resolveDefaultAgentId,
 } from "./agent-scope.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   MODELS_JSON_STATE,
   type ModelsJsonReadyResult,
@@ -64,6 +66,11 @@ type EnsureOpenClawModelsJsonOptions = {
   providerDiscoveryProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
+  onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
+};
+
+type PlanOpenClawModelsJsonSourceOptions = EnsureOpenClawModelsJsonOptions & {
+  authStore?: AuthProfileStore;
 };
 
 type PlannedOpenClawModelsJsonSource = Readonly<{
@@ -376,7 +383,7 @@ async function prepareOpenClawModelsJsonSource(
   const fingerprint = sourceFingerprint.fingerprint;
   const cacheKey = modelsJsonReadyCacheKey(targetPath, fingerprint);
   const cached = MODELS_JSON_STATE.readyCache.get(cacheKey);
-  if (cached) {
+  if (cached && !options.onProviderCatalogOutcome) {
     const settled = await cached;
     await ensureModelsFileModeForModelsJson(targetPath);
     return {
@@ -417,6 +424,9 @@ async function prepareOpenClawModelsJsonSource(
         : {}),
       ...(options.providerDiscoveryEntriesOnly === true
         ? { providerDiscoveryEntriesOnly: true }
+        : {}),
+      ...(options.onProviderCatalogOutcome
+        ? { onProviderCatalogOutcome: options.onProviderCatalogOutcome }
         : {}),
     });
 
@@ -499,7 +509,7 @@ async function prepareOpenClawModelsJsonSource(
 export async function planOpenClawModelsJsonSource(
   config?: OpenClawConfig,
   agentDirOverride?: string,
-  options: EnsureOpenClawModelsJsonOptions = {},
+  options: PlanOpenClawModelsJsonSourceOptions = {},
 ): Promise<PlannedOpenClawModelsJsonSource> {
   const resolved = resolveModelsConfigInput(config);
   const cfg = resolved.config;
@@ -529,6 +539,7 @@ export async function planOpenClawModelsJsonSource(
   const env = createConfigRuntimeEnv(cfg, options.env);
   const plan = await planOpenClawModelsJson({
     cfg,
+    ...(options.authStore ? { authStore: options.authStore } : {}),
     discoveryAuthConfig: resolved.discoveryAuthConfig,
     sourceConfigForSecrets: resolved.sourceConfigForSecrets,
     agentDir,
@@ -548,6 +559,9 @@ export async function planOpenClawModelsJsonSource(
       : {}),
     ...(options.providerDiscoveryEntriesOnly === true
       ? { providerDiscoveryEntriesOnly: true }
+      : {}),
+    ...(options.onProviderCatalogOutcome
+      ? { onProviderCatalogOutcome: options.onProviderCatalogOutcome }
       : {}),
   });
   return {

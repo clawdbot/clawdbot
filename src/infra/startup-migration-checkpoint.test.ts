@@ -1,7 +1,7 @@
 // Startup migration checkpoint tests cover shared-state version records and leases.
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -12,6 +12,10 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
+  OpenClawStateOwnershipError,
+  STATE_SUPERVISION_KEY,
+} from "../state/openclaw-state-ownership.js";
+import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -19,6 +23,7 @@ import {
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   acquireStartupMigrationLease,
+  acquireStartupMigrationLeaseWithWait,
   hasActiveStartupMigrationLease,
   needsStateMigrationCheckpoint,
   needsStartupMigrationCheckpoint,
@@ -30,6 +35,7 @@ import {
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  vi.restoreAllMocks();
 });
 
 const startupMigrationTempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -267,7 +273,153 @@ describe("startup migration checkpoint", () => {
     next.release();
   });
 
-  it("reclaims an active startup migration lease whose owner process is gone", () => {
+  it("rechecks external ownership inside the final lease write transaction", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+    };
+    runOpenClawStateWriteTransaction(() => undefined, { env });
+    closeOpenClawStateDatabaseForTest();
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    const { DatabaseSync } = requireNodeSqlite();
+    const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")?.value as
+      | ((this: import("node:sqlite").DatabaseSync, sql: string) => void)
+      | undefined;
+    if (!originalExec) {
+      throw new Error("DatabaseSync.exec descriptor is unavailable");
+    }
+    // Schema setup commits before the lease helper starts its own transaction.
+    // Claim at that exact boundary so the final transaction must fence the new owner.
+    let immediateTransactionCount = 0;
+    const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
+      this: import("node:sqlite").DatabaseSync,
+      sql: string,
+    ) {
+      if (sql === "BEGIN IMMEDIATE" && ++immediateTransactionCount === 2) {
+        const claimant = new DatabaseSync(databasePath);
+        try {
+          claimant
+            .prepare(
+              `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+               VALUES (?, ?, ?)`,
+            )
+            .run(
+              STATE_SUPERVISION_KEY,
+              JSON.stringify({
+                version: 1,
+                mode: "external",
+                managerId: "race-manager",
+                claimedAt: 1,
+              }),
+              1,
+            );
+        } finally {
+          claimant.close();
+        }
+      }
+      return originalExec.call(this, sql);
+    });
+
+    try {
+      expect(() => acquireStartupMigrationLease({ env, owner: "unmarked", nowMs: 1 })).toThrow(
+        OpenClawStateOwnershipError,
+      );
+    } finally {
+      exec.mockRestore();
+    }
+
+    const verify = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        verify
+          .prepare(
+            `SELECT COUNT(*) AS count
+             FROM state_leases
+             WHERE scope = 'startup-migrations' AND lease_key = 'global'`,
+          )
+          .get(),
+      ).toEqual({ count: 0 });
+      expect(
+        verify
+          .prepare(
+            `SELECT COUNT(*) AS count
+             FROM schema_meta
+             WHERE meta_key IN ('state-migrations', 'startup-migrations')`,
+          )
+          .get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      verify.close();
+    }
+  });
+
+  it("waits for a live same-host startup migration lease to be released", async () => {
+    const env = {
+      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+    };
+    let nowMs = 1001;
+    let elapsedMs = 0;
+    let sleepCount = 0;
+    const lease = acquireStartupMigrationLease({ env, nowMs: 1000, owner: "first" });
+    const checkpoint = {
+      env,
+      version: "2026.7.1",
+      buildIdentity: "2026-07-11T00:00:00.000Z",
+      identity: migrationIdentity,
+    };
+
+    expect(needsStartupMigrationCheckpoint(checkpoint)).toBe(true);
+
+    const acquired = await acquireStartupMigrationLeaseWithWait({
+      env,
+      owner: "second",
+      timeoutMs: 1000,
+      pollIntervalMs: 250,
+      now: () => nowMs,
+      monotonicNow: () => elapsedMs,
+      sleep: async (ms) => {
+        sleepCount += 1;
+        recordSuccessfulStartupMigrations({ ...checkpoint, lease, nowMs });
+        lease.release();
+        nowMs += ms;
+        elapsedMs += ms;
+      },
+    });
+
+    expect(sleepCount).toBe(1);
+    expect(acquired.owner).toBe("second");
+    expect(needsStartupMigrationCheckpoint(checkpoint)).toBe(false);
+    acquired.release();
+  });
+
+  it("preserves the existing lease error when the wait bound expires", async () => {
+    const env = {
+      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+    };
+    let nowMs = 1001;
+    let elapsedMs = 0;
+    const lease = acquireStartupMigrationLease({ env, nowMs: 1000, owner: "first" });
+
+    await expect(
+      acquireStartupMigrationLeaseWithWait({
+        env,
+        owner: "second",
+        timeoutMs: 500,
+        pollIntervalMs: 250,
+        now: () => nowMs,
+        monotonicNow: () => elapsedMs,
+        sleep: async (ms) => {
+          nowMs += ms;
+          elapsedMs += ms;
+        },
+      }),
+    ).rejects.toThrow(
+      `OpenClaw startup migrations are already running for this state directory; retry after the other OpenClaw process finishes or after 1970-01-01T00:05:01.000Z. (held by pid ${process.pid})`,
+    );
+
+    lease.release();
+  });
+
+  it("reclaims an active startup migration lease whose owner process is gone", async () => {
     const env = {
       OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
     };
@@ -281,7 +433,11 @@ describe("startup migration checkpoint", () => {
 
     expect(hasActiveStartupMigrationLease({ env, nowMs: 1001 })).toBe(false);
 
-    const replacement = acquireStartupMigrationLease({ env, nowMs: 1001, owner: "replacement" });
+    const replacement = await acquireStartupMigrationLeaseWithWait({
+      env,
+      owner: "replacement",
+      now: () => 1001,
+    });
     stale.release();
     expect(hasActiveStartupMigrationLease({ env, nowMs: 1002 })).toBe(true);
     replacement.release();

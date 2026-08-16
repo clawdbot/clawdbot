@@ -40,7 +40,7 @@ import { readRemoteMediaBuffer } from "./fetch.js";
 import type { OutboundMediaReadFile } from "./load-options.js";
 import {
   assertLocalMediaAllowed,
-  getDefaultLocalRoots,
+  getDefaultLocalRootsCore,
   LocalMediaAccessError,
   readLocalMediaFile,
   type LocalMediaAccessErrorCode,
@@ -53,7 +53,7 @@ import {
 } from "./media-services.js";
 import { extractOriginalFilename, getMediaDir } from "./store.js";
 
-export { getDefaultLocalRoots, LocalMediaAccessError };
+export { getDefaultLocalRootsCore, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
 
 /** Loaded media bytes plus resolved MIME kind and filename metadata for outbound/plugin callers. */
@@ -1030,7 +1030,7 @@ async function loadWebMediaInternal(
   mediaUrl = stripLegacyMediaDirectivePrefix(mediaUrl);
   mediaUrl = (await resolveMediaStoreUriToPath(mediaUrl)) ?? mediaUrl;
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
-  if (mediaUrl.startsWith("file://")) {
+  if (/^file:/iu.test(mediaUrl)) {
     try {
       mediaUrl = safeFileURLToPath(mediaUrl);
     } catch (err) {

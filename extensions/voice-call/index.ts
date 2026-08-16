@@ -1,9 +1,11 @@
 // Voice Call plugin entrypoint registers its OpenClaw integration.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
+  asNonArrayRecord as asParamRecord,
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -27,7 +29,6 @@ import {
   validateProviderConfig,
   type VoiceCallConfig,
 } from "./src/config.js";
-import type { CoreConfig } from "./src/core-bridge.js";
 import { createVoiceCallContinueOperationStore } from "./src/gateway-continue-operation.js";
 
 const VOICE_CALL_WRITE_METHOD_SCOPE = { scope: "operator.write" as const };
@@ -42,146 +43,6 @@ const voiceCallConfigSchema = {
       enabled,
       provider: config.provider ?? (enabled ? "mock" : undefined),
     });
-  },
-  uiHints: {
-    provider: {
-      label: "Provider",
-      help: "Use twilio, telnyx, or mock for dev/no-network.",
-    },
-    fromNumber: { label: "From Number", placeholder: "+15550001234" },
-    toNumber: { label: "Default To Number", placeholder: "+15550001234" },
-    inboundPolicy: { label: "Inbound Policy" },
-    allowFrom: { label: "Inbound Allowlist" },
-    inboundGreeting: { label: "Inbound Greeting", advanced: true },
-    numbers: {
-      label: "Per-number Routing",
-      help: "Inbound overrides keyed by dialed E.164 number.",
-      advanced: true,
-    },
-    "telnyx.apiKey": { label: "Telnyx API Key", sensitive: true },
-    "telnyx.connectionId": { label: "Telnyx Connection ID" },
-    "telnyx.publicKey": { label: "Telnyx Public Key", sensitive: true },
-    "twilio.accountSid": { label: "Twilio Account SID" },
-    "twilio.authToken": { label: "Twilio Auth Token", sensitive: true },
-    "twilio.region": { label: "Twilio Region", advanced: true },
-    "outbound.defaultMode": { label: "Default Call Mode" },
-    "outbound.notifyHangupDelaySec": {
-      label: "Notify Hangup Delay (sec)",
-      advanced: true,
-    },
-    "serve.port": { label: "Webhook Port" },
-    "serve.bind": { label: "Webhook Bind" },
-    "serve.path": { label: "Webhook Path" },
-    "tailscale.mode": { label: "Tailscale Mode", advanced: true },
-    "tailscale.path": { label: "Tailscale Path", advanced: true },
-    "tunnel.provider": { label: "Tunnel Provider", advanced: true },
-    "tunnel.ngrokAuthToken": {
-      label: "ngrok Auth Token",
-      sensitive: true,
-      advanced: true,
-    },
-    "tunnel.ngrokDomain": { label: "ngrok Domain", advanced: true },
-    "tunnel.allowNgrokFreeTierLoopbackBypass": {
-      label: "Allow ngrok Free Tier (Loopback Bypass)",
-      advanced: true,
-    },
-    "streaming.enabled": {
-      label: "Enable Streaming",
-      help: "Classic streaming transcription currently requires the Twilio call provider.",
-      advanced: true,
-    },
-    "streaming.provider": {
-      label: "Streaming Provider",
-      help: "Uses the first registered realtime transcription provider when unset.",
-      advanced: true,
-    },
-    "streaming.providers": { label: "Streaming Provider Config", advanced: true },
-    "streaming.streamPath": { label: "Media Stream Path", advanced: true },
-    "realtime.enabled": { label: "Enable Realtime Voice", advanced: true },
-    "realtime.provider": {
-      label: "Realtime Voice Provider",
-      help: "Uses the first registered realtime voice provider when unset.",
-      advanced: true,
-    },
-    "realtime.streamPath": { label: "Realtime Stream Path", advanced: true },
-    "realtime.instructions": { label: "Realtime Instructions", advanced: true },
-    "realtime.toolPolicy": {
-      label: "Realtime Tool Policy",
-      help: "Controls the shared openclaw_agent_consult tool.",
-      advanced: true,
-    },
-    "realtime.consultPolicy": {
-      label: "Realtime Consult Policy",
-      help: "Guides when the realtime voice model should call openclaw_agent_consult.",
-      advanced: true,
-    },
-    "realtime.fastContext.enabled": {
-      label: "Enable Fast Realtime Context",
-      help: "Searches memory/session context before the full consult agent.",
-      advanced: true,
-    },
-    "realtime.fastContext.timeoutMs": {
-      label: "Fast Context Timeout",
-      advanced: true,
-    },
-    "realtime.fastContext.maxResults": {
-      label: "Fast Context Result Limit",
-      advanced: true,
-    },
-    "realtime.fastContext.sources": {
-      label: "Fast Context Sources",
-      advanced: true,
-    },
-    "realtime.fastContext.fallbackToConsult": {
-      label: "Fallback To Full Consult",
-      advanced: true,
-    },
-    "realtime.agentContext.enabled": {
-      label: "Enable Agent Voice Context",
-      help: "Injects a compact agent identity and workspace context capsule into realtime voice instructions.",
-      advanced: true,
-    },
-    "realtime.agentContext.maxChars": {
-      label: "Agent Voice Context Limit",
-      advanced: true,
-    },
-    "realtime.agentContext.includeIdentity": {
-      label: "Include Agent Identity",
-      advanced: true,
-    },
-    "realtime.agentContext.includeWorkspaceFiles": {
-      label: "Include Agent Workspace Files",
-      advanced: true,
-    },
-    "realtime.agentContext.files": {
-      label: "Agent Voice Context Files",
-      advanced: true,
-    },
-    "realtime.providers": { label: "Realtime Provider Config", advanced: true },
-    "tts.provider": {
-      label: "TTS Provider Override",
-      help: "Deep-merges with tts (Microsoft is ignored for calls).",
-      advanced: true,
-    },
-    "tts.providers": { label: "TTS Provider Config", advanced: true },
-    publicUrl: { label: "Public Webhook URL", advanced: true },
-    skipSignatureVerification: {
-      label: "Skip Signature Verification",
-      advanced: true,
-    },
-    store: { label: "Call Log Store Path", advanced: true },
-    agentId: {
-      label: "Response Agent ID",
-      help: 'Agent workspace used for voice response generation. Defaults to "main".',
-      advanced: true,
-    },
-    responseModel: {
-      label: "Response Model",
-      help: "Optional override. Falls back to the runtime default model when unset.",
-      advanced: true,
-    },
-    responseSystemPrompt: { label: "Response System Prompt", advanced: true },
-    responseTimeoutMs: { label: "Response Timeout (ms)", advanced: true },
   },
 };
 
@@ -226,12 +87,6 @@ const VoiceCallToolSchema = Type.Union([
     dtmfSequence: Type.Optional(Type.String({ description: "DTMF digits to play before connect" })),
   }),
 ]);
-
-function asParamRecord(params: unknown): Record<string, unknown> {
-  return params && typeof params === "object" && !Array.isArray(params)
-    ? (params as Record<string, unknown>)
-    : {};
-}
 
 function isCliOnlyProcess(): boolean {
   return process.env.OPENCLAW_CLI === "1" && !process.argv.slice(2).includes("gateway");
@@ -321,7 +176,7 @@ export default definePluginEntry({
           };
     const continueOperationStore = createVoiceCallContinueOperationStore({
       config,
-      coreConfig: api.config as CoreConfig,
+      coreConfig: api.config as OpenClawConfig,
     });
 
     const ensureRuntime = async (): Promise<VoiceCallRuntime> => {
@@ -378,7 +233,7 @@ export default definePluginEntry({
 
         const runtimePromise = createVoiceCallRuntime({
           config,
-          coreConfig: api.config as CoreConfig,
+          coreConfig: api.config as OpenClawConfig,
           fullConfig: api.config,
           agentRuntime: api.runtime.agent,
           stateRuntime: api.runtime.state,

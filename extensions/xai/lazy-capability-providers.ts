@@ -28,6 +28,7 @@ import {
   createXaiVideoGenerationProviderMetadata,
   normalizeXaiRealtimeTranscriptionProviderConfig,
 } from "./capability-provider-metadata.js";
+import { serializeXaiRealtimeToolResult } from "./realtime-voice-config.js";
 import { createXaiSpeechProviderMetadata } from "./speech-provider-metadata.js";
 
 const MAX_LAZY_REALTIME_TRANSCRIPTION_AUDIO_BYTES = 2 * 1024 * 1024;
@@ -35,15 +36,6 @@ const MAX_LAZY_REALTIME_VOICE_USER_MESSAGES = 128;
 const MAX_LAZY_REALTIME_VOICE_USER_MESSAGE_BYTES = 256 * 1024;
 const MAX_LAZY_REALTIME_VOICE_TOOL_RESULTS = 128;
 const MAX_LAZY_REALTIME_VOICE_TOOL_RESULT_BYTES = 256 * 1024;
-
-function serializedJsonBytes(value: unknown): number | undefined {
-  try {
-    const serialized = JSON.stringify(value);
-    return typeof serialized === "string" ? Buffer.byteLength(serialized, "utf8") : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 const loadXaiImageGenerationProvider = createLazyRuntimeModule(async () =>
   (await import("./image-generation-provider.js")).buildXaiImageGenerationProvider(),
@@ -262,11 +254,13 @@ function createLazyXaiRealtimeVoiceBridge(
     pendingToolResultCount = 0;
     pendingToolResultBytes = 0;
   };
+  const isCurrentNonterminalGeneration = (candidate: number) =>
+    candidate === generation && terminalGeneration !== candidate;
   const emitTerminal = (
     terminalForGeneration: number,
     outcome: Parameters<NonNullable<RealtimeVoiceBridgeCreateRequest["onClose"]>>[0],
   ) => {
-    if (terminalForGeneration !== generation || terminalGeneration === terminalForGeneration) {
+    if (!isCurrentNonterminalGeneration(terminalForGeneration)) {
       return;
     }
     terminalGeneration = terminalForGeneration;
@@ -281,8 +275,34 @@ function createLazyXaiRealtimeVoiceBridge(
     closedBridges.add(loadedBridge);
     loadedBridge.close();
   };
+  const throwTerminalBridgeError = (
+    terminalForGeneration: number,
+    loadedBridge: RealtimeVoiceBridge,
+    primaryError: unknown,
+  ): never => {
+    if (isCurrentNonterminalGeneration(terminalForGeneration)) {
+      try {
+        req.onError?.(
+          primaryError instanceof Error ? primaryError : new Error(String(primaryError)),
+        );
+      } catch {
+        // Consumer callback failures cannot prevent terminal cleanup or replace the provider failure.
+      }
+      try {
+        emitTerminal(terminalForGeneration, "error");
+      } catch {
+        // Consumer callback failures cannot prevent cleanup or replace the provider failure.
+      }
+    }
+    try {
+      closeBridge(loadedBridge);
+    } catch {
+      // Cleanup failures cannot replace the provider failure.
+    }
+    throw primaryError;
+  };
   const acceptsProviderCallback = (callbackGeneration: number) =>
-    callbackGeneration === generation && !closed && terminalGeneration !== callbackGeneration;
+    !closed && isCurrentNonterminalGeneration(callbackGeneration);
   const guardProviderCallback = <TArgs extends unknown[]>(
     callbackGeneration: number,
     callback: (...args: TArgs) => void,
@@ -315,6 +335,9 @@ function createLazyXaiRealtimeVoiceBridge(
                   : {}),
                 ...(req.onEvent
                   ? { onEvent: guardProviderCallback(loadGeneration, req.onEvent) }
+                  : {}),
+                ...(req.onResponseDone
+                  ? { onResponseDone: guardProviderCallback(loadGeneration, req.onResponseDone) }
                   : {}),
                 ...(req.onToolCall
                   ? { onToolCall: guardProviderCallback(loadGeneration, req.onToolCall) }
@@ -443,12 +466,7 @@ function createLazyXaiRealtimeVoiceBridge(
         try {
           await loadedBridge.connect();
         } catch (error) {
-          if (connectGeneration === generation) {
-            acceptsInput = false;
-            terminalGeneration = connectGeneration;
-            clearPendingInput();
-          }
-          throw error;
+          throwTerminalBridgeError(connectGeneration, loadedBridge, error);
         }
         if (connectGeneration !== generation || !acceptsCurrentInput()) {
           closeBridge(loadedBridge);
@@ -457,9 +475,7 @@ function createLazyXaiRealtimeVoiceBridge(
         try {
           await flushPendingInput(loadedBridge, connectGeneration);
         } catch (error) {
-          emitTerminal(connectGeneration, "error");
-          closeBridge(loadedBridge);
-          throw error;
+          throwTerminalBridgeError(connectGeneration, loadedBridge, error);
         }
         if (connectGeneration !== generation || !acceptsCurrentInput()) {
           closeBridge(loadedBridge);
@@ -545,23 +561,34 @@ function createLazyXaiRealtimeVoiceBridge(
       }
     },
     submitToolResult: (callId, result, options) => {
-      if (!acceptsCurrentInput()) {
+      if (!acceptsCurrentInput() || options?.willContinue === true) {
         return;
       }
       if (acceptsInput && bridge) {
         return bridge.submitToolResult(callId, result, options);
       }
-      const pending = { callId, result, ...(options ? { options } : {}) };
-      const resultBytes = serializedJsonBytes(pending);
+      let serialized: string;
+      try {
+        serialized = serializeXaiRealtimeToolResult(result);
+      } catch (error) {
+        req.onError?.(error as Error);
+        throw error;
+      }
+      const pending = {
+        callId,
+        result: JSON.parse(serialized) as unknown,
+        ...(options ? { options } : {}),
+      };
+      const resultBytes = Buffer.byteLength(JSON.stringify(pending), "utf8");
       if (
-        resultBytes === undefined ||
         pendingToolResultCount >= MAX_LAZY_REALTIME_VOICE_TOOL_RESULTS ||
         pendingToolResultBytes + resultBytes > MAX_LAZY_REALTIME_VOICE_TOOL_RESULT_BYTES
       ) {
-        req.onError?.(
-          new Error("xAI realtime voice pending tool result overflow during lazy startup"),
+        const error = new Error(
+          "xAI realtime voice pending tool result overflow during lazy startup",
         );
-        return;
+        req.onError?.(error);
+        throw error;
       }
       pendingOperations.push({
         ...pending,

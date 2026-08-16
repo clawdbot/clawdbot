@@ -1,8 +1,13 @@
 // Safe loader for the conventional package-local OpenClaw profile.
 import { isScalar, parseDocument, visit } from "yaml";
+import type { ToolProfileId } from "../agents/tool-policy-shared.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { isSafeClawRelativePath } from "./schema-portability.js";
 import { parseClawOpenClawProfile } from "./schema.js";
+import {
+  materializeClawToolProfile,
+  resolveClawToolProfileSnapshot,
+} from "./tool-profile-consent.js";
 import type { ClawDiagnostic, ClawOpenClawProfile } from "./types.js";
 
 const MAX_PROFILE_BYTES = 256 * 1024;
@@ -79,6 +84,81 @@ function parseProfileYaml(
   }
 }
 
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function isToolProfileId(value: string): value is ToolProfileId {
+  return resolveClawToolProfileSnapshot({ profile: value }) !== undefined;
+}
+
+function migrateLegacyDynamicToolProfile(value: unknown): {
+  value: unknown;
+  legacyProfile?: ClawOpenClawProfile;
+} {
+  const profile = record(value);
+  const agent = record(profile?.agent);
+  const tools = record(agent?.tools);
+  const toolProfile = tools?.profile;
+  if (
+    !profile ||
+    !agent ||
+    !tools ||
+    typeof toolProfile !== "string" ||
+    !isToolProfileId(toolProfile) ||
+    tools.allow !== undefined
+  ) {
+    return { value };
+  }
+  if (toolProfile === "full") {
+    return { value };
+  }
+  const validationProbe = parseClawOpenClawProfile({
+    ...profile,
+    agent: {
+      ...agent,
+      tools: {
+        ...tools,
+        profile: "minimal",
+      },
+    },
+  });
+  if (!validationProbe.ok) {
+    return { value };
+  }
+  const validatedTools = validationProbe.profile.agent.tools;
+  if (!validatedTools) {
+    return { value };
+  }
+  const selection = {
+    ...validatedTools,
+    profile: toolProfile,
+  };
+  const legacyProfile: ClawOpenClawProfile = {
+    ...validationProbe.profile,
+    agent: {
+      ...validationProbe.profile.agent,
+      tools: selection,
+    },
+  };
+  const migrated = materializeClawToolProfile(
+    { tools: selection },
+    { allowLegacyDynamicProfile: true },
+  );
+  return {
+    value: {
+      ...profile,
+      agent: {
+        ...agent,
+        tools: migrated.tools,
+      },
+    },
+    legacyProfile,
+  };
+}
+
 async function readProfileFile(packageRoot: string, path: string): Promise<Buffer> {
   const packageFiles = await fsSafeRoot(packageRoot);
   const read = await packageFiles.read(path, {
@@ -102,10 +182,12 @@ async function readProfileFile(packageRoot: string, path: string): Promise<Buffe
 export async function readClawOpenClawProfile(params: {
   packageRoot: string;
   metadata?: Record<string, string>;
+  allowLegacyDynamicToolProfile?: boolean;
 }): Promise<
   | {
       ok: true;
       profile?: ClawOpenClawProfile;
+      legacyProfile?: ClawOpenClawProfile;
       raw?: Buffer;
       path?: string;
       diagnostics?: ClawDiagnostic[];
@@ -193,7 +275,10 @@ export async function readClawOpenClawProfile(params: {
   if (!yaml.ok) {
     return yaml;
   }
-  const parsed = parseClawOpenClawProfile(yaml.value);
+  const migration = params.allowLegacyDynamicToolProfile
+    ? migrateLegacyDynamicToolProfile(yaml.value)
+    : { value: yaml.value };
+  const parsed = parseClawOpenClawProfile(migration.value);
   if (!parsed.ok) {
     return {
       ok: false,
@@ -206,6 +291,7 @@ export async function readClawOpenClawProfile(params: {
   return {
     ok: true,
     profile: parsed.profile,
+    ...(migration.legacyProfile ? { legacyProfile: migration.legacyProfile } : {}),
     raw,
     path: declaredPath,
     ...(diagnostics.length > 0 ? { diagnostics } : {}),

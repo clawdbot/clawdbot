@@ -723,6 +723,7 @@ describe("agent delivery helpers", () => {
 
     expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith({
       channel: "whatsapp",
+      plugin,
       to: "+15551234567",
       cfg: {},
       accountId: "work",
@@ -963,6 +964,7 @@ describe("agent delivery helpers", () => {
     expect(mocks.resolveOutboundTarget).not.toHaveBeenCalled();
     expect(mocks.resolveOutboundSessionRoute).not.toHaveBeenCalled();
     expect(plan.resolvedTo).toBe("channel:C123");
+    expect(plan.plugin).toBeUndefined();
   });
 
   it("does not pass inherited session threads into explicit retarget routing", async () => {

@@ -175,6 +175,29 @@ describe("doctor open-policy allowFrom repair", () => {
     expect(result.config.channels?.discord?.accounts?.work?.allowFrom).toEqual(["*"]);
   });
 
+  it("does not widen QQBot chat access while allowFrom protects native approvals", () => {
+    const config = {
+      channels: {
+        qqbot: {
+          dmPolicy: "open",
+          allowFrom: ["openclaw:approval-disabled"],
+          accounts: {
+            work: {
+              dmPolicy: "open",
+              allowFrom: ["OPERATOR"],
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const first = maybeRepairOpenPolicyAllowFrom(config);
+    const second = maybeRepairOpenPolicyAllowFrom(first.config);
+
+    expect(first).toEqual({ config, changes: [] });
+    expect(second).toEqual({ config, changes: [] });
+  });
+
   it("formats open-policy wildcard warnings", () => {
     const warnings = collectOpenPolicyAllowFromWarnings({
       changes: ['- channels.signal.allowFrom: set to ["*"] (required by dmPolicy="open")'],

@@ -18,6 +18,8 @@ const QA_REASONING_ONLY_RECOVERY_PROMPT =
   "Reasoning-only continuation QA check: read QA_KICKOFF_TASK.md, then answer with exactly REASONING-RECOVERED-OK.";
 const QA_REASONING_ONLY_SIDE_EFFECT_PROMPT =
   "Reasoning-only after write safety check: write reasoning-only-side-effect.txt, then answer with exactly SIDE-EFFECT-GUARD-OK.";
+const QA_MIXED_REASONING_BLANK_FALLBACK_PROMPT =
+  "Mixed reasoning blank fallback QA check: recover through the alternate model.";
 const QA_THINKING_VISIBILITY_OFF_PROMPT =
   "QA thinking visibility check off: answer exactly THINKING-OFF-OK.";
 const QA_THINKING_VISIBILITY_MAX_PROMPT =
@@ -215,6 +217,13 @@ function expectOpenAiNonStreamingResponsesJson<T>(
 
 function expectOpenAiStreamingResponsesText(server: MockServer, body: Record<string, unknown>) {
   return expectStreamingResponsesText(server, { model: "gpt-5.6-luna", ...body });
+}
+
+function parseStreamingResponseEvents(body: string): StreamEvent[] {
+  return body
+    .split("\n")
+    .filter((line) => line.startsWith("data: {") && line.endsWith("}"))
+    .map((line) => JSON.parse(line.slice("data: ".length)) as StreamEvent);
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-capitalized");
@@ -909,6 +918,36 @@ describe("qa mock openai server", () => {
     expect(blockContinuationBody).toContain('"item_id":"msg_mock_block_2"');
     expect(blockContinuationBody).toContain("BLOCK_TWO_OK");
     expect(blockContinuationBody).not.toContain('"item_id":"msg_mock_block_1"');
+  });
+
+  it("serves Telegram visible and unsent failure directives", async () => {
+    const server = await startMockServer();
+    const visibleEvents = parseStreamingResponseEvents(
+      await expectOpenAiStreamingResponsesText(server, {
+        input: [makeUserInput("Telegram visible partial failure QA check")],
+      }),
+    );
+    const unsentEvents = parseStreamingResponseEvents(
+      await expectOpenAiStreamingResponsesText(server, {
+        input: [makeUserInput("Telegram unsent failure QA check")],
+      }),
+    );
+
+    expect(visibleEvents.map((event) => event.type)).toEqual([
+      "response.created",
+      "response.output_item.added",
+      "response.output_text.delta",
+      "response.failed",
+    ]);
+    expect(visibleEvents[2]).toMatchObject({
+      type: "response.output_text.delta",
+      delta: "TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE",
+    });
+    expect(unsentEvents.map((event) => event.type)).toEqual([
+      "response.created",
+      "response.failed",
+    ]);
+    expect(unsentEvents.some((event) => event.type === "response.output_text.delta")).toBe(false);
   });
 
   it("plans deterministic tool-progress reads from prompt paths", async () => {
@@ -3337,6 +3376,45 @@ Update and merge these partial structured summaries.`,
     expect(outputText(payload)).toBe("QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED");
   });
 
+  it("delivers silent terminal representation through the required message tool", async () => {
+    const server = await startMockServer();
+    const completionInput = [
+      makeUserInput("Subagent terminal reply QA check: silent."),
+      makeUserInput(
+        TEST_RUNTIME_CONTEXT_CARRIER.replace(
+          "runtime metadata",
+          "[Internal task completion event]\nTask: qa-terminal-silent\nResult: (no output)",
+        ),
+      ),
+    ];
+    const delivery = await expectNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      instructions:
+        "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. When the message is the completed reply to the current source conversation, set `final=true`.",
+      input: completionInput,
+    });
+    const messageCall = outputToolCall(delivery, "message");
+    expect(outputToolArgsFromItem(messageCall)).toEqual({
+      action: "send",
+      message: "QA-SUBAGENT-TERMINAL-SILENT-REPRESENTED",
+      final: true,
+    });
+
+    const settled = await expectNonStreamingResponsesJson(server, {
+      tools: [MESSAGE_TOOL],
+      input: [
+        ...completionInput,
+        messageCall,
+        makeToolOutputWithCallId(
+          outputToolCallId(messageCall, "call_mock_message_silent_terminal"),
+          '{"ok":true,"messageId":"qa-silent-terminal"}',
+        ),
+      ],
+    });
+    expect(outputItems(settled).some((item) => item.type === "function_call")).toBe(false);
+    expect(outputText(settled)).toBe("");
+  });
+
   it.each([
     {
       name: "OpenAI private-source guidance",
@@ -3435,9 +3513,14 @@ Update and merge these partial structured summaries.`,
     },
   );
 
-  it.each(["visible", "silent", "fallback", "restart"])(
-    "uses explicit silence for the %s completion-agent direct fallback",
-    async (terminalCase) => {
+  it.each([
+    ["visible", "NO_REPLY"],
+    ["silent", "QA-SUBAGENT-TERMINAL-SILENT-REPRESENTED"],
+    ["fallback", "NO_REPLY"],
+    ["restart", "NO_REPLY"],
+  ])(
+    "uses the expected representation for the %s completion-agent direct fallback",
+    async (terminalCase, expected) => {
       const server = await startMockServer();
       const payload = await expectNonStreamingResponsesJson(server, {
         tools: [SESSIONS_SPAWN_TOOL, SESSIONS_YIELD_TOOL],
@@ -3457,7 +3540,7 @@ Update and merge these partial structured summaries.`,
       });
 
       expect(outputItems(payload).some((item) => item.type === "function_call")).toBe(false);
-      expect(outputText(payload)).toBe("NO_REPLY");
+      expect(outputText(payload)).toBe(expected);
     },
   );
 
@@ -6313,6 +6396,49 @@ Update and merge these partial structured summaries.`,
     expect(await response.text()).toContain('"name":"read"');
   });
 
+  it("routes the initial model-switch read through Anthropic guest Code Mode", async () => {
+    const server = await startMockServer();
+    const body = (await expectAnthropicMessagesJson(server, {
+      tools: [
+        {
+          name: "exec",
+          input_schema: {
+            type: "object",
+            properties: { code: { type: "string" } },
+            required: ["code"],
+          },
+        },
+        {
+          name: "wait",
+          input_schema: {
+            type: "object",
+            properties: { runId: { type: "string" } },
+            required: ["runId"],
+          },
+        },
+      ],
+      messages: [
+        makeAnthropicUserText(
+          "Read repo/qa/scenarios/index.yaml and summarize the QA scenario pack mission in one clause before any model switch.",
+        ),
+      ],
+    })) as {
+      stop_reason: string;
+      content: Array<Record<string, unknown>>;
+    };
+
+    expect(body.stop_reason).toBe("tool_use");
+    expect(body.content.find((block) => block.type === "tool_use")?.name).toBe("exec");
+
+    const debug = requireRecord(
+      await getJson(server, "/debug/last-request"),
+      "model switch Code Mode debug request",
+    );
+    expect(debug.plannedToolName).toBe("read");
+    expect(debug.plannedWireToolName).toBe("exec");
+    expect(debug.plannedToolArgs).toEqual({ path: "repo/qa/scenarios/index.yaml" });
+  });
+
   it("returns continuity language after the model-switch reread completes", async () => {
     const server = await startMockServer();
 
@@ -6521,7 +6647,7 @@ Update and merge these partial structured summaries.`,
     const toolUseBlock = body.content.find((block) => block.type === "tool_use") as
       | { id: string; name: string; input: Record<string, unknown> }
       | undefined;
-    expect(toolUseBlock?.id).toMatch(/^toolu_[A-Za-z0-9_]+$/);
+    expect(toolUseBlock?.id).toMatch(/^toolu[a-f0-9]{35}$/);
     expect(toolUseBlock?.id.length).toBeLessThanOrEqual(64);
     expect(toolUseBlock?.name).toBe("read");
     expect(toolUseBlock?.input).toEqual({ path: "repo/docs/help/testing.md" });
@@ -6539,6 +6665,7 @@ Update and merge these partial structured summaries.`,
   it("preserves already-native Anthropic tool IDs while adapting shared generated IDs", () => {
     const nativeId = "toolu_native_123";
     const generatedId = "call_mock_read_generated_1";
+    const secondGeneratedId = "call_mock_read_generated_2";
     const events: StreamEvent[] = [
       {
         type: "response.output_item.added",
@@ -6564,6 +6691,7 @@ Update and merge these partial structured summaries.`,
           output: [
             { type: "function_call", name: "read", call_id: nativeId, arguments: "{}" },
             { type: "function_call", name: "read", call_id: generatedId, arguments: "{}" },
+            { type: "function_call", name: "read", call_id: secondGeneratedId, arguments: "{}" },
           ],
           usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
         },
@@ -6604,9 +6732,13 @@ Update and merge these partial structured summaries.`,
     });
 
     expect(callIds.filter((id) => id === nativeId)).toHaveLength(3);
-    expect(new Set(adaptedGeneratedIds).size).toBe(1);
+    expect(adaptedGeneratedIds.slice(0, 3)).toEqual(
+      Array.from({ length: 3 }, () => "toolu51ca7fb8ca8ab1910ae2815b4e69a38ac71"),
+    );
+    expect(adaptedGeneratedIds[3]).toMatch(/^toolu[a-f0-9]{35}$/);
+    expect(adaptedGeneratedIds[3]).not.toBe(adaptedGeneratedIds[0]);
     expect(repeatedGeneratedIds).toEqual(adaptedGeneratedIds);
-    expect(adaptedGeneratedIds[0]).toMatch(/^toolu_[A-Za-z0-9_]+$/);
+    expect(adaptedGeneratedIds[0]).toMatch(/^toolu[a-f0-9]{35}$/);
     expect(adaptedGeneratedIds[0]?.length).toBeLessThanOrEqual(64);
   });
 
@@ -6664,7 +6796,7 @@ Update and merge these partial structured summaries.`,
       if (!toolUse || typeof toolUse.id !== "string" || typeof toolUse.name !== "string") {
         throw new Error("Expected Anthropic tool_use block");
       }
-      expect(toolUse.id).toMatch(/^toolu_[A-Za-z0-9_]+$/);
+      expect(toolUse.id).toMatch(/^toolu[a-f0-9]{35}$/);
       expect(toolUse.id.length).toBeLessThanOrEqual(64);
       emittedToolUseIds.push(toolUse.id);
       return toolUse;
@@ -7712,7 +7844,7 @@ Update and merge these partial structured summaries.`,
       toolUseStart?.content_block,
       "Anthropic SSE tool_use content block",
     );
-    expect(toolUse.id).toMatch(/^toolu_[A-Za-z0-9_]+$/);
+    expect(toolUse.id).toMatch(/^toolu[a-f0-9]{35}$/);
     expect(String(toolUse.id).length).toBeLessThanOrEqual(64);
     const debug = requireRecord(await getJson(server, "/debug/last-request"), "debug request");
     expect(debug.plannedToolCallId).toBe(toolUse.id);
@@ -7918,6 +8050,30 @@ Update and merge these partial structured summaries.`,
     expect(String(requireRecord(requestLog[2], "debug request 2").allInputText)).toContain(
       QA_REASONING_ONLY_RETRY_INSTRUCTION,
     );
+  });
+
+  it.each([
+    { name: "default", primaryModel: "gpt-5.6-luna", fallbackModel: "gpt-5.6-luna-alt" },
+    {
+      name: "explicit",
+      primaryModel: "mock-empty-primary",
+      fallbackModel: "mock-visible-fallback",
+    },
+  ])("scripts mixed reasoning-plus-blank output for the $name model pair", async (models) => {
+    const server = await startMockServer();
+
+    const primary = await expectOpenAiNonStreamingResponsesJson(server, {
+      model: models.primaryModel,
+      input: [makeUserInput(QA_MIXED_REASONING_BLANK_FALLBACK_PROMPT)],
+    });
+    expect(outputItems(primary).map((item) => item.type)).toEqual(["reasoning", "message"]);
+    expect(outputText(primary, 1)).toBe(" ");
+
+    const fallback = await expectOpenAiNonStreamingResponsesJson(server, {
+      model: models.fallbackModel,
+      input: [makeUserInput(QA_MIXED_REASONING_BLANK_FALLBACK_PROMPT)],
+    });
+    expect(outputText(fallback)).toBe("MODEL-FALLBACK-VISIBLE-OK");
   });
 
   it("scripts the GPT-5.6 Luna thinking visibility switch prompts", async () => {

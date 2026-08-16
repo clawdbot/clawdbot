@@ -5,6 +5,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { formatCliFailureLines } from "./cli/failure-output.js";
 import { runCliWithExitFinalization } from "./cli/one-shot-exit.js";
+import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { formatUncaughtError } from "./infra/errors.js";
 import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
 import { isMainModule } from "./infra/is-main.js";
@@ -70,6 +71,7 @@ export async function runLegacyCliEntry(
 const isMain = isMainModule({
   currentFile: fileURLToPath(import.meta.url),
 });
+const handledRootVersion = isMain && tryHandleRootVersionFastPath(process.argv);
 
 if (!isMain) {
   ({
@@ -96,7 +98,7 @@ if (!isMain) {
   } = await import("./library.js"));
 }
 
-if (isMain) {
+if (isMain && !handledRootVersion) {
   const { restoreRuntimeTerminalState } = await import("./runtime.js");
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.

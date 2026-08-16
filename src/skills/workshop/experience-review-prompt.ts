@@ -1,16 +1,19 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { RunSkillUsage } from "../runtime/run-usage.js";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "./skill-authoring-standards.js";
 
 const EXPERIENCE_REVIEW_MAX_TRANSCRIPT_CHARS = 60_000;
 const EXPERIENCE_REVIEW_MAX_SKILL_ENTRIES = 50;
 const EXPERIENCE_REVIEW_MAX_SKILL_LINE_CHARS = 200;
+const EXPERIENCE_REVIEW_MAX_USED_SKILLS_CHARS = 2_000;
 
 type ExperienceReviewPromptCandidate = {
   ctx: { runId?: string };
   transcript: string;
   modelIterations: number;
   turnAborted?: boolean;
+  usedSkills?: readonly RunSkillUsage[];
   existingSkills?: readonly { name: string; description?: string }[];
 };
 
@@ -110,6 +113,52 @@ function renderExistingSkillsSection(
   ];
 }
 
+function compareRunSkillUsage(left: RunSkillUsage, right: RunSkillUsage): number {
+  for (const field of ["name", "source", "activation"] as const) {
+    if (left[field] !== right[field]) {
+      return left[field] < right[field] ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
+function renderUsedSkillsSection(
+  usedSkills: ExperienceReviewPromptCandidate["usedSkills"],
+): string[] {
+  if (!usedSkills?.length) {
+    return [];
+  }
+  const shown = usedSkills
+    .toSorted(compareRunSkillUsage)
+    .slice(0, EXPERIENCE_REVIEW_MAX_SKILL_ENTRIES);
+  const header = "Skills actually used in this trajectory (authoritative runtime receipt):";
+  const preference =
+    "Prefer improving a used writable workspace skill when it governs the learning.";
+  const reservedOmission = `(+${usedSkills.length} more used skills omitted)`;
+  const entries: string[] = [];
+  for (const skill of shown) {
+    const line = truncateUtf16Safe(
+      `- ${skill.name} (${skill.source}, ${skill.activation})`,
+      EXPERIENCE_REVIEW_MAX_SKILL_LINE_CHARS,
+    );
+    if (
+      ["", header, ...entries, line, reservedOmission, preference].join("\n").length >
+      EXPERIENCE_REVIEW_MAX_USED_SKILLS_CHARS
+    ) {
+      break;
+    }
+    entries.push(line);
+  }
+  const omitted = usedSkills.length - entries.length;
+  return [
+    "",
+    header,
+    ...entries,
+    ...(omitted > 0 ? [`(+${omitted} more used skills omitted)`] : []),
+    preference,
+  ];
+}
+
 export function buildSkillExperienceReviewPrompt(
   candidate: ExperienceReviewPromptCandidate,
 ): string {
@@ -127,7 +176,7 @@ export function buildSkillExperienceReviewPrompt(
     "",
     SKILL_AUTHORING_STANDARDS_PROMPT,
     "",
-    "Choose the smallest mutation, in order: (1) revise a pending proposal on the same topic — use list/inspect to check; (2) patch the existing workspace skill that governs this work — read it first, then quote the exact text to change in old_string with your replacement in new_string, or use an empty old_string to append a new section; place the learning where it belongs and match the skill's style; (3) update with a full replacement body only when the whole skill needs restructuring — those stay pending for the operator; (4) create one new class-level skill only when no existing skill covers this class of work. Make at most one create/patch/update/revise call. Every mutation is a pending proposal; nothing writes a live skill directly, and the tool cannot apply, reject, or quarantine. If nothing genuinely clears the bar, answer NOTHING_TO_LEARN.",
+    "Choose the smallest mutation, in order: (1) revise a pending proposal on the same topic — use list/inspect to check; (2) patch a used writable workspace skill that governs this work, otherwise the best existing workspace skill — read it first, then quote the exact text to change in old_string with your replacement in new_string, or use an empty old_string to append a new section; place the learning where it belongs and match the skill's style; (3) update with a full replacement body only when the whole skill needs restructuring — read it first and preserve everything still useful; (4) create one new class-level skill only when no existing skill covers this class of work. Make at most one create/patch/update/revise call. Every mutation starts as a pending proposal; nothing writes a live skill during this review, and the configured pipeline decides whether to apply it afterward. If nothing genuinely clears the bar, answer NOTHING_TO_LEARN.",
     "",
     candidate.turnAborted === true
       ? `Interrupted run (stopped before completion): ${candidate.ctx.runId ?? "unknown"}`
@@ -137,6 +186,7 @@ export function buildSkillExperienceReviewPrompt(
           "The trajectory may end mid-task. Only capture procedures that visibly worked before the interruption.",
         ]
       : []),
+    ...renderUsedSkillsSection(candidate.usedSkills),
     ...renderExistingSkillsSection(candidate.existingSkills),
     `Model iterations in turn: ${candidate.modelIterations}`,
     "",

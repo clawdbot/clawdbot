@@ -10,11 +10,7 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import {
-  clearConfigSchemaResponseCacheForTests,
-  configHandlers,
-  loadConfigSchemaResponseForTests,
-} from "./config.js";
+import { clearConfigSchemaResponseCacheForTests, configHandlers } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
 
 const configWriteMocks = vi.hoisted(() => ({
@@ -132,6 +128,15 @@ async function invokeConfigPatch(args: {
   return harness;
 }
 
+async function invokeConfigSchema() {
+  const harness = createConfigHandlerHarness({ method: "config.schema" });
+  await expectDefined(
+    configHandlers["config.schema"],
+    'configHandlers["config.schema"] test invariant',
+  )(harness.options);
+  return harness;
+}
+
 beforeEach(() => {
   storedConfig = {};
   storedHash = "base-hash";
@@ -149,9 +154,7 @@ beforeEach(() => {
       nextConfig: OpenClawConfig;
     }) => {
       if (snapshot.hash !== storedHash) {
-        throw new ConfigMutationConflictError("config changed since last load", {
-          currentHash: storedHash,
-        });
+        throw new ConfigMutationConflictError("config changed since last load");
       }
       storedConfig = nextConfig;
       storedHash = `next-hash-${nextHash}`;
@@ -268,11 +271,7 @@ describe("config schema response cache", () => {
       uiHints: { "gateway.port": { advanced: false } },
       version: "test-schema",
     });
-    const harness = createConfigHandlerHarness({ method: "config.schema" });
-    await expectDefined(
-      configHandlers["config.schema"],
-      'configHandlers["config.schema"] test invariant',
-    )(harness.options);
+    const harness = await invokeConfigSchema();
 
     expect(harness.respond).toHaveBeenCalledWith(
       true,
@@ -283,25 +282,33 @@ describe("config schema response cache", () => {
     );
   });
 
-  it("reuses a recent schema build across burst config requests", () => {
-    loadConfigSchemaResponseForTests();
-    loadConfigSchemaResponseForTests();
+  it("reuses a recent schema build across burst config requests", async () => {
+    await invokeConfigSchema();
+    await invokeConfigSchema();
 
     expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(1);
   });
 
-  it("can be cleared when config writes change schema inputs", () => {
-    loadConfigSchemaResponseForTests();
-    clearConfigSchemaResponseCacheForTests();
-    loadConfigSchemaResponseForTests();
+  it("rebuilds after config writes change schema inputs", async () => {
+    await invokeConfigSchema();
+    const patch = await invokeConfigPatch({ raw: { ui: { prefs: { theme: "knot" } } } });
+
+    expect(patch.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true }),
+      undefined,
+    );
+    expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(1);
+
+    await invokeConfigSchema();
 
     expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
   });
 
-  it("rebuilds when the active plugin registry generation changes", () => {
-    loadConfigSchemaResponseForTests();
+  it("rebuilds when the active plugin registry generation changes", async () => {
+    await invokeConfigSchema();
     setActivePluginRegistry(createTestRegistry([]));
-    loadConfigSchemaResponseForTests();
+    await invokeConfigSchema();
 
     expect(loadGatewayRuntimeConfigSchemaMock).toHaveBeenCalledTimes(2);
   });
@@ -329,7 +336,7 @@ describe("config.patch hash-free ui.prefs LWW", () => {
     );
   });
 
-  it("rejects a mixed hash-free patch", async () => {
+  it("rejects a mixed hash-free patch and names the guarded path", async () => {
     const { respond } = await invokeConfigPatch({
       raw: { ui: { prefs: { theme: "knot" } }, gateway: { port: 19_001 } },
     });
@@ -337,7 +344,11 @@ describe("config.patch hash-free ui.prefs LWW", () => {
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ message: expect.stringContaining("config base hash required") }),
+      // The operator must see which path needs the base hash; a bare
+      // "hash required" with no path was a dead-end error.
+      expect.objectContaining({
+        message: expect.stringContaining("config base hash required for gateway.port"),
+      }),
     );
     expect(storedConfig).toEqual({});
   });
@@ -442,9 +453,7 @@ describe("config.patch hash-free ui.prefs LWW", () => {
     configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async () => {
       storedConfig = { ui: { prefs: { locale: "de" } } };
       storedHash = "raced-hash";
-      throw new ConfigMutationConflictError("config changed since last load", {
-        currentHash: storedHash,
-      });
+      throw new ConfigMutationConflictError("config changed since last load");
     });
 
     const { respond } = await invokeConfigPatch({
@@ -460,6 +469,27 @@ describe("config.patch hash-free ui.prefs LWW", () => {
       }),
     );
     expect(storedConfig.ui?.prefs).toEqual({ locale: "de" });
+  });
+
+  it("advises retry only for retryable mutation conflicts", async () => {
+    configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async () => {
+      throw new ConfigMutationConflictError("config path owned by another writer", {
+        retryable: false,
+      });
+    });
+
+    const { respond } = await invokeConfigPatch({
+      raw: { ui: { prefs: { theme: "knot" } } },
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      // A non-retryable conflict fails the retry too; advising it is a dead end.
+      expect.objectContaining({
+        message: "config path owned by another writer",
+      }),
+    );
   });
 });
 

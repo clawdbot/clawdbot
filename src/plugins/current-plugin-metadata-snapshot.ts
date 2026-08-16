@@ -13,6 +13,7 @@ import {
   resolvePluginControlPlaneFingerprint,
   type ResolvePluginControlPlaneContextParams,
 } from "./plugin-control-plane-context.js";
+import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot.runtime.js";
 import type {
   PluginMetadataSnapshot,
   PluginMetadataSnapshotPluginIdScope,
@@ -328,7 +329,9 @@ function resolveCompatiblePluginMetadataSnapshot(
   }
   const requestedWorkspaceDir =
     params.workspaceDir ??
-    (params.allowWorkspaceScopedSnapshot === true ? snapshot.workspaceDir : undefined);
+    (params.allowWorkspaceScopedSnapshot === true || options.scopedOwnerContext === true
+      ? snapshot.workspaceDir
+      : undefined);
   if (snapshot.workspaceDir !== undefined && requestedWorkspaceDir === undefined) {
     return undefined;
   }
@@ -416,3 +419,8 @@ export function getCurrentPluginMetadataSnapshot(
     params,
   );
 }
+
+// Light bridges (plugin-metadata-snapshot.runtime.ts) serve reads through this
+// instance whenever the metadata system is loaded; the require fallback only
+// covers cold processes.
+registerPluginMetadataSnapshotReaders({ getCurrentPluginMetadataSnapshot });

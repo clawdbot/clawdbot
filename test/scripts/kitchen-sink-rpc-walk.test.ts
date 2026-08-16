@@ -62,7 +62,7 @@ import {
   usesBuiltOpenClawEntry,
   validateCliArgs,
   waitForGatewayReady,
-} from "../../scripts/e2e/kitchen-sink-rpc-walk.mjs";
+} from "../../scripts/e2e/kitchen-sink-rpc-walk.mts";
 import {
   resolveWindowsPowerShellPath,
   resolveWindowsSystem32Path,
@@ -179,12 +179,16 @@ function captureSyncError(action: () => void): Error {
 describe("kitchen-sink RPC isolated state", () => {
   it("prints help without creating temp state or installing the plugin", async () => {
     const result = await runCommand(process.execPath, [
-      "scripts/e2e/kitchen-sink-rpc-walk.mjs",
+      "--import",
+      "tsx",
+      "scripts/e2e/kitchen-sink-rpc-walk.mts",
       "--help",
     ]);
 
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Usage: node scripts/e2e/kitchen-sink-rpc-walk.mjs");
+    expect(result.stdout).toContain(
+      "Usage: node --import tsx scripts/e2e/kitchen-sink-rpc-walk.mts",
+    );
     expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_NPM_SPEC");
     expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_PERSONALITY");
     expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_RPC_PORT");
@@ -198,7 +202,7 @@ describe("kitchen-sink RPC isolated state", () => {
   it("prints help before parsing malformed runtime guardrails", async () => {
     const result = await runCommand(
       process.execPath,
-      ["scripts/e2e/kitchen-sink-rpc-walk.mjs", "--help"],
+      ["--import", "tsx", "scripts/e2e/kitchen-sink-rpc-walk.mts", "--help"],
       {
         env: {
           ...process.env,
@@ -208,7 +212,9 @@ describe("kitchen-sink RPC isolated state", () => {
     );
 
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Usage: node scripts/e2e/kitchen-sink-rpc-walk.mjs");
+    expect(result.stdout).toContain(
+      "Usage: node --import tsx scripts/e2e/kitchen-sink-rpc-walk.mts",
+    );
   });
 
   it("detects short and long help flags", () => {
@@ -221,7 +227,9 @@ describe("kitchen-sink RPC isolated state", () => {
     expect(() => validateCliArgs(["--wat"])).toThrow("Unknown argument: --wat");
 
     const error = await runCommand(process.execPath, [
-      "scripts/e2e/kitchen-sink-rpc-walk.mjs",
+      "--import",
+      "tsx",
+      "scripts/e2e/kitchen-sink-rpc-walk.mts",
       "--wat",
     ]).then(
       () => undefined,
@@ -461,7 +469,7 @@ describe("kitchen-sink RPC gateway teardown", () => {
       pid: 12348,
       signalCode: null as NodeJS.Signals | null,
     });
-    const killProcess = vi.fn((_pid: number, signal: number | NodeJS.Signals) => {
+    const killProcess = vi.fn((_pid: number, signal: number | string) => {
       if (signal === "SIGTERM") {
         setTimeout(() => {
           child.exitCode = 0;
@@ -1056,7 +1064,7 @@ setInterval(() => {}, 1000);
       runnerPath,
       `
 import { runCommand } from ${JSON.stringify(
-        new URL("../../scripts/e2e/kitchen-sink-rpc-walk.mjs", import.meta.url).href,
+        new URL("../../scripts/e2e/kitchen-sink-rpc-walk.mts", import.meta.url).href,
       )};
 
 await runCommand(process.execPath, [${JSON.stringify(scriptPath)}], {
@@ -1068,7 +1076,7 @@ await runCommand(process.execPath, [${JSON.stringify(scriptPath)}], {
     );
 
     try {
-      runner = spawn(process.execPath, [runnerPath], {
+      runner = spawn(process.execPath, ["--import", "tsx", runnerPath], {
         cwd: process.cwd(),
         env: {
           ...process.env,

@@ -2,9 +2,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createDeferred } from "../test-utils/deferred.js";
 
 const { getRuntimeConfigMock, stopAllMock } = vi.hoisted(() => ({
   getRuntimeConfigMock: vi.fn(),

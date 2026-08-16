@@ -6,7 +6,7 @@ import type { GatewayClient, GatewayReconnectPausedInfo } from "../gateway/clien
 import { isApprovalMethod } from "../gateway/method-scopes.js";
 import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { createDeferred } from "../shared/deferred.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createPendingApprovalRegistry } from "../shared/pending-approval-registry.js";
 import { getGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import {
@@ -322,7 +322,7 @@ export function createExecApprovalChannelRuntime<
           return;
         }
 
-        const ready = createDeferred();
+        const ready = createDeferredCore();
         let lastConnectError: unknown = null;
 
         const client = await createOperatorApprovalsGatewayClient({

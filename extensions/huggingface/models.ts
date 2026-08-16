@@ -8,7 +8,6 @@ import {
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isHuggingfaceModelDiscoveryTestEnvironment } from "./model-discovery-env.js";
 
 export const HUGGINGFACE_BASE_URL = "https://router.huggingface.co/v1";
 export const HUGGINGFACE_POLICY_SUFFIXES = ["cheapest", "fastest"] as const;
@@ -77,20 +76,6 @@ export function isHuggingfacePolicyLocked(modelRef: string): boolean {
   return HUGGINGFACE_POLICY_SUFFIXES.some((suffix) => ref.endsWith(`:${suffix}`) || ref === suffix);
 }
 
-export function buildHuggingfaceModelDefinition(
-  model: (typeof HUGGINGFACE_MODEL_CATALOG)[number],
-): ModelDefinitionConfig {
-  return {
-    id: model.id,
-    name: model.name,
-    reasoning: model.reasoning,
-    input: model.input,
-    cost: model.cost,
-    contextWindow: model.contextWindow,
-    maxTokens: model.maxTokens,
-  };
-}
-
 function isReasoningModelHeuristic(modelId: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(modelId);
   return (
@@ -147,7 +132,7 @@ function projectHuggingfaceModels(rows: readonly unknown[]): ModelDefinitionConf
 
     const catalogEntry = catalogById.get(id);
     if (catalogEntry) {
-      models.push(buildHuggingfaceModelDefinition(catalogEntry));
+      models.push(Object.assign({}, catalogEntry));
       continue;
     }
 
@@ -175,13 +160,9 @@ export async function discoverHuggingfaceModels(
   apiKey: string,
   timeoutMs = HUGGINGFACE_DISCOVERY_TIMEOUT_MS,
 ): Promise<ModelDefinitionConfig[]> {
-  if (isHuggingfaceModelDiscoveryTestEnvironment()) {
-    return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
-  }
-
   const trimmedKey = apiKey?.trim();
   if (!trimmedKey) {
-    return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
+    return HUGGINGFACE_MODEL_CATALOG.map((model) => Object.assign({}, model));
   }
 
   const requestTimeoutMs = resolveTimerTimeoutMs(timeoutMs, HUGGINGFACE_DISCOVERY_TIMEOUT_MS);
@@ -189,7 +170,7 @@ export async function discoverHuggingfaceModels(
     providerId: "huggingface",
     endpoint: `${HUGGINGFACE_BASE_URL}/models`,
     providerConfig: { baseUrl: HUGGINGFACE_BASE_URL, api: "openai-completions" },
-    models: HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition),
+    models: HUGGINGFACE_MODEL_CATALOG.map((model) => Object.assign({}, model)),
     discoveryApiKey: trimmedKey,
     signal: AbortSignal.timeout(requestTimeoutMs),
     timeoutMs: requestTimeoutMs,

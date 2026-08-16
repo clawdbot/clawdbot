@@ -1,3 +1,4 @@
+import { normalizeNullableString as toOptionalTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -5,6 +6,7 @@ import {
   type OpenClawSchemaVersions,
 } from "../state/openclaw-schema-versions.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
+import { cancelUnreadResponseBody } from "./http-body.js";
 
 type NpmPackageTargetStatus = {
   target: string;
@@ -27,10 +29,6 @@ export type NpmMetadataCommandRunner = (
   stderr: string;
   code: number | null;
 }>;
-
-function toOptionalTrimmedString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
 
 function parseNpmPackageTargetMetadata(raw: string): {
   version: string | null;
@@ -135,9 +133,7 @@ async function fetchNpmPackageTargetStatusFromRegistry(params: {
   } catch (err) {
     return { target: params.target, version: null, nodeEngine: null, error: String(err) };
   } finally {
-    if (res?.bodyUsed !== true) {
-      await res?.body?.cancel().catch(() => undefined);
-    }
+    await cancelUnreadResponseBody(res);
     cleanup();
   }
 }

@@ -325,6 +325,7 @@ type DiscordTextSendParams = {
   suppressEmbeds?: boolean;
   maxChars?: number;
   onResult?: DiscordSendProgress;
+  onPlatformSendDispatch?: () => Promise<void>;
 };
 
 async function sendDiscordText(params: DiscordTextSendParams) {
@@ -343,6 +344,7 @@ async function sendDiscordText(params: DiscordTextSendParams) {
     suppressEmbeds,
     maxChars,
     onResult,
+    onPlatformSendDispatch,
   } = params;
   if (!text.trim()) {
     throw new Error("Message must be non-empty for Discord sends");
@@ -369,6 +371,7 @@ async function sendDiscordText(params: DiscordTextSendParams) {
       flags,
       replyTo: chunkReplyTo,
     });
+    await onPlatformSendDispatch?.();
     const result = (await request(
       () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
       "text",
@@ -429,6 +432,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
     suppressEmbeds,
     maxChars,
     onResult,
+    onPlatformSendDispatch,
   } = params;
   const media = await loadWebMedia(
     mediaUrl,
@@ -466,11 +470,13 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
       {
         data: media.buffer,
         name: resolvedFileName,
+        contentType: media.contentType,
       },
     ],
   });
   let res: { id: string; channel_id: string };
   try {
+    await onPlatformSendDispatch?.();
     res = (await request(
       () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
       "media",
@@ -495,6 +501,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
       allowedMentions,
       maxChars,
       onResult,
+      onPlatformSendDispatch,
     });
   }
   await onResult?.(res, "media", reply?.messageId);

@@ -4,7 +4,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { callGateway } from "../gateway/call.js";
+import { callGateway, isImplicitLocalGatewayTarget } from "../gateway/call.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { withProgress } from "./progress.js";
@@ -34,6 +34,16 @@ type GatewayCliTransportRpcOpts = Omit<GatewayRpcOpts, "timeout"> & {
 };
 
 const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 30_000;
+
+export async function isImplicitLocalGatewayTargetFromCliRuntime(
+  opts: GatewayCliTransportRpcOpts,
+): Promise<boolean> {
+  return await isImplicitLocalGatewayTarget({
+    config: opts.config,
+    url: opts.url,
+    localPortOverride: opts.localPortOverride,
+  });
+}
 
 export async function callGatewayFromCliRuntime(
   method: string,

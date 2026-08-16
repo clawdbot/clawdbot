@@ -23,6 +23,7 @@ type UnknownSendQueueEntry = {
   replyToMode?: ReplyToMode;
   threadId?: string | number | null;
   silent?: boolean;
+  session?: { agentId?: string };
 };
 
 export function buildUnknownSendContext(params: {
@@ -64,6 +65,7 @@ export async function reconcileUnknownQueuedDelivery(params: {
   const adapter = resolveOutboundChannelMessageAdapter({
     channel: params.entry.channel,
     cfg: params.cfg,
+    agentId: params.entry.session?.agentId,
     allowBootstrap: true,
   });
   if (adapter?.durableFinal?.capabilities?.reconcileUnknownSend !== true) {

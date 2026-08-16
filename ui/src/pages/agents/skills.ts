@@ -1,7 +1,8 @@
 // Control UI controller manages agent skills gateway state.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
-import type { RuntimeConfigCapability } from "../../lib/config/index.ts";
+import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { loadSkillStatusReport } from "../../lib/skills/index.ts";
 
 type AgentSkillsState = {
@@ -35,7 +36,7 @@ export async function loadAgentSkills(state: AgentSkillsState, agentId: string) 
     }
   } catch (err) {
     if (isCurrent()) {
-      state.agentSkillsError = String(err);
+      state.agentSkillsError = formatUiError(err);
     }
   } finally {
     if (isCurrent()) {

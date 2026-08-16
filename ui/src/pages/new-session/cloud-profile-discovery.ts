@@ -1,6 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { requestCloudProfiles } from "./cloud-target.ts";
-import type { DraftCloudProfile } from "./discovery.ts";
+import { requestPlaceCatalog } from "./cloud-target.ts";
+import type { DraftCloudProfile, DraftEnvironment } from "./discovery.ts";
 
 export const CLOUD_PROFILE_RETRY_DELAYS_MS = [1_000, 3_000, 10_000, 30_000, 60_000] as const;
 
@@ -13,9 +13,9 @@ export function selectProfiles(
   return { profiles: unsupported ? [] : profiles, unsupported };
 }
 
-export function discoverCloudProfiles(
+export function discoverPlaceCatalog(
   client: Pick<GatewayBrowserClient, "request">,
   admin: boolean,
-): Promise<DraftCloudProfile[]> {
-  return admin ? requestCloudProfiles(client) : Promise.resolve([]);
+): Promise<{ profiles: DraftCloudProfile[]; environments: DraftEnvironment[] }> {
+  return admin ? requestPlaceCatalog(client) : Promise.resolve({ profiles: [], environments: [] });
 }

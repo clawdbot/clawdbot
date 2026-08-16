@@ -1,9 +1,11 @@
 // Covers core TUI state transitions and backend event rendering.
 import { EventEmitter } from "node:events";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../infra/parse-finite-number.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { withEnv } from "../test-utils/env.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
@@ -16,18 +18,17 @@ import {
   installTuiTerminalLossExitHandler,
   isIgnorableTuiStopError,
   isTuiTerminalLossError,
-  resolveCodexCliBin,
   resolveCtrlCAction,
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
   resolveInitialTuiAgentId,
   resolveTuiToolsToggleActivityStatus,
   isTuiBusyActivityStatus,
-  resolveLocalAuthSpawnInvocation,
   resolveTuiCtrlCAction,
   resolveTuiLocalAuthCliInvocation,
   resolveTuiShutdownHardExitMs,
   resolveTuiSessionKey,
+  resolveTuiSessionSelection,
   scheduleProcessExitAfterTuiReturn,
   stopTuiSafely,
 } from "./tui.js";
@@ -224,6 +225,17 @@ describe("resolveTuiSessionKey", () => {
     ).toBe("agent:ops:incident");
   });
 
+  it("unwraps an agent-qualified global key after agent selection", () => {
+    expect(
+      resolveTuiSessionKey({
+        raw: "AGENT:Work:GLOBAL",
+        sessionScope: "per-sender",
+        currentAgentId: "work",
+        sessionMainKey: "main",
+      }),
+    ).toBe("global");
+  });
+
   it.each([
     {
       raw: "agent:main:matrix:channel:!MixedRoomAbCdEf:example.org",
@@ -293,6 +305,7 @@ describe("resolveTuiSessionKey", () => {
 describe("resolveInitialTuiAgentId", () => {
   const cfg: OpenClawConfig = {
     agents: {
+      ownership: "explicit",
       list: [
         { id: "main", workspace: "/tmp/openclaw" },
         { id: "ops", workspace: "/tmp/openclaw/projects/ops" },
@@ -317,9 +330,22 @@ describe("resolveInitialTuiAgentId", () => {
         cfg,
         fallbackAgentId: "main",
         initialSessionInput: "agent:main:incident",
+        agentId: "ops",
         cwd: "/tmp/openclaw/projects/ops/src",
       }),
     ).toBe("main");
+  });
+
+  it("keeps an explicit global-session agent ahead of workspace inference", () => {
+    expect(
+      resolveInitialTuiAgentId({
+        cfg,
+        fallbackAgentId: "main",
+        initialSessionInput: "global",
+        agentId: "ops",
+        cwd: "/tmp/openclaw",
+      }),
+    ).toBe("ops");
   });
 
   it("falls back when cwd has no matching workspace", () => {
@@ -344,34 +370,149 @@ describe("resolveInitialTuiAgentId", () => {
       cwdSpy.mockRestore();
     }
   });
+
+  it("falls back to a retained legacy owner", () => {
+    const retained = retainLegacyDefaultAgentId(structuredClone(cfg), "ops");
+
+    expect(resolveInitialTuiAgentId({ cfg: retained, cwd: "/var/tmp/unrelated" })).toBe("ops");
+  });
+
+  it("keeps an ownerless explicit fleet selection-required", () => {
+    expect(() => resolveInitialTuiAgentId({ cfg, cwd: "/var/tmp/unrelated" })).toThrow(
+      AgentSelectionRequiredError,
+    );
+  });
+
+  it("uses the persisted fixed-store owner for an unscoped global session", () => {
+    const restartConfig: OpenClawConfig = {
+      session: { scope: "global", store: "/tmp/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { main: {}, ops: {} },
+      },
+    };
+
+    expect(
+      resolveInitialTuiAgentId({
+        cfg: restartConfig,
+        initialSessionInput: "global",
+        cwd: "/tmp/openclaw",
+      }),
+    ).toBe("ops");
+    expect(resolveInitialTuiAgentId({ cfg: restartConfig, cwd: "/tmp/openclaw" })).toBe("ops");
+  });
+
+  it("uses the persisted fixed-store owner for any bare initial session key", () => {
+    const restartConfig: OpenClawConfig = {
+      session: { store: "/tmp/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { main: {}, ops: {} },
+      },
+    };
+
+    expect(
+      resolveInitialTuiAgentId({
+        cfg: restartConfig,
+        initialSessionInput: "incident-42",
+        cwd: "/tmp/openclaw",
+      }),
+    ).toBe("ops");
+  });
+});
+
+describe("resolveTuiSessionSelection", () => {
+  it("keeps a fixed-store bare key with its persisted owner", () => {
+    const cfg: OpenClawConfig = {
+      session: { store: "/tmp/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        list: [{ id: "ops" }, { id: "research" }],
+      },
+    };
+
+    expect(
+      resolveTuiSessionSelection({
+        raw: "incident-42",
+        cfg,
+        sessionScope: "per-sender",
+        currentAgentId: "research",
+        sessionMainKey: "main",
+      }),
+    ).toEqual({ key: "incident-42", agentId: "ops" });
+  });
+
+  it("carries an explicit owner while unwrapping global storage", () => {
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", list: [{ id: "ops" }, { id: "research" }] },
+    };
+    expect(
+      resolveTuiSessionSelection({
+        raw: "agent:ops:global",
+        cfg,
+        sessionScope: "per-sender",
+        currentAgentId: "research",
+        sessionMainKey: "main",
+      }),
+    ).toEqual({ key: "global", agentId: "ops" });
+  });
 });
 
 describe("resolveGatewayDisconnectState", () => {
   it("returns scope-upgrade recovery guidance when disconnect reason requires pairing", () => {
-    const state = resolveGatewayDisconnectState("gateway closed (1008): pairing required");
+    const state = resolveGatewayDisconnectState({
+      reason: "gateway closed (1008): pairing required",
+    });
     expect(state.connectionStatus).toContain("pairing required");
     expect(state.activityStatus).toBe("device approval needed: preview latest request");
-    expect(state.pairingHint).toContain("openclaw devices approve --latest");
-    expect(state.pairingHint).toContain("openclaw devices approve <requestId>");
-    expect(state.pairingHint).toContain("--token");
+    expect(state.remediation).toContain("openclaw devices approve --latest");
+    expect(state.remediation).toContain("openclaw devices approve <requestId>");
+    expect(state.remediation).toContain("--url");
+    expect(state.remediation).toContain("--token/--password");
     // Must steer users to `devices`, not the unrelated chat-DM `pairing` command.
-    expect(state.pairingHint).not.toContain("openclaw pairing");
+    expect(state.remediation).not.toContain("openclaw pairing");
   });
 
-  it("returns the same guidance when the gateway reports a pending scope upgrade", () => {
-    const state = resolveGatewayDisconnectState(
-      "gateway closed (1008): scope upgrade pending approval",
-    );
+  it("uses structured pairing details before the generic close reason", () => {
+    const state = resolveGatewayDisconnectState({
+      details: { code: "PAIRING_REQUIRED", reason: "scope-upgrade" },
+      reason: "connect failed",
+    });
     expect(state.activityStatus).toBe("device approval needed: preview latest request");
-    expect(state.pairingHint).toContain("openclaw devices approve --latest");
-    expect(state.pairingHint).toContain("openclaw devices approve <requestId>");
+    expect(state.connectionStatus).toContain("scope upgrade pending approval");
+    expect(state.remediation).toContain("openclaw devices approve --latest");
+  });
+
+  it("shows the device-token rotation command for structured token mismatch", () => {
+    const state = resolveGatewayDisconnectState({
+      details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+      reason: "device token mismatch",
+    });
+    expect(state.activityStatus).toBe("gateway authentication needs attention");
+    expect(state.remediation).toContain(
+      "openclaw devices rotate --device <deviceId> --role operator",
+    );
+  });
+
+  it("shows wait-and-retry guidance for a temporary authentication lockout", () => {
+    const state = resolveGatewayDisconnectState({
+      details: { code: "AUTH_RATE_LIMITED" },
+      reason: "unauthorized: too many failed authentication attempts (retry later)",
+    });
+    expect(state.activityStatus).toBe("gateway authentication temporarily rate-limited");
+    expect(state.remediation).toContain("temporary authentication lockout");
+    expect(state.remediation).not.toContain("gateway.remote.token");
+    expect(state.remediation).not.toContain("devices rotate");
   });
 
   it("falls back to idle for generic disconnect reasons", () => {
-    const state = resolveGatewayDisconnectState("network timeout");
+    const state = resolveGatewayDisconnectState({ reason: "network timeout" });
     expect(state.connectionStatus).toBe("gateway disconnected: network timeout");
     expect(state.activityStatus).toBe("idle");
-    expect(state.pairingHint).toBeUndefined();
+    expect(state.remediation).toBeUndefined();
   });
 });
 
@@ -949,73 +1090,5 @@ describe("TUI shutdown safety", () => {
     expect(writeStderr).toHaveBeenCalledWith("openclaw tui forcing process exit after return\n");
     expect(exit).toHaveBeenCalledWith(0);
     clearInterval(lingeringHandle);
-  });
-});
-
-describe("resolveCodexCliBin", () => {
-  it("returns a string path when codex CLI is installed", async () => {
-    const result = await resolveCodexCliBin();
-    // In this test environment codex is installed; verify it returns a non-empty path
-    if (result !== null) {
-      expect(typeof result).toBe("string");
-      expect(result.length).toBeGreaterThan(0);
-      expect(result).toContain("codex");
-    }
-  });
-
-  it("returns null or a valid path (never throws)", async () => {
-    const result = await resolveCodexCliBin();
-    if (result === null) {
-      expect(result).toBeNull();
-    } else {
-      expect(typeof result).toBe("string");
-    }
-  });
-});
-
-describe("resolveLocalAuthSpawnInvocation", () => {
-  it("wraps Windows cmd shims through cmd.exe", () => {
-    expect(
-      resolveLocalAuthSpawnInvocation({
-        command: "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd",
-        args: ["login"],
-        platform: "win32",
-      }),
-    ).toEqual({
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: ["/d", "/s", "/c", "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd login"],
-      options: { windowsHide: true, windowsVerbatimArguments: true },
-    });
-  });
-
-  it("wraps spaced Windows bat shim paths with outer command-line quoting", () => {
-    expect(
-      resolveLocalAuthSpawnInvocation({
-        command: "C:\\Program Files\\Codex\\codex.bat",
-        args: ["login"],
-        platform: "win32",
-      }),
-    ).toEqual({
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: ["/d", "/s", "/c", '""C:\\Program Files\\Codex\\codex.bat" login"'],
-      options: { windowsHide: true, windowsVerbatimArguments: true },
-    });
-  });
-
-  it("keeps direct execution for non-wrapper commands", () => {
-    expect(
-      resolveLocalAuthSpawnInvocation({
-        command: "/usr/local/bin/codex",
-        args: ["login"],
-        platform: "linux",
-      }),
-    ).toStrictEqual({ command: "/usr/local/bin/codex", args: ["login"], options: {} });
-    expect(
-      resolveLocalAuthSpawnInvocation({
-        command: "C:\\tools\\codex.exe",
-        args: ["login"],
-        platform: "win32",
-      }),
-    ).toStrictEqual({ command: "C:\\tools\\codex.exe", args: ["login"], options: {} });
   });
 });

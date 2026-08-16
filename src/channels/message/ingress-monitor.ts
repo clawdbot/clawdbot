@@ -65,6 +65,7 @@ export type ChannelIngressMonitorLifecycle = {
   onDeferred: () => void;
   onAdoptionFinalizing: () => void;
   onFailed?: (error: unknown) => void | Promise<void>;
+  onCancelled?: () => void | Promise<void>;
   onAbandoned: () => void | Promise<void>;
 };
 
@@ -368,6 +369,16 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             settleDeferredClaim();
           }
         }
+        const settleDeferredLifecycle = async (settle: () => void | Promise<void>) => {
+          handedOff = true;
+          deferredHandoff = true;
+          try {
+            await settle();
+            requestDrain();
+          } finally {
+            settleDeferredClaim();
+          }
+        };
         const wrappedLifecycle: ChannelIngressMonitorLifecycle = {
           ...lifecycle,
           admission: "exclusive",
@@ -393,26 +404,9 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             deferredHandoff = true;
             lifecycle.onAdoptionFinalizing();
           },
-          onFailed: async (error) => {
-            handedOff = true;
-            deferredHandoff = true;
-            try {
-              await lifecycle.onFailed?.(error);
-              requestDrain();
-            } finally {
-              settleDeferredClaim();
-            }
-          },
-          onAbandoned: async () => {
-            handedOff = true;
-            deferredHandoff = true;
-            try {
-              await lifecycle.onAbandoned();
-              requestDrain();
-            } finally {
-              settleDeferredClaim();
-            }
-          },
+          onFailed: (error) => settleDeferredLifecycle(() => lifecycle.onFailed?.(error)),
+          onCancelled: () => settleDeferredLifecycle(() => lifecycle.onCancelled?.()),
+          onAbandoned: () => settleDeferredLifecycle(() => lifecycle.onAbandoned()),
         };
 
         // Adoption can complete before delivery returns; track both lifetimes so stop

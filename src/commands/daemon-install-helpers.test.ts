@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   resolveOpenClawWrapperPath: vi.fn(),
   assertNoSystemLaunchDaemonOwnership: vi.fn(),
   execLaunchctl: vi.fn(),
-  loadPluginManifestRegistry: vi.fn<
+  loadPluginManifestRegistryCore: vi.fn<
     (...args: unknown[]) => { diagnostics: unknown[]; plugins: unknown[] }
   >(() => ({
     diagnostics: [],
@@ -60,6 +60,11 @@ vi.mock("../daemon/service-env.js", () => ({
   buildServiceEnvironment: mocks.buildServiceEnvironment,
 }));
 
+vi.mock("../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginManifestRegistry: (...args: unknown[]) =>
+    mocks.loadPluginManifestRegistryCore(...args),
+}));
+
 vi.mock("../daemon/launchd-exec.js", async (importActual) => ({
   ...(await importActual<typeof import("../daemon/launchd-exec.js")>()),
   execLaunchctl: mocks.execLaunchctl,
@@ -73,7 +78,7 @@ vi.mock("../daemon/launchd-system.js", async (importActual) => ({
 vi.mock("../plugins/manifest-registry.js", async (importActual) => {
   const actual = await importActual<typeof import("../plugins/manifest-registry.js")>();
   const hasPluginIntegrationProvider = (
-    params?: Parameters<typeof actual.loadPluginManifestRegistry>[0],
+    params?: Parameters<typeof actual.loadPluginManifestRegistryCore>[0],
   ) =>
     Object.values(params?.config?.secrets?.providers ?? {}).some(
       (provider) =>
@@ -83,12 +88,12 @@ vi.mock("../plugins/manifest-registry.js", async (importActual) => {
     );
   return {
     ...actual,
-    loadPluginManifestRegistry: (
-      params?: Parameters<typeof actual.loadPluginManifestRegistry>[0],
+    loadPluginManifestRegistryCore: (
+      params?: Parameters<typeof actual.loadPluginManifestRegistryCore>[0],
     ) =>
       hasPluginIntegrationProvider(params)
-        ? mocks.loadPluginManifestRegistry(params)
-        : actual.loadPluginManifestRegistry(params),
+        ? mocks.loadPluginManifestRegistryCore(params)
+        : actual.loadPluginManifestRegistryCore(params),
   };
 });
 
@@ -166,7 +171,7 @@ function mockNodeGatewayPlanFixture(
   });
   mocks.renderSystemNodeWarning.mockReturnValue(warning);
   mocks.buildServiceEnvironment.mockReturnValue(serviceEnvironment);
-  mocks.loadPluginManifestRegistry.mockReturnValue({ diagnostics: [], plugins: [] });
+  mocks.loadPluginManifestRegistryCore.mockReturnValue({ diagnostics: [], plugins: [] });
   mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
     diagnostics: [],
     plugins: [],
@@ -228,19 +233,33 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
   const pluginRoot = path.join(home, "acme-secrets");
   createSecurePluginRoot(pluginRoot);
   writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
-  mocks.loadPluginManifestRegistry.mockReturnValue({
+  const configuredPluginRoot = path.join(home, "acme-plugin");
+  createSecurePluginRoot(configuredPluginRoot);
+  mocks.loadPluginManifestRegistryCore.mockReturnValue({
     diagnostics: [],
     plugins: [
       {
         id: "acme-secrets",
         origin: "global",
         rootDir: pluginRoot,
+        channels: [],
         secretProviderIntegrations: {
           "secret-store": {
             source: "exec",
             command: "${node}",
             args: ["./secret-ref-resolver.js"],
             passEnv: ["ACME_SECRETS_TOKEN"],
+          },
+        },
+      },
+      {
+        id: "acme-plugin",
+        origin: "global",
+        rootDir: configuredPluginRoot,
+        channels: [],
+        configContracts: {
+          secretInputs: {
+            paths: [{ path: "apiKey", expected: "string" }],
           },
         },
       },
@@ -252,6 +271,8 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
       {
         id: "acme-plugin",
         origin: "global",
+        rootDir: configuredPluginRoot,
+        channels: [],
         configContracts: {
           secretInputs: {
             paths: [{ path: "apiKey", expected: "string" }],
@@ -714,7 +735,7 @@ describe("buildGatewayInstallPlan", () => {
     const pluginRoot = path.join(isolatedHome, "acme-secrets");
     createSecurePluginRoot(pluginRoot);
     writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryCore.mockReturnValue({
       diagnostics: [],
       plugins: [
         {
@@ -826,7 +847,7 @@ describe("buildGatewayInstallPlan", () => {
     const pluginRoot = path.join(isolatedHome, "acme-secrets");
     createSecurePluginRoot(pluginRoot);
     writeSecurePluginEntrypoint(path.join(pluginRoot, "secret-ref-resolver.js"));
-    mocks.loadPluginManifestRegistry.mockReturnValue({
+    mocks.loadPluginManifestRegistryCore.mockReturnValue({
       diagnostics: [],
       plugins: [
         {
@@ -2210,6 +2231,11 @@ describe("collectPreservedExistingServiceEnvVars — operator opt-in allowlist",
   it("still drops arbitrary OPENCLAW_FOO", async () => {
     const result = await buildEnvironment({ OPENCLAW_FOO: "bar" });
     expect(result.OPENCLAW_FOO).toBeUndefined();
+  });
+
+  it("drops legacy install-time version metadata from canonical rewrites", async () => {
+    const result = await buildEnvironment({ OPENCLAW_SERVICE_VERSION: "2026.4.24" });
+    expect(result.OPENCLAW_SERVICE_VERSION).toBeUndefined();
   });
 
   it("preserves container opt-ins while dropping unrelated OPENCLAW_* keys", async () => {

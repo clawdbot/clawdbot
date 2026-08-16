@@ -3,7 +3,14 @@ import type { spawnTerminalPty } from "../../process/terminal-pty.js";
 import type { TerminalSessionManager } from "./session-manager.js";
 
 type TerminalOpenRequestInput = Parameters<TerminalSessionManager["open"]>[0];
+type AgentTerminalOwner = Extract<TerminalOpenRequestInput["owner"], { kind: "agent" }>;
 type TerminalPtyHandle = Awaited<ReturnType<typeof spawnTerminalPty>>;
+
+/** Builds the manager-private task binding while preserving the public owner shape. */
+export function taskAgentOwner(agentSessionKey: string, taskId: string): AgentTerminalOwner {
+  const owner = { kind: "agent" as const, agentSessionKey, taskId };
+  return owner;
+}
 
 export type FakeTerminalPty = TerminalPtyHandle & {
   writes: string[];

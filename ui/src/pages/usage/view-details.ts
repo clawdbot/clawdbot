@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render details screen content.
 import { html, svg, nothing } from "lit";
@@ -7,10 +8,9 @@ import {
   type PanelRefreshStatus,
 } from "../../components/panel-refresh-status.ts";
 import { t } from "../../i18n/index.ts";
-import { formatDurationCompact } from "../../lib/format.ts";
 import "../../components/tooltip.ts";
+import { formatDurationCompact } from "../../lib/format.ts";
 import { formatDateTimeMs, formatMs, formatTimeMs } from "../../lib/format.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { parseToolSummary } from "./helpers.ts";
 import { charsToTokens, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import type {
@@ -158,8 +158,7 @@ function renderSessionSummary(
     },
     {
       labelKey: "usage.details.duration",
-      value:
-        formatDurationCompact(usage.durationMs, { spaced: true }) ?? t("usage.common.emptyValue"),
+      value: formatDurationCompact(usage.durationMs) ?? t("usage.common.emptyValue"),
       meta: html`${formatTs(usage.firstActivity)} → ${formatTs(usage.lastActivity)}`,
     },
   ];

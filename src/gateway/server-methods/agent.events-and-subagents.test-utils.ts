@@ -654,10 +654,14 @@ describe("gateway agent handler", () => {
 
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     const error = expectRespondError(respond, {});
-    expectStringFieldContains(error, "message", "requires target");
+    expect(error).toMatchObject({
+      code: ErrorCodes.INVALID_REQUEST,
+      message: expect.stringContaining("requires target"),
+    });
+    expect(error.message).not.toMatch(/^Error:/u);
   });
 
-  it("downgrades to session-only when bestEffortDeliver=true and no external channel is configured", async () => {
+  it("preserves requested delivery when best effort has no external channel", async () => {
     mocks.agentCommand.mockClear();
     primeMainAgentRun();
     const respond = vi.fn();
@@ -687,7 +691,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    await waitForAgentCommandCall();
+    const callArgs = await waitForAgentCommandCall<{ deliver?: boolean; channel?: string }>();
     const accepted = respond.mock.calls.find(
       (call: unknown[]) =>
         call[0] === true && (call[1] as Record<string, unknown>)?.status === "accepted",
@@ -697,9 +701,10 @@ describe("gateway agent handler", () => {
     });
     const rejected = respond.mock.calls.find((call: unknown[]) => call[0] === false);
     expect(rejected).toBeUndefined();
+    expect(callArgs).toMatchObject({ deliver: true, channel: "webchat" });
     expect(logInfo).toHaveBeenCalledTimes(1);
     expect(mockCallArg(logInfo)).toContain(
-      "agent delivery downgraded to session-only (bestEffortDeliver)",
+      "agent delivery unresolved (bestEffortDeliver); final delivery will report",
     );
   });
 

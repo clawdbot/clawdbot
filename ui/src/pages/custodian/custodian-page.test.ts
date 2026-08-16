@@ -57,7 +57,8 @@ describe("custodian page", () => {
         .querySelector<HTMLImageElement>("img.chat-avatar.assistant")
         ?.getAttribute("src"),
     ).toBe("/favicon.svg");
-    expect(page.querySelector(".custodian__mark openclaw-mascot")).not.toBeNull();
+    // Onboarding strips the header identity; the thread avatar is the only mascot.
+    expect(page.querySelector(".custodian__mark openclaw-mascot")).toBeNull();
     const card = page.querySelector("openclaw-option-card")!;
     await card.updateComplete;
     expect(page.querySelector(".option-card__choice--recommended")?.textContent).toContain(
@@ -200,6 +201,81 @@ describe("custodian page", () => {
     expect(page.textContent).toContain("Sensitive reply sent");
     expect(page.textContent).not.toContain("fake-client-secret");
     expect(page.querySelector(".agent-chat__composer-shell")).not.toBeNull();
+  });
+
+  it("keeps a typed cancel action visible beside every active wizard step", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "cancel-wizard-session",
+        reply: "Enter the secret.",
+        action: "none",
+        sensitive: true,
+        wizardInputPending: true,
+        step: {
+          id: "secret",
+          type: "text",
+          message: "Twitch client secret",
+          sensitive: true,
+        },
+      })
+      .mockResolvedValueOnce({
+        sessionId: "cancel-wizard-session",
+        reply: "Channel setup cancelled.",
+        action: "none",
+      });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context);
+
+    const cancel = await waitForFast(() => {
+      const button = page.querySelector<HTMLButtonElement>(".custodian__wizard-cancel");
+      expect(button?.textContent).toContain("Cancel");
+      return button!;
+    });
+    expect(
+      page.querySelector<HTMLButtonElement>(".custodian__header-actions .btn")?.textContent,
+    ).toContain("Exit setup");
+    cancel.click();
+
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request.mock.calls[1]?.[1]).toMatchObject({
+      sessionId: "cancel-wizard-session",
+      wizardCancel: { stepId: "secret" },
+    });
+    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("message");
+    await waitForFast(() => expect(page.textContent).toContain("Channel setup cancelled."));
+    expect(page.querySelector(".custodian__wizard-step")).toBeNull();
+    expect(page.querySelector(".agent-chat__composer-shell")).not.toBeNull();
+  });
+
+  it("hides typed cancel when the Gateway does not advertise it", async () => {
+    const request = vi.fn().mockResolvedValueOnce({
+      sessionId: "old-gateway-wizard-session",
+      reply: "Enter the secret.",
+      action: "none",
+      sensitive: true,
+      wizardInputPending: true,
+      step: {
+        id: "secret",
+        type: "text",
+        message: "Twitch client secret",
+        sensitive: true,
+      },
+    });
+    const { context } = createContext(request, ["openclaw.chat"], {
+      gatewayCapabilities: [],
+    });
+    const { page } = await mountPage(context);
+
+    await waitForFast(() => {
+      expect(page.querySelector(".custodian__wizard-step")).not.toBeNull();
+    });
+    expect(page.querySelector(".custodian__wizard-cancel")).toBeNull();
+
+    page.store.cancelWizardStep(page.store.messages.at(-1)!);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0]?.[1]).not.toHaveProperty("wizardCancel");
   });
 
   it("collapses an empty transcript around a blocking startup error", async () => {

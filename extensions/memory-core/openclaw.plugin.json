@@ -1,6 +1,16 @@
 {
   "id": "memory-core",
+  "doctorContract": {
+    "stateMigrations": true
+  },
   "name": "OpenClaw Memory",
+  "cliCommands": [
+    {
+      "name": "memory",
+      "description": "Search, inspect, and reindex memory files",
+      "hasSubcommands": true
+    }
+  ],
   "activation": {
     "onStartup": false
   },

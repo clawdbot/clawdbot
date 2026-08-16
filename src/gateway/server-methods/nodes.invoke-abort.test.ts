@@ -1,5 +1,6 @@
 /** Ensures caller cancellation composes with, but never replaces, node pairing ownership. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NODE_WORKER_PRIVATE_COMMANDS } from "../../infra/node-commands.js";
 import { isNodeWakeLifecycleCurrent } from "../node-wake-state.js";
 import { resetNodeWakeStateForTest } from "../node-wake-state.test-support.js";
 import { nodeInvokeHandlers } from "./nodes.invoke.js";
@@ -20,7 +21,7 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../../infra/node-pairing-state.js", () => ({
+vi.mock("../../infra/device-pairing-node-state.js", () => ({
   captureNodePairingGeneration: mocks.captureNodePairingGeneration,
   isNodePairingGenerationCurrent: mocks.isNodePairingGenerationCurrent,
 }));
@@ -57,7 +58,13 @@ afterEach(() => {
   resetNodeWakeStateForTest();
 });
 
-function startNodeInvoke(options: { invoke: ReturnType<typeof vi.fn>; signal?: AbortSignal }) {
+function startNodeInvoke(options: {
+  invoke: ReturnType<typeof vi.fn>;
+  signal?: AbortSignal;
+  command?: string;
+  config?: Record<string, unknown>;
+  commands?: string[];
+}) {
   const respond = vi.fn();
   const handler = nodeInvokeHandlers["node.invoke"];
   if (!handler) {
@@ -67,7 +74,7 @@ function startNodeInvoke(options: { invoke: ReturnType<typeof vi.fn>; signal?: A
     req: { type: "req", id: "paired-inference-request", method: "node.invoke" },
     params: {
       nodeId: "paired-node",
-      command: "ollama.chat",
+      command: options.command ?? "ollama.chat",
       params: { model: "node-local:small", prompt: "answer locally" },
       timeoutMs: 10_000,
       idempotencyKey: "paired-inference-idempotency-key",
@@ -77,11 +84,14 @@ function startNodeInvoke(options: { invoke: ReturnType<typeof vi.fn>; signal?: A
     respond,
     context: {
       nodeRegistry: {
-        get: () => session,
-        getForPairingGeneration: () => session,
+        get: () => ({ ...session, commands: options.commands ?? session.commands }),
+        getForPairingGeneration: () => ({
+          ...session,
+          commands: options.commands ?? session.commands,
+        }),
         invoke: options.invoke,
       },
-      getRuntimeConfig: () => ({}),
+      getRuntimeConfig: () => options.config ?? {},
       logGateway: { info: vi.fn(), warn: vi.fn() },
     } as unknown as GatewayRequestHandlerOptions["context"],
     ...(options.signal ? { signal: options.signal } : {}),
@@ -90,6 +100,30 @@ function startNodeInvoke(options: { invoke: ReturnType<typeof vi.fn>; signal?: A
 }
 
 describe("node.invoke caller cancellation", () => {
+  it.each(NODE_WORKER_PRIVATE_COMMANDS)(
+    "rejects private control %s before public policy and dispatch",
+    async (command) => {
+      const invoke = vi.fn();
+      const { invocation, respond } = startNodeInvoke({
+        invoke,
+        command,
+        commands: [command],
+        config: { gateway: { nodes: { commands: { allow: [command] } } } },
+      });
+
+      await invocation;
+
+      expect(invoke).not.toHaveBeenCalled();
+      expect(mocks.resolveNodeCommandAllowlist).not.toHaveBeenCalled();
+      expect(mocks.applyPluginNodeInvokePolicy).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: expect.stringContaining("private") }),
+      );
+    },
+  );
+
   it("cancels paired-node work without breaking pairing lifecycle identity", async () => {
     const controller = new AbortController();
     const invoke = vi.fn(

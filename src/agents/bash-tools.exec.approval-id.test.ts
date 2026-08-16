@@ -74,7 +74,7 @@ vi.mock("../utils/message-channel.js", () => {
   };
 });
 
-vi.mock("../utils/delivery-context.js", () => ({
+vi.mock("../utils/delivery-context.shared.js", () => ({
   normalizeDeliveryContext: (context?: {
     channel?: string | null;
     to?: string | number | null;

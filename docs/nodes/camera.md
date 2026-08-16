@@ -1,12 +1,15 @@
 ---
-summary: "Camera capture on iOS, Android, macOS, and Linux nodes for photos and short video clips"
+summary: "Camera capture and macOS physical PTZ control on paired nodes"
 read_when:
   - Adding or modifying camera capture on node platforms
+  - Controlling a USB camera's physical pan, tilt, or zoom on macOS
   - Extending agent-accessible MEDIA temp-file workflows
 title: "Camera capture"
 ---
 
 OpenClaw supports camera capture for agent workflows on paired **iOS**, **Android**, **macOS**, and **Linux** nodes: capture a photo (`jpg`) or a short video clip (`mp4`, with optional audio) via Gateway `node.invoke`.
+
+The macOS app can also physically pan, tilt, and zoom supported USB UVC cameras. PTZ moves the camera hardware; it does not rotate, crop, or otherwise transform a captured image.
 
 All camera access is gated behind a user-controlled setting per platform.
 
@@ -52,13 +55,14 @@ Like `canvas.*`, the iOS node only allows `camera.*` commands in the **foregroun
 The easiest way to get media files is via the CLI helper, which writes decoded media to a temp file and prints the saved path.
 
 ```bash
-openclaw nodes camera snap --node <id>                 # default: both front + back (2 MEDIA lines)
+openclaw nodes camera snap --node <id>                 # default: one node-selected photo
 openclaw nodes camera snap --node <id> --facing front
+openclaw nodes camera snap --node <id> --facing both   # front then back (2 saved paths)
 openclaw nodes camera clip --node <id> --duration 3000
 openclaw nodes camera clip --node <id> --no-audio
 ```
 
-`nodes camera snap` defaults to `--facing both`, capturing both front and back to give the agent both views; pass `--device-id` with a single explicit facing (`both` is rejected when `--device-id` is set). Output files are temporary (in the OS temp directory) unless you build your own wrapper.
+Without `--facing`, `nodes camera snap` captures one photo using the node's default camera and labels the saved artifact `unknown`. On non-Linux nodes, `--facing both` captures front then back and prints two saved paths. `--device-id` is valid without `--facing`; on non-Linux nodes, it cannot be combined with `--facing both`. Linux always sends one facing-less request and labels the artifact `unknown`, regardless of `--facing`. Output files are temporary (in the OS temp directory) unless you build your own wrapper.
 
 ## Android node
 
@@ -123,6 +127,42 @@ openclaw nodes camera clip --node <id> --no-audio
 - `openclaw nodes camera snap` defaults to `maxWidth=1600` unless overridden.
 - `camera.snap` waits `delayMs` (default 2000ms, clamped to `[0, 10000]`) after warm-up/exposure settle before capturing.
 - Photo payloads are recompressed to keep base64 under 5MB.
+
+### macOS physical PTZ
+
+Physical PTZ is implemented by the Mac app for USB cameras that expose standard UVC absolute pan/tilt or zoom controls. It uses the same **Allow Camera** setting as capture. Other node platforms do not advertise these commands.
+
+Always pass an explicit `deviceId` returned by `camera.list`. OpenClaw never chooses a default camera for physical movement.
+
+- `camera.ptz.status` is a safe read command. Request: `{ "deviceId": "<camera-id>" }`.
+  - The response contains only executable `pan`, `tilt`, and `zoom` axes under `axes`.
+  - Pan and tilt values are degrees. Zoom values are percentages.
+  - Each axis reports `current`, `min`, `max`, `step`, `unit`, `canSet`, and `canMove`. `default` appears only when the camera successfully reports a device default.
+  - `canHome` is true only when every executable exposed axis has a real device-advertised default, so the complete home plan can be attempted.
+- `camera.ptz.control` changes the camera hardware. Its closed operations are:
+  - `{ "deviceId": "<camera-id>", "operation": "set", "target": { "panDegrees": 10, "tiltDegrees": -5, "zoomPercent": 40 } }`
+  - `{ "deviceId": "<camera-id>", "operation": "move", "delta": { "panDegrees": 2, "zoomPercent": -5 } }`
+  - `{ "deviceId": "<camera-id>", "operation": "home" }`
+
+`set` and `move` require at least one finite axis value. Omitted axes remain unchanged, and move deltas for zoom are percentage points. `home` restores the device-advertised defaults; it returns `CAMERA_PTZ_UNSUPPORTED` without moving the camera when `canHome` is false. The Mac app clamps and snaps requested values to the camera's range and resolution; the response returns the post-operation `state` and lists changed request fields in `adjusted`. Requesting an unsupported axis returns `CAMERA_PTZ_AXIS_UNSUPPORTED`.
+
+Pan/tilt and zoom use separate hardware writes and cannot be atomic. If an earlier control group succeeds but a later write or final status read fails, `CAMERA_PTZ_PARTIAL` names the applied groups, includes best-effort resulting state when readable, and tells the caller to run `camera.ptz.status` before retrying.
+
+`camera.ptz.control` is dangerous and remains disarmed until the operator explicitly adds it to `gateway.nodes.commands.allow`:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      commands: { allow: ["camera.ptz.control"] },
+    },
+  },
+}
+```
+
+The allow entry alone does not widen an existing node approval. After the updated Mac reconnects and declares PTZ control, run `openclaw nodes pending`, then approve the widened surface with `openclaw nodes approve <requestId>`.
+
+In the agent `nodes` tool, use `action: "camera_ptz"`, the selected Mac node, `deviceId`, and `ptzOperation: "status" | "set" | "move" | "home"`. Axis inputs are `panDegrees`, `tiltDegrees`, and `zoomPercent`.
 
 ## Linux node host
 

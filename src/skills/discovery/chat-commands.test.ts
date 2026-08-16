@@ -1,24 +1,18 @@
 // Chat command tests cover discovery and invocation of skill-provided commands.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 
 let listSkillCommandsForAgents: typeof import("./chat-commands.js").listSkillCommandsForAgents;
 let listSkillCommandsForWorkspace: typeof import("./chat-commands.js").listSkillCommandsForWorkspace;
 let resolveSkillCommandInvocation: typeof import("./chat-commands.js").resolveSkillCommandInvocation;
 let resolveSkillReferenceInvocations: typeof import("./chat-commands.js").resolveSkillReferenceInvocations;
 
-const tempDirs: string[] = [];
+const tempDirs = createTempDirTracker();
 const resolveNodeExecEligibilityMock = vi.hoisted(() =>
   vi.fn((_params: { agentId?: string }) => ({ canExec: false })),
 );
-
-async function makeTempDir(prefix: string) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
-}
 
 async function createWorkspace(parentDir: string, name: string) {
   const workspace = path.join(parentDir, name);
@@ -27,7 +21,7 @@ async function createWorkspace(parentDir: string, name: string) {
 }
 
 async function createMainAndResearchWorkspaces(prefix: string) {
-  const baseDir = await makeTempDir(prefix);
+  const baseDir = tempDirs.make(prefix);
   const mainWorkspace = await createWorkspace(baseDir, "main");
   const researchWorkspace = await createWorkspace(baseDir, "research");
   return { mainWorkspace, researchWorkspace };
@@ -170,8 +164,8 @@ beforeAll(async () => {
   } = await import("./chat-commands.js"));
 });
 
-afterAll(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+afterAll(() => {
+  tempDirs.cleanup();
 });
 
 beforeEach(() => {
@@ -270,7 +264,7 @@ describe("resolveSkillReferenceInvocations", () => {
   it("ignores common shell variables, escaped references, and unknown names", () => {
     expect(
       resolveSkillReferenceInvocations({
-        text: String.raw`Keep $HOME and \$demo_skill literal; $unknown is not installed.`,
+        text: String.raw`Keep $PATH and \$demo_skill literal; $unknown is not installed.`,
         skillCommands,
       }),
     ).toEqual([]);
@@ -294,7 +288,7 @@ describe("resolveSkillReferenceInvocations", () => {
     ).toEqual(["demo_skill"]);
   });
 
-  it("excludes slash-only skills that are hidden from the model prompt", () => {
+  it("resolves explicitly referenced skills hidden from the model prompt", () => {
     expect(
       resolveSkillReferenceInvocations({
         text: "Use $hidden_skill.",
@@ -306,8 +300,8 @@ describe("resolveSkillReferenceInvocations", () => {
             modelVisible: false,
           },
         ],
-      }),
-    ).toEqual([]);
+      }).map((command) => command.name),
+    ).toEqual(["hidden_skill"]);
   });
 });
 
@@ -333,7 +327,7 @@ describe("listSkillCommandsForAgents", () => {
   });
 
   it("scopes to specific agents when agentIds is provided", async () => {
-    const baseDir = await makeTempDir("openclaw-skills-filter-");
+    const baseDir = tempDirs.make("openclaw-skills-filter-");
     const researchWorkspace = await createWorkspace(baseDir, "research");
 
     const commands = listSkillCommandsForAgents({
@@ -359,7 +353,7 @@ describe("listSkillCommandsForAgents", () => {
   });
 
   it("merges allowlists for agents that share one workspace", async () => {
-    const baseDir = await makeTempDir("openclaw-skills-shared-");
+    const baseDir = tempDirs.make("openclaw-skills-shared-");
     const sharedWorkspace = await createWorkspace(baseDir, "research");
 
     const commands = listMainResearchSkillCommands({
@@ -375,7 +369,7 @@ describe("listSkillCommandsForAgents", () => {
   });
 
   it("deduplicates overlapping allowlists for shared workspace", async () => {
-    const baseDir = await makeTempDir("openclaw-skills-overlap-");
+    const baseDir = tempDirs.make("openclaw-skills-overlap-");
     const sharedWorkspace = await createWorkspace(baseDir, "research");
 
     const commands = listSkillCommandsForAgents({
@@ -396,7 +390,7 @@ describe("listSkillCommandsForAgents", () => {
   });
 
   it("keeps workspace unrestricted when one co-tenant agent has no skills filter", async () => {
-    const baseDir = await makeTempDir("openclaw-skills-unfiltered-");
+    const baseDir = tempDirs.make("openclaw-skills-unfiltered-");
     const sharedWorkspace = await createWorkspace(baseDir, "research");
 
     const commands = listSkillCommandsForAgents({
@@ -417,7 +411,7 @@ describe("listSkillCommandsForAgents", () => {
   });
 
   it("merges empty allowlist with non-empty allowlist for shared workspace", async () => {
-    const baseDir = await makeTempDir("openclaw-skills-empty-");
+    const baseDir = tempDirs.make("openclaw-skills-empty-");
     const sharedWorkspace = await createWorkspace(baseDir, "research");
 
     const commands = listSkillCommandsForAgents({
@@ -436,7 +430,7 @@ describe("listSkillCommandsForAgents", () => {
   });
 
   it("uses inherited defaults for agents that share one workspace", async () => {
-    const baseDir = await makeTempDir("openclaw-skills-defaults-");
+    const baseDir = tempDirs.make("openclaw-skills-defaults-");
     const sharedWorkspace = await createWorkspace(baseDir, "shared-defaults");
 
     const commands = listSkillCommandsForAgents({
@@ -459,7 +453,7 @@ describe("listSkillCommandsForAgents", () => {
   });
 
   it("does not inherit defaults when an agent sets an explicit empty skills list", async () => {
-    const baseDir = await makeTempDir("openclaw-skills-defaults-empty-");
+    const baseDir = tempDirs.make("openclaw-skills-defaults-empty-");
     const sharedWorkspace = await createWorkspace(baseDir, "shared-defaults");
 
     const commands = listSkillCommandsForAgents({
@@ -481,7 +475,7 @@ describe("listSkillCommandsForAgents", () => {
   });
 
   it("skips agents with missing workspaces gracefully", async () => {
-    const baseDir = await makeTempDir("openclaw-skills-missing-");
+    const baseDir = tempDirs.make("openclaw-skills-missing-");
     const validWorkspace = await createWorkspace(baseDir, "research");
     const missingWorkspace = path.join(baseDir, "nonexistent");
 
@@ -505,7 +499,7 @@ describe("listSkillCommandsForAgents", () => {
 
 describe("listSkillCommandsForWorkspace", () => {
   it("inherits defaults when agentId is provided without an explicit skill filter", async () => {
-    const baseDir = await makeTempDir("openclaw-skills-workspace-defaults-");
+    const baseDir = tempDirs.make("openclaw-skills-workspace-defaults-");
     const sharedWorkspace = await createWorkspace(baseDir, "shared-defaults");
 
     const commands = listSkillCommandsForWorkspace({

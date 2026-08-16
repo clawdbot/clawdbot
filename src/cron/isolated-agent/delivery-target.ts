@@ -1,10 +1,8 @@
 /** Resolves isolated cron delivery requests into concrete outbound targets. */
-import { normalizeOptionalThreadValue } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveExplicitDeliveryTargetCompat } from "../../channels/plugins/target-parsing-loaded.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -15,7 +13,6 @@ import { isReservedTargetLiteralError } from "../../infra/outbound/target-errors
 import type { ResolvedMessagingTarget } from "../../infra/outbound/target-resolver.js";
 import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loaded.js";
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
-import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -26,7 +23,7 @@ import { resolveCronAgentSessionKey } from "./session-key.js";
 export type DeliveryTargetResolution =
   | {
       ok: true;
-      channel: Exclude<OutboundChannel, "none">;
+      channel: string;
       to: string;
       accountId?: string;
       threadId?: string | number;
@@ -34,7 +31,7 @@ export type DeliveryTargetResolution =
     }
   | {
       ok: false;
-      channel?: Exclude<OutboundChannel, "none">;
+      channel?: string;
       to?: string;
       accountId?: string;
       threadId?: string | number;
@@ -46,10 +43,6 @@ const targetsRuntimeLoader = createLazyImportLoader(
   () => import("../../infra/outbound/targets.runtime.js"),
 );
 
-async function loadTargetsRuntime() {
-  return await targetsRuntimeLoader.load();
-}
-
 async function resolveOutboundTargetWithRuntime(
   params: Parameters<typeof tryResolveLoadedOutboundTarget>[0],
 ) {
@@ -58,7 +51,7 @@ async function resolveOutboundTargetWithRuntime(
     if (loaded) {
       return loaded;
     }
-    const { resolveOutboundTarget } = await loadTargetsRuntime();
+    const { resolveOutboundTarget } = await targetsRuntimeLoader.load();
     return resolveOutboundTarget({ ...params, allowBootstrap: true });
   } catch (err) {
     return {
@@ -74,14 +67,6 @@ const channelSelectionRuntimeLoader = createLazyImportLoader(
 const deliveryTargetRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-target.runtime.js"),
 );
-
-async function loadChannelSelectionRuntime() {
-  return await channelSelectionRuntimeLoader.load();
-}
-
-async function loadDeliveryTargetRuntime() {
-  return await deliveryTargetRuntimeLoader.load();
-}
 
 function isNonEmptyThreadId(value: string | number | undefined | null): value is string | number {
   return value != null && value !== "";
@@ -117,10 +102,7 @@ function shouldCarrySessionThread(params: {
   return routesSharePeer(params.route, params.lastRoute);
 }
 
-function stripSelectedProviderPrefix(params: {
-  channel: Exclude<OutboundChannel, "none">;
-  to?: string;
-}): string | undefined {
+function stripSelectedProviderPrefix(params: { channel: string; to?: string }): string | undefined {
   const trimmed = params.to?.trim();
   if (!trimmed) {
     return undefined;
@@ -150,11 +132,11 @@ export async function resolveDeliveryTarget(
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
   const allowMismatchedLastTo = requestedChannel === "last";
-  const deliveryTargetRuntime = await loadDeliveryTargetRuntime();
+  const deliveryTargetRuntime = await deliveryTargetRuntimeLoader.load();
 
   const sessionCfg = cfg.session;
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
-  const storePath = resolveStorePath(sessionCfg?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(sessionCfg?.store, { agentId });
 
   // Look up thread-specific session first (e.g. agent:main:main:thread:1234),
   // then fall back to the main session entry.
@@ -196,14 +178,14 @@ export async function resolveDeliveryTarget(
     allowMismatchedLastTo,
   });
 
-  let fallbackChannel: Exclude<OutboundChannel, "none"> | undefined;
+  let fallbackChannel: string | undefined;
   let channelResolutionError: Error | undefined;
   if (!preliminary.channel) {
     if (preliminary.lastChannel) {
       fallbackChannel = preliminary.lastChannel;
     } else {
       try {
-        const { resolveMessageChannelSelection } = await loadChannelSelectionRuntime();
+        const { resolveMessageChannelSelection } = await channelSelectionRuntimeLoader.load();
         const selection = await resolveMessageChannelSelection({ cfg });
         fallbackChannel = selection.channel;
       } catch (err) {
@@ -361,6 +343,7 @@ export async function resolveDeliveryTarget(
   const targetResolution = await deliveryTargetRuntime.resolveChannelTargetForDelivery({
     cfg,
     channel,
+    agentId,
     input: toCandidate,
     accountId,
   });
@@ -418,6 +401,7 @@ export async function resolveDeliveryTarget(
   const routeCanCanonicalizeTarget = deliveryTargetRuntime.channelCanResolveOutboundSessionRoute({
     cfg,
     channel,
+    agentId,
   });
   const routeShouldCanonicalizeTarget =
     route && (route.threadId !== undefined || route.to !== routeTargetCandidate);
@@ -461,17 +445,7 @@ export async function resolveDeliveryTarget(
         })()
       : null;
 
-  const parserExplicitThreadId =
-    explicitThreadId == null && explicitTo
-      ? normalizeOptionalThreadValue(
-          resolveExplicitDeliveryTargetCompat({
-            channel,
-            rawTarget: explicitTo,
-          })?.threadId,
-        )
-      : undefined;
-  // Thread precedence is explicit config, route canonicalization, parser-derived
-  // explicit target, then same-peer session history.
+  // Thread precedence is explicit config, route canonicalization, then same-peer session history.
   const canUseSessionThread =
     options?.inheritSessionThread !== false &&
     shouldCarrySessionThread({
@@ -481,10 +455,7 @@ export async function resolveDeliveryTarget(
       lastRoute,
     });
   const threadId =
-    explicitThreadId ??
-    route?.threadId ??
-    parserExplicitThreadId ??
-    (canUseSessionThread ? resolved.threadId : undefined);
+    explicitThreadId ?? route?.threadId ?? (canUseSessionThread ? resolved.threadId : undefined);
   return {
     ok: true,
     channel,

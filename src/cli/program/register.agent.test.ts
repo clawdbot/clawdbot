@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   agentsListCommandMock: vi.fn(),
   agentsSetIdentityCommandMock: vi.fn(),
   agentsUnbindCommandMock: vi.fn(),
+  requestExitAfterOneShotOutputMock: vi.fn(),
   setVerboseMock: vi.fn(),
   runtime: {
     log: vi.fn(),
@@ -31,6 +32,7 @@ const agentsDeleteCommandMock = mocks.agentsDeleteCommandMock;
 const agentsListCommandMock = mocks.agentsListCommandMock;
 const agentsSetIdentityCommandMock = mocks.agentsSetIdentityCommandMock;
 const agentsUnbindCommandMock = mocks.agentsUnbindCommandMock;
+const requestExitAfterOneShotOutputMock = mocks.requestExitAfterOneShotOutputMock;
 const setVerboseMock = mocks.setVerboseMock;
 const runtime = mocks.runtime;
 
@@ -70,6 +72,10 @@ vi.mock("../../global-state.js", () => ({
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: mocks.runtime,
+}));
+
+vi.mock("../one-shot-exit.js", () => ({
+  requestExitAfterOneShotOutput: mocks.requestExitAfterOneShotOutputMock,
 }));
 
 describe("agent command registration", () => {
@@ -176,6 +182,7 @@ describe("agent command registration", () => {
 
     expect(agentCliCommandMock).toHaveBeenCalledTimes(1);
     expect(agentExecCommandMock).not.toHaveBeenCalled();
+    expect(requestExitAfterOneShotOutputMock).toHaveBeenCalledWith(runtime);
   });
 
   it("keeps an exec-valued parent message on the existing parent action", async () => {
@@ -420,16 +427,31 @@ describe("agent command registration", () => {
 
     await runCli(["agents"]);
 
-    expect(runtime.error).toHaveBeenCalledWith("Error: list failed");
+    expect(runtime.error).toHaveBeenCalledWith("list failed");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("reports errors via runtime when agent command fails", async () => {
-    agentCliCommandMock.mockRejectedValueOnce(new Error("agent failed"));
+  it.each([
+    { label: "human", args: ["agent", "--message", "hello"] },
+    { label: "JSON", args: ["agent", "--message", "hello", "--json"] },
+  ])(
+    "renders gateway request errors without internal class names in $label mode",
+    async ({ args }) => {
+      const message =
+        "The selected model was not found by the provider. Check the model id or choose a different model.";
+      const error = Object.assign(new Error(message), {
+        name: "GatewayClientRequestError",
+        code: "UNAVAILABLE",
+        gatewayCode: "UNAVAILABLE",
+        details: { reason: "model_not_found" },
+      });
+      agentCliCommandMock.mockRejectedValueOnce(error);
 
-    await runCli(["agent", "--message", "hello"]);
+      await runCli(args);
 
-    expect(runtime.error).toHaveBeenCalledWith("Error: agent failed");
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-  });
+      expect(runtime.error).toHaveBeenCalledWith(message);
+      expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("Error:"));
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
 });

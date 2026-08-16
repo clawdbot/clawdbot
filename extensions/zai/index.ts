@@ -16,7 +16,7 @@ import {
   normalizeApiKeyInput,
   normalizeOptionalSecretInput,
   type SecretInput,
-  upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
@@ -36,13 +36,11 @@ import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js
 import { buildZaiModelDefinition, resolveZaiBaseUrl } from "./model-definitions.js";
 import { applyZaiConfig, applyZaiProviderConfig, resolveZaiModelId } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { isGlm52ModelId, resolveThinkingProfile } from "./provider-policy-api.js";
+import { resolveThinkingProfile, resolveZaiReasoningEffort } from "./provider-policy-api.js";
 
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
-type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
-
 function resolveDeprecatedPiAgentAuthPath(env: NodeJS.ProcessEnv): string {
   const home = env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
   return path.join(home, ".pi", "agent", "auth.json");
@@ -69,15 +67,6 @@ function resolveDeprecatedPiAgentAccessToken(
     }
   } catch {}
   return undefined;
-}
-
-async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
-  const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
-  }
 }
 
 function resolveGlm5ForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
@@ -122,29 +111,10 @@ function isDisabledThinkingLevel(thinkingLevel: ProviderWrapStreamFnContext["thi
   return thinkingLevel === "off";
 }
 
-function mapThinkingLevelToZaiReasoningEffort(
-  thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"],
-): "high" | "max" | undefined {
-  switch (thinkingLevel) {
-    case "low":
-    case "medium":
-    case "high":
-    case "adaptive":
-      return "high";
-    case "xhigh":
-    case "max":
-      return "max";
-    default:
-      return undefined;
-  }
-}
-
 function wrapZaiStreamFn(ctx: ProviderWrapStreamFnContext) {
   let streamFn = createToolStreamWrapper(ctx.streamFn, ctx.extraParams?.tool_stream !== false);
   const preserveThinking = shouldPreserveZaiThinking(ctx.extraParams);
-  const reasoningEffort = isGlm52ModelId(ctx.modelId)
-    ? mapThinkingLevelToZaiReasoningEffort(ctx.thinkingLevel)
-    : undefined;
+  const reasoningEffort = resolveZaiReasoningEffort(ctx.modelId, ctx.thinkingLevel);
 
   if (!isDisabledThinkingLevel(ctx.thinkingLevel) && !preserveThinking && !reasoningEffort) {
     return streamFn;

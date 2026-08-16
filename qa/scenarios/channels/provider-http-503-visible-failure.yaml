@@ -30,7 +30,7 @@ scenario:
   docsRefs:
     - docs/channels/qa-channel.md
   codeRefs:
-    - src/auto-reply/reply/provider-request-error-classifier.ts
+    - src/auto-reply/reply/agent-runner-failure-reply.ts
     - src/auto-reply/reply/agent-runner-error-handler.ts
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:

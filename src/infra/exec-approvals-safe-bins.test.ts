@@ -6,7 +6,7 @@ import {
   makeMockCommandResolution,
   makeMockExecutableResolution,
   makePathEnv,
-  makeTempDir,
+  makeExecApprovalsTempDir,
 } from "./exec-approvals-test-helpers.js";
 import {
   evaluateExecAllowlist,
@@ -386,7 +386,7 @@ describe("exec approvals safe bins", () => {
   ];
 
   it.runIf(process.platform !== "win32").each(cases)("$name", (testCase) => {
-    const cwd = testCase.cwd ?? makeTempDir();
+    const cwd = testCase.cwd ?? makeExecApprovalsTempDir();
     testCase.setup?.(cwd);
     const executableName = testCase.executableName ?? "jq";
     const rawExecutable = testCase.rawExecutable ?? executableName;
@@ -562,7 +562,7 @@ describe("exec approvals safe bins", () => {
     if (process.platform === "win32") {
       return;
     }
-    const cwd = makeTempDir();
+    const cwd = makeExecApprovalsTempDir();
     fs.writeFileSync(path.join(cwd, "existing.txt"), "x");
     const resolution = {
       rawExecutable: "sort",
@@ -633,7 +633,7 @@ describe("exec approvals safe bins", () => {
     if (process.platform === "win32") {
       return;
     }
-    const tmp = makeTempDir();
+    const tmp = makeExecApprovalsTempDir();
     const fakeDir = path.join(tmp, "fake-bin");
     fs.mkdirSync(fakeDir, { recursive: true });
     const fakeHead = path.join(fakeDir, "head");

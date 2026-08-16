@@ -95,7 +95,6 @@ type StatusArgs = {
   agentId?: string;
   configuredDefaultModelLabel?: string;
   runtimeContextTokens?: number;
-  explicitConfiguredContextTokens?: number;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   parentSessionKey?: string;
@@ -670,9 +669,8 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   let cacheRead = entry?.cacheRead;
   let cacheWrite = entry?.cacheWrite;
   const freshTotalTokens = resolveFreshSessionTotalTokens(entry);
-  // Undefined freshness is legacy, not stale: keep persisted totals for /status,
-  // but let a fresh transcript prompt snapshot replace them when available.
-  const allowTranscriptContextUsage = entry?.totalTokensFresh !== false;
+  const allowTranscriptContextUsage =
+    entry?.totalTokensFresh !== false && freshTotalTokens === undefined;
   let totalTokens = freshTotalTokens;
 
   // Explicitly stale session/cache usage can still hydrate Tokens/Cache lines
@@ -693,10 +691,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
         allowTranscriptContextUsage &&
         candidate !== undefined &&
         candidate > 0 &&
-        (entry?.totalTokensFresh !== true ||
-          !totalTokens ||
-          totalTokens === 0 ||
-          candidate > totalTokens)
+        (!totalTokens || totalTokens === 0 || candidate > totalTokens)
       ) {
         totalTokens = candidate;
       }
@@ -794,33 +789,8 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       : persistedContextMatchesActiveModel
         ? persistedContextTokens
         : undefined;
-  const agentContextTokens =
-    typeof args.agent?.contextTokens === "number" && args.agent.contextTokens > 0
-      ? args.agent.contextTokens
-      : undefined;
-  const explicitConfiguredContextTokens =
-    typeof args.explicitConfiguredContextTokens === "number" &&
-    args.explicitConfiguredContextTokens > 0
-      ? args.explicitConfiguredContextTokens
-      : undefined;
-  const cappedConfiguredContextTokens =
-    typeof explicitConfiguredContextTokens === "number"
-      ? typeof activeContextTokens === "number"
-        ? Math.min(explicitConfiguredContextTokens, activeContextTokens)
-        : explicitConfiguredContextTokens
-      : undefined;
-  const cappedAgentContextTokens =
-    typeof agentContextTokens === "number"
-      ? typeof activeContextTokens === "number"
-        ? Math.min(agentContextTokens, activeContextTokens)
-        : agentContextTokens
-      : undefined;
   const channelOverrideContextTokens = channelModelNote
-    ? (explicitRuntimeContextTokens ??
-      cappedConfiguredContextTokens ??
-      (typeof activeContextTokens === "number"
-        ? (cappedAgentContextTokens ?? activeContextTokens)
-        : cappedAgentContextTokens))
+    ? (explicitRuntimeContextTokens ?? cappedPersistedContextTokens ?? activeContextTokens)
     : undefined;
   const runtimeSnapshotHasFallbackProvenance =
     initialFallbackState.active ||
@@ -833,28 +803,14 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   // snapshot only when it belongs to a real fallback/equivalent runtime. A
   // transcript-derived previous model is stale after a manual switch and must
   // not pin the newly selected model to the old context window. Separately,
-  // callers can pass an explicit configured cap that should still apply on
-  // fallback paths, but it cannot exceed the active runtime window when that
-  // window is known. Persisted runtime snapshots still take precedence over
-  // configured caps so historical fallback sessions keep their last known live
-  // limit even if the active model later becomes unresolvable.
+  // Persisted runtime snapshots still take precedence over model metadata so
+  // historical fallback sessions keep their last known live limit even if the
+  // active model later becomes unresolvable.
   const contextTokens = runtimeDiffersFromSelected
     ? (() => {
         if (!runtimeSnapshotHasFallbackProvenance) {
           if (typeof selectedContextTokens === "number") {
-            if (explicitConfiguredContextTokens !== undefined) {
-              return Math.min(explicitConfiguredContextTokens, selectedContextTokens);
-            }
-            if (agentContextTokens !== undefined) {
-              return Math.min(agentContextTokens, selectedContextTokens);
-            }
             return selectedContextTokens;
-          }
-          if (explicitConfiguredContextTokens !== undefined) {
-            return explicitConfiguredContextTokens;
-          }
-          if (agentContextTokens !== undefined) {
-            return agentContextTokens;
           }
           return DEFAULT_CONTEXT_TOKENS;
         }
@@ -870,14 +826,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
             typeof selectedContextTokens === "number" &&
             typeof activeContextTokens === "number" &&
             activeContextTokens !== selectedContextTokens;
-          const explicitConfiguredMatchesPersisted =
-            typeof explicitConfiguredContextTokens === "number" &&
-            explicitConfiguredContextTokens === trustedPersistedContextTokens;
-          if (
-            persistedLooksSelectedWindow &&
-            activeWindowDiffersFromSelected &&
-            !explicitConfiguredMatchesPersisted
-          ) {
+          if (persistedLooksSelectedWindow && activeWindowDiffersFromSelected) {
             return activeContextTokens;
           }
           if (typeof activeContextTokens === "number") {
@@ -885,27 +834,29 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
           }
           return trustedPersistedContextTokens;
         }
-        if (cappedConfiguredContextTokens !== undefined) {
-          return cappedConfiguredContextTokens;
-        }
         if (typeof activeContextTokens === "number") {
           return activeContextTokens;
         }
         return DEFAULT_CONTEXT_TOKENS;
       })()
-    : (resolveContextTokensForModel({
-        cfg: contextConfig,
-        ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
-        model: contextLookupModel,
-        contextTokensOverride:
+    : (() => {
+        const resolvedContextTokens = resolveContextTokensForModel({
+          cfg: contextConfig,
+          ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
+          model: contextLookupModel,
+          allowAsyncLoad: false,
+        });
+        const runtimeLimit =
           channelOverrideContextTokens ??
           cappedPersistedContextTokens ??
-          cappedConfiguredContextTokens ??
-          cappedAgentContextTokens ??
-          explicitRuntimeContextTokens,
-        fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-        allowAsyncLoad: false,
-      }) ?? DEFAULT_CONTEXT_TOKENS);
+          explicitRuntimeContextTokens;
+        if (runtimeLimit === undefined) {
+          return resolvedContextTokens ?? DEFAULT_CONTEXT_TOKENS;
+        }
+        return resolvedContextTokens === undefined
+          ? runtimeLimit
+          : Math.min(runtimeLimit, resolvedContextTokens);
+      })();
 
   const thinkLevel =
     args.resolvedThink ?? args.sessionEntry?.thinkingLevel ?? args.agent?.thinkingDefault ?? "off";

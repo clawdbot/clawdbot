@@ -28,22 +28,34 @@ const LEGACY_NODE_HOST_DESKTOP_METADATA: Readonly<
 > = {
   darwin: { platform: "macos", deviceFamily: "Mac" },
   linux: { platform: "linux", deviceFamily: "Linux" },
+  macos: { platform: "macos", deviceFamily: "Mac" },
   win32: { platform: "windows", deviceFamily: "Windows" },
+  windows: { platform: "windows", deviceFamily: "Windows" },
 };
 
-/** Normalizes the desktop metadata emitted by the shipped protocol-v3 node host. */
-export function normalizeLegacyNodeHostClientMetadata(
+/** Normalizes desktop aliases used by protocol-v3-compatible node hosts. */
+export function normalizeNodeHostCompatibilityMetadata(
   client: ConnectParams["client"],
 ): ConnectParams["client"] {
-  if (
-    client.id !== GATEWAY_CLIENT_IDS.NODE_HOST ||
-    client.mode !== GATEWAY_CLIENT_MODES.NODE ||
-    client.deviceFamily?.trim()
-  ) {
+  if (client.id !== GATEWAY_CLIENT_IDS.NODE_HOST || client.mode !== GATEWAY_CLIENT_MODES.NODE) {
     return client;
   }
-  const metadata = LEGACY_NODE_HOST_DESKTOP_METADATA[client.platform];
-  return metadata ? { ...client, ...metadata } : client;
+  if (!Object.hasOwn(LEGACY_NODE_HOST_DESKTOP_METADATA, client.platform)) {
+    return client;
+  }
+  const metadata = LEGACY_NODE_HOST_DESKTOP_METADATA[client.platform]!;
+  const deviceFamily = client.deviceFamily?.trim();
+  if (deviceFamily && deviceFamily.toLowerCase() !== metadata.deviceFamily.toLowerCase()) {
+    return client;
+  }
+  if (client.platform === metadata.platform && deviceFamily) {
+    return client;
+  }
+  return {
+    ...client,
+    platform: metadata.platform,
+    deviceFamily: deviceFamily || metadata.deviceFamily,
+  };
 }
 
 export function filterLegacyNodeProtocolFeatures(params: {

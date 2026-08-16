@@ -109,13 +109,15 @@ export function applyCodexTurnNotificationState(params: {
   let turnCrossedToolHandoff = params.turnCrossedToolHandoff;
 
   if (isCurrentTurnNotification) {
+    // Update item ownership before scheduling progress watches: a started item
+    // owns its quiet execution window, while its completion starts a new idle window.
+    updateActiveTurnItemIds(notification, params.activeTurnItemIds);
+    updateActiveCompletionBlockerItemIds(notification, params.activeCompletionBlockerItemIds);
     turnWatches.touchActivity(`notification:${notification.method}`, {
       details: describeNotificationActivity(notification),
       attemptProgress: true,
     });
     params.onReportExecutionNotification(notification);
-    updateActiveTurnItemIds(notification, params.activeTurnItemIds);
-    updateActiveCompletionBlockerItemIds(notification, params.activeCompletionBlockerItemIds);
     if (notification.method === "item/completed" && params.activeTurnItemIds.size === 0) {
       params.onScheduleTerminalDynamicToolReleaseCheck();
     }

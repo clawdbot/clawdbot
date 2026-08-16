@@ -29,6 +29,25 @@ async function captureToolActivityProof(page: import("playwright").Page, name: s
   await page.screenshot({ path: path.join(artifactDir, `${name}.png`), fullPage: true });
 }
 
+async function captureFactrowProof(
+  page: import("playwright").Page,
+  activity: import("playwright").Locator,
+  theme: "dark" | "light",
+) {
+  const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+  if (!artifactDir) {
+    return;
+  }
+  const state = process.env.OPENCLAW_FACTROW_PROOF_STATE?.trim() || "after";
+  await fs.mkdir(artifactDir, { recursive: true });
+  await page.locator(".chat-main").screenshot({
+    path: path.join(artifactDir, `factrow-${state}-${theme}-context.png`),
+  });
+  await activity.screenshot({
+    path: path.join(artifactDir, `factrow-${state}-${theme}-rows.png`),
+  });
+}
+
 async function expandCompletedWorkGroups(page: import("playwright").Page) {
   const workSummaries = page.locator(".chat-work-group > .chat-activity-group__summary");
   await workSummaries.first().waitFor();
@@ -70,22 +89,29 @@ suite.define(() => {
     await expandCompletedWorkGroups(page);
 
     expect(await page.locator(".chat-tool-msg-summary__label").allTextContents()).toEqual([
-      "Tool error",
+      "Tool output",
       "Tool output",
     ]);
-    // The earlier failure must stay visibly marked as an error even though a
-    // later turn recovered; the recovered row must render neutral.
+    // Each failure keeps only its per-call badge even when its turn later
+    // recovers; both row summaries otherwise render neutral.
     const summaryClasses = await page
       .locator(".chat-tool-msg-summary")
       .evaluateAll((nodes) => nodes.map((node) => node.className));
     expect(summaryClasses).toHaveLength(2);
-    expect(summaryClasses[0]).toContain("chat-tool-msg-summary--error");
+    expect(summaryClasses[0]).not.toContain("chat-tool-msg-summary--error");
     expect(summaryClasses[1]).not.toContain("chat-tool-msg-summary--error");
+    expect(await page.locator(".chat-tool-row__badge").allTextContents()).toEqual([
+      "failed",
+      "failed",
+    ]);
     await context.close();
   });
 
   it("pairs a canonical parallel batch and renders per-file patch sections", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1200 } });
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      viewport: { height: 900, width: 1200 },
+    });
     const page = await context.newPage();
     await installMockGateway(page, {
       historyMessages: [
@@ -138,7 +164,7 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     const activity = page.locator(".chat-group--activity .chat-activity-group__summary");
     await activity.waitFor();
-    expect(await activity.textContent()).toContain("Read a file, edited 2 files");
+    expect(await activity.textContent()).toContain("Read a file, edited a file, created a file");
     if ((await activity.getAttribute("aria-expanded")) !== "true") {
       await activity.click();
     }
@@ -168,6 +194,169 @@ suite.define(() => {
     await rawDetails.click();
     await page.getByText("Applied patch", { exact: true }).waitFor();
     await captureToolActivityProof(page, "parallel-multifile-expanded");
+    await context.close();
+  });
+
+  it("preserves mixed producer-recorded file operations in a realistic agent turn", async () => {
+    const context = await suite.browser.newContext({
+      colorScheme: "light",
+      locale: "en-US",
+      viewport: { height: 760, width: 1120 },
+    });
+    const page = await context.newPage();
+    const timestamp = Date.UTC(2026, 7, 11, 18, 30);
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "user",
+          content:
+            "Please update the release helper: add the summary module, fix the stable-channel plan, remove the legacy formatter, and run the focused test.",
+          timestamp,
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "I’ll make those three scoped file changes, then run the focused release-plan test.",
+            },
+          ],
+          timestamp: timestamp + 1_000,
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-release-patch",
+              name: "apply_patch",
+              arguments: {
+                changes: [
+                  {
+                    path: "src/release/release-summary.ts",
+                    kind: { type: "add" },
+                    diff: "export function formatReleaseSummary(version: string) {\n  return `Release ${version} is ready.`;\n}\n",
+                  },
+                  {
+                    path: "src/release/release-plan.ts",
+                    kind: { type: "update" },
+                    diff: [
+                      "@@ -8,3 +8,3 @@",
+                      "-export const releaseChannel = 'beta';",
+                      "+export const releaseChannel = 'stable';",
+                    ].join("\n"),
+                  },
+                  {
+                    path: "src/release/legacy-format.ts",
+                    kind: { type: "delete" },
+                    diff: "export const legacyReleaseFormat = true;\n",
+                  },
+                ],
+              },
+            },
+            {
+              type: "toolCall",
+              id: "call-release-test",
+              name: "exec",
+              arguments: { command: "pnpm test src/release/release-plan.test.ts" },
+            },
+          ],
+          timestamp: timestamp + 2_000,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-release-patch",
+          toolName: "apply_patch",
+          content: [{ type: "text", text: "Applied patch" }],
+          timestamp: timestamp + 3_000,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-release-test",
+          toolName: "exec",
+          content: [{ type: "text", text: "PASS src/release/release-plan.test.ts (8 tests)" }],
+          timestamp: timestamp + 4_000,
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Done. The summary module is in place, the stable-channel plan is updated, the legacy formatter is removed, and all 8 focused tests pass.",
+            },
+          ],
+          timestamp: timestamp + 5_000,
+        },
+      ],
+    });
+
+    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.getByText("Done. The summary module is in place", { exact: false }).waitFor();
+    const activity = page.locator(".chat-group--activity");
+    const summary = activity.locator(".chat-activity-group__summary");
+    if ((await summary.getAttribute("aria-expanded")) !== "true") {
+      await summary.click();
+    }
+
+    const patchRow = activity.locator(".chat-tool-msg-summary", { hasText: "3 files" });
+    const commandRow = activity.locator(".chat-tool-msg-summary", {
+      hasText: "pnpm test src/release/release-plan.test.ts",
+    });
+    await patchRow.waitFor();
+    await commandRow.waitFor();
+    await captureFactrowProof(page, activity, "light");
+
+    await page.emulateMedia({ colorScheme: "dark" });
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
+      .toBe("dark");
+    await captureFactrowProof(page, activity, "dark");
+    expect(await summary.textContent()).toContain(
+      "Ran a command, edited a file, created a file, deleted a file",
+    );
+    expect(await patchRow.locator(".chat-tool-row__verb").textContent()).toBe("Changed");
+    await context.close();
+  });
+
+  it("shows native tool input when the result sorts before its call", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-native",
+              name: "example_tool",
+              arguments: { query: "example" },
+            },
+          ],
+          timestamp: 2,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-native",
+          toolName: "example_tool",
+          content: [{ type: "text", text: "Native result payload" }],
+          timestamp: 1,
+        },
+      ],
+    });
+
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const row = page.locator(".chat-tool-msg-summary");
+    await row.waitFor();
+    expect(await row.count()).toBe(1);
+    await row.click();
+    const card = page.locator(".chat-tool-card");
+    await card.waitFor();
+    expect(await card.getByText("query:", { exact: true }).count()).toBe(1);
+    expect(await card.getByText("example", { exact: true }).count()).toBe(1);
+    await card.getByText("Tool output", { exact: true }).waitFor();
+    await card.getByText("Native result payload", { exact: true }).waitFor();
+    await captureToolActivityProof(page, "native-result-before-call-expanded");
     await context.close();
   });
 

@@ -451,6 +451,8 @@ function escapesBase(baseDir: string, candidate: string): boolean {
 
 function safeRealpathSync(candidate: string): string | null {
   try {
+    // Hook containment prefers native canonicalization when Node exposes it.
+    // Keep the plain fallback only for runtimes without the native entrypoint.
     const nativeRealpath = fs.realpathSync.native as ((path: string) => string) | undefined;
     return nativeRealpath ? nativeRealpath(candidate) : fs.realpathSync(candidate);
   } catch {

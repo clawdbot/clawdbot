@@ -345,7 +345,7 @@ describe("agents tools panel (browser)", () => {
       { label: "Access", value: "Enabled by the current profile." },
       { label: "Source", value: "Plugin: voice-call" },
       { label: "Default Presets", value: "full" },
-      { label: "Current Thread", value: "Not available in this chat thread right now." },
+      { label: "Current Session", value: "Not available in this chat session right now." },
     ]);
   });
 

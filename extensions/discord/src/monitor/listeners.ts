@@ -4,7 +4,7 @@ import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   type Client,
   type DiscordMessageDispatchData,
@@ -373,8 +373,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
         return;
       }
 
-      const queued = enqueueSystemEvent(presenceEvent.text, {
-        sessionKey: route.sessionKey,
+      const queued = enqueueRoutedSystemEvent(presenceEvent.text, route, {
         contextKey: `discord:presence-online:${this.params.accountId}:${data.guild_id}:${userId}`,
         deliveryContext: {
           channel: "discord",

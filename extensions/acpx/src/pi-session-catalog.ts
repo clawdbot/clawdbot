@@ -4,138 +4,30 @@ import type {
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "openclaw/plugin-sdk/session-catalog";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  boundSessionCatalogTranscriptPage,
+  boundedSessionCatalogLimit,
+  decodeSessionCatalogCursor,
+  encodeSessionCatalogCursor,
+  isExactSessionCatalogCursor,
+  optionalSessionCatalogCursor,
+} from "openclaw/plugin-sdk/session-catalog-runtime";
+import {
+  isRecord,
+  normalizeBoundedOptionalString as optionalPiString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { listPiSummaryPage, readPiSessionById } from "./pi-session-store.js";
+import { parsePiSessionTimestampMs } from "./pi-session-timestamp.js";
 
 const LOCAL_HOST_ID = "gateway";
 const DEFAULT_PAGE_LIMIT = 20;
-const MAX_PAGE_LIMIT = 100;
 const MAX_SEARCH_LENGTH = 500;
-const MAX_CURSOR_LENGTH = 128;
-const MAX_TRANSCRIPT_ITEM_BYTES = 512 * 1024;
-const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 const SESSION_ID_PATTERN = /^(?!-)[A-Za-z0-9._:-]{1,256}$/u;
 
 export type PiSessionPage = { sessions: SessionCatalogSession[]; nextCursor?: string };
 
-function optionalPiString(value: unknown, maxLength: number): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
-}
-
-function boundedLimit(value: unknown, fallback = DEFAULT_PAGE_LIMIT): number {
-  if (value === undefined) {
-    return fallback;
-  }
-  if (!Number.isInteger(value) || Number(value) < 1 || Number(value) > MAX_PAGE_LIMIT) {
-    throw new Error(`limit must be an integer between 1 and ${String(MAX_PAGE_LIMIT)}`);
-  }
-  return Number(value);
-}
-
-function encodeCursor(offset: number): string {
-  return Buffer.from(JSON.stringify({ offset }), "utf8").toString("base64url");
-}
-
-function optionalRawCursor(value: unknown): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "string" || value.length === 0 || value.length > MAX_CURSOR_LENGTH) {
-    throw new Error("cursor is invalid");
-  }
-  return value;
-}
-
-function decodeCursor(value: unknown): number {
-  const cursor = optionalRawCursor(value);
-  if (cursor === undefined) {
-    return 0;
-  }
-  try {
-    const bytes = Buffer.from(cursor, "base64url");
-    if (bytes.toString("base64url") !== cursor) {
-      throw new Error("non-canonical base64url");
-    }
-    const parsed = JSON.parse(bytes.toString("utf8")) as unknown;
-    if (!isRecord(parsed) || !Number.isSafeInteger(parsed.offset) || Number(parsed.offset) < 0) {
-      throw new Error("invalid offset");
-    }
-    const offset = Number(parsed.offset);
-    if (encodeCursor(offset) !== cursor) {
-      throw new Error("non-canonical cursor payload");
-    }
-    return offset;
-  } catch (error) {
-    throw new Error("cursor is invalid", { cause: error });
-  }
-}
-
-export function isExactPiSessionCursor(value: unknown): value is string {
-  if (typeof value !== "string") {
-    return false;
-  }
-  try {
-    decodeCursor(value);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function truncateUtf8(text: string, maxBytes: number): string {
-  if (Buffer.byteLength(text, "utf8") <= maxBytes) {
-    return text;
-  }
-  let low = 0;
-  let high = text.length;
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    if (Buffer.byteLength(text.slice(0, middle), "utf8") <= maxBytes - 3) {
-      low = middle;
-    } else {
-      high = middle - 1;
-    }
-  }
-  const end = low > 0 && /[\uD800-\uDBFF]/u.test(text.charAt(low - 1)) ? low - 1 : low;
-  return `${text.slice(0, end)}…`;
-}
-
-function transcriptPage(
-  items: SessionCatalogTranscriptItem[],
-  limit: number,
-  offset: number,
-): { items: SessionCatalogTranscriptItem[]; nextCursor?: string } {
-  const end = Math.max(0, items.length - offset);
-  const start = Math.max(0, end - limit);
-  const page: SessionCatalogTranscriptItem[] = [];
-  let pageBytes = 2;
-  for (let index = end - 1; index >= start; index -= 1) {
-    const item = items[index];
-    if (!item) {
-      continue;
-    }
-    const bounded: SessionCatalogTranscriptItem = {
-      ...item,
-      text: truncateUtf8(item.text ?? "", MAX_TRANSCRIPT_ITEM_BYTES),
-    };
-    const itemBytes = Buffer.byteLength(JSON.stringify(bounded), "utf8") + 1;
-    if (page.length > 0 && pageBytes + itemBytes > MAX_TRANSCRIPT_PAGE_BYTES) {
-      break;
-    }
-    page.unshift(bounded);
-    pageBytes += itemBytes;
-  }
-  const consumed = offset + page.length;
-  return {
-    items: page,
-    ...(consumed < items.length ? { nextCursor: encodeCursor(consumed) } : {}),
-  };
-}
+export const isExactPiSessionCursor = isExactSessionCatalogCursor;
 
 function textFromContent(content: unknown): string {
   if (typeof content === "string") {
@@ -161,17 +53,6 @@ function textFromContent(content: unknown): string {
     .join("\n");
 }
 
-function timestampMs(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    return Number.isNaN(parsed) ? undefined : parsed;
-  }
-  return undefined;
-}
-
 function parseListParams(value: unknown): { searchTerm?: string; limit: number; cursor?: string } {
   if (value === undefined || value === null) {
     return { limit: DEFAULT_PAGE_LIMIT };
@@ -189,9 +70,9 @@ function parseListParams(value: unknown): { searchTerm?: string; limit: number; 
   if (value.searchTerm !== undefined && !searchTerm) {
     throw new Error("searchTerm is invalid");
   }
-  const cursor = optionalRawCursor(value.cursor);
+  const cursor = optionalSessionCatalogCursor(value.cursor);
   return {
-    limit: boundedLimit(value.limit),
+    limit: boundedSessionCatalogLimit(value.limit),
     ...(searchTerm ? { searchTerm } : {}),
     ...(cursor ? { cursor } : {}),
   };
@@ -209,17 +90,17 @@ function parseReadParams(value: unknown): { threadId: string; limit: number; cur
   if (!threadId || !SESSION_ID_PATTERN.test(threadId)) {
     throw new Error("threadId is invalid");
   }
-  const cursor = optionalRawCursor(value.cursor);
+  const cursor = optionalSessionCatalogCursor(value.cursor);
   return {
     threadId,
-    limit: boundedLimit(value.limit),
+    limit: boundedSessionCatalogLimit(value.limit),
     ...(cursor ? { cursor } : {}),
   };
 }
 
 export async function listLocalPiSessionPage(value?: unknown): Promise<PiSessionPage> {
   const params = parseListParams(value);
-  const offset = decodeCursor(params.cursor);
+  const offset = decodeSessionCatalogCursor(params.cursor);
   const { summaries, hasMore } = await listPiSummaryPage(process.env, {
     offset,
     limit: params.limit,
@@ -228,7 +109,7 @@ export async function listLocalPiSessionPage(value?: unknown): Promise<PiSession
   const page = summaries.map(({ file: _file, version: _version, ...session }) => session);
   return {
     sessions: page,
-    ...(hasMore ? { nextCursor: encodeCursor(offset + page.length) } : {}),
+    ...(hasMore ? { nextCursor: encodeSessionCatalogCursor(offset + page.length) } : {}),
   };
 }
 
@@ -236,7 +117,8 @@ function isoTimestamp(
   message: Record<string, unknown>,
   entry: Record<string, unknown>,
 ): string | undefined {
-  const value = timestampMs(message.timestamp) ?? timestampMs(entry.timestamp);
+  const value =
+    parsePiSessionTimestampMs(message.timestamp) ?? parsePiSessionTimestampMs(entry.timestamp);
   if (value === undefined) {
     return undefined;
   }
@@ -383,9 +265,9 @@ export async function readLocalPiTranscriptPage(
   value: unknown,
 ): Promise<SessionsCatalogReadResult> {
   const params = parseReadParams(value);
-  const offset = decodeCursor(params.cursor);
+  const offset = decodeSessionCatalogCursor(params.cursor);
   const items = piTranscriptItems(await readPiSessionById(params.threadId, process.env));
-  const page = transcriptPage(items, params.limit, offset);
+  const page = boundSessionCatalogTranscriptPage(items, params.limit, offset);
   return {
     hostId: LOCAL_HOST_ID,
     label: "Local Pi",

@@ -441,11 +441,7 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
 }
 
 export function parseStoreTimestampMs(value: string | undefined): number {
-  if (!value) {
-    return Number.NEGATIVE_INFINITY;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+  return parseDateStringTimestampMs(value) ?? Number.NEGATIVE_INFINITY;
 }
 
 export function compareStoreTimestampDesc(
@@ -606,3 +602,4 @@ export function parseEntryRangeFromKey(
   }
   return { startLine: 1, endLine: 1 };
 }
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";

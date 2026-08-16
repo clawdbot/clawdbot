@@ -10,22 +10,22 @@ import {
   bundledPluginRoot,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it as baseIt, vi } from "vitest";
-import { copyBundledPluginMetadata } from "../../scripts/copy-bundled-plugin-metadata.mjs";
+import { copyBundledPluginMetadata } from "../../scripts/copy-bundled-plugin-metadata.mts";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
-} from "../../scripts/lib/local-build-metadata-paths.mjs";
+} from "../../scripts/lib/local-build-metadata-paths.mts";
 import {
   acquireRunNodeBuildLock,
   resolveBuildRequirement,
   resolveRuntimePostBuildRequirement,
   runNodeMain,
-} from "../../scripts/run-node.mjs";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+} from "../../scripts/run-node.mts";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 
 const it = baseIt.extend<{ tmp: string }>({
   tmp: async ({ task: _task }, use) => {
-    await withTempDir({ prefix: "openclaw-run-node-" }, use);
+    await withTestDir({ prefix: "openclaw-run-node-" }, use);
   },
 });
 
@@ -173,11 +173,18 @@ async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
 }
 
 function expectedBuildSpawn() {
-  return [process.execPath, "scripts/tsdown-build.mjs", "--no-clean"];
+  return [process.execPath, "--import", "tsx", "scripts/tsdown-build.mts", "--no-clean"];
 }
 
 function expectedBundledPluginAssetBuildSpawn() {
-  return [process.execPath, "scripts/bundled-plugin-assets.mjs", "--phase", "build"];
+  return [
+    process.execPath,
+    "--import",
+    "tsx",
+    "scripts/bundled-plugin-assets.mts",
+    "--phase",
+    "build",
+  ];
 }
 
 function statusCommandSpawn() {
@@ -186,6 +193,10 @@ function statusCommandSpawn() {
 
 function resolvePath(tmp: string, relativePath: string) {
   return path.join(tmp, relativePath);
+}
+
+function isTsxScriptArgs(args: string[], scriptPath: string): boolean {
+  return args[0] === "--import" && args[1] === "tsx" && args[2] === scriptPath;
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -383,7 +394,7 @@ describe("run-node script", () => {
 
       const nodeCalls: string[][] = [];
       const spawn = (cmd: string, args: string[]) => {
-        if (cmd === process.execPath && args[0] === "scripts/tsdown-build.mjs") {
+        if (cmd === process.execPath && isTsxScriptArgs(args, "scripts/tsdown-build.mts")) {
           fsSync.writeFileSync(argsPath, args.join(" "), "utf-8");
           if (!args.includes("--no-clean")) {
             fsSync.rmSync(resolvePath(tmp, "dist/control-ui"), { recursive: true, force: true });
@@ -404,12 +415,19 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(0);
       await expect(fs.readFile(argsPath, "utf-8")).resolves.toContain(
-        "scripts/tsdown-build.mjs --no-clean",
+        "scripts/tsdown-build.mts --no-clean",
       );
       await expect(fs.readFile(indexPath, "utf-8")).resolves.toContain("sentinel");
       expect(nodeCalls).toEqual([
-        [process.execPath, "scripts/bundled-plugin-assets.mjs", "--phase", "build"],
-        [process.execPath, "scripts/tsdown-build.mjs", "--no-clean"],
+        [
+          process.execPath,
+          "--import",
+          "tsx",
+          "scripts/bundled-plugin-assets.mts",
+          "--phase",
+          "build",
+        ],
+        [process.execPath, "--import", "tsx", "scripts/tsdown-build.mts", "--no-clean"],
         [process.execPath, "openclaw.mjs", "--version"],
       ]);
     },
@@ -481,8 +499,19 @@ describe("run-node script", () => {
 
     expect(exitCode).toBe(0);
     expect(spawnCalls).toHaveLength(3);
-    expect(spawnCalls[0]?.args).toEqual(["scripts/bundled-plugin-assets.mjs", "--phase", "build"]);
-    expect(spawnCalls[1]?.args).toEqual(["scripts/tsdown-build.mjs", "--no-clean"]);
+    expect(spawnCalls[0]?.args).toEqual([
+      "--import",
+      "tsx",
+      "scripts/bundled-plugin-assets.mts",
+      "--phase",
+      "build",
+    ]);
+    expect(spawnCalls[1]?.args).toEqual([
+      "--import",
+      "tsx",
+      "scripts/tsdown-build.mts",
+      "--no-clean",
+    ]);
     expect(spawnCalls[2]?.args).toEqual(["openclaw.mjs", "status"]);
     expect(spawnCalls[0]?.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBeUndefined();
     expect(spawnCalls[1]?.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("1");
@@ -538,13 +567,13 @@ describe("run-node script", () => {
     await writeRuntimePostBuildScaffold(tmp);
     const outputPath = path.join(tmp, ".artifacts", "run-node", "output.log");
     const spawn = (_cmd: string, args: string[]) => {
-      if (args[0] === "scripts/bundled-plugin-assets.mjs") {
+      if (isTsxScriptArgs(args, "scripts/bundled-plugin-assets.mts")) {
         return createPipedExitedProcess({
           stdout: "asset stdout\n",
           stderr: "asset stderr\n",
         });
       }
-      if (args[0] === "scripts/tsdown-build.mjs") {
+      if (isTsxScriptArgs(args, "scripts/tsdown-build.mts")) {
         return createPipedExitedProcess({
           stdout: "build stdout\n",
           stderr: "build stderr\n",
@@ -1175,7 +1204,7 @@ describe("run-node script", () => {
 
   it("returns the build exit code when the compiler step fails", async ({ tmp }) => {
     const spawn = (cmd: string, args: string[] = []) => {
-      if (cmd === process.execPath && args[0] === "scripts/tsdown-build.mjs") {
+      if (cmd === process.execPath && isTsxScriptArgs(args, "scripts/tsdown-build.mts")) {
         return createExitedProcess(23);
       }
       return createExitedProcess(0);
@@ -1190,7 +1219,7 @@ describe("run-node script", () => {
     tmp,
   }) => {
     const spawn = (cmd: string, args: string[] = []) => {
-      if (cmd === process.execPath && args[0] === "scripts/tsdown-build.mjs") {
+      if (cmd === process.execPath && isTsxScriptArgs(args, "scripts/tsdown-build.mts")) {
         const events = new EventEmitter();
         queueMicrotask(() => events.emit("error", new Error("spawn failed")));
         return {
@@ -1511,7 +1540,7 @@ describe("run-node script", () => {
     { label: "remote agent", args: ["agent", "--message", "hello"] },
     { label: "dashboard", args: ["dashboard", "--no-open", "--yes"] },
   ])("does not rebuild for $label calls against an existing dirty dist", async ({ args }) => {
-    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+    await withTestDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupStampedProject(tmp, {
         files: { [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n' },
         trackConfig: true,

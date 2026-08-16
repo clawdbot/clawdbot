@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import { listSessionEntries } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -26,7 +26,7 @@ describe("legacy media persistence Doctor migration from historical v14", () => 
   it("migrates a copy of the exact v2026.7.2-beta.4 schema without losing its session", () => {
     const historicalSchema = historicalV14AgentSchemaSql();
     expect(createHash("sha256").update(historicalSchema).digest("hex")).toBe(
-      "955889668707fbccab70b80b5058af5a1587fd35ae32a80f8605179a68fb5117",
+      "dfb2a98c9418eb1032e82e4310c7bde41700e4a0af05a2464673e9c4ece11fd1",
     );
 
     const stateDir = makeTempDir(tempDirs, "media-persistence-historical-v14-");
@@ -96,7 +96,7 @@ describe("legacy media persistence Doctor migration from historical v14", () => 
     const result = migrateLegacyMediaPersistence({ env });
     expect(result.warnings).toEqual([]);
     expect(
-      listSessionEntries({ agentId: "main", env }).map(({ entry, sessionKey }) => ({
+      listSessionEntriesCore({ agentId: "main", env }).map(({ entry, sessionKey }) => ({
         sessionId: entry.sessionId,
         sessionKey,
       })),

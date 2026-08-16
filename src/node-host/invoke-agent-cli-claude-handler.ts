@@ -1,3 +1,4 @@
+import type { DesktopHostConfig } from "../config/types.desktop.js";
 import { createExecApprovalPolicySnapshot } from "../infra/exec-approvals.js";
 import type { scanInstalledApps } from "../infra/installed-apps.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
@@ -25,6 +26,10 @@ export type NodeHostInvokeRuntime = {
   installedAppsSharingEnabled?: boolean;
   installedAppsPlatform?: NodeJS.Platform;
   scanInstalledApps?: typeof scanInstalledApps;
+  gatewayUrl?: string;
+  gatewayTlsFingerprint?: string;
+  desktopHostConfig?: DesktopHostConfig;
+  emitProgress?: (text: string) => Promise<void>;
 };
 
 type ClaudeCliNodeInvokeDeps = Pick<

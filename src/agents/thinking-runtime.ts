@@ -49,6 +49,8 @@ export function resolveEffectiveAgentRuntime(params: {
   cfg: OpenClawConfig;
   provider: string;
   modelId: string;
+  modelApi?: string | null;
+  modelBaseUrl?: unknown;
   agentId?: string;
   sessionKey?: string;
   sessionEntry?: Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride">;
@@ -63,6 +65,8 @@ export function resolveEffectiveAgentRuntime(params: {
     resolveAgentHarnessPolicy({
       provider: params.provider,
       modelId: params.modelId,
+      modelApi: params.modelApi,
+      modelBaseUrl: params.modelBaseUrl,
       config: params.cfg,
       agentId: params.agentId,
       sessionKey: params.sessionKey,

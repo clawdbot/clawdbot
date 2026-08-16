@@ -4,9 +4,8 @@ import { z } from "zod";
 import type { GatewayRemoteConfig } from "./types.gateway.js";
 import { MemorySearchSchema } from "./zod-schema.agent-runtime.js";
 import { SecretInputSchema } from "./zod-schema.core.js";
-import { NodeHostAgentRunsSchema } from "./zod-schema.node-host.js";
+import { NodeHostAgentRunsSchema, NodeHostWorkerRunsSchema } from "./zod-schema.node-host.js";
 import { sensitive } from "./zod-schema.sensitive.js";
-import { SessionSendPolicySchema } from "./zod-schema.session.js";
 
 type ConfigSchemaShape<T extends object> = {
   [Key in keyof T]-?: z.ZodType<T[Key]>;
@@ -96,25 +95,6 @@ export const AccessGroupsSchema = z
   )
   .optional();
 
-const MemoryQmdPathSchema = z.strictObject({
-  path: z.string(),
-  name: z.string().optional(),
-  pattern: z.string().optional(),
-});
-
-const MemoryQmdSessionSchema = z.strictObject({
-  enabled: z.boolean().optional(),
-  exportDir: z.string().optional(),
-  retentionDays: z.number().int().nonnegative().optional(),
-});
-
-const MemoryQmdLimitsSchema = z.strictObject({
-  maxResults: z.number().int().positive().optional(),
-  maxSnippetChars: z.number().int().positive().optional(),
-  maxInjectedChars: z.number().int().positive().optional(),
-  timeoutMs: z.number().int().nonnegative().optional(),
-});
-
 export const LoggingLevelSchema = z.union([
   z.literal("silent"),
   z.literal("fatal"),
@@ -125,24 +105,10 @@ export const LoggingLevelSchema = z.union([
   z.literal("trace"),
 ]);
 
-const MemoryQmdSchema = z.strictObject({
-  command: z.string().optional(),
-  searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
-  rerank: z.boolean().optional(),
-  searchTool: z.string().trim().min(1).optional(),
-  includeDefaultMemory: z.boolean().optional(),
-  paths: z.array(MemoryQmdPathSchema).optional(),
-  sessions: MemoryQmdSessionSchema.optional(),
-  limits: MemoryQmdLimitsSchema.optional(),
-  scope: SessionSendPolicySchema.optional(),
-});
-
 export const MemorySchema = z
   .strictObject({
-    backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
     citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
     search: MemorySearchSchema,
-    qmd: MemoryQmdSchema.optional(),
   })
   .optional();
 
@@ -308,6 +274,7 @@ const McpServerSchema = z
     auth: z.literal("oauth").optional(),
     oauth: z
       .strictObject({
+        identity: z.enum(["shared", "per-requester"]).optional(),
         authProfileId: z.string().trim().min(1).optional(),
         scope: z.string().trim().min(1).optional(),
         redirectUrl: HttpUrlSchema.optional(),
@@ -378,6 +345,39 @@ const McpServerSchema = z
         path: ["disabled"],
       });
     }
+    if (data.oauth?.identity === "per-requester") {
+      if (data.auth !== "oauth") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'oauth.identity "per-requester" requires auth: "oauth"',
+          path: ["oauth", "identity"],
+        });
+      }
+      if (data.oauth.authProfileId) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'oauth.authProfileId cannot be used with oauth.identity "per-requester"',
+          path: ["oauth", "authProfileId"],
+        });
+      }
+      if (!data.url) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'oauth.identity "per-requester" requires an HTTP server URL',
+          path: ["oauth", "identity"],
+        });
+      }
+      // Command precedence would resolve stdio and strand the server: partitioned
+      // out of the static runtime with no requester sign-in path.
+      if (data.command !== undefined || data.transport === "stdio") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            'oauth.identity "per-requester" cannot be combined with a command or "stdio" transport',
+          path: ["oauth", "identity"],
+        });
+      }
+    }
     // transport "stdio" requires a non-empty command — URL-only servers must use "sse" or "streamable-http"
     if (
       data.transport === "stdio" &&
@@ -428,6 +428,22 @@ function createMcpServersSchema(serverNameSchema: z.ZodType<string>) {
   );
 }
 
+export function validateHttpOrigin(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      url.pathname === "/" &&
+      !url.search &&
+      !url.hash &&
+      !url.username &&
+      !url.password
+    );
+  } catch {
+    return false;
+  }
+}
+
 export const McpConfigSchema = z
   .strictObject({
     servers: createMcpServersSchema(McpServerNameSchema).optional(),
@@ -437,19 +453,10 @@ export const McpConfigSchema = z
         sandboxOrigin: z
           .string()
           .url()
-          .refine((value) => {
-            try {
-              const url = new URL(value);
-              return (
-                (url.protocol === "http:" || url.protocol === "https:") &&
-                url.origin === value.replace(/\/$/u, "") &&
-                !url.username &&
-                !url.password
-              );
-            } catch {
-              return false;
-            }
-          }, "sandboxOrigin must be an HTTP(S) origin without a path, query, or credentials")
+          .refine(
+            validateHttpOrigin,
+            "sandboxOrigin must be an HTTP(S) origin without a path, query, or credentials",
+          )
           .optional(),
         sandboxPort: z.number().int().min(1).max(65535).optional(),
       })
@@ -460,6 +467,7 @@ export const McpConfigSchema = z
 export const NodeHostSchema = z
   .strictObject({
     agentRuns: NodeHostAgentRunsSchema,
+    workerRuns: NodeHostWorkerRunsSchema,
     browserProxy: z
       .strictObject({
         enabled: z.boolean().optional(),

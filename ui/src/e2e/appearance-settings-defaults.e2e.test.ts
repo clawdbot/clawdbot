@@ -534,13 +534,16 @@ suite.define(() => {
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      const viewMenuTrigger = page.locator(".chat-view-menu-trigger");
+      const viewMenuTrigger = page.locator(".chat-header-session-menu__trigger");
       await viewMenuTrigger.click();
-      const viewMenu = page.locator("wa-dropdown.chat-view-menu");
+      const viewMenu = page.locator("wa-dropdown.chat-header-session-menu");
       await expect
-        .poll(() => viewMenu.locator(".chat-view-menu__provenance").textContent())
+        .poll(() => viewMenu.locator('[role="note"]').textContent())
         .toContain("Stored in this browser only");
+      const viewItem = viewMenu.getByRole("menuitem", { name: "View", exact: true });
+      await viewItem.hover();
       const reasoning = viewMenu.getByRole("menuitemcheckbox", { name: "Reasoning" });
+      await expect.poll(() => reasoning.isVisible()).toBe(true);
       await reasoning.click();
       await expect.poll(() => reasoning.getAttribute("aria-checked")).toBe("false");
 
@@ -565,8 +568,9 @@ suite.define(() => {
       await page.reload();
       await viewMenuTrigger.click();
       await expect
-        .poll(() => viewMenu.locator(".chat-view-menu__provenance").textContent())
+        .poll(() => viewMenu.locator('[role="note"]').textContent())
         .toContain("Stored in this browser only");
+      await viewItem.hover();
       await expect
         .poll(() =>
           viewMenu

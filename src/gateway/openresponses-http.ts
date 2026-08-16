@@ -56,7 +56,9 @@ import {
   authorizeOpenAiCompatibleHttpModelOverride,
   getBearerToken,
   getHeader,
+  isAgentSelectionRequiredError,
   isGatewaySessionKeyOverrideError,
+  isInvalidGatewayModelError,
   isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
@@ -464,7 +466,11 @@ export async function handleOpenResponsesHttpRequest(
   try {
     agentId = resolveAgentIdForRequest({ req, model });
   } catch (err) {
-    if (isUnknownGatewayAgentError(err)) {
+    if (
+      isAgentSelectionRequiredError(err) ||
+      isInvalidGatewayModelError(err) ||
+      isUnknownGatewayAgentError(err)
+    ) {
       sendJson(res, 400, {
         error: { message: err.message, type: "invalid_request_error" },
       });
@@ -484,7 +490,9 @@ export async function handleOpenResponsesHttpRequest(
     return true;
   }
 
-  // Extract images + files from input (Phase 2)
+  const prompt = buildAgentPrompt(payload.input);
+
+  // Count URL sources request-wide, but replay media only from the current user turn.
   let images: ImageContent[] = [];
   const fileContexts: string[] = [];
   let urlParts = 0;
@@ -501,31 +509,23 @@ export async function handleOpenResponsesHttpRequest(
       for (const item of payload.input) {
         if (item.type === "message" && typeof item.content !== "string") {
           for (const part of item.content) {
+            if (part.type !== "input_image" && part.type !== "input_file") {
+              continue;
+            }
+            if (part.source.type === "url") {
+              markUrlPart();
+            }
+            if (item !== prompt.activeUserMessage) {
+              continue;
+            }
             if (part.type === "input_image") {
-              const source = part.source as {
-                type?: string;
-                url?: string;
-                data?: string;
-                media_type?: string;
-              };
-              const sourceType =
-                source.type === "base64" || source.type === "url" ? source.type : undefined;
-              if (!sourceType) {
-                throw new Error("input_image must have 'source.url' or 'source.data'");
-              }
-              if (sourceType === "url") {
-                markUrlPart();
-              }
+              const source = part.source;
               const imageSource: InputImageSource =
-                sourceType === "url"
-                  ? {
-                      type: "url",
-                      url: source.url ?? "",
-                      mediaType: source.media_type,
-                    }
+                source.type === "url"
+                  ? { type: "url", url: source.url }
                   : {
                       type: "base64",
-                      data: source.data ?? "",
+                      data: source.data,
                       mediaType: source.media_type,
                     };
               const image = await extractImageContentFromSource(imageSource, limits.images);
@@ -533,67 +533,46 @@ export async function handleOpenResponsesHttpRequest(
               continue;
             }
 
-            if (part.type === "input_file") {
-              const source = part.source as {
-                type?: string;
-                url?: string;
-                data?: string;
-                media_type?: string;
-                filename?: string;
-              };
-              const sourceType =
-                source.type === "base64" || source.type === "url" ? source.type : undefined;
-              if (!sourceType) {
-                throw new Error("input_file must have 'source.url' or 'source.data'");
-              }
-              if (sourceType === "url") {
-                markUrlPart();
-              }
-              const file = await extractFileContentFromSource({
-                source:
-                  sourceType === "url"
-                    ? {
-                        type: "url",
-                        url: source.url ?? "",
-                        mediaType: source.media_type,
-                        filename: source.filename,
-                      }
-                    : {
-                        type: "base64",
-                        data: source.data ?? "",
-                        mediaType: source.media_type,
-                        filename: source.filename,
-                      },
-                limits: limits.files,
-              });
-              const rawText = file.text;
-              if (rawText?.trim()) {
-                fileContexts.push(
-                  renderFileContextBlock({
-                    filename: file.filename,
-                    content: wrapUntrustedFileContent(rawText),
-                  }),
-                );
-              } else if (file.images && file.images.length > 0) {
-                fileContexts.push(
-                  renderFileContextBlock({
-                    filename: file.filename,
-                    content: "[PDF content rendered to images]",
-                    surroundContentWithNewlines: false,
-                  }),
-                );
-              } else {
-                fileContexts.push(
-                  renderFileContextBlock({
-                    filename: file.filename,
-                    content: "[No extractable text]",
-                    surroundContentWithNewlines: false,
-                  }),
-                );
-              }
-              if (file.images && file.images.length > 0) {
-                images = images.concat(file.images);
-              }
+            const source = part.source;
+            const file = await extractFileContentFromSource({
+              source:
+                source.type === "url"
+                  ? { type: "url", url: source.url }
+                  : {
+                      type: "base64",
+                      data: source.data,
+                      mediaType: source.media_type,
+                      filename: source.filename,
+                    },
+              limits: limits.files,
+            });
+            const rawText = file.text;
+            if (rawText?.trim()) {
+              fileContexts.push(
+                renderFileContextBlock({
+                  filename: file.filename,
+                  content: wrapUntrustedFileContent(rawText),
+                }),
+              );
+            } else if (file.images && file.images.length > 0) {
+              fileContexts.push(
+                renderFileContextBlock({
+                  filename: file.filename,
+                  content: "[PDF content rendered to images]",
+                  surroundContentWithNewlines: false,
+                }),
+              );
+            } else {
+              fileContexts.push(
+                renderFileContextBlock({
+                  filename: file.filename,
+                  content: "[No extractable text]",
+                  surroundContentWithNewlines: false,
+                }),
+              );
+            }
+            if (file.images && file.images.length > 0) {
+              images = images.concat(file.images);
             }
           }
         }
@@ -637,7 +616,12 @@ export async function handleOpenResponsesHttpRequest(
       useMessageChannelHeader: true,
     });
   } catch (err) {
-    if (isUnknownGatewayAgentError(err) || isGatewaySessionKeyOverrideError(err)) {
+    if (
+      isAgentSelectionRequiredError(err) ||
+      isUnknownGatewayAgentError(err) ||
+      isInvalidGatewayModelError(err) ||
+      isGatewaySessionKeyOverrideError(err)
+    ) {
       sendJson(res, 400, {
         error: { message: err.message, type: "invalid_request_error" },
       });
@@ -659,9 +643,6 @@ export async function handleOpenResponsesHttpRequest(
   );
   const sessionKey = previousSessionKey ?? resolved.sessionKey;
   const messageChannel = resolved.messageChannel;
-
-  // Build prompt from input
-  const prompt = buildAgentPrompt(payload.input);
 
   const fileContext = fileContexts.length > 0 ? fileContexts.join("\n\n") : undefined;
   const toolChoiceContext = toolChoicePrompt?.trim();
@@ -728,9 +709,12 @@ export async function handleOpenResponsesHttpRequest(
         return true;
       }
 
+      const meta = (result as { meta?: { error?: unknown; stopReason?: unknown } } | null)?.meta;
+      if (meta?.error || meta?.stopReason === "error") {
+        throw new Error("agent run failed");
+      }
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
       const usage = extractUsageFromResult(result);
-      const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
       // A `required`/pinned `tool_choice` must reject a text-only turn instead
@@ -1187,6 +1171,9 @@ export async function handleOpenResponsesHttpRequest(
         abortSignal: abortController.signal,
       });
 
+      if (closed) {
+        return;
+      }
       finalUsage = extractUsageFromResult(result);
 
       if (unrepresentableAssistantReplacement) {
@@ -1422,5 +1409,4 @@ export async function handleOpenResponsesHttpRequest(
 
   return true;
 }
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

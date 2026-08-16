@@ -54,6 +54,7 @@ test("sessions.reset preserves a concurrent same-id lifecycle replacement", asyn
       key: "main",
       reason: "new",
       commandSource: "gateway:agent",
+      workerPlacementContext: {},
       assertCurrent: () => {
         if (!lifecycleCurrent) {
           throw new Error("stale lifecycle");

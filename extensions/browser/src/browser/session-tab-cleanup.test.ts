@@ -54,4 +54,21 @@ describe("session tab cleanup timer", () => {
 
     await stop();
   });
+
+  it("forwards the live runtime config resolver to every periodic sweep", async () => {
+    registryMocks.sweepTrackedBrowserTabs.mockResolvedValue(0);
+    const resolved = { profiles: {} } as never;
+    const getResolvedBrowserConfig = vi.fn(() => resolved);
+    const stop = startTrackedBrowserTabCleanupTimer({
+      getResolvedBrowserConfig,
+      onWarn: vi.fn(),
+    });
+
+    await vi.advanceTimersByTimeAsync(300_000);
+    await vi.waitFor(() => expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledOnce());
+    expect(registryMocks.sweepTrackedBrowserTabs).toHaveBeenCalledWith(
+      expect.objectContaining({ getResolvedBrowserConfig }),
+    );
+    await stop();
+  });
 });

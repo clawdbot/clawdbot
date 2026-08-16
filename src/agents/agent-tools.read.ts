@@ -7,14 +7,15 @@ import path from "node:path";
 import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
 import { formatByteSize } from "@openclaw/normalization-core";
+import type { Static, TSchema } from "typebox";
+import { Value } from "typebox/value";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
-import { toErrorObject } from "../infra/errors.js";
+import { isMissingPathError, toErrorObject } from "../infra/errors.js";
 import {
   canonicalPathFromExistingAncestor,
   root as fsRoot,
   FsSafeError,
 } from "../infra/fs-safe.js";
-import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
 import {
@@ -39,7 +40,7 @@ import {
   withMemoryWriteProvenance,
 } from "./memory-write-provenance.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
-import type { AgentToolResult } from "./runtime/index.js";
+import type { AgentTool, AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import {
@@ -49,6 +50,7 @@ import {
   type ReadToolDetails,
   type ReadToolTruncationDetails,
 } from "./sessions/tools/index.js";
+import { expandOsHomePrefix } from "./sessions/tools/path-utils.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
@@ -73,13 +75,34 @@ type SkillReadContent = {
   readContent?: string;
 };
 
+/** Erase a schema-specific session tool only after its input passes that owned schema. */
+function eraseSessionFileTool<TParameters extends TSchema, TDetails>(
+  tool: AgentTool<TParameters, TDetails>,
+): AnyAgentTool {
+  return {
+    ...tool,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      if (!Value.Check(tool.parameters, params)) {
+        throw new Error(`Invalid parameters for ${tool.name}`);
+      }
+      const typedParams = params as Static<TParameters>;
+      return await tool.execute(
+        toolCallId,
+        typedParams,
+        signal,
+        onUpdate ? (update) => onUpdate(update) : undefined,
+      );
+    },
+  };
+}
+
 type ReadTruncationDetails = {
   truncated: boolean;
   outputLines: number;
+  totalLines: number;
   firstLineExceedsLimit: boolean;
 };
 
-const OFFSET_BEYOND_EOF_RE = /^Offset \d+ is beyond end of file \(\d+ lines total\)$/;
 const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing lines [^\]]*?Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/;
 const DAILY_MEMORY_PATH_RE = /^memory\/\d{4}-\d{2}-\d{2}\.md$/;
@@ -154,13 +177,13 @@ function withToolResultText(
   if (replaced) {
     return {
       ...result,
-      content: nextContent as unknown as AgentToolResult<unknown>["content"],
+      content: nextContent,
     };
   }
-  const textBlock = { type: "text", text } as unknown as TextContentBlock;
+  const textBlock = { type: "text", text } satisfies TextContentBlock;
   return {
     ...result,
-    content: [textBlock] as unknown as AgentToolResult<unknown>["content"],
+    content: [textBlock],
   };
 }
 
@@ -184,9 +207,15 @@ function extractReadTruncationDetails(
     typeof outputLinesRaw === "number" && Number.isFinite(outputLinesRaw)
       ? Math.max(0, Math.floor(outputLinesRaw))
       : 0;
+  const totalLinesRaw = record.totalLines;
+  const totalLines =
+    typeof totalLinesRaw === "number" && Number.isFinite(totalLinesRaw)
+      ? Math.max(0, Math.floor(totalLinesRaw))
+      : 0;
   return {
     truncated: true,
     outputLines,
+    totalLines,
     firstLineExceedsLimit: record.firstLineExceedsLimit === true,
   };
 }
@@ -224,22 +253,6 @@ function stripReadTruncationContentDetails(
   };
 }
 
-function isOffsetBeyondEof(error: unknown, args: Record<string, unknown>): boolean {
-  const offset = args.offset;
-  return (
-    typeof offset === "number" &&
-    Number.isFinite(offset) &&
-    offset > 0 &&
-    error instanceof Error &&
-    OFFSET_BEYOND_EOF_RE.test(error.message)
-  );
-}
-
-function emptyReadResult(): AgentToolResult<unknown> {
-  const textBlock = { type: "text", text: "" } satisfies TextContentBlock;
-  return { content: [textBlock], details: undefined };
-}
-
 function missingDailyMemoryReadResult(relativePath: string): AgentToolResult<unknown> {
   return {
     content: [
@@ -268,9 +281,10 @@ function normalizeDailyMemoryReadPath(value: unknown): string | undefined {
 }
 
 function isNotFoundError(error: unknown): boolean {
-  if (typeof (error as NodeJS.ErrnoException | undefined)?.code === "string") {
-    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  if (isMissingPathError(error)) {
+    return true;
   }
+  // Injected tool implementations may expose only their legacy human-readable error.
   if (!(error instanceof Error)) {
     return false;
   }
@@ -286,9 +300,6 @@ async function executeReadPage(params: {
   try {
     return await params.base.execute(params.toolCallId, params.args, params.signal);
   } catch (error) {
-    if (isOffsetBeyondEof(error, params.args)) {
-      return emptyReadResult();
-    }
     const missingDailyMemoryPath = normalizeDailyMemoryReadPath(params.args.path);
     if (missingDailyMemoryPath && isNotFoundError(error)) {
       return missingDailyMemoryReadResult(missingDailyMemoryPath);
@@ -338,12 +349,16 @@ async function executeReadWithAdaptivePaging(params: {
     }
 
     const truncation = extractReadTruncationDetails(pageResult);
+    const pageEndLine = nextOffset - 1 + (truncation?.outputLines ?? 0);
+    const reachedEof =
+      Boolean(truncation?.truncated) && pageEndLine >= (truncation?.totalLines ?? 0);
     const canContinue =
       Boolean(truncation?.truncated) &&
       !truncation?.firstLineExceedsLimit &&
       (truncation?.outputLines ?? 0) > 0 &&
+      pageEndLine < (truncation?.totalLines ?? 0) &&
       page < MAX_ADAPTIVE_READ_PAGES - 1;
-    const pageText = canContinue ? stripReadContinuationNotice(rawText) : rawText;
+    const pageText = canContinue || reachedEof ? stripReadContinuationNotice(rawText) : rawText;
     const delimiter = aggregatedText && pageText ? "\n\n" : "";
     const nextBytes = Buffer.byteLength(`${delimiter}${pageText}`, "utf-8");
 
@@ -893,9 +908,11 @@ type SandboxToolParams = {
 export function createSandboxedReadTool(
   params: SandboxToolParams & { createTool?: typeof createReadTool },
 ) {
-  const base = (params.createTool ?? createReadTool)(params.root, {
-    operations: createSandboxReadOperations(params),
-  }) as unknown as AnyAgentTool;
+  const base = eraseSessionFileTool(
+    (params.createTool ?? createReadTool)(params.root, {
+      operations: createSandboxReadOperations(params),
+    }),
+  );
   return createOpenClawReadTool(base, {
     modelContextWindowTokens: params.modelContextWindowTokens,
     imageSanitization: params.imageSanitization,
@@ -906,9 +923,11 @@ export function createSandboxedReadTool(
 export function createSandboxedWriteTool(
   params: SandboxToolParams & { createTool?: typeof createWriteTool },
 ) {
-  const base = (params.createTool ?? createWriteTool)(params.root, {
-    operations: createSandboxWriteOperations(params),
-  }) as unknown as AnyAgentTool;
+  const base = eraseSessionFileTool(
+    (params.createTool ?? createWriteTool)(params.root, {
+      operations: createSandboxWriteOperations(params),
+    }),
+  );
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
 }
 
@@ -916,9 +935,11 @@ export function createSandboxedWriteTool(
 export function createSandboxedEditTool(
   params: SandboxToolParams & { createTool?: typeof createEditTool },
 ) {
-  const base = (params.createTool ?? createEditTool)(params.root, {
-    operations: createSandboxEditOperations(params),
-  }) as unknown as AnyAgentTool;
+  const base = eraseSessionFileTool(
+    (params.createTool ?? createEditTool)(params.root, {
+      operations: createSandboxEditOperations(params),
+    }),
+  );
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);
 }
 
@@ -931,9 +952,11 @@ export function createHostWorkspaceWriteTool(
     createTool?: typeof createWriteTool;
   },
 ) {
-  const base = (options?.createTool ?? createWriteTool)(root, {
-    operations: createHostWriteOperations(root, options),
-  }) as unknown as AnyAgentTool;
+  const base = eraseSessionFileTool(
+    (options?.createTool ?? createWriteTool)(root, {
+      operations: createHostWriteOperations(root, options),
+    }),
+  );
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
 }
 
@@ -946,9 +969,11 @@ export function createHostWorkspaceEditTool(
     createTool?: typeof createEditTool;
   },
 ) {
-  const base = (options?.createTool ?? createEditTool)(root, {
-    operations: createHostEditOperations(root, options),
-  }) as unknown as AnyAgentTool;
+  const base = eraseSessionFileTool(
+    (options?.createTool ?? createEditTool)(root, {
+      operations: createHostEditOperations(root, options),
+    }),
+  );
   return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.edit);
 }
 
@@ -1011,13 +1036,15 @@ export function wrapReadToolWithSkillContent(
     }
     return content;
   };
-  const virtualBase = createReadTool("/", {
-    operations: {
-      resolvePath: (filePath) => filePath,
-      access: async (filePath) => void readContent(filePath),
-      readFile: async (filePath) => Buffer.from(readContent(filePath), "utf8"),
-    },
-  }) as unknown as AnyAgentTool;
+  const virtualBase = eraseSessionFileTool(
+    createReadTool("/", {
+      operations: {
+        resolvePath: (filePath) => filePath,
+        access: async (filePath) => void readContent(filePath),
+        readFile: async (filePath) => Buffer.from(readContent(filePath), "utf8"),
+      },
+    }),
+  );
   const virtualRead = createOpenClawReadTool(virtualBase, options);
   return {
     ...tool,
@@ -1052,10 +1079,9 @@ function createSandboxReadOperations(params: SandboxToolParams) {
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
     access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
-    detectImageMimeType: async (absolutePath: string) => {
-      const buffer = await params.bridge.readFile({ filePath: absolutePath, cwd: params.root });
+    detectImageMimeType: async (absolutePath: string, buffer: Buffer) => {
       const mime = await detectMime({ buffer, filePath: absolutePath });
-      return mime && mime.startsWith("image/") ? mime : undefined;
+      return mime?.startsWith("image/") ? mime : undefined;
     },
   } as const;
 }
@@ -1103,13 +1129,8 @@ async function assertSandboxFileExists(params: SandboxToolParams, absolutePath: 
   }
 }
 
-function expandTildeToOsHome(filePath: string): string {
-  const home = resolveOsHomeDir();
-  return home ? expandHomePrefix(filePath, { home }) : filePath;
-}
-
 function resolveHostPath(filePath: string): string {
-  return path.resolve(expandTildeToOsHome(filePath));
+  return path.resolve(expandOsHomePrefix(filePath));
 }
 
 async function writeHostFile(absolutePath: string, content: string) {
@@ -1179,9 +1200,9 @@ function createHostWriteOperations(
         },
         writeFile: writeHostFile,
         readFile: async (absolutePath: string) =>
-          fs.readFile(path.resolve(expandTildeToOsHome(absolutePath))),
+          fs.readFile(path.resolve(expandOsHomePrefix(absolutePath))),
         statFile: (absolutePath: string) =>
-          statHostFile(path.resolve(expandTildeToOsHome(absolutePath))),
+          statHostFile(path.resolve(expandOsHomePrefix(absolutePath))),
       } as const,
       options?.memoryWriteProvenance,
     );

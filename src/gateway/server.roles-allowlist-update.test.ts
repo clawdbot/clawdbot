@@ -7,8 +7,8 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import { approveDevicePairing, listDevicePairing } from "../infra/device-pairing.js";
-import { approveNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
@@ -364,11 +364,24 @@ describe("gateway role enforcement", () => {
       expect(invokeRes.ok).toBe(false);
       expect(invokeRes.error?.message ?? "").toContain("unauthorized role");
 
-      nodeClient = await connectNodeClientWithPairing({
+      nodeClient = await connectNodeClientWithNodePairing({
         port,
         commands: [],
         instanceId: "node-role-enforcement",
         displayName: "node-role-enforcement",
+      });
+
+      const unsupportedEvent = await nodeClient.request<{
+        ok: boolean;
+        event?: string;
+        handled?: boolean;
+        reason?: string;
+      }>("node.event", { event: "test.unsupported", payload: { ok: true } });
+      expect(unsupportedEvent).toEqual({
+        ok: true,
+        event: "test.unsupported",
+        handled: false,
+        reason: "unsupported_event",
       });
 
       const binsPayload = await nodeClient.request("skills.bins", {});

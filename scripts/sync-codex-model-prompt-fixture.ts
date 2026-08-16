@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isRecord as isJsonObject } from "../packages/normalization-core/src/record-coerce.ts";
 import { CODEX_MODEL_PROMPT_FIXTURE_DIR } from "../test/helpers/agents/prompt-snapshot-paths.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -10,7 +11,6 @@ const PERSONALITY_PLACEHOLDER = "{{ personality }}";
 
 export { CODEX_MODEL_PROMPT_FIXTURE_DIR };
 
-type JsonObject = Record<string, unknown>;
 type CodexPromptPersonality = "default" | "friendly" | "pragmatic";
 
 type CodexModelCatalogModel = {
@@ -42,10 +42,6 @@ type CatalogPathResolution = {
 type WritableOutput = {
   write(chunk: string): unknown;
 };
-
-function isJsonObject(value: unknown): value is JsonObject {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function isCodexModel(value: unknown): value is CodexModelCatalogModel {
   return isJsonObject(value) && typeof value.slug === "string";

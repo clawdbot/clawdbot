@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { dispatchWidgetPrompt } from "../../components/mcp-app-security.ts";
 
 type BoardWidgetBridgeRequest = {
@@ -34,11 +35,11 @@ export function isBoardWidgetBridgeRequest(value: unknown): value is BoardWidget
   );
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+function assertWidgetRequestRecord(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) {
     throw new Error("widget host request params are invalid");
   }
-  return value as Record<string, unknown>;
+  return value;
 }
 
 function requiredString(params: Record<string, unknown>, key: string): string {
@@ -133,7 +134,7 @@ export class BoardWidgetBridgeController {
     if (request.ticket !== this.ticket) {
       throw new Error("widget view ticket does not match the active frame");
     }
-    const params = asRecord(request.params);
+    const params = assertWidgetRequestRecord(request.params);
     switch (request.method) {
       case "prompt.send": {
         if (options.promptUserActivated !== true) {
@@ -162,10 +163,7 @@ export class BoardWidgetBridgeController {
       case "data.read": {
         const bindingId = requiredString(params, "bindingId");
         const bindingParams = params.params;
-        if (
-          bindingParams !== undefined &&
-          (!bindingParams || typeof bindingParams !== "object" || Array.isArray(bindingParams))
-        ) {
+        if (bindingParams !== undefined && !isRecord(bindingParams)) {
           throw new Error("widget data binding params are invalid");
         }
         return await this.client.request("board.data.read", {

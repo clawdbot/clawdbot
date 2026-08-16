@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
@@ -173,14 +174,6 @@ function expectPositiveTimestamp(value: unknown) {
 function expectNonEmptyString(value: unknown) {
   expect(typeof value).toBe("string");
   expect((value as string).trim()).not.toBe("");
-}
-
-function createDeferred() {
-  let resolve = () => {};
-  const promise = new Promise<void>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 describe("realtime voice agent consult runtime", () => {

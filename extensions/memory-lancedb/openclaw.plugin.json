@@ -1,7 +1,17 @@
 {
   "id": "memory-lancedb",
+  "doctorContract": {
+    "stateMigrations": true
+  },
   "name": "Memory LanceDB",
   "description": "OpenClaw LanceDB-backed long-term memory plugin with auto-recall, auto-capture, and vector search.",
+  "cliCommands": [
+    {
+      "name": "ltm",
+      "description": "Inspect and query LanceDB-backed memory",
+      "hasSubcommands": true
+    }
+  ],
   "catalog": { "featured": true, "order": 70 },
   "commandAliases": [{ "name": "ltm" }],
   "activation": {
@@ -11,6 +21,10 @@
   "kind": "memory",
   "contracts": {
     "tools": ["memory_forget", "memory_recall", "memory_store"]
+  },
+  "toolMetadata": {
+    "memory_forget": { "sideEffecting": true },
+    "memory_store": { "sideEffecting": true }
   },
   "uiHints": {
     "embedding.apiKey": {

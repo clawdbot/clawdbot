@@ -159,6 +159,21 @@ describe("ManagedWorktreeService", () => {
     expect(repeated).toEqual(created);
   });
 
+  it("reads registry records without retiring a temporarily unavailable worktree", async () => {
+    const created = await service.create({
+      repoRoot: repo,
+      name: "read-only-list",
+      baseRef: "HEAD",
+    });
+    await fs.rm(created.path, { recursive: true, force: true });
+
+    expect(service.listRegistryRecords()).toEqual([expect.objectContaining({ id: created.id })]);
+    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+
+    expect(await service.list()).toEqual([]);
+    expect(getRegistryWorktree(env, created.id)?.removedAt).toBe(now);
+  });
+
   it("does not remove a worktree owned by another caller", async () => {
     const created = await service.create({
       repoRoot: repo,

@@ -206,7 +206,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
   return {
     targetAgentId: "main",
     targetMainKey: "main",
-    targetScope: undefined,
     stateDir: "/tmp/state",
     oauthDir: "/tmp/oauth",
     deviceAuth: {
@@ -267,6 +266,10 @@ function createLegacyStateMigrationDetectionResult(params?: {
       hasLegacy: false,
       preview: [],
     },
+    sharedAuthStore: {
+      sourcePath: "/tmp/state/agents/main/agent/openclaw-agent.sqlite",
+      hasLegacy: false,
+    },
     worktrees: { hasLegacy: false, pathRewrites: [] },
     taskStateSidecars: {
       taskRunsPath: "/tmp/state/tasks/runs.sqlite",
@@ -301,10 +304,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
     },
     tuiLastSessions: {
       sourcePath: "/tmp/state/tui/last-session.json",
-      hasLegacy: false,
-    },
-    commitments: {
-      sourcePath: "/tmp/state/commitments/commitments.json",
       hasLegacy: false,
     },
     auditLogs: {
@@ -351,10 +350,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
       defaultAccountIds: {},
       accountIds: {},
       hasLegacy: false,
-    },
-    channelPlans: {
-      hasLegacy: false,
-      plans: [],
     },
     warnings: [],
     notices: [],
@@ -513,6 +508,10 @@ vi.mock("./doctor-browser.js", () => ({
     changes: [],
     warnings: [],
   }),
+  maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
+    changes: [],
+    warnings: [],
+  }),
   noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -616,6 +615,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
   autoMigrateLegacyStateDir,
   autoMigrateLegacyTaskStateSidecars,
   detectLegacyStateMigrations,
+  migrateLegacyConfigMachineState: vi.fn(() => ({ changes: [], warnings: [] })),
   runLegacyStateMigrations,
 }));
 

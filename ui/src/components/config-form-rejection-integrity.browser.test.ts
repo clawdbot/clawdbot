@@ -312,6 +312,53 @@ describe("config form rejection integrity", () => {
     expect(key.value).toBe("b");
   });
 
+  it("blocks renaming a map key whose value is still a redacted secret", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderObject(
+        {
+          schema: {
+            type: "object",
+            additionalProperties: { type: "string" },
+          },
+          value: { primary: "__OPENCLAW_REDACTED__", plain: "visible" },
+          path: ["secrets"],
+          hints: {},
+          unsupported: new Set(),
+          disabled: false,
+          onPatch,
+        },
+        renderNode,
+      ),
+      container,
+    );
+
+    const redactedKey = expectElement(
+      container.querySelector<HTMLInputElement>("input[aria-label='Key: primary']"),
+      "redacted map key",
+    );
+    redactedKey.value = "renamed";
+    redactedKey.dispatchEvent(new Event("change", { bubbles: true }));
+
+    // Moving the sentinel to a new key can only produce an unsavable draft or,
+    // folded with a delete, silently bind the wrong stored credential.
+    expect(onPatch).not.toHaveBeenCalled();
+    expect(redactedKey.value).toBe("primary");
+
+    const plainKey = expectElement(
+      container.querySelector<HTMLInputElement>("input[aria-label='Key: plain']"),
+      "plain map key",
+    );
+    plainKey.value = "renamed";
+    plainKey.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["secrets"], {
+      primary: "__OPENCLAW_REDACTED__",
+      renamed: "visible",
+    });
+    container.remove();
+  });
+
   it("commits an optional object only after all required children are valid", async () => {
     const container = document.createElement("div");
     document.body.append(container);

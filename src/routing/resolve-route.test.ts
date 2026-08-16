@@ -5,8 +5,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import * as routingBindings from "./bindings.js";
 import {
   deriveLastRoutePolicy,
+  listExactDirectMessageBindingPeerIds,
   resolveAgentRoute,
   resolveInboundLastRouteSessionKey,
+  resolveUnknownDirectMessageRoute,
 } from "./resolve-route.js";
 
 type ResolvedRouteExpectation = {
@@ -1127,6 +1129,82 @@ describe("role-based agent routing", () => {
     },
   ] as const)("$name", (testCase) => {
     expectDiscordRoleRoute(testCase);
+  });
+});
+
+describe("unknown direct-message route decisions", () => {
+  test("lists unique exact peers from normalized account and any-account bindings", () => {
+    const binding = (peerId: string, accountId: string, kind: "direct" | "group" = "direct") => ({
+      agentId: "main",
+      match: { channel: "Telegram", accountId, peer: { kind, id: peerId } },
+    });
+    const cfg = {
+      bindings: [
+        binding("peer-b", "*"),
+        binding("peer-a", " WORK "),
+        binding("peer-b", "work"),
+        binding("*", "work"),
+        binding("room", "work", "group"),
+        binding("other", "other"),
+      ],
+    } satisfies OpenClawConfig;
+
+    expect(
+      listExactDirectMessageBindingPeerIds({ cfg, channel: " telegram ", accountId: " work " }),
+    ).toEqual(["peer-b", "peer-a"]);
+  });
+
+  test.each([
+    {
+      name: "direct wildcard outranks account and channel",
+      wildcard: true,
+      account: true,
+      expectedMatchedBy: "binding.peer.wildcard",
+    },
+    {
+      name: "account outranks channel when no wildcard exists",
+      wildcard: false,
+      account: true,
+      expectedMatchedBy: "binding.account",
+    },
+    {
+      name: "channel matches when no narrower fallback exists",
+      wildcard: false,
+      account: false,
+      expectedMatchedBy: "binding.channel",
+    },
+  ] as const)("$name", ({ wildcard, account, expectedMatchedBy }) => {
+    const bindings: NonNullable<OpenClawConfig["bindings"]> = [
+      {
+        agentId: "exact",
+        match: { channel: "telegram", peer: { kind: "direct", id: "known-user" } },
+      },
+    ];
+    if (wildcard) {
+      bindings.push({
+        agentId: "wildcard",
+        match: { channel: "telegram", peer: { kind: "direct", id: "*" } },
+      });
+    }
+    if (account) {
+      bindings.push({
+        agentId: "account",
+        match: { channel: "telegram" },
+      });
+    }
+    bindings.push({
+      agentId: "channel",
+      match: { channel: "telegram", accountId: "*" },
+    });
+
+    const route = resolveUnknownDirectMessageRoute({
+      cfg: { bindings },
+      channel: "telegram",
+      accountId: "default",
+    });
+
+    expect(route.matchedBy).toBe(expectedMatchedBy);
+    expect(route.agentId).not.toBe("exact");
   });
 });
 

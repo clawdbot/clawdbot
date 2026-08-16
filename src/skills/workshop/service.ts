@@ -69,6 +69,8 @@ type SkillWorkshopWorkspaceOptions = {
   agentId?: string;
 };
 
+export class SkillProposalStaleTargetError extends Error {}
+
 function proposalStoreOptions(env?: NodeJS.ProcessEnv) {
   return env ? { env } : {};
 }
@@ -269,8 +271,8 @@ export async function proposeUpdateSkill(
     input.expectedCurrentContentHash !== undefined &&
     sha256Hex(currentContent) !== input.expectedCurrentContentHash
   ) {
-    throw new Error(
-      "Patch target changed since the reviewer's read: read the skill again and redraft the patch.",
+    throw new SkillProposalStaleTargetError(
+      "Skill changed since the reviewer's read: read it again and redraft the update.",
     );
   }
   // Composition uses the same read that currentContentHash binds the proposal to, so a

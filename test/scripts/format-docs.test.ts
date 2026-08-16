@@ -9,8 +9,8 @@ import {
   formatDocs,
   resolveOxfmtInvocation,
   runOxfmt,
-} from "../../scripts/format-docs.mjs";
-import { outputTail } from "../../scripts/lib/output-tail.mjs";
+} from "../../scripts/format-docs.mts";
+import { outputTail } from "../../scripts/lib/output-tail.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();

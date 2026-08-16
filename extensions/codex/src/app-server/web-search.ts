@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { JsonObject } from "./protocol.js";
 
 export type CodexWebSearchPlan = {
@@ -13,10 +14,6 @@ const CODEX_NATIVE_WEB_SEARCH_DISABLED_CONFIG: JsonObject = {
   "features.standalone_web_search": false,
   web_search: "disabled",
 };
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim() || undefined : undefined;
-}
 
 function normalizeUniqueStrings(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {

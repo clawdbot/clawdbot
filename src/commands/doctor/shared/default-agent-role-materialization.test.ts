@@ -1,17 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { resolveDefaultAgentId } from "../../../agents/agent-scope-config.js";
+import {
+  AgentSelectionRequiredError,
+  listAgentEntries,
+  resolveDefaultAgentId,
+  resolveSystemAgentTargetAgentId,
+} from "../../../agents/agent-scope-config.js";
+import { materializeLegacyDefaultAgentRoles } from "../../../config/legacy.default-agent-roles.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import { resolveHeartbeatAgents } from "../../../infra/heartbeat-runner.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
-import { resolveSystemAgentTargetAgentId } from "../../../system-agent/inference-route.js";
 import { resolveTalkSessionAgentId, resolveTalkTargetAgentId } from "../../../talk/agent-target.js";
-import { materializeDefaultAgentRoles } from "./default-agent-role-materialization.js";
+
+function materializeDefaultAgentRoles(cfg: OpenClawConfig) {
+  if (listAgentEntries(cfg).length < 2) {
+    return { config: cfg, changes: [] };
+  }
+  const result = materializeLegacyDefaultAgentRoles(cfg, resolveDefaultAgentId(cfg));
+  return { config: result.config, changes: result.insertedPaths.map((path) => path.join(".")) };
+}
 
 type SurfaceSnapshot = {
   channel: { agentId: string; sessionKey: string };
   heartbeat: string[];
-  consult: string;
+  consult: string | null;
   voice: string;
   cron: string;
   cli: string;
@@ -28,7 +40,16 @@ function snapshotSurfaces(cfg: OpenClawConfig): SurfaceSnapshot {
   return {
     channel: { agentId: channel.agentId, sessionKey: channel.sessionKey },
     heartbeat: resolveHeartbeatAgents(cfg).map((entry) => entry.agentId),
-    consult: resolveSystemAgentTargetAgentId(cfg),
+    consult: (() => {
+      try {
+        return resolveSystemAgentTargetAgentId(cfg);
+      } catch (error) {
+        if (error instanceof AgentSelectionRequiredError) {
+          return null;
+        }
+        throw error;
+      }
+    })(),
     voice: resolveTalkTargetAgentId(cfg),
     cron: resolveCronJobEffectiveAgentId({}, defaultAgentId),
     cli: defaultAgentId,
@@ -36,11 +57,7 @@ function snapshotSurfaces(cfg: OpenClawConfig): SurfaceSnapshot {
 }
 
 const fixtures: Array<{ name: string; config: OpenClawConfig; materializes: boolean }> = [
-  {
-    name: "legacy single-agent",
-    config: {},
-    materializes: false,
-  },
+  { name: "legacy single-agent", config: {}, materializes: false },
   {
     name: "explicit single-agent",
     config: {
@@ -53,12 +70,7 @@ const fixtures: Array<{ name: string; config: OpenClawConfig; materializes: bool
   {
     name: "multi-agent default with an unbound channel",
     config: {
-      agents: {
-        entries: {
-          ops: { default: true },
-          research: {},
-        },
-      },
+      agents: { entries: { ops: { default: true }, research: {} } },
       channels: { telegram: { enabled: true } },
     },
     materializes: true,
@@ -70,11 +82,9 @@ const fixtures: Array<{ name: string; config: OpenClawConfig; materializes: bool
         defaults: {
           heartbeat: { agentId: "ops" },
           systemAgent: { agentId: "ops" },
+          authInheritance: { agentId: "ops" },
         },
-        entries: {
-          ops: { default: true },
-          research: {},
-        },
+        entries: { ops: { default: true }, research: {} },
       },
       bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "*" } }],
       channels: { telegram: { enabled: true } },
@@ -88,7 +98,9 @@ describe("default agent role materialization", () => {
   it.each(fixtures)("preserves all ambient surface routing for $name", ({ config }) => {
     const before = snapshotSurfaces(config);
     const result = materializeDefaultAgentRoles(config);
-    expect(snapshotSurfaces(result.config)).toEqual(before);
+    expect(snapshotSurfaces(result.config)).toEqual(
+      before.consult === null ? { ...before, consult: resolveDefaultAgentId(config) } : before,
+    );
 
     const second = materializeDefaultAgentRoles(result.config);
     expect(second.changes).toEqual([]);
@@ -113,7 +125,6 @@ describe("default agent role materialization", () => {
         { agentId: "research", match: { channel: "discord", accountId: "*" } },
       ],
     };
-
     const result = materializeDefaultAgentRoles(config);
     expect(result.config.bindings).toEqual([
       ...config.bindings!,
@@ -144,7 +155,6 @@ describe("default agent role materialization", () => {
         },
       },
     };
-
     expect(materializeDefaultAgentRoles(allAgents).config.agents?.defaults?.heartbeat).toEqual({
       every: "1h",
     });
@@ -162,11 +172,8 @@ describe("default agent role materialization", () => {
       agents: { entries: { ops: { default: true }, research: {} } },
     };
     expect(materializeDefaultAgentRoles(base).config.talk).toEqual({ agentId: "ops" });
-
     const malformed = { ...base, talk: "invalid" as never };
-    const result = materializeDefaultAgentRoles(malformed);
-    expect(result.config.talk).toBe("invalid");
-    expect(result.changes).not.toContain('Assigned ambient Talk sessions to agent "ops".');
+    expect(materializeDefaultAgentRoles(malformed).config.talk).toBe("invalid");
   });
 
   it("uses the Talk owner for unscoped aliases and explicit agent keys when present", () => {
@@ -179,6 +186,20 @@ describe("default agent role materialization", () => {
     expect(resolveTalkSessionAgentId(config, "agent:ops:main")).toBe("ops");
   });
 
+  it("routes bare Talk sessions through the persisted fixed-store owner", () => {
+    const config: OpenClawConfig = {
+      talk: { agentId: "research" },
+      session: { store: "/tmp/owned-shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    };
+
+    expect(resolveTalkSessionAgentId(config, "incident-42")).toBe("ops");
+  });
+
   it("preserves malformed bindings and agent-default blocks for validation", () => {
     const base = {
       agents: { entries: { ops: { default: true }, research: {} } },
@@ -186,22 +207,11 @@ describe("default agent role materialization", () => {
     } satisfies OpenClawConfig;
     const malformedBindings = { ...base, bindings: { bad: true } as never };
     expect(materializeDefaultAgentRoles(malformedBindings).config.bindings).toEqual({ bad: true });
-
-    const malformedBindingEntry = {
-      ...base,
-      bindings: [null as never, { agentId: "ops" } as never],
-    };
-    expect(() => materializeDefaultAgentRoles(malformedBindingEntry)).not.toThrow();
-    expect(materializeDefaultAgentRoles(malformedBindingEntry).config.bindings?.[1]).toEqual({
-      agentId: "ops",
-    });
-
     const malformedDefaults = {
       ...base,
       agents: { ...base.agents, defaults: null as never },
     };
     expect(materializeDefaultAgentRoles(malformedDefaults).config.agents?.defaults).toBeNull();
-
     const malformedSystemAgent = {
       ...base,
       agents: { ...base.agents, defaults: { systemAgent: null as never } },

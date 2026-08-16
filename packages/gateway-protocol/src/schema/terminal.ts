@@ -126,14 +126,6 @@ export const TerminalListResultSchema = closedObject({
 });
 export type TerminalListResult = Static<typeof TerminalListResultSchema>;
 
-/** Reads the current output buffer as plain text without attaching. */
-export const TerminalTextParamsSchema = closedObject({ sessionId: NonEmptyString });
-export type TerminalTextParams = Static<typeof TerminalTextParamsSchema>;
-
-/** Plain-text buffer contents (ANSI stripped); an agent/LLM affordance. */
-export const TerminalTextResultSchema = closedObject({ text: Type.String() });
-export type TerminalTextResult = Static<typeof TerminalTextResultSchema>;
-
 /** Shared ok/void result for input, resize, and close. */
 export const TerminalAckResultSchema = closedObject({ ok: Type.Boolean() });
 export type TerminalAckResult = Static<typeof TerminalAckResultSchema>;

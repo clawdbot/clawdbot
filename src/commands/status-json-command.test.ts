@@ -55,7 +55,7 @@ describe("runStatusJsonCommand", () => {
     const scanStatusJsonFast = vi.fn(async () => scan);
 
     await runStatusJsonCommand({
-      opts: { deep: true, usage: true, timeoutMs: 1234, all: true },
+      opts: { deep: true, usage: true, agent: "beta", timeoutMs: 1234, all: true },
       runtime,
       scanStatusJsonFast,
       includeSecurityAudit: true,
@@ -66,7 +66,7 @@ describe("runStatusJsonCommand", () => {
     expect(scanStatusJsonFast).toHaveBeenCalledWith({ timeoutMs: 1234, all: true }, runtime);
     expect(mocks.resolveStatusJsonOutput).toHaveBeenCalledWith({
       scan,
-      opts: { deep: true, usage: true, timeoutMs: 1234, all: true },
+      opts: { deep: true, usage: true, agent: "beta", timeoutMs: 1234, all: true },
       includeSecurityAudit: true,
       includePluginCompatibility: true,
       suppressHealthErrors: true,
@@ -75,11 +75,30 @@ describe("runStatusJsonCommand", () => {
       built: true,
       input: {
         scan,
-        opts: { deep: true, usage: true, timeoutMs: 1234, all: true },
+        opts: { deep: true, usage: true, agent: "beta", timeoutMs: 1234, all: true },
         includeSecurityAudit: true,
         includePluginCompatibility: true,
         suppressHealthErrors: true,
       },
     });
+  });
+
+  it("rejects --agent when usage is not requested", async () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    } as never;
+    const scanStatusJsonFast = vi.fn();
+
+    await expect(
+      runStatusJsonCommand({
+        opts: { agent: "beta" },
+        runtime,
+        scanStatusJsonFast,
+        includeSecurityAudit: false,
+      }),
+    ).rejects.toThrow("--agent is only valid with --usage");
+    expect(scanStatusJsonFast).not.toHaveBeenCalled();
   });
 });

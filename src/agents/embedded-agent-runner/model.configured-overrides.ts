@@ -1,3 +1,4 @@
+import { asOptionalRecord as readModelParams } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -7,7 +8,10 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { resolveCatalogOwnedModelCompat } from "../model-compat-catalog.js";
 import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
-import { shouldSuppressBuiltInModel, shouldUnconditionallySuppress } from "../model-suppression.js";
+import {
+  shouldSuppressBuiltInModelCore,
+  shouldUnconditionallySuppress,
+} from "../model-suppression.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
   attachModelProviderMetadataOwners,
@@ -69,7 +73,7 @@ export function shouldSuppressConfiguredModel(params: {
   ) {
     return false;
   }
-  return shouldSuppressBuiltInModel({
+  return shouldSuppressBuiltInModelCore({
     provider: params.provider,
     id: params.modelId,
     ...(params.cfg ? { config: params.cfg } : {}),
@@ -226,13 +230,6 @@ export function hasConfiguredFallbackSurface(params: {
     return true;
   }
   return Boolean(params.providerConfig?.baseUrl?.trim());
-}
-
-function readModelParams(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
 }
 
 function mergeModelParams(
@@ -443,8 +440,6 @@ export function applyConfiguredProviderOverrides(params: {
     !configuredModel &&
     !providerConfig.baseUrl &&
     !providerConfig.api &&
-    providerConfig.contextWindow === undefined &&
-    providerConfig.contextTokens === undefined &&
     providerConfig.maxTokens === undefined &&
     requestTimeoutMs === undefined &&
     !providerHeaders &&
@@ -527,8 +522,7 @@ export function applyConfiguredProviderOverrides(params: {
     workspaceDir: params.workspaceDir,
     runtimeHooks: params.runtimeHooks,
   });
-  const resolvedContextWindow =
-    metadataOverrideModel?.contextWindow ?? providerConfig.contextWindow;
+  const resolvedContextWindow = metadataOverrideModel?.contextWindow;
   const configuredMaxTokens = metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens;
   const resolvedMaxTokens = configuredMaxTokens ?? discoveredModel.maxTokens;
   const normalizedResolvedMaxTokens = clampModelMaxTokensToContextWindow(
@@ -597,10 +591,7 @@ export function applyConfiguredProviderOverrides(params: {
           input: normalizedInput,
           cost: metadataOverrideModel?.cost ?? discoveredModel.cost,
           contextWindow: resolvedContextWindow ?? discoveredModel.contextWindow,
-          contextTokens:
-            metadataOverrideModel?.contextTokens ??
-            providerConfig.contextTokens ??
-            discoveredModel.contextTokens,
+          contextTokens: metadataOverrideModel?.contextTokens ?? discoveredModel.contextTokens,
           ...(normalizedResolvedMaxTokens !== undefined
             ? {
                 maxTokens: normalizedResolvedMaxTokens,

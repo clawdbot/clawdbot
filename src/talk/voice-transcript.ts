@@ -118,6 +118,10 @@ class VoiceTranscriptOperationRegistry {
     }
   }
 
+  async flush(key: string): Promise<void> {
+    await this.owners.get(key)?.queue.flush({ requireSuccess: true });
+  }
+
   clear(): void {
     this.owners.clear();
   }

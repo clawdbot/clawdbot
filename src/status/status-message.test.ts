@@ -107,11 +107,13 @@ describe("buildStatusMessageParts presentation", () => {
     const parts = buildStatusMessageParts({
       now: 1_751_529_600_000,
       config: { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
-      agent: { model: "anthropic/claude-haiku-4-5", contextTokens: 100_000 },
+      agent: { model: "anthropic/claude-haiku-4-5" },
+      runtimeContextTokens: 100_000,
       sessionEntry: {
         sessionId: "status-meter-session",
         totalTokens: 87_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         compactionCount: 2,
         updatedAt: 1_751_529_500_000,
       },
@@ -154,10 +156,8 @@ describe("buildStatusMessage context window", () => {
       },
       agent: {
         model: "ollama-cloud/deepseek-v4-pro",
-        contextTokens: 1_000_000,
       },
       configuredDefaultModelLabel: "ollama-cloud/deepseek-v4-pro",
-      explicitConfiguredContextTokens: 1_000_000,
       runtimeContextTokens: 1_000_000,
       sessionEntry: {
         sessionId: "manual-switch-stale-runtime",
@@ -169,6 +169,7 @@ describe("buildStatusMessage context window", () => {
         model: "deepseek-v4-pro",
         totalTokens: 128_393,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:telegram:direct:584667058",
       sessionScope: "per-sender",
@@ -243,7 +244,6 @@ describe("buildStatusMessage context window", () => {
       },
       agent: {
         model: "anthropic/claude-haiku-4-5",
-        contextTokens: 200_000,
       },
       runtimeContextTokens: 1_000_000,
       sessionEntry: {
@@ -253,6 +253,7 @@ describe("buildStatusMessage context window", () => {
         model: "claude-haiku-4-5",
         totalTokens: 36_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
@@ -283,10 +284,8 @@ describe("buildStatusMessage context window", () => {
       },
       agent: {
         model: "ollama-cloud/deepseek-v4-pro",
-        contextTokens: 1_000_000,
       },
       configuredDefaultModelLabel: "ollama-cloud/deepseek-v4-pro",
-      explicitConfiguredContextTokens: 1_000_000,
       runtimeContextTokens: 128_000,
       sessionEntry: {
         sessionId: "auto-fallback-qwen",
@@ -300,6 +299,7 @@ describe("buildStatusMessage context window", () => {
         model: "deepseek-v4-pro",
         totalTokens: 50_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:telegram:direct:auto-fallback",
       sessionScope: "per-sender",

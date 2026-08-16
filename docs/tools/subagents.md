@@ -175,12 +175,12 @@ Per-agent override: `agents.entries.*.subagents.delegationMode`.
         maxConcurrent: 4,
       },
     },
-    list: [
-      {
-        id: "coordinator",
+    entries: {
+      coordinator: {
+        default: true,
         subagents: { delegationMode: "prefer" },
       },
-    ],
+    },
   },
 }
 ```
@@ -200,7 +200,7 @@ Per-agent override: `agents.entries.*.subagents.delegationMode`.
   Spawn under another configured agent id when allowed by `subagents.allowAgents`.
 </ParamField>
 <ParamField path="cwd" type="string">
-  Optional task working directory for the child run. Native sub-agents still load bootstrap files from the target agent workspace; `cwd` only changes where runtime tools and CLI harnesses do the delegated work.
+  Optional task working directory for the child run. Native sub-agents still load bootstrap files from the target agent workspace; `cwd` only changes where runtime tools and CLI harnesses do the delegated work. For visible sessions, paths outside configured agent workspaces require `operator.admin`; omit `cwd` to use the target agent workspace.
 </ParamField>
 <ParamField path="runtime" type='"subagent" | "acp"' default="subagent">
   `acp` is only for external ACP harnesses (`claude`, `droid`, `gemini`, `opencode`, or explicitly requested Codex ACP/acpx) and for `agents.entries.*` entries whose `runtime.type` is `acp`.
@@ -257,7 +257,7 @@ their latest assistant turn back to the requester; external delivery stays with
 the parent/requester agent.
 </Warning>
 
-With `visible: true`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. Use this mode when the user asks to create or open a thread that should appear in the sidebar. A sandboxed target restricts `cwd` to that agent's workspace. Thread binding, `mode`, thinking overrides, `lightContext`, `attachments`, and `attachAs` are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. The new dashboard child inherits the requester's effective tool-policy ceiling before its first turn. Session listing and addressing obey `tools.sessions.visibility`; the default `tree` scope covers the current session and its own spawn subtree. See [Managed worktrees](/concepts/managed-worktrees) for checkout naming, setup, cleanup, and restore behavior.
+With `visible: true`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. Use this mode when the user asks to create or open a thread that should appear in the sidebar. A sandboxed target restricts `cwd` to that agent's workspace. Non-admin callers may use `cwd` only inside a configured agent workspace. Omit `cwd` to use the target agent workspace; for another repository, ask the operator to start the session from a registered project. Do not replace a rejected persistent spawn with the synchronous `openclaw agent` CLI, whose command deadline defaults to 600 seconds. Thread binding, `mode`, thinking overrides, `lightContext`, `attachments`, and `attachAs` are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. The new dashboard child inherits the requester's effective tool-policy ceiling before its first turn. Session listing and addressing obey `tools.sessions.visibility`; the default `tree` scope covers the current session and its own spawn subtree. See [Managed worktrees](/concepts/managed-worktrees) for checkout naming, setup, cleanup, and restore behavior.
 
 ### Task names and targeting
 
@@ -296,6 +296,27 @@ Only use `sessions_yield` when the session's effective tool list includes
 it. Some minimal or custom tool profiles may expose `sessions_spawn` and
 `subagents` without exposing `sessions_yield`; in that case, do not invent
 a polling loop just to wait for completion.
+
+A sub-agent can also yield on its own behalf to wait for external work, such
+as a remote job or a long-running task it does not drive itself. That pauses
+the child run instead of completing it, so the requester receives no
+completion event yet and keeps waiting. A plugin can then continue that same run
+by calling `api.runtime.subagent.run` with the paused `sessionKey`, instead of
+starting a sibling. The requester is announced once such a follow-up finishes
+normally; a follow-up that yields again leaves the run paused and the requester
+waiting.
+
+Automatic continuation is specific to the plugin runtime API above. Ordinary
+follow-ups through routes not tracked as sub-agent runs neither continue the
+paused run nor announce its requester. Explicit `subagents` steering is
+different: it deliberately replaces the yielded run and continues the same
+child session.
+
+Among plugin runtime follow-ups, continuation applies to those that use default
+delivery. A follow-up that supplies its own requester or completion-delivery
+context is asking for its own audience, so it runs as a separate sibling and
+delivers there instead. The paused run stays resumable, and a later default
+follow-up still continues it.
 
 When active children exist, OpenClaw injects a compact runtime-generated
 `Active Subagents` prompt block into normal turns so the requester can see
@@ -496,10 +517,10 @@ children:
 Sub-agent auth is resolved by **agent id**, not by session type:
 
 - The sub-agent session key is `agent:<agentId>:subagent:<uuid>`.
-- The auth store is loaded from that agent's `agentDir`.
-- The main agent's auth profiles are merged in as a **fallback**; agent profiles override main profiles on conflicts.
+- The local auth overlay is loaded from that agent's `agentDir`.
+- The shared auth profiles are merged in as a **fallback**; agent profiles override shared profiles on conflicts.
 
-The merge is additive, so main profiles are always available as
+The merge is additive, so shared profiles are always available as
 fallbacks. Fully isolated auth per agent is not supported yet.
 
 ## Announce
@@ -507,8 +528,9 @@ fallbacks. Fully isolated auth per agent is not supported yet.
 Sub-agents report back via an announce step:
 
 - The announce step runs inside the sub-agent session (not the requester session).
-- If the sub-agent replies exactly `ANNOUNCE_SKIP`, nothing is posted.
-- If the latest assistant text is the exact silent token `NO_REPLY` / `no_reply`, announce output is suppressed even if earlier visible progress existed.
+- An exact `ANNOUNCE_SKIP` response suppresses announce output.
+- For completion-required runs, an exact child `NO_REPLY` response or no output is a missing deliverable handed to the requester/parent for visible representation or retry; it is not credited as silent delivery.
+- Optional, duplicate, already-visible, or otherwise non-required paths may use exact `NO_REPLY` for intentional silence.
 
 Delivery depends on requester depth:
 

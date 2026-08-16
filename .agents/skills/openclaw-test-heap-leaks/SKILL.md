@@ -24,7 +24,7 @@ For **runtime fixes** (e.g., closure leaks in long-running services like the gat
      ```
 
    - For a suspected file, rerun that file with one worker and collect wall/RSS evidence: `/usr/bin/time -l pnpm test <file> --maxWorkers=1 --reporter=verbose`.
-   - Current `pnpm test` execution is planned by `scripts/test-projects.mjs`. Record the printed Vitest config or shard and preserve that shape when the report is configuration- or worker-budget-specific.
+   - Current `pnpm test` execution is planned by `scripts/test-projects.mts`. Record the printed Vitest config or shard and preserve that shape when the report is configuration- or worker-budget-specific.
 
 2. Collect the strongest available heap evidence.
    - Run `pnpm test:perf:profile:runner -- --output-dir .artifacts/test-perf/vitest-runner-profile -- <file>` for a CPU profile plus a sampling heap profile of the unit runner. Open the heap profile in DevTools and inspect the largest allocation families.
@@ -53,7 +53,7 @@ For **runtime fixes** (e.g., closure leaks in long-running services like the gat
 ## Heuristics
 
 - Do not call everything a leak. Growth in a non-isolated shared Vitest project can be a worker-lifetime problem rather than an application object leak.
-- `scripts/test-projects.mjs`, `scripts/test-group-report.mjs`, and `scripts/run-vitest-profile.mjs` are the current execution, grouped-RSS, and profile entrypoints.
+- `scripts/test-projects.mts`, `scripts/test-group-report.mts`, and `scripts/run-vitest-profile.mts` are the current execution, grouped-RSS, and profile entrypoints.
 - The `[test] starting ...` lines identify the Vitest config or shard to reproduce.
 - `.artifacts/vitest-shard-timings.json` stores config/shard durations for scheduling. It is not a file-level memory-hotspot or behavior manifest.
 - When the same retained object families grow across multiple intervals in the same worker PID, trust the snapshots over intuition, then confirm ambiguous calls with retainer evidence.

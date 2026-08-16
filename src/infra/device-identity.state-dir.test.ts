@@ -7,6 +7,7 @@ import { resolveGatewayLockDir } from "../config/paths.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { resolveDeviceIdentityCoordinatorPaths } from "./device-identity-coordinator-paths.js";
 import { loadDeviceIdentityIfPresent, loadOrCreateDeviceIdentity } from "./device-identity.js";
 
 afterEach(() => {
@@ -57,10 +58,25 @@ describe("device identity state dir defaults", () => {
 
       loadOrCreateDeviceIdentity({ env });
 
-      expect(fs.readdirSync(resolveGatewayLockDir(stateDir))).toContainEqual(
-        expect.stringMatching(/^device-identity\.[0-9a-f]{8}\.lock\.sqlite$/u),
-      );
-      expect(fs.readdirSync(legacyTmpDir)).toEqual([]);
+      const coordinatorPaths = resolveDeviceIdentityCoordinatorPaths({
+        databasePath: path.join(stateDir, "state", "openclaw.sqlite"),
+        stateDir,
+        temporaryDirectory: legacyTmpDir,
+        uid: typeof process.getuid === "function" ? process.getuid() : undefined,
+      });
+      const processTempPath = coordinatorPaths[0];
+      const stateLocalPath = coordinatorPaths[1];
+      if (!processTempPath || !stateLocalPath) {
+        throw new Error("coordinator bridge paths are unavailable");
+      }
+      const stateCoordinators = fs
+        .readdirSync(path.dirname(stateLocalPath))
+        .filter((entry) => entry.startsWith("device-identity."));
+      const processTempCoordinators = fs
+        .readdirSync(path.dirname(processTempPath))
+        .filter((entry) => entry.startsWith("device-identity."));
+      expect(stateCoordinators).toHaveLength(1);
+      expect(processTempCoordinators).toEqual(stateCoordinators);
       expect(fs.existsSync(path.join(fakeHome, ".openclaw"))).toBe(false);
     });
   });

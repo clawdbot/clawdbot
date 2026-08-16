@@ -179,7 +179,7 @@ vi.mock("./nodes-cli/rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./nodes-cli/rpc.js")>("./nodes-cli/rpc.js");
   return {
     ...actual,
-    resolveNodeId: vi.fn(async () => "node-1"),
+    resolveCliNodeId: vi.fn(async () => "node-1"),
   };
 });
 
@@ -315,6 +315,38 @@ describe("exec approvals CLI", () => {
     expect(output).toContain("State");
     expect(output).toContain("defaults (no stored overrides)");
     expect(output).not.toContain("Exists");
+  });
+
+  it("sanitizes stored allowlist patterns in human output without changing JSON", async () => {
+    const pattern = "/tmp/safe\u001b[31mred\u001b[0m\u001b]0;pwned\u0007\nnext\trow\rback\bspace🦞";
+    localSnapshot.file = {
+      version: 1,
+      agents: { "*": { allowlist: [{ pattern }] } },
+    };
+
+    await runApprovalsCommand(["approvals", "get"]);
+
+    const output = defaultRuntime.log.mock.calls.map(([line]) => String(line ?? "")).join("\n");
+    const hasUnsafeControl = Array.from(output).some((char) => {
+      const codePoint = char.codePointAt(0) ?? -1;
+      return (
+        codePoint === 0x07 ||
+        codePoint === 0x08 ||
+        codePoint === 0x1b ||
+        (codePoint >= 0x7f && codePoint <= 0x9f)
+      );
+    });
+    expect(hasUnsafeControl).toBe(false);
+    expect(output).toContain("safered\\nnext\\trow\\rbackspace🦞");
+
+    defaultRuntime.writeJson.mockClear();
+    await runApprovalsCommand(["approvals", "get", "--json"]);
+
+    const file = requireRecord(writtenJson().file, "JSON approvals file");
+    const agents = requireRecord(file.agents, "JSON approvals agents");
+    const wildcard = requireRecord(agents["*"], "JSON wildcard agent");
+    const allowlist = requireArray(wildcard.allowlist, "JSON wildcard allowlist");
+    expect(requireRecord(allowlist[0], "JSON allowlist entry").pattern).toBe(pattern);
   });
 
   it("adds effective policy to json output", async () => {
@@ -913,7 +945,8 @@ describe("exec approvals CLI", () => {
 
     await expect(runNativeApprovalsFileCommand(filePath)).rejects.toThrow("__exit__:1");
 
-    expect(runtimeErrors[0]).toContain("File exceeds 1048576 bytes");
+    expect(writtenJson().error).toContain("File exceeds 1048576 bytes");
+    expect(runtimeErrors).toHaveLength(0);
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
 
@@ -922,7 +955,8 @@ describe("exec approvals CLI", () => {
 
     await expect(runNativeApprovalsFileCommand(dir)).rejects.toThrow("__exit__:1");
 
-    expect(runtimeErrors[0]).toMatch(/EISDIR|directory/i);
+    expect(writtenJson().error).toMatch(/EISDIR|directory/i);
+    expect(runtimeErrors).toHaveLength(0);
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
 
@@ -958,7 +992,8 @@ describe("exec approvals CLI", () => {
       openSpy.mockRestore();
     }
 
-    expect(runtimeErrors[0]).toContain("File exceeds 1048576 bytes");
+    expect(writtenJson().error).toContain("File exceeds 1048576 bytes");
+    expect(runtimeErrors).toHaveLength(0);
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
 });

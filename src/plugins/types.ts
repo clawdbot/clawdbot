@@ -137,6 +137,8 @@ export type {
   RealtimeTranscriptionProviderPlugin,
   SpeechProviderPlugin,
   TranscriptSourceProvider,
+  WorkerDesktopApp,
+  WorkerDesktopEndpoint,
   WorkerLease,
   WorkerLeaseStatus,
   WorkerProfile,

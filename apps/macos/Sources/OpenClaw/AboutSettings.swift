@@ -7,7 +7,7 @@ struct AboutSettings: View {
     weak var updater: UpdaterProviding?
     @Environment(\.colorScheme) private var colorScheme
     @State private var iconHover = false
-    @AppStorage("autoUpdateEnabled") private var autoCheckEnabled = true
+    @AppStorage("autoUpdateEnabled", store: AppDefaults.standard) private var autoCheckEnabled = true
     @State private var didLoadUpdaterState = false
 
     var body: some View {
@@ -70,7 +70,9 @@ struct AboutSettings: View {
                         Button("Check for Updates…") { updater.checkForUpdates(nil) }
                     }
                 } else {
-                    Text("Updates unavailable in this build.")
+                    Text(AppProfile.current.isActive
+                        ? "App updates are unavailable while a profile is active."
+                        : "Updates unavailable in this build.")
                         .foregroundStyle(.secondary)
                         .padding(.top, 4)
                 }

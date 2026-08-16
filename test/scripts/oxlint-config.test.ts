@@ -10,6 +10,7 @@ type OxlintConfig = {
     files?: string[];
     rules?: Record<string, unknown>;
   }>;
+  plugins?: string[];
   rules?: Record<string, unknown>;
 };
 
@@ -19,6 +20,7 @@ type OxlintTsconfig = {
 };
 
 const ZERO_BASELINE_RULES = [
+  "eslint/array-callback-return",
   "eslint/no-div-regex",
   "eslint/no-constructor-return",
   "eslint/no-extra-label",
@@ -31,6 +33,9 @@ const ZERO_BASELINE_RULES = [
   "eslint/no-var",
   "eslint/no-param-reassign",
   "eslint/no-implicit-coercion",
+  "eslint/no-label-var",
+  "eslint/no-prototype-builtins",
+  "eslint/no-redeclare",
   "eslint/no-useless-rename",
   "eslint/no-useless-return",
   "eslint/no-new-wrappers",
@@ -42,13 +47,13 @@ const ZERO_BASELINE_RULES = [
   "eslint/prefer-const",
   "eslint/prefer-numeric-literals",
   "eslint/prefer-object-has-own",
+  "eslint/prefer-promise-reject-errors",
   "eslint/radix",
+  "eslint/symbol-description",
   "eslint/unicode-bom",
   "eslint/yoda",
   "import/no-absolute-path",
-  "import/first",
   "import/no-empty-named-blocks",
-  "import/no-duplicates",
   "import/no-self-import",
   "node/no-exports-assign",
   "promise/no-new-statics",
@@ -58,6 +63,7 @@ const ZERO_BASELINE_RULES = [
   "typescript/no-inferrable-types",
   "typescript/no-non-null-asserted-nullish-coalescing",
   "typescript/no-unnecessary-qualifier",
+  "typescript/prefer-enum-initializers",
   "typescript/prefer-find",
   "typescript/prefer-for-of",
   "typescript/prefer-function-type",
@@ -66,17 +72,20 @@ const ZERO_BASELINE_RULES = [
   "typescript/prefer-return-this-type",
   "unicorn/consistent-date-clone",
   "unicorn/consistent-empty-array-spread",
+  "unicorn/explicit-timer-delay",
   "unicorn/no-console-spaces",
   "unicorn/no-length-as-slice-end",
   "unicorn/no-instanceof-array",
   "unicorn/no-negation-in-equality-check",
   "unicorn/no-new-buffer",
+  "unicorn/no-this-assignment",
   "unicorn/no-typeof-undefined",
   "unicorn/no-unreadable-array-destructuring",
   "unicorn/no-useless-error-capture-stack-trace",
   "unicorn/no-zero-fractions",
   "unicorn/prefer-array-flat",
   "unicorn/prefer-array-some",
+  "unicorn/prefer-blob-reading-methods",
   "unicorn/prefer-dom-node-text-content",
   "unicorn/prefer-keyboard-event-key",
   "unicorn/prefer-math-min-max",
@@ -89,7 +98,9 @@ const ZERO_BASELINE_RULES = [
   "unicorn/prefer-set-has",
   "unicorn/prefer-structured-clone",
   "unicorn/prefer-string-slice",
+  "unicorn/prefer-string-trim-start-end",
   "unicorn/require-array-join-separator",
+  "unicorn/require-module-attributes",
   "unicorn/require-number-to-fixed-digits-argument",
   "unicorn/throw-new-error",
   "vitest/no-import-node-test",
@@ -97,6 +108,16 @@ const ZERO_BASELINE_RULES = [
   "vitest/prefer-called-once",
   "vitest/prefer-called-times",
   "vitest/prefer-expect-type-of",
+];
+
+const DEFERRED_IMPORT_RULES = [
+  "import/default",
+  "import/first",
+  "import/namespace",
+  "import/no-duplicates",
+  "import/no-named-as-default",
+  "import/no-named-as-default-member",
+  "import/no-unassigned-import",
 ];
 
 function readJson(path: string): unknown {
@@ -148,7 +169,6 @@ describe("oxlint config", () => {
       ".agents/skills/autoreview/tests/fixtures/**",
       "test/fixtures/oxlint-boundary-guards/**",
       "**/a2ui.bundle.js",
-      "extensions/browser/chrome-extension/modules/copilot-runtime.js",
       "extensions/diffs/assets/viewer-runtime.js",
       "extensions/diffs-language-pack/assets/viewer-runtime.js",
       "node_modules/",
@@ -211,8 +231,8 @@ describe("oxlint config", () => {
       },
       {
         files: [
-          "**/*.test.ts",
-          "**/*.test.tsx",
+          "**/*.{test,suite}.ts",
+          "**/*.{test,suite}.tsx",
           "**/*.e2e.test.ts",
           "**/*.live.test.ts",
           "**/*test-harness.ts",
@@ -247,6 +267,17 @@ describe("oxlint config", () => {
       expect(override.excludeFiles).toContain("ui/src/i18n/locales/**");
       expect(override.excludeFiles).toContain("src/wizard/i18n/locales/**");
     }
+    for (const override of scopedBudgets.slice(0, 3)) {
+      expect(override.excludeFiles).toContain("**/*.{test,spec,suite}.*");
+    }
+    expect(scopedBudgets[3]?.files).toEqual(
+      expect.arrayContaining([
+        "src/**/*.{test,spec,suite}.*",
+        "ui/src/**/*.{test,spec,suite}.*",
+        "packages/**/*.{test,spec,suite}.*",
+        "extensions/**/*.{test,spec,suite}.*",
+      ]),
+    );
     expect(exactExceptions).toEqual([
       {
         files: ["extensions/copilot/src/event-bridge.ts"],
@@ -281,11 +312,15 @@ describe("oxlint config", () => {
     ]);
   });
 
-  it("enables clean zero-baseline lint rules", () => {
+  it("enables clean zero-baseline lint rules and keeps import campaigns off", () => {
     const config = readJson(".oxlintrc.json") as OxlintConfig;
 
+    expect(config.plugins).toContain("import");
     for (const rule of ZERO_BASELINE_RULES) {
       expect(config.rules?.[rule]).toBe("error");
+    }
+    for (const rule of DEFERRED_IMPORT_RULES) {
+      expect(config.rules?.[rule]).toBe("off");
     }
   });
 });

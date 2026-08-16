@@ -240,7 +240,8 @@ export function createDiffsTool(params: {
       const viewerUrl = buildViewerUrl({
         config: params.api.config,
         viewerPath: artifact.viewerPath,
-        baseUrl: normalizeBaseUrl(toolParams.baseUrl) ?? params.viewerBaseUrl,
+        baseUrl: normalizeBaseUrl(toolParams.baseUrl),
+        viewerBaseUrl: params.viewerBaseUrl,
       });
 
       const baseDetails = {

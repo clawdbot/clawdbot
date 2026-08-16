@@ -24,9 +24,13 @@ describe("cron tool flat-params", () => {
   });
 
   function firstGatewayToolCall<TParams>(): [string, unknown, TParams] {
-    const call = callGatewayToolMock.mock.calls[0];
+    return gatewayToolCall<TParams>(0);
+  }
+
+  function gatewayToolCall<TParams>(index: number): [string, unknown, TParams] {
+    const call = callGatewayToolMock.mock.calls[index];
     if (!call) {
-      throw new Error("expected callGatewayTool to be called");
+      throw new Error(`expected callGatewayTool call ${index + 1}`);
     }
     return call as [string, unknown, TParams];
   }
@@ -320,6 +324,14 @@ describe("cron tool flat-params", () => {
   });
 
   it("recovers a flat trigger when updating a job", async () => {
+    callGatewayToolMock
+      .mockResolvedValueOnce({
+        id: "job-trigger",
+        configRevision: "sha256:flat-trigger-update",
+        trigger: null,
+        payload: { kind: "systemEvent", text: "before" },
+      })
+      .mockResolvedValueOnce({ ok: true });
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 
     await tool.execute("call-flat-trigger-update", {
@@ -328,18 +340,32 @@ describe("cron tool flat-params", () => {
       trigger: { script: "json({ fire: true })", once: false },
     });
 
-    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+    const [getMethod, _getGatewayOpts, getParams] = firstGatewayToolCall<{ id?: string }>();
+    expect(getMethod).toBe("cron.get");
+    expect(getParams).toEqual({ id: "job-trigger" });
+
+    const [method, _gatewayOpts, params] = gatewayToolCall<{
       id?: string;
+      expectedConfigRevision?: string;
       patch?: { trigger?: { script?: string; once?: boolean } };
-    }>();
+    }>(1);
     expect(method).toBe("cron.update");
     expect(params).toEqual({
       id: "job-trigger",
+      expectedConfigRevision: "sha256:flat-trigger-update",
       patch: { trigger: { script: "json({ fire: true })", once: false } },
     });
   });
 
   it("recovers a flat trigger clear when updating a job", async () => {
+    callGatewayToolMock
+      .mockResolvedValueOnce({
+        id: "job-trigger",
+        configRevision: "sha256:flat-trigger-clear",
+        trigger: { script: "json({ fire: false })", once: true },
+        payload: { kind: "systemEvent", text: "before" },
+      })
+      .mockResolvedValueOnce({ ok: true });
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 
     await tool.execute("call-flat-trigger-clear", {
@@ -348,12 +374,21 @@ describe("cron tool flat-params", () => {
       trigger: null,
     });
 
-    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+    const [getMethod, _getGatewayOpts, getParams] = firstGatewayToolCall<{ id?: string }>();
+    expect(getMethod).toBe("cron.get");
+    expect(getParams).toEqual({ id: "job-trigger" });
+
+    const [method, _gatewayOpts, params] = gatewayToolCall<{
       id?: string;
+      expectedConfigRevision?: string;
       patch?: { trigger?: null };
-    }>();
+    }>(1);
     expect(method).toBe("cron.update");
-    expect(params).toEqual({ id: "job-trigger", patch: { trigger: null } });
+    expect(params).toEqual({
+      id: "job-trigger",
+      expectedConfigRevision: "sha256:flat-trigger-clear",
+      patch: { trigger: null },
+    });
   });
 
   it("trims trailing whitespace from recognized job object keys (#95407)", async () => {
@@ -396,7 +431,7 @@ describe("cron tool flat-params", () => {
     await tool.execute("call-patch-trailing-space", {
       action: "update",
       jobId: "job-123",
-      patch: {
+      job: {
         "schedule ": { kind: "cron", expr: "0 9 * * 1-5", tz: "America/New_York" },
         "enabled ": false,
       },

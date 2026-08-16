@@ -420,7 +420,7 @@ describe("createTelegramBot channel_post media", () => {
         const response = await params.fetchImpl(params.url);
         const buffer = new Uint8Array(await response.arrayBuffer());
         if (buffer.length > params.maxBytes) {
-          throw new MediaFetchError("max_bytes", `media exceeds ${params.maxBytes} MB limit`);
+          throw new MediaFetchError("max_bytes", `payload exceeds maxBytes ${params.maxBytes}`);
         }
         return {
           path: "/tmp/telegram-media.bin",
@@ -507,7 +507,6 @@ describe("createTelegramBot channel_post media", () => {
 
   it("dispatches an oversized channel_post as a type-only media fact", async () => {
     setOpenChannelPostConfig();
-
     const fetchSpy = createImageFetchSpy({
       body: new Uint8Array([0xff, 0xd8, 0xff, 0x00]),
       contentType: "image/jpeg",
@@ -525,6 +524,7 @@ describe("createTelegramBot channel_post media", () => {
     );
 
     expect(replySpy).toHaveBeenCalledOnce();
+    expect(sendMessageSpy).not.toHaveBeenCalled();
     expectTypeOnlyMediaPayload("image");
     fetchSpy.mockRestore();
   });
@@ -608,21 +608,21 @@ describe("createTelegramBot channel_post media", () => {
         cause: Object.assign(new Error("aborted"), { name: "AbortError" }),
       }),
       result: { kind: "failed-retryable", error: expect.any(MediaFetchError) },
-      warnings: 0,
+      warning: undefined,
     },
     {
       name: "permanent oversized media",
       messageId: 98077,
       error: new MediaFetchError("max_bytes", "Failed to fetch media: payload exceeds maxBytes 10"),
       result: { kind: "completed" },
-      warnings: 1,
+      warning: "⚠️ File too large. Maximum size is 100MB.",
     },
     {
       name: "permanent SSRF rejection",
       messageId: 98078,
       error: new MediaFetchError("fetch_failed", "blocked by SSRF guard: private address"),
       result: { kind: "completed" },
-      warnings: 1,
+      warning: "⚠️ Failed to download media. Please try again.",
     },
   ])("preserves durable replay handling for $name (#98076)", async (testCase) => {
     setOpenTelegramDirectConfig();
@@ -640,13 +640,12 @@ describe("createTelegramBot channel_post media", () => {
       withTelegramSpooledReplayUpdate(update, () => handler(ctx)),
     );
     expect(result).toEqual(testCase.result);
-    expect(sendMessageSpy).toHaveBeenCalledTimes(testCase.warnings);
-    expect(replySpy).toHaveBeenCalledTimes(testCase.warnings);
-    expect(sendMessageSpy.mock.calls[0]?.[1]).toEqual(
-      [undefined, "⚠️ Failed to download media. Please try again."][testCase.warnings],
-    );
-    if (testCase.warnings) {
-      expectTelegramDownloadWarning(testCase.messageId);
+    const expectedWarnings = testCase.warning ? 1 : 0;
+    expect(sendMessageSpy).toHaveBeenCalledTimes(expectedWarnings);
+    expect(replySpy).toHaveBeenCalledTimes(expectedWarnings);
+    expect(sendMessageSpy.mock.calls[0]?.[1]).toBe(testCase.warning);
+    if (testCase.warning) {
+      expectTelegramDownloadWarning(testCase.messageId, testCase.warning);
       expectTypeOnlyMediaPayload("document");
     }
   });

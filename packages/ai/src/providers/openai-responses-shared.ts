@@ -1,19 +1,28 @@
 // OpenAI Responses shared helpers map runtime messages, tools, and stream events.
 import type {
   ResponseCreateParamsStreaming,
-  ResponseFunctionCallOutputItemList,
   ResponseInput,
-  ResponseInputItem,
-  ResponseInputContent,
-  ResponseInputImage,
-  ResponseInputText,
-  ResponseOutputMessage,
-  ResponseReasoningItem,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 import { clampThinkingLevel } from "../model-utils.js";
+import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import {
+  buildOpenAIResponsesReasoningReplayMetadata,
+  suppressOpenAIResponsesCompaction,
+  type OpenAIResponsesReplayMode,
+} from "../transports/openai-responses-compaction-replay.js";
+import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
+import {
+  createOpenAIResponsesAssistantOutput,
+  createResponsesStreamWithEncryptedContentRetry,
+  convertProviderResponsesMessages,
+} from "../transports/openai-responses-replay-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
-import { transportAbortError } from "../transports/transport-stream-shared.js";
+import { createOpenAIResponseHook } from "../transports/openai-transport-shared.js";
+import {
+  transportAbortError,
+  withProviderResponseHook,
+} from "../transports/transport-stream-shared.js";
 import type {
   Api,
   AssistantMessage,
@@ -21,110 +30,22 @@ import type {
   Model,
   SimpleStreamOptions,
   StreamOptions,
-  TextSignatureV1,
   Usage,
 } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { shortHash } from "../utils/hash.js";
-import { headersToRecord } from "../utils/headers.js";
-import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import { projectProviderError } from "../utils/provider-error.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
   getFirstStreamEventTimeoutMs,
   type FirstStreamEventInternalOptions,
 } from "../utils/stream-first-event-timeout.js";
-import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import {
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
   supportsOpenAITemperature,
 } from "./openai-reasoning-effort.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
-import {
-  describeToolResultMediaPlaceholder,
-  extractToolResultText,
-  isImageWithMediaPayload,
-} from "./tool-result-text.js";
-import { transformMessages } from "./transform-messages.js";
-
-// =============================================================================
-// Utilities
-// =============================================================================
-
-const EMPTY_TOOL_RESULT_TEXT = "(no output)";
-
-// itemId is undefined when the id has no separator so replay paths keep
-// omitting the optional item id instead of serializing an empty string.
-function splitResponsesToolCallId(id: string): [callId: string, itemId: string | undefined] {
-  const separatorIndex = id.indexOf("|");
-  return separatorIndex === -1
-    ? [id, undefined]
-    : [id.slice(0, separatorIndex), id.slice(separatorIndex + 1)];
-}
-
-function sanitizeToolResultText(text: string, fallback: string): string {
-  const sanitized = sanitizeSurrogates(text);
-  return sanitized.trim().length > 0 ? sanitized : fallback;
-}
-
-type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
-type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> & { id?: string };
-function normalizeResponsesReasoningReplayItem(params: {
-  item: ReplayableResponseReasoningItem;
-  replayResponsesItemIds: boolean;
-}): ReplayableResponseReasoningItem {
-  const next = { ...(params.item as ReplayableResponseReasoningItem & Record<string, unknown>) };
-  if (!Array.isArray(next.summary)) {
-    next.summary = [];
-  }
-  if (!params.replayResponsesItemIds) {
-    delete next.id;
-  }
-  return next as ReplayableResponseReasoningItem;
-}
-
-function parseTextSignature(
-  signature: string | undefined,
-): { id?: string; phase?: TextSignatureV1["phase"] } | undefined {
-  if (!signature) {
-    return undefined;
-  }
-  if (signature.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(signature) as Partial<TextSignatureV1>;
-      if (parsed.v === 1) {
-        const id = typeof parsed.id === "string" ? parsed.id : undefined;
-        const phase =
-          parsed.phase === "commentary" || parsed.phase === "final_answer"
-            ? parsed.phase
-            : undefined;
-        // A reasoning-dropped replay keeps the phase but omits the paired id.
-        if (id !== undefined || phase !== undefined) {
-          return { id, phase };
-        }
-        return undefined;
-      }
-    } catch {
-      // Fall through to legacy plain-string handling.
-    }
-  }
-  return { id: signature };
-}
-
-function resolveReplayableResponsesMessageId(params: {
-  textSignatureId?: string;
-  fallbackId: string;
-  fallbackOrdinal: number;
-  previousReplayItemWasReasoning: boolean;
-}): string | undefined {
-  if (!params.textSignatureId) {
-    return params.fallbackOrdinal === 0
-      ? params.fallbackId
-      : `${params.fallbackId}_${params.fallbackOrdinal}`;
-  }
-  return params.previousReplayItemWasReasoning ? params.textSignatureId : undefined;
-}
 
 interface OpenAIResponsesStreamOptions {
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
@@ -141,6 +62,9 @@ interface OpenAIResponsesStreamOptions {
 interface ConvertResponsesMessagesOptions {
   includeSystemPrompt?: boolean;
   replayResponsesItemIds?: boolean;
+  sessionId?: string;
+  authProfileId?: string;
+  replayMode?: OpenAIResponsesReplayMode;
 }
 export { convertResponsesToolPayload };
 
@@ -168,8 +92,9 @@ type ResponsesStreamClient = {
 
 type ResponsesLifecycleStreamOptions = Pick<
   StreamOptions,
-  "signal" | "timeoutMs" | "maxRetries" | "onPayload" | "onResponse"
+  "signal" | "timeoutMs" | "maxRetries" | "onPayload" | "onResponse" | "sessionId"
 > &
+  Pick<BaseOpenAIStreamOptions, "authProfileId" | "onCompactionRejected"> &
   FirstStreamEventInternalOptions;
 
 type OpenAIResponsesProcessStreamOptions = OpenAIResponsesStreamOptions &
@@ -196,6 +121,8 @@ type ResponsesCommonParamsOptions = Pick<StreamOptions, "maxTokens" | "temperatu
   reasoningSummary?: ResponsesReasoningSummary;
 };
 
+type ResponsesLifecycleRequest = OpenAIResponsesRequestParams;
+
 // =============================================================================
 // Message conversion
 // =============================================================================
@@ -206,249 +133,13 @@ export function convertResponsesMessages<TApi extends Api>(
   allowedToolCallProviders: ReadonlySet<string>,
   options?: ConvertResponsesMessagesOptions,
 ): ResponseInput {
-  const messages: ResponseInput = [];
-  const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
-
-  const normalizeIdPart = (part: string): string => {
-    const sanitized = part.replace(/[^a-zA-Z0-9_-]/g, "_");
-    const normalized = sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
-    return normalized.replace(/_+$/, "");
-  };
-
-  const buildForeignResponsesItemId = (itemId: string): string => {
-    const normalized = `fc_${shortHash(itemId)}`;
-    return normalized.length > 64 ? normalized.slice(0, 64) : normalized;
-  };
-
-  const normalizeToolCallId = (
-    id: string,
-    targetModel: Model<TApi>,
-    source: AssistantMessage,
-  ): string => {
-    void targetModel;
-    if (!allowedToolCallProviders.has(model.provider)) {
-      return normalizeIdPart(id);
-    }
-    if (!id.includes("|")) {
-      return normalizeIdPart(id);
-    }
-    // The includes("|") guard above guarantees the item id component exists.
-    const [callId, itemId = ""] = splitResponsesToolCallId(id);
-    const normalizedCallId = normalizeIdPart(callId);
-    const isForeignToolCall = source.provider !== model.provider || source.api !== model.api;
-    let normalizedItemId = isForeignToolCall
-      ? buildForeignResponsesItemId(itemId)
-      : normalizeIdPart(itemId);
-    // OpenAI Responses API requires item id to start with "fc"
-    if (!normalizedItemId.startsWith("fc_")) {
-      normalizedItemId = normalizeIdPart(`fc_${normalizedItemId}`);
-    }
-    return `${normalizedCallId}|${normalizedItemId}`;
-  };
-
-  const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
-
-  const includeSystemPrompt = options?.includeSystemPrompt ?? true;
-  if (includeSystemPrompt && context.systemPrompt) {
-    const compat = model.compat as { supportsDeveloperRole?: boolean } | undefined;
-    const role =
-      model.reasoning && compat?.supportsDeveloperRole !== false ? "developer" : "system";
-    messages.push({
-      type: "message",
-      role,
-      content: [
-        {
-          type: "input_text",
-          text: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
-        },
-      ],
-    });
-  }
-
-  let msgIndex = 0;
-  for (const msg of transformedMessages) {
-    if (msg.role === "user") {
-      if (typeof msg.content === "string") {
-        messages.push({
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: sanitizeSurrogates(msg.content) }],
-        });
-      } else {
-        const content: ResponseInputContent[] = msg.content.map((item): ResponseInputContent => {
-          if (item.type === "text") {
-            return {
-              type: "input_text",
-              text: sanitizeSurrogates(item.text),
-            } satisfies ResponseInputText;
-          }
-          return {
-            type: "input_image",
-            detail: "auto",
-            image_url: `data:${item.mimeType};base64,${item.data}`,
-          } satisfies ResponseInputImage;
-        });
-        if (content.length === 0) {
-          continue;
-        }
-        messages.push({
-          type: "message",
-          role: "user",
-          content,
-        });
-      }
-    } else if (msg.role === "assistant") {
-      const output: ResponseInput = [];
-      let textFallbackOrdinal = 0;
-      const assistantMsg = msg;
-      let previousReplayItemWasReasoning = false;
-      const isDifferentModel =
-        assistantMsg.model !== model.id &&
-        assistantMsg.provider === model.provider &&
-        assistantMsg.api === model.api;
-
-      for (const block of msg.content) {
-        if (block.type === "thinking") {
-          if (block.thinkingSignature) {
-            const reasoningItem = normalizeResponsesReasoningReplayItem({
-              item: JSON.parse(block.thinkingSignature) as ReplayableResponseReasoningItem,
-              replayResponsesItemIds: shouldReplayResponsesItemIds,
-            });
-            output.push(reasoningItem as ResponseInputItem);
-            previousReplayItemWasReasoning = true;
-          }
-        } else if (block.type === "text") {
-          const textBlock = block;
-          const parsedSignature = parseTextSignature(textBlock.textSignature);
-          let msgId = shouldReplayResponsesItemIds
-            ? resolveReplayableResponsesMessageId({
-                textSignatureId: parsedSignature?.id,
-                fallbackId: `msg_${msgIndex}`,
-                fallbackOrdinal: textFallbackOrdinal,
-                previousReplayItemWasReasoning,
-              })
-            : undefined;
-          if (!parsedSignature?.id) {
-            textFallbackOrdinal += 1;
-          }
-          if (msgId && msgId.length > 64) {
-            msgId = `msg_${shortHash(msgId)}`;
-          }
-          const messageItem: ReplayableResponseOutputMessage = {
-            type: "message",
-            role: "assistant",
-            content: [
-              { type: "output_text", text: sanitizeSurrogates(textBlock.text), annotations: [] },
-            ],
-            status: "completed",
-            ...(msgId ? { id: msgId } : {}),
-            phase: parsedSignature?.phase,
-          };
-          output.push(messageItem as ResponseInputItem);
-          previousReplayItemWasReasoning = false;
-        } else if (block.type === "toolCall") {
-          const toolCall = block;
-          const [callId, itemIdRaw] = splitResponsesToolCallId(toolCall.id);
-          let itemId: string | undefined = shouldReplayResponsesItemIds ? itemIdRaw : undefined;
-
-          // For different-model messages, set id to undefined to avoid pairing validation.
-          // OpenAI tracks which fc_xxx IDs were paired with rs_xxx reasoning items.
-          // By omitting the id, we avoid triggering that validation (like cross-provider does).
-          if (shouldReplayResponsesItemIds && isDifferentModel && itemId?.startsWith("fc_")) {
-            itemId = undefined;
-          }
-
-          output.push({
-            type: "function_call",
-            ...(itemId ? { id: itemId } : {}),
-            call_id: callId,
-            name: toolCall.name,
-            arguments: JSON.stringify(toolCall.arguments),
-          });
-          previousReplayItemWasReasoning = false;
-        }
-      }
-      if (output.length === 0) {
-        continue;
-      }
-      messages.push(...output);
-    } else if (msg.role === "toolResult") {
-      const textResult = extractToolResultText(msg.content);
-      const sanitizedTextResult = sanitizeSurrogates(textResult);
-      const hasImages = msg.content.some(isImageWithMediaPayload);
-      const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
-      const hasText = sanitizedTextResult.trim().length > 0;
-      const [callId] = splitResponsesToolCallId(msg.toolCallId);
-
-      let output: string | ResponseFunctionCallOutputItemList;
-      if (hasImages && model.input.includes("image")) {
-        const contentParts: ResponseFunctionCallOutputItemList = [];
-
-        if (hasText) {
-          contentParts.push({
-            type: "input_text",
-            text: sanitizedTextResult,
-          });
-        } else if (mediaPlaceholder === "(see attached media)") {
-          contentParts.push({
-            type: "input_text",
-            text: mediaPlaceholder,
-          });
-        }
-
-        for (const block of msg.content) {
-          if (isImageWithMediaPayload(block)) {
-            contentParts.push({
-              type: "input_image",
-              detail: "auto",
-              image_url: `data:${block.mimeType};base64,${block.data}`,
-            });
-          }
-        }
-
-        output = contentParts;
-      } else {
-        output = sanitizeToolResultText(textResult, mediaPlaceholder ?? EMPTY_TOOL_RESULT_TEXT);
-      }
-
-      messages.push({
-        type: "function_call_output",
-        call_id: callId,
-        output,
-      });
-    }
-    msgIndex++;
-  }
-
-  return messages;
+  return convertProviderResponsesMessages(model, context, allowedToolCallProviders, options);
 }
 
-// =============================================================================
+export const createResponsesAssistantOutput = createOpenAIResponsesAssistantOutput;
+
 // Stream lifecycle
 // =============================================================================
-
-export function createResponsesAssistantOutput<TApi extends Api>(
-  model: Model<TApi>,
-  api: Api = model.api,
-): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [],
-    api,
-    provider: model.provider,
-    model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop",
-    timestamp: Date.now(),
-  };
-}
 
 export function applyResponsesServiceTierPricing(
   usage: Usage,
@@ -562,34 +253,52 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   model: Model<TApi>;
   output: AssistantMessage;
   options?: ResponsesLifecycleStreamOptions;
-  createClient: () => ResponsesStreamClient;
-  buildParams: () => ResponseCreateParamsStreaming;
+  resolveRequestModel?: (model: Model<TApi>) => Model<TApi>;
+  createClient: (model: Model<TApi>) => ResponsesStreamClient;
+  buildParams: (
+    model: Model<TApi>,
+    replayMode: OpenAIResponsesReplayMode,
+  ) => ResponsesLifecycleRequest;
   processStreamOptions?: OpenAIResponsesProcessStreamOptions;
-  formatError: (error: unknown) => string;
 }): Promise<void> {
-  const { stream, model, output, options } = params;
+  const { stream, output, options } = params;
 
   let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
   try {
-    const client = params.createClient();
-    let requestParams = params.buildParams();
-    const nextParams = await options?.onPayload?.(requestParams, model);
-    if (nextParams !== undefined) {
-      requestParams = nextParams as ResponseCreateParamsStreaming;
-    }
+    const model = params.resolveRequestModel?.(params.model) ?? params.model;
+    const client = params.createClient(model);
+    const buildRequest = async (replayMode: OpenAIResponsesReplayMode) => {
+      let request = params.buildParams(model, replayMode);
+      const nextRequest = await options?.onPayload?.(request, model);
+      if (nextRequest !== undefined) {
+        request = nextRequest as ResponsesLifecycleRequest;
+      }
+      return request;
+    };
+    const requestParams = await buildRequest("checkpoint");
 
     firstEventAbort = createFirstStreamEventAbortController(options?.signal);
-    const { data: openaiStream, response } = await client.responses
-      .create(requestParams, {
-        ...buildResponsesRequestOptions(options),
-        signal: firstEventAbort.signal,
-      })
-      .withResponse();
-    await options?.onResponse?.(
-      { status: response.status, headers: headersToRecord(response.headers) },
-      model,
+    const { stream: openaiStream, response } = await createResponsesStreamWithEncryptedContentRetry(
+      {
+        client: client as never,
+        request: requestParams as never,
+        requestOptions: {
+          ...buildResponsesRequestOptions(options),
+          signal: firstEventAbort.signal,
+        },
+        model,
+        buildFullHistoryRequest: () => buildRequest("full-history"),
+        onCompactionRejected: (checkpoint) =>
+          suppressOpenAIResponsesCompaction(output, model, options, checkpoint),
+      },
     );
-    stream.push({ type: "start", partial: output });
+    const hookedOpenAIStream = withProviderResponseHook({
+      stream: openaiStream,
+      signal: firstEventAbort.signal,
+      abort: firstEventAbort.abort,
+      hook: createOpenAIResponseHook(options?.onResponse, response, model),
+      onReady: () => stream.push({ type: "start", partial: output }),
+    });
 
     const firstEventTimeoutMs = getFirstStreamEventTimeoutMs(options);
     const onFirstEventTimeout = getFirstStreamEventTimeoutHandler(options);
@@ -608,7 +317,13 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
             signal: params.processStreamOptions?.signal ?? options?.signal,
           }
         : undefined;
-    await processResponsesStream(openaiStream, output, stream, model, processStreamOptions);
+    await processResponsesStream(hookedOpenAIStream, output, stream, model, {
+      ...processStreamOptions,
+      reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
+        sessionId: options?.sessionId,
+        authProfileId: options?.authProfileId,
+      }),
+    });
 
     if (options?.signal?.aborted) {
       throw transportAbortError(options.signal);
@@ -622,9 +337,9 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     stream.end();
   } catch (error) {
     cleanStreamingScratchBuffers(output);
-    output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-    output.errorMessage = params.formatError(error);
-    stream.push({ type: "error", reason: output.stopReason, error: output });
+    const terminal = projectProviderError(error, options?.signal);
+    Object.assign(output, terminal);
+    stream.push({ type: "error", reason: terminal.stopReason, error: output });
     stream.end();
   } finally {
     firstEventAbort?.dispose();

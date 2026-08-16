@@ -1,6 +1,6 @@
 // Gateway run loop tests cover foreground gateway lifecycle and restart behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayServer } from "../../gateway/server.impl.js";
+import type { GatewayServer } from "../../gateway/server-public.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
@@ -216,6 +216,7 @@ vi.mock("../../tasks/runtime-internal.js", () => ({
 
 vi.mock("../../config/runtime-snapshot.js", () => ({
   clearRuntimeConfigSnapshot: () => clearRuntimeConfigSnapshot(),
+  registerRuntimeConfigSnapshotPreparer: vi.fn(),
 }));
 
 vi.mock("../../tasks/task-registry.maintenance.js", () => ({
@@ -233,7 +234,7 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
   waitForActiveEmbeddedRuns: (timeoutMs?: number) => waitForActiveEmbeddedRuns(timeoutMs),
 }));
 
-vi.mock("../../agents/main-session-restart-recovery-marking.js", () => ({
+vi.mock("../../agents/main-session-recovery/main-session-restart-recovery-marking.js", () => ({
   markRestartAbortedMainSessions: (params: unknown) => markRestartAbortedMainSessions(params),
 }));
 
@@ -525,6 +526,27 @@ describe("runGatewayLoop", () => {
       });
       expect(runtime.exit).toHaveBeenCalledWith(0);
       expect(flushLogger).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("names and canonically formats a gateway close failure", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const close = vi.fn<GatewayCloseFn>(async () => {
+        throw new TypeError("close owner failed");
+      });
+      const { start, started } = createSignaledStart(close);
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      await runLoopWithStart({ start, runtime });
+      await waitForStart(started);
+
+      captureSignal("SIGTERM")();
+
+      await expect(exited).resolves.toBe(0);
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        "shutdown step failed (gateway server close): close owner failed",
+      );
     });
   });
 

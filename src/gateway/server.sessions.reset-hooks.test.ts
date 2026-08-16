@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { listSessionEntries, loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesCore, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
@@ -37,6 +37,7 @@ type CommandNewHookEvent = {
   action: string;
   sessionKey?: string;
   context?: {
+    agentId?: string;
     commandSource?: string;
     previousSessionEntry?: { sessionId?: string };
   };
@@ -101,7 +102,9 @@ async function configureGlobalAgentSessionStore(dir: string) {
     configPath,
     `${JSON.stringify(
       {
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: {
+          list: [{ id: "main", default: true }, { id: "work" }],
+        },
         session: { scope: "global", store: storeTemplate },
       },
       null,
@@ -243,7 +246,7 @@ async function performSessionReset(params: {
   onCommitted?: (commit: { key: string; sessionId: string }) => void;
 }) {
   const { performGatewaySessionReset } = await import("./session-reset-service.js");
-  return performGatewaySessionReset(params);
+  return performGatewaySessionReset({ ...params, workerPlacementContext: {} });
 }
 
 function expectResetErrorMessage(
@@ -272,15 +275,23 @@ function commandNewHookEvents() {
     .filter(isCommandNewHookEvent);
 }
 
-function expectSingleCommandNewHookEvent() {
-  const events = commandNewHookEvents();
+function expectSingleCommandHookEvent(action: "new" | "reset") {
+  const events = (sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>)
+    .map((call) => call[0])
+    .filter(
+      (event): event is CommandNewHookEvent =>
+        Boolean(event) &&
+        typeof event === "object" &&
+        (event as { type?: unknown }).type === "command" &&
+        (event as { action?: unknown }).action === action,
+    );
   expect(events).toHaveLength(1);
   const event = events[0];
   if (!event) {
-    throw new Error("expected session hook event");
+    throw new Error(`expected command ${action} hook event`);
   }
   expect(event.type).toBe("command");
-  expect(event.action).toBe("new");
+  expect(event.action).toBe(action);
   return event;
 }
 
@@ -319,7 +330,7 @@ async function resolveGatewaySessionStorePathForKey(key: string) {
 async function loadGatewaySessionStoreForKey(key: string) {
   const gatewayStorePath = await resolveGatewaySessionStorePathForKey(key);
   return Object.fromEntries(
-    listSessionEntries({ storePath: gatewayStorePath }).map(({ sessionKey, entry }) => [
+    listSessionEntriesCore({ storePath: gatewayStorePath }).map(({ sessionKey, entry }) => [
       sessionKey,
       entry,
     ]),
@@ -345,7 +356,7 @@ test("sessions.reset emits internal command hook with reason", async () => {
   await writeMainSessionEntry("sess-main");
 
   await resetMainSession();
-  const event = expectSingleCommandNewHookEvent();
+  const event = expectSingleCommandHookEvent("new");
   expect(event.sessionKey).toBe("agent:main:main");
   expect(event.context?.commandSource).toBe("gateway:sessions.reset");
   expect(event.context?.previousSessionEntry?.sessionId).toBe("sess-main");
@@ -447,8 +458,7 @@ test("sessions.reset infers selected global agent from agent-prefixed aliases", 
     await writeGlobalSessionFile(globalConfig.workStorePath, "sess-work-global");
     const { getRuntimeConfig } = await import("../config/config.js");
     const { resolveGatewaySessionStoreTarget } = await import("./session-utils.js");
-    const { performGatewaySessionReset } = await import("./session-reset-service.js");
-    const reset = await performGatewaySessionReset({
+    const reset = await performSessionReset({
       key: "agent:work:main",
       reason: "reset",
       commandSource: "gateway:sessions.reset",
@@ -542,7 +552,36 @@ test("sessions.reset emits inferred selected global agent scope", async () => {
       }),
     );
     expect(broadcast.mock.calls[1]?.[2]).toEqual(new Set(["conn-work"]));
+    const hookEvent = expectSingleCommandHookEvent("reset");
+    expect(hookEvent.sessionKey).toBe("global");
+    expect(hookEvent.context?.agentId).toBe("work");
   });
+});
+
+test("sessions.reset of an incognito session broadcasts a delete, not a reset", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "incognito-chat": sessionStoreEntry("sess-incognito", { incognito: true }),
+    },
+  });
+  const broadcast = vi.fn();
+  const reset = await directSessionReq<{ ok: true; key: string; deleted?: boolean }>(
+    "sessions.reset",
+    { key: "incognito-chat", reason: "reset" },
+    {
+      context: {
+        broadcastToConnIds: broadcast,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-incognito"]),
+      },
+    },
+  );
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.deleted).toBe(true);
+  // The row is gone; only reason "delete" makes clients drop it and navigate away.
+  expect(broadcast.mock.calls[0]?.[0]).toBe("sessions.changed");
+  expect(broadcast.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ reason: "delete" }));
 });
 
 test("sessions.reset emits enriched session_end and session_start hooks", async () => {
@@ -676,7 +715,7 @@ test("sessions.create with emitCommandHooks=true fires command:new hook against 
 
   await createFromMainSession({ emitCommandHooks: true });
 
-  expect(expectSingleCommandNewHookEvent().context?.commandSource).toBe("webchat");
+  expect(expectSingleCommandHookEvent("new").context?.commandSource).toBe("webchat");
 });
 
 test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks against parent (#76957)", async () => {
@@ -879,7 +918,7 @@ test("sessions.create keeps an explicit TUI child key when session.dmScope is 'm
     expect(result.ok).toBe(true);
     expect(result.payload?.key).toBe("agent:main:tui-explicit");
     expect(result.payload?.sessionId).not.toBe("sess-parent-tui");
-    expect(expectSingleCommandNewHookEvent().context?.commandSource).toBe("webchat");
+    expect(expectSingleCommandHookEvent("new").context?.commandSource).toBe("webchat");
     const [endEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
     const [startEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionStart);
     expect(endEvent.sessionKey).toBe("agent:main:main");

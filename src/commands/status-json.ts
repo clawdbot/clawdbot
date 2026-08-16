@@ -10,6 +10,7 @@ export async function statusJsonCommand(
   opts: {
     deep?: boolean;
     usage?: boolean;
+    agent?: string;
     timeoutMs?: number;
     all?: boolean;
   },

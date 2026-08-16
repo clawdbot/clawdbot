@@ -1,6 +1,8 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harness/types.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
+import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
+import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
 import {
   calculateContextTokens,
   compact,
@@ -41,18 +43,19 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
    * @param customInstructions Optional instructions for the compaction summary
    */
   async compact(customInstructions?: string): Promise<CompactionResult> {
-    return await this.runWithSessionWriteLock(
-      async () => await this.compactWithSessionWriteLock(customInstructions, "none"),
+    return await this.runWithSessionWriteSettlement(
+      async () => await this.compactWithSessionWriteSettlement(customInstructions, "none"),
     );
   }
 
   async [agentSessionAutomaticCompaction](customInstructions?: string): Promise<CompactionResult> {
-    return await this.runWithSessionWriteLock(
-      async () => await this.compactWithSessionWriteLock(customInstructions, "retry-invalid-once"),
+    return await this.runWithSessionWriteSettlement(
+      async () =>
+        await this.compactWithSessionWriteSettlement(customInstructions, "retry-invalid-once"),
     );
   }
 
-  private async compactWithSessionWriteLock(
+  private async compactWithSessionWriteSettlement(
     customInstructions?: string,
     summaryOutputPolicy: SummaryOutputPolicy = "none",
   ): Promise<CompactionResult> {
@@ -246,7 +249,9 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     );
     const newEntries = this.sessionManager.getEntries();
     const sessionContext = this.sessionManager.buildSessionContext();
-    this.agent.state.messages = sessionContext.messages;
+    // Compaction replaces the request prefix, invalidating retained usage and thinking signatures.
+    // Sanitize at assignment so every continuation driver receives replay-safe history.
+    this.agent.state.messages = sanitizeCompactionReplayMessages(sessionContext.messages);
 
     const savedCompactionEntry = newEntries.find(
       (e) => e.type === "compaction" && e.summary === compactionResult.summary,
@@ -320,20 +325,19 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       if (this.contextOverflowRecoveryOwner === "caller") {
         return false;
       }
-      if (this.overflowRecoveryAttempted) {
+      if (this.overflowRecoveryAttempts >= MAX_OVERFLOW_COMPACTION_ATTEMPTS) {
         this.emit({
           type: "compaction_end",
           reason: "overflow",
           result: undefined,
           aborted: false,
           willRetry: false,
-          errorMessage:
-            "Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.",
+          errorMessage: `Context overflow recovery failed after ${MAX_OVERFLOW_COMPACTION_ATTEMPTS} compact-and-retry attempts. Try reducing context or switching to a larger-context model.`,
         });
         return false;
       }
 
-      this.overflowRecoveryAttempted = true;
+      this.overflowRecoveryAttempts += 1;
       // Keep the failed response in history, but exclude it from the retry context.
       const messages = this.agent.state.messages;
       if (messages.at(-1)?.role === "assistant") {
@@ -352,17 +356,6 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
       if (estimate.lastUsageIndex === null) {
         return false;
       } // No usage data at all
-      // Verify the usage source is post-compaction. Kept pre-compaction messages
-      // have stale usage reflecting the old (larger) context and would falsely
-      // trigger compaction right after one just finished.
-      const usageMsg = messages.at(estimate.lastUsageIndex);
-      if (
-        compactionEntry &&
-        usageMsg?.role === "assistant" &&
-        usageMsg.timestamp <= new Date(compactionEntry.timestamp).getTime()
-      ) {
-        return false;
-      }
       contextTokens = estimate.tokens;
     } else if (assistantMessage.usage.contextUsage?.state === "unavailable") {
       const estimatedContextTokens = this.getContextUsage()?.tokens;

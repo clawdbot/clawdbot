@@ -54,7 +54,7 @@ function loadCurrent(scope: RestartRecoveryTerminalDeliveryScope): SessionEntry 
 /** Persists ambiguity before a terminal external send is allowed to start. */
 export async function beginRestartRecoveryTerminalDelivery(
   scope: RestartRecoveryTerminalDeliveryScope,
-): Promise<"started" | "blocked" | "stale" | "not-applicable"> {
+): Promise<"started" | "already-delivered" | "delivery-ambiguous" | "stale" | "not-applicable"> {
   let started = false;
   const updated = await updateSessionEntry(
     { sessionKey: scope.sessionKey, storePath: scope.storePath },
@@ -89,7 +89,7 @@ export async function beginRestartRecoveryTerminalDelivery(
     current?.sessionId === scope.sessionId &&
     hasRestartRecoveryTerminalRun(current, scope.sourceTurnId)
   ) {
-    return "blocked";
+    return "already-delivered";
   }
   // The gateway already verified a short-lived current-turn capability. Room
   // events intentionally persist no running recovery state, so only durable
@@ -101,7 +101,9 @@ export async function beginRestartRecoveryTerminalDelivery(
     return "stale";
   }
   if (current.restartRecoveryDeliveryReceiptState || current.restartRecoveryDeliveryToolCallId) {
-    return "blocked";
+    return current.restartRecoveryDeliveryReceiptState === "delivered-terminal"
+      ? "already-delivered"
+      : "delivery-ambiguous";
   }
   throw new Error("failed to persist terminal delivery intent");
 }

@@ -1,4 +1,4 @@
-import { buildMainSessionRecoveryClearPatch } from "../agents/main-session-recovery-clear.js";
+import { buildMainSessionRecoveryClearPatch } from "../agents/main-session-recovery/main-session-recovery-clear.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 
 export function buildForkedGatewaySessionEntry(
@@ -19,5 +19,6 @@ export function buildForkedGatewaySessionEntry(
       : {}),
     totalTokens: undefined,
     totalTokensFresh: false,
+    totalTokensVersion: undefined,
   };
 }

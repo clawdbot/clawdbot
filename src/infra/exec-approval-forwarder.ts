@@ -48,7 +48,7 @@ import {
 // chat targets, then sends resolution/expiry notices to the same targets.
 const log = createSubsystemLogger("gateway/exec-approvals");
 type DeliverApprovalPayloads =
-  typeof import("../channels/message/runtime.js").sendDurableMessageBatch;
+  typeof import("../channels/message/runtime.js").sendDurableMessageBatchCore;
 type MaybePromise<T> = T | Promise<T>;
 type ResolveSessionTargetFn = (params: {
   cfg: OpenClawConfig;
@@ -781,8 +781,8 @@ export function createExecApprovalForwarder(
   const deliver =
     deps.deliver ??
     (async (params) => {
-      const { sendDurableMessageBatch } = await loadExecApprovalForwarderRuntime();
-      return sendDurableMessageBatch(params);
+      const { sendDurableMessageBatchCore } = await loadExecApprovalForwarderRuntime();
+      return sendDurableMessageBatchCore(params);
     });
   const nowMs = deps.nowMs ?? Date.now;
   const resolveSessionTarget = deps.resolveSessionTarget ?? defaultResolveSessionTarget;

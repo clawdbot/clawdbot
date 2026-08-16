@@ -2,6 +2,13 @@ import type { SessionsListParams } from "../../../packages/gateway-protocol/src/
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readAgentRunIndexVersion } from "../../infra/agent-run-registry.js";
 import { readSessionIdentityMutationVersion } from "../../sessions/session-lifecycle-events.js";
+import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
+import {
+  readOpenClawAgentDatabaseRegistryToken,
+  readOpenIncognitoAgentDatabaseGeneration,
+} from "../../state/openclaw-agent-db.js";
+import { readSessionAutomationVersion } from "../session-automation-index.js";
+import { readSessionLifecyclePersistenceVersion } from "../session-lifecycle-state.js";
 import { isGatewayAdmin } from "../session-sharing.js";
 import { readSessionTitleProjectionUnavailableVersion } from "../session-transcript-title-reader.js";
 import type { SessionsListResult } from "../session-utils.types.js";
@@ -11,9 +18,15 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 
 type SessionListFence = {
   agentRunIndexVersion: number;
+  agentDatabaseRegistryToken: symbol;
+  incognitoDatabaseGeneration: number;
+  lifecyclePersistenceVersion: number;
+  sessionAutomationVersion: number;
   sessionIdentityMutationVersion: number;
   sessionsMutationVersion: number;
+  sessionTranscriptUpdateVersion: number;
   titleProjectionUnavailableVersion: number;
+  workerPlacementDiskSpaceVersion: number;
 };
 type SessionListOperation = SessionListFence & { promise: Promise<SessionsListResult> };
 type SessionListCompleted = SessionListFence & { expiresAt?: number; result: SessionsListResult };
@@ -29,18 +42,32 @@ const sessionListsByContext = new WeakMap<GatewayRequestContext, SessionListStat
 function readSessionListFence(context: GatewayRequestContext): SessionListFence {
   return {
     agentRunIndexVersion: readAgentRunIndexVersion(),
+    agentDatabaseRegistryToken: readOpenClawAgentDatabaseRegistryToken(),
+    incognitoDatabaseGeneration: readOpenIncognitoAgentDatabaseGeneration(),
+    lifecyclePersistenceVersion: readSessionLifecyclePersistenceVersion(),
+    sessionAutomationVersion: readSessionAutomationVersion(),
     sessionIdentityMutationVersion: readSessionIdentityMutationVersion(),
     sessionsMutationVersion: readSessionsMutationVersion(context),
+    // Rows embed transcript-derived previews/titles; a committed transcript
+    // write without a session mutation must still invalidate reuse.
+    sessionTranscriptUpdateVersion: readSessionTranscriptUpdateVersion(),
     titleProjectionUnavailableVersion: readSessionTitleProjectionUnavailableVersion(),
+    workerPlacementDiskSpaceVersion: context.workerPlacementDiskSpaceReader?.version() ?? 0,
   };
 }
 
 function matchesSessionListFence(value: SessionListFence, fence: SessionListFence): boolean {
   return (
     value.agentRunIndexVersion === fence.agentRunIndexVersion &&
+    value.agentDatabaseRegistryToken === fence.agentDatabaseRegistryToken &&
+    value.incognitoDatabaseGeneration === fence.incognitoDatabaseGeneration &&
+    value.lifecyclePersistenceVersion === fence.lifecyclePersistenceVersion &&
+    value.sessionAutomationVersion === fence.sessionAutomationVersion &&
     value.sessionIdentityMutationVersion === fence.sessionIdentityMutationVersion &&
     value.sessionsMutationVersion === fence.sessionsMutationVersion &&
-    value.titleProjectionUnavailableVersion === fence.titleProjectionUnavailableVersion
+    value.sessionTranscriptUpdateVersion === fence.sessionTranscriptUpdateVersion &&
+    value.titleProjectionUnavailableVersion === fence.titleProjectionUnavailableVersion &&
+    value.workerPlacementDiskSpaceVersion === fence.workerPlacementDiskSpaceVersion
   );
 }
 
@@ -90,9 +117,9 @@ function rememberCompletedSessionList(
 function resolveSessionListExpiration(result: SessionsListResult): number | null | undefined {
   let expiresAt: number | undefined;
   for (const session of result.sessions) {
-    // Running durations tick continuously, and a retained child can sit outside
-    // this page, leaving no authoritative child expiration to cache safely.
-    if (session.hasActiveSubagentRun || session.childSessions?.length) {
+    // Live work can settle without a session/index mutation, running durations tick,
+    // and a retained child can sit outside this page. None has a safe cache deadline.
+    if (session.hasActiveRun || session.hasActiveSubagentRun || session.childSessions?.length) {
       return null;
     }
     const statusExpiration = session.agentStatus?.expiresAt;

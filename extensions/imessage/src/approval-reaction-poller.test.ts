@@ -8,7 +8,7 @@ import {
 import type { IMessageRpcClient } from "./client.js";
 
 const resolverMocks = vi.hoisted(() => ({
-  resolveIMessageApproval: vi.fn(),
+  resolveApprovalOverGateway: vi.fn(),
   isApprovalNotFoundError: vi.fn(() => false),
 }));
 
@@ -17,8 +17,10 @@ const registerIMessageApprovalReactionTarget = (
   params: Omit<IMessageTargetParams, "approvalKind">,
 ) => registerIMessageApprovalReactionTargetRaw({ ...params, approvalKind: "exec" });
 
-vi.mock("./approval-resolver.js", () => ({
-  resolveIMessageApproval: resolverMocks.resolveIMessageApproval,
+vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
+  resolveApprovalOverGateway: resolverMocks.resolveApprovalOverGateway,
+}));
+vi.mock("openclaw/plugin-sdk/error-runtime", () => ({
   isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
 }));
 
@@ -131,8 +133,8 @@ describe("iMessage approval reaction poller", () => {
     clearIMessageApprovalReactionTargetsForTest();
     accountSequence += 1;
     accountId = `test-${accountSequence}`;
-    resolverMocks.resolveIMessageApproval.mockReset();
-    resolverMocks.resolveIMessageApproval.mockImplementation(
+    resolverMocks.resolveApprovalOverGateway.mockReset();
+    resolverMocks.resolveApprovalOverGateway.mockImplementation(
       async ({ decision }: { decision: "allow-once" | "allow-always" | "deny" }) => ({
         applied: true,
         approval:
@@ -172,11 +174,13 @@ describe("iMessage approval reaction poller", () => {
     );
 
     expect(request).toHaveBeenCalledWith("chats.list", { limit: 50 }, { timeoutMs: 10_000 });
-    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledWith({
+    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith({
+      accountId,
       cfg: buildApprovalConfig(),
       approvalId: "exec-1",
       approvalKind: "exec",
       decision: "allow-once",
+      channel: "imessage",
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
@@ -218,7 +222,7 @@ describe("iMessage approval reaction poller", () => {
     await pollPendingIMessageApprovalReactions(pollParams);
     await pollPendingIMessageApprovalReactions(pollParams);
 
-    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledTimes(1);
+    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
     expect(request.mock.calls.filter(([method]) => method === "chats.list")).toHaveLength(1);
     expect(request.mock.calls.filter(([method]) => method === "messages.history")).toHaveLength(2);
     expect(request).toHaveBeenCalledWith(
@@ -229,7 +233,7 @@ describe("iMessage approval reaction poller", () => {
   });
 
   it("retries no-target discovery after resolver failures expire observed targets", async () => {
-    resolverMocks.resolveIMessageApproval.mockRejectedValue(new Error("gateway down"));
+    resolverMocks.resolveApprovalOverGateway.mockRejectedValue(new Error("gateway down"));
     const request = createRpcRequest([buildApprovalMessage()], [42]);
     const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
 
@@ -243,7 +247,7 @@ describe("iMessage approval reaction poller", () => {
       dateNow.mockRestore();
     }
 
-    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledTimes(2);
+    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(2);
     expect(request.mock.calls.filter(([method]) => method === "chats.list")).toHaveLength(2);
   });
 
@@ -320,7 +324,7 @@ describe("iMessage approval reaction poller", () => {
       dateNow.mockRestore();
     }
 
-    expect(resolverMocks.resolveIMessageApproval).not.toHaveBeenCalled();
+    expect(resolverMocks.resolveApprovalOverGateway).not.toHaveBeenCalled();
   });
 
   it("uses learned chat ids for fast scoped polling after discovery", async () => {
@@ -403,11 +407,13 @@ describe("iMessage approval reaction poller", () => {
       { chat_id: 99, limit: 30 },
       { timeoutMs: 10_000 },
     );
-    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledWith({
+    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith({
+      accountId,
       cfg: buildApprovalConfig("+15551239999"),
       approvalId: "exec-handle",
       approvalKind: "exec",
       decision: "allow-once",
+      channel: "imessage",
       senderId: "+15551239999",
       gatewayUrl: undefined,
     });
@@ -450,19 +456,21 @@ describe("iMessage approval reaction poller", () => {
       buildPollParams(request, { cfg: buildApprovalConfig(APPROVER) }),
     );
 
-    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledTimes(1);
-    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledWith({
+    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
+    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith({
+      accountId,
       cfg: buildApprovalConfig(APPROVER),
       approvalId: "exec-1",
       approvalKind: "exec",
       decision: "allow-once",
+      channel: "imessage",
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
   });
 
   it("stops polling after another surface records the canonical winner", async () => {
-    resolverMocks.resolveIMessageApproval.mockResolvedValueOnce({
+    resolverMocks.resolveApprovalOverGateway.mockResolvedValueOnce({
       applied: false,
       approval: { status: "denied", decision: "deny", reason: "user" },
     });
@@ -508,7 +516,7 @@ describe("iMessage approval reaction poller", () => {
     await pollPendingIMessageApprovalReactions(pollParams);
     await pollPendingIMessageApprovalReactions(pollParams);
 
-    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledTimes(1);
+    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
     expect(request).toHaveBeenCalledTimes(1);
     expect(logVerboseMessage).toHaveBeenCalledWith(
       "imessage: approval reaction already resolved id=exec-1 sender=+15551230000 status=denied decision=deny reason=user via messageId=msg-1",
@@ -517,7 +525,7 @@ describe("iMessage approval reaction poller", () => {
   });
 
   it("stops scanning after an authorized resolver failure", async () => {
-    resolverMocks.resolveIMessageApproval.mockRejectedValueOnce(new Error("gateway down"));
+    resolverMocks.resolveApprovalOverGateway.mockRejectedValueOnce(new Error("gateway down"));
     registerIMessageApprovalReactionTarget({
       accountId,
       conversation: { chatId: 42, chatGuid: "iMessage;+;chat-guid" },
@@ -556,12 +564,14 @@ describe("iMessage approval reaction poller", () => {
       buildPollParams(request, { cfg: buildApprovalConfig(APPROVER) }),
     );
 
-    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledTimes(1);
-    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledWith({
+    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
+    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith({
+      accountId,
       cfg: buildApprovalConfig(APPROVER),
       approvalId: "exec-1",
       approvalKind: "exec",
       decision: "allow-once",
+      channel: "imessage",
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });

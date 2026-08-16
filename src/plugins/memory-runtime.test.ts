@@ -30,9 +30,9 @@ vi.mock("./memory-state.js", async (importOriginal) => {
 
 import {
   authorizeActiveMemorySearchHits,
-  closeActiveMemorySearchManager,
-  closeActiveMemorySearchManagers,
-  getActiveMemorySearchManager,
+  closeActiveMemorySearchManagerCore,
+  closeActiveMemorySearchManagersCore,
+  getActiveMemorySearchManagerCore,
   resolveActiveMemoryBackendConfig,
 } from "./memory-runtime.js";
 import { resetStandaloneMemoryRegistrySlot } from "./memory-runtime.test-support.js";
@@ -93,7 +93,7 @@ describe("memory runtime handles", () => {
     mocks.loadPluginRegistryHandle.mockReturnValue(registry);
 
     await expect(
-      getActiveMemorySearchManager({ cfg: memoryConfig, agentId: "main" }),
+      getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" }),
     ).resolves.toEqual({ manager: null, error: "no index" });
 
     expect(mocks.loadPluginRegistryHandle).toHaveBeenCalledWith({
@@ -121,17 +121,17 @@ describe("memory runtime handles", () => {
     });
     expect(hasMemoryRuntime()).toBe(false);
 
-    await getActiveMemorySearchManager({ cfg: memoryConfig, agentId: "main" });
+    await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
     expect(hasMemoryRuntime()).toBe(true);
 
-    await closeActiveMemorySearchManagers();
+    await closeActiveMemorySearchManagersCore();
     expect(hasMemoryRuntime()).toBe(false);
 
-    await getActiveMemorySearchManager({ cfg: memoryConfig, agentId: "main" });
+    await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
     expect(hasMemoryRuntime()).toBe(true);
     expect(mocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
 
-    await closeActiveMemorySearchManagers();
+    await closeActiveMemorySearchManagersCore();
     expect(runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(2);
     expect(hasMemoryRuntime()).toBe(false);
   });
@@ -143,14 +143,14 @@ describe("memory runtime handles", () => {
       .mockReturnValueOnce(main.registry)
       .mockReturnValueOnce(research.registry);
 
-    await getActiveMemorySearchManager({ cfg: memoryConfig, agentId: "main" });
-    await getActiveMemorySearchManager({ cfg: memoryConfig, agentId: "research" });
+    await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+    await getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "research" });
     expect(hasMemoryRuntime()).toBe(true);
 
-    await closeActiveMemorySearchManager({ cfg: memoryConfig, agentId: "main" });
+    await closeActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
     expect(hasMemoryRuntime()).toBe(true);
 
-    await closeActiveMemorySearchManagers();
+    await closeActiveMemorySearchManagersCore();
     expect(main.runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(1);
     expect(research.runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(1);
     expect(hasMemoryRuntime()).toBe(false);
@@ -164,17 +164,17 @@ describe("memory runtime handles", () => {
     );
 
     await expect(
-      getActiveMemorySearchManager({ cfg: memoryConfig, agentId: "main" }),
+      getActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" }),
     ).rejects.toThrow("manager initialization failed");
     expect(hasMemoryRuntime()).toBe(true);
 
     runtime.closeAllMemorySearchManagers.mockRejectedValueOnce(
       new Error("manager teardown failed"),
     );
-    await expect(closeActiveMemorySearchManagers()).rejects.toThrow("manager teardown failed");
+    await expect(closeActiveMemorySearchManagersCore()).rejects.toThrow("manager teardown failed");
     expect(hasMemoryRuntime()).toBe(true);
 
-    await closeActiveMemorySearchManagers();
+    await closeActiveMemorySearchManagersCore();
     expect(hasMemoryRuntime()).toBe(false);
   });
 
@@ -212,7 +212,7 @@ describe("memory runtime handles", () => {
     },
   ])("does not load a disabled memory selection", async (cfg) => {
     await expect(
-      getActiveMemorySearchManager({ cfg: cfg as never, agentId: "main" }),
+      getActiveMemorySearchManagerCore({ cfg: cfg as never, agentId: "main" }),
     ).resolves.toEqual({ manager: null, error: "memory plugin unavailable" });
     expect(mocks.loadPluginRegistryHandle).not.toHaveBeenCalled();
   });
@@ -322,8 +322,8 @@ describe("memory runtime handles", () => {
     resolveActiveMemoryBackendConfig({ cfg: memoryConfig, agentId: "research" });
     mocks.loadPluginRegistryHandle.mockClear();
 
-    await closeActiveMemorySearchManager({ cfg: memoryConfig, agentId: "main" });
-    await closeActiveMemorySearchManagers(memoryConfig);
+    await closeActiveMemorySearchManagerCore({ cfg: memoryConfig, agentId: "main" });
+    await closeActiveMemorySearchManagersCore(memoryConfig);
 
     for (const { runtime } of [main, research]) {
       expect(runtime.closeMemorySearchManager).toHaveBeenCalledWith({

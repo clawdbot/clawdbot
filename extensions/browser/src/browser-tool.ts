@@ -4,6 +4,7 @@
  * Builds the model-facing browser tool, chooses sandbox/host/node routing, and
  * maps high-level actions onto browser control client calls.
  */
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createBrowserNodeProxyRequest } from "./browser-node-proxy.js";
 import { resolveBrowserNodeTarget } from "./browser-node-routing.js";
 import { applyBrowserTabToolBinding, parseBrowserTabToolBinding } from "./browser-tool-binding.js";
@@ -367,6 +368,12 @@ export function createBrowserTool(opts?: {
     provider?: string;
     model?: string;
   };
+  screenshotResultMode?: "image" | "path";
+  persistScreenshot?: (params: {
+    sourcePath: string;
+    type: "png" | "jpeg";
+    targetId?: string;
+  }) => Promise<string>;
   mediaScope?: {
     sessionKey?: string;
     channel?: string;
@@ -652,7 +659,9 @@ export function createBrowserTool(opts?: {
                   body: { kind: "close" },
                   timeoutMs: toolTimeoutMs,
                 });
-            sessionTabs.untrack(targetId);
+            sessionTabs.untrack(
+              readStringValue((result as { targetId?: unknown }).targetId) ?? targetId,
+            );
             return jsonResult(result);
           }
           if (targetId) {
@@ -662,7 +671,7 @@ export function createBrowserTool(opts?: {
             });
             sessionTabs.untrack(targetId);
           } else {
-            await browserToolDeps.browserAct(
+            const result = await browserToolDeps.browserAct(
               baseUrl,
               { kind: "close" },
               {
@@ -670,6 +679,7 @@ export function createBrowserTool(opts?: {
                 timeoutMs: toolTimeoutMs,
               },
             );
+            sessionTabs.untrack(readStringValue(result.targetId));
           }
           return jsonResult({ ok: true });
         }
@@ -716,6 +726,31 @@ export function createBrowserTool(opts?: {
                 profile,
               });
           sessionTabs.touch(readStringValue(result.targetId) ?? targetId);
+          if (opts?.screenshotResultMode === "path") {
+            const artifactPath = opts.persistScreenshot
+              ? await opts.persistScreenshot({
+                  sourcePath: result.path,
+                  type,
+                  targetId: readStringValue(result.targetId) ?? targetId,
+                })
+              : result.path;
+            if (artifactPath.length > 4_096) {
+              throw new Error("Browser screenshot artifact path exceeds 4096 characters");
+            }
+            const resultRecord = result as Record<string, unknown>;
+            const resultTargetId = readStringValue(resultRecord.targetId) ?? targetId;
+            const resultUrl = readStringValue(resultRecord.url);
+            return jsonResult({
+              ok: resultRecord.ok === true,
+              path: artifactPath,
+              ...(resultTargetId ? { targetId: truncateUtf16Safe(resultTargetId, 256) } : {}),
+              ...(resultUrl ? { url: truncateUtf16Safe(resultUrl, 2_048) } : {}),
+              ...(Array.isArray(resultRecord.annotations)
+                ? { annotationCount: resultRecord.annotations.length }
+                : {}),
+              media: { outbound: false },
+            });
+          }
           const screenshotPath = result.path;
           const screenshotCfg = browserToolDeps.getRuntimeConfig();
           const imageSanitization = resolveRuntimeImageSanitization();
@@ -897,6 +932,7 @@ export function createBrowserTool(opts?: {
             baseUrl,
             profile,
             proxyRequest,
+            signal,
             onTabActivity: sessionTabs.touch,
           });
         case "upload": {
@@ -951,6 +987,7 @@ export function createBrowserTool(opts?: {
             profile,
             proxyRequest,
             onTabActivity: sessionTabs.touch,
+            onTabClose: sessionTabs.untrack,
           });
         }
         default:

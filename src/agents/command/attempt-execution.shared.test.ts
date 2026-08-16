@@ -11,7 +11,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../internal-runtime-context.js";
 import {
-  persistSessionEntry,
+  persistAgentSession,
   resolveAcpPromptBody,
   resolveInternalEventTranscriptBody,
 } from "./attempt-execution.shared.js";
@@ -90,7 +90,7 @@ describe("attempt execution prompt materialization", () => {
   });
 });
 
-describe("persistSessionEntry", () => {
+describe("persistAgentSession", () => {
   const sessionKey = "agent:main:main";
 
   it("clears stale local entries when guarded persistence sees no persisted entry", async () => {
@@ -106,7 +106,7 @@ describe("persistSessionEntry", () => {
 
       // A guarded write can decline persistence after rereading disk; local
       // memory must be cleared too so later turns do not reuse stale entries.
-      const persisted = await persistSessionEntry({
+      const persisted = await persistAgentSession({
         sessionStore,
         sessionKey,
         storePath,
@@ -160,7 +160,7 @@ describe("persistSessionEntry", () => {
       await replaceSessionEntry({ sessionKey, storePath }, currentEntry);
       const sessionStore = { [sessionKey]: staleEntry };
 
-      const persisted = await persistSessionEntry({
+      const persisted = await persistAgentSession({
         sessionStore,
         sessionKey,
         storePath,
@@ -206,7 +206,7 @@ describe("persistSessionEntry", () => {
       await replaceSessionEntry({ sessionKey, storePath }, currentEntry);
       const sessionStore = { [sessionKey]: initialEntry };
 
-      const persisted = await persistSessionEntry({
+      const persisted = await persistAgentSession({
         sessionStore,
         sessionKey,
         storePath,
@@ -244,7 +244,7 @@ describe("persistSessionEntry", () => {
       };
       const sessionStore = { [sessionKey]: staleEntry };
 
-      const persisted = await persistSessionEntry({
+      const persisted = await persistAgentSession({
         sessionStore,
         sessionKey,
         storePath,
@@ -275,14 +275,14 @@ describe("persistSessionEntry", () => {
       };
       const sessionStore = { [sessionKey]: staleEntry };
 
-      const first = await persistSessionEntry({
+      const first = await persistAgentSession({
         sessionStore,
         sessionKey,
         storePath,
         initialEntry: staleEntry,
         entry: staleEntry,
       });
-      const second = await persistSessionEntry({
+      const second = await persistAgentSession({
         sessionStore,
         sessionKey,
         storePath,
@@ -314,7 +314,7 @@ describe("persistSessionEntry", () => {
         updatedAt: 1,
       };
 
-      const persisted = await persistSessionEntry({
+      const persisted = await persistAgentSession({
         sessionStore,
         sessionKey,
         storePath,

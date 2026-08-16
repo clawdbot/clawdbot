@@ -649,7 +649,7 @@ export function markdownToText(markdown: string): string {
 }
 
 /** Truncates text by characters and reports whether truncation occurred. */
-export function truncateText(
+export function truncateWebFetchText(
   value: string,
   maxChars: number,
 ): { text: string; truncated: boolean } {

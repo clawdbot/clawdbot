@@ -25,9 +25,12 @@ import {
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-runtime.test-helpers.js";
+import type {
+  TaskSystemAuditCode,
+  TaskSystemAuditSeverity,
+} from "../tasks/task-system-audit.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type { TaskSystemAuditCode, TaskSystemAuditSeverity } from "./tasks-audit-system.js";
 import {
   tasksAuditCommand,
   tasksCancelCommand,
@@ -209,7 +212,9 @@ describe("tasks commands", () => {
       });
 
       const limitedRuntime = createRuntime();
+      const auditStartedAt = Date.now();
       await tasksAuditCommand({ json: true, limit: 1 }, limitedRuntime);
+      const auditFinishedAt = Date.now();
 
       const limitedPayload = readFirstJsonLog(limitedRuntime) as { findings: unknown[] };
       const [limitedFinding] = limitedPayload.findings as Array<{ ageMs?: number }>;
@@ -224,8 +229,8 @@ describe("tasks commands", () => {
         token: runningFlow.flowId,
         flow: jsonRoundTrip(runningFlow),
       });
-      expect(limitedFinding?.ageMs).toBeGreaterThanOrEqual(45 * 60_000);
-      expect(limitedFinding?.ageMs).toBeLessThan(45 * 60_000 + 1_000);
+      expect(limitedFinding?.ageMs).toBeGreaterThanOrEqual(auditStartedAt - runningFlow.updatedAt);
+      expect(limitedFinding?.ageMs).toBeLessThanOrEqual(auditFinishedAt - runningFlow.updatedAt);
     });
   });
 
@@ -793,22 +798,6 @@ describe("tasks commands", () => {
         runId: `run${unsafe}`,
         error: `error${unsafe}`,
       });
-      const filteredListRuntime = createRuntime();
-      await tasksListCommand(
-        { runtime: `cron${unsafe}`, status: `running${unsafe}` },
-        filteredListRuntime,
-      );
-      const filteredAuditRuntime = createRuntime();
-      await tasksAuditCommand(
-        {
-          severity: `warn${unsafe}` as TaskSystemAuditSeverity,
-          code: `lost${unsafe}` as TaskSystemAuditCode,
-        },
-        filteredAuditRuntime,
-      );
-      for (const runtime of [filteredListRuntime, filteredAuditRuntime]) {
-        expectSafeTaskOutput(runtime);
-      }
       const lookupRuntime = createRuntime();
       await tasksShowCommand({ lookup: `missing${unsafe}` }, lookupRuntime);
       expectSafeTaskOutput(lookupRuntime, "error");

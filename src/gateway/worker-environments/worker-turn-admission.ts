@@ -105,21 +105,28 @@ export function resolvePlacementIdentity(
 export function requireActivePlacement(
   placement: WorkerSessionPlacementRecord,
 ): ActiveWorkerPlacement {
+  const failureDetail =
+    placement.state === "failed"
+      ? `: ${placement.terminalReason ?? placement.recoveryError}; redispatch the session so its worker can bootstrap the current build before retrying.`
+      : "";
   if (
     placement.state !== "active" ||
     !placement.remoteWorkspaceDir ||
     !placement.workerBundleHash
   ) {
-    throw new Error(`Worker turn rejected in placement ${placement.state}`);
+    throw new Error(`Worker turn rejected in placement ${placement.state}${failureDetail}`);
   }
   return placement;
 }
 
-export function releaseClaimIfOwned(
+export async function releaseClaimIfOwned(
   placements: WorkerSessionPlacementStore,
   turnClaim: WorkerSessionTurnClaim,
-): void {
+): Promise<void> {
   if (placements.validateTurnClaim(turnClaim)) {
+    if (turnClaim.owner.kind === "worker") {
+      await placements.closeWorkerTurnToolState(turnClaim);
+    }
     placements.releaseTurn(turnClaim);
   }
 }

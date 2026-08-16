@@ -9,7 +9,7 @@ import {
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import {
-  buildChannelAccountSnapshot,
+  resolveChannelAccountSnapshot,
   buildReadOnlySourceChannelAccountSnapshot,
 } from "../../channels/plugins/status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
@@ -87,7 +87,7 @@ export async function formatConfigChannelsStatusLines(
         cfg: sourceConfig,
         accountId,
       });
-      const resolvedSnapshot = await buildChannelAccountSnapshot({
+      const resolvedSnapshot = await resolveChannelAccountSnapshot({
         plugin,
         cfg,
         accountId,

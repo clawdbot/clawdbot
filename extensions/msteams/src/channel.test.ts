@@ -19,6 +19,21 @@ function createConfiguredMSTeamsCfg(): OpenClawConfig {
 }
 
 describe("msteamsPlugin", () => {
+  it("distinguishes users from channel and group conversations", () => {
+    const infer = msteamsPlugin.messaging?.inferTargetChatType;
+    const ownerId = "00000000-0000-0000-0000-000000000001";
+    expect(infer?.({ to: ownerId })).toBe("direct");
+    expect(infer?.({ to: "19:channel@thread.tacv2" })).toBe("channel");
+    expect(infer?.({ to: "19:group@thread.v2" })).toBe("group");
+    expect(
+      msteamsPlugin.messaging?.resolveOutboundSessionRoute?.({
+        cfg: {},
+        agentId: "main",
+        target: ownerId,
+      }),
+    ).toMatchObject({ chatType: "direct" });
+  });
+
   it("shares account and metadata contracts with the lightweight setup plugin", () => {
     expect(msteamsSetupPlugin.meta).toEqual(msteamsPlugin.meta);
 

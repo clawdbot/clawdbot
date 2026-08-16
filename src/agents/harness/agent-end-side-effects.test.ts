@@ -1,5 +1,6 @@
 // Verifies agent-end side effects keep plugin hooks independent from experience review.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import { scheduleSkillExperienceReview } from "../../skills/workshop/experience-review-default.js";
 import { awaitAgentEndSideEffects, runAgentEndSideEffects } from "./agent-end-side-effects.js";
 import {
@@ -28,6 +29,12 @@ describe("agent end side effects", () => {
   });
 
   it("fires plugin agent_end hooks alongside experience review scheduling", async () => {
+    recordRunSkillUsage({
+      runId: "run-1",
+      name: "release-runbook",
+      source: "workspace",
+      activation: "read",
+    });
     runAgentEndSideEffects({
       event: {
         messages: [],
@@ -52,6 +59,11 @@ describe("agent end side effects", () => {
 
     expect(mockRunAgentEndHook).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(mockExperienceReview).toHaveBeenCalledTimes(1));
+    expect(mockExperienceReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        usedSkills: [{ name: "release-runbook", source: "workspace", activation: "read" }],
+      }),
+    );
   });
 
   it("still runs agent_end hooks when experience review scheduling fails", async () => {

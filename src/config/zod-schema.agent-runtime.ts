@@ -752,22 +752,13 @@ export const MemorySearchSchema = z
     enabled: z.boolean().optional(),
     rememberAcrossConversations: z.boolean().optional(),
     sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
-    extraPaths: z.array(z.string()).optional(),
-    qmd: z
-      .object({
-        extraCollections: z
-          .array(
-            z
-              .object({
-                path: z.string(),
-                name: z.string().optional(),
-                pattern: z.string().optional(),
-              })
-              .strict(),
-          )
-          .optional(),
-      })
-      .strict()
+    extraPaths: z
+      .array(
+        z.union([
+          z.string(),
+          z.object({ path: z.string(), pattern: z.string().optional() }).strict(),
+        ]),
+      )
       .optional(),
     multimodal: z
       .object({
@@ -894,7 +885,6 @@ export const AgentModelPolicySchema = z
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
-    default: z.boolean().optional(),
     name: z.string().optional(),
     description: z.string().optional(),
     workspace: z.string().optional(),
@@ -933,7 +923,6 @@ export const AgentEntrySchema = z
     tts: AgentTtsConfigSchema,
     skillsLimits: AgentSkillsLimitsSchema,
     contextLimits: AgentContextLimitsSchema,
-    contextTokens: z.number().int().positive().optional(),
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema.unwrap().omit({ visibleReplies: true }).optional(),

@@ -3,7 +3,10 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it } from "vitest";
-import { repairRejectedThinkingReplayInSessionManager } from "./thinking-replay-repair.js";
+import {
+  repairRejectedCompactionReplayInSessionManager,
+  repairRejectedThinkingReplayInSessionManager,
+} from "./thinking-replay-repair.js";
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -135,5 +138,46 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
       reason: "no thinking blocks on active branch",
     });
     expect(sessionManager.getLeafId()).toBe(beforeLeafId);
+  });
+});
+
+describe("repairRejectedCompactionReplayInSessionManager", () => {
+  it("rewrites from the checkpoint identity that supplied the rejected request", () => {
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage(asAppendMessage({ role: "user", content: "first", timestamp: 1 }));
+    for (const [data, id, timestamp] of [
+      ["rejected-ciphertext", "cmp_rejected", 2],
+      ["newer-ciphertext", "cmp_newer", 4],
+    ] as const) {
+      sessionManager.appendMessage(
+        asAppendMessage({
+          role: "assistant",
+          content: [{ type: "text", text: id }],
+          providerReplay: {
+            v: 1,
+            type: "openai-responses-compaction",
+            data,
+            id,
+            replayIndex: 0,
+          },
+          timestamp,
+        }),
+      );
+      sessionManager.appendMessage(
+        asAppendMessage({ role: "user", content: `after ${id}`, timestamp: timestamp + 1 }),
+      );
+    }
+
+    expect(
+      repairRejectedCompactionReplayInSessionManager({
+        sessionManager,
+        checkpoint: { data: "rejected-ciphertext", id: "cmp_rejected" },
+      }),
+    ).toMatchObject({ repaired: true, repairedCount: 1 });
+    expect(
+      branchMessages(sessionManager)
+        .filter((message) => message.role === "assistant")
+        .map((message) => message.providerReplay),
+    ).toEqual([undefined, undefined]);
   });
 });

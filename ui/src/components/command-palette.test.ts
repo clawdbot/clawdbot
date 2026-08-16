@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
@@ -12,6 +13,10 @@ import type {
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { CommandPalette } from "./command-palette.ts";
+import {
+  DESKTOP_PANEL_TOGGLE_EVENT,
+  type DesktopPanelToggleDetail,
+} from "./panel-toggle-contract.ts";
 
 type GatewayHarness = {
   gateway: ApplicationGateway;
@@ -83,14 +88,6 @@ function createSessionResult(key: string, displayName: string): SessionsListResu
     defaults: {},
     sessions: [{ key, kind: "direct", displayName, updatedAt: 1 }],
   } as SessionsListResult;
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
 }
 
 async function mountPalette(context: ApplicationContext<RouteId>) {
@@ -207,6 +204,32 @@ describe("CommandPalette lifecycle", () => {
     expect(palette.textContent).not.toContain("Stale chat");
   });
 
+  it("shows a search failure instead of a false empty result", async () => {
+    const { gateway } = createGateway(true);
+    const list = vi
+      .fn<ApplicationContext<RouteId>["sessions"]["list"]>()
+      .mockRejectedValueOnce(new Error("store needs doctor migration"))
+      .mockResolvedValueOnce(createSessionResult("agent:main:zz", "Recovered chat"));
+    const { palette } = await mountPalette(createContext(gateway, list));
+    // The query matches no navigation item, so a swallowed search failure
+    // would render the plain "No results" empty state.
+    await enterQuery(palette, "zzz-unmatched");
+    await vi.advanceTimersByTimeAsync(250);
+    await palette.updateComplete;
+
+    expect(list).toHaveBeenCalledOnce();
+    expect(palette.textContent).toContain("Chat search failed");
+    expect(palette.textContent).not.toContain("No results");
+
+    // A new keystroke clears the failure state and retries cleanly.
+    await enterQuery(palette, "zz");
+    await palette.updateComplete;
+    expect(palette.textContent).not.toContain("Chat search failed");
+    await vi.advanceTimersByTimeAsync(250);
+    await palette.updateComplete;
+    expect(palette.textContent).toContain("Recovered chat");
+  });
+
   it("navigates to the plugin manager from search", async () => {
     const { gateway } = createGateway(true);
     const { palette } = await mountPalette(
@@ -222,5 +245,50 @@ describe("CommandPalette lifecycle", () => {
     item?.click();
 
     expect(palette.onNavigate).toHaveBeenCalledWith("plugins");
+  });
+
+  it.each([
+    { available: true, expectedCount: 1 },
+    { available: false, expectedCount: 0 },
+  ])(
+    "shows the desktop action only when availability is $available",
+    async ({ available, expectedCount }) => {
+      const { gateway } = createGateway(true);
+      const { palette } = await mountPalette(
+        createContext(
+          gateway,
+          vi.fn(async () => createSessionResult("agent:main:test", "Test")),
+        ),
+      );
+      palette.desktopAvailable = available;
+      await enterQuery(palette, "desktop");
+
+      expect(palette.querySelectorAll("#cmd-palette-option-panel-desktop")).toHaveLength(
+        expectedCount,
+      );
+    },
+  );
+
+  it("opens the desktop panel from its palette action", async () => {
+    const { gateway } = createGateway(true);
+    const { palette } = await mountPalette(
+      createContext(
+        gateway,
+        vi.fn(async () => createSessionResult("agent:main:test", "Test")),
+      ),
+    );
+    palette.desktopAvailable = true;
+    await enterQuery(palette, "desktop");
+    const events: CustomEvent<DesktopPanelToggleDetail>[] = [];
+    const listener = (event: Event) => events.push(event as CustomEvent<DesktopPanelToggleDetail>);
+    window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, listener);
+    try {
+      palette.querySelector<HTMLElement>("#cmd-palette-option-panel-desktop")?.click();
+    } finally {
+      window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, listener);
+    }
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.detail).toEqual({ open: true });
   });
 });

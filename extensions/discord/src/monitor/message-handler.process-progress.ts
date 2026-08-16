@@ -1,12 +1,12 @@
 import type { StatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
-import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 // Discord plugin module owns progress-window state and agent-event rendering.
 import { createChannelProgressReceiptTracker } from "openclaw/plugin-sdk/channel-outbound";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import type { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 
-type ReplyOptions = NonNullable<ChannelInboundTurnPlan["replyOptions"]>;
+type ReplyOptions = Omit<GetReplyOptions, "onBlockReply">;
 type CallbackPayload<K extends keyof ReplyOptions> =
   NonNullable<ReplyOptions[K]> extends (...args: infer Args) => unknown ? Args[0] : never;
 type DraftPreview = ReturnType<typeof createDiscordDraftPreviewController>;
@@ -125,6 +125,10 @@ export function createDiscordMessageProgressRuntime(params: {
     commentaryPayloadsEnabled: draftPreview.isProgressMode
       ? draftPreview.commentaryProgressEnabled
       : undefined,
+    shouldDeliverCommentaryPayloads:
+      draftPreview.isProgressMode && draftPreview.commentaryProgressEnabled
+        ? () => shouldYieldDraftCommentary()
+        : undefined,
     reasoningPayloadsEnabled: reasoningDurableEnabled,
     onVerboseProgressVisibility: (isActive) => {
       shouldYieldDraftCommentary = isActive;

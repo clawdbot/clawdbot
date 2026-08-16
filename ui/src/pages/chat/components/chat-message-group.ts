@@ -8,7 +8,7 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import { summarizeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
-import { extractToolCardsCached, isToolCardError } from "../../../lib/chat/tool-cards.ts";
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
@@ -22,7 +22,7 @@ import {
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
-import { renderDeleteButton, renderRewindButton } from "./chat-message-confirmation.ts";
+import { renderRewindButton } from "./chat-message-confirmation.ts";
 import {
   renderMessageActionButtons,
   renderReplyButton,
@@ -55,6 +55,8 @@ type ActiveContinuation = {
   options: StreamGroupOptions;
 };
 
+type ReplyPreview = MessageReplyTarget & { sourceMessageId: string };
+
 type RenderMessageGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
@@ -84,6 +86,7 @@ type RenderMessageGroupOptions = {
   userName?: string | null;
   userAvatar?: string | null;
   showAvatarGutter?: boolean;
+  showAssistantAvatar?: boolean;
   basePath?: string;
   localMediaPreviewRoots?: readonly string[];
   assistantAttachmentAuthToken?: string | null;
@@ -92,8 +95,11 @@ type RenderMessageGroupOptions = {
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   contextWindow?: number | null;
-  onDelete?: () => void;
   onReply?: (target: MessageReplyTarget) => void;
+  resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
+  onResolveReply?: (replyToId: string) => void;
+  onOpenReply?: (replyToId: string) => void;
+  replyNavigationId?: string | null;
   onRewind?: () => void;
   rewindDisabled?: boolean;
   activeContinuation?: ActiveContinuation;
@@ -101,6 +107,10 @@ type RenderMessageGroupOptions = {
 };
 
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
+
+// Each automatic load attempt costs 2 revisions (loading, then error), so
+// this bounds auto-retries to 3 before the manual retry affordance takes over.
+const FULL_MESSAGE_RETRY_REVISION_LIMIT = 6;
 
 function buildGroupedMessageRenderOptions(
   group: MessageGroup,
@@ -118,12 +128,15 @@ function buildGroupedMessageRenderOptions(
   ) {
     const messageId = actionDetails.messageId;
     const expansion = opts.getAssistantMessageExpansion?.(messageId);
+    const retriesExhausted =
+      expansion?.status === "error" && expansion.revision >= FULL_MESSAGE_RETRY_REVISION_LIMIT;
     assistantMessageDisclosure = {
-      expanded: expansion?.status === "loaded" && expansion.expanded,
+      expanded: expansion?.status === "loaded",
       ...(expansion?.status === "loaded" ? { markdown: actionDetails.markdown } : {}),
-      loading: expansion?.status === "loading",
-      error: expansion?.status === "error",
-      onToggle: () => opts.onToggleAssistantMessageExpanded?.(messageId),
+      // Manual re-entry once the bounded automatic retries gave up.
+      ...(retriesExhausted
+        ? { onRetryFullMessage: () => opts.onToggleAssistantMessageExpanded?.(messageId) }
+        : {}),
     };
   }
   return {
@@ -140,7 +153,6 @@ function buildGroupedMessageRenderOptions(
     showReasoning: opts.showReasoning,
     showToolCalls: opts.showToolCalls ?? true,
     runActive: opts.runActive,
-    turnSucceeded: group.turnSucceeded,
     autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
     isToolMessageExpanded: opts.isToolMessageExpanded,
     onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
@@ -161,6 +173,10 @@ function buildGroupedMessageRenderOptions(
     resolveArtifactDownload: opts.resolveArtifactDownload,
     embedSandboxMode: opts.embedSandboxMode,
     allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
+    resolveReplyPreview: opts.resolveReplyPreview,
+    onResolveReply: opts.onResolveReply,
+    onOpenReply: opts.onOpenReply,
+    replyNavigationId: opts.replyNavigationId,
   };
 }
 
@@ -224,11 +240,6 @@ export function renderActivityGroup(
   const latestCards = latestGroup.messages.flatMap((item) =>
     extractToolCardsCached(item.message, item.key),
   );
-  const toolCount =
-    cards.length || groups.reduce((count, group) => count + group.messages.length, 0);
-  // Aggregate chrome follows the latest group; older failures stay visible
-  // in the settled summary and expanded child rows.
-  const hasError = latestGroup.turnSucceeded !== true && latestCards.some(isToolCardError);
   // While a run is live, the newest still-running call names the group so
   // the collapsed header reads like a status line; afterwards it aggregates.
   const runningCard = opts.runActive
@@ -236,16 +247,10 @@ export function renderActivityGroup(
     : undefined;
   const groupSummaryLabel = runningCard
     ? `${resolveToolRowText(runningCard, opts.runActive)}…`
-    : summarizeToolGroup(
-        cards.map((card) => ({
-          name: card.name,
-          args: card.args,
-          isError: isToolCardError(card),
-        })),
-      );
+    : summarizeToolGroup(cards.map((card) => ({ name: card.name, args: card.args })));
   const activityDisclosureId = `activity:${firstGroup.key}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
-  const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
+  const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
   const showAvatarGutter = opts.showAvatarGutter !== false;
   const assistantName = opts.assistantName ?? "Assistant";
 
@@ -253,9 +258,10 @@ export function renderActivityGroup(
     <div
       class="chat-group tool chat-group--activity chat-group--with-footer"
       data-chat-row-key=${firstGroup.key}
-      data-chat-row-keys=${JSON.stringify(groups.map((group) => group.key))}
     >
-      ${showAvatarGutter
+      ${showAvatarGutter &&
+      (normalizeRoleForGrouping(firstGroup.role) !== "assistant" ||
+        opts.showAssistantAvatar !== false)
         ? renderChatAvatar(
             firstGroup.role,
             {
@@ -274,27 +280,17 @@ export function renderActivityGroup(
       <div class="chat-group-messages">
         <div class="chat-activity-group ${activityExpanded ? "is-open" : ""}">
           <button
-            class="chat-activity-group__summary ${hasError
-              ? "chat-activity-group__summary--error"
-              : ""}"
+            class="chat-activity-group__summary"
             type="button"
             aria-expanded=${String(activityExpanded)}
             aria-controls=${activityBodyId}
-            aria-label=${hasError
-              ? t(
-                  toolCount === 1
-                    ? "chat.toolCards.group.activityErrorOne"
-                    : "chat.toolCards.group.activityErrorMany",
-                  { count: String(toolCount) },
-                )
-              : nothing}
             @click=${(event: MouseEvent) => {
               if (shouldToggleSelectableDisclosure(event)) {
                 opts.onToggleToolMessageExpanded?.(activityDisclosureId, activityExpanded);
               }
             }}
           >
-            <span class="chat-activity-group__icon">${hasError ? icons.x : icons.activity}</span>
+            <span class="chat-activity-group__icon">${icons.activity}</span>
             <span class="chat-activity-group__label" title=${groupSummaryLabel}
               >${groupSummaryLabel}</span
             >
@@ -323,17 +319,16 @@ export function renderActivityGroup(
       <div class="chat-group-footer">
         <span class="chat-sender-name">${t("chat.messages.activity")}</span>
         ${renderChatTimestamp(firstGroup.timestamp)}
-        ${opts.onDelete ? renderDeleteButton(opts.onDelete, "right") : nothing}
       </div>
     </div>
   `;
 }
 
-export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
+export function resolveMessageGroupSenderLabel(
+  group: MessageGroup,
+  opts: Pick<RenderMessageGroupOptions, "assistantName" | "userId" | "userName" | "userAvatar">,
+): string {
   const normalizedRole = normalizeRoleForGrouping(group.role);
-  const isWorkspaceConflict = group.messages.every((item) =>
-    Boolean(workspaceResultConflictFromTranscript(item.message)),
-  );
   const assistantName = opts.assistantName ?? "Assistant";
   const resolvedUserName = resolveLocalUserName({
     name: opts.userName ?? null,
@@ -342,20 +337,29 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const userLabel = group.senderLabel?.trim();
   const isPeerGroup = normalizedRole === "user" && isPeerSenderGroup(group, opts.userId);
   const isCurrentUser = normalizedRole === "user" && Boolean(group.sender) && !isPeerGroup;
-  const who =
-    normalizedRole === "user"
-      ? isCurrentUser
-        ? resolvedUserName
-        : (userLabel ?? resolvedUserName)
-      : normalizedRole === "assistant"
-        ? (userLabel ?? assistantName)
-        : normalizedRole === "tool"
-          ? "Tool"
-          : isWorkspaceConflict
-            ? t("chat.workspaceConflict.eventSender")
-            : normalizedRole;
-  const showAvatarGutter = opts.showAvatarGutter !== false;
-  const persistUserIdentity = normalizedRole === "user" && showAvatarGutter;
+  return normalizedRole === "user"
+    ? isCurrentUser
+      ? resolvedUserName
+      : (userLabel ?? resolvedUserName)
+    : normalizedRole === "assistant"
+      ? (userLabel ?? assistantName)
+      : normalizedRole === "tool"
+        ? t("chat.messages.toolSender")
+        : group.messages.every((item) =>
+              Boolean(workspaceResultConflictFromTranscript(item.message)),
+            )
+          ? t("chat.workspaceConflict.eventSender")
+          : normalizedRole;
+}
+
+export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
+  const normalizedRole = normalizeRoleForGrouping(group.role);
+  const isWorkspaceConflict = group.messages.every((item) =>
+    Boolean(workspaceResultConflictFromTranscript(item.message)),
+  );
+  const assistantName = opts.assistantName ?? "Assistant";
+  const isPeerGroup = normalizedRole === "user" && isPeerSenderGroup(group, opts.userId);
+  const who = resolveMessageGroupSenderLabel(group, opts);
   const roleClass =
     normalizedRole === "user"
       ? "user"
@@ -366,6 +370,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           : isWorkspaceConflict
             ? "workspace-conflict"
             : "other";
+  const showAvatarGutter = opts.showAvatarGutter !== false;
+  const persistUserIdentity = normalizedRole === "user" && showAvatarGutter;
 
   // Aggregate usage/cost/model across all messages in the group
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
@@ -393,11 +399,26 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       senderLabel: who,
     }),
   );
+  for (const details of messageActionDetails) {
+    if (!details?.shouldFetchFullMessage || !details.messageId) {
+      continue;
+    }
+    const expansion = opts.getAssistantMessageExpansion?.(details.messageId);
+    // A transient load failure must not pin the truncated preview for the
+    // whole session: retry on later render passes, bounded by revision
+    // (each attempt costs 2 revisions) so a dead loader cannot hot-loop.
+    if (
+      !expansion ||
+      (expansion.status === "error" && expansion.revision < FULL_MESSAGE_RETRY_REVISION_LIMIT)
+    ) {
+      opts.onToggleAssistantMessageExpanded?.(details.messageId);
+    }
+  }
   const lastMessageIndex = group.messages.length - 1;
   const footerActionDetails = messageActionDetails[lastMessageIndex] ?? null;
   const hasUserFooterActions =
     normalizedRole === "user" &&
-    Boolean((footerActionDetails?.replyTarget && opts.onReply) || opts.onDelete || opts.onRewind);
+    Boolean((footerActionDetails?.replyTarget && opts.onReply) || opts.onRewind);
 
   // Attributed (logged-in) senders tint their bubbles with the same stable
   // identity hue as their avatar initials; CSS owns per-theme lightness so
@@ -417,7 +438,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
     >
-      ${showAvatarGutter
+      ${showAvatarGutter && (normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
         ? renderChatAvatar(
             group.role,
             {
@@ -487,9 +508,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                   ${footerActionDetails?.replyTarget && opts.onReply
                     ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
                     : nothing}
-                  ${opts.onDelete ? renderDeleteButton(opts.onDelete, "left") : nothing}
                   ${opts.onRewind
-                    ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled), "left")
+                    ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled))
                     : nothing}
                 </div>
               `
@@ -500,21 +520,13 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           <span class="chat-sender-name">${who}</span>
           ${renderMessageMeta(group.timestamp, meta)}
         </div>
-        ${normalizedRole !== "user" && (footerActionDetails || opts.onDelete)
+        ${normalizedRole !== "user" && footerActionDetails
           ? html`
               <div
                 class="chat-group-footer-actions"
                 data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
               >
-                ${footerActionDetails
-                  ? renderMessageActionButtons(
-                      footerActionDetails,
-                      opts,
-                      normalizedRole !== "user" ? opts.onDelete : undefined,
-                    )
-                  : opts.onDelete
-                    ? renderDeleteButton(opts.onDelete, "right")
-                    : nothing}
+                ${renderMessageActionButtons(footerActionDetails, opts)}
               </div>
             `
           : nothing}

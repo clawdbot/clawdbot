@@ -13,7 +13,7 @@ import {
  */
 
 const FILE_SECRET_REF_SEGMENT_PATTERN = /^(?:[^~]|~0|~1)*$/;
-/** Shared alias grammar for env/file/exec secret provider names. */
+/** Shared alias grammar for env/file/exec/store secret provider names. */
 export const SECRET_PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const EXEC_SECRET_REF_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$/;
 
@@ -43,6 +43,8 @@ type SecretRefDefaultsCarrier = {
       file?: string;
       /** Default provider alias for exec-backed secret refs. */
       exec?: string;
+      /** Default provider alias for shared-store secret refs. */
+      store?: string;
     };
     /** Provider declarations used only when callers ask to prefer the first matching source. */
     providers?: Record<string, { source?: string }>;
@@ -60,12 +62,7 @@ export function resolveDefaultSecretProviderAlias(
   source: SecretRefSource,
   options?: { preferFirstProviderForSource?: boolean },
 ): string {
-  const configured =
-    source === "env"
-      ? config.secrets?.defaults?.env
-      : source === "file"
-        ? config.secrets?.defaults?.file
-        : config.secrets?.defaults?.exec;
+  const configured = config.secrets?.defaults?.[source];
   if (configured?.trim()) {
     return configured.trim();
   }
@@ -140,6 +137,9 @@ export function isValidSecretRef(ref: SecretRef): boolean {
   }
   if (ref.source === "file") {
     return isValidFileSecretRefId(ref.id);
+  }
+  if (ref.source === "store") {
+    return isValidEnvSecretRefId(ref.id);
   }
   return isValidExecSecretRefId(ref.id);
 }

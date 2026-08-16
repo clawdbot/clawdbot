@@ -5,7 +5,7 @@ import {
   PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES,
   evaluatePluginSdkDeclarationBudget,
   isPrivateQaPluginSdkBuild,
-} from "../../scripts/lib/plugin-sdk-declaration-budget.mjs";
+} from "../../scripts/lib/plugin-sdk-declaration-budget.mts";
 
 describe("plugin SDK declaration budget", () => {
   it("selects private QA mode only for the explicit build flag", () => {

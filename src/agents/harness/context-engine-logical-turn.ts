@@ -2,6 +2,7 @@ import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   evaluateContextEngineHostSupport,
+  supportsContextEngineDurableTurnAdvancement,
   type ContextEngineHostSupport,
 } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
@@ -31,7 +32,6 @@ export type ContextEngineLogicalTurnLease = {
     host: ContextEngineHostSupport;
     operation: ContextEngineOperation;
     requiresDurableCommit: boolean;
-    hasAdmissionFence: boolean;
   }) => EffectiveContextEngineRef;
   degradeBeforeStart: (reason: string) => EffectiveContextEngineRef;
   begin: () => EffectiveContextEngineRef;
@@ -43,10 +43,14 @@ export function selectContextEngineForTranscriptHost(params: {
   lease: ContextEngineLogicalTurnLease;
   host: ContextEngineHostSupport;
   operation: ContextEngineOperation;
-  recorder: Pick<UserTurnTranscriptRecorder, "getAdmissionReceipt"> | undefined;
+  recorder: Pick<UserTurnTranscriptRecorder, "getAdmissionReceipt" | "hasPersisted"> | undefined;
 }): EffectiveContextEngineRef {
   const admission = params.recorder?.getAdmissionReceipt();
-  if (params.recorder && !admission) {
+  // Selection runs during turn preparation, before the user turn is written, so an admitted
+  // receipt does not exist yet on the paths that persist during the run. A receipt is only
+  // owed once the turn has actually been persisted: until then there is no admitted entry for
+  // the fence to anchor to, so there is nothing to degrade over.
+  if (params.recorder && !admission && params.recorder.hasPersisted()) {
     return params.lease.degradeBeforeStart(
       "current-turn transcript admission receipt is unavailable",
     );
@@ -55,7 +59,6 @@ export function selectContextEngineForTranscriptHost(params: {
     host: params.host,
     operation: params.operation,
     requiresDurableCommit: params.recorder !== undefined,
-    hasAdmissionFence: admission !== undefined,
   });
 }
 
@@ -75,6 +78,9 @@ export async function createContextEngineLogicalTurnLease(params: {
   let degradedReason = resolution.configuredFailure;
   let warned = false;
   const disposalHolds = new Set<Promise<unknown>>();
+  const isBaselineEngineSelection =
+    resolution.configuredFailure === undefined &&
+    resolution.configured.registeredId === resolution.fallback.registeredId;
 
   const asEffective = (): EffectiveContextEngineRef =>
     Object.freeze({
@@ -89,12 +95,22 @@ export async function createContextEngineLogicalTurnLease(params: {
     }
     warned = true;
     (params.warn ?? console.warn)(
-      `[context-engine] Context engine "${sanitizeForLog(resolution.configuredId)}" degraded to "${sanitizeForLog(resolution.fallback.registeredId)}" for this logical turn: ${sanitizeForLog(reason)}`,
+      `[context-engine] Context engine "${sanitizeForLog(resolution.configuredId)}" degraded to "${sanitizeForLog(resolution.fallback.registeredId)}" for this logical turn: ${sanitizeForLog(reason)}. ` +
+        `The "${sanitizeForLog(resolution.fallback.registeredId)}" engine will handle only this turn; configuration is unchanged, and "${sanitizeForLog(resolution.configuredId)}" will be retried next turn.`,
     );
   };
 
   const degradeBeforeStart = (reason: string): EffectiveContextEngineRef => {
-    if (state === "started" || state === "disposed") {
+    if (state === "disposed") {
+      throw new Error("context-engine logical turn selection is already pinned");
+    }
+    if (isBaselineEngineSelection) {
+      if (state === "unselected") {
+        state = "selected";
+      }
+      return asEffective();
+    }
+    if (state === "started") {
       throw new Error("context-engine logical turn selection is already pinned");
     }
     degradedReason ??= reason;
@@ -108,7 +124,6 @@ export async function createContextEngineLogicalTurnLease(params: {
     host: ContextEngineHostSupport;
     operation: ContextEngineOperation;
     requiresDurableCommit: boolean;
-    hasAdmissionFence: boolean;
   }): string | undefined => {
     const support = evaluateContextEngineHostSupport({
       contextEngineInfo: effective.engine.info,
@@ -118,17 +133,24 @@ export async function createContextEngineLogicalTurnLease(params: {
     if (!support.ok) {
       return `host "${selection.host.id}" is missing ${support.missingCapabilities.join(", ")}`;
     }
+    if (isBaselineEngineSelection) {
+      // Legacy delegates durable transcript ownership to SessionManager, so only its
+      // actual host requirements apply to repeated logical-turn selection.
+      return undefined;
+    }
     if (
-      selection.hasAdmissionFence &&
+      // A recorder-backed turn will be admitted during the run, so the declaration is required
+      // whether or not the receipt exists yet at selection time. Gating this on the receipt alone
+      // would let an engine that declares durable advancement but omits current-turn fencing run
+      // on fresh turns, which the documented contract sends to legacy.
+      selection.requiresDurableCommit &&
       effective.engine.info.transcriptSemantics?.currentTurnFence !== "before-current-turn-entry-v1"
     ) {
       return "current-turn transcript fencing is not declared";
     }
     if (
       selection.requiresDurableCommit &&
-      (effective.engine.info.transcriptSemantics?.turnAdvancementIdempotency !==
-        "atomic-idempotent-v1" ||
-        typeof effective.engine.commitTurn !== "function")
+      !supportsContextEngineDurableTurnAdvancement(effective.engine)
     ) {
       return "atomic idempotent turn advancement is not declared";
     }

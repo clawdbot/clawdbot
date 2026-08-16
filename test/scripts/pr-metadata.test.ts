@@ -17,6 +17,10 @@ set -euo pipefail
 
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   if [[ "$*" == *changedFiles* ]]; then
+    if [ "\${FAKE_REJECT_REVIEW_REQUESTS:-0}" = "1" ] && [[ "$*" == *reviewRequests* ]]; then
+      echo "GraphQL: Resource not accessible by integration (repository.pullRequest.reviewRequests.nodes.0.requestedReviewer)" >&2
+      exit 1
+    fi
     jq -nc --argjson changedFiles "\${FAKE_CHANGED_FILES:-101}" --argjson fileCount "\${FAKE_GRAPHQL_FILE_COUNT:-100}" --argjson includeChangeType "\${FAKE_GRAPHQL_CHANGE_TYPE:-true}" '
       {
         number: 42,
@@ -73,12 +77,16 @@ function readPrMetadata(
     graphqlChangeType?: boolean;
     graphqlFileCount?: string;
     headAfter?: string;
+    rejectReviewRequests?: boolean;
     restFileCount?: string;
   } = {},
 ) {
   return spawnSync(
     "bash",
-    ["-c", "set -euo pipefail; source scripts/pr-lib/worktree.sh; pr_meta_json 42"],
+    [
+      "-c",
+      "set -euo pipefail; source scripts/lib/plain-gh.sh; source scripts/pr-lib/worktree.sh; pr_meta_json 42",
+    ],
     {
       cwd: process.cwd(),
       env: {
@@ -88,7 +96,9 @@ function readPrMetadata(
         FAKE_GRAPHQL_CHANGE_TYPE: options.graphqlChangeType === false ? "false" : "true",
         FAKE_GRAPHQL_FILE_COUNT: options.graphqlFileCount ?? "100",
         FAKE_HEAD_AFTER: options.headAfter ?? "head-a",
+        FAKE_REJECT_REVIEW_REQUESTS: options.rejectReviewRequests ? "1" : "0",
         FAKE_REST_FILE_COUNT: options.restFileCount ?? "101",
+        OPENCLAW_GH_BIN: join(fakeGhDir, "gh"),
         PATH: `${fakeGhDir}:${process.env.PATH}`,
       },
       encoding: "utf8",
@@ -103,6 +113,17 @@ afterEach(() => {
 });
 
 describe("PR metadata", () => {
+  it("does not request reviewer metadata that GitHub App tokens cannot read", () => {
+    const result = readPrMetadata(createFakeGh(), {
+      changedFiles: "2",
+      graphqlFileCount: "2",
+      rejectReviewRequests: true,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
   it("uses cacheable GraphQL file metadata when the complete list fits", () => {
     const result = readPrMetadata(createFakeGh(), {
       changedFiles: "2",

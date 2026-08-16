@@ -19,7 +19,8 @@ import {
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OutboundDeliveryResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -28,7 +29,7 @@ import {
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
-import type { IMessageApprovalGatewayRuntime } from "./approval-resolver.js";
+import type { IMessageApprovalGatewayRuntime } from "./approval-gateway-types.js";
 import {
   buildIMessageApprovalConversationKeyForInbound,
   buildIMessageApprovalConversationKeyForTarget,
@@ -78,10 +79,11 @@ export type PendingIMessageApprovalReactionPollTarget = {
   expiresAtMs: number;
 };
 
-const resolverRuntimeLoader = createLazyRuntimeModule(() => import("./approval-resolver.js"));
+const loadResolveApprovalOverGateway = createLazyRuntimeSurface(
+  () => import("openclaw/plugin-sdk/approval-gateway-runtime"),
+  (runtime) => runtime.resolveApprovalOverGateway,
+);
 const pendingReactionPollTargets = new Map<string, PendingIMessageApprovalReactionPollTarget>();
-
-const loadApprovalResolver = resolverRuntimeLoader;
 
 function prunePendingReactionPollTargets(nowMs = Date.now()): void {
   for (const [key, target] of pendingReactionPollTargets.entries()) {
@@ -684,13 +686,15 @@ export async function handleIMessageApprovalReaction(params: {
     return { handled: true, stopPolling: false };
   }
 
-  const { isApprovalNotFoundError, resolveIMessageApproval } = await loadApprovalResolver();
+  const resolveApprovalOverGateway = await loadResolveApprovalOverGateway();
   try {
-    const result = await resolveIMessageApproval({
+    const result = await resolveApprovalOverGateway({
       cfg: params.cfg,
       approvalId: target.approvalId,
       approvalKind: target.approvalKind,
       decision: target.decision,
+      channel: "imessage",
+      accountId: params.accountId,
       senderId: event.actorHandle,
       gatewayUrl: params.gatewayUrl,
       ...(params.gatewayRuntime ? { gatewayRuntime: params.gatewayRuntime } : {}),
@@ -759,5 +763,5 @@ export async function maybeResolveIMessageApprovalReaction(params: {
 export function clearIMessageApprovalReactionTargetsForTest(): void {
   imessageApprovalReactionTargets.clearForTest();
   pendingReactionPollTargets.clear();
-  resolverRuntimeLoader.clear();
+  loadResolveApprovalOverGateway.clear();
 }

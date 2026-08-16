@@ -1,6 +1,7 @@
 // Telegram plugin module implements monitor behavior.
 import type { RunOptions } from "@grammyjs/runner";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -13,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { isTelegramExecApprovalHandlerConfigured } from "./exec-approvals.js";
@@ -139,6 +141,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       cfg,
       accountId: opts.accountId,
     });
+    const ownerAgentId =
+      opts.ownerAgentId?.trim() ||
+      resolveTelegramAccountOwnerAgentId({ cfg, accountId: account.accountId });
     const token = opts.token?.trim() || account.token;
     if (!token) {
       throw new Error(
@@ -164,12 +169,15 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       await startTelegramWebhook({
         token,
         accountId: account.accountId,
+        ownerAgentId,
         config: cfg,
         path: opts.webhookPath,
         port: opts.webhookPort,
         secret: opts.webhookSecret ?? account.config.webhookSecret,
         host: opts.webhookHost ?? account.config.webhookHost,
         runtime: opts.runtime as RuntimeEnv,
+        buildContext: (opts.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
+          .buildContext,
         fetch: proxyFetch,
         abortSignal: opts.abortSignal,
         publicUrl: opts.webhookUrl,
@@ -268,7 +276,10 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         token,
         config: cfg,
         accountId: account.accountId,
+        ownerAgentId,
         runtime: opts.runtime,
+        buildContext: (opts.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
+          .buildContext,
         proxyFetch,
         botInfo: opts.botInfo,
         abortSignal: opts.abortSignal,

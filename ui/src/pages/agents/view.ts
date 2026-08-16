@@ -195,19 +195,34 @@ export function renderAgents(props: AgentsProps) {
     <div class="agents-layout">
       <section class="agents-toolbar">
         <div class="agents-toolbar-row">
-          <div class="agents-control-select">
-            <openclaw-agent-select
-              .options=${agentOptions}
-              .value=${selectedId ?? ""}
-              .accessibleLabel=${t("usage.filters.agent")}
-              .identityById=${props.agentIdentityById}
-              .authToken=${props.authToken}
-              .disabled=${props.loading}
-              .onSelect=${props.onSelectAgent}
-              .onCreateAgent=${props.access.canCreateAgent ? props.onCreateAgent : null}
-            ></openclaw-agent-select>
-          </div>
+          ${agentOptions.length > 1
+            ? html`
+                <div class="agents-control-select">
+                  <openclaw-agent-select
+                    .options=${agentOptions}
+                    .value=${selectedId ?? ""}
+                    .accessibleLabel=${t("usage.filters.agent")}
+                    .identityById=${props.agentIdentityById}
+                    .authToken=${props.authToken}
+                    .disabled=${props.loading}
+                    .onSelect=${props.onSelectAgent}
+                    .onCreateAgent=${props.access.canCreateAgent ? props.onCreateAgent : null}
+                  ></openclaw-agent-select>
+                </div>
+              `
+            : nothing}
           <div class="agents-toolbar-actions">
+            ${agentOptions.length <= 1 && props.access.canCreateAgent
+              ? html`
+                  <button
+                    class="btn btn--sm btn--ghost agents-create-btn"
+                    ?disabled=${props.loading}
+                    @click=${props.onCreateAgent}
+                  >
+                    ${t("custodian.newAgent")}
+                  </button>
+                `
+              : nothing}
             ${selectedAgent
               ? html`
                   <button

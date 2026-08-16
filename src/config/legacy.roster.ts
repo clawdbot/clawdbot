@@ -1,12 +1,24 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
+import {
+  retainLegacyDefaultAgentId,
+  tryGetLegacyDefaultAgentId,
+} from "./legacy.default-agent-owner.js";
+import { materializeLegacyDefaultAgentRoles } from "./legacy.default-agent-roles.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
-/** Every missing or empty roster is the shipped implicit-main shape. */
-export function migratePersistedImplicitMainRoster(raw: unknown): {
+type MigrationResult = {
   config: unknown;
   changed: boolean;
   diagnostics: string[];
-} {
+  insertedPaths?: string[][];
+  retainedLegacyDefaultAgentId?: string;
+};
+
+export function migratePersistedImplicitMainRoster(
+  raw: unknown,
+  options: { materializeWorkspace?: boolean } = {},
+): MigrationResult {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { config: raw, changed: false, diagnostics: [] };
   }
@@ -67,8 +79,15 @@ export function migratePersistedImplicitMainRoster(raw: unknown): {
       !Array.isArray(entries) &&
       Object.keys(entries).length === 0)
   ) {
+    if (agents.ownership === "explicit") {
+      return {
+        config: convertedLegacyList ? { ...root, agents } : raw,
+        changed: convertedLegacyList,
+        diagnostics: convertedLegacyList ? ["Moved agents.list to keyed agents.entries."] : [],
+      };
+    }
     return {
-      config: { ...root, agents: { ...agents, entries: { main: { default: true } } } },
+      config: { ...root, agents: { ...agents, entries: { main: {} } } },
       changed: true,
       diagnostics: convertedLegacyList ? ["Moved agents.list to keyed agents.entries."] : [],
     };
@@ -92,41 +111,60 @@ export function migratePersistedImplicitMainRoster(raw: unknown): {
   if (hasInvalidDefaultMarker) {
     return { config: raw, changed: false, diagnostics: [] };
   }
-  const defaultIds = validIds.filter(
+
+  const markedIds = validIds.filter(
     (id) => (roster[id] as Record<string, unknown>).default === true,
   );
-  if (defaultIds.length === 1) {
-    return convertedLegacyList
-      ? {
-          config: { ...root, agents },
-          changed: true,
-          diagnostics: ["Moved agents.list to keyed agents.entries."],
-        }
-      : { config: raw, changed: false, diagnostics: [] };
+  const hasValidLegacyMarker = agents.ownership !== "explicit" && markedIds.length === 1;
+  const legacyDefaultAgentId =
+    tryGetLegacyDefaultAgentId(raw as OpenClawConfig) ??
+    (validIds.length > 1 && hasValidLegacyMarker ? markedIds[0] : undefined);
+  let nextRoot: Record<string, unknown> = { ...root, agents };
+  let insertedPaths: string[][] = [];
+  const diagnostics = convertedLegacyList ? ["Moved agents.list to keyed agents.entries."] : [];
+  let changed = convertedLegacyList;
+  if (legacyDefaultAgentId) {
+    const materialized = materializeLegacyDefaultAgentRoles(
+      nextRoot as OpenClawConfig,
+      legacyDefaultAgentId,
+      options,
+    );
+    nextRoot = materialized.config as Record<string, unknown>;
+    insertedPaths = materialized.insertedPaths;
+    if (insertedPaths.length > 0) {
+      diagnostics.push("Materialized legacy per-surface agent ownership.");
+      changed = true;
+    }
   }
-  const effectiveId = defaultIds[0] ?? validIds[0]!;
-  const repaired = Object.fromEntries(
-    Object.entries(roster).map(([id, entry]) => {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-        return [id, entry];
-      }
-      const next = { ...(entry as Record<string, unknown>) };
-      if (id === effectiveId) {
-        next.default = true;
-      } else {
-        delete next.default;
-      }
-      return [id, next];
-    }),
-  );
+  if (hasValidLegacyMarker) {
+    const nextAgents = (nextRoot.agents as Record<string, unknown> | undefined) ?? agents;
+    const materializedEntries = (nextAgents.entries ?? roster) as Record<string, unknown>;
+    nextRoot = {
+      ...nextRoot,
+      agents: {
+        ...nextAgents,
+        entries: Object.fromEntries(
+          Object.entries(materializedEntries).map(([id, entry]) => {
+            if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+              return [id, entry];
+            }
+            const { default: _default, ...rest } = entry as Record<string, unknown>;
+            return [id, rest];
+          }),
+        ),
+      },
+    };
+    diagnostics.push("Removed retired agents.entries.*.default markers.");
+    changed = true;
+  }
+
+  const config = (changed ? nextRoot : raw) as OpenClawConfig;
+  retainLegacyDefaultAgentId(config, legacyDefaultAgentId);
   return {
-    config: { ...root, agents: { ...agents, entries: repaired } },
-    changed: true,
-    diagnostics: [
-      ...(convertedLegacyList ? ["Moved agents.list to keyed agents.entries."] : []),
-      defaultIds.length === 0
-        ? `Migrated agents.entries by marking "${effectiveId}" as default.`
-        : `Migrated agents.entries by keeping "${effectiveId}" as default and clearing ${defaultIds.length - 1} duplicate marker(s).`,
-    ],
+    config,
+    changed,
+    diagnostics,
+    ...(insertedPaths.length > 0 ? { insertedPaths } : {}),
+    ...(legacyDefaultAgentId ? { retainedLegacyDefaultAgentId: legacyDefaultAgentId } : {}),
   };
 }

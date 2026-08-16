@@ -21,6 +21,7 @@ import {
 import {
   buildOpenGroupPolicyRestrictSendersWarning,
   buildOpenGroupPolicyWarning,
+  createConditionalWarningCollector,
   createOpenProviderGroupPolicyWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import {
@@ -189,6 +190,12 @@ const collectZaloSecurityWarnings = createOpenProviderGroupPolicyWarningCollecto
     ];
   },
 });
+const collectZaloOpenGroupFindings = createConditionalWarningCollector.findings({
+  collectWarnings: collectZaloSecurityWarnings,
+  checkId: "channels.zalo.groups.open",
+  severity: "critical",
+  title: "Zalo security warning",
+});
 
 export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
   createChatChannelPlugin({
@@ -235,6 +242,10 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       messaging: {
         targetPrefixes: ["zalo", "zl"],
         normalizeTarget: normalizeZaloMessagingTarget,
+        inferTargetChatType: ({ to }) => {
+          const target = normalizeZaloMessagingTarget(to);
+          return target ? (/^group:/i.test(target) ? "group" : "direct") : undefined;
+        },
         resolveOutboundSessionRoute: (params) => resolveZaloOutboundSessionRoute(params),
         targetResolver: {
           looksLikeId: looksLikeZaloChatId,
@@ -281,7 +292,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
     },
     security: {
       resolveDmPolicy: resolveZaloDmPolicy,
-      collectWarnings: collectZaloSecurityWarnings,
+      collectWarnings: collectZaloOpenGroupFindings,
     },
     pairing: {
       text: {

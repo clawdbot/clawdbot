@@ -1,5 +1,6 @@
 /** Focused HTTP coverage for hook admission feedback and pending replay behavior. */
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import {
@@ -41,14 +42,6 @@ async function waitForCronIsolatedRuns(count: number): Promise<void> {
   await expect
     .poll(() => cronIsolatedRun.mock.calls.length, { timeout: 2_000, interval: 10 })
     .toBe(count);
-}
-
-function createDeferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((innerResolve) => {
-    resolve = innerResolve;
-  });
-  return { promise, resolve };
 }
 
 async function waitForDuplicateRequest(): Promise<void> {

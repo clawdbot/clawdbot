@@ -621,12 +621,9 @@ export async function executeExaWebSearchProviderTool(
 }
 
 export const testing = {
-  normalizeExaResults,
-  normalizeExaFreshness,
   parseExaContents,
   buildExaCacheKey,
   resolveExaApiKey,
-  resolveExaConfig,
   resolveExaDescription,
   resolveExaSearchCount,
   resolveExaSearchEndpoint,
@@ -634,4 +631,3 @@ export const testing = {
   readExaErrorDetail,
   readExaSearchResults,
 } as const;
-export { testing as __testing };

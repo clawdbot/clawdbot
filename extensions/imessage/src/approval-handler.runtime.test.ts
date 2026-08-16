@@ -24,8 +24,8 @@ const timersMock = vi.hoisted(() => ({
   delay: vi.fn(async () => undefined),
 }));
 
-const approvalResolverMock = vi.hoisted(() => ({
-  resolveIMessageApproval: vi.fn(),
+const approvalGatewayMock = vi.hoisted(() => ({
+  resolveApprovalOverGateway: vi.fn(),
   isApprovalNotFoundError: vi.fn(() => false),
 }));
 
@@ -148,7 +148,12 @@ vi.mock("./actions.runtime.js", () => ({
   },
 }));
 
-vi.mock("./approval-resolver.js", () => approvalResolverMock);
+vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
+  resolveApprovalOverGateway: approvalGatewayMock.resolveApprovalOverGateway,
+}));
+vi.mock("openclaw/plugin-sdk/error-runtime", () => ({
+  isApprovalNotFoundError: approvalGatewayMock.isApprovalNotFoundError,
+}));
 
 describe("imessageApprovalNativeRuntime", () => {
   it("renders shared reactions in pending exec approvals", async () => {
@@ -245,8 +250,8 @@ describe("imessageApprovalNativeRuntime", () => {
   describe("deliverPending GUID-only binding", () => {
     beforeEach(() => {
       iMessageApprovalPollTargets.clearForTest();
-      approvalResolverMock.resolveIMessageApproval.mockReset();
-      approvalResolverMock.resolveIMessageApproval.mockResolvedValue({
+      approvalGatewayMock.resolveApprovalOverGateway.mockReset();
+      approvalGatewayMock.resolveApprovalOverGateway.mockResolvedValue({
         applied: true,
         approval: {},
       });
@@ -452,8 +457,8 @@ describe("imessageApprovalNativeRuntime", () => {
 
     beforeEach(() => {
       iMessageApprovalPollTargets.clearForTest();
-      approvalResolverMock.resolveIMessageApproval.mockReset();
-      approvalResolverMock.resolveIMessageApproval.mockResolvedValue({
+      approvalGatewayMock.resolveApprovalOverGateway.mockReset();
+      approvalGatewayMock.resolveApprovalOverGateway.mockResolvedValue({
         applied: true,
         approval: {},
       });
@@ -552,10 +557,11 @@ describe("imessageApprovalNativeRuntime", () => {
           pollGuid: POLL_GUID,
         }),
       ).resolves.toBe(true);
-      expect(approvalResolverMock.resolveIMessageApproval).toHaveBeenCalledWith(
+      expect(approvalGatewayMock.resolveApprovalOverGateway).toHaveBeenCalledWith(
         expect.objectContaining({
           approvalId: "exec-poll",
           decision: "allow-once",
+          channel: "imessage",
         }),
       );
     });
@@ -594,7 +600,7 @@ describe("imessageApprovalNativeRuntime", () => {
           pollGuid: POLL_GUID,
         }),
       ).resolves.toBe(true);
-      expect(approvalResolverMock.resolveIMessageApproval).toHaveBeenCalledTimes(1);
+      expect(approvalGatewayMock.resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
     });
 
     [

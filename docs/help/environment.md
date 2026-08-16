@@ -101,20 +101,20 @@ See [Workspace `.env` files](/gateway/security#workspace-env-files) for the secu
 
 ## Config `env` block
 
-Two equivalent ways to set inline env vars (both are non-overriding):
+Set inline env vars under `env.vars` (values are non-overriding):
 
 ```json5
 {
   env: {
-    OPENROUTER_API_KEY: "sk-or-...",
     vars: {
+      OPENROUTER_API_KEY: "sk-or-...",
       GROQ_API_KEY: "gsk-...",
     },
   },
 }
 ```
 
-The config `env` block accepts literal string values only. It does not expand
+The config `env.vars` block accepts literal string values only. It does not expand
 `file:...` values; for example, `XAI_API_KEY: "file:secrets/xai-api-key.txt"`
 is passed to providers as that exact string.
 

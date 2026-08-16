@@ -5,8 +5,33 @@ import { describe, expect, it } from "vitest";
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import { readRuntimePromptImageFactIndexes } from "../../../media/runtime-prompt-image-provenance.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
-import { detectAndLoadPromptImages } from "./images.js";
-import { preparePluginHarnessPromptImages } from "./plugin-harness-prompt-images.js";
+import { prepareEmbeddedAttemptPromptExecution } from "./attempt-prompt-submit.js";
+
+async function preparePluginHarnessPromptImages(params: {
+  runParams: Parameters<typeof prepareEmbeddedAttemptPromptExecution>[0]["attempt"];
+  runtime: {
+    workspaceDir: string;
+    model: Parameters<typeof prepareEmbeddedAttemptPromptExecution>[0]["attempt"]["model"];
+  };
+  pluginHarnessOwnsTransport: boolean;
+}) {
+  if (!params.pluginHarnessOwnsTransport) {
+    return {
+      images: params.runParams.images,
+      imageOrder: params.runParams.imageOrder,
+      media: params.runParams.media,
+    };
+  }
+  const result = await prepareEmbeddedAttemptPromptExecution({
+    attempt: { ...params.runParams, model: params.runtime.model },
+    effectiveWorkspace: params.runtime.workspaceDir,
+    effectiveFsWorkspaceOnly: false,
+    prompt: "",
+    skipPromptSubmission: false,
+    pluginHarness: true,
+  });
+  return { images: result.images, imageOrder: result.imageOrder, media: result.media };
+}
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
@@ -33,7 +58,7 @@ describe("plugin harness prompt media", () => {
         },
         pluginHarnessOwnsTransport: true,
       } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]),
-    ).resolves.toEqual({ images: undefined, imageOrder: undefined, media: undefined });
+    ).resolves.toEqual({ images: [], imageOrder: undefined, media: undefined });
   });
 
   it.each([
@@ -103,9 +128,8 @@ describe("plugin harness prompt media", () => {
       expect(result.images ?? []).toHaveLength(testCase.expectedImages);
       if (testCase.expectedImages > 0) {
         expect(result.images?.[0]?.mimeType).toBe("image/png");
-      } else {
-        expect(result.media).toEqual(media);
       }
+      expect(result.media).toBeUndefined();
     } finally {
       envSnapshot.restore();
       await fs.rm(stateDir, { recursive: true, force: true });
@@ -162,24 +186,9 @@ describe("plugin harness prompt media", () => {
       ]);
       expect(readRuntimePromptImageFactIndexes(result.images ?? [])).toEqual([0]);
       expect(result.imageOrder).toEqual(["inline"]);
-      expect(result.media?.[0]).toMatchObject({ contentType: "image/png", kind: "image" });
-      expect(result.media?.[0]).not.toHaveProperty("path");
-      expect(result.media?.[0]).not.toHaveProperty("url");
-      expect(result.media?.[1]).toMatchObject(documentFact);
-
-      const serialized = JSON.stringify(result);
-      const restored = JSON.parse(serialized) as typeof result;
-      const replay = await detectAndLoadPromptImages({
-        prompt: "",
-        media: restored.media,
-        workspaceDir,
-        model: { input: ["text", "image"] },
-        existingImages: restored.images,
-        imageOrder: restored.imageOrder,
-      });
-      expect(replay.failedMediaCount).toBe(0);
-      expect(replay.images).toEqual(result.images);
-      expect(replay.imageFactIndexes).toEqual([0]);
+      expect(result.media).toBeUndefined();
+      expect(JSON.stringify(result)).not.toContain(imagePath);
+      expect(structuredClone(result).images).toEqual(result.images);
     } finally {
       envSnapshot.restore();
       await fs.rm(stateDir, { recursive: true, force: true });
@@ -206,6 +215,44 @@ describe("plugin harness prompt media", () => {
           pluginHarnessOwnsTransport: true,
         } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]),
       ).rejects.toThrow("failed to hydrate 1 structured image attachment");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("delivers readable images when an unresolved attachment is hydration-suppressed", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-harness-mixed-media-"));
+    const imagePath = path.join(workspaceDir, "present.png");
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    try {
+      const result = await preparePluginHarnessPromptImages({
+        runParams: {
+          agentId: "main",
+          config: { agents: { defaults: { sandbox: { mode: "off" } } } },
+          images: [{ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" }],
+          imageOrder: ["inline"],
+          media: [
+            { path: imagePath, contentType: "image/png" },
+            {
+              path: path.join(workspaceDir, "missing.png"),
+              contentType: "image/png",
+              hydrationSuppressed: true,
+            },
+          ],
+          sessionId: "session-mixed",
+        },
+        runtime: {
+          model: { input: ["text", "image"] },
+          sessionId: "session-mixed",
+          workspaceDir,
+        },
+        pluginHarnessOwnsTransport: true,
+      } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]);
+
+      expect(result.images).toEqual([
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ]);
+      expect(result.imageOrder).toEqual(["inline"]);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -308,13 +355,7 @@ describe("plugin harness prompt media", () => {
     } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]);
 
     expect(result.images).toEqual([]);
-    expect(result.media?.[0]).toMatchObject({
-      contentType: "image/png",
-      kind: "image",
-      hydrationSuppressed: true,
-    });
-    expect(result.media?.[0]).not.toHaveProperty("path");
-    expect(result.media?.[0]).not.toHaveProperty("url");
+    expect(result.media).toBeUndefined();
   });
 
   it("retains layout-derived suppression after plugin host materialization", async () => {
@@ -357,9 +398,7 @@ describe("plugin harness prompt media", () => {
 
     expect(result.images).toEqual([inlineImage]);
     expect(result.imageOrder).toEqual(["inline"]);
-    expect(result.media?.[0]).toMatchObject({ kind: "image", hydrationSuppressed: true });
-    expect(result.media?.[1]).toMatchObject({ kind: "image" });
-    expect(result.media?.[1]).not.toHaveProperty("hydrationSuppressed");
+    expect(result.media).toBeUndefined();
   });
 
   it("keeps unsupported native images as aligned type-only facts", async () => {
@@ -383,10 +422,7 @@ describe("plugin harness prompt media", () => {
     } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]);
 
     expect(result.images).toEqual([]);
-    expect(result.media?.[0]).toMatchObject({ contentType: "image/png" });
-    expect(result.media?.[0]).not.toHaveProperty("path");
-    expect(result.media?.[1]).toMatchObject({ kind: "image" });
-    expect(result.media?.[1]).not.toHaveProperty("path");
+    expect(result.media).toBeUndefined();
   });
 
   it("leaves facts untouched when the native harness owns transport", async () => {

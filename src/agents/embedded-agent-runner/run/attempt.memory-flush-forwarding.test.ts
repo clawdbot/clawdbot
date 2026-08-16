@@ -6,7 +6,7 @@ import type { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessi
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
-import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
+import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.js";
 
 const MEMORY_RELATIVE_PATH = "memory/2026-03-24.md";
 

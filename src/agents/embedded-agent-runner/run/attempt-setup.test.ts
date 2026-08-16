@@ -5,17 +5,21 @@ import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const resolveProviderRuntimePluginHandle = vi.hoisted(() => vi.fn());
+const resolveSandboxContext = vi.hoisted(() => vi.fn(async () => null));
 
 vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/provider-hook-runtime.js")>()),
   resolveProviderRuntimePluginHandle,
 }));
 
-import { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
+vi.mock("../../sandbox.js", () => ({ resolveSandboxContext }));
+
+import { prepareEmbeddedAttemptSetup, resolveAttemptWorkspaceSandbox } from "./attempt-setup.js";
 
 describe("prepareEmbeddedAttemptSetup", () => {
   beforeEach(() => {
     resolveProviderRuntimePluginHandle.mockReset();
+    resolveSandboxContext.mockClear();
   });
 
   it("prepares the default and session agent identities together", async () => {
@@ -38,6 +42,48 @@ describe("prepareEmbeddedAttemptSetup", () => {
     expect(setup.defaultAgentId).toBe("main");
     expect(setup.sessionAgentId).toBe("marketing");
   });
+
+  it("passes the resolved skill snapshot into sandbox synchronization", async () => {
+    const skillsSnapshot = {
+      prompt: "skills",
+      skills: [{ name: "alpha" }],
+      resolvedSkills: [],
+      version: 42,
+    };
+
+    await prepareEmbeddedAttemptSetup({
+      config: {},
+      modelId: "gpt-5.4",
+      provider: "openai",
+      runId: "run-sandbox-skills",
+      sessionId: "session-sandbox-skills",
+      sessionKey: "agent:main:main",
+      skillsSnapshot,
+      thinkLevel: "high",
+      timeoutMs: 30_000,
+      workspaceDir: path.join(os.tmpdir(), "openclaw-attempt-setup-sandbox-skills"),
+    } as unknown as EmbeddedRunAttemptParams);
+
+    expect(resolveSandboxContext).toHaveBeenCalledWith(expect.objectContaining({ skillsSnapshot }));
+  });
+
+  it.each(["ro", "rw"] as const)(
+    "keeps collection review on the host workspace with %s sandbox access",
+    async (workspaceAccess) => {
+      const workspaceDir = path.join(os.tmpdir(), "openclaw-attempt-setup-collection-review");
+      const setup = await resolveAttemptWorkspaceSandbox({
+        agentId: "main",
+        config: { agents: { defaults: { sandbox: { mode: "all", workspaceAccess } } } },
+        sessionId: "session-collection-review",
+        sessionKey: "agent:main:skill-collection-review",
+        skillWorkshopCollectionReconcile: {},
+        workspaceDir,
+      });
+
+      expect(resolveSandboxContext).not.toHaveBeenCalled();
+      expect(setup.effectiveWorkspace).toBe(workspaceDir);
+    },
+  );
 
   it("reuses lifecycle metadata and the provider handle from the runtime plan", async () => {
     const metadataSnapshot = { plugins: [] } as never;

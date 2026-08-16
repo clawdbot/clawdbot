@@ -2,12 +2,18 @@
 // backoff, and Chrome tab-group color mapping. No chrome.* usage here so the
 // repo's vitest suite can exercise the logic directly.
 
-/** Tab group shown to the user; membership == what the agent may touch. */
+/** Tab group shown to the user; an ACL in selected mode and an ownership marker in all mode. */
 export const OPENCLAW_TAB_GROUP_TITLE = "OpenClaw";
-const EXTENSION_RELAY_PROTOCOL = "openclaw-extension-relay";
-const EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX = "openclaw-extension-token.";
+export const ACCESS_MODE_ALL = "all";
+export const ACCESS_MODE_SELECTED = "selected";
+const EXTENSION_RELAY_PROTOCOL = "openclaw-extension-relay.v2";
 const RELAY_SECRET_PATTERN = /^[0-9a-f]{64}$/;
-const PAIRING_STORAGE_KEYS = ["relayUrl", "gatewayUrl", "token"];
+const PAIRING_STORAGE_KEYS = ["relayUrl", "gatewayUrl", "token", "authVersion"];
+const ACCESS_MODE_KEY = "accessMode";
+const PAIRING_STATUS_KEY = "pairingStatus";
+const UNSUPPORTED_PROXY_PREFIX_STATUS = "proxy-prefix-unsupported";
+const UNSUPPORTED_PROXY_PREFIX_HINT =
+  "Stored proxy-prefixed browser relay pairing is no longer supported. Re-run `openclaw browser extension pair` with a Gateway URL that has no path prefix.";
 
 const CHROME_GROUP_COLORS = {
   grey: [128, 128, 128],
@@ -66,13 +72,41 @@ function parseGatewayHint(raw) {
 }
 
 function directGatewayUrlFromRelay(relay) {
-  const suffix = "/browser/extension";
-  if (!relay.pathname.endsWith(suffix)) {
+  if (relay.pathname !== "/browser/extension") {
     return null;
   }
   const gateway = new URL(relay.toString());
-  gateway.pathname = gateway.pathname.slice(0, -suffix.length) || "/";
+  gateway.pathname = "/";
+  gateway.search = "";
   return gateway.toString();
+}
+
+function isUnsupportedProxyPrefix(raw) {
+  if (typeof raw !== "string") {
+    return false;
+  }
+  try {
+    const relay = new URL(raw);
+    return (
+      isAllowedWebSocketUrl(relay) &&
+      relay.pathname !== "/browser/extension" &&
+      relay.pathname.endsWith("/browser/extension")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function normalizeRelayQuery(relay) {
+  const query = [...relay.searchParams];
+  if (
+    query.some(([key, value]) => key !== "profile" || !/^[a-z0-9-]+$/.test(value)) ||
+    query.filter(([key]) => key === "profile").length > 1
+  ) {
+    return false;
+  }
+  relay.searchParams.sort();
+  return true;
 }
 
 function validatePairingFields(relayUrl, token, gatewayUrl) {
@@ -88,10 +122,13 @@ function validatePairingFields(relayUrl, token, gatewayUrl) {
   } catch {
     return null;
   }
+  const supportedPath =
+    (isLoopbackHost(relay.hostname) && relay.pathname === "/extension") ||
+    relay.pathname === "/browser/extension";
   if (
     !isAllowedWebSocketUrl(relay) ||
-    !relay.pathname.endsWith("/extension") ||
-    relay.search ||
+    !supportedPath ||
+    !normalizeRelayQuery(relay) ||
     relay.hash
   ) {
     return null;
@@ -118,7 +155,8 @@ function validatePairingFields(relayUrl, token, gatewayUrl) {
 
 /**
  * Parse a pairing string printed by `openclaw browser extension pair`.
- * Shape: ws://127.0.0.1:<port>/extension?gateway=<url>#<token>
+ * Native local and direct-remote pairings use the Gateway route; local manual,
+ * browser-node, and legacy local pairings use the host relay route.
  * The additive gateway hint is not a credential; old extensions safely pass
  * it through to the relay while new extensions remove it before connecting.
  */
@@ -137,14 +175,21 @@ export function parsePairingString(raw) {
     return null;
   }
   const query = [...parsed.searchParams];
-  if (query.length > 1 || (query.length === 1 && query[0]?.[0] !== "gateway")) {
+  const gatewayEntries = query.filter(([key]) => key === "gateway");
+  const profileEntries = query.filter(([key]) => key === "profile");
+  if (
+    gatewayEntries.length > 1 ||
+    profileEntries.length > 1 ||
+    query.some(([key]) => key !== "gateway" && key !== "profile")
+  ) {
     return null;
   }
-  const gatewayUrl = query.length === 1 ? query[0]?.[1] : undefined;
-  if (query.length === 1 && !gatewayUrl?.trim()) {
+  const gatewayUrl = gatewayEntries[0]?.[1];
+  if ((gatewayEntries.length === 1 && !gatewayUrl?.trim()) || profileEntries[0]?.[1] === "") {
     return null;
   }
-  parsed.search = "";
+  parsed.searchParams.delete("gateway");
+  parsed.searchParams.sort();
   return validatePairingFields(parsed.toString(), token, gatewayUrl);
 }
 
@@ -156,6 +201,7 @@ function parseStoredPairing(stored) {
   const parsed = validatePairingFields(stored.relayUrl, stored.token, stored.gatewayUrl);
   if (
     !parsed ||
+    (stored.authVersion !== undefined && stored.authVersion !== 2) ||
     parsed.relayUrl !== stored.relayUrl ||
     parsed.token !== stored.token ||
     (parsed.gatewayUrl ?? "") !== (stored.gatewayUrl ?? "")
@@ -181,41 +227,101 @@ export function createPairingConfigStore(storage) {
     },
     read: () =>
       run(async () => {
-        const stored = await storage.get([...PAIRING_STORAGE_KEYS, "groupColor"]);
+        const stored = await storage.get([
+          ...PAIRING_STORAGE_KEYS,
+          ACCESS_MODE_KEY,
+          PAIRING_STATUS_KEY,
+          "groupColor",
+        ]);
         const hasPairing = PAIRING_STORAGE_KEYS.some((key) => Object.hasOwn(stored, key));
         const pairing = hasPairing ? parseStoredPairing(stored) : null;
+        let pairingStatus =
+          stored[PAIRING_STATUS_KEY] === UNSUPPORTED_PROXY_PREFIX_STATUS
+            ? UNSUPPORTED_PROXY_PREFIX_STATUS
+            : "";
         if (hasPairing && !pairing) {
           if (!invalidObserved) {
             invalidationRevision += 1;
           }
           invalidObserved = true;
+          pairingStatus = isUnsupportedProxyPrefix(stored.relayUrl)
+            ? UNSUPPORTED_PROXY_PREFIX_STATUS
+            : "";
           await storage.remove(PAIRING_STORAGE_KEYS).catch(() => undefined);
+          if (pairingStatus) {
+            await storage.set({ [PAIRING_STATUS_KEY]: pairingStatus }).catch(() => undefined);
+          } else if (Object.hasOwn(stored, PAIRING_STATUS_KEY)) {
+            await storage.remove([PAIRING_STATUS_KEY]).catch(() => undefined);
+          }
         } else {
           invalidObserved = false;
+          if (pairing) {
+            const repairs = {};
+            if (stored.authVersion === undefined) {
+              repairs.authVersion = 2;
+            }
+            // Pairings created before access modes promised group-only access.
+            // Unknown future/corrupt values fail closed without discarding the key.
+            if (
+              stored[ACCESS_MODE_KEY] !== ACCESS_MODE_ALL &&
+              stored[ACCESS_MODE_KEY] !== ACCESS_MODE_SELECTED
+            ) {
+              repairs[ACCESS_MODE_KEY] = ACCESS_MODE_SELECTED;
+            }
+            if (Object.keys(repairs).length > 0) {
+              await storage.set(repairs);
+            }
+          }
+          if (pairing && pairingStatus) {
+            pairingStatus = "";
+            await storage.remove([PAIRING_STATUS_KEY]).catch(() => undefined);
+          }
         }
         return {
           relayUrl: pairing?.relayUrl ?? "",
           token: pairing?.token ?? "",
           gatewayUrl: pairing?.gatewayUrl ?? "",
+          authVersion: pairing ? 2 : undefined,
+          accessMode: pairing
+            ? stored[ACCESS_MODE_KEY] === ACCESS_MODE_ALL
+              ? ACCESS_MODE_ALL
+              : ACCESS_MODE_SELECTED
+            : ACCESS_MODE_SELECTED,
           groupColor: typeof stored.groupColor === "string" ? stored.groupColor : "orange",
+          pairingStatusHint:
+            pairingStatus === UNSUPPORTED_PROXY_PREFIX_STATUS ? UNSUPPORTED_PROXY_PREFIX_HINT : "",
         };
       }),
-    save: (pairing, groupColor) =>
-      run(() =>
-        storage.set({
+    save: (pairing, groupColor, accessMode = ACCESS_MODE_ALL) =>
+      run(async () => {
+        await storage.set({
           relayUrl: pairing.relayUrl,
           token: pairing.token,
           gatewayUrl: pairing.gatewayUrl ?? "",
+          authVersion: 2,
+          accessMode: accessMode === ACCESS_MODE_SELECTED ? ACCESS_MODE_SELECTED : ACCESS_MODE_ALL,
           groupColor,
-        }),
-      ),
-    clear: () => run(() => storage.remove(PAIRING_STORAGE_KEYS)),
+        });
+        await storage.remove([PAIRING_STATUS_KEY]);
+      }),
+    setAccessMode: (accessMode) =>
+      run(async () => {
+        const stored = await storage.get(PAIRING_STORAGE_KEYS);
+        if (!parseStoredPairing(stored)) {
+          throw new Error("Pair the extension first.");
+        }
+        const normalized = accessMode === ACCESS_MODE_ALL ? ACCESS_MODE_ALL : ACCESS_MODE_SELECTED;
+        await storage.set({ [ACCESS_MODE_KEY]: normalized });
+        return normalized;
+      }),
+    clear: () =>
+      run(() => storage.remove([...PAIRING_STORAGE_KEYS, ACCESS_MODE_KEY, PAIRING_STATUS_KEY])),
   };
 }
 
-/** Build WebSocket subprotocols without putting the relay secret in the request URL. */
-export function buildRelayWsProtocols(token) {
-  return [EXTENSION_RELAY_PROTOCOL, `${EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX}${token}`];
+/** Build the v2 WebSocket subprotocol list; credentials stay in WebCrypto only. */
+export function buildRelayWsProtocols() {
+  return [EXTENSION_RELAY_PROTOCOL];
 }
 
 /** Exponential reconnect backoff: 1s, 2s, 4s ... capped at 30s. */

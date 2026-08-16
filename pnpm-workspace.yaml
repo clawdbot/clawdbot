@@ -9,10 +9,10 @@ minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
   - "@openclaw/crabline@0.1.11"
-  - "@openclaw/fs-safe@0.5.2"
+  - "@openclaw/fs-safe@0.5.5"
   - "@openclaw/libterminal@0.3.2"
   - "@openclaw/proxyline@0.3.4"
-  - "@openclaw/uirouter@0.1.0"
+  - "@openclaw/uirouter@0.1.1"
   - "acpx"
   - "tokenjuice"
   - "@agentclientprotocol/sdk"
@@ -63,6 +63,13 @@ minimumReleaseAgeExclude:
   - "@microsoft/teams.common@2.0.12"
   - "@microsoft/teams.graph@2.0.12"
   - "@modelcontextprotocol/sdk@1.30.0"
+  - "@trycua/cua-driver@0.19.3"
+  - "@trycua/cua-driver-darwin-arm64@0.19.3"
+  - "@trycua/cua-driver-darwin-x64@0.19.3"
+  - "@trycua/cua-driver-linux-arm64-gnu@0.19.3"
+  - "@trycua/cua-driver-linux-x64-gnu@0.19.3"
+  - "@trycua/cua-driver-win32-arm64-msvc@0.19.3"
+  - "@trycua/cua-driver-win32-x64-msvc@0.19.3"
   - "@openai/codex"
   - "@openai/codex-*"
   - "@pierre/diffs@1.2.3"
@@ -120,14 +127,13 @@ verifyDepsBeforeRun: false
 blockExoticSubdeps: true
 
 overrides:
-  "@agentclientprotocol/codex-acp@1.1.7>@openai/codex": 0.146.1
+  "@agentclientprotocol/codex-acp@1.1.7>@openai/codex": 0.147.0
   "@anthropic-ai/sdk": 0.115.0
   "@opentelemetry/core": 2.10.0
   "@opentelemetry/propagator-jaeger": 2.10.0
   "@aws-sdk/core": 3.977.1
   "@aws-sdk/credential-provider-node": 3.972.72
   "@aws-sdk/xml-builder": 3.972.37
-  hono: 4.12.32
   "@hono/node-server": 2.0.12
   axios: 1.18.1
   fast-uri: 4.1.2
@@ -167,7 +173,6 @@ allowBuilds:
   "@discordjs/opus": false
   esbuild: true
   koffi: false
-  node-llama-cpp: false
   onnxruntime-node: false
   protobufjs: true
   sharp: true

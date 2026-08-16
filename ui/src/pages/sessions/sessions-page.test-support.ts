@@ -25,6 +25,7 @@ export type TestSessionsPage = HTMLElement & {
   sessionMenu: { key: string; x: number; y: number } | null;
   sessionMenuTrigger: HTMLElement | null;
   checkpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
+  checkpointErrorByKey: Record<string, string>;
   checkpointLoadingKey: string | null;
   checkpointBusyKey: string | null;
   sessionMutationPending: boolean;
@@ -38,15 +39,21 @@ export type TestSessionsPage = HTMLElement & {
   deleteSessionFromMenu: (row: GatewaySessionRow) => Promise<void>;
   deleteAllArchived: () => Promise<void>;
   stopCloudWorker: (row: GatewaySessionRow) => Promise<void>;
-  rememberCustomGroup: (name: string) => Promise<void>;
+  rememberCustomGroup: (name: string) => Promise<unknown>;
+  requestNewCategory: (sessionKey?: string) => Promise<void>;
   openSessionMenu: (
     row: GatewaySessionRow,
     position: { x: number; y: number },
     trigger: HTMLElement | null,
   ) => void;
-  patchSession: (key: string, patch: { archived?: boolean; pinned?: boolean }) => Promise<unknown>;
+  patchSession: (
+    key: string,
+    patch: { archived?: boolean; pinned?: boolean; label?: string | null },
+    scope?: unknown,
+    expectedSessionId?: string,
+  ) => Promise<unknown>;
   archiveSessionWithUndo: (row: GatewaySessionRow) => Promise<void>;
-  forkSession: (key: string) => Promise<void>;
+  forkSession: (key: string, fromLastCompleted?: boolean) => Promise<void>;
   branchCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
   restoreCheckpoint: (sessionKey: string, checkpointId: string) => Promise<void>;
   addToWorkboard: (session: GatewaySessionRow) => Promise<void>;

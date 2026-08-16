@@ -102,11 +102,12 @@ export function registerPiSessionCatalog(api: OpenClawPluginApi): void {
   const provider: SessionCatalogProvider = {
     id: "pi",
     label: "Pi",
+    supportsProcessHomeIsolation: true,
     list: async (query) => await (await loadCatalogRuntime()).list(query),
     read: async (request) => await (await loadCatalogRuntime()).read(request),
     continueSession: async (request) => await (await loadCatalogRuntime()).continueSession(request),
-    checkUpstreamActivity: async (probes) =>
-      await (await loadCatalogRuntime()).checkUpstreamActivity(probes),
+    checkUpstreamActivity: async (probes, policy) =>
+      await (await loadCatalogRuntime()).checkUpstreamActivity(probes, policy),
     openTerminal: async (request) => await (await loadCatalogRuntime()).openTerminal(request),
   };
   api.registerSessionCatalog(provider);

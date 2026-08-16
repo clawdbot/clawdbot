@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validateConfigObjectRaw } from "../../../config/validation.js";
+import { resolveModelEntries } from "../../../media-understanding/resolve.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
@@ -127,6 +128,7 @@ describe("legacy config migration end to end", () => {
         defaults: { pdfMaxMb: 12, mediaModels: { image: "openai/image-1" } },
         entries: { main: { name: "Main", tools: { exec: { timeoutSeconds: 45 } } } },
       },
+      plugins: { entries: { openai: { config: { personality: "off" } } } },
       tools: { exec: { timeoutSeconds: 30 } },
       attachments: { ttlHours: 24 },
       logging: { consoleStyle: "pretty", audit: { enabled: false, messages: "direct" } },
@@ -154,6 +156,9 @@ describe("legacy config migration end to end", () => {
         },
       },
     });
+    expect(result.changes).toContain(
+      "Moved agents.defaults.promptOverlays.gpt5.personality → plugins.entries.openai.config.personality.",
+    );
     const validation = validateConfigObjectRaw(result.config);
     expect(validation.ok, validation.ok ? undefined : JSON.stringify(validation.issues)).toBe(true);
     expect(applyLegacyDoctorMigrations(result.config)).toEqual({ next: null, changes: [] });
@@ -169,6 +174,19 @@ describe("legacy config migration end to end", () => {
     ]) {
       expect(serialized).not.toContain(`"${key}"`);
     }
+  });
+
+  it("preserves canonical OpenAI personality over the retired prompt overlay", () => {
+    const result = migrateLegacyConfig({
+      agents: { defaults: { promptOverlays: { gpt5: { personality: "off" } } } },
+      plugins: { entries: { openai: { config: { personality: "friendly" } } } },
+    });
+
+    expect(result.config?.plugins?.entries?.openai?.config?.personality).toBe("friendly");
+    expect(result.config?.agents?.defaults?.promptOverlays).toBeUndefined();
+    expect(result.changes).toContain(
+      "Removed agents.defaults.promptOverlays.gpt5.personality (plugins.entries.openai.config.personality already set).",
+    );
   });
 
   it("repairs unsupported OTel grpc once and is then a no-op", () => {
@@ -194,5 +212,66 @@ describe("legacy config migration end to end", () => {
     });
     expect(validateConfigObjectRaw(result.config).ok).toBe(true);
     expect(applyLegacyDoctorMigrations(result.config)).toEqual({ next: null, changes: [] });
+  });
+
+  it("loads the OpenCode doctor contract from an exec reviewer fallback", () => {
+    const raw = {
+      tools: {
+        exec: {
+          reviewer: { model: { fallbacks: ["opencode/hy3-free@work"] } },
+        },
+      },
+    };
+    const applied = applyLegacyDoctorMigrations(raw);
+
+    expect(applied.next?.tools).toEqual({
+      exec: {
+        reviewer: { model: { fallbacks: ["opencode/laguna-s-2.1-free@work"] } },
+      },
+    });
+    const result = migrateLegacyConfig(raw);
+
+    expect(result.partiallyValid).toBeUndefined();
+    expect(result.config?.tools?.exec?.reviewer?.model).toEqual({
+      fallbacks: ["opencode/laguna-s-2.1-free@work"],
+    });
+    expect(result.changes).toContain(
+      "Updated tools.exec.reviewer.model.fallbacks.0 from the retired OpenCode Zen model to opencode/laguna-s-2.1-free.",
+    );
+    const validation = validateConfigObjectRaw(result.config);
+    expect(validation.ok, validation.ok ? undefined : JSON.stringify(validation.issues)).toBe(true);
+    expect(applyLegacyDoctorMigrations(result.config)).toEqual({ next: null, changes: [] });
+    expect(migrateLegacyConfig(result.config)).toEqual({ config: null, changes: [] });
+  });
+
+  it("keeps a repaired OpenCode media preference selected", () => {
+    const result = migrateLegacyConfig({
+      tools: {
+        media: {
+          image: { preferredModel: "opencode/hy3-free" },
+          models: [
+            { provider: "other", model: "alternative", capabilities: ["image"] },
+            { provider: "opencode", model: "hy3-free", capabilities: ["image"] },
+          ],
+        },
+      },
+    });
+
+    expect(result.config?.tools?.media?.image?.preferredModel).toBe("opencode/laguna-s-2.1-free");
+    const entries = resolveModelEntries({
+      cfg: result.config ?? {},
+      capability: "image",
+      config: result.config?.tools?.media?.image,
+      providerRegistry: new Map([
+        ["opencode", { capabilities: ["image"] }],
+        ["other", { capabilities: ["image"] }],
+      ]),
+    });
+    expect(entries[0]?.entry).toMatchObject({
+      provider: "opencode",
+      model: "laguna-s-2.1-free",
+    });
+    expect(validateConfigObjectRaw(result.config).ok).toBe(true);
+    expect(migrateLegacyConfig(result.config)).toEqual({ config: null, changes: [] });
   });
 });

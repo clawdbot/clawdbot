@@ -27,7 +27,7 @@ function resolveProviderDocsById(params?: {
 }): Map<string, string> {
   return new Map(
     providersRuntime
-      .resolvePluginProviders({
+      .resolvePluginProvidersCore({
         config: params?.config,
         workspaceDir: params?.workspaceDir,
         env: params?.env,

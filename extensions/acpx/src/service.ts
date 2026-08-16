@@ -15,7 +15,6 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
-  AcpRuntime,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   PluginLogger,
@@ -28,16 +27,18 @@ import {
   type ResolvedAcpxPluginConfig,
 } from "./config.js";
 import {
+  ACPX_PROBE_LEASE_SESSION_KEY,
   createAcpxProcessLeaseStore,
   openAcpxProcessLeaseStateStore,
   type AcpxProcessLeaseStore,
 } from "./process-lease.js";
 import {
+  cleanupOpenClawOwnedAcpxPendingLease,
   cleanupOpenClawOwnedAcpxProcessTree,
   reapStaleOpenClawOwnedAcpxOrphans,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
-import { createLazyAcpRuntimeProxy } from "./runtime-proxy.js";
+import { createLazyAcpRuntimeProxy, type CompleteAcpRuntime } from "./runtime-proxy.js";
 import {
   ACPX_GATEWAY_INSTANCE_KEY,
   ACPX_GATEWAY_INSTANCE_MAX_ENTRIES,
@@ -46,14 +47,9 @@ import {
   type AcpxGatewayInstanceRecord,
 } from "./state.js";
 
-type AcpxRuntimeLike = AcpRuntime & {
+type AcpxRuntimeLike = CompleteAcpRuntime & {
   probeAvailability(): Promise<void>;
   isHealthy(): boolean;
-  doctor?(): Promise<{
-    ok: boolean;
-    message: string;
-    details?: string[];
-  }>;
 };
 const ENABLE_STARTUP_PROBE_ENV = "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE";
 const SKIP_RUNTIME_PROBE_ENV = "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE";
@@ -67,8 +63,8 @@ type AcpxRuntimeFactoryParams = {
 };
 
 type AcpxBackendLifecycle = {
-  publish: (backend: { runtime: AcpRuntime; healthy?: () => boolean }) => void;
-  retract: (runtime: AcpRuntime) => void;
+  publish: (backend: { runtime: CompleteAcpRuntime; healthy?: () => boolean }) => void;
+  retract: (runtime: CompleteAcpRuntime) => void;
 };
 
 type CreateAcpxRuntimeServiceParams = {
@@ -131,25 +127,6 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
       return runtime?.isHealthy() ?? false;
     },
   };
-}
-
-function warnOnIgnoredLegacyCompatibilityConfig(params: {
-  pluginConfig: ResolvedAcpxPluginConfig;
-  logger?: PluginLogger;
-}): void {
-  const ignoredFields: string[] = [];
-  if (params.pluginConfig.legacyCompatibilityConfig.queueOwnerTtlSeconds != null) {
-    ignoredFields.push("queueOwnerTtlSeconds");
-  }
-  if (params.pluginConfig.legacyCompatibilityConfig.strictWindowsCmdWrapper === false) {
-    ignoredFields.push("strictWindowsCmdWrapper=false");
-  }
-  if (ignoredFields.length === 0) {
-    return;
-  }
-  params.logger?.warn(
-    `embedded acpx runtime ignores legacy compatibility config: ${ignoredFields.join(", ")}`,
-  );
 }
 
 function formatDoctorDetail(detail: unknown): string | null {
@@ -281,26 +258,32 @@ async function reapOpenAcpxProcessLeases(params: {
   const leases = await params.leaseStore.listOpen(params.gatewayInstanceId);
   const inspectedPids: number[] = [];
   const terminatedPids: number[] = [];
-  const pendingLeaseRootResults = new Map<
-    string,
-    { inspectedPids: number[]; terminatedPids: number[] }
-  >();
+  const legacyWrapperRoots = new Set<string>();
   for (const lease of leases) {
     if (lease.rootPid <= 0) {
+      legacyWrapperRoots.add(lease.wrapperRoot);
       await params.leaseStore.markState(lease.leaseId, "closing");
-      let result = pendingLeaseRootResults.get(lease.wrapperRoot);
-      if (!result) {
-        result = await reapStaleOpenClawOwnedAcpxOrphans({
-          wrapperRoot: lease.wrapperRoot,
-          deps: params.deps,
-        });
-        pendingLeaseRootResults.set(lease.wrapperRoot, result);
-        inspectedPids.push(...result.inspectedPids);
-        terminatedPids.push(...result.terminatedPids);
-      }
+      const result = await cleanupOpenClawOwnedAcpxPendingLease({
+        leaseId: lease.leaseId,
+        gatewayInstanceId: lease.gatewayInstanceId,
+        wrapperRoot: lease.wrapperRoot,
+        wrapperPath: lease.wrapperPath,
+        deps: params.deps,
+      });
+      inspectedPids.push(...result.inspectedPids);
+      terminatedPids.push(...result.terminatedPids);
+      // A missing probe wrapper cannot prove its detached adapter descendants
+      // exited because those descendants do not carry the lease arguments.
+      const retryableEvidenceFailure =
+        result.skippedReason === "ambiguous-root" ||
+        result.skippedReason === "process-list-unavailable" ||
+        result.skippedReason === "unsupported-platform" ||
+        result.skippedReason === "unverified-root" ||
+        (lease.sessionKey === ACPX_PROBE_LEASE_SESSION_KEY &&
+          result.skippedReason === "missing-root");
       await params.leaseStore.markState(
         lease.leaseId,
-        result.terminatedPids.length > 0 ? "closed" : "lost",
+        retryableEvidenceFailure ? "open" : result.terminatedPids.length > 0 ? "closed" : "lost",
       );
       continue;
     }
@@ -316,12 +299,24 @@ async function reapOpenAcpxProcessLeases(params: {
     terminatedPids.push(...result.terminatedPids);
     await params.leaseStore.markState(
       lease.leaseId,
-      result.skippedReason === "process-list-unavailable"
+      result.skippedReason === "process-list-unavailable" ||
+        result.skippedReason === "unsupported-platform"
         ? "open"
         : result.terminatedPids.length > 0
           ? "closed"
           : "lost",
     );
+  }
+  // Preserve the previous narrow trigger for marker cleanup: a pending lease
+  // proves this Gateway had an uncertain spawn. Keep aggregate results wholly
+  // separate from the state transition of any specific lease.
+  for (const wrapperRoot of legacyWrapperRoots) {
+    const legacyResult = await reapStaleOpenClawOwnedAcpxOrphans({
+      wrapperRoot,
+      deps: params.deps,
+    });
+    inspectedPids.push(...legacyResult.inspectedPids);
+    terminatedPids.push(...legacyResult.terminatedPids);
   }
   return { inspectedPids, terminatedPids };
 }
@@ -385,11 +380,6 @@ export function createAcpxRuntimeService(
           `reaped ${startupReap.terminatedPids.length} stale OpenClaw-owned ACPX process${startupReap.terminatedPids.length === 1 ? "" : "es"}`,
         );
       }
-      warnOnIgnoredLegacyCompatibilityConfig({
-        pluginConfig,
-        logger: ctx.logger,
-      });
-
       const startedRuntime = await measureAcpxStartup(ctx, "runtime.create", () =>
         params.runtimeFactory
           ? params.runtimeFactory({
@@ -445,7 +435,7 @@ export function createAcpxRuntimeService(
           return;
         }
         const doctorReport = await measureAcpxStartup(ctx, "probe.doctor", () =>
-          startedRuntime.doctor?.(),
+          startedRuntime.doctor(),
         );
         if (currentRevision !== lifecycleRevision) {
           return;

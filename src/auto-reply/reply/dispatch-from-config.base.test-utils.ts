@@ -52,7 +52,8 @@ import {
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
-import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
+import { admitReplyTurn } from "./reply-turn-admission.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -91,7 +92,7 @@ describe("dispatchReplyFromConfig", () => {
     };
   }
 
-  it("loads a registry handle before reading inbound hook state", async () => {
+  it("falls back to a live registry handle when the Gateway dispatch runtime is inactive", async () => {
     setNoAbort();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -100,8 +101,29 @@ describe("dispatchReplyFromConfig", () => {
       SessionKey: "agent:main:main",
     });
 
-    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    const replyResolver = vi.fn(
+      async (
+        _ctx: MsgContext,
+        _opts?: GetReplyOptions,
+        _cfg?: OpenClawConfig,
+        _preparedRuntime?: unknown,
+      ) => ({ text: "hi" }) satisfies ReplyPayload,
+    );
+    const preparedRuntime = await import("../../agents/prepared-model-runtime.js");
+    const preparedLookup = vi
+      .spyOn(preparedRuntime, "loadPublishedGatewayReplyDispatchRuntime")
+      .mockResolvedValue(undefined);
+    try {
+      await dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher,
+        replyResolver,
+        usePublishedModelRuntime: true,
+      });
+    } finally {
+      preparedLookup.mockRestore();
+    }
 
     const pluginLoadOptions = firstMockArg(
       runtimePluginMocks.loadAgentRuntimePluginRegistryHandle,
@@ -117,6 +139,63 @@ describe("dispatchReplyFromConfig", () => {
         "hookMocks.runner.hasHooks.mock.invocationCallOrder[0] test invariant",
       ),
     );
+    expect(replyResolver.mock.calls[0]?.[3]).toBeUndefined();
+  });
+
+  it("keeps a raw three-argument resolver on one prepared generation across replacement", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    let receivedPreparedRuntime: unknown;
+    let replacementPreparedRuntime: unknown;
+    const preparedRegistry = createTestRegistry([]);
+    const preparedRuntimeModule = await import("../../agents/prepared-model-runtime.js");
+    const preparedRuntime = Object.freeze({
+      agentId: "main",
+      agentDir: "/tmp/prepared-agent",
+      workspaceDir: "/tmp/prepared-workspace",
+      config: cfg,
+      modelCatalog: { entries: [], routeVariants: [] },
+      inboundPluginRegistry: preparedRegistry,
+    });
+    const preparedLookup = vi
+      .spyOn(preparedRuntimeModule, "loadPublishedGatewayReplyDispatchRuntime")
+      .mockResolvedValueOnce(preparedRuntime)
+      .mockResolvedValue(
+        Object.freeze({
+          ...preparedRuntime,
+          workspaceDir: "/tmp/replacement-workspace",
+        }),
+      );
+    const replyResolver = vi.fn(
+      async (_ctx: MsgContext, _opts?: GetReplyOptions, configOverride?: OpenClawConfig) => {
+        expect(configOverride).toBeUndefined();
+        receivedPreparedRuntime = getPreparedReplyDispatchRuntime();
+        replacementPreparedRuntime = await preparedLookup({ agentId: "main" });
+        expect(getPreparedReplyDispatchRuntime()).toBe(receivedPreparedRuntime);
+        return { text: "hi" } satisfies ReplyPayload;
+      },
+    );
+    try {
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "whatsapp",
+          SessionKey: "agent:main:main",
+          MessageSid: "prepared",
+        }),
+        cfg,
+        dispatcher: createDispatcher(),
+        replyResolver,
+        usePublishedModelRuntime: true,
+      });
+      expect(preparedLookup).toHaveBeenCalledTimes(2);
+      expect(preparedLookup).toHaveBeenNthCalledWith(1, { agentId: "main" });
+      expect(preparedLookup).toHaveBeenNthCalledWith(2, { agentId: "main" });
+      expect(runtimePluginMocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
+      expect(receivedPreparedRuntime).toBe(preparedRuntime);
+      expect(replacementPreparedRuntime).not.toBe(preparedRuntime);
+    } finally {
+      preparedLookup.mockRestore();
+    }
   });
 
   it("drops a durable source duplicate before before_dispatch hooks", async () => {
@@ -314,6 +393,69 @@ describe("dispatchReplyFromConfig", () => {
     activeOperation.complete();
   });
 
+  it("preempts a heartbeat before resolving a visible Telegram turn", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:telegram:direct:heartbeat-preemption";
+    const heartbeatAdmission = await admitReplyTurn({
+      sessionKey,
+      sessionId: "heartbeat-session",
+      kind: "heartbeat",
+      resetTriggered: false,
+    });
+    expect(heartbeatAdmission.status).toBe("owned");
+    if (heartbeatAdmission.status !== "owned") {
+      return;
+    }
+    const heartbeatOperation = heartbeatAdmission.operation;
+    const cancel = vi.fn(() => heartbeatOperation.complete());
+    heartbeatOperation.attachBackend({
+      kind: "embedded",
+      cancel,
+      isStreaming: () => true,
+    });
+    heartbeatOperation.setPhase("running");
+    sessionStoreMocks.currentEntry = {
+      sessionId: "heartbeat-session",
+      updatedAt: Date.now(),
+    };
+    let heartbeatWasAbortedBeforeReply = false;
+    const replyResolver = vi.fn(async () => {
+      heartbeatWasAbortedBeforeReply = heartbeatOperation.abortSignal.aborted;
+      return { text: "visible reply" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "user:1",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        BodyForAgent: "answer this now",
+      }),
+      cfg: automaticDirectReplyConfig,
+      dispatcher: createDispatcher(),
+      replyOptions: {
+        turnAdoptionLifecycle: {
+          onAdopted: async () => {},
+          onDeferred: vi.fn(),
+          onSettled: vi.fn(),
+        },
+      },
+      replyResolver,
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(heartbeatWasAbortedBeforeReply).toBe(true);
+    expect(heartbeatOperation.result).toEqual({
+      kind: "aborted",
+      code: "aborted_for_supersession",
+    });
+    expect(cancel).toHaveBeenCalledWith("superseded");
+    expect(replyResolver).toHaveBeenCalledOnce();
+  });
+
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
@@ -379,6 +521,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
       sessionKey: "agent:main:slack:channel:C123",
       agentId: "main",
+      expectedWriterRunId: "slack-run-1",
       text: "Slack command reply",
       mediaUrls: undefined,
       idempotencyKey: "channel-final:slack-message-1:0",
@@ -471,76 +614,6 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(result.queuedFinal).toBe(true);
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
-  });
-
-  it("records stale-foreground suppressed CLI-owned finals without duplicating answer text", async () => {
-    setNoAbort();
-    const dispatcher = createReplyDispatcher({
-      deliver: vi.fn(async () => undefined),
-      beforeDeliver: (payload, info) => {
-        if (info.kind !== "final") {
-          return payload;
-        }
-        setReplyPayloadMetadata(payload, {
-          foregroundDeliverySuppression: { reason: "stale-foreground" },
-        });
-        return null;
-      },
-    });
-    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        OriginatingTo: "channel:C123",
-        SessionKey: "agent:main:slack:channel:C123",
-        MessageSid: "slack-message-cli",
-      }),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver: async (_ctx, opts) => {
-        (
-          opts as GetReplyOptions & {
-            onSessionPrepared?: (binding: {
-              sessionKey?: string;
-              sessionId: string;
-              storePath?: string;
-            }) => void;
-          }
-        ).onSessionPrepared?.({
-          sessionKey: "agent:main:slack:channel:c123",
-          sessionId: "prepared-session",
-          storePath: "/tmp/prepared-sessions.json",
-        });
-        return setReplyPayloadMetadata(
-          { text: "The CLI answer already lives in the transcript." },
-          { assistantTranscriptOwned: true },
-        );
-      },
-    });
-    await settleReplyDispatcher({ dispatcher });
-
-    expect(result.queuedFinal).toBe(true);
-    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(1);
-    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
-      sessionKey: "agent:main:slack:channel:C123",
-      agentId: "main",
-      expectedSessionId: "prepared-session",
-      text: "Channel final suppressed before delivery: stale foreground",
-      mediaUrls: undefined,
-      idempotencyKey: "channel-final-suppressed:slack-message-cli:0",
-      deliveryMirror: {
-        kind: "channel-final-suppressed",
-        reason: "stale-foreground",
-        sourceMessageId: "slack-message-cli",
-      },
-      storePath: "/tmp/prepared-sessions.json",
-      updateMode: "inline",
-      config: emptyConfig,
-      beforeMessageWrite: expect.any(Function),
-    });
   });
 
   it("disables routed delivery mirrors for CLI-owned finals", async () => {

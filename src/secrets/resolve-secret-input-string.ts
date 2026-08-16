@@ -15,7 +15,7 @@ type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
  * Plugin and gateway callers can override normalization and convert SecretRef resolution errors
  * into surface-specific failures without duplicating provider lookup behavior.
  */
-export async function resolveSecretInputString(params: {
+export async function materializeSecretInput(params: {
   config: OpenClawConfig;
   /** Inline string, SecretInput object, or SecretRef object from config/plugin settings. */
   value: unknown;

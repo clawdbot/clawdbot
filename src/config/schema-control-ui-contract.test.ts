@@ -125,4 +125,19 @@ describe("generated config schema Control UI contract", () => {
 
     expect([...new Set(lossyPaths)].toSorted()).toEqual([]);
   });
+
+  it("keeps native command settings editable as tri-state controls", () => {
+    const rawSchema = computeBaseConfigSchemaResponse({
+      generatedAt: "control-ui-contract",
+    }).schema as JsonSchema;
+    const analysis = analyzeConfigSchema(rawSchema);
+
+    for (const path of ["commands.native", "commands.nativeSkills"]) {
+      expect(isPathUnsupported(path, analysis.unsupportedPaths)).toBe(false);
+      expect(analysis.schema ? schemaAtPath(analysis.schema, path) : undefined).toMatchObject({
+        enum: [true, false, "auto"],
+        default: "auto",
+      });
+    }
+  });
 });

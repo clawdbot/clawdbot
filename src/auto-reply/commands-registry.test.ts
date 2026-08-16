@@ -12,6 +12,7 @@ import {
   listChatCommandsForConfig,
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
+  mergeNativeCommandSpecs,
   normalizeCommandBody,
   parseCommandArgs,
   resolveCommandArgChoices,
@@ -379,6 +380,47 @@ describe("commands registry", () => {
     expect(requireNativeSpec(native, "demo_skill").descriptionLocalizations).toEqual({
       ko: "데모 스킬",
     });
+  });
+
+  it("merges native command specs with primary precedence and stable secondary order", () => {
+    const primary: readonly NativeCommandSpec[] = [
+      { name: " Primary ", description: "primary", acceptsArgs: false },
+      { name: "", description: "blank primary", acceptsArgs: false },
+      { name: "PRIMARY", description: "duplicate primary", acceptsArgs: false },
+    ];
+    const acceptedSecondary: NativeCommandSpec = {
+      name: "Secondary",
+      description: "secondary",
+      descriptionLocalizations: { de: "Sekundär" },
+      acceptsArgs: true,
+      args: [{ name: "value", description: "value", type: "string" }],
+      isAlias: true,
+    };
+    const secondary: readonly NativeCommandSpec[] = [
+      { name: "primary", description: "primary collision", acceptsArgs: false },
+      { name: " ", description: "blank secondary", acceptsArgs: false },
+      acceptedSecondary,
+      { name: " secondary ", description: "secondary collision", acceptsArgs: false },
+      { name: "third", description: "third", acceptsArgs: false },
+    ];
+    const primaryBefore = structuredClone(primary);
+    const secondaryBefore = structuredClone(secondary);
+    const collisions: string[] = [];
+
+    const merged = mergeNativeCommandSpecs({
+      primary,
+      secondary,
+      onCollision: (name) => collisions.push(name),
+    });
+
+    expect(merged).toEqual([primary[0], acceptedSecondary, secondary[4]]);
+    expect(merged).not.toBe(primary);
+    expect(merged[0]).toBe(primary[0]);
+    expect(merged[1]).toBe(acceptedSecondary);
+    expect(merged[2]).toBe(secondary[4]);
+    expect(collisions).toEqual(["primary", "secondary"]);
+    expect(primary).toEqual(primaryBefore);
+    expect(secondary).toEqual(secondaryBefore);
   });
 
   it("applies discord native command overrides", () => {

@@ -13,9 +13,14 @@ import { z } from "zod";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
-import { sha256HexPrefix } from "./crypto-digest.js";
+import { sha256HexPrefixCore } from "./crypto-digest.js";
 import { createFileLockManager } from "./file-lock-manager.js";
-import { isGatewayArgv, isOpenClawCommandArgv, parseProcCmdline } from "./gateway-process-argv.js";
+import {
+  isGatewayArgv,
+  isOpenClawArgv,
+  isOpenClawCommandArgv,
+  parseProcCmdline,
+} from "./gateway-process-argv.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "./node-sqlite.js";
 import {
   readWindowsProcessArgsSync,
@@ -30,6 +35,8 @@ const GATEWAY_LOCKS = createFileLockManager("openclaw.gateway-lock");
 type LockPayload = {
   pid: number;
   ownerId?: string;
+  /** Present when Gateway cron writes use the dynamic-default ownership projection. */
+  cronOwnerProjection?: "dynamic-default-v1";
   createdAt: string;
   configPath: string;
   port?: number;
@@ -41,10 +48,13 @@ type LockPayload = {
 const LockPayloadSchema = z.object({
   pid: z.number(),
   ownerId: z.string().min(1).optional(),
+  cronOwnerProjection: z.literal("dynamic-default-v1").optional(),
   createdAt: z.string(),
   configPath: z.string(),
   port: z.number().int().min(1).max(65_535).optional(),
-  role: z.enum(["gateway", "skill-workshop-apply", "sqlite-maintenance"]).optional(),
+  role: z
+    .enum(["gateway", "agent-embedded", "skill-workshop-apply", "sqlite-maintenance"])
+    .optional(),
   stateDir: z.string().optional(),
   startTime: z.number().optional(),
 }) as z.ZodType<LockPayload>;
@@ -56,11 +66,12 @@ type GatewayLockHandle = {
   release: () => Promise<void>;
 };
 
-type GatewayLockRole = "gateway" | "skill-workshop-apply" | "sqlite-maintenance";
+type GatewayLockRole = "gateway" | "agent-embedded" | "skill-workshop-apply" | "sqlite-maintenance";
 
 export type GatewayLockIdentity = {
   pid: number;
   ownerId?: string;
+  cronOwnerProjection?: "dynamic-default-v1";
   createdAt: string;
   port: number;
   startTime?: number;
@@ -198,10 +209,20 @@ async function resolveGatewayOwnerStatus(
   }
 
   const readFn = readCmdline ?? ((p: number) => defaultReadProcessCmdline(p, platform));
-  if (role === "sqlite-maintenance" || role === "skill-workshop-apply") {
+  if (
+    role === "agent-embedded" ||
+    role === "sqlite-maintenance" ||
+    role === "skill-workshop-apply"
+  ) {
     const args = readFn(pid);
     if (!args) {
       return "unknown";
+    }
+    if (role === "agent-embedded") {
+      // The role covers every direct embedded surface (agent --local, agent exec,
+      // local TUI, and CLI model probes), so validate the owning OpenClaw process
+      // instead of baking one command spelling into stale-lock recovery.
+      return isOpenClawArgv(args) ? "alive" : "dead";
     }
     const command = role === "sqlite-maintenance" ? "doctor" : "skills";
     return isOpenClawCommandArgv(args, command) ? "alive" : "dead";
@@ -298,7 +319,7 @@ function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, suppliedLockDir?: strin
   const stateDir = canonicalizeStateDir(resolvedStateDir);
   const lockDir = suppliedLockDir ?? resolveGatewayLockDir(stateDir);
   const configPath = resolveConfigPath(env, resolvedStateDir);
-  const configHash = sha256HexPrefix(configPath, 8);
+  const configHash = sha256HexPrefixCore(configPath, 8);
   return {
     configLockPath: path.join(lockDir, `gateway.${configHash}.lock`),
     configPath,
@@ -350,6 +371,7 @@ async function readVerifiedGatewayLockIdentity(
   return {
     pid: payload.pid,
     ...(payload.ownerId ? { ownerId: payload.ownerId } : {}),
+    ...(payload.cronOwnerProjection ? { cronOwnerProjection: payload.cronOwnerProjection } : {}),
     createdAt: payload.createdAt,
     port: payload.port,
     ...(payload.startTime !== undefined ? { startTime: payload.startTime } : {}),
@@ -461,6 +483,7 @@ async function acquireLockFile(
     return {
       pid: process.pid,
       ownerId: opts.ownerId,
+      ...(opts.role === "gateway" ? { cronOwnerProjection: "dynamic-default-v1" as const } : {}),
       createdAt: resolveTimestampMsToIsoString(now()),
       configPath,
       stateDir,
@@ -545,6 +568,12 @@ async function acquireLockFile(
     await sleep(Math.min(pollIntervalMs, remainingMs));
   }
 
-  const owner = lastPayload?.pid ? ` (pid ${lastPayload.pid})` : "";
-  throw new GatewayLockError(`gateway already running${owner}; lock timeout after ${timeoutMs}ms`);
+  const ownerPid = lastPayload?.pid ? ` (pid ${lastPayload.pid})` : "";
+  const owner =
+    lastPayload?.role === "agent-embedded"
+      ? `another embedded OpenClaw state writer is active${ownerPid}`
+      : lastPayload?.role && lastPayload.role !== "gateway"
+        ? `state directory is locked by ${lastPayload.role}${ownerPid}`
+        : `gateway already running${ownerPid}`;
+  throw new GatewayLockError(`${owner}; lock timeout after ${timeoutMs}ms`);
 }

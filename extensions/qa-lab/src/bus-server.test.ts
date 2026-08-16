@@ -1,5 +1,6 @@
 // Qa Lab tests cover bus server plugin behavior.
 import { Agent, createServer, request } from "node:http";
+import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeQaHttpServer, handleQaBusRequest, startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
@@ -41,6 +42,7 @@ async function pollQaBus(params: {
   baseUrl: string;
   accountId: string;
   cursor: number;
+  acknowledgedCursor?: number;
   timeoutMs: number;
 }): Promise<QaBusPollResult> {
   const response = await fetch(`${params.baseUrl}/v1/poll`, {
@@ -51,6 +53,7 @@ async function pollQaBus(params: {
     body: JSON.stringify({
       accountId: params.accountId,
       cursor: params.cursor,
+      acknowledgedCursor: params.acknowledgedCursor,
       timeoutMs: params.timeoutMs,
     }),
   });
@@ -109,10 +112,15 @@ describe("qa-bus server", () => {
     await Promise.all(stops.splice(0).map((stop) => stop()));
   });
 
-  it("wakes stale-cursor long polls as soon as matching account traffic arrives", async () => {
+  it("wakes matching polls and fences late polls and writes during shutdown", async () => {
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });
-    stops.push(bus["stop"]);
+    let stopped = false;
+    stops.push(async () => {
+      if (!stopped) {
+        await bus.stop();
+      }
+    });
 
     const pending = pollQaBus({
       baseUrl: bus.baseUrl,
@@ -135,6 +143,69 @@ describe("qa-bus server", () => {
       cursor: 1,
       kind: "inbound-message",
     });
+
+    const waitForCursorAdvance = state.waitForCursorAdvance.bind(state);
+    let pollWaitersStarted = 0;
+    let pollWaitersSettled = 0;
+    state.waitForCursorAdvance = async (...args) => {
+      pollWaitersStarted += 1;
+      try {
+        return await waitForCursorAdvance(...args);
+      } finally {
+        pollWaitersSettled += 1;
+      }
+    };
+    const activePoll = fetch(`${bus.baseUrl}/v1/poll`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ accountId: "active", cursor: 1, timeoutMs: 30_000 }),
+    }).catch(() => undefined);
+    await vi.waitFor(() => expect(pollWaitersStarted).toBe(1));
+    const body = JSON.stringify({ accountId: "late-body", cursor: 0, timeoutMs: 30_000 });
+    const slowPoll = request({
+      host: "127.0.0.1",
+      port: bus.port,
+      path: "/v1/poll",
+      method: "POST",
+      headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) },
+    });
+    slowPoll.on("response", (response) => response.resume());
+    slowPoll.on("error", () => undefined);
+    slowPoll.write(body.slice(0, 1));
+    const inboundBody = JSON.stringify({
+      conversation: { id: "late-room", kind: "direct" },
+      senderId: "late-sender",
+      text: "must not survive shutdown",
+    });
+    const slowInbound = request({
+      host: "127.0.0.1",
+      port: bus.port,
+      path: "/v1/inbound/message",
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(inboundBody),
+      },
+    });
+    slowInbound.on("response", (response) => response.resume());
+    slowInbound.on("error", () => undefined);
+    slowInbound.write(inboundBody.slice(0, 1));
+    await sleep(10);
+
+    stopped = true;
+    const startedAt = Date.now();
+    const stopping = bus.stop();
+    setTimeout(() => {
+      slowPoll.end(body.slice(1));
+      slowInbound.end(inboundBody.slice(1));
+    }, 50);
+    await stopping;
+    await activePoll;
+
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(pollWaitersStarted).toBe(1);
+    expect(pollWaitersSettled).toBe(1);
+    expect(state.getSnapshot()).toMatchObject({ events: [], messages: [] });
   });
 
   it("resumes an account after its last acknowledged cursor when the client restarts", async () => {
@@ -160,6 +231,27 @@ describe("qa-bus server", () => {
       baseUrl: bus.baseUrl,
       accountId: "acct-a",
       cursor: firstPoll.cursor,
+      acknowledgedCursor: 0,
+      timeoutMs: 0,
+    });
+    expect(state.getAcknowledgedPollCursor("acct-a")).toBe(0);
+    const unacknowledgedRestart = await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: 0,
+      timeoutMs: 0,
+    });
+    expect(
+      unacknowledgedRestart.events.flatMap((event) =>
+        "message" in event ? [event.message.id] : [],
+      ),
+    ).toEqual([consumed.id]);
+
+    await pollQaBus({
+      baseUrl: bus.baseUrl,
+      accountId: "acct-a",
+      cursor: firstPoll.cursor,
+      acknowledgedCursor: firstPoll.cursor,
       timeoutMs: 0,
     });
     expect(state.getAcknowledgedPollCursor("acct-a")).toBe(firstPoll.cursor);
@@ -250,6 +342,24 @@ describe("qa-bus server", () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
       error: "poll cursor must be an integer at least 0.",
+    });
+  });
+
+  it("rejects acknowledgements beyond the fetched cursor", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    const response = await postQaBusJson(bus.baseUrl, "/v1/poll", {
+      accountId: "acct-a",
+      cursor: 1,
+      acknowledgedCursor: 2,
+      timeoutMs: 0,
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "acknowledged poll cursor must not exceed the requested poll cursor.",
     });
   });
 

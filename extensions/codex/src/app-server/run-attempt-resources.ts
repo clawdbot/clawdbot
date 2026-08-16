@@ -1,7 +1,7 @@
 import {
   embeddedAgentLog,
+  runAgentCleanupStep,
   type AgentHarnessRuntimeArtifactBinding,
-  type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
@@ -16,6 +16,7 @@ import {
   createCodexNativeHookRelay,
   emitCodexNativePreToolUseFailureDiagnostic,
   type CodexNativePreToolUseFailure,
+  type CodexNativeHookRelay,
 } from "./native-hook-relay.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
@@ -67,10 +68,11 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     routeActivated: false,
     detachRouteAbort: (() => undefined) as () => void,
     trajectoryEndRecorded: false,
-    nativeHookRelay: undefined as NativeHookRelayRegistrationHandle | undefined,
+    nativeHookRelay: undefined as CodexNativeHookRelay | undefined,
     nativeSubagentMonitor: undefined as
       | ReturnType<typeof codexNativeSubagentMonitorRuntime.register>
       | undefined,
+    runtimeContinuationStarted: false,
     nativePreToolUseFailureFallbackActive: false,
     nativePreToolUseFailureFallbackTerminalReason: undefined as
       | CodexNativePreToolUseFailure["disposition"]
@@ -135,7 +137,9 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     }
     state.sharedCodexClientRetiredForOneShotCleanup = true;
     const retired = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(state.client);
-    embeddedAgentLog.info("codex app-server one-shot cleanup checked shared client retirement", {
+    // Runs on every one-shot attempt teardown; routine retirement checks are
+    // diagnostic detail, not operator-facing info.
+    embeddedAgentLog.debug("codex app-server one-shot cleanup checked shared client retirement", {
       runId: params.runId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
@@ -158,6 +162,16 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       await releaseCodexSandboxExecServerEnvironment(sandbox);
     }
   };
+  const runCleanupStep = (step: string, operation: () => Promise<void> | void | undefined) =>
+    runAgentCleanupStep({
+      runId: params.runId,
+      sessionId: params.sessionId,
+      step,
+      log: embeddedAgentLog,
+      cleanup: async () => {
+        await operation();
+      },
+    });
   const unregisterNativeSubagentMonitor = () => {
     state.nativeSubagentMonitor?.unregister();
     state.nativeSubagentMonitor = undefined;
@@ -173,6 +187,16 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       retainClient: () => retainSharedCodexAppServerClientIfCurrent(state.client),
       retainParentThread: (protectedThreadId) =>
         protectCodexAppServerLiveThread(state.client, protectedThreadId),
+      claimDirectChild: (childThreadId) => state.nativeHookRelay?.claimDirectChild(childThreadId),
+      rejectPendingDirectChild: (childThreadId, reason) =>
+        state.nativeHookRelay?.rejectPendingDirectChild(childThreadId, reason),
+      ...(params.sessionKey && params.agentHarnessTaskRuntimeScope
+        ? {
+            onDirectChildAccepted: () => {
+              state.runtimeContinuationStarted = true;
+            },
+          }
+        : {}),
     });
   };
   const releaseCurrentRoute = () => {
@@ -193,6 +217,13 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     decision: { action: "resume"; binding: CodexAppServerThreadBinding } | { action: "start" },
   ) => {
     state.nativeHookRelay?.unregister();
+    if (params.pluginHarnessToolPolicyRestricted === true) {
+      state.nativeHookRelay = undefined;
+      return {
+        configPatch: buildCodexNativeHookRelayDisabledConfig(),
+        nativeHookRelayGeneration: undefined,
+      };
+    }
     state.nativeHookRelay = createCodexNativeHookRelay({
       options: options.nativeHookRelay,
       generation:
@@ -222,6 +253,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       turnStartTimeoutMs: params.timeoutMs,
       loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
       signal: runAbortController.signal,
+      hostCapabilities: params.hostCapabilities,
       onPreToolUseFailure: (failure) => {
         const projector = projectorRef.current;
         if (projector) {
@@ -260,6 +292,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     releaseSharedClientLeaseOnce,
     releaseSharedClientLeaseAndRetireOneShotClient,
     releaseSandboxExecEnvironment,
+    runCleanupStep,
     registerNativeSubagentMonitor,
     releaseCurrentRoute,
     startupTimeoutMs,

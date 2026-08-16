@@ -1,18 +1,15 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  isSyntheticSourceReplyTurn,
-  resolveSourceReplyDeliveryMode,
-} from "../../auto-reply/reply/source-reply-delivery-mode.js";
+import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
+import { isSyntheticSourceReplyTurn } from "../../auto-reply/reply/source-reply-delivery-mode.js";
 import {
   formatThinkingLevels,
   normalizeThinkLevel,
   normalizeVerboseLevel,
 } from "../../auto-reply/thinking.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent-delivery.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import {
   isPluginMetadataSnapshotCompatible,
@@ -23,7 +20,6 @@ import {
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
-  scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -31,21 +27,15 @@ import {
   resolveAgentHarnessSessionContextError,
 } from "../../sessions/agent-harness-session-key.js";
 import { resolveUserPath } from "../../utils.js";
-import {
-  sessionDeliveryChannel,
-  sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "../agent-runtime-config.js";
 import {
   listAgentIds,
   resolveAgentDir,
-  resolveDefaultAgentId,
   resolveSessionAgentId,
   resolveAgentWorkspaceDir,
 } from "../agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
-import { selectAgentHarness } from "../harness/selection.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { buildConfiguredModelCatalog, resolveConfiguredModelRef } from "../model-selection.js";
@@ -59,6 +49,7 @@ import {
   prependInternalEventContext,
   resolveInternalEventTranscriptBody,
 } from "./attempt-execution.shared.js";
+import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
 import { createAgentCommandSessionWorkingCopy } from "./session-helpers.js";
 import { resolveSession } from "./session.js";
@@ -92,28 +83,6 @@ export function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "
     throw new Error(`${label} override contains invalid control characters.`);
   }
   return trimmed;
-}
-
-export function resolveExplicitAgentCommandSessionKey(params: {
-  rawExplicitSessionKey?: string;
-  agentIdOverride?: string;
-  shouldScopeDefaultAgentKey?: boolean;
-  cfg: OpenClawConfig;
-}): string | undefined {
-  if (
-    isUnscopedSessionKeySentinel(params.rawExplicitSessionKey) &&
-    !params.agentIdOverride &&
-    !params.shouldScopeDefaultAgentKey
-  ) {
-    return params.rawExplicitSessionKey;
-  }
-  return scopeLegacySessionKeyToAgent({
-    agentId:
-      params.agentIdOverride ??
-      (params.shouldScopeDefaultAgentKey ? resolveDefaultAgentId(params.cfg) : undefined),
-    sessionKey: params.rawExplicitSessionKey,
-    mainKey: params.cfg.session?.mainKey,
-  });
 }
 
 export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: RuntimeEnv) {
@@ -345,42 +314,15 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
       isHeartbeat: commandOpts.bootstrapContextRunKind === "heartbeat",
     })
   ) {
-    // Lifecycle turns keep their effective delivery mode, but CLI reuse belongs
-    // to the existing session's normal source-reply policy.
-    const stableReplyContext = {
-      CommandAuthorized: false,
-      ChatType: sessionEntryRaw.chatType,
-      Provider: sessionDeliveryOrigin(sessionEntryRaw)?.provider,
-      Surface: sessionDeliveryChannel(sessionEntryRaw),
-      InputProvenance: commandOpts.inputProvenance,
-    };
-    const stableProvider = sessionEntryRaw.modelProvider ?? configuredModel.provider;
-    const stableModel = sessionEntryRaw.model ?? configuredModel.model;
-    const stableRuntime = resolveEffectiveAgentRuntime({
-      cfg,
-      provider: stableProvider,
-      modelId: stableModel,
-      agentId: sessionAgentId,
-      sessionKey,
-      sessionEntry: sessionEntryRaw,
-    });
-    const harness = selectAgentHarness({
-      provider: stableProvider,
-      modelId: stableModel,
-      config: cfg,
-      agentId: sessionAgentId,
-      sessionKey,
-      agentHarnessRuntimeOverride: stableRuntime,
-    });
-    const defaultVisibleReplies =
-      harness.deliveryDefaults?.visibleReplies ?? harness.deliveryDefaults?.sourceVisibleReplies;
     commandOpts = {
       ...commandOpts,
       cliSessionBindingFacts: {
-        sourceReplyDeliveryMode: resolveSourceReplyDeliveryMode({
+        sourceReplyDeliveryMode: resolveSessionStableReplyMode({
           cfg,
-          ctx: stableReplyContext,
-          defaultVisibleReplies,
+          ctx: { CommandAuthorized: false },
+          sessionEntry: sessionEntryRaw,
+          sessionAgentId,
+          sessionKey,
         }),
       },
     };

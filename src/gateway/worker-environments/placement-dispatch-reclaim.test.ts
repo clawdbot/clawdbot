@@ -1,5 +1,5 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -26,7 +26,7 @@ describe("worker placement dispatch reclaim", () => {
   let placementStore: PlacementStore;
 
   beforeEach(async () => {
-    root = tempDirs.make("openclaw-dispatch-", await fs.realpath(os.tmpdir()));
+    root = tempDirs.make("openclaw-dispatch-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   });
@@ -36,7 +36,7 @@ describe("worker placement dispatch reclaim", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("orders the migration barrier, provisioning, sync, attachment, and activation", async () => {
+  it("attaches before opening one tunnel for workspace sync and activation", async () => {
     const harness = createHarness(placementStore);
 
     await expect(harness.service.dispatch(REQUEST)).resolves.toMatchObject({
@@ -55,19 +55,26 @@ describe("worker placement dispatch reclaim", () => {
       "placement:provisioning",
       "create",
       "placement:syncing",
-      "tunnel:ready",
-      "sync",
-      "placement:starting",
       "attach",
       "tunnel:attached",
+      "sync",
+      "placement:starting",
       "activation",
       "placement:active",
     ]);
+    expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
   });
 
-  it("reconciles the workspace before destroying and reclaiming an active worker", async () => {
-    const harness = createHarness(placementStore);
-    await harness.service.dispatch(REQUEST);
+  it("reclaims an unchanged active placement through the fenced teardown lifecycle", async () => {
+    const harness = createHarness(placementStore, {
+      reconcileChanged: false,
+      reconcileCommitsManifest: false,
+    });
+    await expect(harness.service.dispatch(REQUEST)).resolves.toMatchObject({
+      state: "active",
+      turnClaim: null,
+      workspaceBaseManifestRef: MANIFEST_REF,
+    });
 
     await expect(
       harness.service.reclaim({
@@ -77,9 +84,11 @@ describe("worker placement dispatch reclaim", () => {
       }),
     ).resolves.toMatchObject({
       state: "reclaimed",
-      workspaceBaseManifestRef: harness.reconciledManifestRef,
+      turnClaim: null,
+      workspaceBaseManifestRef: MANIFEST_REF,
     });
 
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
     expect(harness.log.slice(-11)).toEqual([
       "tunnel:attached",
       "workspace:quiesce",
@@ -93,6 +102,34 @@ describe("worker placement dispatch reclaim", () => {
       "placement:reclaimed",
       "teardown:stop",
     ]);
+  });
+
+  it("reclaims an environment-free failed placement back to clean local state", async () => {
+    const harness = createHarness(placementStore);
+    const requested = placementStore.startDispatch(REQUEST);
+    const failed = placementStore.fail({
+      sessionId: REQUEST.sessionId,
+      expectedGeneration: requested.generation,
+      recoveryError: "device worker is offline",
+    });
+
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).resolves.toMatchObject({
+      state: "local",
+      generation: failed.generation + 1,
+      environmentId: null,
+      recoveryError: null,
+      terminalReason: null,
+      terminalAtMs: null,
+    });
+
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 
   it("retains and reports cloud versions that conflict during an idle reclaim", async () => {
@@ -157,6 +194,116 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.reportWorkspaceResultConflict).not.toHaveBeenCalled();
     expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("retires only the exact unclaimed safe placement generation", () => {
+    const claim = placementStore.claimTurn({
+      ...REQUEST,
+      owner: { kind: "local" },
+      claimId: "retirement-claim",
+      runId: "retirement-run",
+    });
+    expect(() =>
+      placementStore.retireSessionPlacement({
+        sessionId: REQUEST.sessionId,
+        expectedState: "local",
+        expectedGeneration: 0,
+      }),
+    ).toThrow("changed before retirement");
+    placementStore.releaseTurn(claim);
+    placementStore.retireSessionPlacement({
+      sessionId: REQUEST.sessionId,
+      expectedState: "local",
+      expectedGeneration: 0,
+    });
+    expect(placementStore.get(REQUEST.sessionId)).toBeUndefined();
+
+    const requested = placementStore.startDispatch(REQUEST);
+    const failed = placementStore.fail({
+      sessionId: REQUEST.sessionId,
+      expectedGeneration: requested.generation,
+      recoveryError: "dispatch failed",
+    });
+    for (const stale of [
+      { expectedState: "local" as const, expectedGeneration: 0 },
+      { expectedState: "failed" as const, expectedGeneration: failed.generation - 1 },
+    ]) {
+      expect(() =>
+        placementStore.retireSessionPlacement({ sessionId: REQUEST.sessionId, ...stale }),
+      ).toThrow("changed before retirement");
+    }
+    expect(placementStore.get(REQUEST.sessionId)).toMatchObject({
+      state: "failed",
+      generation: failed.generation,
+    });
+  });
+
+  it("retires a reclaimed placement with its child rows and conflict projection", () => {
+    const harness = createHarness(placementStore);
+    const active = harness.placements.seedActive(7);
+    if (active.state !== "active") {
+      throw new Error("expected active worker placement");
+    }
+    const claim = placementStore.claimTurn({
+      ...REQUEST,
+      owner: {
+        kind: "worker",
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+      claimId: "retirement-worker-claim",
+      runId: "retirement-worker-run",
+    });
+    placementStore.recordWorkspaceResultConflict(claim, {
+      paths: ["conflicted.txt"],
+      stagedResultRef: `refs/openclaw/worker-results/${claim.claimId}`,
+    });
+    placementStore.releaseTurn(claim);
+
+    const basePack = Buffer.from("retirement workspace base pack");
+    placementStore.beginWorkspaceReconciliation(
+      {
+        sessionId: active.sessionId,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        placementGeneration: active.generation,
+      },
+      {
+        version: 1,
+        temporaryNonce: "c".repeat(32),
+        baseManifestRef: active.workspaceBaseManifestRef,
+        currentManifestRef: `sha256:${"d".repeat(64)}`,
+        baseEntries: [],
+        appliedEntries: [],
+        baseTree: "e".repeat(40),
+        basePackSha256: createHash("sha256").update(basePack).digest("hex"),
+        basePack,
+      },
+    );
+    const reclaimed = placementStore.finishReclaim({
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: active.generation,
+    });
+    expect(placementStore.listWorkspaceReconciliationOwners()).toHaveLength(1);
+    expect(placementStore.get(active.sessionId)?.workspaceResultConflict).toBeDefined();
+
+    placementStore.retireSessionPlacement({
+      sessionId: reclaimed.sessionId,
+      expectedState: "reclaimed",
+      expectedGeneration: reclaimed.generation,
+    });
+
+    expect(placementStore.get(active.sessionId)).toBeUndefined();
+    expect(placementStore.listWorkspaceReconciliationOwners()).toEqual([]);
+    placementStore.claimTurn({
+      ...REQUEST,
+      owner: { kind: "local" },
+      claimId: "replacement-local-claim",
+      runId: "replacement-local-run",
+    });
+    expect(placementStore.get(active.sessionId)).not.toHaveProperty("workspaceResultConflict");
   });
 
   it("applies a prepared staged result before requiring its manifest commit", async () => {

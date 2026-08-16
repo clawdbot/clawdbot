@@ -250,6 +250,21 @@ export interface ThinkingContent {
   redacted?: boolean;
 }
 
+/** Opaque provider-owned state that must survive transcript replay without being rendered. */
+export interface ProviderReplayState {
+  v: 1;
+  type: string;
+  id?: string;
+  data: string;
+  replayIndex?: number;
+  provider: Provider;
+  api: Api;
+  model: string;
+  baseUrlHash?: string;
+  sessionHash?: string;
+  authProfileHash?: string;
+}
+
 /** Base64 image content block with MIME type metadata. */
 export interface ImageContent {
   type: "image";
@@ -296,6 +311,10 @@ export interface Usage {
 /** Normalized assistant stop reasons across text providers. */
 export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
+/** Stable error codes for provider outcomes that cannot be replayed safely. */
+export const PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE = "PROVIDER_POST_DISPATCH_AMBIGUITY";
+export const PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE = "PROVIDER_FAILURE_WITH_OUTPUT";
+
 /** User turn in a text-model conversation. */
 export interface UserMessage {
   role: "user";
@@ -321,6 +340,7 @@ export interface AssistantMessage {
   model: string;
   responseModel?: string; // Concrete `chunk.model` when different from the requested `model` (e.g. OpenRouter `auto` -> `anthropic/...`)
   responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
+  providerReplay?: ProviderReplayState; // Opaque provider state carried into a compatible later request.
   turnId?: string; // Runtime-assigned stable turn identity when the provider does not expose one
   diagnostics?: AssistantMessageDiagnostic[]; // Redacted provider/runtime diagnostics for failures and recoveries.
   usage: Usage;
@@ -636,7 +656,7 @@ export interface Model<TApi extends Api = Api> {
     cacheRead: number; // $/million tokens
     cacheWrite: number; // $/million tokens
   };
-  contextWindow: number;
+  contextWindow?: number;
   /**
    * Optional effective runtime cap used for compaction/session budgeting.
    * Keeps provider/native contextWindow metadata intact while allowing a

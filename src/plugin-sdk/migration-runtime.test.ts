@@ -207,7 +207,7 @@ describe("copyMemoryMigrationFileItem", () => {
   it.runIf(process.platform !== "win32")(
     "rejects a hardlinked memory source without creating the destination",
     async () => {
-      const root = await fs.realpath(tempDirs.make("openclaw-memory-copy-"));
+      const root = tempDirs.make("openclaw-memory-copy-");
       const workspaceDir = path.join(root, "workspace");
       const outside = path.join(root, "outside", "outside.md");
       const source = path.join(root, "source", "MEMORY.md");

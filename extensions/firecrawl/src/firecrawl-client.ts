@@ -1,5 +1,6 @@
 // Firecrawl plugin module implements firecrawl client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
@@ -37,10 +38,6 @@ import {
 } from "./config.js";
 
 const SEARCH_CACHE = new Map<
-  string,
-  { value: Record<string, unknown>; expiresAt: number; insertedAt: number }
->();
-const SCRAPE_CACHE = new Map<
   string,
   { value: Record<string, unknown>; expiresAt: number; insertedAt: number }
 >();
@@ -561,6 +558,13 @@ export function parseFirecrawlScrapePayload(params: {
     data.metadata && typeof data.metadata === "object"
       ? (data.metadata as Record<string, unknown>)
       : undefined;
+  const rawStatus = parseFiniteNumber(metadata?.statusCode) ?? parseFiniteNumber(data.statusCode);
+  const status = rawStatus === undefined ? undefined : Math.floor(rawStatus);
+  if (status !== undefined && (status < 200 || status >= 300)) {
+    throw new Error(
+      `Firecrawl fetch failed (${status}): target returned an unsuccessful HTTP status.`,
+    );
+  }
   const markdown =
     (typeof data.markdown === "string" && data.markdown) ||
     (typeof data.content === "string" && data.content) ||
@@ -582,10 +586,6 @@ export function parseFirecrawlScrapePayload(params: {
     source: "web_fetch",
     includeWarning: false,
   });
-  const status =
-    (typeof metadata?.statusCode === "number" && metadata.statusCode) ||
-    (typeof data.statusCode === "number" && data.statusCode) ||
-    undefined;
   const title =
     typeof metadata?.title === "string" && metadata.title
       ? wrapBoundedMetadata(metadata.title)
@@ -649,24 +649,6 @@ export async function runFirecrawlScrape(
       ? Math.floor(params.maxChars)
       : DEFAULT_SCRAPE_MAX_CHARS;
   const maxChars = Math.min(requestedMaxChars, maxCharsCap);
-  const cacheKey = normalizeCacheKey(
-    JSON.stringify({
-      type: "firecrawl-scrape",
-      url: params.url,
-      extractMode: params.extractMode,
-      baseUrl,
-      onlyMainContent,
-      maxAgeMs,
-      proxy,
-      storeInCache,
-      maxChars,
-    }),
-  );
-  const cached = readCache(SCRAPE_CACHE, cacheKey);
-  if (cached) {
-    return { ...cached.value, cached: true };
-  }
-
   const endpoint = await resolveEndpoint(baseUrl, "/v2/scrape");
   const payload = await postFirecrawlJson(
     {
@@ -714,12 +696,6 @@ export async function runFirecrawlScrape(
     extractMode: params.extractMode,
     maxChars,
   });
-  writeCache(
-    SCRAPE_CACHE,
-    cacheKey,
-    result,
-    resolveCacheTtlMs(undefined, DEFAULT_CACHE_TTL_MINUTES),
-  );
   return result;
 }
 
@@ -729,7 +705,5 @@ export const testing = {
   postFirecrawlJson,
   readFirecrawlJsonResponse,
   resolveEndpoint,
-  validateFirecrawlBaseUrl,
   resolveSearchItems,
 };
-export { testing as __testing };

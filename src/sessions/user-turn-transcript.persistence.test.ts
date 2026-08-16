@@ -1,6 +1,5 @@
 // User turn persistence tests cover the shared transcript writer.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import {
   initializeGlobalHookRunner,
@@ -9,26 +8,18 @@ import {
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../agents/harness/hook-helpers.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { persistUserTurnTranscript } from "./user-turn-transcript.test-support.js";
 
 describe("persistUserTurnTranscript", () => {
-  const tempDirs: string[] = [];
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   afterEach(() => {
     resetGlobalHookRunner();
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
   });
-
-  function createTempDir(prefix: string): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-    tempDirs.push(dir);
-    return dir;
-  }
 
   function createSqliteTranscriptTarget(params: {
     dir: string;
@@ -76,7 +67,7 @@ describe("persistUserTurnTranscript", () => {
   }
 
   it("appends a structured user turn through the shared transcript writer", async () => {
-    const dir = createTempDir("openclaw-user-turn-append-");
+    const dir = tempDirs.make("openclaw-user-turn-append-");
     const target = createSqliteTranscriptTarget({ dir });
     const provenance = {
       kind: "inter_session" as const,
@@ -114,7 +105,7 @@ describe("persistUserTurnTranscript", () => {
   });
 
   it("round-trips a multi-attachment SQLite row byte-identically", async () => {
-    const dir = createTempDir("openclaw-user-turn-append-media-");
+    const dir = tempDirs.make("openclaw-user-turn-append-media-");
     const target = createSqliteTranscriptTarget({ dir });
     const expected = {
       role: "user",
@@ -149,7 +140,7 @@ describe("persistUserTurnTranscript", () => {
   });
 
   it("persists sender metadata as __openclaw envelope", async () => {
-    const dir = createTempDir("openclaw-user-turn-append-sender-");
+    const dir = tempDirs.make("openclaw-user-turn-append-sender-");
     const target = createSqliteTranscriptTarget({ dir });
     // Deliberately attach runtime-only profile fields to prove durable sender
     // attribution is a whitelist, not a copy of the inbound sender object.
@@ -199,7 +190,7 @@ describe("persistUserTurnTranscript", () => {
   });
 
   it("omits __openclaw when no sender metadata is provided", async () => {
-    const dir = createTempDir("openclaw-user-turn-append-nosender-");
+    const dir = tempDirs.make("openclaw-user-turn-append-nosender-");
     const target = createSqliteTranscriptTarget({ dir });
 
     const appended = await persistUserTurnTranscript({
@@ -215,7 +206,7 @@ describe("persistUserTurnTranscript", () => {
   });
 
   it("uses inline update mode by default", async () => {
-    const dir = createTempDir("openclaw-user-turn-append-inline-");
+    const dir = tempDirs.make("openclaw-user-turn-append-inline-");
     const target = createSqliteTranscriptTarget({ dir });
 
     const appended = await persistUserTurnTranscript({
@@ -240,7 +231,7 @@ describe("persistUserTurnTranscript", () => {
   });
 
   it("returns the existing user turn when the idempotency key was already persisted", async () => {
-    const dir = createTempDir("openclaw-user-turn-append-idempotent-");
+    const dir = tempDirs.make("openclaw-user-turn-append-idempotent-");
     const target = createSqliteTranscriptTarget({ dir });
 
     const first = await persistUserTurnTranscript({
@@ -311,7 +302,7 @@ describe("persistUserTurnTranscript", () => {
         },
       ]),
     );
-    const dir = createTempDir("openclaw-user-turn-redacted-idempotent-");
+    const dir = tempDirs.make("openclaw-user-turn-redacted-idempotent-");
     const target = createSqliteTranscriptTarget({ dir });
 
     await persistUserTurnTranscript({
@@ -319,6 +310,8 @@ describe("persistUserTurnTranscript", () => {
       input: {
         text: "secret prompt",
         idempotencyKey: "chat-run-1:user",
+        replyToId: "transcript-reply-1",
+        replyToPreview: { text: "Original reply", senderLabel: "Molty" },
         senderIsOwner: true,
         provenance,
         sender: { id: "user-42", name: "Ada" },
@@ -336,6 +329,8 @@ describe("persistUserTurnTranscript", () => {
       input: {
         text: "secret prompt",
         idempotencyKey: "chat-run-1:user",
+        replyToId: "transcript-reply-1",
+        replyToPreview: { text: "Original reply", senderLabel: "Molty" },
         senderIsOwner: true,
         provenance,
         sender: { id: "user-42", name: "Ada" },
@@ -357,6 +352,8 @@ describe("persistUserTurnTranscript", () => {
         provenance,
         __openclaw: {
           hookOwned: true,
+          replyToId: "transcript-reply-1",
+          replyToPreview: { text: "Original reply", senderLabel: "Molty" },
           senderIsOwner: false,
           transport: {
             channel: "reef",

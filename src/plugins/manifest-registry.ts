@@ -9,11 +9,14 @@ import {
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
+import {
+  isPluginCandidateInstallOwnerAmbiguous,
+  resolvePluginCandidateInstallOwner,
+} from "./candidate-install-owner.js";
 import { normalizePluginsConfigWithResolver } from "./config-policy.js";
 import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
 import {
@@ -21,14 +24,17 @@ import {
   type PluginCandidate,
   type PluginDiscoveryResult,
 } from "./discovery.js";
+import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
+import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type {
   PluginBundleFormat,
   PluginConfigUiHint,
   PluginDiagnostic,
   PluginFormat,
+  PluginManifestDoctorContract,
 } from "./manifest-types.js";
 import {
   isCoreReservedPluginId,
@@ -68,6 +74,7 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
+import { satisfiesPluginApiRange } from "./package-compat.js";
 import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
@@ -187,7 +194,6 @@ export type PluginManifestContractListKey =
   | "imageGenerationProviders"
   | "videoGenerationProviders"
   | "musicGenerationProviders"
-  | "memoryEmbeddingProviders"
   | "webContentExtractors"
   | "webFetchProviders"
   | "webSearchProviders"
@@ -242,11 +248,14 @@ export type PluginManifestRecord = {
   syntheticAuthRefs?: string[];
   nonSecretAuthMarkers?: string[];
   commandAliases?: PluginManifestCommandAlias[];
+  cliCommands?: PluginManifest["cliCommands"];
   providerUsageAuthEnvVars?: Record<string, string[]>;
   providerAuthAliases?: Record<string, string>;
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
   activation?: PluginManifestActivation;
   setup?: PluginManifestSetup;
+  doctorContract?: PluginManifestDoctorContract;
+  sessionRouteStateOwners?: DoctorSessionRouteStateOwner[];
   packageManifest?: OpenClawPackageManifest;
   packageDependencies?: PluginDependencySpecMap;
   packageOptionalDependencies?: PluginDependencySpecMap;
@@ -411,7 +420,6 @@ function mergeManifestContracts(
     "trustedToolPolicies",
     "externalAuthProviders",
     "embeddingProviders",
-    "memoryEmbeddingProviders",
     "speechProviders",
     "realtimeTranscriptionProviders",
     "realtimeVoiceProviders",
@@ -555,6 +563,8 @@ function buildRecord(params: {
   );
   return {
     id: pluginId,
+    doctorContract: params.manifest.doctorContract,
+    sessionRouteStateOwners: params.manifest.sessionRouteStateOwners,
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,
@@ -596,6 +606,7 @@ function buildRecord(params: {
     syntheticAuthRefs: params.manifest.syntheticAuthRefs ?? [],
     nonSecretAuthMarkers: params.manifest.nonSecretAuthMarkers ?? [],
     commandAliases: params.manifest.commandAliases,
+    cliCommands: params.manifest.cliCommands,
     providerUsageAuthEnvVars: params.manifest.providerUsageAuthEnvVars,
     providerAuthAliases: params.manifest.providerAuthAliases,
     providerAuthChoices: params.manifest.providerAuthChoices,
@@ -773,6 +784,21 @@ function dedupePluginDiagnostics(diagnostics: PluginDiagnostic[]): PluginDiagnos
   return deduped;
 }
 
+function resolveCandidateInstallOwner(params: {
+  pluginId: string;
+  candidate: PluginCandidate;
+  installRecords: Record<string, PluginInstallRecord>;
+}): string | undefined {
+  if (isPluginCandidateInstallOwnerAmbiguous(params.candidate)) {
+    return undefined;
+  }
+  const installOwner = resolvePluginCandidateInstallOwner(params.candidate);
+  if (installOwner) {
+    return Object.hasOwn(params.installRecords, installOwner) ? installOwner : undefined;
+  }
+  return undefined;
+}
+
 function matchesInstalledPluginRecord(params: {
   pluginId: string;
   candidate: PluginCandidate;
@@ -784,7 +810,8 @@ function matchesInstalledPluginRecord(params: {
   if (params.candidate.origin !== "global" && params.candidate.origin !== "config") {
     return false;
   }
-  const record = params.installRecords[params.pluginId];
+  const installOwner = resolveCandidateInstallOwner(params);
+  const record = installOwner ? params.installRecords[installOwner] : undefined;
   if (!record) {
     return false;
   }
@@ -839,7 +866,9 @@ function isTrustedOfficialPluginInstall(params: {
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
 }): boolean {
+  const installOwner = resolveCandidateInstallOwner(params);
   if (
+    !installOwner ||
     (params.candidate.origin !== "global" && params.candidate.origin !== "config") ||
     !matchesInstalledPluginRecord({
       pluginId: params.pluginId,
@@ -856,18 +885,18 @@ function isTrustedOfficialPluginInstall(params: {
     return false;
   }
   const catalogEntry = getOfficialExternalPluginCatalogEntryForPackage(packageName);
-  if (!catalogEntry || resolveOfficialExternalPluginId(catalogEntry) !== params.pluginId) {
+  if (!catalogEntry || resolveOfficialExternalPluginId(catalogEntry) !== installOwner) {
     return false;
   }
   const officialInstall = resolveOfficialExternalPluginInstall(catalogEntry);
-  const installRecord = params.installRecords[params.pluginId];
+  const installRecord = params.installRecords[installOwner];
   if (!installRecord) {
     return false;
   }
   const officialClawHubInstall =
     installRecord.source === "clawhub"
       ? resolveTrustedSourceLinkedOfficialClawHubInstall({
-          pluginId: params.pluginId,
+          pluginId: installOwner,
           record: installRecord,
         })
       : undefined;
@@ -982,7 +1011,7 @@ function isSameGlobalPackageDuplicate(left: PluginCandidate, right: PluginCandid
   );
 }
 
-export function loadPluginManifestRegistry(
+export function loadPluginManifestRegistryCore(
   params: {
     config?: OpenClawConfig;
     workspaceDir?: string;
@@ -1184,7 +1213,11 @@ export function loadPluginManifestRegistry(
             ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
             : {}),
         });
-
+    recordPluginManifestInstallOwner(
+      record,
+      resolvePluginCandidateInstallOwner(candidate),
+      isPluginCandidateInstallOwnerAmbiguous(candidate),
+    );
     const existing = seenIds.get(effectivePluginId);
     if (existing) {
       // Check whether both candidates point to the same physical directory
@@ -1275,7 +1308,7 @@ export function loadBundledPluginManifestRegistry(
 ): PluginManifestRegistry {
   const env = params.env ?? process.env;
   const installRecords: Record<string, PluginInstallRecord> = {};
-  return loadPluginManifestRegistry({
+  return loadPluginManifestRegistryCore({
     env,
     installRecords,
     discovery: discoverOpenClawPlugins({

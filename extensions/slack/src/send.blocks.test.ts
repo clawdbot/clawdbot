@@ -95,50 +95,16 @@ function slackDnsRequestError(): Error {
   });
 }
 
-describe("sendMessageSlack NO_REPLY guard", () => {
-  it("suppresses NO_REPLY text before any Slack API call", async () => {
+describe("sendMessageSlack NO_REPLY literal", () => {
+  // Silent-reply stripping is owned by core auto-reply normalization before
+  // payloads reach outbound; a literal NO_REPLY sent through the message tool
+  // must deliver on Slack exactly like every sibling channel.
+  it("delivers a literal NO_REPLY text like sibling channels", async () => {
     const client = createSlackSendTestClient();
     const result = await sendMessageSlack("channel:C123", "NO_REPLY", {
       token: "xoxb-test",
       cfg: SLACK_TEST_CFG,
       client,
-    });
-
-    expect(client.chat.postMessage).not.toHaveBeenCalled();
-    expect(result.messageId).toBe("suppressed");
-    expect(result.receipt.platformMessageIds).toStrictEqual([]);
-  });
-
-  it("suppresses NO_REPLY with surrounding whitespace", async () => {
-    const client = createSlackSendTestClient();
-    const result = await sendMessageSlack("channel:C123", "  NO_REPLY  ", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-    });
-
-    expect(client.chat.postMessage).not.toHaveBeenCalled();
-    expect(result.messageId).toBe("suppressed");
-  });
-
-  it("does not suppress substantive text containing NO_REPLY", async () => {
-    const client = createSlackSendTestClient();
-    await sendMessageSlack("channel:C123", "This is not a NO_REPLY situation", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-    });
-
-    expect(client.chat.postMessage).toHaveBeenCalled();
-  });
-
-  it("does not suppress NO_REPLY when blocks are attached", async () => {
-    const client = createSlackSendTestClient();
-    const result = await sendMessageSlack("channel:C123", "NO_REPLY", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
-      blocks: [{ type: "section", text: { type: "mrkdwn", text: "content" } }],
     });
 
     expect(client.chat.postMessage).toHaveBeenCalled();
@@ -1420,24 +1386,18 @@ describe("sendMessageSlack blocks", () => {
     expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("derives fallback text from image blocks", async () => {
-    const client = createSlackSendTestClient();
-    await sendMessageSlack("channel:C123", "", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
+  it.each<{
+    name: string;
+    blocks: NonNullable<Parameters<typeof sendMessageSlack>[2]["blocks"]>;
+    fallbackText: string;
+  }>([
+    {
+      name: "derives fallback text from image blocks",
       blocks: [{ type: "image", image_url: "https://example.com/a.png", alt_text: "Build chart" }],
-    });
-
-    expect(postedMessage(client).text).toBe("Build chart");
-  });
-
-  it("derives fallback text from video blocks", async () => {
-    const client = createSlackSendTestClient();
-    await sendMessageSlack("channel:C123", "", {
-      token: "xoxb-test",
-      cfg: SLACK_TEST_CFG,
-      client,
+      fallbackText: "Build chart",
+    },
+    {
+      name: "derives fallback text from video blocks",
       blocks: [
         {
           type: "video",
@@ -1447,21 +1407,23 @@ describe("sendMessageSlack blocks", () => {
           alt_text: "demo",
         },
       ],
-    });
-
-    expect(postedMessage(client).text).toBe("Release demo");
-  });
-
-  it("derives fallback text from file blocks", async () => {
+      fallbackText: "Release demo",
+    },
+    {
+      name: "derives fallback text from file blocks",
+      blocks: [{ type: "file", source: "remote", external_id: "F123" }],
+      fallbackText: "Shared a file",
+    },
+  ])("$name", async ({ blocks, fallbackText }) => {
     const client = createSlackSendTestClient();
     await sendMessageSlack("channel:C123", "", {
       token: "xoxb-test",
       cfg: SLACK_TEST_CFG,
       client,
-      blocks: [{ type: "file", source: "remote", external_id: "F123" }],
+      blocks,
     });
 
-    expect(postedMessage(client).text).toBe("Shared a file");
+    expect(postedMessage(client).text).toBe(fallbackText);
   });
 
   it("caps long fallback text while preserving blocks", async () => {
@@ -1491,72 +1453,53 @@ describe("sendMessageSlack blocks", () => {
     expect(post.text).toHaveLength(SLACK_TEXT_LIMIT);
   });
 
-  it("rejects blocks combined with mediaUrl", async () => {
-    const client = createSlackSendTestClient();
-    await expect(
-      sendMessageSlack("channel:C123", "hi", {
-        token: "xoxb-test",
-        cfg: SLACK_TEST_CFG,
-        client,
+  it.each<{
+    name: string;
+    options: Partial<Parameters<typeof sendMessageSlack>[2]>;
+    error: RegExp;
+  }>([
+    {
+      name: "rejects blocks combined with mediaUrl",
+      options: {
         mediaUrl: "https://example.com/image.png",
         blocks: [{ type: "divider" }],
-      }),
-    ).rejects.toThrow(/does not support blocks with mediaUrl/i);
-    expect(client.chat.postMessage).not.toHaveBeenCalled();
-  });
-
-  it("rejects replyBroadcast combined with mediaUrl", async () => {
-    const client = createSlackSendTestClient();
-    await expect(
-      sendMessageSlack("channel:C123", "hi", {
-        token: "xoxb-test",
-        cfg: SLACK_TEST_CFG,
-        client,
+      },
+      error: /does not support blocks with mediaUrl/i,
+    },
+    {
+      name: "rejects replyBroadcast combined with mediaUrl",
+      options: {
         mediaUrl: "https://example.com/image.png",
         threadTs: "171234.100",
         replyBroadcast: true,
-      }),
-    ).rejects.toThrow(/replyBroadcast is only supported for text or block thread replies/i);
-    expect(client.chat.postMessage).not.toHaveBeenCalled();
-  });
-
-  it("rejects empty blocks arrays from runtime callers", async () => {
+      },
+      error: /replyBroadcast is only supported for text or block thread replies/i,
+    },
+    {
+      name: "rejects empty blocks arrays from runtime callers",
+      options: { blocks: [] },
+      error: /must contain at least one block/i,
+    },
+    {
+      name: "rejects blocks arrays above Slack max count",
+      options: { blocks: Array.from({ length: 51 }, () => ({ type: "divider" })) },
+      error: /cannot exceed 50 items/i,
+    },
+    {
+      name: "rejects blocks missing type from runtime callers",
+      options: { blocks: [{} as { type: string }] },
+      error: /non-empty string type/i,
+    },
+  ])("$name", async ({ options, error }) => {
     const client = createSlackSendTestClient();
     await expect(
       sendMessageSlack("channel:C123", "hi", {
         token: "xoxb-test",
         cfg: SLACK_TEST_CFG,
         client,
-        blocks: [],
+        ...options,
       }),
-    ).rejects.toThrow(/must contain at least one block/i);
-    expect(client.chat.postMessage).not.toHaveBeenCalled();
-  });
-
-  it("rejects blocks arrays above Slack max count", async () => {
-    const client = createSlackSendTestClient();
-    const blocks = Array.from({ length: 51 }, () => ({ type: "divider" }));
-    await expect(
-      sendMessageSlack("channel:C123", "hi", {
-        token: "xoxb-test",
-        cfg: SLACK_TEST_CFG,
-        client,
-        blocks,
-      }),
-    ).rejects.toThrow(/cannot exceed 50 items/i);
-    expect(client.chat.postMessage).not.toHaveBeenCalled();
-  });
-
-  it("rejects blocks missing type from runtime callers", async () => {
-    const client = createSlackSendTestClient();
-    await expect(
-      sendMessageSlack("channel:C123", "hi", {
-        token: "xoxb-test",
-        cfg: SLACK_TEST_CFG,
-        client,
-        blocks: [{} as { type: string }],
-      }),
-    ).rejects.toThrow(/non-empty string type/i);
+    ).rejects.toThrow(error);
     expect(client.chat.postMessage).not.toHaveBeenCalled();
   });
 });

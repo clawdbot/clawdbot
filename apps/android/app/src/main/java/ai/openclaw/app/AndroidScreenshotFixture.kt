@@ -2,6 +2,7 @@ package ai.openclaw.app
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -17,6 +18,7 @@ internal object AndroidScreenshotFixture {
   }
 
   const val gatewayId = "android-screenshot-gateway"
+  const val controlUiBaseUrl = "http://127.0.0.1:18789"
   const val mainSessionKey = "agent:main:node-screenshot"
   const val primarySessionTitle = "Android release planning"
   const val cronJobId = "android-release-digest"
@@ -267,6 +269,22 @@ internal object AndroidScreenshotFixture {
               1_783_555_080_000,
             ),
           )
+          add(
+            chatMessage(
+              role = "user",
+              content = "[System] Continue the interrupted turn.",
+              timestamp = 1_783_555_100_000,
+              provenanceSourceTool = "main_session_restart_recovery",
+            ),
+          )
+          add(
+            chatMessage(
+              role = "user",
+              content = "[System] Gateway restarted during the Android release update.",
+              timestamp = 1_783_555_120_000,
+              provenanceSourceTool = "restart-sentinel",
+            ),
+          )
           add(chatMessage("user", "Summarize the open review feedback for me.", 1_783_555_140_000))
           add(
             chatMessage(
@@ -274,6 +292,32 @@ internal object AndroidScreenshotFixture {
               "The main thread asks for a regression test around session restore, and the second one wants the new " +
                 "config key documented before merge. Both are small; I can draft patches for each if you want.",
               1_783_555_200_000,
+            ),
+          )
+          add(
+            chatMessage(
+              role = "system",
+              content = "Compaction",
+              timestamp = 1_783_555_220_000,
+              marker =
+                buildJsonObject {
+                  put("kind", JsonPrimitive("compaction"))
+                  put("id", JsonPrimitive("android-screenshot-compaction"))
+                  put("tokensBefore", JsonPrimitive(900_000))
+                  put("tokensAfter", JsonPrimitive(24_700))
+                },
+            ),
+          )
+          add(
+            chatMessage(
+              role = "system",
+              content = "Reset",
+              timestamp = 1_783_555_240_000,
+              marker =
+                buildJsonObject {
+                  put("kind", JsonPrimitive("reset"))
+                  put("id", JsonPrimitive("android-screenshot-reset"))
+                },
             ),
           )
           add(chatMessage("user", "Draft a short status update for the team.", 1_783_555_260_000))
@@ -305,10 +349,22 @@ internal object AndroidScreenshotFixture {
     role: String,
     content: String,
     timestamp: Long,
+    provenanceSourceTool: String? = null,
+    marker: JsonObject? = null,
   ) = buildJsonObject {
     put("role", JsonPrimitive(role))
     put("content", JsonPrimitive(content))
     put("timestamp", JsonPrimitive(timestamp))
+    provenanceSourceTool?.let { sourceTool ->
+      put(
+        "provenance",
+        buildJsonObject {
+          put("kind", JsonPrimitive("internal_system"))
+          put("sourceTool", JsonPrimitive(sourceTool))
+        },
+      )
+    }
+    marker?.let { put("__openclaw", it) }
   }
 
   private fun sessionList(paramsJson: String?): String {

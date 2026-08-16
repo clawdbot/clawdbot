@@ -1,6 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Dedicated sidebar for the full-page settings takeover (see app-host.ts).
 import { html, nothing } from "lit";
-import type { UpdateAvailable } from "../api/types.ts";
+import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import {
   cancelRoutePreload,
   navigationIconForRoute,
@@ -16,9 +17,10 @@ import {
 } from "../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
+import type { UpdateProgress } from "../app/update-confirmation.ts";
+import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { icons } from "./icons.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
 import { renderOfflineSidebarStatus } from "./session-row-badges.ts";
@@ -38,8 +40,17 @@ type SettingsSidebarProps = {
   lastError: string | null;
   gatewayVersion: string;
   updateAvailable: UpdateAvailable | null;
-  updateRunning: boolean;
+  updateSchedule?: UpdateScheduleState | null;
+  heldUpdateCampaignId?: string | null;
+  updateBusy: boolean;
+  updateStatusBanner?: ApplicationStatusBanner | null;
+  watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
+  canUpdate?: boolean;
+  canHoldUpdate?: boolean;
   onUpdate: () => void;
+  refreshRequired: boolean;
+  onRefresh: () => void;
+  onHoldUpdate?: () => Promise<boolean>;
   searchQuery: string;
   searchBlockMatches?: readonly SettingsSearchBlock[];
   onExit: () => void;
@@ -303,8 +314,17 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
       </nav>
       <openclaw-sidebar-update-card
         .updateAvailable=${props.updateAvailable}
-        .updateRunning=${props.updateRunning}
+        .updateSchedule=${props.updateSchedule ?? null}
+        .heldUpdateCampaignId=${props.heldUpdateCampaignId ?? null}
+        .updateBusy=${props.updateBusy}
+        .statusBanner=${props.updateStatusBanner ?? null}
+        .watchUpdateProgress=${props.watchUpdateProgress}
+        .canUpdate=${props.canUpdate ?? false}
+        .canHoldUpdate=${props.canHoldUpdate ?? false}
         .onUpdate=${props.onUpdate}
+        .refreshRequired=${props.refreshRequired}
+        .onRefresh=${props.onRefresh}
+        .onHoldUpdate=${props.onHoldUpdate ?? (async () => false)}
       ></openclaw-sidebar-update-card>
       <footer class="settings-sidebar__footer">
         ${props.offline

@@ -124,6 +124,7 @@ export const telegramSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use TELEGRAM_BOT_TOKEN" },
+      envVars: ["TELEGRAM_BOT_TOKEN"],
     },
   },
   legacyAdapter: telegramSetupAdapter,

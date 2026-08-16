@@ -1,3 +1,4 @@
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html } from "lit";
 import { GatewayRequestError, type GatewayEventFrame } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
@@ -142,12 +143,6 @@ const CHANNEL_AUTH_STATUS_KEYS = [
   "signingSecretStatus",
   "userTokenStatus",
 ] as const;
-
-function asRecord(value: unknown): UnknownRecord | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as UnknownRecord)
-    : null;
-}
 
 function hasUnavailableAuth(account: UnknownRecord): boolean {
   return CHANNEL_AUTH_STATUS_KEYS.some((key) => account[key] === "configured_unavailable");

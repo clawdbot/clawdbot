@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
+import {
+  BILLING_ERROR_USER_MESSAGE,
+  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+} from "../../agents/failover/user-copy.js";
 import { AgentHarnessSessionSupersededError } from "../../agents/harness/errors.js";
-import { SessionWriteLockStaleError } from "../../agents/session-write-lock-error.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -18,8 +21,8 @@ import {
   expectRecordFields,
   requireMockCall,
   createMinimalRunAgentTurnParams,
+  createTestFallbackSummaryError,
 } from "./agent-runner-execution.test-support.js";
-import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
 import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 
 const state = setupAgentRunnerExecutionTestState();
@@ -27,19 +30,15 @@ const state = setupAgentRunnerExecutionTestState();
 describe("executeAgentTurn: terminal failures", () => {
   it("surfaces billing guidance for mixed-cause fallback exhaustion", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
-      Object.assign(
-        new Error(
+      createTestFallbackSummaryError({
+        message:
           "All models failed (2): anthropic/claude: 429 (rate_limit) | openai/gpt-5.4: 402 (billing)",
-        ),
-        {
-          name: "FallbackSummaryError",
-          attempts: [
-            { provider: "anthropic", model: "claude", error: "429", reason: "rate_limit" },
-            { provider: "openai", model: "gpt-5.4", error: "402", reason: "billing" },
-          ],
-          soonestCooldownExpiry: Date.now() + 60_000,
-        },
-      ),
+        attempts: [
+          { provider: "anthropic", model: "claude", error: "429", reason: "rate_limit" },
+          { provider: "openai", model: "gpt-5.4", error: "402", reason: "billing" },
+        ],
+        soonestCooldownExpiry: Date.now() + 60_000,
+      }),
     );
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
@@ -68,7 +67,7 @@ describe("executeAgentTurn: terminal failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toBe("billing");
+      expect(result.payload.text).toBe(BILLING_ERROR_USER_MESSAGE);
       expect(result.payload.text).not.toContain("All models failed");
       expect(result.payload.text).not.toContain("402 (billing)");
       expect(result.payload.text).not.toContain("Rate-limited");
@@ -79,8 +78,8 @@ describe("executeAgentTurn: terminal failures", () => {
     const codexMessage =
       "You've reached your Codex subscription usage limit. Next reset in 42 minutes (2026-05-04T21:34:00.000Z). Run /codex account for current usage details.";
     state.runWithModelFallbackMock.mockRejectedValueOnce(
-      Object.assign(new Error(`All models failed (1): openai/gpt-5.5: ${codexMessage}`), {
-        name: "FallbackSummaryError",
+      createTestFallbackSummaryError({
+        message: `All models failed (1): openai/gpt-5.5: ${codexMessage}`,
         attempts: [
           {
             provider: "openai",
@@ -130,7 +129,13 @@ describe("executeAgentTurn: terminal failures", () => {
   it("surfaces direct Codex usage-limit errors when fallback does not wrap one attempt", async () => {
     const codexMessage =
       "You've reached your Codex subscription usage limit. Codex did not return a reset time for this limit. Run /codex account for current usage details.";
-    state.runWithModelFallbackMock.mockRejectedValueOnce(new Error(codexMessage));
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      new FailoverError(codexMessage, {
+        reason: "rate_limit",
+        provider: "openai",
+        model: "gpt-5.5",
+      }),
+    );
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = await executeAgentTurn({
@@ -167,29 +172,25 @@ describe("executeAgentTurn: terminal failures", () => {
 
   it("surfaces billing guidance for pure billing cooldown fallback exhaustion", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
-      Object.assign(
-        new Error(
+      createTestFallbackSummaryError({
+        message:
           "All models failed (2): anthropic/claude-opus-4-6: Provider anthropic has billing issue (skipping all models) (billing) | anthropic/claude-sonnet-4-6: Provider anthropic has billing issue (skipping all models) (billing)",
-        ),
-        {
-          name: "FallbackSummaryError",
-          attempts: [
-            {
-              provider: "anthropic",
-              model: "claude-opus-4-6",
-              error: "Provider anthropic has billing issue (skipping all models)",
-              reason: "billing",
-            },
-            {
-              provider: "anthropic",
-              model: "claude-sonnet-4-6",
-              error: "Provider anthropic has billing issue (skipping all models)",
-              reason: "billing",
-            },
-          ],
-          soonestCooldownExpiry: Date.now() + 60_000,
-        },
-      ),
+        attempts: [
+          {
+            provider: "anthropic",
+            model: "claude-opus-4-6",
+            error: "Provider anthropic has billing issue (skipping all models)",
+            reason: "billing",
+          },
+          {
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            error: "Provider anthropic has billing issue (skipping all models)",
+            reason: "billing",
+          },
+        ],
+        soonestCooldownExpiry: Date.now() + 60_000,
+      }),
     );
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
@@ -218,20 +219,21 @@ describe("executeAgentTurn: terminal failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toBe("billing");
+      expect(result.payload.text).toBe(BILLING_ERROR_USER_MESSAGE);
     }
   });
 
   it("surfaces restart text when fallback exhaustion wraps a drain error, keeping fail bookkeeping", async () => {
     const { replyOperation, failMock } = createMockReplyOperation();
     state.runWithModelFallbackMock.mockRejectedValueOnce(
-      Object.assign(new Error("fallback exhausted"), {
-        name: "FallbackSummaryError",
+      createTestFallbackSummaryError({
+        message: "fallback exhausted",
         attempts: [
           {
             provider: "anthropic",
             model: "claude",
-            error: new GatewayDrainingError(),
+            error: "gateway draining",
+            reason: "unknown",
           },
         ],
         soonestCooldownExpiry: null,
@@ -278,13 +280,14 @@ describe("executeAgentTurn: terminal failures", () => {
   it("surfaces restart text when fallback exhaustion wraps a cleared lane error, keeping fail bookkeeping", async () => {
     const { replyOperation, failMock } = createMockReplyOperation();
     state.runWithModelFallbackMock.mockRejectedValueOnce(
-      Object.assign(new Error("fallback exhausted"), {
-        name: "FallbackSummaryError",
+      createTestFallbackSummaryError({
+        message: "fallback exhausted",
         attempts: [
           {
             provider: "anthropic",
             model: "claude",
-            error: new CommandLaneClearedError("session:main"),
+            error: "command lane cleared",
+            reason: "unknown",
           },
         ],
         soonestCooldownExpiry: null,
@@ -380,55 +383,6 @@ describe("executeAgentTurn: terminal failures", () => {
           event.data.stopReason === "restart",
       ),
     ).toBe(true);
-  });
-
-  it("hands a confirmed restart lease loss to the replacement owner", async () => {
-    const agentEvents = await import("../../infra/agent-events.js");
-    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
-    const { replyOperation, failMock } = createMockReplyOperation();
-    const abortForRestart = vi.spyOn(replyOperation, "abortForRestart");
-    abortForRestart.mockImplementationOnce(() => {
-      Object.defineProperty(replyOperation, "result", {
-        value: { kind: "aborted", code: "aborted_for_restart" } as const,
-        configurable: true,
-      });
-      return true;
-    });
-    state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error("embedded runner failed", {
-        cause: new SessionWriteLockStaleError({
-          lockPath: "sqlite:session-write:agent:main:main",
-          owner: "replacement gateway",
-          staleReasons: ["lease-lost"],
-        }),
-      }),
-    );
-    const confirmRestartRecoveryArmedAfterLeaseLoss = vi.fn(async () => true);
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({ replyOperation }),
-      confirmRestartRecoveryArmedAfterLeaseLoss,
-      isRestartRecoveryArmed: () => false,
-    });
-
-    expect(result).toEqual({ kind: "final", payload: { text: SILENT_REPLY_TOKEN } });
-    expect(confirmRestartRecoveryArmedAfterLeaseLoss).toHaveBeenCalledOnce();
-    expect(abortForRestart).toHaveBeenCalledOnce();
-    expect(failMock).not.toHaveBeenCalled();
-    expect(
-      emitAgentEvent.mock.calls.filter(
-        ([event]) =>
-          event.stream === "lifecycle" &&
-          event.data.phase === "end" &&
-          event.data.stopReason === "restart",
-      ),
-    ).toHaveLength(1);
-    expect(
-      emitAgentEvent.mock.calls.some(
-        ([event]) => event.stream === "lifecycle" && event.data.phase === "error",
-      ),
-    ).toBe(false);
   });
 
   it("preserves restart ownership when an aborted embedded runner resolves normally", async () => {

@@ -4,11 +4,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  defaultQaModelForMode,
   normalizeQaProviderMode,
   splitQaModelRef,
   type QaProviderMode,
 } from "./model-selection.js";
+import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
 import { getQaProvider } from "./providers/index.js";
 import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
 import { QA_FRONTIER_PROVIDER_IDS } from "./providers/live-frontier/catalog.js";
@@ -35,11 +35,6 @@ export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);
   return uniqueStrings([...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS, ...normalizedExtra]);
-}
-
-function normalizeQaGatewayModelRef(input: string | undefined, fallback: string) {
-  const model = input?.trim();
-  return model && model.length > 0 ? model : fallback;
 }
 
 function remapQaMockModelRefForCodex(modelRef: string) {
@@ -78,14 +73,12 @@ export function buildQaGatewayConfig(params: {
   const providerMode = normalizeQaProviderMode(params.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
   const provider = getQaProvider(providerMode);
   const usesCodexMockAppServer = params.forcedRuntime === "codex" && providerMode === "mock-openai";
-  const normalizedPrimaryModel = normalizeQaGatewayModelRef(
-    params.primaryModel,
-    defaultQaModelForMode(providerMode),
-  );
-  const normalizedAlternateModel = normalizeQaGatewayModelRef(
-    params.alternateModel,
-    defaultQaModelForMode(providerMode, { alternate: true }),
-  );
+  const { primaryModel: normalizedPrimaryModel, alternateModel: normalizedAlternateModel } =
+    resolveQaRuntimeModelPair({
+      providerMode,
+      primaryModel: params.primaryModel,
+      alternateModel: params.alternateModel,
+    });
   const primaryModel = usesCodexMockAppServer
     ? remapQaMockModelRefForCodex(normalizedPrimaryModel)
     : normalizedPrimaryModel;
@@ -218,7 +211,6 @@ export function buildQaGatewayConfig(params: {
       lastTouchedVersion: OPENCLAW_VERSION,
     },
     memory: {
-      backend: "builtin",
       search: {
         ...mockMemorySearch,
       },

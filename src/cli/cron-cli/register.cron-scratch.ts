@@ -1,6 +1,6 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 // Cron scratch CLI: private per-job prompt context reads and compare-and-swap writes.
 import type { Command } from "commander";
-import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { handleCronCliError, printCronJson } from "./shared.js";
 import { readCronScratchContent } from "./trigger-options.js";

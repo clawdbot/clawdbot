@@ -1,9 +1,11 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { icons } from "../../components/icons.ts";
-import "../../components/tooltip.ts";
+import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
+import "../../components/tooltip.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
@@ -22,6 +24,7 @@ import type { NewSessionVisibility } from "./create-params.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
 
 type NewSessionComposerOptions = {
+  attachmentLimits?: { maxBytes: number; maxImageBytes: number };
   attachments: ChatAttachment[];
   canSubmit: boolean;
   getAttachments: () => ChatAttachment[];
@@ -31,18 +34,85 @@ type NewSessionComposerOptions = {
   readSignal: AbortSignal;
   requiresModifier: boolean;
   submitDisabledReason?: string;
+  blockedSubmitNotice?: string;
+  terminalAction?: {
+    canStart: boolean;
+    disabledReason?: string;
+    onStart: () => void;
+  };
   submitting: boolean;
   textareaController: NewSessionComposerTextareaController;
   messageLocked?: boolean;
   visibility?: NewSessionVisibility;
   draftAvailable?: boolean;
-  incognitoDisabledReason?: string;
   onAttachmentsChange: (attachments: ChatAttachment[]) => void;
   onPendingReadsChange: (delta: 1 | -1) => void;
   onInput: (message: string) => void;
+  onOpenImage?: (item: ImageLightboxItem) => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
 };
+
+function renderStartControl(options: NewSessionComposerOptions) {
+  const startLabel = options.submitting ? t("newSession.starting") : t("newSession.start");
+  if (!options.terminalAction) {
+    return html`
+      <openclaw-tooltip content=${options.submitDisabledReason ?? t("newSession.start")}>
+        <button
+          type="button"
+          class="chat-send-btn new-session-page__start-submit"
+          ?disabled=${!options.canSubmit}
+          aria-busy=${String(options.submitting)}
+          aria-label=${startLabel}
+          @click=${options.onSubmit}
+        >
+          ${options.submitting ? icons.loader : icons.arrowUp}
+        </button>
+      </openclaw-tooltip>
+    `;
+  }
+  const terminalLabel = t("newSession.startInTerminal");
+  return html`
+    <div class="new-session-page__start-split">
+      <openclaw-tooltip content=${options.submitDisabledReason ?? t("newSession.start")}>
+        <button
+          type="button"
+          class="chat-send-btn new-session-page__start-submit new-session-page__start-primary"
+          ?disabled=${!options.canSubmit}
+          aria-busy=${String(options.submitting)}
+          aria-label=${startLabel}
+          @click=${options.onSubmit}
+        >
+          ${options.submitting ? icons.loader : icons.arrowUp}
+        </button>
+      </openclaw-tooltip>
+      <openclaw-tooltip content=${options.terminalAction.disabledReason ?? terminalLabel}>
+        <wa-dropdown class="new-session-page__start-menu" placement="top-end">
+          <button
+            slot="trigger"
+            type="button"
+            class="chat-send-btn new-session-page__start-menu-trigger"
+            ?disabled=${!options.terminalAction.canStart}
+            aria-label=${terminalLabel}
+          >
+            ${icons.chevronUp}
+          </button>
+          <wa-dropdown-item
+            value="start-terminal"
+            ?disabled=${!options.terminalAction.canStart}
+            @click=${() => {
+              if (options.terminalAction?.canStart) {
+                options.terminalAction.onStart();
+              }
+            }}
+          >
+            ${terminalLabel}
+          </wa-dropdown-item>
+        </wa-dropdown>
+      </openclaw-tooltip>
+    </div>
+  `;
+}
 
 export class NewSessionComposerTextareaController {
   private textarea: HTMLTextAreaElement | null = null;
@@ -75,18 +145,16 @@ export class NewSessionComposerTextareaController {
   }
 }
 
-/** Mutually exclusive visibility pills: selecting one clears the other, re-click returns to normal. */
+/** Draft visibility pill: selecting it clears incognito, re-click returns to normal. */
 function renderVisibilityPill(params: {
   mode: Exclude<NewSessionVisibility, "normal">;
   icon: unknown;
   label: string;
   description: string;
-  disabledReason?: string;
   options: NewSessionComposerOptions;
 }) {
   const active = params.options.visibility === params.mode;
-  const disabled =
-    params.options.submitting || params.options.messageLocked || Boolean(params.disabledReason);
+  const disabled = params.options.submitting || params.options.messageLocked;
   return html`
     <button
       type="button"
@@ -94,7 +162,7 @@ function renderVisibilityPill(params: {
       role="switch"
       aria-checked=${String(active)}
       ?disabled=${disabled}
-      title=${params.disabledReason ?? params.description}
+      title=${params.description}
       @click=${() => params.options.onVisibilityChange?.(active ? "normal" : params.mode)}
     >
       <span aria-hidden="true">${params.icon}</span>${params.label}
@@ -106,23 +174,24 @@ export function renderDraftError(message: string) {
   return html`
     <div class="callout danger new-session-page__error new-session-page__alert" role="alert">
       <span class="new-session-page__alert-icon" aria-hidden="true">${icons.alertTriangle}</span>
-      <span class="callout__content new-session-page__alert-message">${message}</span>
+      <span class="callout__content new-session-page__alert-message"
+        >${formatUiError(message)}</span
+      >
     </div>
   `;
 }
 
 function handleComposerKeydown(event: KeyboardEvent, options: NewSessionComposerOptions) {
-  if (
-    !options.canSubmit ||
-    options.submitting ||
-    event.key !== "Enter" ||
-    event.shiftKey ||
-    event.isComposing ||
-    event.keyCode === 229
-  ) {
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) {
     return;
   }
-  if (!options.requiresModifier || event.metaKey || event.ctrlKey) {
+  if (options.requiresModifier && !event.metaKey && !event.ctrlKey) {
+    return;
+  }
+  // A reasoned gate still consumes the press: the submission flow records the
+  // attempt and surfaces the reason instead of silently inserting a newline.
+  // Only silent gates (busy button, empty draft) keep Enter native.
+  if (options.canSubmit || options.submitDisabledReason !== undefined) {
     event.preventDefault();
     options.onSubmit();
   }
@@ -130,8 +199,8 @@ function handleComposerKeydown(event: KeyboardEvent, options: NewSessionComposer
 
 /** Draft message box styled as the chat composer shell so both pickers match. */
 function renderNewSessionComposer(options: NewSessionComposerOptions) {
-  const startLabel = options.submitting ? t("newSession.starting") : t("newSession.start");
   const attachmentProps = {
+    attachmentLimits: options.attachmentLimits,
     attachments: options.attachments,
     disabled: options.submitting || options.messageLocked,
     getAttachments: options.getAttachments,
@@ -140,6 +209,7 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
     onAttachmentsChange: options.onAttachmentsChange,
     onDraftChange: options.onInput,
     onPendingReadsChange: options.onPendingReadsChange,
+    onOpenImage: options.onOpenImage,
     readSignal: options.readSignal,
   };
   const attachmentDropHandlers = createChatAttachmentDropHandlers({
@@ -158,7 +228,6 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
       <div class="agent-chat__input">
         ${renderChatAttachmentInputs(attachmentProps)} ${renderAttachmentPreview(attachmentProps)}
         <div class="agent-chat__composer-input-row">
-          ${renderChatAttachmentMenu(attachmentProps)}
           <div class="agent-chat__composer-combobox">
             <textarea
               ${ref(options.textareaController.ref)}
@@ -180,48 +249,32 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
               }}
             ></textarea>
           </div>
-          <div class="agent-chat__composer-actions">
-            <openclaw-tooltip content=${options.submitDisabledReason ?? t("newSession.start")}>
-              <button
-                type="button"
-                class="chat-send-btn"
-                ?disabled=${!options.canSubmit}
-                aria-label=${startLabel}
-                @click=${options.onSubmit}
-              >
-                ${options.submitting ? icons.loader : icons.arrowUp}
-              </button>
-            </openclaw-tooltip>
-          </div>
+          <div class="agent-chat__composer-actions">${renderStartControl(options)}</div>
         </div>
         <div class="agent-chat__composer-footer">
           <div class="agent-chat__composer-controls">
+            ${renderChatAttachmentMenu(attachmentProps)}
             ${options.modelControl && options.modelControl !== nothing
               ? html`<div class="chat-composer-model-control">${options.modelControl}</div>`
               : nothing}
             ${options.draftAvailable
               ? renderVisibilityPill({
                   mode: "draft",
-                  icon: "👻",
+                  icon: icons.pencil,
                   label: t("newSession.draft"),
                   description: t("newSession.draftDescription"),
                   options,
                 })
               : nothing}
-            ${renderVisibilityPill({
-              mode: "incognito",
-              icon: icons.lock,
-              label: t("newSession.incognito"),
-              description: t("newSession.incognitoDescription"),
-              disabledReason: options.incognitoDisabledReason,
-              options,
-            })}
           </div>
         </div>
+        ${options.blockedSubmitNotice
+          ? html`<div class="new-session-page__blocked-submit" role="status">
+              ${options.blockedSubmitNotice}
+            </div>`
+          : nothing}
         ${options.pendingAttachmentReads > 0
-          ? html`<span class="agent-chat__sr-only" role="status"
-              >${t("newSession.readingAttachment")}</span
-            >`
+          ? html`<span class="sr-only" role="status">${t("newSession.readingAttachment")}</span>`
           : nothing}
       </div>
     </div>
@@ -242,15 +295,22 @@ export function renderNewSessionDraftComposer(options: {
   textareaController: NewSessionComposerTextareaController;
   requiresModifier: boolean;
   submitDisabledReason?: string;
+  blockedSubmitNotice?: string;
+  terminalAction?: {
+    canStart: boolean;
+    disabledReason?: string;
+    onStart: () => void;
+  };
   submitting: boolean;
   messageLocked?: boolean;
-  incognitoDisabledReason?: string;
   onInput: (message: string) => void;
+  onOpenImage?: (item: ImageLightboxItem) => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
 }) {
   const readSignal = options.attachmentDraft.readSignal;
   return renderNewSessionComposer({
+    attachmentLimits: options.context?.gateway.snapshot.hello?.policy?.attachments,
     attachments: options.attachmentDraft.attachments,
     canSubmit: options.canSubmit,
     getAttachments: () => options.attachmentDraft.attachments,
@@ -269,10 +329,11 @@ export function renderNewSessionDraftComposer(options: {
     readSignal,
     requiresModifier: options.requiresModifier,
     submitDisabledReason: options.submitDisabledReason,
+    blockedSubmitNotice: options.blockedSubmitNotice,
+    terminalAction: options.terminalAction,
     submitting: options.submitting,
     textareaController: options.textareaController,
     messageLocked: options.messageLocked,
-    incognitoDisabledReason: options.incognitoDisabledReason,
     onAttachmentsChange: (attachments) => {
       if (!options.submitting && !options.messageLocked) {
         options.attachmentDraft.replace(attachments);
@@ -280,6 +341,7 @@ export function renderNewSessionDraftComposer(options: {
     },
     onPendingReadsChange: (delta) => options.attachmentDraft.updatePending(readSignal, delta),
     onInput: options.onInput,
+    onOpenImage: options.onOpenImage,
     onVisibilityChange: options.onVisibilityChange,
     onSubmit: options.onSubmit,
   });

@@ -5,6 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatDurationCompact, formatTimeMs } from "../../lib/format.ts";
 import "../../styles/logbook.css";
 import {
@@ -72,14 +73,17 @@ function renderStatusChips(status: LogbookStatusPayload): TemplateResult {
           >`
         : nothing}
       ${status.lastCaptureError
-        ? html`<span class="logbook__chip logbook__chip--error" title=${status.lastCaptureError}>
+        ? html`<span
+            class="logbook__chip logbook__chip--error"
+            title=${formatUiExternalText(status.lastCaptureError)}
+          >
             ${t("logbook.status.captureError")}
           </span>`
         : nothing}
       ${status.lastBatch?.status === "error"
         ? html`<span
             class="logbook__chip logbook__chip--error"
-            title=${status.lastBatch.error ?? ""}
+            title=${formatUiExternalText(status.lastBatch.error)}
           >
             ${t("logbook.status.batchError")}
           </span>`
@@ -148,7 +152,7 @@ function renderCard(
             ? html`<span class="logbook-card__app">${card.appPrimary}</span>`
             : nothing}
           <span class="logbook-card__duration"
-            >${formatDurationCompact(card.endMs - card.startMs, { spaced: true }) ?? "0s"}</span
+            >${formatDurationCompact(card.endMs - card.startMs) ?? "0s"}</span
           >
         </span>
       </button>
@@ -166,7 +170,9 @@ function renderCard(
                       ${t("common.loading")}
                     </div>`
                   : nothing}
-              ${card.detail ? html`<p class="logbook-card__detail">${card.detail}</p>` : nothing}
+              ${card.detail
+                ? html`<p class="logbook-card__detail">${formatUiExternalText(card.detail)}</p>`
+                : nothing}
               ${card.distractions.length > 0
                 ? html`
                     <div class="logbook-card__distractions">
@@ -209,7 +215,7 @@ function renderStats(state: LogbookUiState): TemplateResult | typeof nothing {
           <span>${t("logbook.stats.focus", { pct: String(focusPct) })}</span>
           <span
             >${t("logbook.stats.tracked", {
-              duration: formatDurationCompact(stats.trackedMs, { spaced: true }) ?? "0s",
+              duration: formatDurationCompact(stats.trackedMs) ?? "0s",
             })}</span
           >
         </div>
@@ -229,7 +235,7 @@ function renderStats(state: LogbookUiState): TemplateResult | typeof nothing {
                 ></span>
               </span>
               <span class="logbook-stats__category-time"
-                >${formatDurationCompact(entry.ms, { spaced: true }) ?? "0s"}</span
+                >${formatDurationCompact(entry.ms) ?? "0s"}</span
               >
             </div>
           `,

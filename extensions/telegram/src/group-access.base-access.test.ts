@@ -107,7 +107,6 @@ const DEFAULT_GROUP_ACCESS_PARAMS: GroupAccessParams = {
     groupConfig: { requireMention: false },
   }),
   enforcePolicy: true,
-  useTopicAndGroupOverrides: false,
   enforceAllowlistAuthorization: true,
   allowEmptyAllowlistEntries: false,
   requireSenderForAllowlistAuthorization: true,
@@ -230,6 +229,27 @@ describe("evaluateTelegramGroupPolicyAccess", () => {
       reason: "group-policy-disabled",
       groupPolicy: "disabled",
     });
+  });
+
+  it("uses topic policy before group and account policy", () => {
+    expect(
+      runAccess({
+        telegramCfg: { groupPolicy: "open" } as TelegramAccountConfig,
+        groupConfig: { groupPolicy: "open" },
+        topicConfig: { groupPolicy: "disabled" },
+      }),
+    ).toEqual({
+      allowed: false,
+      reason: "group-policy-disabled",
+      groupPolicy: "disabled",
+    });
+    expect(
+      runAccess({
+        telegramCfg: { groupPolicy: "open" } as TelegramAccountConfig,
+        groupConfig: { groupPolicy: "disabled" },
+        topicConfig: { groupPolicy: "open" },
+      }),
+    ).toEqual({ allowed: true, groupPolicy: "open" });
   });
 
   it("allows non-group messages without any checks", () => {

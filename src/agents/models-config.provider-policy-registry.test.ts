@@ -56,7 +56,7 @@ beforeAll(async () => {
 
   const manifestRegistryModule = await import("../plugins/manifest-registry.js");
   loadPluginManifestRegistrySpy = vi
-    .spyOn(manifestRegistryModule, "loadPluginManifestRegistry")
+    .spyOn(manifestRegistryModule, "loadPluginManifestRegistryCore")
     .mockReturnValue(manifestRegistry as never);
   const publicSurfaceLoader = await import("../plugins/public-surface-loader.js");
   loadBundledPluginPublicArtifactModuleSyncSpy = vi

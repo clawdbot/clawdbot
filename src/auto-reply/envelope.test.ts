@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import {
   formatAgentEnvelope,
-  formatEnvelopeTimestamp,
+  formatAgentEnvelopeTimestamp,
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
 } from "./envelope.js";
@@ -28,7 +28,7 @@ describe("formatAgentEnvelope", () => {
 
   it("formats timestamps in local timezone by default", () => {
     const ts = Date.UTC(2025, 0, 2, 3, 4);
-    const expectedTimestamp = formatEnvelopeTimestamp(ts, { timezone: "local" });
+    const expectedTimestamp = formatAgentEnvelopeTimestamp(ts, { timezone: "local" });
     const body = formatAgentEnvelope({
       channel: "WebChat",
       timestamp: ts,
@@ -70,15 +70,15 @@ describe("formatAgentEnvelope", () => {
       agents: { defaults: { userTimezone: "Not/A_Timezone" } },
     });
     expect(options.timezone).toBe("local");
-    expect(formatEnvelopeTimestamp(ts, options)).toBe(
-      formatEnvelopeTimestamp(ts, { timezone: "local" }),
+    expect(formatAgentEnvelopeTimestamp(ts, options)).toBe(
+      formatAgentEnvelopeTimestamp(ts, { timezone: "local" }),
     );
   });
 
   it("keeps the UTC fallback for an invalid explicit timezone option", () => {
     const ts = Date.UTC(2025, 0, 2, 3, 4, 5);
-    expect(formatEnvelopeTimestamp(ts, { timezone: "Not/A_Timezone" })).toBe(
-      formatEnvelopeTimestamp(ts, { timezone: "utc" }),
+    expect(formatAgentEnvelopeTimestamp(ts, { timezone: "Not/A_Timezone" })).toBe(
+      formatAgentEnvelopeTimestamp(ts, { timezone: "utc" }),
     );
   });
 

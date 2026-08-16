@@ -1,5 +1,6 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.shared.WearProxyCapability
 import ai.openclaw.wear.shared.WearRealtimeTalkEntry
 import ai.openclaw.wear.shared.WearRealtimeTalkRole
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
@@ -264,6 +265,92 @@ class MainActivityTest {
 
     assertEquals(WearConversationFailure.ACTION_REJECTED, snapshot?.failure)
     assertNull(snapshot?.sessions?.single()?.title)
+  }
+
+  @Test
+  fun conversationSnapshotExposesPulseOnlyForConnectedCapablePhone() {
+    val pulse =
+      WearAgentPulseSnapshot(
+        tasks =
+          WearAgentPulseTasks(
+            state = WearAgentPulseTaskState.Ready,
+            queued = 2,
+            running = 3,
+            completed = 5,
+            failed = 1,
+            activeAtLimit = false,
+            recentAtLimit = false,
+          ),
+        swarm =
+          WearAgentPulseSwarm(
+            state = WearAgentPulseSwarmState.Active,
+            groups = 1,
+            running = 1,
+            done = 0,
+            failed = 0,
+            phases =
+              listOf(
+                WearAgentPulsePhase(
+                  queued = 2,
+                  running = 1,
+                  done = 0,
+                  failed = 0,
+                  hidden = 0,
+                ),
+              ),
+            morePhases = false,
+          ),
+        approvals =
+          WearAgentPulseApprovals(
+            state = WearAgentPulseApprovalsState.Ready,
+            pending = 2,
+          ),
+        eventSequence = 7L,
+        phoneNodeId = "phone-1",
+        eventStreamId = "epoch-1",
+      )
+    val capable =
+      WearUiState(
+        loading = false,
+        connected = true,
+        phoneNodeId = "phone-1",
+        proxyCapabilities = setOf(WearProxyCapability.AgentPulse),
+        agentPulse = pulse,
+        agentPulseLoading = true,
+        agentPulseFailure = WearConversationFailure.INTERNAL_ERROR,
+      ).toConversationSnapshot()
+
+    assertTrue(capable?.agentPulseSupported == true)
+    assertEquals(pulse, capable?.agentPulse)
+    assertTrue(capable?.agentPulseLoading == true)
+    assertEquals(WearConversationFailure.INTERNAL_ERROR, capable?.agentPulseFailure)
+
+    val offline =
+      WearUiState(
+        loading = false,
+        connected = false,
+        phoneNodeId = "phone-1",
+        proxyCapabilities = setOf(WearProxyCapability.AgentPulse),
+        agentPulse = pulse,
+        agentPulseLoading = true,
+        agentPulseFailure = WearConversationFailure.INTERNAL_ERROR,
+      ).toConversationSnapshot()
+
+    assertFalse(offline?.agentPulseSupported == true)
+    assertNull(offline?.agentPulse)
+    assertFalse(offline?.agentPulseLoading == true)
+    assertNull(offline?.agentPulseFailure)
+
+    val unsupported =
+      WearUiState(
+        loading = false,
+        connected = true,
+        phoneNodeId = "phone-1",
+        agentPulse = pulse,
+      ).toConversationSnapshot()
+
+    assertFalse(unsupported?.agentPulseSupported == true)
+    assertNull(unsupported?.agentPulse)
   }
 
   @Test

@@ -16,7 +16,7 @@ import type { ChannelPlugin } from "./plugins/types.plugin.js";
 /**
  * Builds the safe account snapshot shown by CLI, gateway, and status summaries.
  */
-export function buildChannelAccountSnapshot(params: {
+export function buildChannelAccountSummary(params: {
   plugin: ChannelPlugin;
   account: unknown;
   cfg: OpenClawConfig;

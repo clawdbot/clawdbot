@@ -121,6 +121,30 @@ describe("matrixMessageActions", () => {
     expect(discovery.actions).not.toContain(profileAction);
   });
 
+  it("exposes verification actions only with owner identity context", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          ...createConfiguredMatrixConfig().channels?.matrix,
+          encryption: true,
+          actions: { verification: true },
+        },
+      },
+    } as CoreConfig;
+
+    const nonOwnerDiscovery = matrixMessageActions.describeMessageTool({
+      cfg,
+      senderIsOwner: false,
+    } as never);
+    const ownerDiscovery = matrixMessageActions.describeMessageTool({
+      cfg,
+      senderIsOwner: true,
+    } as never);
+
+    expect(nonOwnerDiscovery?.actions).not.toContain("permissions");
+    expect(ownerDiscovery?.actions).toContain("permissions");
+  });
+
   it("hides gated actions when the default Matrix account disables them", () => {
     const discovery = matrixMessageActions.describeMessageTool({
       cfg: {

@@ -59,9 +59,9 @@ describe("connection user profile helpers", () => {
       userProfileAvatarUrl(
         "wss://remote.example.test",
         "profile-1",
-        42,
+        "content-hash-png",
         "https://gateway.example.test/control/profile",
       ),
-    ).toBe("https://remote.example.test/api/users/profile-1/avatar?v=42");
+    ).toBe("https://remote.example.test/api/users/profile-1/avatar?v=content-hash-png");
   });
 });

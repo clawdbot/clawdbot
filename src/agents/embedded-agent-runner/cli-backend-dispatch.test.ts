@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { resolveEmbeddedCliBackendDispatchEligibility } from "./cli-backend-dispatch-eligibility.js";
 import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
@@ -44,7 +45,9 @@ vi.mock("./cli-backend-dispatch-transcript.js", () => ({
 }));
 
 function baseRunParams(overrides: Partial<RunEmbeddedAgentParams> = {}): RunEmbeddedAgentParams {
+  const runId = overrides.runId ?? "run-cli-dispatch-test";
   return {
+    admittedRunContext: createTestAdmittedRunContext(runId),
     sessionId: "recall-session",
     sessionKey: "agent:main:recall",
     sessionFile: "/tmp/recall/session.jsonl",
@@ -53,7 +56,7 @@ function baseRunParams(overrides: Partial<RunEmbeddedAgentParams> = {}): RunEmbe
     provider: "claude-cli",
     model: "claude-opus-4-8",
     timeoutMs: 30_000,
-    runId: "run-cli-dispatch-test",
+    runId,
     cliBackendDispatch: "subscription-auth" as const,
     toolsAllow: ["memory_search"],
     ...overrides,
@@ -408,13 +411,17 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(onExecutionStarted).toHaveBeenCalledWith({ lifecycleGeneration: "gen-1" });
   });
 
-  it("retains prompt media facts through the embedded-to-CLI bridge", async () => {
+  it("retains ordered prompt images and media facts through the embedded-to-CLI bridge", async () => {
+    const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
+    const imageOrder = ["inline" as const];
     const media = [{ path: "/tmp/recall.png", contentType: "image/png" }];
 
-    await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams({ media }));
+    await runEmbeddedAgentViaCliBackendIfEligible(baseRunParams({ images, imageOrder, media }));
 
     expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
       prompt: "recall prompt",
+      images,
+      imageOrder,
       media,
     });
   });

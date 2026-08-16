@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -11,12 +12,16 @@ import {
   assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshot,
 } from "../../config/config.js";
+import {
+  createPluginInstallRecordMap,
+  serializePluginInstallRecordMap,
+  setPluginInstallRecordMapEntry,
+} from "../../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { hasErrnoCode } from "../../infra/errors.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
-import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import {
   DEFAULT_PACKAGE_CHANNEL,
   EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
@@ -35,6 +40,7 @@ import {
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
 import {
+  buildPostCoreHandoffEnv,
   POST_CORE_UPDATE_ENV,
   POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
   type PreUpdateConfigRestoreInput,
@@ -71,7 +77,7 @@ import {
 } from "./update-command-config.js";
 import {
   completePostCorePluginUpdate,
-  withUpdateFinalizationEnv,
+  withPrePluginUpdateDoctorEnv,
 } from "./update-command-fresh-doctor.js";
 import {
   updatePluginsAfterCoreUpdate,
@@ -86,7 +92,6 @@ import {
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 export { POST_CORE_UPDATE_ENV };
 export const POST_CORE_UPDATE_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_CHANNEL";
-export const POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL";
 export const POST_CORE_UPDATE_RESULT_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH";
 export const POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV =
   "OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH";
@@ -202,7 +207,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
   }
 
   const completedPluginUpdate = await withPluginLifecycleLease({}, async () => {
-    const initialPluginUpdate = await withUpdateFinalizationEnv(async () => {
+    const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {
       await createUpdateConfigSnapshot();
       await doctorCommand(defaultRuntime, {
         nonInteractive: true,
@@ -302,11 +307,12 @@ export async function writePostCorePluginUpdateResultFile(
   await writeJson(filePath, result, { trailingNewline: true });
 }
 
-async function writePostCorePluginInstallRecordsFile(
+/** @internal exported for focused handoff contract tests. */
+export async function writePostCorePluginInstallRecordsFile(
   filePath: string,
   records: Record<string, PluginInstallRecord>,
 ): Promise<void> {
-  await fs.writeFile(filePath, `${JSON.stringify(records)}\n`, "utf-8");
+  await fs.writeFile(filePath, `${serializePluginInstallRecordMap(records)}\n`, "utf-8");
 }
 
 export async function readPostCorePluginInstallRecordsFile(
@@ -339,7 +345,14 @@ export async function readPostCorePluginInstallRecordsFile(
       { cause: err },
     );
   }
-  return normalizePluginInstallRecordMap(parsed);
+  try {
+    return normalizePluginInstallRecordMap(parsed);
+  } catch (err) {
+    throw new Error(
+      `Invalid plugin install records in handoff file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
+      { cause: err },
+    );
+  }
 }
 
 async function execFileStdout(file: string, args: string[]): Promise<string | undefined> {
@@ -440,7 +453,8 @@ export function resolvePostCoreUpdateChildStdio(
   return platform === "win32" || jsonMode ? "pipe" : "inherit";
 }
 
-function preparePostCorePluginInstallRecordsForFreshProcess(params: {
+/** @internal exported for focused handoff contract tests. */
+export function preparePostCorePluginInstallRecordsForFreshProcess(params: {
   records: Record<string, PluginInstallRecord>;
   targetVersion: string | null;
 }): Record<string, PluginInstallRecord> {
@@ -452,18 +466,18 @@ function preparePostCorePluginInstallRecordsForFreshProcess(params: {
     return params.records;
   }
   let changed = false;
-  const next: Record<string, PluginInstallRecord> = {};
+  const next = createPluginInstallRecordMap<PluginInstallRecord>();
   for (const [pluginId, record] of Object.entries(params.records)) {
     const installedVersion = record.resolvedVersion ?? record.version;
     const comparison = installedVersion
       ? compareSemverStrings(installedVersion, params.targetVersion)
       : null;
     if (record.source !== "npm" || comparison === null || comparison <= 0) {
-      next[pluginId] = record;
+      setPluginInstallRecordMapEntry(next, pluginId, record);
       continue;
     }
     const { resolvedSpec: _resolvedSpec, resolvedVersion: _resolvedVersion, ...rest } = record;
-    next[pluginId] = rest;
+    setPluginInstallRecordMapEntry(next, pluginId, rest);
     changed = true;
   }
   return changed ? next : params.records;
@@ -546,25 +560,22 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
     await writePostCoreSourceConfigFile(sourceConfigPath, params.preUpdateConfig);
     const jsonMode = params.opts.json === true;
     const childStdio = resolvePostCoreUpdateChildStdio(process.platform, jsonMode);
+    const handoffEnv = buildPostCoreHandoffEnv({
+      baseEnv: stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
+      compatHostVersion: postCoreHostVersion,
+      requestedChannel: params.requestedChannel,
+      sourceConfigPath: params.preUpdateConfig ? sourceConfigPath : undefined,
+    });
     const child = spawn(params.nodeRunner ?? resolveNodeRunner(), argv, {
       stdio: childStdio,
       env: {
-        ...stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
+        ...handoffEnv,
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
         [POST_CORE_UPDATE_ENV]: "1",
         [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
-        ...(params.requestedChannel
-          ? { [POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV]: params.requestedChannel }
-          : {}),
         [POST_CORE_UPDATE_RESULT_PATH_ENV]: resultPath,
         [POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV]: installRecordsPath,
         [POST_CORE_UPDATE_STARTED_AT_ENV]: String(params.updateStartedAtMs),
-        ...(postCoreHostVersion === null
-          ? {}
-          : { OPENCLAW_COMPATIBILITY_HOST_VERSION: postCoreHostVersion }),
-        ...(params.preUpdateConfig
-          ? { [POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV]: sourceConfigPath }
-          : {}),
       },
     });
     // JSON callers own stdout, so child diagnostics must remain off that protocol stream.

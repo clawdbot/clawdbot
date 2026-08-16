@@ -114,8 +114,6 @@ function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
 
 async function withFetchPathTest(mockFetch: MockKilocodeFetch, runAssertions: () => Promise<void>) {
   const release = vi.fn(async () => {});
-  vi.stubEnv("NODE_ENV", "");
-  vi.stubEnv("VITEST", "");
 
   fetchWithSsrFGuardMock.mockReset();
   const callMockFetch = mockFetch as unknown as (
@@ -133,7 +131,6 @@ async function withFetchPathTest(mockFetch: MockKilocodeFetch, runAssertions: ()
     await runAssertions();
     return release;
   } finally {
-    vi.unstubAllEnvs();
     fetchWithSsrFGuardMock.mockReset();
   }
 }
@@ -141,29 +138,6 @@ async function withFetchPathTest(mockFetch: MockKilocodeFetch, runAssertions: ()
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
   vi.resetModules();
-});
-
-describe("discoverKilocodeModels", () => {
-  it("returns static catalog in test environment", async () => {
-    const models = await discoverKilocodeModels();
-    expect(models).toStrictEqual(EXPECTED_STATIC_KILOCODE_MODELS);
-  });
-
-  it("static catalog has correct defaults for kilo-auto/balanced", async () => {
-    const models = await discoverKilocodeModels();
-    const auto = requireModelById(models, "kilo-auto/balanced");
-    expect(auto.name).toBe("Auto Balanced");
-    expect(auto.reasoning).toBe(true);
-    expect(auto.input).toEqual(["text", "image"]);
-    expect(auto.contextWindow).toBe(1000000);
-    expect(auto.maxTokens).toBe(65536);
-    expect(auto.cost).toEqual({
-      input: 0.325,
-      output: 1.95,
-      cacheRead: 0.0325,
-      cacheWrite: 0.40625,
-    });
-  });
 });
 
 describe("discoverKilocodeModels (fetch path)", () => {

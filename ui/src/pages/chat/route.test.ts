@@ -33,7 +33,30 @@ function result(
 }
 
 function contextFor(listResult: SessionsListResult | null, mainKey = "main") {
-  const client = {};
+  const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+    if (method === "sessions.resolve") {
+      const shortId = typeof params.shortId === "string" ? params.shortId.toLowerCase() : "";
+      const matches =
+        listResult?.sessions.filter((session) =>
+          session.key.toLowerCase().replaceAll("-", "").includes(shortId),
+        ) ?? [];
+      return matches.length === 1 && matches[0]
+        ? { ok: true, key: matches[0].key }
+        : {
+            ok: false,
+            ...(matches.length > 1
+              ? { candidates: matches.map((session) => ({ key: session.key })) }
+              : {}),
+          };
+    }
+    if (method === "sessions.describe") {
+      return {
+        session: listResult?.sessions.find((session) => session.key === params.key) ?? null,
+      };
+    }
+    throw new Error(`Unexpected gateway request: ${method}`);
+  });
+  const client = { request };
   const list = vi.fn(async (_options?: { offset?: number; search?: string }) => listResult);
   const context = {
     basePath: "",
@@ -44,7 +67,7 @@ function contextFor(listResult: SessionsListResult | null, mainKey = "main") {
     agents: { state: { agentsList: { mainKey } } },
     sessions: { list },
   } as unknown as ApplicationContext;
-  return { context, list };
+  return { context, list, request };
 }
 
 describe("loadChatRoute", () => {
@@ -62,14 +85,22 @@ describe("loadChatRoute", () => {
   });
 
   it("survives sessionId rotation and canonicalizes decorative short-form segments", async () => {
-    const { context, list } = contextFor(result([row()]));
-    list
-      .mockResolvedValueOnce(result([row({ sessionId: "before-compaction" })]))
-      .mockResolvedValueOnce(result([row({ sessionId: "after-compaction" })]));
+    const { context, list, request } = contextFor(result([row()]));
+    let describeCount = 0;
+    request.mockImplementation(async (method) => {
+      if (method === "sessions.resolve") {
+        return { ok: true, key: sessionKey };
+      }
+      return {
+        session: row({
+          sessionId: describeCount++ === 0 ? "before-compaction" : "after-compaction",
+        }),
+      };
+    });
     const signal = new AbortController().signal;
     const redirected = await loadChatRoute(
       context,
-      { pathname: "/chat/wrong/not-the-name-12345678", search: "?draft=ship", hash: "" },
+      { pathname: "/chat/main/not-the-name-12345678", search: "?draft=ship", hash: "" },
       "chat",
       signal,
     );
@@ -84,7 +115,7 @@ describe("loadChatRoute", () => {
         hash: "",
       },
       canonicalLocationSource: {
-        pathname: "/chat/wrong/not-the-name-12345678",
+        pathname: "/chat/main/not-the-name-12345678",
         search: "?draft=ship",
         hash: "",
       },
@@ -98,10 +129,8 @@ describe("loadChatRoute", () => {
         signal,
       ),
     ).resolves.toEqual({ kind: "session", sessionKey, draft: "ship", face: "chat" });
-    expect(list).toHaveBeenCalledTimes(2);
-    expect(list).toHaveBeenCalledWith(
-      expect.objectContaining({ search: "12345678", limit: 20, archivedFilter: "all" }),
-    );
+    expect(list).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledTimes(4);
   });
 
   it("round-trips literal channel, peer, and cron keys without searching", async () => {
@@ -128,9 +157,9 @@ describe("loadChatRoute", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
-  it("queries the first uuid block so longer disambiguation links can resolve", async () => {
+  it("passes longer disambiguation prefixes directly to the gateway resolver", async () => {
     const target = row({ key: "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001" });
-    const { context, list } = contextFor(result([target]));
+    const { context, list, request } = contextFor(result([target]));
     await expect(
       loadChatRoute(
         context,
@@ -145,141 +174,13 @@ describe("loadChatRoute", () => {
       face: "chat",
       shortId: "123456780a",
     });
-    // Stored keys hold a hyphenated uuid, so "123456780a" is not a substring of anything
-    // the gateway searches. Only the first block survives as a needle; the full prefix is
-    // still applied per row, so the longer link resolves instead of 404ing.
-    expect(list).toHaveBeenCalledWith(expect.objectContaining({ search: "12345678" }));
-    expect(list).not.toHaveBeenCalledWith(expect.objectContaining({ search: "123456780a" }));
-  });
-
-  it("stops prefix pagination at the fixed bound and reports an incomplete result", async () => {
-    const target = row({ key: "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001" });
-    const { context, list } = contextFor(result([]));
-    for (let page = 0; page < 5; page += 1) {
-      list.mockResolvedValueOnce(
-        result(page === 0 ? [target] : [], {
-          hasMore: true,
-          nextOffset: (page + 1) * 20,
-          offset: page * 20,
-        }),
-      );
-    }
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/dashboard/main/deploy-12345678", search: "", hash: "" },
-        "dashboard",
-        new AbortController().signal,
-      ),
-    ).resolves.toMatchObject({
-      kind: "ambiguous",
-      shortId: "12345678",
-      truncated: true,
-      candidates: [{ href: expect.stringContaining("123456780aaa40008000000000000001") }],
+    expect(list).not.toHaveBeenCalled();
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.resolve", {
+      shortId: "123456780a",
+      slugHint: "deploy-monitor",
+      agentId: "main",
+      allowMissing: true,
     });
-    expect(list).toHaveBeenCalledTimes(5);
-    expect(list.mock.calls.map(([options]) => options?.offset)).toEqual([
-      undefined,
-      20,
-      40,
-      60,
-      80,
-    ]);
-  });
-
-  it("does not reinterpret a bounded incomplete search with zero matches as literal", async () => {
-    const { context, list } = contextFor(result([]));
-    for (let page = 0; page < 5; page += 1) {
-      list.mockResolvedValueOnce(
-        result([], {
-          hasMore: true,
-          nextOffset: (page + 1) * 20,
-          offset: page * 20,
-        }),
-      );
-    }
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/chat/main/deadbeef", search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
-      ),
-    ).resolves.toEqual({
-      kind: "ambiguous",
-      shortId: "deadbeef",
-      candidates: [],
-      truncated: true,
-      face: "chat",
-    });
-    expect(list).toHaveBeenCalledTimes(5);
-  });
-
-  it("stops paginating once the route navigation is aborted", async () => {
-    const { context, list } = contextFor(result([]));
-    const navigation = new AbortController();
-    list.mockImplementation(async (options) => {
-      navigation.abort();
-      return result([], {
-        hasMore: true,
-        nextOffset: (options?.offset ?? 0) + 20,
-      });
-    });
-
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/chat/main/deadbeef", search: "", hash: "" },
-        "chat",
-        navigation.signal,
-      ),
-    ).rejects.toMatchObject({ name: "AbortError" });
-    expect(list).toHaveBeenCalledOnce();
-  });
-
-  it("keeps a shared session lookup alive while another navigation still owns it", async () => {
-    const matching = row({
-      key: "agent:main:dashboard:deadbeef-0000-4000-8000-000000000001",
-      displayName: "Shared lookup",
-    });
-    const { context, list } = contextFor(result([]));
-    let releaseLookup: ((value: SessionsListResult) => void) | undefined;
-    list.mockImplementation(
-      () =>
-        new Promise<SessionsListResult>((resolve) => {
-          releaseLookup = resolve;
-        }),
-    );
-    const staleNavigation = new AbortController();
-    const activeNavigation = new AbortController();
-    const location = { pathname: "/chat/main/deadbeef", search: "", hash: "" };
-    const stale = loadChatRoute(context, location, "chat", staleNavigation.signal);
-    const active = loadChatRoute(context, location, "chat", activeNavigation.signal);
-    await vi.waitFor(() => expect(list).toHaveBeenCalledOnce());
-
-    staleNavigation.abort();
-    releaseLookup?.(result([matching]));
-
-    await expect(stale).rejects.toMatchObject({ name: "AbortError" });
-    await expect(active).resolves.toMatchObject({
-      kind: "session",
-      sessionKey: matching.key,
-      face: "chat",
-    });
-    expect(list).toHaveBeenCalledOnce();
-  });
-
-  it("stops after one unavailable session-list result", async () => {
-    const { context, list } = contextFor(null);
-    await expect(
-      loadChatRoute(
-        context,
-        { pathname: "/chat/main/deadbeef", search: "", hash: "" },
-        "chat",
-        new AbortController().signal,
-      ),
-    ).rejects.toThrow("Session list unavailable while resolving URL");
-    expect(list).toHaveBeenCalledTimes(1);
   });
 
   it("builds distinct working links for ambiguous prefixes", async () => {

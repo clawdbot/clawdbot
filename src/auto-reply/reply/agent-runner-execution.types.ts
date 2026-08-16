@@ -1,4 +1,5 @@
 import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import type { FailoverReason } from "../../agents/failover/signal.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -15,7 +16,7 @@ export type RuntimeFallbackAttempt = {
   provider: string;
   model: string;
   error: string;
-  reason?: string;
+  reason: FailoverReason;
   status?: number;
   code?: string;
 };
@@ -105,7 +106,6 @@ export type AgentTurnParams = {
   toolProgressDetail?: "explain" | "raw";
   replyMediaContext?: ReplyMediaContext;
   onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
-  confirmRestartRecoveryArmedAfterLeaseLoss?: () => Promise<boolean>;
   isRestartRecoveryArmed?: () => boolean;
 };
 

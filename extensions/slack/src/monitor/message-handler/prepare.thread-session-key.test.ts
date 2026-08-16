@@ -70,9 +70,6 @@ function buildChannelMessage(overrides?: Partial<SlackMessageEvent>): SlackMessa
 
 function buildEventScope(teamId: string): SlackEventScope {
   return {
-    apiAppId: "A1",
-    enterpriseId: "E1",
-    isEnterpriseInstall: true,
     teamId,
     client: {} as SlackEventScope["client"],
   };

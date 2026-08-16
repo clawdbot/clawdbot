@@ -1,7 +1,6 @@
 import type { OpenClawConfig } from "../types.openclaw.js";
-import type { SessionUnreferencedArtifactSweepResult } from "./disk-budget.js";
+import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import type { SessionResetBoundaryReason } from "./session-reset-boundary-event.js";
-import type { SessionMaintenanceApplyReport } from "./store-maintenance-operations.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionLifecycleArtifactCleanupParams = {
@@ -27,6 +26,9 @@ export type SessionLifecycleStoreTarget = {
 };
 
 export type SessionLifecycleArchivedTranscript = {
+  /** Canonical SQLite archive identity used for idempotent derived-file publication. */
+  generation: string;
+  sessionId: string;
   sourcePath: string;
   archivedPath: string;
 };
@@ -82,6 +84,8 @@ export type DeleteSessionEntryLifecycleParams = {
   deleteTranscriptWithoutArchive?: boolean;
   /** Optional exact row guard checked under the storage writer lock. */
   expectedEntry?: SessionEntry;
+  /** Optional exact ordered transcript guard checked in the deleting SQLite transaction. */
+  expectedTranscript?: { sessionId: string; eventJson: readonly string[] };
   /** Optional provider-run identity guard checked under the storage writer lock. */
   expectedSessionId?: string | null;
   /** Optional owner revision guard checked under the storage writer lock. */
@@ -105,6 +109,8 @@ type SessionEntryLifecycleRemovalBase = {
   /** Doctor cross-store repair only: delivery aliases copied under the canonical destination key. */
   deliveryCleanupKeys?: readonly string[];
   archiveRemovedTranscript?: boolean;
+  /** Omit removal when the transcript changed after the caller's positive classification. */
+  expectedTranscriptSnapshot?: SessionStateDeleteSnapshot;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
   expectedUpdatedAt?: number;
@@ -150,8 +156,6 @@ export type SessionEntryLifecycleMutationResult = {
   removedEntries: number;
   removedSessionKeys: string[];
   archivedTranscriptDirectories: string[];
-  unreferencedArtifacts: SessionUnreferencedArtifactSweepResult | null;
-  maintenanceReport: SessionMaintenanceApplyReport | null;
   afterCount: number;
   artifactCleanupError?: unknown;
 };

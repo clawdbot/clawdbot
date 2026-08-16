@@ -6,11 +6,18 @@ import {
 } from "./approval-native-route-coordinator.js";
 
 const approvalRouteReporters: Array<ReturnType<typeof createApprovalNativeRouteReporterRaw>> = [];
+const defaultRouteSelector = {
+  shouldHandle: () => true,
+  classifyRoute: () => "unbound" as const,
+};
 
 function createApprovalNativeRouteReporter(
-  params: Parameters<typeof createApprovalNativeRouteReporterRaw>[0],
+  params: Omit<
+    Parameters<typeof createApprovalNativeRouteReporterRaw>[0],
+    "shouldHandle" | "classifyRoute"
+  >,
 ) {
-  const reporter = createApprovalNativeRouteReporterRaw(params);
+  const reporter = createApprovalNativeRouteReporterRaw({ ...params, ...defaultRouteSelector });
   approvalRouteReporters.push(reporter);
   return reporter;
 }
@@ -28,16 +35,200 @@ function createGatewayRequestMock() {
 }
 
 describe("createApprovalNativeRouteReporter", () => {
+  it("keeps the local approval route visible when an unbound request has multiple runtimes", () => {
+    const coordinator = createApprovalNativeRouteCoordinator();
+    const first = coordinator.createReporter({
+      ...defaultRouteSelector,
+      handledKinds: new Set(["exec"]),
+      channel: "telegram",
+      accountId: "default",
+      requestGateway: createGatewayRequestMock(),
+    });
+    const second = coordinator.createReporter({
+      ...defaultRouteSelector,
+      handledKinds: new Set(["exec"]),
+      channel: "telegram",
+      accountId: "ops",
+      requestGateway: createGatewayRequestMock(),
+    });
+    first.start();
+    second.start();
+
+    expect(coordinator.hasActiveRuntime({ approvalKind: "exec", channel: "telegram" })).toBe(false);
+    expect(
+      coordinator.hasActiveRuntime({
+        approvalKind: "exec",
+        channel: "telegram",
+        accountId: "ops",
+      }),
+    ).toBe(true);
+    coordinator.close();
+  });
+
+  it("selects the sole eligible runtime for an unbound request", () => {
+    const coordinator = createApprovalNativeRouteCoordinator();
+    const requestGateway = createGatewayRequestMock();
+    const createReporter = (accountId: string, eligible: boolean) =>
+      coordinator.createReporter({
+        handledKinds: new Set(["exec"]),
+        channel: "telegram",
+        accountId,
+        requestGateway,
+        shouldHandle: () => eligible,
+        classifyRoute: () => "unbound",
+      });
+    const defaultReporter = createReporter("default", true);
+    const opsReporter = createReporter("ops", false);
+    defaultReporter.start();
+    opsReporter.start();
+    const request = {
+      id: "approval-filtered",
+      request: { command: "echo hi", turnSourceChannel: "telegram" },
+      createdAtMs: 0,
+      expiresAtMs: Date.now() + 60_000,
+    } as const;
+
+    expect(defaultReporter.selectRequest({ approvalKind: "exec", request })).toEqual({
+      kind: "selected",
+    });
+    expect(opsReporter.selectRequest({ approvalKind: "exec", request })).toEqual({
+      kind: "ineligible",
+    });
+    coordinator.close();
+  });
+
+  it("keeps each channel's sole eligible runtime independent", () => {
+    const coordinator = createApprovalNativeRouteCoordinator();
+    const requestGateway = createGatewayRequestMock();
+    const createReporter = (channel: string) =>
+      coordinator.createReporter({
+        ...defaultRouteSelector,
+        handledKinds: new Set(["exec"]),
+        channel,
+        accountId: "default",
+        requestGateway,
+      });
+    const telegramReporter = createReporter("telegram");
+    const matrixReporter = createReporter("matrix");
+    telegramReporter.start();
+    matrixReporter.start();
+    const request = {
+      id: "approval-two-channels",
+      request: { command: "echo hi" },
+      createdAtMs: 0,
+      expiresAtMs: Date.now() + 60_000,
+    } as const;
+
+    expect(telegramReporter.selectRequest({ approvalKind: "exec", request })).toEqual({
+      kind: "selected",
+    });
+    expect(matrixReporter.selectRequest({ approvalKind: "exec", request })).toEqual({
+      kind: "selected",
+    });
+    coordinator.close();
+  });
+
+  it("fails an unbound multi-account route visibly and keeps the owner snapshot sticky", async () => {
+    const coordinator = createApprovalNativeRouteCoordinator();
+    const requestGateway = createGatewayRequestMock();
+    const createReporter = (accountId: string) =>
+      coordinator.createReporter({
+        ...defaultRouteSelector,
+        handledKinds: new Set(["exec"]),
+        channel: "telegram",
+        accountId,
+        requestGateway,
+      });
+    const first = createReporter("default");
+    const second = createReporter("ops");
+    first.start();
+    second.start();
+    const request = {
+      id: "deadbeef-1234-4567-89ab-cdef01234567",
+      request: {
+        command: "echo hi",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "chat:123",
+      },
+      createdAtMs: 0,
+      expiresAtMs: Date.now() + 60_000,
+    } as const;
+
+    expect(first.selectRequest({ approvalKind: "exec", request })).toEqual({
+      kind: "ambiguous-owner",
+    });
+    expect(second.selectRequest({ approvalKind: "exec", request })).toEqual({
+      kind: "ambiguous-owner",
+    });
+    await first.reportSkipped({ approvalKind: "exec", request, reason: "ambiguous-owner" });
+    await second.reportSkipped({ approvalKind: "exec", request, reason: "ambiguous-owner" });
+
+    expect(requestGateway).toHaveBeenCalledTimes(1);
+    expect(requestGateway).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        channel: "telegram",
+        to: "chat:123",
+        message:
+          "Approval required, but multiple channel accounts can handle this request. Open the Control UI or terminal UI to approve it.",
+      }),
+    );
+    expect(requestGateway).not.toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ message: expect.stringContaining("/approve") }),
+    );
+
+    const late = createReporter("late");
+    late.start();
+    expect(late.selectRequest({ approvalKind: "exec", request })).toEqual({ kind: "ineligible" });
+    coordinator.close();
+  });
+
+  it("selects every eligible explicit owner and no unrelated account", () => {
+    const coordinator = createApprovalNativeRouteCoordinator();
+    const requestGateway = createGatewayRequestMock();
+    const createReporter = (accountId: string, eligible: boolean) =>
+      coordinator.createReporter({
+        handledKinds: new Set(["exec"]),
+        channel: "telegram",
+        accountId,
+        requestGateway,
+        shouldHandle: () => eligible,
+        classifyRoute: () => "bound-or-explicit",
+      });
+    const first = createReporter("default", true);
+    const second = createReporter("ops", true);
+    const unrelated = createReporter("other", false);
+    first.start();
+    second.start();
+    unrelated.start();
+    const request = {
+      id: "approval-explicit-owners",
+      request: { command: "echo hi" },
+      createdAtMs: 0,
+      expiresAtMs: Date.now() + 60_000,
+    } as const;
+
+    expect(first.selectRequest({ approvalKind: "exec", request })).toEqual({ kind: "selected" });
+    expect(second.selectRequest({ approvalKind: "exec", request })).toEqual({ kind: "selected" });
+    expect(unrelated.selectRequest({ approvalKind: "exec", request })).toEqual({
+      kind: "ineligible",
+    });
+    coordinator.close();
+  });
+
   it("isolates active routes and cleanup between Gateway instances", () => {
     const first = createApprovalNativeRouteCoordinator();
     const second = createApprovalNativeRouteCoordinator();
     const firstReporter = first.createReporter({
+      ...defaultRouteSelector,
       handledKinds: new Set(["exec"]),
       channel: "telegram",
       accountId: "default",
       requestGateway: createGatewayRequestMock(),
     });
     const secondReporter = second.createReporter({
+      ...defaultRouteSelector,
       handledKinds: new Set(["exec"]),
       channel: "discord",
       accountId: "default",
@@ -72,6 +263,7 @@ describe("createApprovalNativeRouteReporter", () => {
     const coordinator = createApprovalNativeRouteCoordinator();
     const requestGateway = createGatewayRequestMock();
     const reporter = coordinator.createReporter({
+      ...defaultRouteSelector,
       handledKinds: new Set(["exec"]),
       channel: "telegram",
       accountId: "default",
@@ -91,18 +283,19 @@ describe("createApprovalNativeRouteReporter", () => {
     reporter.start();
     coordinator.close();
     reporter.start();
-    reporter.observeRequest({ approvalKind: "exec", request });
-    await reporter.reportSkipped({ approvalKind: "exec", request });
+    reporter.selectRequest({ approvalKind: "exec", request });
+    await reporter.reportSkipped({ approvalKind: "exec", request, reason: "ineligible" });
 
     const lateReporter = coordinator.createReporter({
+      ...defaultRouteSelector,
       handledKinds: new Set(["exec"]),
       channel: "telegram",
       accountId: "default",
       requestGateway,
     });
     lateReporter.start();
-    lateReporter.observeRequest({ approvalKind: "exec", request });
-    await lateReporter.reportSkipped({ approvalKind: "exec", request });
+    lateReporter.selectRequest({ approvalKind: "exec", request });
+    await lateReporter.reportSkipped({ approvalKind: "exec", request, reason: "ineligible" });
 
     expect(coordinator.hasActiveRuntime({ approvalKind: "exec", channel: "telegram" })).toBe(false);
     expect(requestGateway).not.toHaveBeenCalled();
@@ -123,7 +316,7 @@ describe("createApprovalNativeRouteReporter", () => {
       });
       reporter.start();
 
-      reporter.observeRequest({
+      reporter.selectRequest({
         approvalKind: "exec",
         request: {
           id: "approval-long",
@@ -137,13 +330,9 @@ describe("createApprovalNativeRouteReporter", () => {
         },
       });
 
-      expect(setTimeoutSpy).toHaveBeenCalledTimes(1);
-      const cleanupCall = setTimeoutSpy.mock.calls[0];
-      if (cleanupCall === undefined) {
-        throw new Error("expected cleanup timeout call");
-      }
-      const [cleanupCallback, cleanupDelayMs] = cleanupCall;
-      expect(cleanupDelayMs).toBe(5 * 60_000);
+      const cleanupCall = setTimeoutSpy.mock.calls.find(([, delay]) => delay === 5 * 60_000);
+      expect(cleanupCall).toBeDefined();
+      const [cleanupCallback] = cleanupCall ?? [];
       expect(cleanupCallback).toBeTypeOf("function");
     } finally {
       vi.useRealTimers();
@@ -174,7 +363,7 @@ describe("createApprovalNativeRouteReporter", () => {
       requestGateway,
     });
     reporter.start();
-    reporter.observeRequest({
+    reporter.selectRequest({
       approvalKind: "exec",
       request,
     });
@@ -252,11 +441,11 @@ describe("createApprovalNativeRouteReporter", () => {
     originReporter.start();
     otherReporter.start();
 
-    originReporter.observeRequest({
+    originReporter.selectRequest({
       approvalKind: "exec",
       request,
     });
-    otherReporter.observeRequest({
+    otherReporter.selectRequest({
       approvalKind: "exec",
       request,
     });
@@ -336,7 +525,7 @@ describe("createApprovalNativeRouteReporter", () => {
       requestGateway,
     });
     reporter.start();
-    reporter.observeRequest({
+    reporter.selectRequest({
       approvalKind: "exec",
       request,
     });

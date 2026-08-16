@@ -14,7 +14,7 @@ function mkTempRoot() {
 }
 
 function runTestHotspots(args: string[]) {
-  return spawnSync(process.execPath, ["scripts/test-hotspots.mjs", ...args], {
+  return spawnSync(process.execPath, ["--import", "tsx", "scripts/test-hotspots.mts", ...args], {
     cwd: process.cwd(),
     encoding: "utf8",
   });
