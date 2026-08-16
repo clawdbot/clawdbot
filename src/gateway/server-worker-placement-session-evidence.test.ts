@@ -2,8 +2,10 @@ import fsSync from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as sessionTargetsReadAvailability from "../config/sessions/targets-read-availability.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -22,6 +24,7 @@ const readIdentityEvidenceBatchSpy = vi.spyOn(sessionAccessor, "readSessionIdent
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
+  resetConfigRuntimeState();
   resolveTargetsReadOnlySpy.mockClear();
   readIdentityEvidenceBatchSpy.mockClear();
 });
@@ -110,6 +113,58 @@ describe("worker placement session evidence", () => {
           storePath: incognitoStorePath,
         },
       ]);
+    });
+  });
+
+  it("canonicalizes legacy default-main placements before batching", async () => {
+    const stateDir = tempDirs.make("openclaw-placement-session-canonical-main-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json");
+      const cfg: OpenClawConfig = {
+        session: { store: storeTemplate },
+        agents: { list: [{ id: "ops", default: true }] },
+      };
+      setRuntimeConfigSnapshot(cfg, cfg);
+      const placement = localPlacement("session-canonical-main", "agent:main:main", "ops");
+      const canonicalKey = "agent:ops:main";
+      await sessionAccessor.upsertSessionEntryCore(
+        { agentId: "ops", sessionKey: canonicalKey },
+        { sessionId: placement.sessionId, updatedAt: 1 },
+      );
+
+      const resolve = await createWorkerPlacementSessionEvidenceResolver([placement]);
+
+      await expect(resolve(placement)).resolves.toBe("current");
+      expect(readIdentityEvidenceBatchSpy).toHaveBeenCalledWith([
+        {
+          agentId: "ops",
+          sessionId: placement.sessionId,
+          sessionKey: canonicalKey,
+          storePath: storeTemplate.replace("{agentId}", "ops"),
+        },
+      ]);
+    });
+  });
+
+  it("keeps a listed deleted-main placement current after default-agent migration", async () => {
+    const stateDir = tempDirs.make("openclaw-placement-session-legacy-main-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const cfg: OpenClawConfig = {
+        session: {
+          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+        agents: { list: [{ id: "ops", default: true }] },
+      };
+      setRuntimeConfigSnapshot(cfg, cfg);
+      const placement = localPlacement("session-legacy-main", "agent:main:main", "ops");
+      await sessionAccessor.upsertSessionEntryCore(
+        { agentId: "main", sessionKey: placement.sessionKey },
+        { sessionId: placement.sessionId, updatedAt: 1 },
+      );
+
+      const resolve = await createWorkerPlacementSessionEvidenceResolver([placement]);
+
+      await expect(resolve(placement)).resolves.toBe("current");
     });
   });
 

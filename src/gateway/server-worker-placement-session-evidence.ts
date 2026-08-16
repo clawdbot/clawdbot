@@ -1,12 +1,14 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { SessionStoreTargetsReadCache } from "../config/sessions/targets-read-availability.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
-  resolveAgentIdFromSessionKey,
+  parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 import type {
   PlacementSessionEvidence,
@@ -25,19 +27,56 @@ const loadPlacementSessionEvidenceRuntime = createLazyRuntimeModule(async () => 
   };
 });
 
+type PlacementSessionIdentity = {
+  placement: WorkerSessionPlacementRecord;
+  agentId: string;
+  sessionKey: string;
+};
+
+function resolvePlacementSessionIdentities(
+  cfg: OpenClawConfig,
+  placement: WorkerSessionPlacementRecord,
+): PlacementSessionIdentity[] {
+  const requestedAgentId = normalizeAgentId(placement.agentId);
+  const parsedKey = parseAgentSessionKey(placement.sessionKey);
+  const canonicalKey = resolveSessionStoreKey({
+    cfg,
+    sessionKey: placement.sessionKey,
+    storeAgentId: requestedAgentId,
+  });
+  const canonicalAgentId =
+    canonicalKey === "global" || canonicalKey === "unknown" || !parsedKey
+      ? requestedAgentId
+      : resolveSessionStoreAgentId(cfg, canonicalKey);
+  const canonical = { placement, agentId: canonicalAgentId, sessionKey: canonicalKey };
+  if (!parsedKey) {
+    return [canonical];
+  }
+  const persistedAgentId = normalizeAgentId(parsedKey.agentId);
+  if (persistedAgentId === canonicalAgentId) {
+    return [canonical];
+  }
+  // A deleted legacy owner can still hold the exact persisted placement row.
+  // Probe it alongside the canonical owner and preserve current > unknown > absent.
+  return [canonical, { placement, agentId: persistedAgentId, sessionKey: placement.sessionKey }];
+}
+
 export async function createWorkerPlacementSessionEvidenceResolver(
   placements: readonly WorkerSessionPlacementRecord[],
 ): Promise<PlacementSessionEvidenceResolver> {
   try {
     const cfg = getRuntimeConfig();
     const runtime = await loadPlacementSessionEvidenceRuntime();
+    const identities = placements.flatMap((placement) =>
+      resolvePlacementSessionIdentities(cfg, placement),
+    );
     const targetsReadCache: SessionStoreTargetsReadCache = new Map();
     const targetResultsByAgentId = new Map(
       [
         ...new Set(
-          placements
-            .filter((placement) => !isIncognitoSessionKey(placement.sessionKey))
-            .map((placement) => normalizeAgentId(placement.agentId)),
+          identities
+            .filter((identity) => !isIncognitoSessionKey(identity.sessionKey))
+            .map((identity) => identity.agentId),
         ),
       ].map(
         (agentId) =>
@@ -49,52 +88,47 @@ export async function createWorkerPlacementSessionEvidenceResolver(
           ] as const,
       ),
     );
-    const prepared = placements.flatMap((placement) => {
-      if (isIncognitoSessionKey(placement.sessionKey)) {
-        const agentId = resolveAgentIdFromSessionKey(placement.sessionKey);
+    const prepared = identities.flatMap((identity) => {
+      if (isIncognitoSessionKey(identity.sessionKey)) {
         return [
           {
-            placement,
+            identity,
             target: {
-              agentId,
-              storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId }),
+              agentId: identity.agentId,
+              storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: identity.agentId }),
             },
           },
         ];
       }
-      const targetResult = targetResultsByAgentId.get(normalizeAgentId(placement.agentId));
+      const targetResult = targetResultsByAgentId.get(identity.agentId);
       return targetResult?.available
-        ? targetResult.targets.map((target) => ({
-            placement,
-            target,
-          }))
+        ? targetResult.targets.map((target) => ({ identity, target }))
         : [];
     });
     const evidence = prepared.length
       ? runtime.readSessionIdentityEvidenceBatch(
-          prepared.map(({ placement, target }) => ({
+          prepared.map(({ identity, target }) => ({
             agentId: target.agentId,
-            sessionId: placement.sessionId,
-            sessionKey: placement.sessionKey,
+            sessionId: identity.placement.sessionId,
+            sessionKey: identity.sessionKey,
             storePath: target.storePath,
           })),
         )
       : [];
     const evidenceByPlacement = new Map<WorkerSessionPlacementRecord, PlacementSessionEvidence>(
-      placements.map((placement) => {
-        if (isIncognitoSessionKey(placement.sessionKey)) {
-          return [placement, "absent"];
-        }
-        const targetResult = targetResultsByAgentId.get(normalizeAgentId(placement.agentId));
-        const initialEvidence =
-          targetResult?.available || targetResult?.reason === "database-missing"
-            ? "absent"
-            : "unknown";
-        return [placement, initialEvidence];
-      }),
+      placements.map((placement) => [placement, "absent"]),
     );
+    for (const identity of identities) {
+      if (isIncognitoSessionKey(identity.sessionKey)) {
+        continue;
+      }
+      const targetResult = targetResultsByAgentId.get(identity.agentId);
+      if (!targetResult?.available && targetResult?.reason !== "database-missing") {
+        evidenceByPlacement.set(identity.placement, "unknown");
+      }
+    }
     for (const [index, result] of evidence.entries()) {
-      const placement = prepared[index]?.placement;
+      const placement = prepared[index]?.identity.placement;
       if (!placement) {
         continue;
       }
