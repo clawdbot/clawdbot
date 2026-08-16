@@ -212,6 +212,7 @@ type GitHubIdentityConfigValue = {
 };
 
 type AgentConfigEntry = {
+  id?: string;
   name?: string;
   workspace?: string;
   agentDir?: string;
@@ -235,6 +236,7 @@ type ConfigSnapshot = {
       models?: Record<string, { alias?: string }>;
       skills?: string[];
     };
+    list?: AgentConfigEntry[];
     entries?: Record<string, AgentConfigEntry>;
   };
   tools?: {

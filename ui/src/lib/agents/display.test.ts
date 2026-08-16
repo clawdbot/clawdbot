@@ -402,6 +402,20 @@ describe("resolveAgentSkillsFilter", () => {
       ),
     ).toEqual([]);
   });
+
+  it("resolves explicit filters from the supported list roster", () => {
+    expect(
+      resolveAgentSkillsFilter(
+        {
+          agents: {
+            defaults: { skills: ["github", "weather"] },
+            list: [{ id: "main", skills: ["calendar"] }],
+          },
+        },
+        "main",
+      ),
+    ).toEqual(["calendar"]);
+  });
 });
 
 describe("buildAgentContext", () => {
