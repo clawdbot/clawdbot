@@ -1,5 +1,5 @@
 // Process regression for typed gateway startup-migration refusal and lease cleanup.
-import { execFile, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -233,6 +233,14 @@ describe.concurrent("gateway startup-migration refusal", () => {
   }, 45_000);
 
   it("refuses before relocating legacy state when a live gateway owns the state directory", async () => {
+    // Live owner fixture with gateway-shaped argv: on Windows no file-lock start
+    // time exists, so the lock reader validates the owner through process argv
+    // (isGatewayArgv); the Vitest process itself would read as a dead owner there.
+    const ownerChild = spawn(
+      process.execPath,
+      ["-e", "setTimeout(() => {}, 120_000)", "src/entry.ts", "gateway"],
+      { cwd: path.resolve("."), stdio: "ignore" },
+    );
     const temporaryRoot = await fs.promises.mkdtemp(
       path.join(os.tmpdir(), "openclaw-live-owner-refusal-"),
     );
@@ -272,15 +280,15 @@ describe.concurrent("gateway startup-migration refusal", () => {
       fs.mkdirSync(sharedStateDbDir, { recursive: true });
       const orphanWalPath = path.join(sharedStateDbDir, "openclaw.sqlite-wal");
       fs.writeFileSync(orphanWalPath, Buffer.alloc(64, 1));
-      // A live gateway owner: this test process is alive and its start time
-      // matches, which is exactly how a real concurrent gateway verifies.
+      // A live gateway owner: the spawned gateway-shaped child is alive with a
+      // matching start time, which is exactly how a real concurrent gateway verifies.
       const lockDir = resolveGatewayLockDir(stateDir);
       fs.mkdirSync(lockDir, { recursive: true });
-      const startTime = getFileLockProcessStartTime(process.pid);
+      const startTime = getFileLockProcessStartTime(ownerChild.pid!);
       fs.writeFileSync(
         path.join(lockDir, "gateway.state.lock"),
         JSON.stringify({
-          pid: process.pid,
+          pid: ownerChild.pid,
           ownerId: "live-owner-refusal-test",
           createdAt: new Date().toISOString(),
           configPath,
@@ -313,6 +321,7 @@ describe.concurrent("gateway startup-migration refusal", () => {
       expect(result.stderr, output).toContain("already owns this state directory");
       expect(hasActiveStartupMigrationLease({ env })).toBe(false);
     } finally {
+      ownerChild.kill();
       await fs.promises.rm(root, { recursive: true, force: true });
     }
   }, 45_000);
