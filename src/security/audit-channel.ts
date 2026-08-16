@@ -469,7 +469,12 @@ export async function collectChannelSecurityFindingsCore(params: {
           accountId,
           account,
         });
-        for (const message of warnings ?? []) {
+        for (const warning of warnings ?? []) {
+          if (typeof warning !== "string") {
+            findings.push(warning);
+            continue;
+          }
+          const message = warning;
           const trimmed = message.trim();
           if (!trimmed) {
             continue;

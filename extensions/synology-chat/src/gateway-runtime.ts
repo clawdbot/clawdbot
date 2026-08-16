@@ -173,10 +173,10 @@ function collectSynologyGatewayStartupIssues(params: {
   return issues;
 }
 
-export function collectSynologyGatewayRoutingWarnings(params: {
+export function collectSynologyGatewayRoutingFindings(params: {
   cfg: OpenClawConfig;
   account: ResolvedSynologyChatAccount;
-}): string[] {
+}) {
   return collectSynologyGatewayStartupIssues({
     cfg: params.cfg,
     account: params.account,
@@ -188,7 +188,12 @@ export function collectSynologyGatewayRoutingWarnings(params: {
         issue.code === "duplicate-webhook-path" ||
         issue.code === "duplicate-webhook-url",
     )
-    .map((issue) => `- Synology Chat: ${issue.message}`);
+    .map((issue) => ({
+      checkId: `channels.synology-chat.routing.${issue.code}`,
+      severity: issue.code === "duplicate-webhook-url" ? ("critical" as const) : ("warn" as const),
+      title: "Synology Chat security warning",
+      detail: `Synology Chat: ${issue.message}`,
+    }));
 }
 
 export function validateSynologyGatewayAccountStartup(params: {
