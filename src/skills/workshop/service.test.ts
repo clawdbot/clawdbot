@@ -1216,6 +1216,53 @@ describe("skill workshop proposals", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "recovers a partial create through the quarantine config",
+    async () => {
+      const workspaceDir = await makeWorkspace();
+      const targetSkillsDir = await tempDirs.make("openclaw-workshop-quarantine-symlink-");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      const config = {
+        skills: {
+          load: { allowSymlinkTargets: [targetSkillsDir] },
+          workshop: { allowSymlinkTargetWrites: true },
+        },
+      };
+      const proposal = await proposeCreateSkill({
+        workspaceDir,
+        config,
+        name: "Quarantine Symlink",
+        description: "Recover before quarantining an allowed symlink target",
+        content: "# Quarantine Symlink\n\nRecover before terminal disposal.\n",
+        supportFiles: [{ path: "references/proof.md", content: "Partial support.\n" }],
+      });
+      const targetSupportFile = path.join(
+        targetSkillsDir,
+        "quarantine-symlink",
+        "references",
+        "proof.md",
+      );
+      await writeSkillProposalRollback({
+        proposalId: proposal.record.id,
+        rollback: createSkillProposalRollback({
+          proposalId: proposal.record.id,
+          targetSkillFile: proposal.record.target.skillFile,
+          action: "create",
+          supportFiles: [{ path: "references/proof.md", existed: false }],
+        }),
+      });
+      await fs.mkdir(path.dirname(targetSupportFile), { recursive: true });
+      await fs.writeFile(targetSupportFile, "Partial support.\n", "utf8");
+
+      closeOpenClawStateDatabaseForTest();
+      await expect(
+        quarantineSkillProposal({ workspaceDir, config, proposalId: proposal.record.id }),
+      ).resolves.toMatchObject({ status: "quarantined" });
+      await expect(fs.access(targetSupportFile)).rejects.toThrow();
+      await expect(readSkillProposalRollback(proposal.record.id)).resolves.toBeNull();
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "uses the proposal environment for symlink recovery",
     async () => {
       const workspaceDir = await makeWorkspace();
