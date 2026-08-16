@@ -94,14 +94,24 @@ vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
 const TEST_AGENT_WORKSPACE = "/tmp/openclaw-test-workspace";
 let sendHandlers: typeof import("./send.js").sendHandlers;
 
-function resolveAgentIdFromSessionKeyForTests(params: { sessionKey?: string }): string {
+function resolveAgentIdFromSessionKeyForTests(params: {
+  sessionKey?: string;
+  agentId?: string;
+}): string {
+  const explicitAgentId = params.agentId?.trim().toLowerCase();
   if (typeof params.sessionKey === "string") {
     const match = params.sessionKey.match(/^agent:([^:]+)/i);
     if (match?.[1]) {
-      return match[1];
+      const sessionAgentId = match[1].toLowerCase();
+      if (explicitAgentId && explicitAgentId !== sessionAgentId) {
+        throw new Error(
+          `agent "${explicitAgentId}" does not match session key agent "${sessionAgentId}"`,
+        );
+      }
+      return sessionAgentId;
     }
   }
-  return "main";
+  return explicitAgentId ?? "main";
 }
 
 function messageActionContextFromSessionKeyForTests(sessionKey: string): {
@@ -139,11 +149,12 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   resolveSessionAgentId: ({
     sessionKey,
+    agentId,
   }: {
     sessionKey?: string;
     config?: unknown;
     agentId?: string;
-  }) => resolveAgentIdFromSessionKeyForTests({ sessionKey }),
+  }) => resolveAgentIdFromSessionKeyForTests({ sessionKey, agentId }),
   resolveAgentConfig: () => undefined,
   resolveDefaultAgentId: () => "main",
   resolveAgentWorkspaceDir: () => TEST_AGENT_WORKSPACE,
