@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { driver, result } from "./commands.test-helpers.js";
+import { callWindowTool } from "./driver-result.js";
 import {
   adoptGeneration,
   issueElementRef,
@@ -8,7 +10,6 @@ import {
   resolveElementRef,
   resolveObservation,
   resolveWindowRef,
-  verifyGeneration,
   type CuaFrameState,
 } from "./frame.js";
 
@@ -38,7 +39,7 @@ const contract = JSON.parse(
   ),
 ) as RefLifecycleContract;
 
-function runCase(testCase: RefLifecycleCase): void {
+async function runCase(testCase: RefLifecycleCase): Promise<void> {
   const state: CuaFrameState = { generation: "generation-1" };
   const windowRef = issueWindowRef(state, { pid: 100, windowId: 10 });
   const observation = issueObservation(state, windowRef);
@@ -64,9 +65,23 @@ function runCase(testCase: RefLifecycleCase): void {
       adoptGeneration(state, "generation-2");
       resolveWindowRef(state, windowRef);
       return;
-    case "in_flight_generation_change":
-      verifyGeneration(state, "generation-2");
+    case "in_flight_generation_change": {
+      // The production path is callWindowTool: it snapshots the driver
+      // generation, awaits the driver call, then detects rotation. Asserting a
+      // pre-call guard instead would leave that post-await check unprotected.
+      const session = driver();
+      session.callTool.mockImplementationOnce(async () => {
+        session.setGeneration("execution-2");
+        return result({});
+      });
+      await callWindowTool(
+        session.session,
+        { generation: session.session.generation },
+        "get_window_state",
+        {},
+      );
       return;
+    }
     case "superseded_observation":
       issueObservation(state, windowRef);
       resolveObservation(state, observation.id, windowRef);
@@ -82,11 +97,13 @@ function runCase(testCase: RefLifecycleCase): void {
 
 describe("Computer Use ref lifecycle contract", () => {
   for (const testCase of contract.cases) {
-    it(testCase.id, () => {
+    it(testCase.id, async () => {
       if (testCase.expected === "valid") {
-        expect(() => runCase(testCase)).not.toThrow();
+        await expect(runCase(testCase)).resolves.toBeUndefined();
       } else {
-        expect(() => runCase(testCase)).toThrow(new RegExp(`^${contract.staleErrorCode}:`, "u"));
+        await expect(runCase(testCase)).rejects.toThrow(
+          new RegExp(`^${contract.staleErrorCode}:`, "u"),
+        );
       }
     });
   }
