@@ -50,7 +50,10 @@ export function isStaleChunkImportError(error: unknown): boolean {
 }
 
 function reloadControlUiDocument(): void {
-  window.location.reload();
+  const url = new URL(window.location.href);
+  // The pre-app mount recovery strips this one-shot cache buster before bootstrap.
+  url.searchParams.set("openclaw_mount_recovery", String(Date.now()));
+  window.location.replace(url.href);
 }
 
 function sessionStorageOrNull(): Pick<Storage, "getItem" | "setItem"> | null {
