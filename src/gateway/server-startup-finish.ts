@@ -38,6 +38,7 @@ export async function finishGatewayStartup(params: {
   loadGatewayStartupPostAttachModule: () => Promise<
     typeof import("./server-startup-post-attach.js")
   >;
+  beforeWorkerEnvironmentRuntimeStart?: () => void;
   waitForPostReadyWork: () => Promise<void>;
 }) {
   const {
@@ -53,6 +54,7 @@ export async function finishGatewayStartup(params: {
     logReload,
     logTailscale,
     loadGatewayStartupPostAttachModule,
+    beforeWorkerEnvironmentRuntimeStart,
   } = params;
   const {
     minimalTestGateway,
@@ -327,11 +329,7 @@ export async function finishGatewayStartup(params: {
                   if (lifecycle.closePreludeStarted) {
                     return null;
                   }
-                  // QA-only fault injection keeps the real deferred sidecar
-                  // transport boundary observable without seeding worker state.
-                  if (process.env.OPENCLAW_QA_FAIL_WORKER_START === "1") {
-                    throw new Error("QA worker environment sidecar failure sentinel");
-                  }
+                  beforeWorkerEnvironmentRuntimeStart?.();
                   return await workerPlacementRuntime.startRuntime({
                     isClosePreludeStarted: () => lifecycle.closePreludeStarted,
                     // Close must see the drain handle before reconciliation can yield.

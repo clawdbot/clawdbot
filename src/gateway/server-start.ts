@@ -18,6 +18,13 @@ const { log, logTailscale, logChannels, logHealth, logCron, logReload, logHooks,
   gatewayKernelLogs;
 const POST_READY_WORK_START_DELAY_MS = 500;
 
+const qaWorkerEnvironmentRuntimeStartFailure =
+  process.env.OPENCLAW_QA_FAIL_WORKER_START === "1"
+    ? () => {
+        throw new Error("QA worker environment sidecar failure sentinel");
+      }
+    : undefined;
+
 export { resetPreparedModelCatalogForTestCore };
 
 export async function startGatewayServerCore(
@@ -56,6 +63,7 @@ export async function startGatewayServerCore(
       logReload,
       logTailscale,
       loadGatewayStartupPostAttachModule,
+      beforeWorkerEnvironmentRuntimeStart: qaWorkerEnvironmentRuntimeStartFailure,
       waitForPostReadyWork: () => postReadyWorkBarrier,
     });
   } catch (err) {
