@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines -- TODO: split this chat pane rendering boundary. */
 import { html, nothing } from "lit";
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/index.js";
 import { findInlineApproval } from "../../app/approval-presentation.ts";
@@ -19,7 +20,10 @@ import {
   resolveChatPaneObserverRunId,
 } from "../../lib/observer-digest.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
-import { controlModelChatInteractionProps } from "./chat-control-model-interactions.ts";
+import {
+  controlModelChatInteractionProps,
+  questionPromptsForRoute,
+} from "./chat-control-model-interactions.ts";
 import { clearChatHistory } from "./chat-history.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { createChatModelSetupBanner, requiresChatModelSetup } from "./chat-model-setup.ts";
@@ -313,7 +317,10 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       // Unconditional: catalog chats never render the rail (sessionRailReady is
       // forced false), and a hide/show from any surface must reach the gateway.
       onObserverVisibilityChange: this.setSessionObserverVisibility,
-      gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
+      gatewayQuestionPrompts:
+        catalogKey || sessionParticipationBlocked
+          ? []
+          : questionPromptsForRoute(this.questionPrompts, state.sessionKey, currentAgentId),
       ...controlModelChatInteractionProps(
         state,
         this.questionPromptState,

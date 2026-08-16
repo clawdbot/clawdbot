@@ -260,6 +260,12 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       if (!controlModelAdapter || controlModelSyncing) {
         return;
       }
+      if (
+        (lastListOptions.limit ?? DEFAULT_SESSION_LIST_QUERY.limit) >
+        CONTROL_MODEL_MAX_SESSION_PAGE_SIZE
+      ) {
+        return;
+      }
       const catalog = initialControlModel.getSnapshot().sessionCatalog;
       if (catalog.status !== "loading") {
         applyControlModelSnapshot(catalog);

@@ -4,7 +4,12 @@ import type {
   ControlModelRequestOptions,
 } from "../../../../packages/gateway-client/src/model/index.js";
 import type { QuestionPromptCommand } from "../../app/question-prompt-command.ts";
-import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
+import {
+  cancelQuestionPrompt,
+  submitQuestionPrompt,
+  type QuestionPrompt,
+} from "../../app/question-prompt.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import {
   selectedControlModelConversationForRoute,
   type ChatControlModelConversationState,
@@ -53,6 +58,22 @@ export function controlModelQuestionPromptCommand(
 }
 
 type QuestionPromptState = Parameters<typeof submitQuestionPrompt>[0];
+
+export function questionPromptsForRoute(
+  prompts: readonly QuestionPrompt[],
+  sessionKey: string,
+  agentId?: string,
+): QuestionPrompt[] {
+  const normalizedAgentId = agentId?.trim().toLowerCase();
+  return prompts.filter(
+    (prompt) =>
+      prompt.sessionKey !== undefined &&
+      areUiSessionKeysEquivalent(prompt.sessionKey, sessionKey) &&
+      (!normalizedAgentId ||
+        !prompt.agentId ||
+        prompt.agentId.trim().toLowerCase() === normalizedAgentId),
+  );
+}
 
 export function controlModelChatInteractionProps(
   state: ChatControlModelConversationState,

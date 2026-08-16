@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   controlModelChatInteractionProps,
   controlModelQuestionPromptCommand,
+  questionPromptsForRoute,
 } from "./chat-control-model-interactions.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -90,5 +91,19 @@ describe("controlModelQuestionPromptCommand", () => {
     expect(
       controlModelChatInteractionProps(state, {} as never, "global", "main").controlModelArtifacts,
     ).toEqual([{ id: "artifact-one" }]);
+  });
+
+  it("filters shared global question state by the selected agent", () => {
+    const prompts = [
+      { id: "main", sessionKey: "global", agentId: "main" },
+      { id: "work", sessionKey: "global", agentId: "work" },
+      { id: "legacy", sessionKey: "global" },
+      { id: "other", sessionKey: "agent:main:other", agentId: "main" },
+    ] as never;
+
+    expect(questionPromptsForRoute(prompts, "global", "work").map((prompt) => prompt.id)).toEqual([
+      "work",
+      "legacy",
+    ]);
   });
 });

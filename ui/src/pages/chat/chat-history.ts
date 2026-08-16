@@ -800,6 +800,13 @@ async function ensureControlModel(state: ChatState): Promise<ControlModel | unde
   }
   if (!state.controlModel) {
     state.controlModel = model;
+    if (
+      state.chatSessionMessageSubscription &&
+      state.sessions?.subscribeMessages &&
+      state.sessions.unsubscribeMessages
+    ) {
+      await retireLegacySessionMessageSubscription(state as ChatSessionMessageSubscriptionState);
+    }
     state.requestUpdate?.();
   }
   return state.controlModel;
@@ -1691,7 +1698,7 @@ function controlModelConversationForState(state: ChatState): ControlModelConvers
     state.controlModelConversationSessionKey === state.sessionKey &&
     (state.controlModelConversationAgentId ?? null) === (agentId ?? null)
   ) {
-    return state.controlModelConversation;
+    return model.conversation(state.sessionKey, agentId ? { agentId } : {});
   }
   if (state.controlModelConversation) {
     const previousKey = state.controlModelConversationSessionKey;

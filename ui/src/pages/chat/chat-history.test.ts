@@ -660,7 +660,7 @@ describe("canonical history snapshot projection", () => {
     releaseSecondRefresh();
     await Promise.all([explicit, concurrent]);
 
-    expect(model.conversation).toHaveBeenCalledOnce();
+    expect(model.conversation).toHaveBeenCalledTimes(2);
     expect(refreshHistory).toHaveBeenCalledTimes(2);
     // oxlint-disable-next-line unbound-method -- Vitest inspects the mock without invoking it.
     expect(state.client?.request).not.toHaveBeenCalledWith("chat.history", expect.anything());
