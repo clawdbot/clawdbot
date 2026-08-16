@@ -2773,6 +2773,22 @@ describe("config cli", () => {
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
+    it("rejects a directory passed as --file", async () => {
+      const pathname = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-patch-directory-"));
+      try {
+        await expect(runConfigCommand(["config", "patch", "--file", pathname])).rejects.toThrow(
+          ExitError,
+        );
+      } finally {
+        fs.rmSync(pathname, { recursive: true, force: true });
+      }
+
+      expectErrorIncludes(
+        `--file must be a regular file: ${pathname}. Choose a JSON5 input file and try again.`,
+      );
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
     it("rejects --file patches above the config mutation limit", async () => {
       const pathname = path.join(
         os.tmpdir(),
@@ -3363,7 +3379,7 @@ describe("config cli", () => {
         },
         refsChecked: 0,
         skippedExecRefs: 0,
-        errors: [{ kind: "schema", message }],
+        errors: [{ kind: "schema", message: expect.stringContaining(message) }],
       });
       expectErrorIncludes(message);
     });
@@ -3400,7 +3416,10 @@ describe("config cli", () => {
 
     it("aggregates schema and resolvability failures in --dry-run --json mode", async () => {
       setGatewaySnapshot({ providers: { default: { source: "env" } } });
-      mockResolveSecretRefValue.mockRejectedValue(new Error("missing env var"));
+      const secret = "sk-abcdefghijklmnopqrstuv";
+      const error = new Error(`missing env var: Authorization: Bearer ${secret}`);
+      error.name = "SecretResolutionError";
+      mockResolveSecretRefValue.mockRejectedValue(error);
 
       await expect(
         runConfigCommand([
@@ -3423,6 +3442,8 @@ describe("config cli", () => {
       expect(errorKinds).toContain("resolvability");
       const errorRefs = (payload.errors ?? []).map((entry) => entry.ref ?? "");
       expect(errorRefs).toContain("env:default:DISCORD_BOT_TOKEN");
+      expect(JSON.stringify(payload)).not.toContain(error.name);
+      expect(JSON.stringify(payload)).not.toContain(secret);
     });
 
     it("fails dry-run when provider updates make existing refs unresolvable", async () => {

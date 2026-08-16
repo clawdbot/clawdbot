@@ -849,7 +849,9 @@ struct RootSidebar: View {
     private func forkSession(_ session: OpenClawChatSessionEntry) {
         Task {
             do {
-                let key = try await self.appModel.makeChatTransport().forkSession(parentKey: session.key)
+                let key = try await self.appModel.makeChatTransport().forkSession(
+                    parentKey: session.key,
+                    fromLastCompleted: session.hasActiveRun == true)
                 self.appModel.openChat(sessionKey: key)
                 self.selectSidebarDestination(.chat)
                 await self.model.refreshSessions(appModel: self.appModel)

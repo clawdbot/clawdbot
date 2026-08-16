@@ -63,6 +63,7 @@ describe("audit activity protocol schemas", () => {
         limit: 500,
       }),
     ).toBe(true);
+    expect(validateAuditActivityListParams({ direction: "inbound" })).toBe(true);
     expect(validateAuditActivityListParams({ direction: "sideways" })).toBe(false);
     expect(validateAuditActivityListParams({ limit: 501 })).toBe(false);
   });

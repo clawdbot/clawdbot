@@ -14,6 +14,11 @@ import {
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import {
+  createPluginStateKeyedStore,
+  resetPluginStateStoreForTests,
+  sweepExpiredPluginStateEntries,
+} from "../plugin-state/plugin-state-store.js";
+import {
   beginGatewayRestartSignalAdmission,
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -560,6 +565,29 @@ describe("task-registry", () => {
     hoisted.cancelBackgroundExecSessionMock.mockReset();
     hoisted.cancelActiveCronTaskRunMock.mockReset();
     hoisted.killSubagentRunAdminMock.mockReset();
+  });
+
+  it("sweeps expired plugin state after restart before a plugin namespace reopens", async () => {
+    await withTaskRegistryTempDir(async () => {
+      try {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000);
+        const store = createPluginStateKeyedStore<{ value: string }>("fixture-plugin", {
+          namespace: "maintenance-restart",
+          maxEntries: 10,
+        });
+        await store.register("expired", { value: "stale" }, { ttlMs: 100 });
+
+        // Close plugin-state's process-local handle while preserving the shared SQLite file.
+        resetPluginStateStoreForTests();
+        vi.setSystemTime(1_200);
+        await runTaskRegistryMaintenance();
+
+        expect(sweepExpiredPluginStateEntries()).toBe(0);
+      } finally {
+        resetPluginStateStoreForTests();
+      }
+    });
   });
 
   it("updates task status from lifecycle events", async () => {

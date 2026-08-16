@@ -153,6 +153,22 @@ describe("cron attention details", () => {
 
     expect(overdue?.detail).toBe("Nightly backup\nunnamed-id");
   });
+
+  it("does not flag an actively running job as overdue", () => {
+    // The gateway leaves nextRunAtMs past-due during execution; runningAtMs is
+    // the recorded fact that a run is in flight (agentTurn runs may take up to
+    // an hour, far beyond the 5-minute overdue grace).
+    const running = cronJob("running-id");
+    running.state = { lastRunStatus: "ok", nextRunAtMs: 1, runningAtMs: 2 };
+    const stalled = cronJob("stalled-id");
+    stalled.state = { lastRunStatus: "ok", nextRunAtMs: 2 };
+
+    const overdue = cronItems([running, stalled], 300_003).find(
+      (item) => item.kind === "cronOverdue",
+    );
+
+    expect(overdue?.detail).toBe("stalled-id");
+  });
 });
 
 describe("pending approval attention", () => {

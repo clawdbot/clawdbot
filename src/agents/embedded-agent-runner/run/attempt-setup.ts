@@ -44,6 +44,7 @@ import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
@@ -75,7 +76,6 @@ import {
   formatEmbeddedRunStageSummary,
   shouldWarnEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
-import { repairAttemptToolUseResultPairing } from "./attempt-transcript-helpers.js";
 import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -378,7 +378,7 @@ export function installEmbeddedAttemptContextGuards(input: {
       ...(input.repairToolUseResultPairing
         ? {
             repairAssembledMessages: (messages) =>
-              repairAttemptToolUseResultPairing(messages, input.isOpenAIResponsesApi),
+              sanitizeToolUseResultPairingForModel(messages, input.isOpenAIResponsesApi),
           }
         : {}),
       getPrePromptMessageCount: input.getPrePromptMessageCount,

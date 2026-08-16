@@ -40,10 +40,16 @@ publish a general-download elevation archive. Install only a certified, source-a
 authorized release operator:
 
 ```bash
-scripts/mac-elevation-host.sh install \
-  --archive "/path/to/OpenClaw-<full-source-sha>-stable.zip"
-scripts/mac-elevation-host.sh status
+cd /path/to/elevation-artifact-set
+shasum -a 256 -c "OpenClaw-<full-source-sha>-stable.zip.sha256"
+shasum -a 256 -c "OpenClaw-<full-source-sha>-stable-installer.sh.sha256"
+./OpenClaw-<full-source-sha>-stable-installer.sh install \
+  --archive "OpenClaw-<full-source-sha>-stable.zip"
+./OpenClaw-<full-source-sha>-stable-installer.sh status
 ```
+
+Transfer the complete artifact set: archive, receipt, portable installer, and both checksum files. The target Mac does
+not need an OpenClaw source checkout. Verify both checksums before running the installer.
 
 `--elevation-host` is implied by the installed job. It keeps the Bridge, control channel, Mac node, Gateway
 connectivity, and termination handling active while disabling automatic windows, updater startup, Dock promotion,
@@ -55,9 +61,9 @@ uses the separate `ai.openclaw.mac.elevation-host` job and refuses to race or re
 (`ai.openclaw.mac`).
 
 The elevation archive is Foundation-signed, notarized, stapled, named by the full OpenClaw source commit, and contains
-exactly `OpenClaw.app`. Its receipt binds the archive digest, OpenClaw and Peekaboo source revisions, signer, CDHash,
-architectures, entitlement digests, and Apple notarization submission ID. No AppleScript or Apple Events entitlement
-is part of this workflow.
+exactly `OpenClaw.app`. Its receipt binds the archive and installer names and digests, OpenClaw and Peekaboo source
+revisions, signer, CDHash, architectures, entitlement digests, and Apple notarization submission ID. No AppleScript or
+Apple Events entitlement is part of this workflow.
 
 ## Client discovery order
 

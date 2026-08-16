@@ -2,7 +2,7 @@ import { html, nothing } from "lit";
 import "../../../components/image-lightbox.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
-import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
+import { openResolvedImage } from "./chat-message-image-open.ts";
 
 export function isImageLightboxEvent(event: Event): boolean {
   return event
@@ -12,7 +12,7 @@ export function isImageLightboxEvent(event: Event): boolean {
     );
 }
 
-export function inlineChatImageFromEvent(event: Event): HTMLImageElement | null {
+function inlineChatImageFromEvent(event: Event): HTMLImageElement | null {
   const target = event
     .composedPath()
     .find(
@@ -31,29 +31,26 @@ export function inlineChatImageFromEvent(event: Event): HTMLImageElement | null 
 export function openInlineChatImage(
   event: Event,
   onOpenImage: ((item: ImageLightboxItem) => void) | undefined,
-) {
+): boolean {
   if (event.defaultPrevented) {
-    return;
+    return false;
   }
   const image = inlineChatImageFromEvent(event);
   if (!image) {
-    return;
+    return false;
   }
   event.preventDefault();
   const src = image.currentSrc || image.src;
   const title = image.alt.trim() || t("chat.imageLightbox.untitled");
-  if (onOpenImage) {
-    onOpenImage({ src, title });
-  } else {
-    openExternalUrlSafe(src, { allowDataImage: true });
-  }
+  openResolvedImage(onOpenImage, src, title);
+  return true;
 }
 
 export function renderChatImageLightbox(
   item: ImageLightboxItem | null | undefined,
-  onClose: (() => void) | undefined,
+  onClose: () => void,
 ) {
-  if (!item || !onClose) {
+  if (!item) {
     return nothing;
   }
   return html`

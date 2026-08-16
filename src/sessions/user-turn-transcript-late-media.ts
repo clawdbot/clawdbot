@@ -6,7 +6,7 @@ import type { PersistedUserTurnMessage } from "./user-turn-transcript.types.js";
 export function readUserTurnMessageMeta(
   message: AgentMessage,
 ): Record<string, unknown> | undefined {
-  return asOptionalRecord((message as unknown as Record<string, unknown>)["__openclaw"]);
+  return asOptionalRecord(Reflect.get(message, "__openclaw"));
 }
 
 export function buildLateResolvedMediaMessage(params: {
@@ -21,7 +21,8 @@ export function buildLateResolvedMediaMessage(params: {
   ) {
     return undefined;
   }
-  const resolved = params.resolvedMessage as unknown as Record<string, unknown>;
+  const resolvedIdempotencyKey = Reflect.get(params.resolvedMessage, "idempotencyKey");
+  const resolvedTimestamp = Reflect.get(params.resolvedMessage, "timestamp");
   const admittedContent = params.admittedMessage?.content;
   const resolvedContent = params.resolvedMessage.content;
   let content = resolvedContent;
@@ -34,14 +35,14 @@ export function buildLateResolvedMediaMessage(params: {
     });
   }
   const idempotencyKey =
-    typeof resolved.idempotencyKey === "string" && resolved.idempotencyKey.length > 0
-      ? `${resolved.idempotencyKey}:late-media`
-      : `late-media:${typeof resolved.timestamp === "number" ? resolved.timestamp : Date.now()}`;
+    typeof resolvedIdempotencyKey === "string" && resolvedIdempotencyKey.length > 0
+      ? `${resolvedIdempotencyKey}:late-media`
+      : `late-media:${typeof resolvedTimestamp === "number" ? resolvedTimestamp : Date.now()}`;
   // Late-media scaffolding is wire-only so user-facing transcript projections skip it.
   return {
-    ...resolved,
+    ...params.resolvedMessage,
     content,
     idempotencyKey,
     __openclaw: { ...readUserTurnMessageMeta(params.resolvedMessage), lateMedia: true },
-  } as unknown as PersistedUserTurnMessage;
+  } as PersistedUserTurnMessage;
 }

@@ -34,6 +34,12 @@ type HandleInlineActionsInput = Parameters<
   typeof import("./get-reply-inline-actions.js").handleInlineActions
 >[0];
 
+const skillToolDispatchDependencies: NonNullable<
+  HandleInlineActionsInput["skillToolDispatchDependencies"]
+> = {
+  createOpenClawTools: createOpenClawToolsMock,
+};
+
 vi.mock("./commands.runtime.js", () => ({
   handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
   buildStatusReply: (...args: unknown[]) => buildStatusReplyMock(...args),
@@ -41,10 +47,6 @@ vi.mock("./commands.runtime.js", () => ({
 
 vi.mock("../../skills/discovery/chat-commands.runtime.js", () => ({
   listSkillCommandsForWorkspace: (...args: unknown[]) => listSkillCommandsForWorkspaceMock(...args),
-}));
-
-vi.mock("../../agents/openclaw-tools.runtime.js", () => ({
-  createOpenClawTools: (...args: unknown[]) => createOpenClawToolsMock(...args),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -128,6 +130,7 @@ const createHandleInlineActionsInput = (params: {
     contextTokens: 0,
     abortedLastRun: false,
     sessionScope: "per-sender",
+    skillToolDispatchDependencies,
     ...params.overrides,
   };
 };

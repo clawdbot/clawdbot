@@ -6,11 +6,82 @@ import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-r
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
 
-function expectNoLead(row: Element | null) {
-  expect(row?.querySelector(".sidebar-session-indicator")).toBeNull();
+function expectEmptyLead(row: Element | null) {
+  const lead = row?.querySelector(".sidebar-session-indicator");
+  expect(lead).not.toBeNull();
+  expect(lead?.childElementCount).toBe(0);
 }
 
 describe("AppSidebar session indicators", () => {
+  it("renders named glyphs as strokes and keeps emoji as text", async () => {
+    const glyphKey = "agent:main:glyph";
+    const emojiKey = "agent:main:emoji";
+    const sessions = createSessionsHarness("main", [glyphKey, emojiKey]);
+    const result = sessions.sessions.state.result;
+    if (!result) {
+      throw new Error("expected session list");
+    }
+    const glyph = result.sessions.find((row) => row.key === glyphKey);
+    const emoji = result.sessions.find((row) => row.key === emojiKey);
+    if (!glyph || !emoji) {
+      throw new Error("expected icon sessions");
+    }
+    glyph.icon = "braces";
+    emoji.icon = "🦞";
+
+    const { sidebar } = await mountSidebar(
+      createGatewayHarness({} as GatewayBrowserClient).gateway,
+      sessions.sessions,
+    );
+    const glyphRow = sidebar.querySelector(`[data-session-key="${glyphKey}"]`);
+    const emojiRow = sidebar.querySelector(`[data-session-key="${emojiKey}"]`);
+
+    expect(glyphRow?.querySelector(".session-glyph__icon svg")).not.toBeNull();
+    expect(glyphRow?.querySelector(".session-glyph__emoji")).toBeNull();
+    expect(emojiRow?.querySelector(".session-glyph__emoji")?.textContent).toBe("🦞");
+    expect(emojiRow?.querySelector(".session-glyph__icon")).toBeNull();
+  });
+
+  it("places Home activity in the same trailing endcap as session activity", async () => {
+    const mainKey = "agent:main:main";
+    const workingKey = "agent:main:working";
+    const sessions = createSessionsHarness("main", [mainKey, workingKey]);
+    const result = sessions.sessions.state.result;
+    if (!result) {
+      throw new Error("expected session list");
+    }
+    for (const row of result.sessions) {
+      row.hasActiveRun = true;
+      row.status = "running";
+    }
+    const { sidebar } = await mountSidebar(
+      createGatewayHarness({} as GatewayBrowserClient).gateway,
+      sessions.sessions,
+    );
+    sidebar.outboxCountForSession = (sessionKey) => (sessionKey === mainKey ? 2 : 0);
+    sidebar.hasSessionDraft = (sessionKey) => sessionKey === mainKey;
+    sidebar.requestUpdate();
+    await sidebar.updateComplete;
+
+    const home = sidebar.querySelector(".nav-item--home");
+    const workingSession = sidebar.querySelector(`[data-session-key="${workingKey}"]`);
+    const homeSpinner = home?.querySelector(".nav-item__state .session-run-spinner");
+    const sessionSpinner = workingSession?.querySelector(".session-row-aside .session-run-spinner");
+
+    expect(home?.querySelector(".nav-item__icon")).not.toBeNull();
+    expect(home?.querySelector(".session-glyph__ring")).toBeNull();
+    expect(homeSpinner).not.toBeNull();
+    expect(homeSpinner?.className).toBe(sessionSpinner?.className);
+    expect(homeSpinner?.getAttribute("role")).toBe(sessionSpinner?.getAttribute("role"));
+    expect(homeSpinner?.getAttribute("aria-label")).toBe(
+      sessionSpinner?.getAttribute("aria-label"),
+    );
+    expect(
+      home?.querySelector(".nav-item__state .session-row-badge--queued")?.textContent,
+    ).toContain("2");
+    expect(home?.querySelector(".nav-item__state .session-row-badge--draft")).not.toBeNull();
+  });
+
   it("preserves child PR indicators and leads a pinned child like any other", async () => {
     const parentKey = "agent:main:parent";
     const pinnedKey = "agent:main:pinned-child";
@@ -196,11 +267,11 @@ describe("AppSidebar session indicators", () => {
       expect(sidebar.querySelector('[data-session-pr-state="merged"]')).not.toBeNull();
     });
     const plain = sidebar.querySelector(`[data-session-key="${keys.plain}"]`);
-    expectNoLead(plain);
+    expectEmptyLead(plain);
     expect(plain?.querySelector(".session-row-state")).toBeNull();
 
     const forked = sidebar.querySelector(`[data-session-key="${keys.forked}"]`);
-    expectNoLead(forked);
+    expectEmptyLead(forked);
     expect(
       forked?.querySelector(".session-row-aside > .session-row-state .session-row-fork-indicator"),
     ).not.toBeNull();
@@ -210,14 +281,14 @@ describe("AppSidebar session indicators", () => {
     expect(forked?.querySelector(".session-row-fork-indicator")?.hasAttribute("title")).toBe(false);
 
     const unread = sidebar.querySelector(`[data-session-key="${keys.unread}"]`);
-    expectNoLead(unread);
+    expectEmptyLead(unread);
     expect(
       unread?.querySelector(".session-row-aside > .session-row-state .session-unread-dot"),
     ).not.toBeNull();
 
     const runningUnread = sidebar.querySelector(`[data-session-key="${keys.runningUnread}"]`);
     expect(runningUnread?.classList.contains("session-row-host--running")).toBe(true);
-    expectNoLead(runningUnread);
+    expectEmptyLead(runningUnread);
     expect(
       runningUnread?.querySelector(".session-row-aside > .session-row-state .session-run-spinner"),
     ).not.toBeNull();
@@ -241,7 +312,7 @@ describe("AppSidebar session indicators", () => {
 
     for (const key of [keys.openPullRequest, keys.mergedPullRequest]) {
       const row = sidebar.querySelector(`[data-session-key="${key}"]`);
-      expectNoLead(row);
+      expectEmptyLead(row);
       expect(row?.querySelector(".session-row-state [data-session-pr-state]")).not.toBeNull();
       expect(row?.querySelector("a")?.getAttribute("title")).toContain(
         key === keys.openPullRequest ? "Open PR" : "Merged",
@@ -257,7 +328,7 @@ describe("AppSidebar session indicators", () => {
     sessions.publishList({ result });
     await waitForFast(() => {
       expect(sidebar.querySelector('[data-session-pr-state="open"]')).toBeNull();
-      expectNoLead(sidebar.querySelector(`[data-session-key="${keys.openPullRequest}"]`));
+      expectEmptyLead(sidebar.querySelector(`[data-session-key="${keys.openPullRequest}"]`));
     });
   });
 });

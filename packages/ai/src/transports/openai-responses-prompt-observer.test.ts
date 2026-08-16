@@ -14,7 +14,7 @@ import {
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
 } from "./openai-responses-compaction-replay.js";
-import { tagOpenAIResponsesReasoningReplayItem } from "./openai-responses-replay-internal.js";
+import { OPENAI_RESPONSES_REASONING_REPLAY_META_KEY } from "./openai-responses-contracts.js";
 
 type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
 const SDK_FULL_HISTORY_PREFIX = "full history before compaction";
@@ -135,18 +135,14 @@ function createCompactionContext(
           {
             type: "thinking",
             thinking: "prior reasoning",
-            thinkingSignature: JSON.stringify(
-              tagOpenAIResponsesReasoningReplayItem(
-                {
-                  type: "reasoning",
-                  id: "rs_sdk_retry",
-                  encrypted_content: SDK_REASONING_CIPHERTEXT,
-                  summary: [],
-                },
-                model,
-                identity,
-              ),
-            ),
+            thinkingSignature: JSON.stringify({
+              type: "reasoning",
+              id: "rs_sdk_retry",
+              encrypted_content: SDK_REASONING_CIPHERTEXT,
+              summary: [],
+              [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]:
+                buildOpenAIResponsesReasoningReplayMetadata(model, identity),
+            }),
           },
         ]
       : [],

@@ -5,6 +5,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -340,8 +341,7 @@ function withWriteTransaction(write: (database: OpenClawStateDatabase) => void) 
   runOpenClawStateWriteTransaction((database) => write(database));
 }
 
-export function loadTaskRegistryStateFromSqlite(): TaskRegistryStoreSnapshot {
-  const { db, path } = openTaskRegistryDatabase();
+function readTaskRegistrySnapshot({ db, path }: TaskRegistryDatabase): TaskRegistryStoreSnapshot {
   return runSqliteDeferredTransactionSync(db, () => {
     assertSqliteTableIntegrity(db, path, "task_runs");
     assertSqliteTableIntegrity(db, path, "task_delivery_state");
@@ -354,6 +354,20 @@ export function loadTaskRegistryStateFromSqlite(): TaskRegistryStoreSnapshot {
       ),
     };
   });
+}
+
+export function loadTaskRegistryStateFromSqlite(): TaskRegistryStoreSnapshot {
+  return readTaskRegistrySnapshot(openTaskRegistryDatabase());
+}
+
+/** Loads task records without creating or migrating shared state. */
+export function loadTaskRegistryStateFromSqliteReadOnly(): TaskRegistryStoreSnapshot {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(readTaskRegistrySnapshot) ?? {
+      tasks: new Map(),
+      deliveryStates: new Map(),
+    }
+  );
 }
 
 export function listTaskRegistryRecordsByOwnerKeyFromSqlite(ownerKey: string): TaskRecord[] {
@@ -374,8 +388,11 @@ export function listTaskRegistryRecordsByRuntimeSourceIdFromSqlite(params: {
   if (params.sourceId !== undefined && !sourceId) {
     return [];
   }
-  const { db } = openTaskRegistryDatabase();
-  return selectTaskRowsByRuntimeSourceId(db, params.runtime, sourceId).map(rowToTaskRecord);
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }) =>
+      selectTaskRowsByRuntimeSourceId(db, params.runtime, sourceId).map(rowToTaskRecord),
+    ) ?? []
+  );
 }
 
 export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapshot) {

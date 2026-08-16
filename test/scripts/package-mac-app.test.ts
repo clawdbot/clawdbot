@@ -47,6 +47,17 @@ function getPackageManagerHelperBlock(): string {
   return script.slice(start, end);
 }
 
+function getMergeFrameworkMachOsBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("merge_framework_machos()");
+  const end = script.indexOf('PEEKABOO_SOURCE_COMMIT="$(resolve_peekaboo_source_commit)"');
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
 function getSwiftToolchainBlock(): string {
   const script = readFileSync("scripts/lib/swift-toolchain.sh", "utf8");
   const start = script.indexOf("REQUIRED_SWIFT_TOOLS_MAJOR=");
@@ -749,6 +760,57 @@ describe("package-mac-app plist stamping", () => {
     expect(helperCopy).toContain('chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"');
   });
 
+  it.runIf(process.platform === "darwin")(
+    "merges framework Mach-O binaries when the checkout path contains glob metacharacters",
+    () => {
+      const root = tempDirs.make("openclaw-package-framework-[fixture]-");
+      const primary = path.join(root, "Primary.framework");
+      const secondary = path.join(root, "Secondary.framework");
+      const destination = path.join(root, "Destination.framework");
+      const relativeBinary = path.join("Versions", "A", "OpenClawFixture");
+
+      for (const framework of [primary, secondary, destination]) {
+        mkdirSync(path.dirname(path.join(framework, relativeBinary)), { recursive: true });
+      }
+
+      const fixtureBinary = "/bin/ls";
+      const fixtureArchitectures = spawnSync("/usr/bin/lipo", ["-archs", fixtureBinary], {
+        encoding: "utf8",
+      })
+        .stdout.trim()
+        .split(/\s+/u);
+      const [primaryArchitecture, secondaryArchitecture] = fixtureArchitectures;
+      if (!primaryArchitecture || !secondaryArchitecture) {
+        throw new Error(`${fixtureBinary} must contain at least two architectures`);
+      }
+      const primaryBinary = path.join(primary, relativeBinary);
+      const secondaryBinary = path.join(secondary, relativeBinary);
+      const destinationBinary = path.join(destination, relativeBinary);
+      expect(
+        spawnSync("/usr/bin/lipo", [
+          "-thin",
+          primaryArchitecture,
+          fixtureBinary,
+          "-output",
+          primaryBinary,
+        ]).status,
+      ).toBe(0);
+      expect(spawnSync("/bin/cp", [fixtureBinary, secondaryBinary]).status).toBe(0);
+      writeFileSync(destinationBinary, readFileSync(primaryBinary));
+
+      const result = runHelper(`
+        set -euo pipefail
+        ${getMergeFrameworkMachOsBlock()}
+        merge_framework_machos ${JSON.stringify(primary)} ${JSON.stringify(destination)} ${JSON.stringify(secondary)}
+        /usr/bin/lipo -info ${JSON.stringify(destinationBinary)}
+      `);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(primaryArchitecture);
+      expect(result.stdout).toContain(secondaryArchitecture);
+    },
+  );
+
   it.each([
     { title: "keeps the default backend when Xcode's Metal shim works", shimExit: 0, xcrunExit: 0 },
     {
@@ -825,6 +887,45 @@ describe("package-mac-app plist stamping", () => {
     } else {
       expect(swiftArgs.slice(1, 3)).toEqual(["--build-system", "native"]);
     }
+  });
+
+  it("skips the MLX TTS helper build and copy when OPENCLAW_SKIP_MLX_TTS=1", () => {
+    const script = readFileSync(scriptPath, "utf8");
+
+    // Both the per-arch build and the bundle copy are gated on the same flag so
+    // a skipped build never tries to copy a helper binary that was not built.
+    expect(script).toContain(
+      'if [[ "$SKIP_MLX_TTS" == "1" ]]; then\n    echo "🔇 Skipping $MLX_TTS_HELPER_PRODUCT (OPENCLAW_SKIP_MLX_TTS=1)',
+    );
+    expect(script).toContain(
+      'if [[ "$SKIP_MLX_TTS" == "1" ]]; then\n  echo "🔇 Skipping MLX TTS helper copy (OPENCLAW_SKIP_MLX_TTS=1)',
+    );
+  });
+
+  it("refuses OPENCLAW_SKIP_MLX_TTS for release builds but allows it for dev builds", () => {
+    const script = readFileSync(scriptPath, "utf8");
+
+    // Run the real guard snippet from the script (not a copy) so the release
+    // safety invariant stays coupled to source: release bundles must ship the
+    // voice helper, which notarization later verifies.
+    const guardStart = script.indexOf('SKIP_MLX_TTS="${OPENCLAW_SKIP_MLX_TTS:-0}"');
+    const guardEnd = script.indexOf("BUILD_TS=", guardStart);
+    expect(guardStart).toBeGreaterThanOrEqual(0);
+    expect(guardEnd).toBeGreaterThan(guardStart);
+    const guard = script.slice(guardStart, guardEnd);
+
+    const released = runHelper(
+      `set -euo pipefail\nexport OPENCLAW_SKIP_MLX_TTS=1\nBUILD_CONFIG=release\n${guard}\necho reached-build`,
+    );
+    expect(released.status).toBe(1);
+    expect(released.stderr).toContain("not allowed for release builds");
+    expect(released.stdout).not.toContain("reached-build");
+
+    const dev = runHelper(
+      `set -euo pipefail\nexport OPENCLAW_SKIP_MLX_TTS=1\nBUILD_CONFIG=debug\n${guard}\necho reached-build`,
+    );
+    expect(dev.status, dev.stderr).toBe(0);
+    expect(dev.stdout).toContain("reached-build");
   });
 
   it("falls back to corepack pnpm when the pnpm shim is absent", () => {
@@ -1300,6 +1401,41 @@ describe("package-mac-app plist stamping", () => {
     );
     expect(script.indexOf("Copying provider icon resources")).toBeLessThan(
       script.indexOf('echo "🔏 Signing bundle'),
+    );
+  });
+
+  it("stages the pinned universal CUA driver before nested-code signing", () => {
+    const packageScript = readFileSync(scriptPath, "utf8");
+    const stageScript = readFileSync("scripts/stage-cua-driver-macos.sh", "utf8");
+    const codesignScript = readFileSync("scripts/codesign-mac-app.sh", "utf8");
+    const cuaManifest = JSON.parse(
+      readFileSync("extensions/cua-computer/package.json", "utf8"),
+    ) as {
+      dependencies: Record<string, string>;
+      cuaDriverArtifacts: Record<string, { archiveSha256?: string }>;
+    };
+
+    expect(stageScript).toContain('TAG="cua-driver-rs-v${VERSION}"');
+    expect(stageScript).toContain(
+      'ARTIFACT_MANIFEST="$ROOT_DIR/extensions/cua-computer/package.json"',
+    );
+    expect(stageScript).toContain('manifest.dependencies["@trycua/cua-driver"]');
+    expect(stageScript).toContain('manifest.cuaDriverArtifacts["darwin-universal-binary"]');
+    expect(cuaManifest.dependencies["@trycua/cua-driver"]).toBe("0.19.3");
+    expect(cuaManifest.cuaDriverArtifacts["darwin-universal-binary"]?.archiveSha256).toBe(
+      "733e28a3782ac8d325f8fce8b5d97486c1054af755b40dfd086151b34c79377e",
+    );
+    expect(packageScript).toContain(
+      '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',
+    );
+    expect(packageScript.indexOf("Staging embedded CUA driver")).toBeLessThan(
+      packageScript.indexOf('echo "🔏 Signing bundle'),
+    );
+    expect(codesignScript).toContain(
+      'echo "Signing embedded CUA driver"; sign_plain_item "$CUA_DRIVER"',
+    );
+    expect(codesignScript.indexOf("Signing embedded CUA driver")).toBeLessThan(
+      codesignScript.indexOf("# Finally sign the bundle"),
     );
   });
 

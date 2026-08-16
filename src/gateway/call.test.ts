@@ -161,6 +161,7 @@ let startMode: StartMode = "hello";
 let startCalls = 0;
 let closeCode = 1006;
 let closeReason = "";
+let helloCapabilities: string[] | undefined = [];
 let helloMethods: string[] | undefined = ["health", "secrets.resolve"];
 let connectError: Error | null = null;
 
@@ -169,7 +170,7 @@ function makeStubGatewayHello(): HelloOk {
     type: "hello-ok",
     protocol: 1,
     server: { version: "test", connId: "test-connection" },
-    features: { methods: helloMethods ?? [], events: [] },
+    features: { capabilities: helloCapabilities ?? [], methods: helloMethods ?? [], events: [] },
     snapshot: {
       presence: [],
       health: {},
@@ -312,6 +313,7 @@ function resetGatewayCallMocks() {
   startCalls = 0;
   closeCode = 1006;
   closeReason = "";
+  helloCapabilities = [];
   helloMethods = ["health", "secrets.resolve"];
   connectError = null;
   gatewayClientRequest = async (method, params, opts) => {
@@ -1795,6 +1797,37 @@ describe("callGateway error details", () => {
     await expect(request).rejects.toBe(upgradeError);
   });
 
+  it.each(["ECONNREFUSED", "EHOSTUNREACH", "ETIMEDOUT"])(
+    "renders %s connect failures as an actionable gateway-unreachable message",
+    async (code) => {
+      startMode = "silent";
+      setLocalLoopbackGatewayConfig();
+      const socketError = Object.assign(new Error(`connect ${code} 127.0.0.1:18789`), { code });
+
+      const request = callGateway({ method: "health" });
+      await waitForFast(() => expect(lastClientOptions).not.toBeNull());
+      lastClientOptions?.onClose?.(1006, "", {
+        phase: "pre-hello",
+        socketOpened: false,
+        transportValidated: false,
+        transientPreHelloCleanClose: false,
+        connectError: socketError,
+      });
+
+      let error: unknown;
+      await request.catch((caught: unknown) => {
+        error = caught;
+      });
+      expect(isGatewayTransportError(error)).toBe(true);
+      const message = (error as Error).message;
+      expect(message).toContain(`Gateway not reachable at ws://127.0.0.1:18789 (${code}).`);
+      expect(message).toContain(
+        "Start it with `openclaw gateway run` or check `openclaw gateway status`.",
+      );
+      expect(message).not.toContain(`connect ${code}`);
+    },
+  );
+
   it.each([
     {
       name: "another structured auth rejection",
@@ -2428,6 +2461,19 @@ describe("callGateway error details", () => {
       }),
     ).rejects.toThrow(
       /does not support required method "secrets\.resolve".*update or restart the active gateway/i,
+    );
+  });
+
+  it("fails before request when a required gateway capability is missing", async () => {
+    setLocalLoopbackGatewayConfig();
+    helloCapabilities = [];
+    await expect(
+      callGateway({
+        method: "gateway.restart.request",
+        requiredCapabilities: ["gateway-restart-target-safe-v1"],
+      }),
+    ).rejects.toThrow(
+      /does not support required capability "gateway-restart-target-safe-v1".*update or restart the active gateway/i,
     );
   });
 });

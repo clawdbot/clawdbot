@@ -7,6 +7,7 @@ import {
   type CommandPaletteTargetDetail,
 } from "../../components/command-palette-contract.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   announceCatalogSessionContinued,
   parseCatalogSessionKey,
@@ -40,6 +41,7 @@ import {
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { resolveChatAgentId } from "./chat-state-route.ts";
 import { persistedMessageEntryId } from "./chat-thread.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
 import {
@@ -518,7 +520,7 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
       }
     } catch (error) {
       if (generation === this.olderLoadGeneration) {
-        state.lastError = error instanceof Error ? error.message : String(error);
+        state.lastError = formatUiError(error);
       }
     } finally {
       if (generation === this.olderLoadGeneration) {
@@ -549,6 +551,7 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
       return;
     }
     const sourceSessionKey = state.sessionKey;
+    const sourceAgentId = resolveChatAgentId(state);
     const sourceCatalogGeneration = this.catalogLoadGeneration;
     const continuation = Symbol("catalog-continuation");
     this.activeCatalogContinuation = continuation;
@@ -568,7 +571,13 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
     try {
       const result = await client.request<SessionsCatalogContinueResult>(
         "sessions.catalog.continue",
-        key,
+        {
+          ...key,
+          agentId: sourceAgentId,
+          ...(this.catalogSession.sourceHomeId
+            ? { sourceHomeId: this.catalogSession.sourceHomeId }
+            : {}),
+        },
       );
       // A catalog adoption must not navigate or send into a pane that switched
       // sessions or reconnected while its original continuation was in flight.
@@ -576,7 +585,8 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
         this.activeCatalogContinuation !== continuation ||
         !this.isConnectionScopeCurrent(scope) ||
         this.catalogLoadGeneration !== sourceCatalogGeneration ||
-        state.sessionKey !== sourceSessionKey
+        state.sessionKey !== sourceSessionKey ||
+        resolveChatAgentId(state) !== sourceAgentId
       ) {
         releaseStaleContinuation();
         return;
@@ -591,7 +601,11 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
         releaseStaleContinuation();
         return;
       }
-      announceCatalogSessionContinued({ ...key, sessionKey: result.sessionKey });
+      announceCatalogSessionContinued({
+        ...key,
+        agentId: sourceAgentId,
+        sessionKey: result.sessionKey,
+      });
       this.activeCatalogContinuation = null;
       state.chatSending = false;
       state.requestUpdate();
@@ -600,13 +614,14 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
         this.activeCatalogContinuation !== continuation ||
         !this.isConnectionScopeCurrent(scope) ||
         this.catalogLoadGeneration !== sourceCatalogGeneration ||
-        state.sessionKey !== sourceSessionKey
+        state.sessionKey !== sourceSessionKey ||
+        resolveChatAgentId(state) !== sourceAgentId
       ) {
         releaseStaleContinuation();
         return;
       }
       this.activeCatalogContinuation = null;
-      state.lastError = error instanceof Error ? error.message : String(error);
+      state.lastError = formatUiError(error);
       state.chatSending = false;
       state.requestUpdate();
     }
@@ -651,7 +666,7 @@ export abstract class ChatPaneHistory extends ChatPaneSession {
         draft: editorText,
       });
     } catch (error) {
-      state.lastError = error instanceof Error ? error.message : String(error);
+      state.lastError = formatUiError(error);
       state.chatError = state.lastError;
       state.requestUpdate?.();
     }

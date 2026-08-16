@@ -24,6 +24,7 @@ import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
+import { CodexCompactionPlanState } from "./plan-compaction-state.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
@@ -116,16 +117,18 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         return ordinal;
       }
     : undefined;
-  const dynamicToolParams =
-    allocateCodexToolOutcomeOrdinal || onCodexToolOutcome
-      ? {
-          ...runtimeParams,
-          ...(allocateCodexToolOutcomeOrdinal
-            ? { allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal }
-            : {}),
-          ...(onCodexToolOutcome ? { onToolOutcome: onCodexToolOutcome } : {}),
-        }
-      : runtimeParams;
+  const compactionPlanState = new CodexCompactionPlanState();
+  const dynamicToolParams = {
+    ...runtimeParams,
+    onAgentEvent: (event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0]) => {
+      compactionPlanState.record(event);
+      return runtimeParams.onAgentEvent?.(event);
+    },
+    ...(allocateCodexToolOutcomeOrdinal
+      ? { allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal }
+      : {}),
+    ...(onCodexToolOutcome ? { onToolOutcome: onCodexToolOutcome } : {}),
+  };
   const computerContextEpoch: {
     value: number;
     frameToolCallId?: string;
@@ -541,6 +544,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       cronCreatorToolAllowlistCaptureRef,
       scheduledAppAuthoritySourceRef,
       dynamicToolParams,
+      compactionPlanState,
       computerContextEpoch,
       toolBridge,
       toolState,

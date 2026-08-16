@@ -220,7 +220,7 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
         }
         assistantChanged = true;
         return {
-          ...(block as unknown as Record<string, unknown>),
+          ...block,
           id: nextId,
         } as typeof block;
       });
@@ -332,7 +332,7 @@ export function downgradeOpenAIFunctionCallReasoningPairs(
         assistantChanged = true;
         localRewrittenIds.set(toolCallBlock.id, pairing.callId);
         return {
-          ...(block as unknown as Record<string, unknown>),
+          ...block,
           id: pairing.callId,
         } as typeof block;
       });

@@ -318,9 +318,6 @@ export const slackOutbound: ChannelOutboundAdapter = {
             text,
             mediaUrl,
             deliveryQueueId: useSingleDeliveryMarker ? ctx.deliveryQueueId : undefined,
-            onPlatformSendDispatch: useSingleDeliveryMarker
-              ? ctx.onPlatformSendDispatch
-              : undefined,
           }),
         finalize: async () => {
           let lastResult: Awaited<ReturnType<SlackSendFn>> | undefined;
@@ -337,9 +334,6 @@ export const slackOutbound: ChannelOutboundAdapter = {
                 : {}),
               ...(message.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
               deliveryQueueId: useSingleDeliveryMarker ? ctx.deliveryQueueId : undefined,
-              onPlatformSendDispatch: useSingleDeliveryMarker
-                ? ctx.onPlatformSendDispatch
-                : undefined,
             });
           }
           if (!lastResult) {

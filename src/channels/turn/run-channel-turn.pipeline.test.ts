@@ -950,6 +950,37 @@ describe("channel turn pipeline", () => {
     ]);
   });
 
+  it("does not warn when an active run accepts deferred steer ownership", async () => {
+    const events: string[] = [];
+    const log = vi.fn();
+    const recordInboundSession = createRecordInboundSession(events);
+    const runDispatch = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      deferredToActiveRun: "steer" as const,
+    }));
+
+    const result = await runPreparedChannelTurn({
+      channel: "test",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession,
+      runDispatch,
+      log,
+      messageId: "msg-deferred-steer",
+      record: {
+        onRecordError: vi.fn(),
+      },
+    });
+
+    expectDispatched(result);
+    expect(result.dispatchResult?.deferredToActiveRun).toBe("steer");
+    expect(log.mock.calls).not.toContainEqual([
+      expect.objectContaining({ reason: "zero-count-visible-dispatch" }),
+    ]);
+  });
+
   it("still warns when a visible turn has zero counts and no observed delivery", async () => {
     const events: string[] = [];
     const log = vi.fn();

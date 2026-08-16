@@ -6,6 +6,7 @@ import {
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { deriveContextPromptTokens, hasNonzeroUsage } from "../../agents/usage.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
@@ -149,9 +150,6 @@ export async function prepareReplyAgentPayloads(state: {
         isHeartbeat,
         silentExpected: followupRun.run.silentExpected,
         allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
-        isMessageToolOnly:
-          (opts?.sourceReplyDeliveryMode ?? followupRun.run.sourceReplyDeliveryMode) ===
-          "message_tool_only",
         hasPendingContinuation: pendingContinuation,
         // Upstream hoists the deliberate-silent classification; the fork's wider
         // commitment set stays authoritative so a side-effect-only or
@@ -291,12 +289,17 @@ export async function prepareReplyAgentPayloads(state: {
     );
     return returnPreparedFallbackPayload(silentFallbackFailurePayload);
   };
-  const fallbackNoticePayloads: ReplyPayload[] = [];
-  if (
+  const fallbackNoticeChanged =
     !fallbackExhausted &&
     !preserveUserFacingSessionState &&
-    fallbackTransition.fallbackTransitioned
-  ) {
+    (fallbackTransition.fallbackTransitioned || fallbackTransition.fallbackCleared);
+  const fallbackNoticeChatType = fallbackNoticeChanged
+    ? normalizeChatType(sessionCtx.ChatType)
+    : undefined;
+  const shouldDeliverFallbackNotice =
+    fallbackNoticeChatType !== "group" && fallbackNoticeChatType !== "channel";
+  let fallbackNoticeText: string | null = null;
+  if (fallbackNoticeChanged && fallbackTransition.fallbackTransitioned) {
     emitAgentEvent({
       runId,
       sessionKey,
@@ -312,24 +315,18 @@ export async function prepareReplyAgentPayloads(state: {
         attempts: fallbackAttempts,
       },
     });
-    const fallbackNotice = buildFallbackNotice({
-      selectedProvider,
-      selectedModel,
-      activeProvider: providerUsed,
-      activeModel: modelUsed,
-      attempts: fallbackAttempts,
-      cfg,
-    });
-    if (fallbackNotice) {
-      fallbackNoticePayloads.push(
-        markReplyPayloadForSourceSuppressionDelivery({
-          text: fallbackNotice,
-          isFallbackNotice: true,
-        }),
-      );
+    if (shouldDeliverFallbackNotice) {
+      fallbackNoticeText = buildFallbackNotice({
+        selectedProvider,
+        selectedModel,
+        activeProvider: providerUsed,
+        activeModel: modelUsed,
+        attempts: fallbackAttempts,
+        cfg,
+      });
     }
   }
-  if (!fallbackExhausted && !preserveUserFacingSessionState && fallbackTransition.fallbackCleared) {
+  if (fallbackNoticeChanged && fallbackTransition.fallbackCleared) {
     emitAgentEvent({
       runId,
       sessionKey,
@@ -343,17 +340,22 @@ export async function prepareReplyAgentPayloads(state: {
         previousActiveModel: fallbackTransition.previousState.activeModel,
       },
     });
-    fallbackNoticePayloads.push(
-      markReplyPayloadForSourceSuppressionDelivery({
-        text: buildFallbackClearedNotice({
-          selectedProvider,
-          selectedModel,
-          previousActiveModel: fallbackTransition.previousState.activeModel,
-        }),
-        isFallbackNotice: true,
-      }),
-    );
+    if (shouldDeliverFallbackNotice) {
+      fallbackNoticeText = buildFallbackClearedNotice({
+        selectedProvider,
+        selectedModel,
+        previousActiveModel: fallbackTransition.previousState.activeModel,
+      });
+    }
   }
+  const fallbackNoticePayloads: ReplyPayload[] = fallbackNoticeText
+    ? [
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: fallbackNoticeText,
+          isFallbackNotice: true,
+        }),
+      ]
+    : [];
 
   // Drain any late tool/block deliveries before deciding there's "nothing to send".
   // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and

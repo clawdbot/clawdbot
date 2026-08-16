@@ -133,18 +133,16 @@ export function mergePreparedUserTurnMessageForRuntime(params: {
   ) {
     return params.runtimeMessage;
   }
-  const runtimeMessage = params.runtimeMessage as unknown as Record<string, unknown>;
-  const preparedMessage = params.preparedMessage as unknown as Record<string, unknown>;
   const runtimeMeta = readUserTurnMessageMeta(params.runtimeMessage);
   const preparedMeta = readUserTurnMessageMeta(params.preparedMessage);
   return {
-    ...runtimeMessage,
-    ...preparedMessage,
+    ...params.runtimeMessage,
+    ...params.preparedMessage,
     ...(preparedMeta ? { __openclaw: { ...runtimeMeta, ...preparedMeta } } : {}),
     ...(userMessageHasImageContent(params.runtimeMessage)
       ? { content: params.runtimeMessage.content }
       : {}),
-  } as unknown as AgentMessage;
+  } as AgentMessage;
 }
 
 /** Restores only auth state that write hooks must not be able to forge or erase. */
@@ -161,9 +159,9 @@ export function restorePreparedUserTurnOperationalMetaForRuntime(params: {
     return params.runtimeMessage;
   }
   return {
-    ...(params.runtimeMessage as unknown as Record<string, unknown>),
+    ...params.runtimeMessage,
     __openclaw: { ...readUserTurnMessageMeta(params.runtimeMessage), senderIsOwner },
-  } as unknown as AgentMessage;
+  } as AgentMessage;
 }
 
 /** Applies before-message hooks while preserving user-turn transcript metadata. */
@@ -174,12 +172,10 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   if (!params.beforeMessageWrite) {
     return message;
   }
-  const originalMessage = message as unknown as { idempotencyKey?: unknown };
+  const originalIdempotencyKey = Reflect.get(message, "idempotencyKey");
   const idempotencyKey =
-    typeof originalMessage.idempotencyKey === "string" ? originalMessage.idempotencyKey : undefined;
-  const provenance = normalizeInputProvenance(
-    (message as unknown as { provenance?: unknown }).provenance,
-  );
+    typeof originalIdempotencyKey === "string" ? originalIdempotencyKey : undefined;
+  const provenance = normalizeInputProvenance(Reflect.get(message, "provenance"));
   const originalMeta = readUserTurnMessageMeta(message);
   const senderIsOwner = originalMeta?.senderIsOwner;
   const replyToId = normalizeOptionalString(originalMeta?.replyToId);
@@ -243,10 +239,10 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     ...(mediaImageLayout === undefined ? {} : { mediaImageLayout }),
   };
   return {
-    ...(nextUserMessage as unknown as Record<string, unknown>),
+    ...nextUserMessage,
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(Object.keys(protectedMeta).length > 0 ? { __openclaw: protectedMeta } : {}),
-  } as unknown as PersistedUserTurnMessage;
+  } as PersistedUserTurnMessage;
 }
 
 // Store-backed persistence resolves the current session transcript file lazily

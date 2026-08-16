@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
@@ -157,7 +158,57 @@ describe("chat pane placement", () => {
     await reclaim;
 
     expect(request).not.toHaveBeenCalled();
-    expect(state.chatError).toBe(t("sessionsView.actionUnavailable"));
+    expect(state.lastError).toBeNull();
+    expect(state.chatError).toBeNull();
+  });
+
+  it("publishes a reclaim failure for the current presentation", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("reclaim failed");
+    });
+    const { pane, state } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["sessions.reclaim"] },
+      auth: { role: "operator", scopes: ["operator.admin"] },
+    } as never;
+    const session = activePlacementSession();
+
+    const reclaim = pane.reclaimHeaderPlacement(session);
+    const actions = await waitForConfirmDialogActions();
+    answerConfirmDialog(actions, "confirm");
+    await reclaim;
+
+    expect(state.lastError).toBe("reclaim failed");
+    expect(state.chatError).toBe(state.lastError);
+  });
+
+  it("does not publish a reclaim failure after leaving and returning", async () => {
+    const response = createDeferred<never>();
+    const request = vi.fn(() => response.promise);
+    const { pane, state } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["sessions.reclaim"] },
+      auth: { role: "operator", scopes: ["operator.admin"] },
+    } as never;
+    const session = activePlacementSession();
+
+    const reclaim = pane.reclaimHeaderPlacement(session);
+    const actions = await waitForConfirmDialogActions();
+    answerConfirmDialog(actions, "confirm");
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    pane.presented = false;
+    pane.presented = true;
+    response.reject(new Error("stale reclaim failed"));
+    await reclaim;
+
+    expect(state.lastError).toBeNull();
+    expect(state.chatError).toBeNull();
   });
 
   it("keeps reclaim progress with its session when the pane switches rows", async () => {

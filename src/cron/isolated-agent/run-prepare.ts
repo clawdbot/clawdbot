@@ -24,7 +24,7 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import type { SkillSnapshot } from "../../skills/types.js";
-import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { resolveCronJobEffectiveAgentId, tryResolveCronDefaultAgentId } from "../agent-id.js";
 import type { CronDeliveryPlan } from "../delivery-plan.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
@@ -80,7 +80,6 @@ import {
   resolveAgentTimeoutMs,
   resolveAgentWorkspaceDir,
   resolveCronStyleNow,
-  tryResolveLegacyCompatibilityAgentId,
   resolveHookExternalContentSource,
   isThinkingLevelSupported,
   resolveSupportedThinkingLevel,
@@ -151,7 +150,7 @@ export async function prepareCronRunContext(params: {
     normalizedRequested ?? parseAgentSessionKey(input.job.sessionKey ?? input.sessionKey)?.agentId;
   const initialAgentId = resolveCronJobEffectiveAgentId(
     { agentId: requiredAgentId },
-    tryResolveLegacyCompatibilityAgentId(requestedRuntimeCfg),
+    tryResolveCronDefaultAgentId(requestedRuntimeCfg),
   );
   const modelOwner = await resolveCronModelSelectionOwner({
     cfg: requestedRuntimeCfg,
@@ -671,6 +670,7 @@ export async function prepareCronRunContext(params: {
             scheduledToolPolicy: input.job.scheduledToolPolicy,
             owner: input.job.owner,
           }),
+          scheduledToolCallerOrigin: input.job.toolsAllowProvenance?.callerOrigin,
           cliSessionBindingFacts: {
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,

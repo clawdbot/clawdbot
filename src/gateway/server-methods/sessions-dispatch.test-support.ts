@@ -36,6 +36,7 @@ export function makeReclaimedPlacement(): WorkerSessionPlacementRecord {
     sessionId: dispatchTestSessionId,
     agentId: "main",
     sessionKey: dispatchTestSessionKey,
+    executionMode: "worker-turn",
     state: "reclaimed",
     environmentId: "environment-previous",
     generation: 4,

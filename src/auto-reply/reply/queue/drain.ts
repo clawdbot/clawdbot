@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { MediaImageLayout } from "../../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { readToolAllowlistIntersection } from "../../../agents/tool-policy.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
@@ -44,6 +45,17 @@ import {
   retireFollowupRunCancellation,
   type FollowupRun,
 } from "./types.js";
+
+type InternalFollowupRun = FollowupRun & {
+  /** Keep admission state out of the public plugin-facing FollowupRun contract. */
+  currentTurnImagesPrepared?: true;
+  /** Admission-owned layout; fact indexes are relative to this run's media array. */
+  mediaImageLayout?: MediaImageLayout;
+};
+
+function hasPreparedCurrentTurnImages(run: FollowupRun): boolean {
+  return (run as InternalFollowupRun).currentTurnImagesPrepared === true;
+}
 
 // Persists the most recent runFollowup callback per queue key so that
 // enqueueFollowupRun can restart a drain that finished and deleted the queue.
@@ -225,6 +237,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
       accountId: run.originatingAccountId,
       threadId: run.originatingThreadId,
     }),
+    hasPreparedCurrentTurnImages(run),
     run.originatingChatId ?? "",
     resolveFollowupReplyAnchor(run) ?? "",
     run.originatingReplyToMode ?? "",
@@ -336,24 +349,52 @@ function renderCollectItemPrompt(item: FollowupRun, idx: number, prompt: string)
 
 function collectQueuedPromptMedia(
   items: FollowupRun[],
-): Pick<FollowupRun, "images" | "imageOrder" | "media"> {
+): Pick<FollowupRun, "images" | "imageOrder" | "media"> &
+  Pick<InternalFollowupRun, "currentTurnImagesPrepared" | "mediaImageLayout"> {
   const images: NonNullable<FollowupRun["images"]> = [];
   const imageOrder: NonNullable<FollowupRun["imageOrder"]> = [];
   const media: NonNullable<FollowupRun["media"]> = [];
+  const mediaImageSlots: MediaImageLayout["slots"] = [];
+  const suppressedFactIndexes: number[] = [];
+  const currentTurnImagesPrepared = items.every(hasPreparedCurrentTurnImages);
   for (const item of items) {
+    const mediaOffset = media.length;
+    const internalItem = item as InternalFollowupRun;
     if (item.images) {
       images.push(...item.images);
     }
     if (item.imageOrder) {
       imageOrder.push(...item.imageOrder);
     }
+    if (currentTurnImagesPrepared) {
+      const itemSlots: MediaImageLayout["slots"] =
+        internalItem.mediaImageLayout?.slots ?? item.imageOrder?.map((kind) => ({ kind })) ?? [];
+      mediaImageSlots.push(
+        ...itemSlots.map((slot) =>
+          slot.factIndex === undefined
+            ? { kind: slot.kind }
+            : { kind: slot.kind, factIndex: slot.factIndex + mediaOffset },
+        ),
+      );
+      suppressedFactIndexes.push(
+        ...(internalItem.mediaImageLayout?.suppressedFactIndexes ?? []).map(
+          (factIndex) => factIndex + mediaOffset,
+        ),
+      );
+    }
     if (item.media) {
       media.push(...item.media);
     }
   }
+  const mediaImageLayout =
+    mediaImageSlots.length > 0 || suppressedFactIndexes.length > 0
+      ? { slots: mediaImageSlots, suppressedFactIndexes }
+      : undefined;
   return {
-    ...(images.length > 0 ? { images } : {}),
-    ...(imageOrder.length > 0 ? { imageOrder } : {}),
+    ...(currentTurnImagesPrepared ? { currentTurnImagesPrepared: true as const } : {}),
+    ...(currentTurnImagesPrepared || images.length > 0 ? { images } : {}),
+    ...(currentTurnImagesPrepared || imageOrder.length > 0 ? { imageOrder } : {}),
+    ...(mediaImageLayout ? { mediaImageLayout } : {}),
     ...(media.length > 0 ? { media } : {}),
   };
 }

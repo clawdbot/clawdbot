@@ -6,8 +6,13 @@ export type WorkerSessionPlacementIdentity = {
   sessionKey: string;
 };
 
+export type WorkerPlacementExecutionMode = "worker-turn" | "remote-exec";
+export type WorkerSessionPlacementDispatchIdentity = WorkerSessionPlacementIdentity & {
+  executionMode?: WorkerPlacementExecutionMode;
+};
+
 export type WorkerSessionTurnOwner =
-  | { kind: "local" }
+  | { kind: "local"; environmentId?: string; ownerEpoch?: number }
   | { kind: "worker"; environmentId: string; ownerEpoch: number };
 
 export type WorkerSessionTurnClaim = {
@@ -17,6 +22,18 @@ export type WorkerSessionTurnClaim = {
   placementGeneration: number;
   owner: WorkerSessionTurnOwner;
 };
+
+export function placementTurnOwner(placement: {
+  executionMode: WorkerPlacementExecutionMode;
+  environmentId: string;
+  activeOwnerEpoch: number;
+}): WorkerSessionTurnOwner {
+  return {
+    kind: placement.executionMode === "remote-exec" ? "local" : "worker",
+    environmentId: placement.environmentId,
+    ownerEpoch: placement.activeOwnerEpoch,
+  };
+}
 
 export type PersistedTurnClaim =
   | {
@@ -41,11 +58,11 @@ export type WorkerWorkspaceResultConflict = {
 };
 
 type PersistedLocalTurnClaim = Extract<PersistedTurnClaim, { owner: "local" }>;
-type PersistedWorkerTurnClaim = Extract<PersistedTurnClaim, { owner: "worker" }>;
 
 type PlacementRecordBase<TurnClaim extends PersistedTurnClaim | null> =
   WorkerSessionPlacementIdentity & {
     generation: number;
+    executionMode: WorkerPlacementExecutionMode;
     turnClaim: TurnClaim;
     createdAtMs: number;
     updatedAtMs: number;
@@ -56,7 +73,6 @@ type PlacementRecordBase<TurnClaim extends PersistedTurnClaim | null> =
 
 type UnclaimedPlacementRecordBase = PlacementRecordBase<null>;
 type LocalClaimablePlacementRecordBase = PlacementRecordBase<PersistedLocalTurnClaim | null>;
-type WorkerClaimablePlacementRecordBase = PlacementRecordBase<PersistedWorkerTurnClaim | null>;
 
 export type EmptyWorkerPlacementMetadata = {
   environmentId: null;
@@ -155,11 +171,11 @@ type StartingPlacementRecord = UnclaimedPlacementRecordBase &
   StartingPlacementMetadata & {
     state: "starting";
   };
-type ActivePlacementRecord = WorkerClaimablePlacementRecordBase &
+type ActivePlacementRecord = PlacementRecordBase<PersistedTurnClaim | null> &
   OwnedWorkerPlacementMetadata & {
     state: "active";
   };
-type DrainingPlacementRecord = WorkerClaimablePlacementRecordBase &
+type DrainingPlacementRecord = PlacementRecordBase<PersistedTurnClaim | null> &
   OwnedWorkerPlacementMetadata & {
     state: "draining";
   };
@@ -208,6 +224,18 @@ export function required(value: string, field: string): string {
     throw new Error(`Worker session placement ${field} must be a non-empty string`);
   }
   return normalized;
+}
+
+export function normalizeWorkerPlacementExecutionMode(
+  value: string | null | undefined,
+): WorkerPlacementExecutionMode {
+  if (value === null || value === undefined || value === "worker-turn") {
+    return "worker-turn";
+  }
+  if (value === "remote-exec") {
+    return value;
+  }
+  throw new Error(`Invalid worker placement execution mode: ${value}`);
 }
 
 export function nullableRequired(value: string | null, field: string): string | null {
@@ -278,12 +306,16 @@ export function localTurnClaimForState(
   return turnClaim;
 }
 
-export function workerTurnClaimForState(
+export function activeTurnClaimForState(
   turnClaim: PersistedTurnClaim | null,
   state: "active" | "draining",
-): PersistedWorkerTurnClaim | null {
-  if (turnClaim?.owner === "local") {
-    throw new Error(`Local turn claim cannot survive placement ${state}`);
+  executionMode: WorkerPlacementExecutionMode,
+): PersistedTurnClaim | null {
+  if (
+    (turnClaim?.owner === "local" && executionMode !== "remote-exec") ||
+    (turnClaim?.owner === "worker" && executionMode !== "worker-turn")
+  ) {
+    throw new Error(`Turn claim owner does not match ${executionMode} placement ${state}`);
   }
   return turnClaim;
 }
@@ -300,6 +332,7 @@ export function unclaimedTurnForState(
 
 export function assertRecordShape(record: {
   state: WorkerSessionPlacementState;
+  executionMode: WorkerPlacementExecutionMode;
   environmentId: string | null;
   activeOwnerEpoch: number | null;
   workspaceBaseManifestRef: string | null;
@@ -401,14 +434,85 @@ export function assertRecordShape(record: {
     record.turnClaim?.owner === "local" &&
     record.state !== "local" &&
     record.state !== "requested" &&
-    record.state !== "failed"
+    record.state !== "failed" &&
+    !(
+      record.executionMode === "remote-exec" &&
+      (record.state === "active" || record.state === "draining")
+    )
   ) {
     throw new Error("Local turn claim requires local, dispatch-barrier, or failed placement");
   }
   if (record.turnClaim?.owner === "worker") {
     const workerMayFinish = record.state === "active" || record.state === "draining";
-    if (!workerMayFinish || record.activeOwnerEpoch !== record.turnClaim.ownerEpoch) {
+    if (
+      record.executionMode !== "worker-turn" ||
+      !workerMayFinish ||
+      record.activeOwnerEpoch !== record.turnClaim.ownerEpoch
+    ) {
       throw new Error("Worker turn claim requires the active or draining worker owner epoch");
     }
   }
+}
+
+export function isCurrentPlacementTurnClaim(
+  record: WorkerSessionPlacementRecord,
+  claim: WorkerSessionTurnClaim,
+): boolean {
+  const persisted = record.turnClaim;
+  if (
+    !persisted ||
+    persisted.claimId !== claim.claimId ||
+    persisted.runId !== claim.runId ||
+    persisted.generation !== claim.placementGeneration ||
+    persisted.owner !== claim.owner.kind
+  ) {
+    return false;
+  }
+  if (claim.owner.kind === "worker") {
+    return (
+      persisted.ownerEpoch === claim.owner.ownerEpoch &&
+      record.executionMode === "worker-turn" &&
+      (record.state === "active" || record.state === "draining") &&
+      record.environmentId === claim.owner.environmentId &&
+      record.activeOwnerEpoch === claim.owner.ownerEpoch
+    );
+  }
+  if (record.state === "active" || record.state === "draining") {
+    return (
+      record.executionMode === "remote-exec" &&
+      claim.owner.environmentId === record.environmentId &&
+      claim.owner.ownerEpoch === record.activeOwnerEpoch
+    );
+  }
+  if (
+    record.state === "failed" &&
+    record.executionMode === "remote-exec" &&
+    record.environmentId &&
+    record.activeOwnerEpoch !== null
+  ) {
+    return (
+      claim.owner.environmentId === record.environmentId &&
+      claim.owner.ownerEpoch === record.activeOwnerEpoch
+    );
+  }
+  return (
+    (record.state === "local" || record.state === "requested" || record.state === "failed") &&
+    claim.owner.environmentId === undefined &&
+    claim.owner.ownerEpoch === undefined
+  );
+}
+
+export function resolvePlacementTurnEnvironment(
+  record: WorkerSessionPlacementRecord,
+  claim: WorkerSessionTurnClaim,
+): { environmentId: string; ownerEpoch: number } | undefined {
+  if (
+    !isCurrentPlacementTurnClaim(record, claim) ||
+    (record.state !== "active" && record.state !== "draining") ||
+    !record.environmentId ||
+    record.activeOwnerEpoch === null
+  ) {
+    return undefined;
+  }
+  return { environmentId: record.environmentId, ownerEpoch: record.activeOwnerEpoch };
 }

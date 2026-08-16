@@ -9,6 +9,7 @@ import type {
   RawMessageStreamEvent,
   TextBlockParam,
 } from "@anthropic-ai/sdk/resources/messages.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import {
@@ -412,7 +413,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       if (nextParams !== undefined) {
         params = nextParams as MessageCreateParamsStreaming;
       }
-      applyClaudeRequestContract(params as unknown as Record<string, unknown>, model);
+      applyClaudeRequestContract(params, model);
       const sdkRequestOptions = {
         ...(requestOptions?.signal ? { signal: requestOptions.signal } : {}),
         ...(requestOptions?.timeoutMs !== undefined ? { timeout: requestOptions.timeoutMs } : {}),
@@ -448,7 +449,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
           // and allowing the thinking-block recovery retry to fire.
           eventSink.push({ type: "start", partial: output });
         } else if (event.type === "content_block_start") {
-          const rawContentBlock = event.content_block as unknown as Record<string, unknown>;
+          const rawContentBlock = isRecord(event.content_block) ? event.content_block : undefined;
           if (
             requestOptions?.anthropicServerCompaction === true &&
             compactionCapture.begin(event.index, rawContentBlock, output.content.length)
@@ -566,7 +567,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
             });
           }
         } else if (event.type === "content_block_delta") {
-          const rawDelta = event.delta as unknown as Record<string, unknown>;
+          const rawDelta = isRecord(event.delta) ? event.delta : undefined;
           if (compactionCapture.delta(event.index, rawDelta)) {
             continue;
           } else if (event.delta.type === "text_delta") {
@@ -1088,13 +1089,7 @@ async function buildParams(
         params.thinking = { type: "adaptive", display };
         const effort = options?.effort ?? (mandatoryAdaptiveThinking ? "high" : undefined);
         if (effort) {
-          // The Anthropic SDK types can lag newly supported effort values such as "xhigh".
-          params.output_config =
-            effort === "xhigh"
-              ? ({ effort } as unknown as NonNullable<
-                  MessageCreateParamsStreaming["output_config"]
-                >)
-              : { effort };
+          params.output_config = { effort };
         }
       } else {
         // Budget-based thinking for older models.

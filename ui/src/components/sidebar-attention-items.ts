@@ -5,7 +5,7 @@ import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import { t } from "../i18n/index.ts";
-import { isCronJobActiveFailure } from "../lib/cron-status.ts";
+import { isCronJobActiveFailure, isCronJobRunning } from "../lib/cron-status.ts";
 import { clampText } from "../lib/format.ts";
 import { isMonitoredAuthProvider } from "../lib/model-auth.ts";
 import type { IconName } from "./icons.ts";
@@ -89,6 +89,7 @@ export function buildSidebarAttentionItems(params: {
   const overdueCron = params.cronJobs.filter(
     (job) =>
       job.enabled &&
+      !isCronJobRunning(job) &&
       job.state?.nextRunAtMs != null &&
       params.now - job.state.nextRunAtMs > CRON_OVERDUE_GRACE_MS,
   );

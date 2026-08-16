@@ -7,7 +7,6 @@ import {
 } from "../process/gateway-work-admission.js";
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
-  HEARTBEAT_SKIP_LANES_BUSY,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   hasTrustedContinuationHeartbeatWake,
   markTrustedContinuationHeartbeatWake,
@@ -832,7 +831,7 @@ describe("heartbeat-wake", () => {
     });
   });
 
-  it.each([HEARTBEAT_SKIP_CRON_IN_PROGRESS, HEARTBEAT_SKIP_LANES_BUSY])(
+  it.each([HEARTBEAT_SKIP_CRON_IN_PROGRESS])(
     "retries %s after the default retry delay",
     async (reason) => {
       vi.useFakeTimers();

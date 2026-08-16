@@ -15,6 +15,7 @@ import {
   normalizeGuardLoginSet,
   readBoundedGitHubErrorText,
   readBoundedGitHubJson,
+  sanitizeGuardDisplayValue,
 } from "./guard-shared.mjs";
 
 /** Marker used to identify dependency guard comments. */
@@ -159,18 +160,12 @@ function stableJson(value) {
   return JSON.stringify(sorted);
 }
 
-export function sanitizeDisplayValue(value) {
-  return String(value)
-    .replace(/[\p{Cc}]/gu, "?")
-    .slice(0, 240);
-}
-
 export function markdownCode(value) {
-  return `\`${sanitizeDisplayValue(value).replaceAll("`", "\\`")}\``;
+  return `\`${sanitizeGuardDisplayValue(value).replaceAll("`", "\\`")}\``;
 }
 
 function shellQuote(value) {
-  return `'${sanitizeDisplayValue(value).replaceAll("'", "'\\''")}'`;
+  return `'${sanitizeGuardDisplayValue(value).replaceAll("'", "'\\''")}'`;
 }
 
 function* dependencyOverrideCandidates({ comments, expectedSha, newerThan }) {
@@ -188,7 +183,7 @@ function* dependencyOverrideCandidates({ comments, expectedSha, newerThan }) {
       }
       yield {
         login,
-        reason: reason ? sanitizeDisplayValue(reason) : null,
+        reason: reason ? sanitizeGuardDisplayValue(reason) : null,
         sha: expectedSha,
         url: comment.html_url,
       };
@@ -313,7 +308,7 @@ export function renderAuthorizedDependencyComment(override) {
     "This PR includes dependency graph changes. A repository admin or member of `@openclaw/openclaw-secops` authorized this exact head SHA with `/allow-dependencies-change`.",
     "",
     `- Approved SHA: ${markdownCode(override.sha)}`,
-    `- Approved by: @${sanitizeDisplayValue(override.login)}`,
+    `- Approved by: @${sanitizeGuardDisplayValue(override.login)}`,
   ];
   if (override.reason) {
     lines.push(`- Reason: ${markdownCode(override.reason)}`);
@@ -332,7 +327,7 @@ export function renderTrustedDependencyComment({ actor, headSha }) {
     "This PR includes dependency graph changes. The dependency guard is informational because the PR author is a repository admin or a member of `@openclaw/openclaw-secops`.",
     "",
     `- Current SHA: ${markdownCode(headSha ?? "<head-sha>")}`,
-    `- Trusted actor: @${sanitizeDisplayValue(actor.login)}`,
+    `- Trusted actor: @${sanitizeGuardDisplayValue(actor.login)}`,
     `- Trusted role: ${markdownCode(actor.reason)}`,
     "",
     "Security review is still recommended before merge when the dependency graph change is intentional.",
@@ -360,7 +355,7 @@ export function renderRemovalOnlyDependencyComment({ dependencyGraphChanges, hea
 }
 
 export function renderAutoscrubbedDependencyComment({ baseBranch, lockfileChanges, commitSha }) {
-  const safeBranch = sanitizeDisplayValue(baseBranch ?? "main");
+  const safeBranch = sanitizeGuardDisplayValue(baseBranch ?? "main");
   const fileLines = lockfileChanges.map((path) => `- ${markdownCode(path)}`);
   return `${dependencyGraphGuardMarker}
 
@@ -411,7 +406,7 @@ export function renderBlockedDependencyComment({
   dependencyManifestChanges,
   autoscrubStatus,
 }) {
-  const safeBranch = sanitizeDisplayValue(baseBranch ?? "main");
+  const safeBranch = sanitizeGuardDisplayValue(baseBranch ?? "main");
   const baseRef = shellQuote(`origin/${safeBranch}`);
   const reasons = [];
   for (const path of lockfileChanges) {
@@ -839,7 +834,7 @@ async function main() {
       [
         "## Dependency Guard",
         "",
-        `Dependency graph change noted for trusted actor @${sanitizeDisplayValue(trustedActor.login)} and allowed to continue.`,
+        `Dependency graph change noted for trusted actor @${sanitizeGuardDisplayValue(trustedActor.login)} and allowed to continue.`,
       ].join("\n"),
     );
     console.log("Dependency graph change noted for trusted actor; guard is informational.");
@@ -987,7 +982,7 @@ async function main() {
       [
         "## Dependency Guard",
         "",
-        `Dependency graph change authorized by @${sanitizeDisplayValue(override.login)} for ${markdownCode(override.sha)}.`,
+        `Dependency graph change authorized by @${sanitizeGuardDisplayValue(override.login)} for ${markdownCode(override.sha)}.`,
       ].join("\n"),
     );
     console.log("Dependency graph change authorized by trusted override.");

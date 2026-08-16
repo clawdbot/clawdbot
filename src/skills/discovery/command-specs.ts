@@ -170,6 +170,7 @@ export function buildWorkspaceSkillCommandSpecs(
 
     specs.push({
       name: unique,
+      displayName: entry.skill.displayName ?? rawName,
       skillFile: canonicalizePath(entry.skill.filePath),
       skillName: rawName,
       description,

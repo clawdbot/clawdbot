@@ -27,6 +27,7 @@ let mobileContext: BrowserContext;
 function readUiCss(): string {
   const files = [
     "ui/src/styles/base.css",
+    "ui/src/styles/board.css",
     "ui/src/styles/layout.css",
     "ui/src/styles/layout.mobile.css",
     "ui/src/styles/components.css",
@@ -544,7 +545,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
     }
   });
 
-  it("keeps sidebars compact while preserving normal content scroll and text entry", async () => {
+  it("uses one canonical scrollbar width while preserving normal content scroll and text entry", async () => {
     const page = await desktopContext.newPage();
     try {
       await page.setViewportSize({ width: 1200, height: 800 });
@@ -567,6 +568,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
               <div style="height: 200px"></div>
             </main>
             <section class="chat-thread" style="height: 100px">Selectable transcript</section>
+            <div class="board-tabs__track">Hidden horizontal rail</div>
           </body>
         </html>
       `);
@@ -595,6 +597,11 @@ describeBrowserLayout("app chrome interaction styles", () => {
           regularSidebarSelection: style(".sidebar-shell__body").userSelect,
           settingsSidebarScrollbar: scrollbarWidth(".settings-sidebar__nav"),
           settingsSidebarSelection: style(".settings-sidebar__nav").userSelect,
+          // The board tab rail intentionally hides its scrollbar (a drag/wheel
+          // affordance, not a styling variant); the new blanket
+          // `* { scrollbar-width: thin }` rule in base.css must not win over
+          // its higher-specificity `scrollbar-width: none`.
+          hiddenRailScrollbarWidth: style(".board-tabs__track").scrollbarWidth,
         };
       });
 
@@ -602,10 +609,11 @@ describeBrowserLayout("app chrome interaction styles", () => {
         chatSelection: "text",
         chromeSelection: "none",
         contentScrollbar: "12px",
+        hiddenRailScrollbarWidth: "none",
         inputSelection: "text",
-        regularSidebarScrollbar: "6px",
+        regularSidebarScrollbar: "12px",
         regularSidebarSelection: "none",
-        settingsSidebarScrollbar: "6px",
+        settingsSidebarScrollbar: "12px",
         settingsSidebarSelection: "none",
       });
     } finally {

@@ -2,7 +2,7 @@ import { accessSync, constants, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { resolveAcpSessionAvailability } from "openclaw/plugin-sdk/acp-runtime";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveNodeHostExecutable } from "openclaw/plugin-sdk/node-host";
 import type {
@@ -379,7 +379,7 @@ async function listOpenCodeHosts(
     agentId: OPENCODE_ACP_AGENT_ID,
   }).available;
   const adopted = query.sessionEntries
-    ? listAdoptedOpenCodeSessions(api, query.sessionEntries)
+    ? listAdoptedOpenCodeSessions(api, query.agentId, query.sessionEntries)
     : new Map<string, string>();
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
   const hosts: SessionCatalogHost[] = [];
@@ -496,9 +496,11 @@ function currentOpenCodeCatalogConfig(api: OpenClawPluginApi): OpenClawConfig {
 
 function listAdoptedOpenCodeSessions(
   api: OpenClawPluginApi,
+  agentId?: string,
   sessionEntries?: SessionCatalogEntrySnapshot,
 ): Map<string, string> {
   return listAdoptedSessionCatalogSessions({
+    ...(agentId ? { agentId } : {}),
     config: currentOpenCodeCatalogConfig(api),
     pluginId: api.id,
     runtime: api.runtime,
@@ -518,6 +520,7 @@ function listAdoptedOpenCodeSessions(
 
 async function continueOpenCodeSession(
   api: OpenClawPluginApi,
+  agentId: string,
   hostId: string,
   threadId: string,
 ): Promise<Awaited<ReturnType<typeof linkContinuedOpenCodeSession>>> {
@@ -538,7 +541,7 @@ async function continueOpenCodeSession(
   const sourceKey = sessionCatalogAdoptedSourceKey(hostId, threadId);
   return await continueAdoption({
     sourceKey,
-    findExisting: () => listAdoptedOpenCodeSessions(api).get(sourceKey),
+    findExisting: () => listAdoptedOpenCodeSessions(api, agentId).get(sourceKey),
     create: async () => {
       const config = currentOpenCodeCatalogConfig(api);
       const page = await listLocalOpenCodeSessionPage(
@@ -564,7 +567,7 @@ async function continueOpenCodeSession(
       const created = await api.runtime.agent.session.createSessionEntry({
         cfg: config,
         key: sessionCatalogAdoptedSessionKey(OPENCODE_ADOPTED_SESSION_KEY_PREFIX, threadId),
-        agentId: resolveDefaultAgentId(config),
+        agentId,
         recoverMatchingInitialEntry: true,
         ...(record.name ? { label: record.name } : {}),
         ...(record.cwd ? { spawnedCwd: record.cwd } : {}),
@@ -582,6 +585,7 @@ async function continueOpenCodeSession(
             threadId,
             read: async ({ cursor, limit }) =>
               await readOpenCodeTranscript(api.runtime, {
+                agentId: entry.agentId,
                 hostId,
                 threadId,
                 limit,
@@ -615,7 +619,11 @@ export function registerOpenCodeSessionCatalog(api: OpenClawPluginApi): void {
     read: async (request) => await readOpenCodeTranscript(api.runtime, request),
     continueSession: async (request) => {
       assertOpenCodeLocalAccess(request.hostId, request.allowProcessHomeFallback);
-      return await continueOpenCodeSession(api, request.hostId, request.threadId);
+      const agentId = resolveSessionAgentIds({
+        config: api.config,
+        agentId: request.agentId,
+      }).sessionAgentId;
+      return await continueOpenCodeSession(api, agentId, request.hostId, request.threadId);
     },
     checkUpstreamActivity: (probes, policy) =>
       checkOpenCodeUpstreamActivity(

@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
-import type { Server } from "node:http";
+import type { IncomingMessage, Server } from "node:http";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { Readable } from "node:stream";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
 import { invokeNodeWorkerSupervisorCommand } from "../../node-host/node-worker-supervisor-commands.js";
@@ -15,6 +16,10 @@ import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 async function listen(server: Server): Promise<string> {
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -25,6 +30,86 @@ async function listen(server: Server): Promise<string> {
     throw new Error("workspace transfer test server did not bind");
   }
   return `ws://127.0.0.1:${address.port}`;
+}
+
+function injectUploadWriteFaults() {
+  const originalOpen = fs.open.bind(fs);
+  let beforeRetry: (() => Promise<void>) | undefined;
+  let nextWriteError: Error | undefined;
+  let stagingRoot: string | undefined;
+  let observedShortWrite = false;
+  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    const handle = await originalOpen(...args);
+    if (
+      typeof args[0] !== "string" ||
+      !args[0].includes(`${path.sep}upload-`) ||
+      path.basename(args[0]) !== "result.txt" ||
+      args[1] !== "wx"
+    ) {
+      return handle;
+    }
+
+    stagingRoot = path.dirname(args[0]);
+    let injectShortWrite = true;
+    const injectedHandle = Object.create(handle) as typeof handle;
+    injectedHandle.close = handle.close.bind(handle);
+    injectedHandle.write = (async (
+      buffer: Buffer,
+      offset = 0,
+      length = buffer.byteLength - offset,
+      position?: number | null,
+    ) => {
+      if (nextWriteError) {
+        const error = nextWriteError;
+        nextWriteError = undefined;
+        throw error;
+      }
+      if (injectShortWrite) {
+        injectShortWrite = false;
+        const writeLength = Math.max(1, Math.floor(length / 2));
+        observedShortWrite ||= writeLength < length;
+        return await handle.write(buffer, offset, writeLength, position);
+      }
+      const retryHook = beforeRetry;
+      beforeRetry = undefined;
+      await retryHook?.();
+      return await handle.write(buffer, offset, length, position);
+    }) as typeof handle.write;
+    return injectedHandle;
+  });
+
+  return {
+    blockNextRetry() {
+      let markStarted!: () => void;
+      let release!: () => void;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      beforeRetry = async () => {
+        markStarted();
+        await released;
+      };
+      return { started, release };
+    },
+    failNextWrite(error: Error) {
+      nextWriteError = error;
+    },
+    lastStagingRoot: () => stagingRoot,
+    shortWriteObserved: () => observedShortWrite,
+  };
+}
+
+function retryOrUploadStatus(retryStarted: Promise<void>, upload: Promise<unknown>) {
+  return Promise.race([
+    retryStarted.then(() => "retrying" as const),
+    upload.then(
+      () => "completed" as const,
+      () => "failed" as const,
+    ),
+  ]);
 }
 
 describe("node workspace transfer service", () => {
@@ -130,33 +215,47 @@ describe("node workspace transfer service", () => {
         fs.readFile(path.join(downloaded.workspaceDir, "nested", "input.txt"), "utf8"),
       ).resolves.toBe("nested input\n");
       await fs.writeFile(path.join(downloaded.workspaceDir, "result.txt"), "node result\n");
+      const writeFaults = injectUploadWriteFaults();
+      const persistenceRetry = writeFaults.blockNextRetry();
+      const uploadResult = (token: string) =>
+        runtime.exec(
+          {
+            gatewayNamespace: "gateway-test",
+            environmentId: "environment-1",
+            sessionId: "session-1",
+            generation: 2,
+            argv: ["openclaw-internal-workspace-transfer"],
+            transfer: {
+              direction: "upload",
+              token,
+              baseManifestRef: prepared.snapshot.manifestRef,
+            },
+          },
+          undefined,
+          { url: gatewayUrl },
+        );
       const uploadToken = service.prepareUpload("environment-1", prepared.snapshot.manifestRef);
       expect(() => service.prepareUpload("environment-1", prepared.snapshot.manifestRef)).toThrow(
         "already active",
       );
-      await runtime.exec(
-        {
-          gatewayNamespace: "gateway-test",
-          environmentId: "environment-1",
-          sessionId: "session-1",
-          generation: 2,
-          argv: ["openclaw-internal-workspace-transfer"],
-          transfer: {
-            direction: "upload",
-            token: uploadToken,
-            baseManifestRef: prepared.snapshot.manifestRef,
-          },
-        },
-        undefined,
-        { url: gatewayUrl },
-      );
-      const replay = await fetch(
-        `${httpOrigin}/__openclaw__/worker-transfer/v1/environments/environment-1/reconciliations/${prepared.snapshot.manifestRef.slice(7)}`,
-        {
-          method: "POST",
-          headers: { authorization: `Bearer ${uploadToken}`, "content-length": "0" },
-        },
-      );
+      const upload = uploadResult(uploadToken);
+      try {
+        await expect(retryOrUploadStatus(persistenceRetry.started, upload)).resolves.toBe(
+          "retrying",
+        );
+        expect(writeFaults.shortWriteObserved()).toBe(true);
+        expect(() => service.takeUpload("environment-1", prepared.snapshot.manifestRef)).toThrow(
+          "did not complete",
+        );
+      } finally {
+        persistenceRetry.release();
+      }
+      await upload;
+      const reconciliationUrl = `${httpOrigin}/__openclaw__/worker-transfer/v1/environments/environment-1/reconciliations/${prepared.snapshot.manifestRef.slice(7)}`;
+      const replay = await fetch(reconciliationUrl, {
+        method: "POST",
+        headers: { authorization: `Bearer ${uploadToken}`, "content-length": "0" },
+      });
       expect(replay.status).toBe(404);
       const uploaded = service.takeUpload("environment-1", prepared.snapshot.manifestRef);
       expect(uploaded.current.entries).toContainEqual(
@@ -165,6 +264,38 @@ describe("node workspace transfer service", () => {
       await expect(
         fs.readFile(path.join(uploaded.stagingRoot, "result.txt"), "utf8"),
       ).resolves.toBe("node result\n");
+      const invalidUploadToken = service.prepareUpload(
+        "environment-1",
+        prepared.snapshot.manifestRef,
+      );
+      const invalidUpload = await fetch(reconciliationUrl, {
+        method: "POST",
+        headers: { authorization: `Bearer ${invalidUploadToken}`, "content-length": "0" },
+      });
+      expect(invalidUpload.status).toBe(413);
+      await expect(invalidUpload.json()).resolves.toEqual({
+        error: "workspace_transfer_limit",
+      });
+      const replacementUploadToken = service.prepareUpload(
+        "environment-1",
+        prepared.snapshot.manifestRef,
+      );
+      service.revoke("environment-1", replacementUploadToken);
+      writeFaults.failNextWrite(new Error("injected terminal upload write failure"));
+      const failedUploadToken = service.prepareUpload(
+        "environment-1",
+        prepared.snapshot.manifestRef,
+      );
+      await expect(uploadResult(failedUploadToken)).rejects.toThrow("workspace-transfer-failed");
+      expect(writeFaults.lastStagingRoot()).toBeDefined();
+      await expect(fs.stat(writeFaults.lastStagingRoot()!)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      const resetUploadToken = service.prepareUpload(
+        "environment-1",
+        prepared.snapshot.manifestRef,
+      );
+      service.revoke("environment-1", resetUploadToken);
       const acceptedToken = service.publishSnapshot("environment-1", {
         manifest: uploaded.current,
         manifestRef: uploaded.currentManifestRef,
@@ -176,6 +307,29 @@ describe("node workspace transfer service", () => {
       expect(service.getSnapshot("environment-1", prepared.snapshot.manifestRef)).toBeUndefined();
       expect(service.getSnapshot("environment-1", uploaded.currentManifestRef)).toBeDefined();
       service.revoke("environment-1", acceptedToken);
+
+      const authorityRetry = writeFaults.blockNextRetry();
+      const retiredUploadToken = service.prepareUpload(
+        "environment-1",
+        prepared.snapshot.manifestRef,
+      );
+      const retiredUpload = uploadResult(retiredUploadToken);
+      try {
+        await expect(retryOrUploadStatus(authorityRetry.started, retiredUpload)).resolves.toBe(
+          "retrying",
+        );
+        environment.ownerEpoch += 1;
+      } finally {
+        authorityRetry.release();
+      }
+      await expect(retiredUpload).rejects.toThrow("workspace-transfer-failed");
+      expect(writeFaults.lastStagingRoot()).toBeDefined();
+      await expect(fs.stat(writeFaults.lastStagingRoot()!)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(() => service.takeUpload("environment-1", prepared.snapshot.manifestRef)).toThrow(
+        "did not complete",
+      );
     } finally {
       await service.closeAll();
       server.closeAllConnections();
@@ -229,6 +383,132 @@ describe("node workspace transfer service", () => {
 
     expect(signal.aborted).toBe(true);
     expect(service.isAuthorizationCurrent(authorization!)).toBe(false);
+  });
+
+  it("clears crash scratch eagerly and removes the transfer root on shutdown", async () => {
+    const root = tempDirs.make("node-workspace-transfer-lifecycle-");
+    const temporaryRoot = path.join(root, "transfer-tmp");
+    const staleRoot = path.join(temporaryRoot, "context-stale");
+    await fs.mkdir(staleRoot, { recursive: true });
+    await fs.writeFile(path.join(staleRoot, "base.pack"), "stale");
+    const service = createNodeWorkspaceTransferService({
+      getOwner: () => undefined,
+      temporaryRoot,
+    });
+
+    await service.initialize();
+
+    await expect(fs.readdir(temporaryRoot)).resolves.toEqual([]);
+    await service.closeAll();
+    await expect(fs.stat(temporaryRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("serializes transfer context replacement for one environment", async () => {
+    const root = tempDirs.make("node-workspace-transfer-serialization-");
+    const localPath = path.join(root, "workspace");
+    const temporaryRoot = path.join(root, "transfer-tmp");
+    await fs.mkdir(localPath);
+    await fs.writeFile(path.join(localPath, "input.txt"), "input\n");
+    const service = createNodeWorkspaceTransferService({
+      getOwner: () => ({
+        credential: {
+          ownerEpoch: 1,
+          expiresAtMs: Date.now() + 60_000,
+          sessionId: "session-serialize",
+        },
+        environment: {
+          ownerEpoch: 1,
+          attachedSessionIds: ["session-serialize"],
+          destroyRequestedAtMs: null,
+          state: "attached",
+        },
+      }),
+      temporaryRoot,
+    });
+
+    await Promise.all([
+      service.prepareSync({
+        environmentId: "environment-serialize",
+        ownerEpoch: 1,
+        sessionId: "session-serialize",
+        generation: 1,
+        localPath,
+        isAuthorized: () => true,
+      }),
+      service.prepareSync({
+        environmentId: "environment-serialize",
+        ownerEpoch: 1,
+        sessionId: "session-serialize",
+        generation: 2,
+        localPath,
+        isAuthorized: () => true,
+      }),
+    ]);
+
+    const contexts = (await fs.readdir(temporaryRoot)).filter((name) =>
+      name.startsWith("context-"),
+    );
+    expect(contexts).toHaveLength(1);
+    await service.closeAll();
+  });
+
+  it("releases an upload owner after validation fails before staging", async () => {
+    const root = tempDirs.make("node-workspace-transfer-upload-release-");
+    const localPath = path.join(root, "workspace");
+    await fs.mkdir(localPath);
+    await fs.writeFile(path.join(localPath, "input.txt"), "input\n");
+    const service = createNodeWorkspaceTransferService({
+      getOwner: () => ({
+        credential: {
+          ownerEpoch: 1,
+          expiresAtMs: Date.now() + 60_000,
+          sessionId: "session-upload-release",
+        },
+        environment: {
+          ownerEpoch: 1,
+          attachedSessionIds: ["session-upload-release"],
+          destroyRequestedAtMs: null,
+          state: "attached",
+        },
+      }),
+      temporaryRoot: path.join(root, "transfer-tmp"),
+    });
+    const prepared = await service.prepareSync({
+      environmentId: "environment-upload-release",
+      ownerEpoch: 1,
+      sessionId: "session-upload-release",
+      generation: 1,
+      localPath,
+      isAuthorized: () => true,
+    });
+    const token = service.prepareUpload(
+      "environment-upload-release",
+      prepared.snapshot.manifestRef,
+    );
+    const route = {
+      kind: "reconcile",
+      direction: "upload",
+      environmentId: "environment-upload-release",
+      baseManifestRef: prepared.snapshot.manifestRef,
+    } as const;
+    const authorization = service.authorize({ route, token });
+    if (!authorization) {
+      throw new Error("upload authorization was not created");
+    }
+    const request = Readable.from([]) as unknown as IncomingMessage;
+    request.headers = { "content-length": "0" };
+
+    await expect(
+      service.receiveUpload({
+        authorization,
+        request,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("byte limit");
+    expect(() =>
+      service.prepareUpload("environment-upload-release", prepared.snapshot.manifestRef),
+    ).not.toThrow();
+    await service.closeAll();
   });
 
   it("rejects a retained tunnel callback after durable transfer ownership changes", async () => {

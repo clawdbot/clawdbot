@@ -129,6 +129,7 @@ export {
   countSessionEntryRowsReadOnly,
   ensureSessionEntrySync,
   copySessionOwnedStateForCanonicalRepair,
+  ensureTranscriptGenerationsForCanonicalRepair,
   hasSessionEntriesByStatusReadOnly,
   listSessionGenerationIdsForCanonicalRepair,
   clearPluginOwnedSessionState,
@@ -157,6 +158,10 @@ export {
   updateResolvedSessionEntry,
   upsertSessionEntryCore,
 } from "./session-accessor.entry.js";
+export {
+  readSessionIdentityEvidenceBatch,
+  type SessionIdentityEvidenceResult,
+} from "./session-accessor.sqlite-entry-availability.js";
 export {
   createSessionEntryWithTranscript,
   forkSessionEntryFromParentTarget,
@@ -208,6 +213,7 @@ export {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   findTranscriptEvent,
+  inspectTranscriptEventsSync,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
@@ -242,7 +248,7 @@ export {
   readSessionTranscriptActiveStats,
   readSessionTranscriptBoundedMessageTailPage,
   readRecentSessionTranscriptMessageEvents,
-  readSessionTranscriptActiveLeafEvents,
+  readSessionTranscriptActivePathEntryRelation,
   readSessionTranscriptMessageAnchorPage,
   readSessionTranscriptMessageEventById,
   readSessionTranscriptMessageEventCount,

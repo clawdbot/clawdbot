@@ -96,26 +96,39 @@ and external URLs. Registering another provider replaces the current provider.
 
 ### Capability registration
 
-| Method                                           | What it registers                                                                                                                         |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerProvider(...)`                      | Text inference (LLM)                                                                                                                      |
-| `api.registerWorkerProvider(...)`                | Cloud-worker lifecycle leases                                                                                                             |
-| `api.registerModelCatalogProvider(...)`          | Model catalog rows for text and media generation                                                                                          |
-| `api.registerAgentHarness(...)`                  | [Experimental](/plugins/sdk-agent-harness) native agent executor (Codex, Copilot)                                                         |
-| `api.registerCliBackend(...)`                    | Local CLI inference backend                                                                                                               |
-| `api.registerChannel(...)`                       | Messaging channel                                                                                                                         |
-| `api.registerEmbeddingProvider(...)`             | Reusable vector embedding provider                                                                                                        |
-| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis                                                                                                            |
-| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription                                                                                                          |
-| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions                                                                                                            |
-| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis                                                                                                                |
-| `api.registerTranscriptSourceProvider(...)`      | Live or imported meeting transcript source; meeting plugins can use `createMeetingTranscriptSourceProvider` from `plugin-sdk/transcripts` |
-| `api.registerImageGenerationProvider(...)`       | Image generation                                                                                                                          |
-| `api.registerMusicGenerationProvider(...)`       | Music generation                                                                                                                          |
-| `api.registerVideoGenerationProvider(...)`       | Video generation                                                                                                                          |
-| `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider                                                                                                               |
-| `api.registerWebSearchProvider(...)`             | Web search                                                                                                                                |
-| `api.registerCompactionProvider(...)`            | Pluggable transcript-compaction backend                                                                                                   |
+| Method                                           | What it registers                                                                 |
+| ------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `api.registerProvider(...)`                      | Text inference (LLM)                                                              |
+| `api.registerWorkerProvider(...)`                | Cloud-worker lifecycle leases                                                     |
+| `api.registerModelCatalogProvider(...)`          | Model catalog rows for text and media generation                                  |
+| `api.registerAgentHarness(...)`                  | [Experimental](/plugins/sdk-agent-harness) native agent executor (Codex, Copilot) |
+| `api.registerCliBackend(...)`                    | Local CLI inference backend                                                       |
+| `api.registerChannel(...)`                       | Messaging channel                                                                 |
+| `api.registerEmbeddingProvider(...)`             | Reusable vector embedding provider                                                |
+| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis                                                    |
+| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription                                                  |
+| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions                                                    |
+| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis                                                        |
+| `api.registerTranscriptSourceProvider(...)`      | Live or imported meeting transcript source                                        |
+| `api.registerImageGenerationProvider(...)`       | Image generation                                                                  |
+| `api.registerMusicGenerationProvider(...)`       | Music generation                                                                  |
+| `api.registerVideoGenerationProvider(...)`       | Video generation                                                                  |
+| `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider                                                       |
+| `api.registerWebSearchProvider(...)`             | Web search                                                                        |
+| `api.registerCompactionProvider(...)`            | Pluggable transcript-compaction backend                                           |
+
+Transcript source providers that share an account namespace with an inbound
+channel declare an `accountOwnership` descriptor with that channel id and a
+canonical account resolver. OpenClaw then
+ignores model-selected account ids for same-channel capture, binds the trusted
+inbound account, and records it as the session owner for later lifecycle
+actions. The resolver also selects an omitted account before OpenClaw starts or
+persists live capture. It validates an already-bound trusted account without
+redirecting it and returns an actionable typed error when no unique capable
+account exists. Configured auto-start must supply a nonempty source account or
+resolve one with this descriptor. OpenClaw rejects ambiguous or unresolved ownership before it
+persists the start or invokes the provider. Provider aliases are lookup names
+only and must not be used for this declaration.
 
 Worker providers must also declare their id in `contracts.workerProviders`.
 Core persists durable intent before `provision(profile, operationId)`. Providers validate settings before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease when the operation id repeats. Providers whose provisioning can legitimately exceed core's five-minute default may return a positive millisecond budget from `resolveProvisionTimeoutMs(profile)`; include acquisition, provider-owned setup, and cleanup in that bound.
@@ -127,10 +140,8 @@ Providers with renewable leases can also implement `renew(leaseId)`.
 Embedding providers registered with `api.registerEmbeddingProvider(...)` must
 also be listed in `contracts.embeddingProviders` in the plugin manifest. This
 is the generic embedding surface for reusable vector generation. Memory search
-can consume this generic provider surface. The older
-`api.registerMemoryEmbeddingProvider(...)` and
-`contracts.memoryEmbeddingProviders` seam is deprecated compatibility while
-existing memory-specific providers migrate.
+consumes this generic provider surface. The older memory-specific registrar and
+manifest contract were removed after their August 2026 migration window.
 
 Memory-specific providers that still expose a runtime `batchEmbed(...)` stay on
 the existing per-file batching contract unless their runtime explicitly sets
@@ -656,11 +667,7 @@ rebuild earlier history. Without the full contract, OpenClaw uses the legacy
 context path for the whole logical turn and its retries, leaves the configured
 engine unchanged, and tries that engine again on the next logical turn.
 
-### Deprecated memory embedding adapters
-
-| Method                                         | What it registers                              |
-| ---------------------------------------------- | ---------------------------------------------- |
-| `api.registerMemoryEmbeddingProvider(adapter)` | Memory embedding adapter for the active plugin |
+### Memory embedding adapters
 
 - `registerMemoryCapability` is the exclusive memory-plugin API.
 - `registerMemoryCapability` may also expose `publicArtifacts.listArtifacts(...)`
@@ -679,12 +686,8 @@ engine unchanged, and tries that engine again on the next logical turn.
 - `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
   reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
   chain.
-- `registerMemoryEmbeddingProvider` is deprecated. New embedding providers
-  should use `api.registerEmbeddingProvider(...)` and
-  `contracts.embeddingProviders`.
-- Existing memory-specific providers continue to work during the migration
-  window, but plugin inspection reports this as compatibility debt for
-  non-bundled plugins.
+- Embedding providers use `api.registerEmbeddingProvider(...)` and
+  `contracts.embeddingProviders`; there is no separate memory-only registry.
 
 ### Events and lifecycle
 
@@ -699,7 +702,7 @@ semantics.
 ### Hook decision semantics
 
 `before_install` is a plugin-runtime lifecycle hook, not the operator install
-policy surface. Use `security.installPolicy` when an allow/block decision must
+policy surface. Use `security.installPolicy` when an allow/warn/block decision must
 cover CLI and Gateway-backed install or update paths.
 
 - `before_tool_call`: returning `{ block: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.

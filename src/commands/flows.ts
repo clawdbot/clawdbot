@@ -6,13 +6,18 @@ import { truncateToVisibleWidth, visibleWidth } from "../../packages/terminal-co
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { parseCliEnumFilter } from "../cli/enum-filter.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { cancelFlowById, getFlowTaskSummary } from "../tasks/task-executor.js";
-import type { TaskFlowRecord, TaskFlowStatus } from "../tasks/task-flow-registry.types.js";
+import {
+  TASK_FLOW_STATUSES,
+  type TaskFlowRecord,
+  type TaskFlowStatus,
+} from "../tasks/task-flow-registry.types.js";
 import {
   getTaskFlowById,
   listTaskFlowRecords,
@@ -161,7 +166,7 @@ export async function flowsListCommand(
   opts: { json?: boolean; status?: string },
   runtime: RuntimeEnv,
 ) {
-  const statusFilter = normalizeOptionalString(opts.status);
+  const statusFilter = parseCliEnumFilter(opts.status, "--status", TASK_FLOW_STATUSES);
   const flows = listTaskFlowRecords().filter((flow) => {
     if (statusFilter && flow.status !== statusFilter) {
       return false;

@@ -330,16 +330,28 @@ function resolveLocalPairingFallback(
   }
 }
 
-function buildFallbackStateMismatchError(details: ConnectPairingRequiredDetails): Error {
-  return new Error(
-    [
-      details.requestId
-        ? `${FALLBACK_STATE_MISMATCH_MESSAGE} Missing requestId: ${details.requestId}.`
-        : FALLBACK_STATE_MISMATCH_MESSAGE,
-      "The running gateway is probably using a different OPENCLAW_PROFILE or OPENCLAW_STATE_DIR than this CLI.",
-      "Rerun with the same profile/state-dir as the gateway, or pass --token/--password so the CLI can approve through the gateway.",
-    ].join("\n"),
-  );
+function buildFallbackStateMismatchError(
+  details: ConnectPairingRequiredDetails,
+  pendingRequestIds: string[],
+): Error {
+  const heading = details.requestId
+    ? `${FALLBACK_STATE_MISMATCH_MESSAGE} Missing requestId: ${details.requestId}.`
+    : FALLBACK_STATE_MISMATCH_MESSAGE;
+  // A populated local pending list means the CLI and gateway share this store:
+  // each rejected connect re-mints the request, so the held id is stale rather
+  // than foreign. Only an empty list suggests a genuinely different store, and
+  // shared-auth flags are only a fix when the gateway actually uses shared auth.
+  const guidance =
+    pendingRequestIds.length > 0
+      ? [
+          "That request was superseded by a newer pending request.",
+          `Approve the current request instead: openclaw devices approve ${pendingRequestIds[0]}`,
+        ]
+      : [
+          "The running gateway may be using a different OPENCLAW_PROFILE or OPENCLAW_STATE_DIR than this CLI.",
+          "Rerun with the gateway's profile/state-dir; if the gateway uses shared auth, pass --token/--password to approve through it.",
+        ];
+  return new Error([heading, ...guidance].join("\n"));
 }
 
 function assertLocalFallbackMatchesGatewayRequest(
@@ -350,25 +362,27 @@ function assertLocalFallbackMatchesGatewayRequest(
   if (!requestId) {
     return;
   }
-  const hasRequest = (list.pending ?? []).some(
-    (request) => normalizeOptionalString(request.requestId) === requestId,
-  );
-  if (!hasRequest) {
-    throw buildFallbackStateMismatchError(details);
+  const pendingRequestIds = (list.pending ?? [])
+    .map((request) => normalizeOptionalString(request.requestId))
+    .filter((id): id is string => Boolean(id));
+  if (!pendingRequestIds.includes(requestId)) {
+    throw buildFallbackStateMismatchError(details, pendingRequestIds);
   }
 }
 
 function redactLocalPairedDevice(device: InfraPairedDevice): PairedDevice {
   const { tokens, ...rest } = device;
   return {
-    ...(rest as unknown as PairedDevice),
-    tokens: summarizeDeviceTokens(tokens) as DeviceTokenSummary[] | undefined,
+    ...rest,
+    tokens: summarizeDeviceTokens(tokens),
   };
 }
 
 async function listPairingWithFallback(opts: DevicesRpcOpts): Promise<DevicePairingList> {
   try {
-    return parseDevicePairingList(await callGatewayCli("device.pair.list", opts, {}));
+    return parseDevicePairingList(
+      await callGatewayCli("device.pair.list", opts, {}, { scopes: [PAIRING_SCOPE] }),
+    );
   } catch (error) {
     const fallback = resolveLocalPairingFallback(opts, error);
     if (!fallback) {
@@ -471,7 +485,9 @@ async function approvePairingWithFallback(
       if (!hasOriginalPending && !hasGatewayPending) {
         return null;
       }
-      throw buildFallbackStateMismatchError(fallback.details);
+      // Fail-closed replacement validation refused to substitute; do not point
+      // at the incompatible pending id as a recovery step.
+      throw buildFallbackStateMismatchError(fallback.details, []);
     }
     const approved = await approveDevicePairing(requestId, {
       // Local CLI fallback already assumes direct machine access; treat it as an
@@ -480,7 +496,7 @@ async function approvePairingWithFallback(
     });
     if (!approved) {
       if (gatewayRequestId && gatewayRequestId === requestId) {
-        throw buildFallbackStateMismatchError(fallback.details);
+        throw buildFallbackStateMismatchError(fallback.details, []);
       }
       return null;
     }

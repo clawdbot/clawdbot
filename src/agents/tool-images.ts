@@ -134,10 +134,9 @@ function inferImageFileName(params: {
   label?: string;
   mediaPathHint?: string;
 }): string | undefined {
-  const rec = params.block as unknown as Record<string, unknown>;
   const explicitKeys = ["fileName", "filename", "path", "url"] as const;
   for (const key of explicitKeys) {
-    const raw = rec[key];
+    const raw = Reflect.get(params.block, key);
     if (typeof raw !== "string" || raw.trim().length === 0) {
       continue;
     }
@@ -147,8 +146,9 @@ function inferImageFileName(params: {
     }
   }
 
-  if (typeof rec.name === "string" && rec.name.trim().length > 0) {
-    return rec.name.trim();
+  const name = Reflect.get(params.block, "name");
+  if (typeof name === "string" && name.trim().length > 0) {
+    return name.trim();
   }
 
   if (params.mediaPathHint) {

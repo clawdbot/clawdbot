@@ -9,6 +9,7 @@ import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexAppServerStartOptionsKey,
   codexSandboxPolicyForTurn,
+  isCodexSandboxExecServerEnabled,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerStartOptionsForAgent,
@@ -1446,6 +1447,11 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         },
       }).appServer?.experimental,
     ).toEqual({ sandboxExecServer: true });
+    expect(
+      isCodexSandboxExecServerEnabled(undefined, {
+        placementExecutionMode: "remote-exec",
+      }),
+    ).toBe(true);
   });
 
   it("rejects the retired dynamic tool profile key", () => {

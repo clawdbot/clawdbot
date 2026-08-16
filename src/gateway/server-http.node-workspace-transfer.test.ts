@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createGatewayHttpServer } from "./server-http.js";
+import type { NodeWorkerBundleTransferHttpCallback } from "./worker-environments/node-worker-bundle-transfer-http.js";
 import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http.js";
 
 const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
@@ -15,6 +16,7 @@ afterEach(() => {
 });
 
 async function withTransferServer<T>(params: {
+  bundleCallback?: NodeWorkerBundleTransferHttpCallback;
   callback?: NodeWorkspaceTransferHttpCallback;
   limiter?: AuthRateLimiter;
   hooks?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
@@ -29,6 +31,7 @@ async function withTransferServer<T>(params: {
     handleHooksRequest: params.hooks ?? (async () => false),
     resolvedAuth,
     joinRateLimiter: params.limiter,
+    handleNodeWorkerBundleTransferRequest: params.bundleCallback,
     handleNodeWorkspaceTransferRequest: params.callback,
     getRuntimeConfig: () => ({}),
   });
@@ -51,6 +54,65 @@ function writeJson(res: ServerResponse, status: number, body: unknown): void {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
 }
+
+describe("node worker bundle transfer HTTP routing", () => {
+  it("reserves the exact bundle namespace and collapses rejected auth", async () => {
+    const hooks = vi.fn(async () => false);
+    const callback = vi.fn<NodeWorkerBundleTransferHttpCallback>(async () => ({
+      kind: "unauthorized",
+    }));
+    await withTransferServer({
+      bundleCallback: callback,
+      hooks,
+      run: async (origin) => {
+        const url = `${origin}/__openclaw__/worker-bundle/v1/bundles/${"a".repeat(64)}`;
+        const missing = await fetch(url);
+        const rejected = await fetch(url, {
+          headers: { authorization: "Bearer rejected-transfer-token" },
+        });
+        const queried = await fetch(`${url}?alias=true`, {
+          headers: { authorization: "Bearer rejected-transfer-token" },
+        });
+
+        expect(missing.status).toBe(404);
+        expect(rejected.status).toBe(404);
+        expect(queried.status).toBe(404);
+        expect(missing.headers.get("cache-control")).toBe("no-store");
+        expect(callback).toHaveBeenCalledOnce();
+        expect(hooks).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  it("lets an authenticated exact bundle route own its response", async () => {
+    const callback: NodeWorkerBundleTransferHttpCallback = async ({ bearer, bundleHash, res }) => {
+      if (bearer !== "valid-bundle-token") {
+        return { kind: "unauthorized" };
+      }
+      return {
+        kind: "authorized",
+        handle: () => {
+          res.writeHead(200, { "content-type": "text/plain" });
+          res.end(bundleHash);
+        },
+      };
+    };
+    await withTransferServer({
+      bundleCallback: callback,
+      run: async (origin) => {
+        const bundleHash = "b".repeat(64);
+        const response = await fetch(
+          `${origin}/__openclaw__/worker-bundle/v1/bundles/${bundleHash}`,
+          { headers: { authorization: "Bearer valid-bundle-token" } },
+        );
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("no-store");
+        await expect(response.text()).resolves.toBe(bundleHash);
+      },
+    });
+  });
+});
 
 describe("node workspace transfer HTTP routing", () => {
   it("reserves the namespace before hooks and collapses missing or rejected auth", async () => {

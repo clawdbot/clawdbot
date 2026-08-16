@@ -68,6 +68,7 @@ import type {
 } from "./invoke-types.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
+import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
 import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-commands.js";
 import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
@@ -88,6 +89,7 @@ const OUTPUT_EVENT_TAIL = 20_000;
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 type NodeHostPrivateInvokeRuntime = NodeHostInvokeRuntime & {
+  workerBundleInstaller?: NodeWorkerBundleInstallerControl;
   workerSupervisor?: NodeWorkerSupervisorControl;
   workerWorkspace?: NodeWorkerWorkspaceRuntime;
 };
@@ -616,6 +618,7 @@ async function dispatchInvoke(
   const workerSupervisorResult = await invokeNodeWorkerSupervisorCommand({
     command,
     paramsJSON: frame.paramsJSON,
+    bundleInstaller: runtime.workerBundleInstaller,
     supervisor: runtime.workerSupervisor,
     workspace: runtime.workerWorkspace,
     gatewayUrl: runtime.gatewayUrl,

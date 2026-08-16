@@ -690,8 +690,7 @@ describe("CronService", () => {
   it("retries one-shot lifecycle claim conflicts instead of disabling the job (#106875)", async () => {
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "error" as const,
-      error:
-        'CronSessionLifecycleClaimError: Session "agent:main:cron:job-1" changed while starting work. Retry.',
+      error: 'Session "agent:main:cron:job-1" changed while starting work. Retry.',
     }));
     const { store, cron, events } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);
     const job = await runIsolatedAnnounceJobAndWait({
@@ -714,8 +713,7 @@ describe("CronService", () => {
   it("does not retry a lifecycle claim conflict after agent execution starts (#108428)", async () => {
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "error" as const,
-      error:
-        'CronSessionLifecycleClaimError: Session "agent:main:cron:job-1" changed while starting work. Retry.',
+      error: 'Session "agent:main:cron:job-1" changed while starting work. Retry.',
       executionStarted: true,
     }));
     const { store, cron, events } = await createIsolatedAnnounceHarness(runIsolatedAgentJob);

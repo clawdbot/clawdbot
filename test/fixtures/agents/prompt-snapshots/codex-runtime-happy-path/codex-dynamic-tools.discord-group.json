@@ -54,6 +54,7 @@
             "type": "string"
           },
           "cwd": {
+            "description": "Working directory for the child. With visible=true, paths outside configured agent workspaces require operator.admin; omit to use the target agent workspace.",
             "type": "string"
           },
           "label": {

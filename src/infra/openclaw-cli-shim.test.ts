@@ -38,16 +38,17 @@ describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
         mode: 0o700,
       });
 
-      const shim = await prepareGatewayAgentCliShim({
+      await prepareGatewayAgentCliShim({
         env: testCase.profile ? { OPENCLAW_PROFILE: testCase.profile } : {},
         invocation: { command: process.execPath, args: [entryPath], cwd: root },
         stateDir,
       });
+      const shimBinDir = path.join(stateDir, "tmp", "agent-cli");
       const config = {
         tools: { exec: { pathPrepend: [staleBinDir] } },
       } satisfies OpenClawConfig;
       const execConfig = resolveExecToolConfig({ cfg: config });
-      expect(execConfig.pathPrepend?.slice(0, 2)).toEqual([shim.binDir, staleBinDir]);
+      expect(execConfig.pathPrepend?.slice(0, 2)).toEqual([shimBinDir, staleBinDir]);
 
       process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
       process.env.PATH = `${staleBinDir}${path.delimiter}${process.env.PATH ?? ""}`;
@@ -67,7 +68,7 @@ describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
       expect(JSON.parse(readExecText(result))).toEqual({
         source: "gateway",
         args: testCase.expectedArgs,
-        pathHead: shim.binDir,
+        pathHead: shimBinDir,
       });
     });
   });
@@ -75,7 +76,7 @@ describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
 
 it("renders a Windows PATH launcher for the running CLI", async () => {
   await withTestDir("openclaw-agent-cli-shim-win-", async (root) => {
-    const result = await prepareGatewayAgentCliShim({
+    await prepareGatewayAgentCliShim({
       env: { OPENCLAW_PROFILE: "work" },
       invocation: {
         command: "C:\\Program Files\\nodejs\\node.exe",
@@ -86,8 +87,8 @@ it("renders a Windows PATH launcher for the running CLI", async () => {
       stateDir: root,
     });
 
-    expect(path.basename(result.executablePath)).toBe("openclaw.cmd");
-    expect(await fs.readFile(result.executablePath, "utf8")).toBe(
+    const executablePath = path.join(root, "tmp", "agent-cli", "openclaw.cmd");
+    expect(await fs.readFile(executablePath, "utf8")).toBe(
       '@echo off\r\n"C:\\Program Files\\nodejs\\node.exe" C:\\OpenClaw\\dist\\index.js --profile work %*\r\n',
     );
   });

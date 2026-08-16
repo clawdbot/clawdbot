@@ -1,6 +1,13 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { DockPanelPlacement } from "../dock-panel-layout.ts";
+import { icons } from "../icons.ts";
+import { renderPanelEmptyState } from "../panel-empty-state.ts";
+import {
+  TerminalOpenTimeoutError,
+  TerminalOpenUnusableSessionError,
+} from "./terminal-connection.ts";
 import type { TerminalPanelSessionTab } from "./terminal-panel-session-types.ts";
 import { renderTerminalPanelTabs } from "./terminal-panel-tabs.ts";
 import {
@@ -13,6 +20,7 @@ type TerminalDock = Exclude<DockPanelPlacement, "left">;
 
 export function renderTerminalPanelToolbar(
   fullscreen: boolean,
+  embedded: boolean,
   dock: TerminalDock,
   uploadController: TerminalPanelUploadController,
   sessionPicker: TemplateResult,
@@ -22,6 +30,7 @@ export function renderTerminalPanelToolbar(
 ): TemplateResult {
   return renderTerminalPanelActions({
     fullscreen,
+    embedded,
     dock,
     upload: uploadController,
     sessionPicker,
@@ -78,7 +87,25 @@ export function renderTerminalPanelViewport(
             <span>${t("terminal.connecting")}</span>
           </div>`
         : nothing}
+      ${!activeId && !connecting && !errorText
+        ? renderPanelEmptyState({
+            icon: icons.terminal,
+            heading: t("chat.sidePanel.terminal"),
+            description: t("chat.sidePanel.terminalEmpty"),
+          })
+        : nothing}
       ${renderTerminalUploadLayer(uploadController)}
     </wa-tab-panel>
   `;
+}
+
+/** Operator-facing text for a failed terminal.open; typed errors map to copy. */
+export function terminalOpenErrorText(error: unknown): string {
+  if (error instanceof TerminalOpenTimeoutError) {
+    return t("terminal.connectionTimedOut");
+  }
+  if (error instanceof TerminalOpenUnusableSessionError) {
+    return t("terminal.unavailable");
+  }
+  return formatUiError(error);
 }

@@ -28,7 +28,6 @@ import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import { maybeSteerSubagentAnnounce } from "./subagent-announce-active-wake.js";
 import {
   hasAnnounceSendEvidence,
-  hasWriterClaimReboundAnnounceError,
   isWriterClaimReboundAnnounceError,
   resolveSubagentAnnounceTimeoutMs,
   runAnnounceDeliveryWithRetry,
@@ -284,7 +283,6 @@ const testing = {
     setSubagentAnnounceDeliveryDepsForTest(overrides);
   },
   hasAnnounceSendEvidence,
-  hasWriterClaimReboundAnnounceError,
   isWriterClaimReboundAnnounceError,
 };
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

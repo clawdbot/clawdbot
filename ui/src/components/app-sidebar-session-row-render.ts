@@ -40,6 +40,7 @@ import {
   resolveSidebarSessionSubtitle,
 } from "./session-row-subtitle.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
+import { projectPresencePayload } from "./viewer-facepile.ts";
 import "./elapsed-time.ts";
 
 const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
@@ -115,7 +116,7 @@ export interface SessionListHost {
   startSidebarSectionDrag(sectionId: string): void;
   finishSidebarSectionDrag(): void;
   toggleSection(sectionId: string): void;
-  openNewSession(): void;
+  openNewSession(target?: NewSessionTarget): void;
   readNewSessionAccess(): import("../lib/session-method-access.ts").SessionMethodAccess;
   readSessionMutationAccess(request: {
     method: string;
@@ -180,12 +181,22 @@ export function renderRecentSession(params: {
       ? session.archivedBy
       : session.createdActor
     : undefined;
-  const { running, leadingIndicator, trailingIndicator } = renderSessionLeadingState(
-    session,
-    pullRequestState,
-    ownerActor,
-    ownerAttribution,
-  );
+  const ownerId = ownerActor?.id?.trim();
+  const ownerViewing = ownerId
+    ? projectPresencePayload(
+        host.sessionData.presencePayload,
+        host.sessionDataContext?.gateway.snapshot.selfUser?.id,
+        host.sessionData.presenceInstanceId,
+      ).users.some((user) => user.id === ownerId && user.watchedSessions.includes(session.key))
+    : undefined;
+  const { running, leadingIndicator, trailingIndicator, renderedOwnerId } =
+    renderSessionLeadingState(
+      session,
+      pullRequestState,
+      ownerActor,
+      ownerAttribution,
+      ownerViewing,
+    );
   const trailingDescription = session.isChild
     ? ""
     : describeSessionTrailingState(session, pullRequestState);
@@ -242,8 +253,7 @@ export function renderRecentSession(params: {
     requiredScope: "operator.write",
   });
   const rowDraggable = !session.isChild && groupWriteAccess.allowed;
-  // Empty 16/20px lead columns indent titles past section labels and siblings.
-  const showLead = leadingIndicator !== nothing || session.visibility === "draft";
+  // Always reserve the lead so every title shares the section-label text line.
   const row = html`
     <div
       class=${rowClass}
@@ -278,18 +288,14 @@ export function renderRecentSession(params: {
         aria-describedby=${[stateId, metaId].filter(Boolean).join(" ") || nothing}
         @click=${(event: MouseEvent) => host.handleSessionRowClick(event, session)}
       >
-        ${showLead
-          ? html`<span class="sidebar-session-indicator"
-              >${leadingIndicator}
-              ${session.visibility === "draft"
-                ? html`<span
-                    class="session-row-draft-indicator"
-                    title=${t("chat.sessionSharing.draft")}
-                    >👻</span
-                  >`
-                : nothing}</span
-            >`
-          : nothing}
+        <span class="sidebar-session-indicator"
+          >${leadingIndicator}
+          ${session.visibility === "draft"
+            ? html`<span class="session-row-draft-indicator" title=${t("chat.sessionSharing.draft")}
+                >👻</span
+              >`
+            : nothing}</span
+        >
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name hover-marquee"
             >${session.archived
@@ -317,6 +323,7 @@ export function renderRecentSession(params: {
           .selfUserId=${host.sessionDataContext?.gateway.snapshot.selfUser?.id}
           .selfInstanceId=${host.sessionData.presenceInstanceId}
           .sessionKey=${session.key}
+          .excludeUserId=${renderedOwnerId}
           .maxVisible=${3}
           variant="session"
         ></openclaw-viewer-facepile>

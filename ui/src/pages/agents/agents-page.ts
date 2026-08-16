@@ -38,6 +38,7 @@ import {
   runCronJob,
   type CronState,
 } from "../../lib/cron/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   canCallGatewayMethod,
   type GatewayMethodOperatorScope,
@@ -331,10 +332,9 @@ class AgentsPage
 
   private async selectDefaultAgentFile(agentId: string) {
     const files = this.agentFilesList?.files ?? [];
-    if (this.agentFileActive && files.some((file) => file.name === this.agentFileActive)) {
-      return;
+    if (!this.agentFileActive || !files.some((file) => file.name === this.agentFileActive)) {
+      this.agentFileActive = files.find((file) => file.name === "AGENTS.md")?.name ?? null;
     }
-    this.agentFileActive = files.find((file) => file.name === "AGENTS.md")?.name ?? null;
     if (this.agentFileActive) {
       await loadAgentFileContent(this, agentId, this.agentFileActive);
     }
@@ -492,7 +492,7 @@ class AgentsPage
       .ensure(ids)
       .catch((err: unknown) => {
         if (this.isCurrentRequest(client, generation, undefined, { agentIdentity })) {
-          this.agentIdentityError = String(err);
+          this.agentIdentityError = formatUiError(err);
         }
       })
       .finally(() => {
@@ -544,13 +544,13 @@ class AgentsPage
     }
   }
 
-  private ensureModelCatalog() {
+  private ensureModelCatalog(options: { refresh?: boolean } = {}) {
     const client = this.client;
     const agentId = this.resolveSelectedAgentId();
     if (!client || !this.connected || !agentId) {
       return;
     }
-    if (this.chatModelCatalogClient === client) {
+    if (!options.refresh && this.chatModelCatalogClient === client) {
       const cached = this.chatModelCatalogByAgentId.get(agentId);
       if (cached) {
         this.chatModelCatalog = cached;
@@ -591,7 +591,7 @@ class AgentsPage
       .catch((error: unknown) => {
         if (this.isCurrentRequest(client, generation, agentId)) {
           this.chatModelCatalogAgentId = null;
-          this.chatModelCatalogError = error instanceof Error ? error.message : String(error);
+          this.chatModelCatalogError = formatUiError(error);
         }
       })
       .finally(() => {
@@ -830,8 +830,8 @@ class AgentsPage
     if (!client) {
       return;
     }
-    void saveAgentFile(this, agentId, name, content).then(() => {
-      if (this.isCurrentRequest(client, generation, agentId, { agents })) {
+    void saveAgentFile(this, agentId, name, content).then((saved) => {
+      if (saved && this.isCurrentRequest(client, generation, agentId, { agents })) {
         void this.loadAgentFiles(agentId, true);
       }
     });
@@ -1114,7 +1114,10 @@ class AgentsPage
             stageAgentPrimaryModel(this.context.runtimeConfig, agentId, modelId);
             void refreshVisibleToolsEffectiveForCurrentSession(this);
           },
-          onModelCatalogRetry: () => this.ensureModelCatalog(),
+          // Availability facts (provider keys added/removed, new models) go
+          // stale in the per-agent cache; opening the picker re-reads them,
+          // mirroring the chat composer's on-open refresh.
+          onModelCatalogRetry: () => this.ensureModelCatalog({ refresh: true }),
           onModelFallbacksChange: (agentId, fallbacks) => {
             if (this.canCall("config.set", "operator.admin")) {
               stageAgentModelFallbacks(this.context.runtimeConfig, agentId, fallbacks);

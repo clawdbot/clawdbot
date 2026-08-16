@@ -10,7 +10,6 @@ import { getRuntimeConfig } from "../config/io.js";
 import {
   resolveSessionStoreCompatibilityAgentId,
   tryGetLegacyDefaultAgentId,
-  tryResolveLegacyCompatibilityAgentId,
 } from "../config/legacy.default-agent-owner.js";
 import {
   canonicalizeMainSessionAlias,
@@ -25,7 +24,7 @@ import {
 } from "../config/sessions/targets.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
+import { resolveCronJobEffectiveAgentId, tryResolveCronDefaultAgentId } from "../cron/agent-id.js";
 import {
   buildCronCommandSummary,
   redactCronCommandSummaryForExternalDelivery,
@@ -107,11 +106,15 @@ export type GatewayCronState = {
   cron: GatewayCronServiceContract;
   storePath: string;
   cronEnabled: boolean;
-  reconcileExitWatchers?: () => Promise<void>;
-  stopExitWatchers?: () => void;
-  reconcileStreamWatchers?: () => Promise<void>;
-  stopStreamWatchers?: () => Promise<void>;
-  reconcileHeartbeatJobs?: (cfg?: OpenClawConfig) => Promise<void>;
+  // Required, not optional: reload rules call these hooks directly on whatever
+  // cronState is live (including the lazy proxy). An optional member here let
+  // the proxy silently omit reconcileHeartbeatJobs, turning every
+  // restart-heartbeat reload into a permanent no-op until gateway restart.
+  reconcileExitWatchers: () => Promise<void>;
+  stopExitWatchers: () => void;
+  reconcileStreamWatchers: () => Promise<void>;
+  stopStreamWatchers: () => Promise<void>;
+  reconcileHeartbeatJobs: (cfg?: OpenClawConfig) => Promise<void>;
 };
 
 function classifyCronScriptFailure(code: CronTriggerFailureCode): CronRunErrorClassification {
@@ -380,7 +383,7 @@ export function buildGatewayCronService(params: {
     const runtimeConfig = getRuntimeConfig();
     const normalized =
       typeof requested === "string" && requested.trim() ? normalizeAgentId(requested) : undefined;
-    const defaultAgentId = tryResolveLegacyCompatibilityAgentId(runtimeConfig);
+    const defaultAgentId = tryResolveCronDefaultAgentId(runtimeConfig);
     if (
       normalized !== undefined &&
       normalized !== defaultAgentId &&
@@ -507,7 +510,7 @@ export function buildGatewayCronService(params: {
     return sanitizeCronHeartbeatOverride(heartbeatOverride);
   };
 
-  const defaultAgentId = tryResolveLegacyCompatibilityAgentId(params.cfg);
+  const defaultAgentId = tryResolveCronDefaultAgentId(params.cfg);
   const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(params.cfg);
   const resolveSessionStorePath = (agentId?: string) =>
     resolveSessionStorePathCore(params.cfg.session?.store, {
@@ -728,7 +731,7 @@ export function buildGatewayCronService(params: {
       : {}),
     ...(defaultAgentId ? { defaultAgentId } : {}),
     ...(legacyDefaultAgentId ? { legacyDefaultAgentId } : {}),
-    resolveDefaultAgentId: () => tryResolveLegacyCompatibilityAgentId(getRuntimeConfig()),
+    resolveDefaultAgentId: () => tryResolveCronDefaultAgentId(getRuntimeConfig()),
     resolveSessionStoreAgentIds: () => {
       const cfg = getRuntimeConfig();
       try {
@@ -1019,7 +1022,7 @@ export function buildGatewayCronService(params: {
         webhookToken: params.cfg.cron?.webhookToken,
         ssrfPolicy: webhookSsrfPolicy,
       }),
-    log: getChildLogger({ module: "cron", storePath }),
+    log: getChildLogger({ module: "cron", storeKey: storePath }),
     onEvent: (evt) => {
       // Any job/store change can alter session automation bindings, including
       // in-place enable flips during runs; run/schedule events bump too (cheap).

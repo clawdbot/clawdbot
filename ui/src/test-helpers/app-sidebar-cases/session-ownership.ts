@@ -121,6 +121,11 @@ describe("AppSidebar session ownership", () => {
     const bobAvatarBefore = sidebar
       .querySelector('[data-session-key="agent:main:bob"] openclaw-viewer-avatar img')
       ?.getAttribute("src");
+    expect(
+      sidebar
+        .querySelector('[data-session-key="agent:main:bob"] .session-owner-chip')
+        ?.classList.contains("session-owner-chip--away"),
+    ).toBe(true);
 
     gateway.publishEvent("presence", {
       presence: [
@@ -131,6 +136,7 @@ describe("AppSidebar session ownership", () => {
             name: "Bob",
             avatarUrl: "/api/users/profile-bob/avatar?v=99",
           },
+          watchedSessions: ["agent:main:bob"],
         },
       ],
     });
@@ -140,6 +146,11 @@ describe("AppSidebar session ownership", () => {
         .querySelector('[data-session-key="agent:main:bob"] openclaw-viewer-avatar img')
         ?.getAttribute("src"),
     ).toBe(bobAvatarBefore);
+    const bobChip = sidebar.querySelector(
+      '[data-session-key="agent:main:bob"] .session-owner-chip',
+    );
+    expect(bobChip?.classList.contains("session-owner-chip--away")).toBe(false);
+    expect(bobChip?.getAttribute("title")).toBe("Created by Bob · viewing now");
 
     const adaChip = sidebar.querySelector(
       '[data-session-key="agent:main:ada"] .session-owner-chip',
@@ -290,7 +301,9 @@ describe("AppSidebar session ownership", () => {
     }
     result.creators = [{ id: "profile-bob", label: "Bob" }];
     const createdOrder = keys.slice(1);
-    const updatedOrder = [keys[1]!, keys[2]!, keys[3]!, keys[4]!];
+    // b1 and a1 tie at updatedAt 40; the ascending-key tie-break (mirroring
+    // the gateway list order) puts a1 first.
+    const updatedOrder = [keys[2]!, keys[1]!, keys[3]!, keys[4]!];
     const peopleOrder = [keys[2]!, keys[4]!, keys[1]!, keys[3]!];
 
     const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
@@ -376,6 +389,12 @@ describe("AppSidebar session ownership", () => {
       sidebar.querySelector('openclaw-session-owner-chip span[title="Archived by Bob"]'),
     ).not.toBeNull();
     expect(sidebar.querySelector('span[title="Created by Ada"]')).toBeNull();
+    // Facepile dedup follows the rendered lead: the archivist chip is shown,
+    // so Bob is excluded while creator Ada must stay visible as a viewer.
+    const archivedFacepile = sidebar.querySelector(
+      '[data-session-key="agent:main:archived"] openclaw-viewer-facepile',
+    ) as (HTMLElement & { excludeUserId?: string }) | null;
+    expect(archivedFacepile?.excludeUserId).toBe("profile-bob");
 
     collaborator.createdActor = { type: "human", id: "profile-ada", label: "Ada" };
     result.creators = [{ id: "profile-ada", label: "Ada" }];
@@ -383,6 +402,10 @@ describe("AppSidebar session ownership", () => {
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector("openclaw-session-owner-chip")).toBeNull();
+    const soloFacepile = sidebar.querySelector(
+      '[data-session-key="agent:main:archived"] openclaw-viewer-facepile',
+    ) as (HTMLElement & { excludeUserId?: string }) | null;
+    expect(soloFacepile?.excludeUserId).toBeUndefined();
   });
 
   it("filters by creator and hides custom groups without matching sessions", async () => {

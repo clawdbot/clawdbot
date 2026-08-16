@@ -18,6 +18,7 @@ import {
 } from "./embedded-agent-helpers.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
 import { hasAttemptTerminalState } from "./embedded-agent-runner/run/attempt-terminal-evidence.js";
+import { resolveFinalAssistantVisibleText } from "./embedded-agent-runner/run/helpers.js";
 import { isIncompleteTerminalAssistantTurn } from "./embedded-agent-runner/run/incomplete-turn-classification.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
@@ -77,9 +78,26 @@ export function handleAgentEnd(
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
   let lifecycleErrorText: string | undefined;
-  const hasAssistantVisibleText =
+  // Terminal delivery does not depend on streamed text alone: when the streamed
+  // assistant texts are empty, payload building falls back to the completed
+  // assistant message's visible text, so such a turn still reaches the user.
+  // Classification must key on the same fact, otherwise a delivered reply is
+  // recorded here as an abandoned, replay-invalid turn. Error and abort stop
+  // reasons keep the streamed-only view because their raw text can describe an
+  // interrupted generation rather than a reply (mirrors
+  // resolveTerminalAssistantTexts).
+  const hasStreamedAssistantVisibleText =
     Array.isArray(ctx.state.assistantTexts) &&
     ctx.state.assistantTexts.some((text) => hasAssistantVisibleReply({ text }));
+  const completedAssistantFallbackText =
+    isAssistantMessage(lastAssistant) &&
+    lastAssistant.stopReason !== "error" &&
+    lastAssistant.stopReason !== "aborted"
+      ? resolveFinalAssistantVisibleText(lastAssistant)
+      : undefined;
+  const hasAssistantVisibleText =
+    hasStreamedAssistantVisibleText ||
+    hasAssistantVisibleReply({ text: completedAssistantFallbackText ?? "" });
   const hadLivenessPreservingSideEffect =
     ctx.state.hadDeterministicSideEffect === true ||
     hasCommittedMessagingToolDeliveryEvidence(ctx.state) ||

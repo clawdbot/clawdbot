@@ -40,6 +40,7 @@ import {
   attachGatewayLocalUserIngress,
   prepareGatewayLocalUserIngress,
 } from "./local-user-ingress.js";
+import { listSessionGroups } from "./session-groups.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import {
   agentCommandMock,
@@ -193,6 +194,109 @@ function describeSessionStoreForensics(storePath: string): string {
     .all();
   return JSON.stringify({ storeDir, files, resolvedTargetPath: target.path, rows });
 }
+
+test("sessions.create assigns and registers its requested group", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const broadcastToConnIds = vi.fn();
+
+  const created = await directSessionReq<{ key: string }>(
+    "sessions.create",
+    {
+      agentId: "main",
+      category: "Client work",
+    },
+    {
+      context: {
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+      },
+    },
+  );
+
+  expect(created.ok).toBe(true);
+  const key = requireNonEmptyString(created.payload?.key, "grouped session key");
+  expect(loadSessionEntry({ sessionKey: key, storePath })?.category).toBe("Client work");
+  expect(listSessionGroups().map((group) => group.name)).toContain("Client work");
+  expect(broadcastToConnIds).toHaveBeenCalledWith(
+    "sessions.changed",
+    expect.objectContaining({ reason: "groups" }),
+    new Set(["conn-1"]),
+    { dropIfSlow: true },
+  );
+});
+
+test("sessions.create carries keyed adoption authorization through the durable commit", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:dashboard:categorized-adoption";
+  await writeSessionStore({
+    entries: {
+      [key]: sessionStoreEntry("session-categorized-adoption", { category: "Personal" }),
+    },
+  });
+  const assertCurrent = vi.fn();
+
+  const adopted = await directSessionReq(
+    "sessions.create",
+    { agentId: "main", key, category: "Projects" },
+    {
+      sessionMutationAuthorization: {
+        assertCurrent,
+        assertTargetCurrent: vi.fn(),
+      },
+    },
+  );
+
+  expect(adopted.ok).toBe(true);
+  expect(assertCurrent).toHaveBeenCalled();
+  expect(loadSessionEntry({ sessionKey: key, storePath })?.category).toBe("Projects");
+});
+
+test("sessions.create registers a category only after the session commit succeeds", async () => {
+  await createSessionStoreDir();
+  const category = "Deferred category";
+  let validations = 0;
+
+  const failed = await directSessionReq(
+    "sessions.create",
+    { agentId: "main", category, key: "agent:main:dashboard:failed-category-create" },
+    {
+      context: {
+        validateAgentRuntimeApprovalAuthority: () => ++validations < 3,
+      },
+      client: {
+        connect: { scopes: ["operator.write"] },
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey: "agent:main:main",
+          },
+        },
+      } as never,
+    },
+  );
+
+  expect(failed.ok).toBe(false);
+  expect(listSessionGroups().map((group) => group.name)).not.toContain(category);
+
+  const broadcastToConnIds = vi.fn();
+  const created = await directSessionReq(
+    "sessions.create",
+    { agentId: "main", category, key: "agent:main:dashboard:successful-category-create" },
+    {
+      context: {
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+      },
+    },
+  );
+
+  expect(created.ok).toBe(true);
+  expect(listSessionGroups().filter((group) => group.name === category)).toHaveLength(1);
+  expect(
+    broadcastToConnIds.mock.calls.filter(([, payload]) => payload?.reason === "groups"),
+  ).toHaveLength(1);
+});
 
 test("concurrent sessions.create requests adopt one canonical keyed session", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -3881,6 +3985,21 @@ test("sessions.create rejects fork without parentSessionKey", async () => {
   });
 });
 
+test("sessions.create rejects forkFrom without fork", async () => {
+  await createSessionStoreDir();
+
+  const created = await directSessionReq("sessions.create", {
+    parentSessionKey: "main",
+    forkFrom: "last-completed",
+  });
+
+  expect(created.ok).toBe(false);
+  expect(created.error).toMatchObject({
+    code: "INVALID_REQUEST",
+    message: "forkFrom requires fork=true",
+  });
+});
+
 test("sessions.create rejects fork when the parent exceeds the fork size cap", async () => {
   const { dir } = await createSessionStoreDir();
   testState.sessionConfig = { scope: "per-sender" };
@@ -3925,6 +4044,74 @@ test("sessions.create rejects fork while the parent session is active", async ()
       code: "UNAVAILABLE",
       message: "Parent session main is still active; try again in a moment.",
     });
+  } finally {
+    embeddedRunMock.activeIds.delete(parentSessionId);
+    testState.sessionConfig = undefined;
+  }
+});
+
+test("sessions.create forks an active parent from its last completed message", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.sessionConfig = { scope: "per-sender" };
+  const parentSessionId = "sess-active-completed-fork-parent";
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(parentSessionId, {
+        // The in-flight tail can make the whole parent exceed the cap; only the
+        // selected completed prefix should govern this fork.
+        totalTokens: 200_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      }),
+    },
+  });
+  await seedSessionTranscript({
+    sessionId: parentSessionId,
+    sessionKey: "agent:main:main",
+    storePath,
+    messages: [
+      { role: "user", content: "completed question" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "completed answer" }],
+        stopReason: "stop",
+      },
+      { role: "user", content: "active question" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "active tool call" }],
+        stopReason: "toolUse",
+      },
+    ],
+  });
+  embeddedRunMock.activeIds.add(parentSessionId);
+  try {
+    const created = await directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
+      parentSessionKey: "main",
+      fork: true,
+      forkFrom: "last-completed",
+    });
+
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    const messages = await loadTranscriptEvents({
+      sessionId: created.payload?.sessionId ?? "",
+      sessionKey: created.payload?.key ?? "",
+      storePath,
+    });
+    expect(
+      messages.flatMap((entry) =>
+        entry &&
+        typeof entry === "object" &&
+        "type" in entry &&
+        entry.type === "message" &&
+        "message" in entry
+          ? [entry.message]
+          : [],
+      ),
+    ).toEqual([
+      expect.objectContaining({ role: "user", content: "completed question" }),
+      expect.objectContaining({ role: "assistant", stopReason: "stop" }),
+    ]);
   } finally {
     embeddedRunMock.activeIds.delete(parentSessionId);
     testState.sessionConfig = undefined;

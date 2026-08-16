@@ -27,6 +27,10 @@ import {
 } from "../server-constants.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
+import {
+  classifyGatewayStaleInstall,
+  GATEWAY_STALE_INSTALL_CLOSE_REASON,
+} from "../stale-install.js";
 import { cleanupTalkConnection } from "../talk-session-registry.js";
 import { formatForLog, logWs } from "../ws-log.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
@@ -92,7 +96,6 @@ type GatewayWsSharedHandlerParams = {
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
   preauthHandshakeTimeoutMs?: number;
   isStartupPending?: () => boolean;
-  isControlUiDeviceAuthMigrationPending?: () => boolean;
   gatewayMethods: string[];
   events: string[];
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
@@ -144,11 +147,25 @@ function attachGatewayWsMessageHandlerOnDemand(
     })
     .catch((error: unknown) => {
       params.socket.off("message", queueMessage);
+      const formattedError = formatError(error);
+      const staleInstall = classifyGatewayStaleInstall(error);
+      if (staleInstall) {
+        params.setCloseCause("message-handler-load-failed", {
+          error: formattedError,
+          staleInstall: true,
+          restartCommand: staleInstall.restartCommand,
+        });
+        params.logWsControl.error(
+          `failed to load ws message handler because the OpenClaw installation changed while the Gateway was running conn=${params.connId}; run: ${staleInstall.restartCommand}; error: ${formattedError}`,
+        );
+        params.close(1011, GATEWAY_STALE_INSTALL_CLOSE_REASON);
+        return;
+      }
       params.setCloseCause("message-handler-load-failed", {
-        error: formatError(error),
+        error: formattedError,
       });
-      params.logWsControl.warn(
-        `failed to load ws message handler conn=${params.connId}: ${formatError(error)}`,
+      params.logWsControl.error(
+        `failed to load ws message handler conn=${params.connId}: ${formattedError}`,
       );
       params.close(1011, "gateway message handler unavailable");
     });
@@ -172,7 +189,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     browserRateLimiter,
     nodeReapprovalCoordinator,
     isStartupPending,
-    isControlUiDeviceAuthMigrationPending,
     gatewayMethods,
     events,
     refreshHealthSnapshot,
@@ -333,7 +349,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     const send = (obj: unknown) => {
       if (closed) {
-        return;
+        return { kind: "unavailable" } as const;
       }
       if (socket.bufferedAmount > MAX_BUFFERED_BYTES) {
         logRejectedLargePayload({
@@ -347,12 +363,19 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           limitBytes: MAX_BUFFERED_BYTES,
         });
         close(1008, connectionKind === "worker" ? "slow-consumer" : "slow consumer");
-        return;
+        return { kind: "unavailable" } as const;
+      }
+      let encoded: string;
+      try {
+        encoded = JSON.stringify(obj);
+      } catch (error) {
+        return { kind: "serialization", error } as const;
       }
       try {
-        socket.send(JSON.stringify(obj));
+        socket.send(encoded);
+        return { kind: "sent" } as const;
       } catch {
-        /* ignore */
+        return { kind: "unavailable" } as const;
       }
     };
 
@@ -683,7 +706,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       browserRateLimiter,
       nodeReapprovalCoordinator,
       isStartupPending,
-      isControlUiDeviceAuthMigrationPending,
       gatewayMethods,
       events,
       extraHandlers,

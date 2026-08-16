@@ -753,6 +753,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.maintenance.mode": "Session Maintenance Mode",
   "session.maintenance.pruneAfter": "Session Prune After",
   "session.maintenance.maxEntries": "Session Max Entries",
+  "session.maintenance.preserveRecent": "Preserve Recent Sessions",
   "session.maintenance.resetArchiveRetention": "Session Reset Archive Retention",
   "session.maintenance.maxDiskBytes": "Session Max Disk Budget",
   "session.maintenance.highWaterBytes": "Session Disk High-water Target",

@@ -417,6 +417,7 @@ export function buildGatewaySessionRow(params: {
     previousSessionId: entry?.previousSessionId,
     kind: gatewayKind,
     label: entry?.label,
+    icon: entry?.icon,
     category: entry?.category,
     boardFace: entry?.boardFace,
     ...sessionClassificationForRow(cfg, key, sessionAgentId, entry),

@@ -412,30 +412,6 @@ describe("worker turn launcher reclaimed placement", () => {
     }
   });
 
-  it("rejects a reclaimed placement when redispatch is unavailable", async () => {
-    seedReclaimedPlacement();
-    const provider = createWorkerSessionTurnPlacementProvider({
-      environments: unusedEnvironments(),
-      placements,
-    });
-    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
-
-    await expect(
-      provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "run-reclaimed-unavailable",
-        },
-        turn("run-reclaimed-unavailable"),
-        runLocal,
-      ),
-    ).rejects.toThrow("Reclaimed worker placement requires redispatch");
-    expect(runLocal).not.toHaveBeenCalled();
-    expect(placements.get(SESSION_ID)).toMatchObject({ state: "reclaimed", turnClaim: null });
-  });
-
   it("does not fall back locally when reclaimed redispatch fails", async () => {
     seedReclaimedPlacement();
     const provider = createWorkerSessionTurnPlacementProvider({
@@ -487,6 +463,40 @@ describe("worker turn launcher reclaimed placement", () => {
         runLocal,
       ),
     ).rejects.toThrow("Worker turn rejected in placement requested");
+    expect(runLocal).not.toHaveBeenCalled();
+    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+  });
+
+  it("projects a failed placement cause with current-build recovery guidance", async () => {
+    placements.startDispatch({
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+    });
+    placements.fail({
+      sessionId: SESSION_ID,
+      recoveryError: "cloud worker disappeared: environment state destroyed",
+    });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments: unusedEnvironments(),
+      placements,
+    });
+    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+
+    await expect(
+      provider.executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "run-failed",
+        },
+        turn("run-failed"),
+        runLocal,
+      ),
+    ).rejects.toThrow(
+      "Worker turn rejected in placement failed: cloud worker disappeared: environment state destroyed; redispatch the session so its worker can bootstrap the current build before retrying.",
+    );
     expect(runLocal).not.toHaveBeenCalled();
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
   });

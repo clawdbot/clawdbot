@@ -57,7 +57,7 @@ const RESTART_REPLY_POST_ABORT_DRAIN_POLL_MS = 50;
 const RESTART_TERMINAL_PERSISTENCE_WAIT_TIMEOUT_MS = 1_000;
 const RESTART_MARKER_SLOW_WARNING_MS = 1_000;
 
-export type ShutdownResult = {
+type ShutdownResult = {
   durationMs: number;
   warnings: string[];
 };
@@ -603,21 +603,6 @@ async function disposeRuntimeWithShutdownGrace(params: {
   disposeTimeout.clear();
 }
 
-async function disposeAllBundleLspRuntimesOnDemand(): Promise<void> {
-  const { disposeAllBundleLspRuntimes } = await import("../agents/agent-bundle-lsp-runtime.js");
-  await disposeAllBundleLspRuntimes();
-}
-
-async function drainRetainedEmbeddingProvidersOnDemand(): Promise<void> {
-  const { drainRetainedOpenAiEmbeddingProviders } = await import("./embeddings-http.js");
-  await drainRetainedOpenAiEmbeddingProviders();
-}
-
-async function stopGmailWatcherOnDemand(): Promise<void> {
-  const { stopGmailWatcher } = await import("../hooks/gmail-watcher.js");
-  await stopGmailWatcher();
-}
-
 export async function runGatewayClosePrelude(params: {
   stopDiagnostics?: () => void;
   clearSkillsRefreshTimer?: () => void;
@@ -685,6 +670,11 @@ export function createGatewayCloseHandler(
     postReadySidecars?: readonly GatewayPostReadySidecarHandle[];
     disposeSessionMcpRuntimes?: () => Promise<void>;
     disposeBundleLspRuntimes?: () => Promise<void>;
+    disposeAllBundleLspRuntimes: () => Promise<void>;
+    drainRetainedOpenAiEmbeddingProviders: () => Promise<void>;
+    stopGmailWatcher: () => Promise<void>;
+    disposeAllCodeModeRuns: () => Promise<void> | void;
+    closeProviderTransportDispatcherPool: () => Promise<void>;
     cron: { stop: () => void; stopAndDrain?: () => Promise<void> };
     heartbeatRunner: HeartbeatRunner;
     updateCheckStop?: (() => void) | null;
@@ -883,25 +873,12 @@ export function createGatewayCloseHandler(
           await shutdownStep(`channel/${channelId}`, () => params.stopChannel(channelId), warnings);
         }
       });
-      // Load the bridge only at shutdown; eager imports boot the subagent registry at startup.
-      // Cancel parked calls before their agent harnesses and MCP transports disappear.
-      await shutdownStep(
-        "code-mode-runs",
-        async () => {
-          const { disposeAllCodeModeRuns } = await import("../agents/code-mode-state.js");
-          return disposeAllCodeModeRuns();
-        },
-        warnings,
-      );
+      await shutdownStep("code-mode-runs", () => params.disposeAllCodeModeRuns(), warnings);
       await shutdownStep("agent-harnesses", () => disposeRegisteredAgentHarnesses(), warnings);
       await shutdownStep("ai-session-resources", () => cleanupSessionResources(), warnings);
       await shutdownStep(
         "provider-transport-dispatchers",
-        async () => {
-          const { closeProviderTransportDispatcherPool } =
-            await import("../agents/provider-transport-dispatcher-pool.js");
-          await closeProviderTransportDispatcherPool();
-        },
+        () => params.closeProviderTransportDispatcherPool(),
         warnings,
       );
       await measureCloseStep("bundle-runtimes", async () => {
@@ -914,7 +891,7 @@ export function createGatewayCloseHandler(
           }),
           disposeRuntimeWithShutdownGrace({
             label: "bundle-lsp",
-            dispose: params.disposeBundleLspRuntimes ?? disposeAllBundleLspRuntimesOnDemand,
+            dispose: params.disposeBundleLspRuntimes ?? params.disposeAllBundleLspRuntimes,
             graceMs: LSP_RUNTIME_CLOSE_GRACE_MS,
             warnings,
           }),
@@ -935,7 +912,7 @@ export function createGatewayCloseHandler(
         recordShutdownWarning(warnings, "media-cleanup");
       }
       await measureCloseStep("gmail-watcher", () =>
-        shutdownStep("gmail-watcher", () => stopGmailWatcherOnDemand(), warnings),
+        shutdownStep("gmail-watcher", () => params.stopGmailWatcher(), warnings),
       );
       await shutdownStep(
         "cron",
@@ -1097,7 +1074,7 @@ export function createGatewayCloseHandler(
       }
       await disposeRuntimeWithShutdownGrace({
         label: "embedding-providers",
-        dispose: drainRetainedEmbeddingProvidersOnDemand,
+        dispose: params.drainRetainedOpenAiEmbeddingProviders,
         graceMs: EMBEDDING_PROVIDER_CLOSE_GRACE_MS,
         warnings,
       });

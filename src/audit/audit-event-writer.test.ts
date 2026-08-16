@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -302,6 +303,41 @@ describe("audit event worker", () => {
       expect(persisted.context_json).not.toContain(raw);
       expect(JSON.stringify(errors)).not.toContain(raw);
     }
+  });
+
+  it("stops without resetting the WAL owned by an active Gateway reader", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    recordAuditEvent(input(), database);
+    closeOpenClawStateDatabaseForTest();
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+    await writer.ready;
+    const gateway = openOpenClawStateDatabase(database);
+    gateway.db.exec("BEGIN;");
+    gateway.db.prepare("SELECT count(*) FROM audit_events").get();
+
+    try {
+      expect(
+        writer.record({ ...input(), sourceId: "worker-before-stop", runId: "worker-before-stop" }),
+      ).toBe(true);
+      const stopStartedAt = performance.now();
+      await writer.stop();
+      const stopElapsedMs = performance.now() - stopStartedAt;
+
+      expect(errors).toEqual([]);
+      expect(stopElapsedMs).toBeLessThan(1_000);
+      expect(fs.statSync(`${gateway.path}-wal`).size).toBeGreaterThan(0);
+    } finally {
+      gateway.db.exec("ROLLBACK;");
+      await writer.stop();
+    }
+
+    expect(gateway.db.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+    expect(listAuditEvents({ database, limit: 10 }).events.map((event) => event.runId)).toEqual([
+      "worker-before-stop",
+      "run-1",
+    ]);
   });
 
   it("persists owned unknown and omits inherited evidence through the worker clone boundary", async () => {

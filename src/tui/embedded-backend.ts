@@ -798,7 +798,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       ok: true as const,
       path: target.storePath,
       key: target.canonicalKey ?? opts.key,
-      entry: applied.entry as unknown as Record<string, unknown>,
+      entry: { ...applied.entry },
       resolved: {
         modelProvider: resolved.provider,
         model: resolved.model,

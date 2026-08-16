@@ -336,11 +336,11 @@ Plugins run in-process with the Gateway - treat them as trusted code.
 - Installing/updating plugins runs executable code:
   - The install path is the per-plugin directory under the active plugin install root.
   - ClawHub packages and OpenClaw's bundled/official catalog are trusted sources. A new arbitrary npm, `npm-pack:`, git, local path/archive, or marketplace source warns before install; noninteractive installs require `--force` after you review and trust that source. `--force` confirms provenance and permits overwrite; it does not bypass `security.installPolicy` or remaining install safety checks. Updates reuse the already selected source.
-  - OpenClaw does not run built-in local dangerous-code blocking during install/update. Use `security.installPolicy` for operator-owned local allow/block decisions and `openclaw security audit --deep` for diagnostic scanning.
+  - OpenClaw does not run built-in local dangerous-code blocking during install/update. Use `security.installPolicy` for operator-owned local allow/warn/block decisions and `openclaw security audit --deep` for diagnostic scanning.
   - npm and git plugin installs run package-manager dependency convergence only during the explicit install/update flow. Local paths and archives are treated as self-contained packages; OpenClaw copies/references them without running `npm install`.
   - Prefer pinned exact versions (`@scope/pkg@1.2.3`) and inspect the unpacked code before enabling.
-  - `--dangerously-force-unsafe-install` is deprecated and no longer changes install/update behavior.
-  - `security.installPolicy` lets operators run a trusted local command to make host-specific allow/block decisions for skill and plugin installs. It runs after source material is staged but before install continues, applies to ClawHub skills too, and is not bypassed by deprecated unsafe flags.
+  - `security.installPolicy` lets operators run a trusted local command to return `allow`, `warn`, or `block` for skill and plugin installs. It runs after source material is staged but before install continues and applies to ClawHub skills too.
+  - A `warn` result stops before commit. Interactive CLI commands ask the operator to type the plugin or skill name using the same wording as suspicious ClawHub releases, then re-evaluate policy before continuing. An over-4,000-character rendered review fails closed before prompting. Declined and non-interactive direct CLI commands can use `--acknowledge-install-policy-warning` as explicit approval after review for every warning in that command invocation. The Control UI exposes the same invocation-wide approval through **Install anyway** for plugin installs. Other Gateway-backed and automatic installs remain blocked when they have no operator-confirmation flow. Every approved warning is re-evaluated before continuing. `block` and policy failures remain terminal. Neither `--force` nor the deprecated plugin install/update flag `--dangerously-force-unsafe-install` approves policy warnings.
 
 Details: [Plugins](/tools/plugin)
 
@@ -691,7 +691,7 @@ Trusted proxy headers do not make node device pairing automatically trusted - `g
 The Control UI needs a secure context (HTTPS or localhost) to generate device identity.
 
 - Token/password auth does not replace browser device identity over remote plain HTTP. Use HTTPS (for example, Tailscale Serve) or open the UI on `127.0.0.1` from the Gateway host.
-- `gateway.controlUi.dangerouslyDisableDeviceAuth`: retired break-glass input. Older configs preserve authenticated, pairing-only Control UI access for remediation until a browser reopened over HTTPS or localhost completes the bounded, explicit self-pairing migration; do not add it to current config.
+- `gateway.controlUi.dangerouslyDisableDeviceAuth`: retired break-glass input, now fully inert. Control UI browsers pair through the normal device flow; `openclaw doctor --fix` removes the legacy key.
 - Separately, successful `gateway.auth.mode: "trusted-proxy"` authentication can admit **operator** Control UI sessions without device identity. This does not extend to node-role Control UI sessions.
 
 ### Insecure/dangerous flags
@@ -701,7 +701,6 @@ The Control UI needs a secure context (HTTPS or localhost) to generate device id
 <AccordionGroup>
   <Accordion title="Flags tracked by the audit today">
     - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true`
-    - pending Control UI device-auth migration imported from retired `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
     - `security.audit.suppressions configured (<count>)`
     - `hooks.gmail.allowUnsafeExternalContent=true`
     - `hooks.mappings[<index>].allowUnsafeExternalContent=true`
@@ -713,7 +712,7 @@ The Control UI needs a secure context (HTTPS or localhost) to generate device id
   <Accordion title="All dangerous*/dangerously* keys in the config schema">
     Control UI and browser:
     - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback`
-    - `gateway.controlUi.dangerouslyDisableDeviceAuth` (retired upgrade input)
+    - `gateway.controlUi.dangerouslyDisableDeviceAuth` (retired, inert)
     - `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`
 
     Channel name-matching (bundled and plugin channels; also per `accounts.<accountId>` where applicable):

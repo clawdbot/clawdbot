@@ -564,6 +564,7 @@ CREATE INDEX IF NOT EXISTS idx_device_pairing_paired_approved
 CREATE TABLE IF NOT EXISTS device_bootstrap_tokens (
   token_key TEXT NOT NULL PRIMARY KEY,
   token TEXT NOT NULL,
+  setup_id TEXT,
   ts INTEGER NOT NULL,
   device_id TEXT,
   public_key TEXT,
@@ -576,6 +577,22 @@ CREATE TABLE IF NOT EXISTS device_bootstrap_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_device_bootstrap_tokens_ts
   ON device_bootstrap_tokens(ts);
+
+-- Terminal outcome of a redeemed setup credential. The bootstrap row is deleted
+-- on redemption, so this is the only durable proof a setup code succeeded; the
+-- presenting client reconciles it when the completion broadcast is missed.
+-- Non-secret only: never the bootstrap token or anything derived from it.
+-- Bounded by retention to a handful of live rows, so the primary key is the
+-- only access path worth having.
+CREATE TABLE IF NOT EXISTS device_pair_setup_completions (
+  setup_id TEXT NOT NULL PRIMARY KEY,
+  device_id TEXT NOT NULL,
+  device_name TEXT,
+  access TEXT NOT NULL,
+  completed_at_ms INTEGER NOT NULL,
+  delivery_state TEXT NOT NULL CHECK (delivery_state IN ('uncertain', 'confirmed')),
+  retain_until_ms INTEGER NOT NULL
+) STRICT;
 
 CREATE TABLE IF NOT EXISTS device_pairing_join_codes (
   shortcode TEXT,
@@ -2110,7 +2127,9 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 CREATE TABLE IF NOT EXISTS session_groups (
   name TEXT NOT NULL PRIMARY KEY,
   position INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  cwd TEXT,
+  worktree INTEGER
 ) STRICT;
 
 -- Gateway-owned sidebar section layout. IDs are ungrouped, groups, work, or
@@ -2190,6 +2209,7 @@ CREATE TABLE IF NOT EXISTS worker_session_placements (
   session_id TEXT NOT NULL PRIMARY KEY,
   agent_id TEXT NOT NULL,
   session_key TEXT NOT NULL,
+  execution_mode TEXT CHECK (execution_mode IN ('worker-turn', 'remote-exec')),
   state TEXT NOT NULL CHECK (
     state IN (
       'local',
@@ -2289,9 +2309,13 @@ CREATE TABLE IF NOT EXISTS worker_session_placements (
   CHECK (
     turn_claim_owner IS NULL
     OR
-    (turn_claim_owner IS 'local' AND state IN ('local', 'requested', 'failed'))
+    (turn_claim_owner IS 'local' AND (
+      state IN ('local', 'requested', 'failed')
+      OR (state IN ('active', 'draining') AND execution_mode IS 'remote-exec')
+    ))
     OR
     (turn_claim_owner IS 'worker' AND state IN ('active', 'draining')
+      AND (execution_mode IS NULL OR execution_mode IS 'worker-turn')
       AND turn_claim_owner_epoch IS active_owner_epoch)
   )
 ) STRICT;

@@ -5,6 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatDurationCompact, formatTimeMs } from "../../lib/format.ts";
 import "../../styles/logbook.css";
 import {
@@ -72,14 +73,17 @@ function renderStatusChips(status: LogbookStatusPayload): TemplateResult {
           >`
         : nothing}
       ${status.lastCaptureError
-        ? html`<span class="logbook__chip logbook__chip--error" title=${status.lastCaptureError}>
+        ? html`<span
+            class="logbook__chip logbook__chip--error"
+            title=${formatUiExternalText(status.lastCaptureError)}
+          >
             ${t("logbook.status.captureError")}
           </span>`
         : nothing}
       ${status.lastBatch?.status === "error"
         ? html`<span
             class="logbook__chip logbook__chip--error"
-            title=${status.lastBatch.error ?? ""}
+            title=${formatUiExternalText(status.lastBatch.error)}
           >
             ${t("logbook.status.batchError")}
           </span>`
@@ -166,7 +170,9 @@ function renderCard(
                       ${t("common.loading")}
                     </div>`
                   : nothing}
-              ${card.detail ? html`<p class="logbook-card__detail">${card.detail}</p>` : nothing}
+              ${card.detail
+                ? html`<p class="logbook-card__detail">${formatUiExternalText(card.detail)}</p>`
+                : nothing}
               ${card.distractions.length > 0
                 ? html`
                     <div class="logbook-card__distractions">

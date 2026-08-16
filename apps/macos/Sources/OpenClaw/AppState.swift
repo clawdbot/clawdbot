@@ -113,6 +113,8 @@ final class AppState {
     @ObservationIgnored private let voiceWakeGlobalSyncScheduler = VoiceWakeGlobalSyncScheduler()
     @ObservationIgnored private var activeComputerPresenceTask: Task<Void, Never>?
     @ObservationIgnored private var activeComputerPresenceUpdateGeneration: UInt64 = 0
+    @ObservationIgnored private var computerControlHostReconciliationTask: Task<Void, Never>?
+    @ObservationIgnored private var computerControlHostGeneration: UInt64 = 0
 
     var isPaused: Bool {
         didSet { self.ifNotPreview { AppDefaults.standard.set(self.isPaused, forKey: pauseDefaultsKey) } }
@@ -364,18 +366,40 @@ final class AppState {
             self.ifNotPreview {
                 AppDefaults.standard.set(self.peekabooBridgeEnabled, forKey: peekabooBridgeEnabledKey)
             }
-            self.applyPeekabooBridgeHostState()
+            self.applyComputerControlHostState()
         }
     }
 
-    /// PeekabooBridge shares Computer Control's local UI-automation surface, so the host only
-    /// runs while Computer Control is enabled. With Computer Control off, users drive Peekaboo
-    /// via its own Mac app instead of a second, separately toggled bridge here.
-    func applyPeekabooBridgeHostState() {
+    /// The selected provider owns the complete Computer Control execution surface.
+    /// Keep the unselected host stopped so one node execution never mixes backends.
+    func applyComputerControlHostState() {
         self.ifNotPreview {
             let computerControlEnabled = isComputerControlEnabled()
-            let shouldRun = self.peekabooBridgeEnabled && computerControlEnabled
-            Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(shouldRun) }
+            let provider = ComputerControlProvider.current()
+            let peekabooBridgeEnabled = self.peekabooBridgeEnabled
+            self.computerControlHostGeneration &+= 1
+            let generation = self.computerControlHostGeneration
+            let predecessor = self.computerControlHostReconciliationTask
+            let task = Task { @MainActor [weak self] in
+                await predecessor?.value
+                guard let self, generation == self.computerControlHostGeneration else { return }
+                switch provider {
+                case .cua where computerControlEnabled:
+                    await PeekabooBridgeHostCoordinator.shared.setEnabled(false)
+                    guard generation == self.computerControlHostGeneration else { return }
+                    await CuaDriverHostCoordinator.shared.setEnabled(true)
+                case .peekaboo:
+                    await CuaDriverHostCoordinator.shared.setEnabled(false)
+                    guard generation == self.computerControlHostGeneration else { return }
+                    await PeekabooBridgeHostCoordinator.shared.setEnabled(
+                        peekabooBridgeEnabled && computerControlEnabled)
+                case .cua:
+                    await CuaDriverHostCoordinator.shared.setEnabled(false)
+                    guard generation == self.computerControlHostGeneration else { return }
+                    await PeekabooBridgeHostCoordinator.shared.setEnabled(false)
+                }
+            }
+            self.computerControlHostReconciliationTask = task
         }
     }
 

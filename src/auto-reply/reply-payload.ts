@@ -152,7 +152,8 @@ export type ReplyDeliveryContext = {
   replyToMode: ReplyToMode;
 };
 
-const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
+const REPLY_MEDIA_FAILURE_WARNING =
+  "⚠️ Media failed. Try sending a smaller supported file or a different format.";
 
 /** Appends the standard media failure warning without duplicating it. */
 export function appendReplyMediaFailureWarning(text: string | undefined): string {
@@ -247,10 +248,6 @@ export type ReplyPayloadMetadata = {
   replyDispatcherNormalizationOwner?: object;
   /** Exact key for replacing a runtime-owned assistant row after media materialization. */
   assistantTranscriptIdempotencyKey?: string;
-  /** Foreground freshness prevented a visible final after transcript persistence. */
-  foregroundDeliverySuppression?: {
-    reason: "stale-foreground";
-  };
   /** Opaque owner for one final-delivery transcript capture on a shared dispatcher. */
   finalDeliveryCapture?: object;
   /** Exact persisted delivery owner; WeakMap-only and never serialized. */

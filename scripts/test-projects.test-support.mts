@@ -31,7 +31,10 @@ import { isAcpxExtensionRoot } from "../test/vitest/vitest.extension-acpx-paths.
 import { isActiveMemoryExtensionRoot } from "../test/vitest/vitest.extension-active-memory-paths.mjs";
 import { isBrowserExtensionRoot } from "../test/vitest/vitest.extension-browser-paths.mjs";
 import { resolveSplitChannelExtensionShard } from "../test/vitest/vitest.extension-channel-split-paths.mjs";
-import { isCodexExtensionRoot } from "../test/vitest/vitest.extension-codex-paths.mjs";
+import {
+  codexExtensionTestRoots,
+  isCodexExtensionRoot,
+} from "../test/vitest/vitest.extension-codex-paths.mjs";
 import { isDiffsExtensionRoot } from "../test/vitest/vitest.extension-diffs-paths.mjs";
 import { isFeishuExtensionRoot } from "../test/vitest/vitest.extension-feishu-paths.mjs";
 import { isIrcExtensionRoot } from "../test/vitest/vitest.extension-irc-paths.mjs";
@@ -215,7 +218,6 @@ const EXTENSION_CODEX_APP_SERVER_TOOLS_VITEST_CONFIG =
   "test/vitest/vitest.extension-codex-app-server-tools.config.ts";
 const EXTENSION_CODEX_SURFACE_VITEST_CONFIG =
   "test/vitest/vitest.extension-codex-surface.config.ts";
-const EXTENSION_CHANNELS_VITEST_CONFIG = "test/vitest/vitest.extension-channels.config.ts";
 const EXTENSION_DIFFS_VITEST_CONFIG = "test/vitest/vitest.extension-diffs.config.ts";
 const EXTENSION_DISCORD_VITEST_CONFIG = "test/vitest/vitest.extension-discord.config.ts";
 const EXTENSION_FEISHU_VITEST_CONFIG = "test/vitest/vitest.extension-feishu.config.ts";
@@ -262,6 +264,7 @@ const UNIT_SECURITY_VITEST_CONFIG = "test/vitest/vitest.unit-security.config.ts"
 const UNIT_SRC_VITEST_CONFIG = "test/vitest/vitest.unit-src.config.ts";
 const UNIT_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.unit-support.config.ts";
 const EXTENSION_TEST_PROCESS_ROOTS = new Map([
+  [EXTENSION_CODEX_VITEST_CONFIG, codexExtensionTestRoots],
   [EXTENSION_MATRIX_VITEST_CONFIG, matrixExtensionTestRoots],
   [EXTENSION_TELEGRAM_VITEST_CONFIG, telegramExtensionTestRoots],
 ]);
@@ -505,7 +508,6 @@ const VITEST_CONFIG_BY_KIND: Record<string, string> = {
   extensionIrc: EXTENSION_IRC_VITEST_CONFIG,
   extensionLine: EXTENSION_LINE_VITEST_CONFIG,
   extensionMattermost: EXTENSION_MATTERMOST_VITEST_CONFIG,
-  extensionChannel: EXTENSION_CHANNELS_VITEST_CONFIG,
   extensionTelegram: EXTENSION_TELEGRAM_VITEST_CONFIG,
   extensionVoiceCall: EXTENSION_VOICE_CALL_VITEST_CONFIG,
   extensionWhatsApp: EXTENSION_WHATSAPP_VITEST_CONFIG,
@@ -557,6 +559,17 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
     [
       "extensions/slack/src/monitor/enterprise-install.test.ts",
       "extensions/slack/src/monitor/provider.auth-test-token.test.ts",
+    ],
+  ],
+  [
+    "src/gateway/worker-environments/worker-turn-launcher.ts",
+    [
+      "src/gateway/worker-environments/worker-turn-launcher.test.ts",
+      "src/gateway/worker-environments/worker-turn-launcher-claim-admission.test.ts",
+      "src/gateway/worker-environments/worker-turn-launcher-failure-recovery.test.ts",
+      "src/gateway/worker-environments/worker-turn-launcher-reclaimed-placement.test.ts",
+      "src/gateway/worker-environments/worker-turn-launcher-remote-handoff.test.ts",
+      "src/gateway/worker-environments/worker-turn-launcher-terminal-results.test.ts",
     ],
   ],
 ]);
@@ -2510,6 +2523,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [/^scripts\/lib\/plistbuddy\.sh$/u, ["create-dmg", "package-mac-app", "package-mac-dist"]],
   [/^scripts\/lib\/swift-toolchain\.sh$/u, ["package-mac-app", "package-mac-dist"]],
+  [/^scripts\/stage-cua-driver-macos\.sh$/u, ["package-mac-app"]],
   [
     /^scripts\/lib\/npm-publish-plan\.mjs$/u,
     [
@@ -3292,9 +3306,6 @@ function classifyTarget(arg: string, cwd: string) {
     }
     if (isQaExtensionRoot(extensionRoot)) {
       return "extensionQa";
-    }
-    if (isChannelSurfaceTestFile(relative)) {
-      return "extensionChannel";
     }
     if (isAcpxExtensionRoot(extensionRoot)) {
       return "extensionAcpx";
@@ -4149,7 +4160,7 @@ export function withRetryNoOutputTimeout<T extends { env?: NodeJS.ProcessEnv }>(
 
 export function createVitestRunSpecs(
   args: string[],
-  params: { baseEnv?: NodeJS.ProcessEnv; cwd?: string; tempDir?: string } = {},
+  params: { baseEnv?: NodeJS.ProcessEnv; cwd?: string } = {},
 ) {
   const cwd = params.cwd ?? process.cwd();
   const baseEnv = params.baseEnv ?? process.env;
@@ -4159,10 +4170,7 @@ export function createVitestRunSpecs(
   );
   return plans.map((plan, index) => {
     const includeFilePath = plan.includePatterns
-      ? path.join(
-          params.tempDir ?? os.tmpdir(),
-          `openclaw-vitest-include-${randomUUID()}-${index}.json`,
-        )
+      ? path.join(os.tmpdir(), `openclaw-vitest-include-${randomUUID()}-${index}.json`)
       : null;
     return {
       config: plan.config,
@@ -4310,21 +4318,17 @@ function formatFailedShardStatus(failure: FailedVitestShard) {
   return details.length > 0 ? ` (${details.join(", ")})` : "";
 }
 
-export function formatFailedShardDigest(
-  failures: FailedVitestShard[],
-  options: { limit?: number } = {},
-) {
+export function formatFailedShardDigest(failures: FailedVitestShard[]) {
   if (failures.length === 0) {
     return [];
   }
 
-  const limit = options.limit ?? FAILED_SHARD_DIGEST_LIMIT;
   const orderedFailures = failures.toSorted((left, right) => {
     const leftOrder = typeof left.order === "number" ? left.order : Number.MAX_SAFE_INTEGER;
     const rightOrder = typeof right.order === "number" ? right.order : Number.MAX_SAFE_INTEGER;
     return leftOrder - rightOrder || left.config.localeCompare(right.config);
   });
-  const shown = orderedFailures.slice(0, limit);
+  const shown = orderedFailures.slice(0, FAILED_SHARD_DIGEST_LIMIT);
   const lines = [`[test] failed shard digest (${failures.length}):`];
   for (const failure of shown) {
     const includePatterns = failure.includePatterns ?? [];
@@ -4337,16 +4341,4 @@ export function formatFailedShardDigest(
     lines.push(`[test] - ... ${failures.length - shown.length} more failed shard(s) omitted`);
   }
   return lines;
-}
-
-export function buildVitestArgs(args: string[], cwd = process.cwd()) {
-  const [plan] = buildVitestRunPlans(args, cwd);
-  if (!plan) {
-    return createVitestArgs({
-      config: DEFAULT_VITEST_CONFIG,
-      forwardedArgs: [],
-      watchMode: false,
-    });
-  }
-  return createVitestArgs(plan);
 }

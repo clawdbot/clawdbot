@@ -1,6 +1,11 @@
 import { css } from "lit";
 
 export const desktopPanelStyles = css`
+  .bp--embedded {
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
   .bp--bottom {
     left: var(--shell-nav-width, 0);
     right: calc(var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px));

@@ -46,6 +46,7 @@ import { responsesPromptObserver } from "../transports/openai-responses-contract
 import { ResponsesStreamFailure } from "../transports/openai-responses-debug.js";
 import { createResponsesPromptEgressObserver } from "../transports/openai-responses-prompt-observer-internal.js";
 import {
+  commitResponsesEncryptedContentAttempt,
   isInvalidEncryptedContentError,
   resolveNextResponsesEncryptedContentAttempt,
   type ResponsesEncryptedContentAttempt,
@@ -313,6 +314,10 @@ export const streamOpenAICodexResponses: StreamFunction<
         kind: "initial",
         request: await buildBody("checkpoint"),
       };
+      const commitSemanticAttempt = (attempt: ResponsesEncryptedContentAttempt<RequestBody>) =>
+        commitResponsesEncryptedContentAttempt(attempt, (checkpoint) =>
+          suppressOpenAIResponsesCompaction(output, model, options, checkpoint),
+        );
       const observePromptEgress = createResponsesPromptEgressObserver(
         options,
         context.systemPrompt,
@@ -356,14 +361,7 @@ export const streamOpenAICodexResponses: StreamFunction<
               stream,
               model,
               () => {
-                if (activeAttempt.kind === "compaction-stripped") {
-                  suppressOpenAIResponsesCompaction(
-                    output,
-                    model,
-                    options,
-                    activeAttempt.rejectedCompaction,
-                  );
-                }
+                commitSemanticAttempt(activeAttempt);
                 websocketStarted = true;
               },
               requestOptions,
@@ -561,14 +559,7 @@ export const streamOpenAICodexResponses: StreamFunction<
           if (activeSignal?.aborted) {
             throw transportAbortError(activeSignal);
           }
-          if (activeAttempt.kind === "compaction-stripped") {
-            suppressOpenAIResponsesCompaction(
-              output,
-              model,
-              options,
-              activeAttempt.rejectedCompaction,
-            );
-          }
+          commitSemanticAttempt(activeAttempt);
           break;
         }
 

@@ -189,6 +189,29 @@ describe("worker environment protocol schemas", () => {
     ).toBe(true);
     expect(
       Value.Check(EnvironmentSummarySchema, {
+        id: "node:outdated",
+        type: "node",
+        status: "available",
+        issues: [
+          {
+            code: "update-required",
+            action: "update-and-reconnect",
+            updateCommand: "openclaw update",
+            headlessReconnectCommand: "openclaw node restart",
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        id: "node:outdated",
+        type: "node",
+        status: "available",
+        issues: [{ code: "update-required", action: "run-legacy-worker" }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
         ...workerSummary("ready", "available"),
         worker: { ...workerSummary("ready", "available").worker, ageMs: -1 },
       }),

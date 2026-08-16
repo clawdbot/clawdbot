@@ -10,7 +10,10 @@ import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/sc
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { ChatType } from "../../channels/chat-type.js";
-import type { CronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
+import type {
+  CronScheduledToolCallerOrigin,
+  CronScheduledToolPolicy,
+} from "../../cron/scheduled-tool-policy.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { InlineAttachment, InlineAttachmentMount } from "../../shared/inline-attachments.js";
 import type { SessionBoardFace } from "../../shared/session-types.js";
@@ -490,6 +493,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
       toolsAllowIsDefault?: boolean;
       /** Exact server-stamped authority provenance copied from the owning cron job. */
       scheduledToolPolicy?: CronScheduledToolPolicy;
+      /** Store-private origin paired with an account scheduled-tool policy. */
+      scheduledToolCallerOrigin?: CronScheduledToolCallerOrigin;
       cliSessionBindingFacts?: {
         extraSystemPromptStatic?: string;
         sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
@@ -608,6 +613,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     acpSessionBinding?: AcpSessionBinding;
     claudeCliSessionId?: string;
     label?: string;
+    /** Persistent operator/agent-set sidebar emoji icon (single grapheme). */
+    icon?: string;
     /** User-defined organization bucket for session lists; unrelated to chat groupId/groupChannel. */
     category?: string;
     /** Preferred Control UI face when a caller opens this session without explicit face intent. */

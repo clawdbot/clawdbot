@@ -296,11 +296,11 @@ describe("program routes", () => {
 
   it("routes status --json through the lean JSON command", async () => {
     const route = expectRoute(["status"]);
-    await expect(route.run(routeArgv("status --json --deep --usage --timeout 5000"))).resolves.toBe(
-      true,
-    );
+    await expect(
+      route.run(routeArgv("status --json --deep --usage --agent beta --timeout 5000")),
+    ).resolves.toBe(true);
     expect(statusJsonCommandMock).toHaveBeenCalledWith(
-      { deep: true, all: false, usage: true, timeoutMs: 5000 },
+      { deep: true, all: false, usage: true, agent: "beta", timeoutMs: 5000 },
       defaultRuntime,
     );
   });

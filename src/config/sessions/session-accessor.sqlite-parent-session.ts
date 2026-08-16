@@ -71,8 +71,10 @@ export async function forkSessionTranscriptFromParent(
       let result: ForkSessionFromParentTranscriptResult = { status: "failed" };
       runOpenClawAgentWriteTransaction((database) => {
         result = forkSqliteParentTranscriptInTransaction(database, resolved, {
+          enforceTokenLimit: params.enforceTokenLimit,
           parentEntry: params.parentEntry,
           parentSessionKey: params.parentSessionKey,
+          forkFrom: params.forkFrom,
           targetSessionId: params.targetSessionId,
           targetSessionKey: params.sessionKey,
         });
@@ -91,9 +93,14 @@ export async function forkSessionTranscriptFromParent(
   const sourceDatabase = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   const source = resolveParentForkSourceTranscript(
     loadTranscriptEventsFromDatabase(sourceDatabase, params.parentEntry.sessionId),
+    params.forkFrom,
   );
   if (!source) {
     return { status: "failed" };
+  }
+  const limitDecision = resolveParentForkLimitDecision(params, source);
+  if (limitDecision) {
+    return { status: "too-large", decision: limitDecision };
   }
   const parentSessionFile = formatLegacySqliteSessionMarkerForScope({
     ...resolved,
@@ -342,8 +349,10 @@ function forkSqliteParentTranscriptInTransaction(
   database: OpenClawAgentDatabase,
   resolved: ResolvedSqliteScope,
   params: {
+    enforceTokenLimit?: boolean;
     parentEntry: SessionEntry;
     parentSessionKey: string;
+    forkFrom?: "last-completed";
     targetSessionId?: string;
     targetSessionKey: string;
   },
@@ -353,9 +362,14 @@ function forkSqliteParentTranscriptInTransaction(
   }
   const source = resolveParentForkSourceTranscript(
     loadTranscriptEventsFromDatabase(database, params.parentEntry.sessionId),
+    params.forkFrom,
   );
   if (!source) {
     return { status: "failed" };
+  }
+  const limitDecision = resolveParentForkLimitDecision(params, source);
+  if (limitDecision) {
+    return { status: "too-large", decision: limitDecision };
   }
   const sessionId = params.targetSessionId ?? randomUUID();
   const targetScope = {
@@ -380,6 +394,24 @@ function forkSqliteParentTranscriptInTransaction(
       sessionId,
     },
   };
+}
+
+function resolveParentForkLimitDecision(
+  params: Pick<
+    ForkSessionFromParentTranscriptParams,
+    "enforceTokenLimit" | "forkFrom" | "parentEntry"
+  >,
+  source: ParentForkSourceTranscript,
+): Extract<SessionParentForkDecision, { status: "skip" }> | undefined {
+  if (!params.enforceTokenLimit) {
+    return undefined;
+  }
+  const decision = planParentForkDecision(
+    params.parentEntry,
+    estimateTranscriptPromptTokens(source.branchEntries),
+    { preferTranscriptEstimate: params.forkFrom === "last-completed" },
+  );
+  return decision.status === "skip" ? decision : undefined;
 }
 
 function writeSqliteForkedChildTranscriptInTransaction(

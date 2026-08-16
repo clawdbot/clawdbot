@@ -9,15 +9,13 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
-import {
-  type WorkerAdmissionHandshake,
-  WORKER_PROTOCOL_FEATURES,
-} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
+  NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_PRIVATE_COMMANDS,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+  NODE_WORKER_WORKSPACE_EXEC_COMMAND,
 } from "../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -42,12 +40,6 @@ type TestNodeSocket = {
   bufferedAmount: number;
   send: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
-};
-
-const WORKER_RUNS = {
-  bundleHash: "a".repeat(64),
-  openclawVersion: "2026.8.1",
-  protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
 };
 
 const NON_OPEN_NODE_SOCKET_STATES = [
@@ -107,7 +99,7 @@ function makeClient(
     caps?: string[];
     commands?: string[];
     computerUse?: unknown;
-    workerRuns?: WorkerAdmissionHandshake;
+    declaredComputerUse?: unknown;
     permissions?: Record<string, boolean>;
     declaredCaps?: string[];
     declaredCommands?: string[];
@@ -141,7 +133,7 @@ function makeClient(
       caps: opts.caps ?? [],
       commands: opts.commands ?? [],
       computerUse: opts.computerUse,
-      workerRuns: opts.workerRuns,
+      declaredComputerUse: opts.declaredComputerUse,
       permissions: opts.permissions,
       declaredCaps: opts.declaredCaps,
       declaredCommands: opts.declaredCommands,
@@ -293,18 +285,22 @@ function authorizeSystemRun(registry: NodeRegistry, overrides: Partial<SystemRun
   });
 }
 
+function computerUseDescriptor() {
+  return {
+    contractVersion: 2 as const,
+    provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+    actions: ["screenshot", "left_click"] as const,
+    targets: ["screen"] as const,
+    deliveryModes: ["foreground"] as const,
+    observations: ["image"] as const,
+    features: { recording: false, agentCursor: false, multiDisplay: false },
+  };
+}
+
 describe("gateway/node-registry", () => {
   it("retains the validated Computer Use declaration on the live session", () => {
     const registry = createNodeRegistry();
-    const computerUse = {
-      contractVersion: 2,
-      provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
-      actions: ["screenshot", "left_click"],
-      targets: ["screen"],
-      deliveryModes: ["foreground"],
-      observations: ["image"],
-      features: { recording: false, agentCursor: false, multiDisplay: false },
-    };
+    const computerUse = computerUseDescriptor();
     const client = makeClient("conn-computer", "node-computer", [], {
       commands: ["screen.snapshot", "computer.act"],
       computerUse,
@@ -378,7 +374,6 @@ describe("gateway/node-registry", () => {
       makeClient("conn-1", "node-1", [], {
         clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
         commands: ["system.run"],
-        workerRuns: WORKER_RUNS,
       }),
       { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
     );
@@ -391,7 +386,7 @@ describe("gateway/node-registry", () => {
         connId: "conn-1",
         declaration: {
           protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-          workerRuns: WORKER_RUNS,
+          workerHost: { enabled: true, capacity: "available" },
         },
       }),
     ).toEqual({ changed: true });
@@ -402,7 +397,7 @@ describe("gateway/node-registry", () => {
         pairingIdentity: "identity-a",
         pairingGeneration: "generation-a",
         protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        workerRuns: WORKER_RUNS,
+        workerHost: { enabled: true, capacity: "available" },
         commands: ["system.run"],
       }),
     ]);
@@ -430,41 +425,27 @@ describe("gateway/node-registry", () => {
       ),
     ).not.toBeNull();
     await expect(nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([
-      expect.objectContaining({ pairingGeneration: "generation-b", workerRuns: WORKER_RUNS }),
+      expect.objectContaining({ pairingGeneration: "generation-b" }),
     ]);
-    expect(
-      isNodeRunnerSessionHost({
-        registry: nodeRegistry,
-        nodeId: "node-1",
-        connId: "conn-1",
-        pairingGeneration: "generation-b",
-      }),
-    ).toBe(true);
 
     registerNodeSession(
       nodeRegistry,
       makeClient("conn-2", "node-1", [], {
         clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
         commands: ["system.run"],
-        workerRuns: WORKER_RUNS,
       }),
       { pairingIdentity: "identity-a", pairingGeneration: "generation-b" },
     );
     await expect(nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
     expect(
-      isNodeRunnerSessionHost({
-        registry: nodeRegistry,
-        nodeId: "node-1",
-        connId: "conn-2",
-        pairingGeneration: "generation-b",
-      }),
-    ).toBe(false);
-    expect(
       updateNodeRunnerInventory({
         registry: nodeRegistry,
         nodeId: "node-1",
         connId: "conn-1",
-        declaration: { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] },
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerHost: { enabled: true, capacity: "available" },
+        },
       }),
     ).toBeNull();
     expect(
@@ -474,7 +455,7 @@ describe("gateway/node-registry", () => {
         connId: "conn-2",
         declaration: {
           protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-          workerRuns: WORKER_RUNS,
+          workerHost: { enabled: true, capacity: "available" },
         },
       }),
     ).toEqual({ changed: true });
@@ -482,17 +463,9 @@ describe("gateway/node-registry", () => {
       expect.objectContaining({
         connId: "conn-2",
         pairingGeneration: "generation-b",
-        workerRuns: WORKER_RUNS,
+        workerHost: { enabled: true, capacity: "available" },
       }),
     ]);
-    expect(
-      isNodeRunnerSessionHost({
-        registry: nodeRegistry,
-        nodeId: "node-1",
-        connId: "conn-2",
-        pairingGeneration: "generation-b",
-      }),
-    ).toBe(true);
   });
 
   it("notifies when same-node replacement removes runner eligibility", async () => {
@@ -514,7 +487,7 @@ describe("gateway/node-registry", () => {
         connId: "conn-1",
         declaration: {
           protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-          workerRuns: WORKER_RUNS,
+          workerHost: { enabled: true, capacity: "available" },
         },
       }),
     ).toEqual({ changed: true });
@@ -532,17 +505,9 @@ describe("gateway/node-registry", () => {
     expect(inventoryChanged).toHaveBeenCalledTimes(2);
     expect(inventoryChanged).toHaveBeenLastCalledWith("node-1");
     await expect(nodeWorkerSupervisorTransport.listCurrentNodes()).resolves.toEqual([]);
-    expect(
-      isNodeRunnerSessionHost({
-        registry: nodeRegistry,
-        nodeId: "node-1",
-        connId: "conn-2",
-        pairingGeneration: "generation-a",
-      }),
-    ).toBe(false);
   });
 
-  it("fences a retained private proof after the advertised worker build changes", async () => {
+  it("keeps status proof current across capacity changes while fencing launches", async () => {
     const frames: string[] = [];
     const { nodeRegistry, nodeWorkerSupervisorTransport } = createPrivateNodeRegistryRuntime();
     registerNodeSession(
@@ -550,7 +515,6 @@ describe("gateway/node-registry", () => {
       makeClient("conn-1", "node-1", frames, {
         clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
         commands: ["system.run"],
-        workerRuns: WORKER_RUNS,
       }),
       { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
     );
@@ -561,64 +525,7 @@ describe("gateway/node-registry", () => {
         connId: "conn-1",
         declaration: {
           protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-          workerRuns: WORKER_RUNS,
-        },
-      }),
-    ).toEqual({ changed: true });
-    const [proof] = await nodeWorkerSupervisorTransport.listCurrentNodes();
-    if (!proof) {
-      throw new Error("expected current supervisor proof");
-    }
-
-    expect(
-      updateNodeRunnerInventory({
-        registry: nodeRegistry,
-        nodeId: "node-1",
-        connId: "conn-1",
-        declaration: {
-          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-          workerRuns: { ...WORKER_RUNS, bundleHash: "b".repeat(64) },
-        },
-      }),
-    ).toEqual({ changed: true });
-
-    await expect(
-      nodeWorkerSupervisorTransport.invoke({
-        node: proof,
-        command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
-        params: { launchId: "launch-1" },
-        isDispatchAuthorized: () => true,
-      }),
-    ).resolves.toEqual({
-      ok: false,
-      error: {
-        code: "PRIVATE_DIALECT_UNAVAILABLE",
-        message: "node worker supervisor dialect is unavailable",
-      },
-    });
-    expect(frames).toEqual([]);
-  });
-
-  it("keeps a private proof current across equivalent worker feature ordering", async () => {
-    const frames: string[] = [];
-    const { nodeRegistry, nodeWorkerSupervisorTransport } = createPrivateNodeRegistryRuntime();
-    registerNodeSession(
-      nodeRegistry,
-      makeClient("conn-1", "node-1", frames, {
-        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        commands: ["system.run"],
-        workerRuns: WORKER_RUNS,
-      }),
-      { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
-    );
-    expect(
-      updateNodeRunnerInventory({
-        registry: nodeRegistry,
-        nodeId: "node-1",
-        connId: "conn-1",
-        declaration: {
-          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-          workerRuns: WORKER_RUNS,
+          workerHost: { enabled: true, capacity: "available" },
         },
       }),
     ).toEqual({ changed: true });
@@ -633,18 +540,14 @@ describe("gateway/node-registry", () => {
         connId: "conn-1",
         declaration: {
           protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-          workerRuns: {
-            ...WORKER_RUNS,
-            protocolFeatures: WORKER_RUNS.protocolFeatures.toReversed(),
-          },
+          workerHost: { enabled: true, capacity: "full" },
         },
       }),
-    ).toEqual({ changed: false });
+    ).toEqual({ changed: true });
 
-    const invocation = nodeWorkerSupervisorTransport.invoke({
+    const workspaceInvoke = nodeWorkerSupervisorTransport.invoke({
       node: proof,
-      command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
-      params: { launchId: "launch-1" },
+      command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
       isDispatchAuthorized: () => true,
     });
     await vi.waitFor(() => expect(frames).toHaveLength(1));
@@ -658,7 +561,117 @@ describe("gateway/node-registry", () => {
         payloadJSON: "null",
       }),
     ).toBe(true);
-    await expect(invocation).resolves.toMatchObject({ ok: true, payloadJSON: "null" });
+    await expect(workspaceInvoke).resolves.toMatchObject({ ok: true, payloadJSON: "null" });
+
+    await expect(
+      nodeWorkerSupervisorTransport.invoke({
+        node: proof,
+        command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+        isDispatchAuthorized: () => true,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "PRIVATE_DIALECT_UNAVAILABLE" },
+    });
+  });
+
+  it("fences retained proofs when runner consent is disabled", async () => {
+    const frames: string[] = [];
+    const { nodeRegistry, nodeWorkerSupervisorTransport } = createPrivateNodeRegistryRuntime();
+    registerNodeSession(
+      nodeRegistry,
+      makeClient("conn-1", "node-1", frames, {
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        commands: ["system.run"],
+      }),
+      { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
+    );
+    expect(
+      updateNodeRunnerInventory({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-1",
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerHost: { enabled: true, capacity: "available" },
+        },
+      }),
+    ).toEqual({ changed: true });
+    const [proof] = await nodeWorkerSupervisorTransport.listCurrentNodes();
+    if (!proof) {
+      throw new Error("expected current supervisor proof");
+    }
+    expect(
+      updateNodeRunnerInventory({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-1",
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerHost: { enabled: false },
+        },
+      }),
+    ).toEqual({ changed: true });
+
+    await expect(
+      nodeWorkerSupervisorTransport.invoke({
+        node: proof,
+        command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+        isDispatchAuthorized: () => true,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "PRIVATE_DIALECT_UNAVAILABLE",
+        message: "node worker supervisor dialect is unavailable",
+      },
+    });
+    expect(frames).toEqual([]);
+  });
+
+  it("promotes bundle prewarm without changing runner authority", async () => {
+    const { nodeRegistry, nodeWorkerSupervisorTransport } = createPrivateNodeRegistryRuntime();
+    registerNodeSession(
+      nodeRegistry,
+      makeClient("conn-1", "node-1", [], {
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        commands: ["system.run"],
+      }),
+      { pairingIdentity: "identity-a", pairingGeneration: "generation-a" },
+    );
+    const declaration = {
+      protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] as const,
+      workerHost: { enabled: true, capacity: "available" as const },
+    };
+    expect(
+      updateNodeRunnerInventory({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-1",
+        declaration,
+      }),
+    ).toEqual({ changed: true });
+    const [priorProof] = await nodeWorkerSupervisorTransport.listCurrentNodes();
+
+    expect(
+      updateNodeRunnerInventory({
+        registry: nodeRegistry,
+        nodeId: "node-1",
+        connId: "conn-1",
+        declaration: {
+          ...declaration,
+          workerHost: { ...declaration.workerHost, bundlePrewarm: 1 },
+        },
+      }),
+    ).toEqual({ changed: true });
+    const [negotiatedProof] = await nodeWorkerSupervisorTransport.listCurrentNodes();
+
+    expect(priorProof && nodeWorkerSupervisorTransport.isCurrent(priorProof, true)).toBe(true);
+    expect(negotiatedProof?.workerHost).toEqual({
+      enabled: true,
+      capacity: "available",
+      bundlePrewarm: 1,
+    });
   });
 
   it("rejects generation-mismatched lookup and dispatch without invalidating the session", async () => {
@@ -2682,11 +2695,13 @@ describe("gateway/node-registry", () => {
 
   it("refreshes effective live surface within the declared surface", () => {
     const registry = createTestNodeRegistry();
+    const computerUse = computerUseDescriptor();
     const client = makeClient("conn-1", "node-1", [], {
       caps: [],
       commands: [],
       declaredCaps: ["talk"],
-      declaredCommands: ["talk.ptt.start"],
+      declaredCommands: ["talk.ptt.start", "computer.act", "screen.snapshot"],
+      declaredComputerUse: computerUse,
       declaredPermissions: { microphone: true, camera: false },
     });
 
@@ -2696,15 +2711,21 @@ describe("gateway/node-registry", () => {
 
     const updated = registry.updateSurface("node-1", {
       caps: ["talk", "screen"],
-      commands: ["talk.ptt.start", "system.run"],
+      commands: ["talk.ptt.start", "computer.act", "screen.snapshot", "system.run"],
       permissions: { microphone: true, camera: true },
     });
 
     expect(updated?.caps).toEqual(["talk"]);
-    expect(updated?.commands).toEqual(["talk.ptt.start"]);
+    expect(updated?.commands).toEqual(["talk.ptt.start", "computer.act", "screen.snapshot"]);
+    expect(updated?.computerUse).toEqual(computerUse);
     expect(updated?.permissions).toEqual({ microphone: true, camera: false });
     expect(client.connect.caps).toEqual(["talk"]);
-    expect((client.connect as { commands?: string[] }).commands).toEqual(["talk.ptt.start"]);
+    expect((client.connect as { commands?: string[] }).commands).toEqual([
+      "talk.ptt.start",
+      "computer.act",
+      "screen.snapshot",
+    ]);
+    expect(client.connect.computerUse).toEqual(computerUse);
   });
 
   it("advances the exact live session with its approved surface generation", () => {

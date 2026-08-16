@@ -33,7 +33,7 @@ const repoRoot = resolveRepoRoot(import.meta.url);
 const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
 const TYPE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".d.ts", ".js", ".mjs", ".json"]);
 const VALID_MODES = new Set(["all", "package-boundary"]);
-const ROOT_SHIMS_TIMEOUT_MS = resolveBoundaryRootShimsTimeoutMs(process.env);
+const ROOT_BOUNDARY_TIMEOUT_MS = resolveBoundaryRootShimsTimeoutMs(process.env);
 const ROOT_SHIMS_MAX_OLD_SPACE_SIZE =
   process.env.OPENCLAW_ROOT_SHIMS_MAX_OLD_SPACE_SIZE?.trim() || "8192";
 const ROOT_SHIMS_NODE_OPTIONS =
@@ -161,9 +161,16 @@ function listSourceDtsOutputs(sourceDir: string, outputPrefix: string) {
 const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
   "src/plugin-sdk",
+  // provider-auth re-exports these signatures into generated SDK declarations.
+  "src/agents/cli-credentials.ts",
   "src/plugins/provider-runtime-model.types.ts",
+  // session-catalog re-exports provider params into generated SDK declarations.
+  "src/plugins/session-catalog.ts",
   "src/plugins/types.ts",
   "src/auto-reply",
+  // doctor-repair-runtime re-exports the state migration contract into the SDK.
+  "src/state/openclaw-state-db.ts",
+  "src/state/openclaw-state-db-contract.ts",
   "packages/ai/src",
   "packages/llm-core/src",
   "packages/markdown-core/src",
@@ -414,7 +421,7 @@ export function parseMode(argv: string[] = process.argv.slice(2)) {
 }
 
 /**
- * Reads the root shim timeout override for long package-boundary builds.
+ * Reads the root boundary timeout override for long declaration and shim builds.
  */
 export function resolveBoundaryRootShimsTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
   const raw = env.OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS?.trim();
@@ -551,8 +558,12 @@ export function isArtifactSetFresh(params: ArtifactFreshParams) {
     return false;
   }
   // Repair the mtime fast path so later invocations in this checkout skip
-  // without re-reading every input byte.
-  const now = new Date();
+  // without re-reading every input byte. The extra millisecond is required,
+  // not cosmetic: landing exactly on the newest input leaves no headroom for
+  // sub-millisecond write rounding or lagging metadata on CI filesystems, and
+  // an output that lands at or below its input silently keeps every later
+  // invocation on the expensive full-hash path this repair exists to avoid.
+  const now = new Date(Math.max(Date.now(), Math.ceil(newestInputMtimeMs)) + 1);
   for (const relativePath of params.outputPaths) {
     const outputPath = resolve(rootDir, relativePath);
     if (fs.existsSync(outputPath)) {
@@ -987,7 +998,7 @@ async function main(argv: string[] = process.argv.slice(2)) {
           label: "plugin-sdk boundary dts",
           args: [runTsgoScript, "-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"],
           env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
-          timeoutMs: 300_000,
+          timeoutMs: ROOT_BOUNDARY_TIMEOUT_MS,
           stamp: {
             path: ROOT_DTS_STAMP,
             inputPaths: ROOT_DTS_INPUTS,
@@ -1006,7 +1017,7 @@ async function main(argv: string[] = process.argv.slice(2)) {
         label: "plugin-sdk package boundary dts",
         args: [runTsgoScript, "-p", "packages/plugin-sdk/tsconfig.json", "--declaration", "true"],
         env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
-        timeoutMs: 300_000,
+        timeoutMs: ROOT_BOUNDARY_TIMEOUT_MS,
         stamp: {
           path: PACKAGE_DTS_STAMP,
           inputPaths: PACKAGE_DTS_INPUTS,
@@ -1274,7 +1285,7 @@ async function main(argv: string[] = process.argv.slice(2)) {
           resolveTsxImportSpecifier(),
           resolve(repoRoot, "scripts/write-plugin-sdk-entry-dts.ts"),
         ],
-        ROOT_SHIMS_TIMEOUT_MS,
+        ROOT_BOUNDARY_TIMEOUT_MS,
         {
           env: {
             NODE_OPTIONS: ROOT_SHIMS_NODE_OPTIONS,

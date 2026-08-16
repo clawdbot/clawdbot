@@ -72,11 +72,7 @@ type SubagentAttachmentRequest =
   | { status: "error"; error: string };
 
 function resolveAttachmentLimits(config: OpenClawConfig): AttachmentLimits {
-  const attachmentsCfg = (
-    config as unknown as {
-      tools?: { sessions_spawn?: { attachments?: Record<string, unknown> } };
-    }
-  ).tools?.sessions_spawn?.attachments;
+  const attachmentsCfg = config.tools?.sessions_spawn?.attachments;
   const boundedLimit = (value: unknown, ceiling: number): number =>
     typeof value === "number" && Number.isFinite(value)
       ? Math.min(Math.max(0, Math.floor(value)), ceiling)

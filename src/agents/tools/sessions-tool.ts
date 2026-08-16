@@ -2,7 +2,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { SessionsPatchResult } from "../../../packages/gateway-protocol/src/index.js";
-import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import {
+  SESSION_AGENT_ATTENTION_ICON_IDS,
+  SESSION_ICON_GLYPH_IDS,
+} from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -56,6 +59,7 @@ const GROUP_NAMES_MAX_ITEMS = 200;
 const SELF_ARCHIVE_MAX_RETRY_DELAY_MS = 5_000;
 const SESSIONS_TOOL_RESULT_MAX_BYTES = 3_840;
 const RESOLVED_OMITTED_REASON = "response_budget_exceeded";
+const SESSION_ICON_GLYPH_DESCRIPTION = SESSION_ICON_GLYPH_IDS.join(", ");
 const log = createSubsystemLogger("agents/sessions");
 
 type SessionsResolved = NonNullable<SessionsPatchResult["resolved"]>;
@@ -102,6 +106,11 @@ const SessionsToolSchema = Type.Object(
     ),
     label: Type.Optional(
       Type.String({ description: "Sidebar title override. Empty string clears it." }),
+    ),
+    icon: Type.Optional(
+      Type.String({
+        description: `Persistent sidebar icon: a single emoji, or a named icon: ${SESSION_ICON_GLYPH_DESCRIPTION}. Empty string clears it. Distinct from attention, which is temporary.`,
+      }),
     ),
     statusNote: Type.Optional(
       Type.String({
@@ -303,7 +312,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     label: "Sessions",
     name: "sessions",
     description:
-      "Session settings, reset, delete, and groups: patch label/status, pin, archive/restore, model/thinking override; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
+      "Session settings, reset, delete, and groups: patch label/icon/status, pin, archive/restore, model/thinking override; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
     parameters: SessionsToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
@@ -408,6 +417,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         key,
         ...lifecycleIdentity,
         ...(params.label !== undefined ? { label: readClearableString(params, "label") } : {}),
+        ...(params.icon !== undefined ? { icon: readClearableString(params, "icon") } : {}),
         ...(params.statusNote !== undefined
           ? { statusNote: readClearableString(params, "statusNote") }
           : {}),

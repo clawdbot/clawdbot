@@ -36,7 +36,11 @@ import {
   renderSettingsToggleRow,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { isCronJobActiveFailure, resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
+import {
+  isCronJobActiveFailure,
+  isCronJobRunning,
+  resolveCronJobLastRunStatus,
+} from "../../lib/cron-status.ts";
 import { parseCronEveryMs } from "../../lib/cron/decimal.ts";
 import type {
   CronFieldErrors,
@@ -45,6 +49,7 @@ import type {
   CronJobsLastStatusFilter,
   CronJobsScheduleKindFilter,
 } from "../../lib/cron/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { renderSegmented } from "./segmented-control.ts";
@@ -749,13 +754,15 @@ function renderJobRow(job: CronJob, props: CronProps) {
               >
             `
           : nothing}
-        ${job.enabled
-          ? nothing
-          : html`<span class="muted cron-table__paused-note">${t("cron.list.paused")}</span>`}
+        ${job.enabled ? nothing : renderDisabledNote(job)}
       </span>
       <span class="cron-table__cell">${formatCronSchedule(job)}</span>
       <span class="cron-table__cell">
-        ${hasNextRun ? formatRelativeTimestamp(nextRunAtMs) : t("common.na")}
+        ${isCronJobRunning(job)
+          ? html`<span class="cron-table__running">${t("cron.runs.runStatusRunning")}</span>`
+          : hasNextRun
+            ? formatRelativeTimestamp(nextRunAtMs)
+            : t("common.na")}
       </span>
       <span class="cron-table__cell cron-table__last">${renderLastRunCell(job)}</span>
       <span
@@ -786,6 +793,29 @@ function renderJobRow(job: CronJob, props: CronProps) {
       </span>
     </div>
   `;
+}
+
+/** Auto-disabled is the escalated failure state, not an operator pause: the
+ * recorded fact (state.autoDisabled) must stay visible or the job silently
+ * drops out of every failure surface the moment the problem became permanent. */
+function renderDisabledNote(job: CronJob) {
+  const autoDisabled = job.state?.autoDisabled;
+  if (!autoDisabled) {
+    return html`<span class="muted cron-table__paused-note">${t("cron.list.paused")}</span>`;
+  }
+  const label = t(
+    autoDisabled.reason === "schedule-errors"
+      ? "cron.list.autoDisabledScheduleErrors"
+      : "cron.list.autoDisabledRunFailures",
+    { count: String(autoDisabled.consecutiveErrors) },
+  );
+  const lastError = job.state?.lastError?.trim();
+  return html`<span
+    class="cron-table__paused-note cron-table__auto-disabled"
+    data-test-id=${`cron-row-auto-disabled-${job.id}`}
+    title=${lastError ? formatUiExternalText(lastError) : label}
+    >${label}</span
+  >`;
 }
 
 function renderLastRunCell(job: CronJob) {

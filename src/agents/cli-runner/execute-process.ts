@@ -478,6 +478,24 @@ export async function executeCliProcess(params: {
       failoverContext,
     );
   }
+  if (runParams.controlOperation === "compact") {
+    const manualCompaction = context.backendResolved.manualCompaction;
+    if (!manualCompaction) {
+      throw new Error(
+        `CLI backend ${context.backendResolved.id} does not support manual compaction`,
+      );
+    }
+    const validation = manualCompaction.validateOutput(stdout);
+    if (!validation.ok) {
+      throw createCliFailoverError(validation.reason, "unknown", failoverContext);
+    }
+    return {
+      text: "",
+      rawText: "",
+      diagnostics: { process: processDiagnostics },
+      finalPromptText: params.prompt,
+    };
+  }
   const parsed =
     parsedStructuredOutput ??
     parseCliOutput({

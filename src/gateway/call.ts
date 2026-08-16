@@ -35,6 +35,7 @@ import { createAbortError } from "../infra/abort-signal.js";
 import { loadDeviceAuthToken, loadOriginDeviceToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
+import { extractErrorCodeOrErrno } from "../infra/error-graph-internal.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
@@ -57,6 +58,7 @@ import {
 import {
   buildGatewayConnectionDetailsWithResolvers,
   projectGatewayConnectionDetailsForDiagnostics,
+  projectGatewayUrlForDiagnostics,
   type GatewayConnectionDetails,
 } from "./connection-details.js";
 import {
@@ -111,6 +113,7 @@ type CallGatewayBaseOptions = {
   instanceId?: string;
   minProtocol?: number;
   maxProtocol?: number;
+  requiredCapabilities?: string[];
   requiredMethods?: string[];
   /**
    * Overrides the config path shown in connection error details.
@@ -246,6 +249,21 @@ export type GatewayProbeConnectionDetails = GatewayConnectionDetails & {
 
 function firstGatewayErrorLine(message: string): string {
   return message.split("\n", 1)[0]?.trim() || message;
+}
+
+// Connection-establishment failures where "start the gateway" is the actionable
+// next step; protocol/auth failures keep their own richer messages.
+const GATEWAY_UNREACHABLE_SOCKET_CODES = new Set([
+  "ECONNREFUSED",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "ETIMEDOUT",
+]);
+
+function isGatewayUnreachableSocketError(error: Error): boolean {
+  const code = extractErrorCodeOrErrno(error);
+  return code !== undefined && GATEWAY_UNREACHABLE_SOCKET_CODES.has(code);
 }
 
 export function formatGatewayTransportErrorJson(value: unknown): GatewayTransportErrorJson | null {
@@ -689,6 +707,24 @@ function formatGatewayTimeoutError(
   return `gateway timeout after ${timeoutMs}ms\n${connectionDetails.message}`;
 }
 
+/** Wrap raw socket-level connect failures (ECONNREFUSED etc.) into one actionable message. */
+function createGatewayUnreachableTransportError(params: {
+  cause: Error;
+  connectionDetails: GatewayConnectionDetails;
+}): GatewayTransportError {
+  const code = extractErrorCodeOrErrno(params.cause);
+  return new GatewayTransportError({
+    kind: "closed",
+    reason: firstGatewayErrorLine(params.cause.message),
+    connectionDetails: params.connectionDetails,
+    message: [
+      `Gateway not reachable at ${projectGatewayUrlForDiagnostics(params.connectionDetails.url)}${code ? ` (${code})` : ""}.`,
+      "Start it with `openclaw gateway run` or check `openclaw gateway status`.",
+      params.connectionDetails.message,
+    ].join("\n"),
+  });
+}
+
 function createGatewayCloseTransportError(params: {
   code: number;
   reason: string;
@@ -746,6 +782,27 @@ function ensureGatewaySupportsRequiredMethods(params: {
         "Update or restart the active gateway and try again.",
       ].join(" "),
     );
+  }
+}
+
+function ensureGatewaySupportsRequiredCapabilities(params: {
+  requiredCapabilities: string[] | undefined;
+  capabilities: string[] | undefined;
+  attemptedMethod: string;
+}): void {
+  const required = (params.requiredCapabilities ?? []).map((entry) => entry.trim()).filter(Boolean);
+  if (required.length === 0) {
+    return;
+  }
+  const supported = new Set(
+    (params.capabilities ?? []).map((entry) => entry.trim()).filter(Boolean),
+  );
+  for (const capability of required) {
+    if (!supported.has(capability)) {
+      throw new Error(
+        `active gateway does not support required capability "${capability}" for "${params.attemptedMethod}". Update or restart the active gateway and try again.`,
+      );
+    }
   }
 }
 
@@ -898,6 +955,11 @@ async function executeGatewayRequestWithScopes<T>(params: {
               methods: hello.features?.methods,
               attemptedMethod: opts.method,
             });
+            ensureGatewaySupportsRequiredCapabilities({
+              requiredCapabilities: opts.requiredCapabilities,
+              capabilities: hello.features?.capabilities,
+              attemptedMethod: opts.method,
+            });
             const activeClient = client;
             if (!activeClient) {
               throw new Error("gateway client not initialized");
@@ -923,7 +985,16 @@ async function executeGatewayRequestWithScopes<T>(params: {
         }
         if (info?.connectError) {
           ignoreClose = true;
-          stop(info.connectError);
+          // Raw socket failures (ECONNREFUSED and friends) otherwise reach the
+          // operator as a bare Node error with no next step.
+          stop(
+            isGatewayUnreachableSocketError(info.connectError)
+              ? createGatewayUnreachableTransportError({
+                  cause: info.connectError,
+                  connectionDetails: params.connectionDetails,
+                })
+              : info.connectError,
+          );
           return;
         }
         if (

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 const CODEX_SUITE_PREFIX = "live-codex-harness";
@@ -19,30 +19,45 @@ function appendLine(file, line) {
   appendFileSync(file, `${line}\n`, "utf8");
 }
 
-function readFallbackModelIds(targetRoot) {
+function readTargetModelIds(targetRoot) {
   const catalogPath = path.join(targetRoot, "extensions/codex/provider-catalog.ts");
+  if (!existsSync(catalogPath)) {
+    const harnessPath = path.join(targetRoot, "scripts/test-live-codex-harness-docker.sh");
+    const source = readFileSync(harnessPath, "utf8");
+    const defaults = new Set(
+      [...source.matchAll(/\$\{OPENCLAW_LIVE_CODEX_HARNESS_MODEL:-[^/}]+\/([^}\s]+)\}/gu)].map(
+        (match) => match[1],
+      ),
+    );
+    if (defaults.size !== 1) {
+      throw new Error(`cannot read one frozen Codex harness default from ${harnessPath}`);
+    }
+    // The harness default proves only the generic lane's model. Specialized
+    // lanes need the explicit cohort declaration from the historical catalog.
+    return { modelIds: new Set(defaults), supportsGpt56Cohort: false };
+  }
   const source = readFileSync(catalogPath, "utf8");
   const start = source.indexOf("export const FALLBACK_CODEX_MODELS = [");
   const end = source.indexOf("] satisfies", start);
   if (start < 0 || end < 0) {
     throw new Error(`cannot read the frozen Codex fallback catalog from ${catalogPath}`);
   }
-  return new Set(
+  const modelIds = new Set(
     [...source.slice(start, end).matchAll(/\bid:\s*["']([^"']+)["']/gu)].map((match) => match[1]),
   );
-}
-
-function resolveFrozenCodexCompatibility({ suiteId, targetRoot }) {
-  const modelIds = readFallbackModelIds(targetRoot);
   const hasSol = modelIds.has("gpt-5.6-sol");
   const hasLuna = modelIds.has("gpt-5.6-luna");
   if (hasSol !== hasLuna) {
     throw new Error("frozen Codex GPT-5.6 capability marker is incomplete; refusing to guess");
   }
-  const supportsGpt56Cohort = hasSol && hasLuna;
+  return { modelIds, supportsGpt56Cohort: hasSol && hasLuna };
+}
+
+function resolveFrozenCodexCompatibility({ suiteId, targetRoot }) {
+  const { modelIds, supportsGpt56Cohort } = readTargetModelIds(targetRoot);
 
   if (suiteId === GENERIC_CODEX_SUITE) {
-    const model = supportsGpt56Cohort
+    const model = modelIds.has("gpt-5.6-luna")
       ? "openai/gpt-5.6-luna"
       : modelIds.has("gpt-5.5")
         ? "openai/gpt-5.5"

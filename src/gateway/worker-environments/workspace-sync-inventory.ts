@@ -277,7 +277,7 @@ export async function runWorkspaceInventoryCommandToFile(params: {
           childStdout.pause();
           outputWrite = outputWrite
             .then(async () => {
-              await output.write(chunk);
+              await output.writeFile(chunk);
               childStdout.resume();
             })
             .catch((error: unknown) => {
@@ -345,7 +345,7 @@ async function writeEligibleGitFiles(params: {
     if (buffered.length === 0) {
       return;
     }
-    await output.write(buffered.join(""));
+    await output.writeFile(buffered.join(""));
     buffered = [];
     bufferedBytes = 0;
   };

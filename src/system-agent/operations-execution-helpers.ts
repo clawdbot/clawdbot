@@ -3,7 +3,6 @@ import { tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope-conf
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -27,7 +26,6 @@ import type {
 } from "./operations-parse.js";
 import { formatSystemAgentPersistentPlan } from "./operations-parse.js";
 import type { SystemAgentOverview } from "./overview.js";
-import { validateSystemAgentPluginInstallSpec } from "./plugin-install.js";
 import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 
 type ConfigModule = typeof import("../config/config.js");
@@ -37,24 +35,6 @@ const loadOverviewModule = async () => await import("./overview.js");
 
 export const CONFIG_GET_OUTPUT_MAX_CHARS = 2_000;
 export const CONFIG_SCHEMA_CHILDREN_MAX = 40;
-
-export function redactConfigValue(value: unknown, configPath: string): unknown {
-  if (typeof value === "string" || typeof value === "number") {
-    return isSensitiveConfigPath(configPath) ? "<redacted>" : value;
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => redactConfigValue(entry, `${configPath}[]`));
-  }
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
-        key,
-        redactConfigValue(entry, configPath ? `${configPath}.${key}` : key),
-      ]),
-    );
-  }
-  return value;
-}
 
 export function readConfigValueAtPath(
   config: unknown,
@@ -749,40 +729,4 @@ export async function isPluginBackingDefaultInferenceRoute(pluginId: string): Pr
       (owner) => owner.trim().toLowerCase() === normalizedPluginId,
     ),
   );
-}
-
-export async function executePluginInstall(
-  operation: Extract<SystemAgentOperation, { kind: "plugin-install" }>,
-  runtime: RuntimeEnv,
-  opts: ExecuteOptions,
-): Promise<SystemAgentOperationResult> {
-  // Reject an untrusted plugin source before proposing or installing it, not
-  // only on the approved apply — a formatted "plan" must never surface an
-  // arbitrary npm/url/file spec that bypassed the ClawHub trust boundary.
-  const validationError = validateSystemAgentPluginInstallSpec(operation.spec);
-  if (validationError) {
-    throw new Error(validationError);
-  }
-  const result = await applyPersistentOperation({
-    auditOperation: "plugin.install",
-    operation,
-    runtime,
-    opts,
-    run: async (ctx) => {
-      const runPluginInstall =
-        ctx.deps?.runPluginInstall ??
-        (async (spec: string, pluginRuntime: RuntimeEnv) => {
-          const { runPluginInstallCommand } = await import("../cli/plugins-install-command.js");
-          await runPluginInstallCommand({ raw: spec, opts: {}, runtime: pluginRuntime });
-        });
-      await ctx.commit(async () => {
-        await runPluginInstall(operation.spec, createNoExitRuntime(ctx.runtime));
-      });
-      return { summary: `Installed plugin ${operation.spec}`, details: { spec: operation.spec } };
-    },
-  });
-  if (result.applied) {
-    runtime.log("Restart the Gateway to apply installed plugin changes.");
-  }
-  return result;
 }

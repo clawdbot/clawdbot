@@ -52,6 +52,11 @@ openclaw-lobster-pet {
   --lob-glint: var(--lob-glint-seed, #00e5cc);
 }
 
+/* Restore hit testing beneath the pointer-inert decorative pet host. */
+wa-dropdown.lobster-pet-dismiss-menu {
+  pointer-events: auto;
+}
+
 /* The Elder does everything at Elder speed. */
 .lobster-pet--elder {
   transition: left 2.6s ease-in-out;

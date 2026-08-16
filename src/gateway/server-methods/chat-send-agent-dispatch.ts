@@ -17,7 +17,10 @@ import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-a
 import { broadcastChatFinal } from "./chat-broadcast.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import { finalizeChatSendAgentOutcome } from "./chat-send-agent-outcome.js";
-import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
+import {
+  discardPreparedChatSendAttachments,
+  type prepareChatSendAttachments,
+} from "./chat-send-attachments.js";
 import {
   resolveWebchatPromptCacheKey,
   scheduleChatDashboardSessionTitle,
@@ -400,19 +403,19 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       await measureDiagnosticsTimelineSpan(
         "gateway.chat_send.post_dispatch",
         async () => {
-          const returnedAgentErrorPayloads = agentRunStarted
-            ? replyDispatch.deliveredReplies
-                .map((entryInner) => entryInner.payload)
-                .filter((payload) => payload.isError)
-            : [];
+          const returnedAgentErrorPayloads = replyDispatch.deliveredReplies
+            .map((entryInner) => entryInner.payload)
+            .filter((payload) => payload.isError);
+          const hasReturnedAgentError =
+            returnedAgentErrorPayloads.length > 0 &&
+            (agentRunStarted || !isInternalTextSlashCommandTurn);
           const returnedAgentErrorMessage =
             returnedAgentErrorPayloads
               .map((payload) => payload.text?.trim())
               .filter((text): text is string => Boolean(text))
               .join(" | ") || undefined;
           if (
-            agentRunStarted &&
-            returnedAgentErrorPayloads.length > 0 &&
+            hasReturnedAgentError &&
             !userTurnRecorder.hasPersisted() &&
             !userTurnRecorder.isBlocked()
           ) {
@@ -431,7 +434,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           // Agent runs persist model-visible turns through SessionManager; this dispatcher owns
           // live delivery. Mirroring agent finals would duplicate normal assistant turns. The
           // non-agent branch has no runtime-owned turn, so it appends one before broadcasting.
-          if (!agentRunStarted && !queuedFollowup.isEnqueued()) {
+          if (!agentRunStarted && !queuedFollowup.isEnqueued() && !hasReturnedAgentError) {
             await finalizeChatSendNonAgentReplies({
               accountId,
               context,
@@ -449,7 +452,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               context,
               deliveredReplies: replyDispatch.deliveredReplies,
               emitFirstAssistantServerTiming,
-              hasReturnedAgentErrorPayloads: returnedAgentErrorPayloads.length > 0,
+              hasReturnedAgentErrorPayloads: hasReturnedAgentError,
               markTerminalBroadcasted,
               session,
             });
@@ -459,7 +462,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             runId: clientRunId,
             sessionKey,
             agentId,
-            hasReturnedAgentErrorPayloads: returnedAgentErrorPayloads.length > 0,
+            hasReturnedAgentErrorPayloads: hasReturnedAgentError,
             broadcastedSourceReplyFinal,
             successfulFinalOwnedElsewhere: queuedFollowup.isEnqueued(),
             markTerminalBroadcasted,
@@ -496,6 +499,13 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     .catch(dispatchErrorLifecycle.handleError)
     .finally(() => {
       dispatchErrorLifecycle.finalize();
+      if (userTurnRecorder.isBlocked() && attachments.offloadedRefs.length > 0) {
+        // A blocked turn persists only the redacted block reason — no media
+        // markers — so the prepared inbound media stays unreferenced forever
+        // (sweep is off by default). Same custody rule as the pre-ACK owner
+        // in chat-send-admission.ts: unreferenced staged media is discarded.
+        void discardPreparedChatSendAttachments(attachments.offloadedRefs);
+      }
       // Cosmetic title work starts only after the accepted turn finishes. Starting it
       // before dispatch can make a cold utility runtime starve the user's real turn.
       scheduleChatDashboardSessionTitle({

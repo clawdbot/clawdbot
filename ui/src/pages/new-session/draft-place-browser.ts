@@ -12,6 +12,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import type { BrowserTarget, DraftNode } from "./discovery.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -184,7 +185,7 @@ export class DraftPlaceBrowser {
       return null;
     }
     const error = this.projectSearchTask.error;
-    return error instanceof Error ? error.message : String(error);
+    return formatUiError(error);
   }
 
   get browserLoading(): boolean {
@@ -489,7 +490,7 @@ export class DraftPlaceBrowser {
       this.close();
     } catch (error) {
       if (requestId === this.browserRequestToken && client === this.gateway.client) {
-        this.browserErrorValue = error instanceof Error ? error.message : String(error);
+        this.browserErrorValue = formatUiError(error);
       }
     } finally {
       if (requestId === this.browserRequestToken) {

@@ -108,6 +108,28 @@ describe("noteDevicePairingHealth", () => {
     noteMock.mockReset();
   });
 
+  it("does not create shared state while collecting local pairing findings", async () => {
+    await withTempDir("openclaw-doctor-device-pairing-readonly-", async (stateDir) => {
+      await withEnvAsync(
+        {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_FAST: "1",
+        },
+        async () => {
+          await expect(
+            collectDevicePairingHealthFindings({
+              cfg: { gateway: { mode: "local" } },
+              healthOk: false,
+            }),
+          ).resolves.toEqual([]);
+          await expect(
+            fs.stat(path.join(stateDir, "state", "openclaw.sqlite")),
+          ).rejects.toMatchObject({ code: "ENOENT" });
+        },
+      );
+    });
+  });
+
   it("warns about pending scope upgrades from local pairing state when the gateway is down", async () => {
     await withApprovedOperatorPairing(async ({ identity, publicKey }) => {
       const pending = await requestDevicePairing({

@@ -4,7 +4,6 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { WORKER_PROTOCOL_FEATURES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   captureNodePairingGeneration,
   captureNodePairingState,
@@ -45,15 +44,10 @@ import {
   getNodeWakeStateSnapshot,
   resetNodeWakeStateForTest,
 } from "../node-wake-state.test-support.js";
+import { bindDeviceWorkerReconciliation } from "../worker-environments/device-provider.js";
 import { nodeHandlers } from "./nodes.js";
 import { createWorkerSupervisorNodeClient } from "./nodes.runner-inventory.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
-
-const WORKER_RUNS = {
-  bundleHash: "a".repeat(64),
-  openclawVersion: "2026.8.1",
-  protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
-};
 
 const createdStates: OpenClawTestState[] = [];
 const pairingGenerationHooks = vi.hoisted(() => ({
@@ -282,7 +276,7 @@ async function approveNodeSurface(stateDir: string, nodeId: string): Promise<voi
 }
 
 describe("nodeHandlers node.describe", () => {
-  it("projects the current exact worker build as a safe session-host boolean", async () => {
+  it("projects current runner availability as a safe session-host boolean", async () => {
     const state = await createState("node-describe-session-host");
     const nodeId = "node-1";
     await pairAndroidNodeDevice(state.stateDir, nodeId);
@@ -291,7 +285,7 @@ describe("nodeHandlers node.describe", () => {
     expect(pairingState?.generation).not.toBeNull();
 
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
-    const nodeClient = createWorkerSupervisorNodeClient("conn-1", WORKER_RUNS);
+    const nodeClient = createWorkerSupervisorNodeClient("conn-1");
     runtime.nodeRegistry.register(nodeClient, {
       pairingIdentity: pairingState?.identity.key ?? "",
       pairingGeneration: pairingState?.generation?.key,
@@ -299,7 +293,7 @@ describe("nodeHandlers node.describe", () => {
     const publication = createOptions(
       {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerRuns: WORKER_RUNS,
+        workerHost: { enabled: true, capacity: "available" },
       },
       { client: nodeClient as never },
     );
@@ -455,7 +449,10 @@ describe("nodeHandlers node.pair.approve", () => {
       pairingGeneration: previousState?.generation?.key,
     });
     const publication = createOptions(
-      { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE] },
+      {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: "available" },
+      },
       { client: client as never },
     );
     Object.assign(publication.context, { nodeRegistry: runtime.nodeRegistry });
@@ -678,6 +675,37 @@ describe("nodeHandlers node.pair.remove", () => {
     expect(wakeLifecycle.aborted).toBe(true);
     expect(drainNodePendingWork(nodeId).items.map((item) => item.id)).toEqual(["baseline-status"]);
     await expect(loadApnsRegistration(nodeId)).resolves.toBeNull();
+  });
+
+  it("reconciles device worker authority before reporting node-role removal", async () => {
+    const state = await createState("node-remove-worker-reconcile");
+    const nodeId = "worker-node-remove";
+    await pairAndroidNodeDevice(state.stateDir, nodeId);
+    const { opts } = createOptions({ nodeId });
+    const order: string[] = [];
+    const workerEnvironmentService = {};
+    bindDeviceWorkerReconciliation(workerEnvironmentService, async () => {
+      order.push("environment");
+      return ["environment-1"];
+    });
+    const reconcileActive = vi.fn(async () => {
+      order.push("placement");
+    });
+    Object.assign(opts.context, {
+      workerEnvironmentService,
+      workerPlacementDispatchService: { reconcileActive },
+    });
+    vi.mocked(opts.respond).mockImplementation(() => {
+      order.push("respond");
+    });
+
+    await expectDefined(
+      nodeHandlers["node.pair.remove"],
+      'nodeHandlers["node.pair.remove"] test invariant',
+    )(opts);
+
+    expect(reconcileActive).toHaveBeenCalledWith("environment-1");
+    expect(order).toEqual(["environment", "placement", "respond"]);
   });
 
   it("preserves an APNs registration created after node-role removal commits", async () => {

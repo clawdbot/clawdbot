@@ -59,6 +59,7 @@ export async function resolveStatusJsonOutput(params: {
   opts: {
     deep?: boolean;
     usage?: boolean;
+    agent?: string;
     timeoutMs?: number;
   };
   includeSecurityAudit: boolean;
@@ -71,6 +72,7 @@ export async function resolveStatusJsonOutput(params: {
       config: scan.cfg,
       sourceConfig: scan.sourceConfig,
       timeoutMs: opts.timeoutMs,
+      ...(opts.agent ? { agentId: opts.agent } : {}),
       usage: opts.usage,
       deep: opts.deep,
       gatewayReachable: scan.gatewayReachable,

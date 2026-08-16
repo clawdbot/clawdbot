@@ -36,6 +36,7 @@ export async function runEmbeddedAttemptExecutionPhase(
       hookRunner,
       markSourceReplyDelivered,
       replaySafeTools,
+      sideEffectToolOwners,
       setActiveSessionSystemPrompt,
       settingsManager,
       subscriptionToolTrust,
@@ -191,6 +192,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     markSourceReplyDelivered,
     sandboxSessionKey: input.setup.sandboxSessionKey,
     subscriptionToolTrust,
+    sideEffectToolOwners,
   });
   input.lifecycle.setToolSearchCatalogExecutor(preparedStream.toolSearchCatalogExecutor);
   input.externalAbortController.setCompactionState({

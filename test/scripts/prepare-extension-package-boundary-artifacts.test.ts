@@ -583,6 +583,8 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     // Simulate checkout: inputs newer than restored outputs, bytes unchanged.
     fs.utimesSync(stampPath, new Date(1_000), new Date(1_000));
     fs.utimesSync(outputPath, new Date(1_000), new Date(1_000));
+    const repairTimeMs = Date.now();
+    fs.utimesSync(inputPath, repairTimeMs / 1_000, (repairTimeMs + 0.5) / 1_000);
     const freshParams = {
       rootDir,
       inputPaths: ["src"],
@@ -590,9 +592,20 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       hashStampPath: "dist/.demo.stamp",
     };
 
-    expect(isArtifactSetFresh(freshParams)).toBe(true);
-    // The hash match repairs output mtimes so the next check takes the fast path.
-    expect(fs.statSync(outputPath).mtimeMs).toBeGreaterThanOrEqual(fs.statSync(inputPath).mtimeMs);
+    vi.useFakeTimers();
+    vi.setSystemTime(repairTimeMs);
+    try {
+      expect(isArtifactSetFresh(freshParams)).toBe(true);
+      // The repaired output must clear the newest input by a whole millisecond.
+      // Matching it exactly leaves no headroom for sub-millisecond write
+      // rounding or lagging metadata, and a CI runner that lands even a
+      // fraction short puts every later invocation back on the full-hash path.
+      expect(fs.statSync(outputPath).mtimeMs).toBeGreaterThanOrEqual(
+        Math.ceil(fs.statSync(inputPath).mtimeMs) + 1,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
 
     fs.appendFileSync(inputPath, "export const demoTwo = 2;\n", "utf8");
     fs.utimesSync(outputPath, new Date(1_000), new Date(1_000));

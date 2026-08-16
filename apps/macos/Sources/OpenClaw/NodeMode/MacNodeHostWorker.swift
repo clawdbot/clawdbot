@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import OpenClawKit
+import OpenClawProtocol
 import OSLog
 import Subprocess
 
@@ -14,16 +15,40 @@ struct MacNodeHostManifest: Equatable, Sendable {
     let version: String
     let caps: [String]
     let commands: [String]
+    let computerUse: AnyCodable?
     let pathEnv: String
+
+    init(
+        version: String,
+        caps: [String],
+        commands: [String],
+        computerUse: AnyCodable? = nil,
+        pathEnv: String)
+    {
+        self.version = version
+        self.caps = caps
+        self.commands = commands
+        self.computerUse = computerUse
+        self.pathEnv = pathEnv
+    }
 }
 
 struct MacNodeHostWorkerLaunch: Equatable, Sendable {
     let command: [String]
     let currentDirectoryURL: URL?
+    let environment: [String: String]
+    let configurationGeneration: UInt64
 
-    init(command: [String], currentDirectoryURL: URL? = nil) {
+    init(
+        command: [String],
+        currentDirectoryURL: URL? = nil,
+        environment: [String: String] = [:],
+        configurationGeneration: UInt64 = 0)
+    {
         self.command = command
         self.currentDirectoryURL = currentDirectoryURL
+        self.environment = environment
+        self.configurationGeneration = configurationGeneration
     }
 }
 
@@ -66,7 +91,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     private let writerQueue = DispatchQueue(label: "ai.openclaw.node-host-worker.writer")
     private let session: GatewayNodeSession
     private let startupTimeout: TimeInterval
-    private let onUnexpectedExit: @Sendable () -> Void
+    private let onUnexpectedExit: @Sendable (UInt64) -> Void
     private var process: ManagedProcess?
     private var processCleanupTask: Task<Void, Never>?
     private var stdinPipe: Pipe?
@@ -93,7 +118,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     init(
         session: GatewayNodeSession,
         startupTimeout: TimeInterval = MacNodeHostWorker.defaultStartupTimeout,
-        onUnexpectedExit: @escaping @Sendable () -> Void = {})
+        onUnexpectedExit: @escaping @Sendable (UInt64) -> Void = { _ in })
     {
         self.session = session
         self.startupTimeout = startupTimeout
@@ -157,6 +182,9 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                     ])
                     for control in self.takePendingInvokeControlsLocked(invokeId: request.id) {
                         try self.enqueueInvokeControlLocked(control, invokeId: request.id)
+                        if case .cancel = control {
+                            self.finishCancelledInvokeLocked(invokeId: request.id)
+                        }
                     }
                 } catch {
                     self.invokeContinuations.removeValue(forKey: request.id)?.resume(returning:
@@ -186,6 +214,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                 let control = PendingInvokeControl.cancel
                 if self.invokeContinuations[invokeId] != nil {
                     try? self.enqueueInvokeControlLocked(control, invokeId: invokeId)
+                    self.finishCancelledInvokeLocked(invokeId: invokeId)
                 } else if self.process?.isRunning == true, self.manifest != nil {
                     self.bufferInvokeControlLocked(control, invokeId: invokeId)
                 }
@@ -241,6 +270,11 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                 "invokeId": invokeId,
             ])
         }
+    }
+
+    private func finishCancelledInvokeLocked(invokeId: String) {
+        self.invokeContinuations.removeValue(forKey: invokeId)?.resume(returning:
+            Self.unavailableResponse(invokeId, "UNAVAILABLE: node-host worker invocation cancelled"))
     }
 
     func setRoute(_ route: GatewayNodeSessionRoute?, authorityGeneration: UInt64) async -> Bool {
@@ -320,7 +354,10 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             self.finishStartLocked(.failure(WorkerError.unavailable("could not protect worker input pipe")))
             return
         }
-        var environment = ProcessInfo.processInfo.environment
+        var environment = ProcessInfo.processInfo.environment.filter { key, _ in
+            !CuaDriverWorkerEnvironment.inheritedFamilyPrefixes.contains { key.hasPrefix($0) }
+        }
+        environment.merge(launch.environment, uniquingKeysWith: { _, explicit in explicit })
         environment["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
         environment["OPENCLAW_NODE_EXEC_HOST"] = "app"
         environment["OPENCLAW_NODE_EXEC_FALLBACK"] = "0"
@@ -459,7 +496,25 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                 self.stopLocked(reason: "worker returned invalid manifest")
                 return
             }
-            let manifest = MacNodeHostManifest(version: version, caps: caps, commands: commands, pathEnv: pathEnv)
+            let computerUse: AnyCodable?
+            if let rawComputerUse = rawManifest["computerUse"] {
+                guard let rawComputerUse = rawComputerUse as? [String: Any],
+                      let data = try? JSONSerialization.data(withJSONObject: rawComputerUse),
+                      let decoded = try? JSONDecoder().decode(AnyCodable.self, from: data)
+                else {
+                    self.stopLocked(reason: "worker returned invalid computer-use descriptor")
+                    return
+                }
+                computerUse = decoded
+            } else {
+                computerUse = nil
+            }
+            let manifest = MacNodeHostManifest(
+                version: version,
+                caps: caps,
+                commands: commands,
+                computerUse: computerUse,
+                pathEnv: pathEnv)
             self.manifest = manifest
             self.inventoryData = (message["inventory"] as? [String: Any]).flatMap(Self.jsonData)
             self.finishStartLocked(.success(manifest))
@@ -666,6 +721,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         notifyUnexpectedExit: Bool = false) -> Task<Void, Never>?
     {
         let wasReady = self.manifest != nil
+        let stoppedWorker = self.launchedWorker
         self.startTimer?.cancel()
         self.startTimer = nil
         self.launchedWorker = nil
@@ -684,8 +740,8 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         for (id, continuation) in pending {
             continuation.resume(returning: Self.unavailableResponse(id, "UNAVAILABLE: node-host worker stopped"))
         }
-        if notifyUnexpectedExit, wasReady {
-            self.onUnexpectedExit()
+        if notifyUnexpectedExit, wasReady, let stoppedWorker {
+            self.onUnexpectedExit(stoppedWorker.configurationGeneration)
         }
         guard let process = self.process else {
             return nil

@@ -4,7 +4,6 @@ import { listAgentIds, listAgentEntries, resolveAgentConfig } from "../agents/ag
 import { resolveModelRefFromString, type ModelRef } from "../agents/model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import {
-  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   resolveHeartbeatPromptCore as resolveHeartbeatPromptText,
   resolveHeartbeatPromptForResponseTool,
 } from "../auto-reply/heartbeat.js";
@@ -291,10 +290,6 @@ export function shouldUseHeartbeatResponseToolPrompt(params: {
     return false;
   }
   return usesCodexHarness(params);
-}
-
-export function resolveHeartbeatAckMaxChars(_cfg: OpenClawConfig, _heartbeat?: HeartbeatConfig) {
-  return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
 }
 
 export function isHeartbeatTypingEnabled(params: {

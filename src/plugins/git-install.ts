@@ -476,6 +476,8 @@ export async function installPluginFromGitSpec(
     };
     const preflight = await preflightPluginGitInstallPolicy({
       config: params.config,
+      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+      onInstallPolicyWarning: params.onInstallPolicyWarning,
       logger: params.logger ?? {},
       mode: effectiveMode,
       pluginId: params.expectedPluginId ?? parsed.label,
@@ -530,6 +532,7 @@ export async function installPluginFromGitSpec(
 
     const result = await installPluginFromInstalledPackageDir({
       dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+      onInstallPolicyWarning: params.onInstallPolicyWarning,
       config: params.config,
       packageDir: repoDir,
       dryRun: params.dryRun,

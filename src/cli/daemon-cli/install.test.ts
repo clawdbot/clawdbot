@@ -110,15 +110,6 @@ vi.mock("../../config/paths.js", () => ({
   resolveIsNixMode: resolveIsNixModeMock,
 }));
 
-vi.mock("../../commands/gateway-install-token.persist.runtime.js", () => ({
-  readConfigFileSnapshot: readConfigFileSnapshotMock,
-  readConfigFileSnapshotForWrite: vi.fn(async () => ({
-    snapshot: await readConfigFileSnapshotMock(),
-    writeOptions: { expectedConfigPath: "/tmp/openclaw.json" },
-  })),
-  replaceConfigFile: replaceConfigFileMock,
-}));
-
 vi.mock("../../config/types.secrets.js", () => ({
   hasConfiguredSecretInput: hasConfiguredSecretInputMock,
   resolveSecretInputRef: resolveSecretInputRefMock,

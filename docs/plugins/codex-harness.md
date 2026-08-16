@@ -462,6 +462,18 @@ Then check Codex app-server state:
 /codex binding
 ```
 
+After installing or updating OpenClaw, explicitly verify the managed package
+binary before cutover:
+
+```bash
+openclaw doctor --lint --only codex/managed-app-server --json
+```
+
+For an effective Codex route using the managed stdio app-server, this
+default-disabled check resolves the platform-native executable and requires the
+exact Codex version pinned by OpenClaw. It does not execute custom, remote, or
+macOS desktop-owned app-servers.
+
 `/status` reports the resolved OpenClaw Fast policy (`on`, `off`, or `auto`)
 and the selected runtime. It does not report the upstream service tier actually
 honored or returned for a completed request. `/codex binding` reports the
@@ -505,6 +517,7 @@ Keep provider refs and runtime policy separate:
 | Resume a stored Codex CLI session as a paired-node turn    | `/codex sessions --host <node> [filter]`, then `/codex resume <session-id> --host <node> --bind here` |
 | View non-archived Codex sessions across computers          | Enable Codex supervision and open **Codex Sessions**                                                  |
 | Change the bound thread's model, fast-mode, or permissions | `/codex model <model>`, `/codex fast [on\|off\|status]`, `/codex permissions [default\|yolo\|status]` |
+| Compact the current Codex session                          | `/codex compact`                                                                                      |
 | Stop or steer the active turn                              | `/codex stop`, `/codex steer <text>`                                                                  |
 | Detach the current binding                                 | `/codex detach` (alias `/codex unbind`)                                                               |
 | Send Codex feedback only                                   | `/codex diagnostics [note]`                                                                           |
@@ -728,7 +741,9 @@ Common forms:
 - `/codex stop` stops the active turn; `/codex steer <text>` steers it.
 - `/codex model <model>`, `/codex fast [on|off|status]`, and
   `/codex permissions [default|yolo|status]` change per-conversation state.
-- `/codex compact` asks Codex app-server to compact the attached thread.
+- `/codex compact` runs the same completion and session-accounting pipeline as
+  `/compact`, then reports whether Codex compacted the session and the resulting
+  token count. If compaction is skipped or fails, the reply includes the reason.
 - `/codex review` starts Codex native review for the attached thread.
 - `/codex diagnostics [note]` asks before sending Codex feedback for the
   attached thread.

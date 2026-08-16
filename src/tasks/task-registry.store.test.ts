@@ -43,6 +43,7 @@ import {
 } from "./task-registry.store.js";
 import {
   loadTaskRegistryStateFromSqlite,
+  loadTaskRegistryStateFromSqliteReadOnly,
   saveTaskRegistryStateToSqlite,
 } from "./task-registry.store.sqlite.js";
 import type { TaskDeliveryState, TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
@@ -133,6 +134,20 @@ function createUnsafeTaskOwnerIndex(database: DatabaseSync): void {
 }
 
 describe("task-registry store runtime", () => {
+  it("does not create shared state for a read-only task snapshot", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-readonly-" },
+      async () => {
+        const statePath = resolveOpenClawStateSqlitePath();
+        expect(() => statSync(statePath)).toThrow();
+
+        const snapshot = loadTaskRegistryStateFromSqliteReadOnly();
+        expect(snapshot.tasks.size).toBe(0);
+        expect(snapshot.deliveryStates.size).toBe(0);
+        expect(() => statSync(statePath)).toThrow();
+      },
+    );
+  });
   let testState: OpenClawTestState;
 
   beforeAll(async () => {

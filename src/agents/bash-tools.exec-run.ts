@@ -2,6 +2,7 @@
  * Exec tool policy, host dispatch, and process lifecycle pipeline.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveStateDir } from "../config/paths.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import {
   type ExecHost,
@@ -13,7 +14,10 @@ import {
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
-import { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
+import {
+  rejectUnsafeExecControlShellCommand,
+  rejectUnsafeExecLiveStateSqliteShellCommand,
+} from "../infra/exec-control-command-guard.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -387,6 +391,12 @@ export function createExecTool(
         scriptPreflightCwd = workdirResolution.hostCwd;
       } else {
         workdir = workdirResolution.remoteCwd;
+      }
+      if (host === "gateway" && workdir) {
+        await rejectUnsafeExecLiveStateSqliteShellCommand(params.command, {
+          stateDir: resolveStateDir(),
+          workdir,
+        });
       }
       let run: ExecProcessHandle;
       let backgroundTask: BackgroundExecTaskHandle | null = null;

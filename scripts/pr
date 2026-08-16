@@ -153,8 +153,9 @@ is_supervised_pr_process() {
 
 if [ "${1-}" = "gc" ] || is_locked_pr_command "${1-}"; then
   if is_supervised_pr_process; then
-    # Do not leak the one-shot marker to tools or nested wrapper calls.
-    unset OPENCLAW_PR_DEDICATED_PROCESS_GROUP
+    # operation-lock.sh consumes the one-shot marker when it installs the
+    # leader-only completion trap, before PR command tools can inherit it.
+    :
   else
     unset OPENCLAW_PR_DEDICATED_PROCESS_GROUP
     unset OPENCLAW_PR_LOCK_NOTIFY_FD

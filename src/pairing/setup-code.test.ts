@@ -8,15 +8,16 @@ import {
 import { captureEnv } from "../test-utils/env.js";
 
 vi.mock("../infra/device-bootstrap.js", () => ({
-  issueDeviceBootstrapToken: vi.fn(async () => ({
+  issueDevicePairSetupBootstrapToken: vi.fn(async () => ({
     token: "bootstrap-123",
     expiresAtMs: 123,
+    setupId: "setup-123",
   })),
 }));
 
 const { decodePairingSetupCode, encodePairingSetupCode, resolvePairingSetupFromConfig } =
   await import("./setup-code.js");
-const { issueDeviceBootstrapToken: issueDeviceBootstrapTokenMock } =
+const { issueDevicePairSetupBootstrapToken: issueDevicePairSetupBootstrapTokenMock } =
   await import("../infra/device-bootstrap.js");
 
 describe("pairing setup code", () => {
@@ -163,7 +164,9 @@ describe("pairing setup code", () => {
     }
     expect(resolved.authLabel).toBe(params.authLabel);
     expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
-    expect(issueDeviceBootstrapTokenMock).toHaveBeenCalledWith({
+    expect(resolved.setupId).toBe("setup-123");
+    expect(resolved.expiresAtMs).toBe(123);
+    expect(issueDevicePairSetupBootstrapTokenMock).toHaveBeenCalledWith({
       baseDir: undefined,
       profile: params.bootstrapProfile ?? {
         roles: ["node", "operator"],
@@ -178,6 +181,8 @@ describe("pairing setup code", () => {
         purpose: "mobile-full",
       },
     });
+    expect(resolved.payload).not.toHaveProperty("setupId");
+    expect(resolved.payload).toHaveProperty("expiresAtMs", 123);
     if (params.url) {
       expect(resolved.payload.url).toBe(params.url);
     }
@@ -279,7 +284,7 @@ describe("pairing setup code", () => {
   });
 
   beforeEach(() => {
-    vi.mocked(issueDeviceBootstrapTokenMock).mockClear();
+    vi.mocked(issueDevicePairSetupBootstrapTokenMock).mockClear();
   });
 
   afterEach(() => {
@@ -381,7 +386,7 @@ describe("pairing setup code", () => {
       },
       expectedError: "Configured gateway.remote.url is invalid.",
     });
-    expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
+    expect(issueDevicePairSetupBootstrapTokenMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -402,7 +407,7 @@ describe("pairing setup code", () => {
       },
       expectedError: "Configured publicUrl is invalid.",
     });
-    expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
+    expect(issueDevicePairSetupBootstrapTokenMock).not.toHaveBeenCalled();
   });
 
   async function resolveCustomGatewaySetup(params: {

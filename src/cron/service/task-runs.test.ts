@@ -50,7 +50,7 @@ describe("cron task run terminal records", () => {
       "agent:ops:cron:default-owner:run:1500",
     );
     expect(() => resolveMainSessionCronRunSessionKey(job, 1_500, undefined)).toThrow(
-      "Cron job has no agent id and no configured default was provided.",
+      "Pass --agent <id>",
     );
   });
 
@@ -164,9 +164,21 @@ describe("cron task run terminal records", () => {
         tryFinishCronTaskRunWithoutHistory(state, {
           taskRunId: runIds[0],
           status: "skipped",
+          error: "cron: job execution timed out",
           endedAt: 1_501,
         });
         expect(childSessionKey(systemEventJob)).toBeUndefined();
+        expect(
+          listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
+            runtime: "cron",
+            sourceId: systemEventJob.id,
+          }),
+        ).toEqual([
+          expect.objectContaining({
+            status: "failed",
+            error: "cron: job execution timed out",
+          }),
+        ]);
       },
     );
   });
@@ -429,7 +441,7 @@ describe("cron task run terminal records", () => {
             action: "finished",
             job,
             status: "skipped",
-            error: "trigger condition not met",
+            error: "cron: job execution timed out",
             runId: "manual:skipped-job:1",
             runAtMs: startedAt,
             durationMs: 0,
@@ -446,10 +458,10 @@ describe("cron task run terminal records", () => {
           runtime: "cron",
           sourceId: job.id,
           agentId: "finn",
-          status: "succeeded",
+          status: "failed",
           startedAt,
           endedAt: startedAt,
-          error: "trigger condition not met",
+          error: "cron: job execution timed out",
           detail: {
             kind: "cron-run",
             status: "skipped",
@@ -782,7 +794,9 @@ describe("cron task run terminal records", () => {
     "cron: isolated agent setup timed out before runner start (last phase: preparing)",
     "cron: isolated agent run stalled before execution start",
     "cron: isolated agent run stalled before execution start (last phase: preparing)",
-  ])("preserves %j as a provisional timed-out task", async (error) => {
+    Object.assign(new Error(), { name: "AbortError" }),
+  ])("preserves a provisional timed-out task for case %#", async (input) => {
+    const expected = input instanceof Error ? timeoutErrorMessage() : input;
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-provisional-watchdog-timeout-" },
       async () => {
@@ -817,7 +831,7 @@ describe("cron task run terminal records", () => {
         tryFinishCronTaskRunWithoutHistory(state, {
           taskRunId,
           status: "error",
-          error,
+          error: input,
           endedAt: startedAt + 100,
         });
 
@@ -829,7 +843,7 @@ describe("cron task run terminal records", () => {
         ).toEqual([
           expect.objectContaining({
             status: "timed_out",
-            error,
+            error: expected,
             endedAt: startedAt + 100,
           }),
         ]);

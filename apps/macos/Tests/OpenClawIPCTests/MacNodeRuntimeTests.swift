@@ -6,6 +6,41 @@ import Testing
 @testable import OpenClaw
 
 struct MacNodeRuntimeTests {
+    private actor ComputerProviderWorkerProbe: MacNodeHostWorking {
+        private let commands: Set<String>
+        private(set) var invokedCommands: [String] = []
+
+        init(commands: Set<String>) {
+            self.commands = commands
+        }
+
+        func start(launch _: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest {
+            MacNodeHostManifest(
+                version: "test",
+                caps: ["screen", "computer"],
+                commands: Array(self.commands),
+                pathEnv: "/usr/bin:/bin")
+        }
+
+        func supports(_ command: String) -> Bool {
+            self.commands.contains(command)
+        }
+
+        func invoke(_ request: BridgeInvokeRequest) -> BridgeInvokeResponse {
+            self.invokedCommands.append(request.command)
+            return BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: #"{"owner":"worker"}"#)
+        }
+
+        func handleInput(invokeId _: String, seq _: Int, payloadJSON _: String) {}
+        func cancel(invokeId _: String) {}
+        func setRoute(_: GatewayNodeSessionRoute?, authorityGeneration _: UInt64) -> Bool {
+            true
+        }
+
+        func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) {}
+        func stop() {}
+    }
+
     private final class LockedCounter: @unchecked Sendable {
         private let lock = NSLock()
         private var count = 0
@@ -625,6 +660,68 @@ struct MacNodeRuntimeTests {
         #expect(result.cursorX == 12)
     }
 
+    @Test func `provider selection owns both snapshot and action without cross-provider fallback`() async throws {
+        let commands: Set<String> = [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue]
+        let cuaWorker = ComputerProviderWorkerProbe(commands: commands)
+        let cuaServices = await MainActor.run { MainActorServicesProbe() }
+        let cuaRuntime = MacNodeRuntime(
+            nodeHostWorker: cuaWorker,
+            makeMainActorServices: { cuaServices },
+            computerControlEnabled: { true },
+            computerControlProvider: { .cua })
+        let action = OpenClawComputerActParams(action: .leftClick, x: 12, y: 34, refWidth: 1280)
+
+        #expect(await (self.invoke(
+            cuaRuntime,
+            "cua-snapshot",
+            MacNodeScreenCommand.snapshot.rawValue)).ok)
+        #expect(try await (self.invoke(
+            cuaRuntime,
+            "cua-action",
+            OpenClawComputerCommand.act.rawValue,
+            params: action)).ok)
+        #expect(await cuaWorker.invokedCommands == [
+            MacNodeScreenCommand.snapshot.rawValue,
+            OpenClawComputerCommand.act.rawValue,
+        ])
+        #expect(await MainActor.run { cuaServices.snapshotCallCount == 0 && cuaServices.performCallCount == 0 })
+
+        let peekabooWorker = ComputerProviderWorkerProbe(commands: commands)
+        let peekabooServices = await MainActor.run { MainActorServicesProbe() }
+        let peekabooRuntime = MacNodeRuntime(
+            nodeHostWorker: peekabooWorker,
+            makeMainActorServices: { peekabooServices },
+            computerControlEnabled: { true },
+            computerControlProvider: { .peekaboo })
+        #expect(await (self.invoke(
+            peekabooRuntime,
+            "peekaboo-snapshot",
+            MacNodeScreenCommand.snapshot.rawValue)).ok)
+        #expect(try await (self.invoke(
+            peekabooRuntime,
+            "peekaboo-action",
+            OpenClawComputerCommand.act.rawValue,
+            params: action)).ok)
+        #expect(await peekabooWorker.invokedCommands.isEmpty)
+        #expect(await MainActor.run {
+            peekabooServices.snapshotCallCount == 1 && peekabooServices.performCallCount == 1
+        })
+
+        let unavailableWorker = ComputerProviderWorkerProbe(commands: [])
+        let unavailableServices = await MainActor.run { MainActorServicesProbe() }
+        let unavailableRuntime = MacNodeRuntime(
+            nodeHostWorker: unavailableWorker,
+            makeMainActorServices: { unavailableServices },
+            computerControlEnabled: { true },
+            computerControlProvider: { .cua })
+        let unavailable = await self.invoke(
+            unavailableRuntime,
+            "cua-unavailable",
+            MacNodeScreenCommand.snapshot.rawValue)
+        #expect(!unavailable.ok)
+        #expect(await MainActor.run { unavailableServices.snapshotCallCount == 0 })
+    }
+
     @Test func `concurrent invokes share one main actor services initialization`() async throws {
         let services = await MainActor.run { MainActorServicesProbe() }
         let factoryGate = AsyncTestGate()
@@ -733,7 +830,7 @@ struct MacNodeRuntimeTests {
 
         #expect(!response.ok)
         #expect(response.error?.code == .unavailable)
-        #expect(response.error?.message.contains("lifecycle changed") == true)
+        #expect(response.error?.message.contains("COMPUTER_STALE_OBSERVATION") == true)
         #expect(generations.perform == [0])
         #expect(generations.release == [1])
     }

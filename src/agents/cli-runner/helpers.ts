@@ -34,6 +34,7 @@ import {
   detectAndLoadPromptImages,
   detectImageReferences,
 } from "../embedded-agent-runner/run/images.js";
+import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import type { AgentTool } from "../runtime/index.js";
 import { detectRuntimeShell } from "../shell-utils.js";
@@ -393,6 +394,7 @@ export async function prepareCliPromptImagePayload(params: {
   localRoots?: readonly string[];
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  mediaImageLayout?: MediaImageLayout;
   media?: MediaFact[];
 }): Promise<{
   prompt: string;
@@ -404,6 +406,7 @@ export async function prepareCliPromptImagePayload(params: {
   const needsHydration =
     params.imagePrompt !== undefined ||
     Boolean(params.media?.length) ||
+    Boolean(params.mediaImageLayout) ||
     (!params.images?.length && detectImageReferences(imagePrompt).length > 0);
   const imageResult = needsHydration
     ? await detectAndLoadPromptImages({
@@ -413,6 +416,7 @@ export async function prepareCliPromptImagePayload(params: {
         model: { input: ["text", "image"] },
         existingImages: params.images,
         imageOrder: params.imageOrder,
+        mediaImageLayout: params.mediaImageLayout,
         maxBytes: MAX_IMAGE_BYTES,
         localRoots: params.localRoots,
       })

@@ -296,6 +296,9 @@ the shared outbound loader. Hosted media capacity defaults to
 `overflowPolicy: "evict-oldest"` for compatibility. Use `"reject-new"` when
 issued URLs must remain valid until expiry, and configure both backing keyed
 stores with `"reject-new"` so independent writers cannot evict live rows.
+Use `validateBeforePersist` to inspect the guarded loader's exact bytes and
+metadata when a transport must reject a payload class. Treat its buffer as
+read-only and throw to reject before capability creation or any store write.
 Authenticate bearer requests with `readMetadata(...)` before calling `read(...)`
 so invalid tokens and `HEAD` requests do not hydrate stored media chunks.
 

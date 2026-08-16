@@ -5,6 +5,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
+import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
@@ -20,6 +21,8 @@ import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 
 export type CompactEmbeddedAgentSessionParams = {
+  /** Explicit session owner captured before fallback agent resolution. */
+  contextEngineAgentId?: string;
   sessionId: string;
   runId?: string;
   sessionKey?: string;
@@ -91,6 +94,12 @@ export type CompactEmbeddedAgentSessionParams = {
   contextEngineRuntimeContext?: ContextEngineRuntimeContext;
   /** Session-pinned embedded harness id. Prevents compaction hot-switching. */
   agentHarnessId?: string;
+  /** Resumable native CLI session targeted by an explicit manual compaction. */
+  cliSessionId?: string;
+  /** Complete persisted CLI binding targeted by an explicit manual compaction. */
+  cliSessionBinding?: CliSessionBinding;
+  /** Owning session facts required for placement and runtime preparation. */
+  sessionEntry?: SessionEntry;
   /** Prevent compaction from changing the persisted session runtime or model. */
   modelSelectionLocked?: boolean;
   /** OpenClaw-owned runtime policy prepared for this compaction path. */

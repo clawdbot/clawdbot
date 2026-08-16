@@ -11,7 +11,7 @@ import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
 import {
-  loadExecApprovals,
+  loadExecApprovalsReadOnly,
   resolveExecApprovalsDisplayPath,
   type ExecAsk,
   type ExecMode,
@@ -88,7 +88,7 @@ function execAskRank(value: ExecAsk): number {
 
 function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
-  const approvals = loadExecApprovals();
+  const approvals = loadExecApprovalsReadOnly();
   const defaultRequestedSecuritySource = "OpenClaw default (full)";
   const defaultRequestedAskSource = "OpenClaw default (off)";
 

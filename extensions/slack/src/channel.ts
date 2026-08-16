@@ -254,8 +254,6 @@ function withSlackSendOverride(params: {
   deps?: { [channelId: string]: unknown } | null;
   send: SlackSendFn;
   tokenOverride?: string;
-  deliveryQueueId?: string;
-  onPlatformSendDispatch?: () => Promise<void>;
 }) {
   return {
     ...params.deps,
@@ -267,10 +265,6 @@ function withSlackSendOverride(params: {
       await params.send(to, text, {
         ...opts,
         ...(params.tokenOverride ? { token: params.tokenOverride } : {}),
-        ...(params.deliveryQueueId ? { deliveryQueueId: params.deliveryQueueId } : {}),
-        ...(params.onPlatformSendDispatch
-          ? { onPlatformSendDispatch: params.onPlatformSendDispatch }
-          : {}),
       }),
   };
 }
@@ -531,7 +525,6 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
       replyToId: threadTsValue,
       threadId: null,
       deliveryQueueId: undefined,
-      onPlatformSendDispatch: undefined,
       deps: withSlackSendOverride({
         deps: ctx.deps,
         send,
@@ -554,14 +547,10 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
       to,
       replyToId: threadTsValue,
       threadId: null,
-      deliveryQueueId: undefined,
-      onPlatformSendDispatch: undefined,
       deps: withSlackSendOverride({
         deps: ctx.deps,
         send,
         tokenOverride,
-        deliveryQueueId: ctx.deliveryQueueId,
-        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
       }),
     });
   },
@@ -581,12 +570,10 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
       replyToId: threadTsValue,
       threadId: null,
       deliveryQueueId: undefined,
-      onPlatformSendDispatch: undefined,
       deps: withSlackSendOverride({
         deps: ctx.deps,
         send,
         tokenOverride,
-        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
       }),
     });
   },

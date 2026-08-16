@@ -296,7 +296,12 @@ export async function runPluginsInstallAction(
     "install command",
     async () => {
       const { runPluginInstallCommand } = await import("./plugins-install-command.js");
-      await runPluginInstallCommand({ raw, opts, invalidateRuntimeCache: false });
+      await runPluginInstallCommand({
+        raw,
+        opts,
+        allowInstallPolicyWarningPrompt: true,
+        invalidateRuntimeCache: false,
+      });
     },
     { command: "install" },
   );

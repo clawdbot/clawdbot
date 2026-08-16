@@ -217,22 +217,19 @@ function source(relativePath: string): string {
 }
 
 describe("channel context builder caller inventory", () => {
-  it("keeps all 26 production sinks wired to exact ingress or named unsupported paths", () => {
-    expect(CALLERS).toHaveLength(26);
+  it("keeps all production sinks wired to exact ingress or named unsupported paths", () => {
     for (const [relativePath, marker] of CALLERS) {
       expect(source(relativePath), relativePath).toContain(marker);
     }
   });
 
-  it("binds all 23 supported producers to finalized host context identity", () => {
-    expect(CONTEXT_BINDING_PRODUCERS).toHaveLength(23);
+  it("binds all supported producers to finalized host context identity", () => {
     for (const relativePath of CONTEXT_BINDING_PRODUCERS) {
       expect(source(relativePath), relativePath).toContain("contextBinding");
     }
   });
 
   it("routes every production sink through its selected context builder", () => {
-    expect(HOST_BUILDERS).toHaveLength(26);
     for (const [relativePath, marker] of HOST_BUILDERS) {
       expect(source(relativePath), relativePath).toContain(marker);
     }

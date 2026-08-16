@@ -22,14 +22,15 @@ import {
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
-import "../../components/session-menu.ts";
 import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
+import "../../components/session-menu.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
 import { openEditor } from "../../lib/editor-links.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
@@ -100,7 +101,7 @@ type SessionsPageMutationResult = "completed" | "failed" | "stale";
 /** Type-only, so the dialog itself stays behind its lazy boundary. */
 type InputDialogOpener = (typeof import("../../components/input-dialog.ts"))["showInputDialog"];
 
-type SessionDeleteRow = Pick<GatewaySessionRow, "key" | "archived">;
+type SessionDeleteRow = Pick<GatewaySessionRow, "key" | "archived" | "sessionId">;
 
 class SessionsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -274,7 +275,7 @@ class SessionsPage extends OpenClawLightDomElement {
       this.transcriptSearch = result ? { status: "results", ...result } : { status: "idle" };
     },
     onError: (error) => {
-      this.transcriptSearch = { status: "error", message: String(error) };
+      this.transcriptSearch = { status: "error", message: formatUiError(error) };
     },
   });
 
@@ -298,7 +299,7 @@ class SessionsPage extends OpenClawLightDomElement {
       if (sessionKey) {
         this.checkpointErrorByKey = {
           ...this.checkpointErrorByKey,
-          [sessionKey]: String(error),
+          [sessionKey]: formatUiError(error),
         };
       }
     },
@@ -608,7 +609,7 @@ class SessionsPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (requestId === this.sessionRequestId && this.isRequestScopeCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     } finally {
       if (requestId === this.sessionRequestId && this.isRequestScopeCurrent(scope)) {
@@ -780,6 +781,7 @@ class SessionsPage extends OpenClawLightDomElement {
       key: row.key,
       agentId: this.sessionAgentId(row.key, scope.context),
       ...options,
+      ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
       ...(row.archived === true ? { archivedOnly: true } : {}),
     }));
     for (const params of requests) {
@@ -847,11 +849,11 @@ class SessionsPage extends OpenClawLightDomElement {
         }
       }
       if (result.errors.length > 0) {
-        this.error = result.errors.join("; ");
+        this.error = formatUiExternalText(result.errors.join("; "));
       }
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     } finally {
       if (this.isRequestScopeCurrent(scope)) {
@@ -894,7 +896,7 @@ class SessionsPage extends OpenClawLightDomElement {
       rows = listed;
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
       return;
     }
@@ -973,7 +975,7 @@ class SessionsPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     } finally {
       if (this.isRequestScopeCurrent(scope)) {
@@ -1063,7 +1065,7 @@ class SessionsPage extends OpenClawLightDomElement {
     try {
       return (await import("../../components/input-dialog.ts")).showInputDialog;
     } catch (error) {
-      this.error = String(error);
+      this.error = formatUiError(error);
       return null;
     }
   }
@@ -1144,7 +1146,10 @@ class SessionsPage extends OpenClawLightDomElement {
     expectedSessionId?: string,
   ): Promise<SessionsPageMutationResult> {
     if (!scope) {
-      return "stale";
+      // Nothing was attempted (e.g. rename dialog submitted after the gateway
+      // dropped); say so instead of silently swallowing the edit.
+      this.error = t("sessionsView.actionRequiresConnection");
+      return "failed";
     }
     if (typeof patch.archived === "boolean" && !expectedSessionId?.trim()) {
       this.error = "Session lifecycle action requires a durable session identity.";
@@ -1177,7 +1182,7 @@ class SessionsPage extends OpenClawLightDomElement {
       return "completed";
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
         return "failed";
       }
       return "stale";
@@ -1193,26 +1198,25 @@ class SessionsPage extends OpenClawLightDomElement {
     if (result !== "completed" || !this.isRequestScopeCurrent(scope)) {
       return;
     }
+    // Undo is captured before showing the toast: the toast host outlives this
+    // page, so the action must run against the shared mutations store (which
+    // fails closed on connection replacement) rather than page scope — a
+    // page-scope check would silently no-op after navigating away.
+    const agentId = this.sessionAgentId(row.key, scope.context);
     showToast({
       message: t("sessionsView.sessionArchived"),
       actionLabel: t("common.undo"),
       onAction: () => {
-        void (async () => {
-          if (!this.isRequestScopeCurrent(scope)) {
-            return;
-          }
-          await this.patchSession(
-            row.key,
-            { archived: false, ...(row.pinned === true ? { pinned: true } : {}) },
-            scope,
-            row.sessionId,
-          );
-        })();
+        void scope.sessions.patch(
+          row.key,
+          { archived: false, ...(row.pinned === true ? { pinned: true } : {}) },
+          { agentId, expectedSessionId: row.sessionId },
+        );
       },
     });
   }
 
-  private async forkSession(key: string) {
+  private async forkSession(key: string, fromLastCompleted = false) {
     const scope = this.captureRequestScope();
     if (!scope) {
       return;
@@ -1221,6 +1225,7 @@ class SessionsPage extends OpenClawLightDomElement {
     const createParams = {
       parentSessionKey: key,
       fork: true,
+      ...(fromLastCompleted ? { forkFrom: "last-completed" as const } : {}),
       ...(agentId ? { agentId } : {}),
     };
     if (!this.requireMutationAccess(scope, { method: "sessions.create", params: createParams })) {
@@ -1246,7 +1251,7 @@ class SessionsPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     }
   }
@@ -1281,6 +1286,12 @@ class SessionsPage extends OpenClawLightDomElement {
   private async loadCheckpoint(sessionKey: string) {
     const scope = this.captureRequestScope();
     if (!scope) {
+      // Rows stay expandable while disconnected; without an error the drawer
+      // would claim "No checkpoints" beside a nonzero checkpoint badge.
+      this.checkpointErrorByKey = {
+        ...this.checkpointErrorByKey,
+        [sessionKey]: t("sessionsView.actionRequiresConnection"),
+      };
       return;
     }
     this.checkpointTaskKey = sessionKey;
@@ -1335,7 +1346,7 @@ class SessionsPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     } finally {
       if (this.isRequestScopeCurrent(scope) && this.checkpointBusyKey === checkpointId) {
@@ -1372,7 +1383,7 @@ class SessionsPage extends OpenClawLightDomElement {
       });
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     } finally {
       if (this.isRequestScopeCurrent(scope) && this.checkpointBusyKey === checkpointId) {
@@ -1478,6 +1489,7 @@ class SessionsPage extends OpenClawLightDomElement {
           unread: row.unread === true,
           archived: row.archived === true,
           category: normalizeOptionalString(row.category) ?? null,
+          icon: normalizeOptionalString(row.icon) ?? null,
         }}
         .anchor=${menu}
         .trigger=${this.sessionMenuTrigger}
@@ -1488,6 +1500,7 @@ class SessionsPage extends OpenClawLightDomElement {
           cloudWorkerStopAction,
         })}
         .forkDisabled=${row.modelSelectionLocked === true}
+        .forkFromLastCompleted=${row.hasActiveRun === true}
         .archiveAllowed=${archiveAllowed}
         .deleteAllowed=${deleteAllowed}
         .cloudWorkerStopAllowed=${cloudWorkerStopAllowed}
@@ -1517,8 +1530,11 @@ class SessionsPage extends OpenClawLightDomElement {
             case "rename":
               void this.renameSession(row);
               break;
+            case "set-icon":
+              void this.patchSession(row.key, { icon: action.icon });
+              break;
             case "fork":
-              void this.forkSession(row.key);
+              void this.forkSession(row.key, row.hasActiveRun === true);
               break;
             case "workboard":
               void this.addToWorkboard(row);
@@ -1745,7 +1761,7 @@ class SessionsPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     }
   }

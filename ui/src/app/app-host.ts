@@ -64,7 +64,6 @@ import {
   COMMAND_PALETTE_ELEMENT,
   CUSTODIAN_PANEL_ELEMENT,
   DESKTOP_PANEL_ELEMENT,
-  DEVICE_PAIR_SETUP_ELEMENT,
   EXEC_APPROVAL_ELEMENT,
   preloadOptionalElement,
   TERMINAL_PANEL_ELEMENT,
@@ -135,7 +134,6 @@ class OpenClawShell
   readonly browserPanelElement = BROWSER_PANEL_ELEMENT;
   readonly desktopPanelElement = DESKTOP_PANEL_ELEMENT;
   readonly custodianPanelElement = CUSTODIAN_PANEL_ELEMENT;
-  readonly devicePairSetupElement = DEVICE_PAIR_SETUP_ELEMENT;
   readonly execApprovalElement = EXEC_APPROVAL_ELEMENT;
   @query("openclaw-command-palette") commandPalette: CommandPaletteElement | undefined;
   @query("openclaw-exec-approval")
@@ -180,6 +178,33 @@ class OpenClawShell
   criticalNoticeRuntime: Promise<
     typeof import("../pages/chat/critical-observer-notice.runtime.ts")
   > | null = null;
+  // Lazy for the same reason: the pairing modal is opened from Settings, not at
+  // boot, so its template, icons, and strings stay off the startup chunk.
+  @state() devicePairSetupRenderer:
+    | typeof import("../pages/devices/view-pairing.runtime.ts").renderDevicePairSetup
+    | null = null;
+  // A rejected chunk must stay visible: the overlay is already open, so the
+  // shell renders a recoverable failure instead of an empty dialog frame.
+  @state() devicePairSetupLoadFailed = false;
+  private devicePairSetupRuntime: Promise<unknown> | null = null;
+
+  loadDevicePairSetupRenderer(): void {
+    this.devicePairSetupRuntime ??= import("../pages/devices/view-pairing.runtime.ts")
+      .then((module) => {
+        this.devicePairSetupRenderer = module.renderDevicePairSetup;
+        this.devicePairSetupLoadFailed = false;
+      })
+      .catch(() => {
+        // Clearing the promise is what makes the retry below able to refetch.
+        this.devicePairSetupLoadFailed = true;
+        this.devicePairSetupRuntime = null;
+      });
+  }
+
+  retryDevicePairSetupRenderer(): void {
+    this.devicePairSetupLoadFailed = false;
+    this.loadDevicePairSetupRenderer();
+  }
   private readonly subscriptions = new SubscriptionsController(this);
   private readonly shellNavigation = new ShellNavigationOwner(this);
   private readonly shellWorkboard = new ShellWorkboardOwner(this);
@@ -546,9 +571,6 @@ class OpenClawShell
     }
     if ((context.overlays?.snapshot.approvalQueue.length ?? 0) > 0) {
       preloadOptionalElement(this, this.execApprovalElement);
-    }
-    if (context.overlays?.snapshot.devicePairSetupOpen) {
-      preloadOptionalElement(this, this.devicePairSetupElement);
     }
     const navState = {
       collapsed: this.nativeNavCollapsed(),

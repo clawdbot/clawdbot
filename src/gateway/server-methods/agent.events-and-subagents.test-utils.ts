@@ -859,7 +859,11 @@ describe("gateway agent handler", () => {
 
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     const error = expectRespondError(respond, {});
-    expectStringFieldContains(error, "message", "requires target");
+    expect(error).toMatchObject({
+      code: ErrorCodes.INVALID_REQUEST,
+      message: expect.stringContaining("requires target"),
+    });
+    expect(error.message).not.toMatch(/^Error:/u);
   });
 
   it("preserves requested delivery when best effort has no external channel", async () => {

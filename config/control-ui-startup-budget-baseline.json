@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 330586,
-  "reason": "cumulative 2026-08-14 growth (run 31798463207 baseline) plus redacted-rename guard i18n string (#123571); CI-measured build-artifacts bytes",
-  "updatedAt": "2026-08-14"
+  "startupJsGzipBytes": 335452,
+  "reason": "chat delivery failures surface globally: toast + session-display naming joins startup chat path",
+  "updatedAt": "2026-08-16"
 }

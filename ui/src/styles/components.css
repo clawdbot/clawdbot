@@ -31,12 +31,20 @@ openclaw-session-owner-chip {
   color: white;
   font-weight: 700;
   line-height: 1;
+  transition:
+    filter var(--duration-fast) ease,
+    opacity var(--duration-fast) ease;
+}
+
+.session-owner-chip--away {
+  filter: grayscale(0.8);
+  opacity: 0.45;
 }
 
 .session-owner-chip--row {
-  width: 16px;
-  height: 16px;
-  font-size: 8px;
+  width: 20px;
+  height: 20px;
+  font-size: 10px;
 }
 
 .session-owner-chip--header {
@@ -57,9 +65,16 @@ openclaw-session-owner-chip {
 .session-glyph {
   position: relative;
   display: inline-flex;
-  width: 16px;
-  height: 16px;
-  flex: 0 0 16px;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+}
+
+.session-glyph--circular .session-glyph__content {
+  width: 20px;
+  height: 20px;
 }
 
 .session-glyph__content {
@@ -71,9 +86,25 @@ openclaw-session-owner-chip {
   transition: transform var(--duration-fast) ease;
 }
 
+.session-glyph__emoji {
+  font-size: 15px;
+  line-height: 1;
+}
+
+.session-glyph__icon,
+.session-glyph__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.session-glyph__icon {
+  display: inline-flex;
+  color: inherit;
+}
+
 /* The ring is a circle, so square artwork (page icons, thumbnails, arbitrary
-   SVGs) must shrink to keep its corners inside it. Circular avatars already
-   fit. A 16px square scaled below 0.75 clears the ring's 17px inner circle. */
+   SVGs) must shrink to keep its corners inside it. A 16px square scaled below
+   0.75 clears its 21px inner circle; 20px circular avatars fill their lead. */
 .session-glyph--running .session-glyph__content {
   transform: scale(0.72);
 }
@@ -734,7 +765,9 @@ openclaw-github-link-hovercard-provider {
   box-shadow: var(--shadow-lg);
   color: var(--text);
   font-family: var(--font-body);
-  pointer-events: none;
+  /* Interactive by design: hover intent and text selection both need the card to
+     receive pointer events (see github-link-hovercard.runtime.ts). */
+  pointer-events: auto;
   opacity: 0;
   transform: translateY(-5px) scale(0.99);
   transform-origin: bottom left;
@@ -797,11 +830,23 @@ openclaw-github-link-hovercard-provider {
   box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 14%, transparent);
 }
 
+/* The repo reference, author and files chip are links too, but the title owns
+   the card's only underline; the rest stay text until hovered or focused. */
 .github-link-hovercard__repo {
   min-width: 0;
+  color: inherit;
   overflow: hidden;
+  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.github-link-hovercard__repo:hover,
+.github-link-hovercard__repo:focus-visible,
+.github-link-hovercard__author:hover,
+.github-link-hovercard__author:focus-visible {
+  color: var(--text-strong);
+  text-decoration: none;
 }
 
 .github-link-hovercard__time {
@@ -811,6 +856,7 @@ openclaw-github-link-hovercard-provider {
 }
 
 .github-link-hovercard__title {
+  display: block;
   margin: 15px 0 17px;
   color: var(--text-strong);
   font-size: var(--control-ui-text-lg);
@@ -818,6 +864,12 @@ openclaw-github-link-hovercard-provider {
   letter-spacing: -0.012em;
   line-height: 1.35;
   overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.github-link-hovercard__title:hover,
+.github-link-hovercard__title:focus-visible {
+  text-decoration: underline;
 }
 
 .github-link-hovercard__footer {
@@ -837,6 +889,7 @@ openclaw-github-link-hovercard-provider {
   color: var(--muted);
   font-size: var(--control-ui-text-md);
   overflow: hidden;
+  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -865,6 +918,17 @@ openclaw-github-link-hovercard-provider {
   font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.github-link-hovercard__metric--files {
+  text-decoration: none;
+}
+
+.github-link-hovercard__metric--files:hover,
+.github-link-hovercard__metric--files:focus-visible {
+  background: var(--bg-muted);
+  color: var(--text-strong);
+  text-decoration: none;
 }
 
 .github-link-hovercard__metric--additions {
@@ -1392,6 +1456,43 @@ openclaw-github-link-hovercard-provider {
   stroke-linejoin: round;
 }
 
+.scope-upgrade-chip-row {
+  display: flex;
+  min-height: 30px;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.scope-upgrade-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 5px 11px;
+  border: 1px solid color-mix(in srgb, var(--warn) 32%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warn) 9%, var(--bg-elevated));
+  color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.scope-upgrade-chip:hover {
+  background: color-mix(in srgb, var(--warn) 14%, var(--bg-elevated));
+}
+
+.scope-upgrade-chip:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.scope-upgrade-chip__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
 .callout.danger {
   border-color: color-mix(in srgb, var(--danger) 34%, var(--border));
   background: linear-gradient(
@@ -1614,6 +1715,16 @@ openclaw-chat-session-rail {
   box-shadow: none;
   backdrop-filter: none;
   animation: none;
+}
+
+.chat-session-rail--embedded {
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
 }
 
 .chat-session-rail__header {
@@ -1867,16 +1978,6 @@ openclaw-chat-session-rail {
   align-items: flex-start;
   gap: 6px;
   padding: 0 14px 10px;
-}
-
-/* Centred in the thread's empty space, both axes: margin auto claims the free
-   vertical room inside the flex column. */
-.chat-session-rail__empty {
-  margin: auto 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.45;
-  text-align: center;
 }
 
 .chat-session-rail__starter {
@@ -2798,7 +2899,7 @@ td.data-table-key-col {
 }
 
 .chat-queue__item--steered {
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  background: var(--info-subtle);
 }
 
 /* The edited row keeps its slot so the operator can see where the corrected
@@ -2883,6 +2984,10 @@ td.data-table-key-col {
   color: var(--danger);
 }
 
+.chat-queue__item--steered .chat-queue__icon {
+  color: var(--info);
+}
+
 /* Reconnect rows mirror the connection pill's amber status dot so the queue
    reads as quiet auto-retry status, not a failure needing action. */
 .chat-queue__dot {
@@ -2914,8 +3019,8 @@ td.data-table-key-col {
 }
 
 .chat-queue__badge--steered {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
+  background: color-mix(in srgb, var(--info) 16%, transparent);
+  color: var(--info);
 }
 
 .chat-queue__item--failed .chat-queue__badge {
@@ -5334,6 +5439,53 @@ td.data-table-key-col {
   text-align: center;
 }
 
+.device-pair-setup__state {
+  display: grid;
+  min-height: 250px;
+  align-content: center;
+  justify-items: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.device-pair-setup__state-icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  background: var(--bg-elevated);
+  color: var(--muted);
+}
+
+.device-pair-setup__state-icon--success {
+  border-color: color-mix(in srgb, var(--ok) 32%, var(--border));
+  background: color-mix(in srgb, var(--ok) 10%, var(--bg-elevated));
+  color: var(--ok);
+}
+
+.device-pair-setup__state-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.device-pair-setup__state h3 {
+  margin: 2px 0 0;
+  color: var(--text-strong);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.3;
+  text-wrap: balance;
+}
+
+.device-pair-setup__state p {
+  margin: -6px 0 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .device-pair-setup__footer {
   display: flex;
   align-items: center;
@@ -5345,11 +5497,32 @@ td.data-table-key-col {
 }
 
 .device-pair-setup__footer a {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 4px;
+  border-radius: 4px;
   color: var(--muted);
+  text-underline-offset: 2px;
 }
 
 .device-pair-setup__footer a:hover {
   color: var(--text);
+}
+
+.device-pair-setup__footer a:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  color: var(--text);
+}
+
+.device-pair-setup__external-icon {
+  display: inline-flex;
+}
+
+.device-pair-setup__external-icon svg {
+  width: 14px;
+  height: 14px;
 }
 
 @media (max-width: 640px) {
@@ -5372,6 +5545,10 @@ td.data-table-key-col {
 
   .device-pair-setup__access {
     grid-template-columns: 1fr;
+  }
+
+  .device-pair-setup__footer a {
+    min-height: 44px;
   }
 }
 
@@ -5521,18 +5698,10 @@ td.data-table-key-col {
   color: var(--accent);
 }
 
-.session-row-badge--approval,
-.session-approval-badge {
+.session-row-badge--approval {
   display: inline-flex;
   align-items: center;
   color: var(--warn);
-}
-
-.session-approval-badge svg {
-  width: 13px;
-  height: 13px;
-  stroke: currentColor;
-  fill: none;
 }
 
 .session-row-badge--cloud[data-placement-state="failed"] {
@@ -5680,7 +5849,7 @@ td.data-table-key-col {
 
 .session-run-spinner,
 .session-glyph__ring {
-  animation: session-run-spin 0.8s linear infinite;
+  animation: session-run-spin 1.6s linear infinite;
 }
 
 @keyframes session-run-spin {

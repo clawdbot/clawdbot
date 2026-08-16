@@ -29,6 +29,11 @@ export type CreateOpenClawToolsOptions = {
   agentChannel?: string;
   runId?: string;
   agentAccountId?: string;
+  gatewayCallerChannel?: string | null;
+  /** True only for explicit server-authored local scheduled provenance. */
+  gatewayCallerLocal?: boolean;
+  /** True only for a validated scheduled tool policy. */
+  gatewayCallerScheduled?: boolean;
   /** Delivery target for topic/thread routing. */
   agentTo?: string;
   /** Thread/topic identifier for routing replies to the originating thread. */
@@ -73,6 +78,8 @@ export type CreateOpenClawToolsOptions = {
   sameChannelThreadRequired?: boolean;
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
   computerContextEpoch?: { value: number };
+  /** Registers run-owned cleanup for tools that hold node resources. */
+  registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
   /** Internal review-run restrictions and proposal provenance. */
   skillWorkshop?: SkillWorkshopRunOptions;
   /** If true, nodes action="invoke" can call media-returning commands directly. */

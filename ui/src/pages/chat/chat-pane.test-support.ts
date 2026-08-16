@@ -40,6 +40,8 @@ export type TestChatPane = HTMLElement & {
   applyGatewaySnapshot: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void;
   connectedCallback: () => void;
   connectionGeneration: number;
+  catalogLoadGeneration: number;
+  continueCatalogSession: (key: CatalogSessionKey) => Promise<void>;
   createSession: () => Promise<boolean>;
   recoverSession: () => Promise<boolean>;
   restartRecoveryComposerBanner: () =>

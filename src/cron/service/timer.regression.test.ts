@@ -14,7 +14,7 @@ import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake-contracts.js";
 import {
   HEARTBEAT_IDLE_RETRY_GRACE_MS,
-  HEARTBEAT_SKIP_LANES_BUSY,
+  HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   HEARTBEAT_SKIP_PREEMPTED,
 } from "../../infra/heartbeat-wake.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -1410,7 +1410,7 @@ describe("cron service timer regressions", () => {
       );
 
       now = scheduledAt + 2_000;
-      heartbeatResult.resolve({ status: "skipped", reason: HEARTBEAT_SKIP_LANES_BUSY });
+      heartbeatResult.resolve({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
       await vi.advanceTimersByTimeAsync(0);
       await timerPromise;
 
@@ -1593,7 +1593,7 @@ describe("cron service timer regressions", () => {
       expect(isCronJobActive(cronJob.id)).toBe(true);
 
       now = scheduledAt + 2_000;
-      heartbeatResult.resolve({ status: "skipped", reason: HEARTBEAT_SKIP_LANES_BUSY });
+      heartbeatResult.resolve({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
       await vi.advanceTimersByTimeAsync(0);
       await timerPromise;
 
@@ -1784,7 +1784,7 @@ describe("cron service timer regressions", () => {
     };
     const runHeartbeatOnce = vi
       .fn<() => Promise<HeartbeatRunResult>>()
-      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_LANES_BUSY })
+      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT })
       .mockResolvedValueOnce({ status: "ran", durationMs: 12 });
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
@@ -2822,7 +2822,7 @@ describe("cron service timer regressions", () => {
       outcome: "skip",
       status: "skipped",
       error: "agent skipped after removal",
-      taskStatus: "succeeded",
+      taskStatus: "failed",
     },
   ] as const)(
     "finalizes a removed job's $outcome outcome in operator history",

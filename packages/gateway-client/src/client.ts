@@ -258,6 +258,7 @@ export type GatewayClientOptions = {
   clientName?: GatewayClientName;
   clientDisplayName?: string;
   clientVersion?: string;
+  clientBuildId?: string;
   platform?: string;
   deviceFamily?: string;
   mode?: GatewayClientMode;
@@ -266,6 +267,7 @@ export type GatewayClientOptions = {
   caps?: string[];
   commands?: string[];
   computerUse?: ConnectParams["computerUse"];
+  /** @deprecated Compatibility for the shipped v1 node-host connect envelope. */
   workerRuns?: ConnectParams["workerRuns"];
   permissions?: Record<string, boolean>;
   pathEnv?: string;
@@ -464,6 +466,7 @@ export class GatewayClient {
     caps: string[];
     commands: string[];
     computerUse?: ConnectParams["computerUse"];
+    /** @deprecated Compatibility for the shipped v1 node-host connect envelope. */
     workerRuns?: ConnectParams["workerRuns"];
   }): void {
     this.opts = {
@@ -760,6 +763,7 @@ export class GatewayClient {
           id: clientId,
           displayName: this.opts.clientDisplayName,
           version: this.opts.clientVersion ?? DEFAULT_CLIENT_VERSION,
+          buildId: this.opts.clientBuildId,
           platform,
           deviceFamily,
           mode: clientMode,

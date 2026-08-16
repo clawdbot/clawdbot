@@ -56,6 +56,28 @@ describe("sessionsCommand", () => {
     );
   });
 
+  it("shows recorded totals without a percentage when freshness provenance is missing", async () => {
+    // Regression: sessions rendered `unknown/... (?%)` for totals `status`
+    // still displayed, because the table dropped non-fresh recorded totals.
+    const store = await writeStore({
+      "agent:main:+15555550123": {
+        sessionId: "abc123",
+        updatedAt: Date.now() - 45 * 60_000,
+        totalTokens: 2000,
+        totalTokensFresh: true,
+        model: "test:opus",
+      },
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+
+    cleanupStore(store);
+
+    const row = logs.find((line) => line.includes("agent:main:+15555550123")) ?? "";
+    expect(row).toContain("2.0k/32k (?%)");
+  });
+
   it("renders the agent runtime in the tabular view", async () => {
     setMockSessionsConfig(() => ({
       agents: {
@@ -148,6 +170,36 @@ describe("sessionsCommand", () => {
     expect(row).toContain("think:high");
   });
 
+  it("sanitizes persisted identifiers only for terminal output", async () => {
+    const key = "agent:main:\u001B[31mpeer\nrow";
+    const sessionId = "session-\u001B[31mid\r\nforged-id";
+    const model = "model-\u001B]0;session-model\u0007🦞\tvariant";
+    const store = await writeStore({
+      [key]: {
+        sessionId,
+        updatedAt: Date.now() - 60_000,
+        model,
+      },
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+
+    const textOutput = logs.join("\n");
+    expect(textOutput).not.toContain("\u001B");
+    expect(textOutput).not.toContain("\nrow");
+    expect(textOutput).toContain("peer\\nrow");
+    expect(textOutput).toContain("\\r\\nforged-id");
+    expect(textOutput).toContain("🦞\\tvariant");
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{ key: string; sessionId?: string; model?: string }>;
+    }>(sessionsCommand, store);
+    cleanupStore(store);
+
+    expect(payload.sessions?.[0]).toMatchObject({ key, sessionId, model });
+  });
+
   it("exports freshness metadata in JSON output", async () => {
     const store = await writeStore({
       "agent:main:main": {
@@ -203,6 +255,21 @@ describe("sessionsCommand", () => {
     expect(payload.sessions?.find((row) => row.key === "agent:main:main")).not.toHaveProperty(
       "sessionFile",
     );
+  });
+
+  it("reports an existing empty SQLite store as an empty successful list", async () => {
+    const store = await writeStore({}, "sessions-empty");
+    const { runtime, logs, errors } = makeRuntime();
+
+    await sessionsCommand({ store }, runtime);
+    cleanupStore(store);
+
+    expect(errors).toEqual([]);
+    expect(logs).toEqual([
+      expect.stringContaining(`Session store: ${store}`),
+      expect.stringContaining("Sessions listed: 0"),
+      "No sessions found.",
+    ]);
   });
 
   it("exports subagent lineage metadata in JSON output", async () => {

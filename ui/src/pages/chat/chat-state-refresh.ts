@@ -1,12 +1,13 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
-import { loadChatHistory, type ChatMetadataResult, type ChatState } from "./chat-history.ts";
+import { loadChatHistory, type ChatMetadataResult } from "./chat-history.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
 import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -241,7 +242,7 @@ export async function refreshChatMetadata(
   const request = { host, client, agentId, version: requestVersion };
   host.chatModelsLoading = true;
   try {
-    if (isGatewayMethodAdvertised(host as unknown as ChatState, "chat.metadata") === false) {
+    if (isGatewayMethodAdvertised(host, "chat.metadata") === false) {
       await refreshMissingChatMetadata(request, EMPTY_CHAT_METADATA_APPLY_RESULT, opts);
       return EMPTY_CHAT_METADATA_APPLY_RESULT;
     }
@@ -288,7 +289,7 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
       return;
     }
     host.modelAuthStatusResult = { ts: 0, providers: [] };
-    host.modelAuthStatusError = err instanceof Error ? err.message : String(err);
+    host.modelAuthStatusError = formatUiError(err);
   }
 }
 
@@ -320,7 +321,7 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
     if (ownsRequest()) {
       // Keep the startup/prepared snapshot usable while making the failed
       // discovery and its retry path visible in the open picker.
-      host.chatModelCatalogError = error instanceof Error ? error.message : String(error);
+      host.chatModelCatalogError = formatUiError(error);
     }
   } finally {
     if (ownsRequest()) {
@@ -341,7 +342,7 @@ async function refreshChat(
   const refreshedAgentId = resolveAgentIdForSession(host);
   const requestUpdate = () => host.requestUpdate?.();
   const previousSessionsResult = host.sessionsResult;
-  const historyLoad = loadChatHistory(host as unknown as ChatState, {
+  const historyLoad = loadChatHistory(host, {
     deferBranches: opts?.deferBranches === true,
     startup: opts?.startup === true,
   });
@@ -442,7 +443,7 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
     opts?.startup &&
     host.client &&
     host.connected &&
-    isGatewayMethodAdvertised(host as unknown as ChatState, "chat.startup") !== false,
+    isGatewayMethodAdvertised(host, "chat.startup") !== false,
   );
   const startupMetadataRequestVersion = ownsStartupMetadata
     ? ++host.chatMetadataRequestVersion

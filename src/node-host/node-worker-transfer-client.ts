@@ -2,10 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import http, { type ClientRequest, type IncomingMessage } from "node:http";
-import https from "node:https";
+import type { ClientRequest, IncomingMessage } from "node:http";
 import path from "node:path";
-import type { TLSSocket } from "node:tls";
 import {
   MAX_WORKSPACE_MANIFEST_BYTES,
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
@@ -15,7 +13,6 @@ import { workerWorkspaceTransferPaths } from "../gateway/worker-environments/wor
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { tempWorkspace } from "../infra/private-temp-workspace.js";
-import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import {
@@ -26,132 +23,15 @@ import {
   nodeWorkspaceTransferReconcilePath,
   type NodeWorkerWorkspaceTransferInput,
 } from "../worker/node-workspace-transfer-protocol.js";
+import {
+  NodeWorkerTransferHttpError,
+  openNodeWorkerTransferHttpRequest,
+  type NodeWorkerTransferHttpRequest,
+} from "./node-worker-transfer-http.js";
 
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const TRANSFER_RESULT_MAX_BYTES = 64 * 1024;
-const validatedTlsSocketPins = new WeakMap<TLSSocket, string>();
 const transferLog = createSubsystemLogger("node-host/worker-workspace");
-
-function transferUrl(gatewayUrl: string, routePath: string): URL {
-  const gateway = new URL(gatewayUrl);
-  if (gateway.protocol !== "ws:" && gateway.protocol !== "wss:") {
-    throw new Error("workspace transfer gateway must use WebSocket transport");
-  }
-  const url = new URL(gateway.toString());
-  url.protocol = gateway.protocol === "wss:" ? "https:" : "http:";
-  const basePath = gateway.pathname.replace(/\/$/u, "");
-  url.pathname = `${basePath}${routePath}`;
-  url.search = "";
-  url.hash = "";
-  if (url.host !== gateway.host) {
-    throw new Error("workspace transfer endpoint must stay on the connected gateway host");
-  }
-  return url;
-}
-
-function waitForTlsPin(request: ClientRequest, expectedRaw?: string): Promise<void> {
-  if (!expectedRaw?.trim()) {
-    return Promise.resolve();
-  }
-  const expected = normalizeFingerprint(expectedRaw);
-  if (!expected) {
-    return Promise.reject(
-      new NodeWorkerWorkspaceTransferError(
-        "workspace-transfer-failed: gateway TLS fingerprint is invalid",
-      ),
-    );
-  }
-  return new Promise<void>((resolve, reject) => {
-    let settled = false;
-    let tlsSocket: TLSSocket | undefined;
-    let fail: (error: Error) => void = () => {};
-    let verify: () => void = () => {};
-    let bindSocket: (socket: import("node:net").Socket) => void = () => {};
-    const finish = (error?: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      request.off("error", fail);
-      request.off("socket", bindSocket);
-      tlsSocket?.off("secureConnect", verify);
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-    fail = (error: Error) => finish(error);
-    request.once("error", fail);
-    bindSocket = (socket) => {
-      tlsSocket = socket as TLSSocket;
-      const validated = validatedTlsSocketPins.get(tlsSocket);
-      if (validated) {
-        finish(
-          validated === expected
-            ? undefined
-            : new NodeWorkerWorkspaceTransferError(
-                "workspace-transfer-failed: gateway TLS fingerprint mismatch",
-              ),
-        );
-        return;
-      }
-      verify = () => {
-        const actual = normalizeFingerprint(tlsSocket!.getPeerCertificate().fingerprint256 ?? "");
-        if (!actual || expected !== actual) {
-          finish(
-            new NodeWorkerWorkspaceTransferError(
-              "workspace-transfer-failed: gateway TLS fingerprint mismatch",
-            ),
-          );
-          return;
-        }
-        validatedTlsSocketPins.set(tlsSocket!, actual);
-        finish();
-      };
-      // A pooled socket was verified when its secureConnect event completed.
-      const peerFingerprint = tlsSocket.getPeerCertificate().fingerprint256;
-      if (request.reusedSocket || peerFingerprint) {
-        verify();
-      } else {
-        tlsSocket.once("secureConnect", verify);
-      }
-    };
-    request.once("socket", bindSocket);
-  });
-}
-
-async function openRequest(params: {
-  gatewayUrl: string;
-  tlsFingerprint?: string;
-  routePath: string;
-  method: "GET" | "POST";
-  token: string;
-  headers?: Record<string, string>;
-  signal?: AbortSignal;
-  writeBody?: (request: ClientRequest) => Promise<void>;
-}): Promise<IncomingMessage> {
-  const url = transferUrl(params.gatewayUrl, params.routePath);
-  const transport = url.protocol === "https:" ? https : http;
-  const request = transport.request(url, {
-    method: params.method,
-    headers: { authorization: `Bearer ${params.token}`, ...params.headers },
-    signal: params.signal,
-    ...(url.protocol === "https:" && params.tlsFingerprint ? { rejectUnauthorized: false } : {}),
-  });
-  const response = once(request, "response").then(([message]) => message as IncomingMessage);
-  const send = async () => {
-    if (url.protocol === "https:") {
-      await waitForTlsPin(request, params.tlsFingerprint);
-    }
-    await params.writeBody?.(request);
-    request.end();
-  };
-  void send().catch((error: unknown) =>
-    request.destroy(error instanceof Error ? error : new Error(String(error))),
-  );
-  return await response;
-}
 
 async function readResponseBody(response: IncomingMessage, maxBytes: number): Promise<Buffer> {
   const chunks: Buffer[] = [];
@@ -183,19 +63,19 @@ async function requireOk(response: IncomingMessage): Promise<void> {
   );
 }
 
-async function downloadBuffer(params: Parameters<typeof openRequest>[0], maxBytes: number) {
-  const response = await openRequest(params);
+async function downloadBuffer(params: NodeWorkerTransferHttpRequest, maxBytes: number) {
+  const response = await openNodeWorkerTransferHttpRequest(params);
   await requireOk(response);
   return await readResponseBody(response, maxBytes);
 }
 
 async function downloadFile(params: {
-  request: Parameters<typeof openRequest>[0];
+  request: NodeWorkerTransferHttpRequest;
   destination: string;
   expectedBytes?: number;
   expectedSha256?: string;
 }): Promise<void> {
-  const response = await openRequest(params.request);
+  const response = await openNodeWorkerTransferHttpRequest(params.request);
   await requireOk(response);
   const output = fs.createWriteStream(params.destination, { flags: "wx", mode: 0o600 });
   const hash = createHash("sha256");
@@ -364,7 +244,7 @@ async function initializeGitWorkspace(params: {
 
 const workspaceTransferQueues = new Map<string, Promise<void>>();
 
-async function serializeWorkspaceTransfer<T>(
+export async function serializeNodeWorkerWorkspace<T>(
   workspaceDir: string,
   operation: () => Promise<T>,
 ): Promise<T> {
@@ -650,7 +530,7 @@ async function uploadWorkspace(params: {
     baseBytes.byteLength +
     manifestBytes.byteLength +
     files.reduce((total, entry) => total + 8 + entry.size, 0);
-  const response = await openRequest({
+  const response = await openNodeWorkerTransferHttpRequest({
     gatewayUrl: params.gatewayUrl,
     tlsFingerprint: params.tlsFingerprint,
     routePath: nodeWorkspaceTransferReconcilePath(
@@ -699,23 +579,35 @@ export async function runNodeWorkerWorkspaceTransfer(params: {
   signal?: AbortSignal;
 }): Promise<string> {
   try {
-    return await serializeWorkspaceTransfer(params.workspaceDir, async () => {
-      await recoverWorkspaceReplacement(params.workspaceDir);
-      return params.transfer.direction === "download"
-        ? await downloadWorkspace({
-            ...params,
-            tlsFingerprint: params.gatewayTlsFingerprint,
-            transfer: params.transfer,
-          })
-        : await uploadWorkspace({
-            ...params,
-            tlsFingerprint: params.gatewayTlsFingerprint,
-            transfer: params.transfer,
-          });
-    });
+    await recoverWorkspaceReplacement(params.workspaceDir);
+    return params.transfer.direction === "download"
+      ? await downloadWorkspace({
+          ...params,
+          tlsFingerprint: params.gatewayTlsFingerprint,
+          transfer: params.transfer,
+        })
+      : await uploadWorkspace({
+          ...params,
+          tlsFingerprint: params.gatewayTlsFingerprint,
+          transfer: params.transfer,
+        });
   } catch (error) {
     if (error instanceof NodeWorkerWorkspaceTransferError) {
       throw error;
+    }
+    if (error instanceof NodeWorkerTransferHttpError) {
+      if (error.reason === "tls-fingerprint-mismatch") {
+        throw new NodeWorkerWorkspaceTransferError(
+          "workspace-transfer-failed: gateway TLS fingerprint mismatch",
+          { cause: error },
+        );
+      }
+      if (error.reason === "invalid-tls-fingerprint") {
+        throw new NodeWorkerWorkspaceTransferError(
+          "workspace-transfer-failed: gateway TLS fingerprint is invalid",
+          { cause: error },
+        );
+      }
     }
     throw new NodeWorkerWorkspaceTransferError(
       "workspace-transfer-failed: transfer did not complete",

@@ -9,6 +9,7 @@ import {
   validateAuditListParams,
   validateAuditRunInspectParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { findAuditActivityFilterConflict } from "../../../packages/gateway-protocol/src/schema/audit-activity.js";
 import { parsePositiveAuditCursor } from "../../audit/audit-cursor.js";
 import { listAuditEvents } from "../../audit/audit-event-store.js";
 import type {
@@ -116,6 +117,19 @@ export const auditHandlers: GatewayRequestHandlers = {
     if (
       !assertValidParams(params, validateAuditActivityListParams, "audit.activity.list", respond)
     ) {
+      return;
+    }
+    const filterConflict = findAuditActivityFilterConflict(params);
+    if (filterConflict) {
+      const detail =
+        filterConflict.type === "kind"
+          ? `${filterConflict.field} only applies to kind ${filterConflict.supportedKinds.join(" or ")}`
+          : `${filterConflict.field} cannot be combined with ${filterConflict.conflictingField}`;
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `invalid audit.activity.list filters: ${detail}`),
+      );
       return;
     }
     const parsed = invalidRangeOrCursor(params);

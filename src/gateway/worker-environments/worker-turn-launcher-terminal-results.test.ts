@@ -28,7 +28,7 @@ describe("worker turn launcher terminal results", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
 
-  it("retains a cloud result when reconciliation fails after worker finishing", async () => {
+  it("requests immediate recovery when reconciliation fails after worker finishing", async () => {
     seedActivePlacement();
     const destroy = vi.fn(async () => attachedEnvironment());
     const tunnelFailure = new NodeWorkerWorkspaceTransferError(
@@ -88,7 +88,18 @@ describe("worker turn launcher terminal results", () => {
       startTunnel: vi.fn(async () => tunnel),
       destroy,
     };
-    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    const recoverPendingWorkspaceResult = vi.fn(async () => {
+      const [pending] = placements.listPendingWorkspaceResults();
+      if (!pending) {
+        throw new Error("expected pending workspace result");
+      }
+      placements.failWorkspaceResultAndReleaseTurn(pending, tunnelFailure);
+    });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments,
+      placements,
+      recoverPendingWorkspaceResult,
+    });
 
     await expect(
       provider.executeTurn(
@@ -106,11 +117,9 @@ describe("worker turn launcher terminal results", () => {
         "Cloud worker finished, but its workspace result could not be reconciled: workspace-transfer-failed: gateway TLS fingerprint mismatch",
     });
 
-    expect(placements.get(SESSION_ID)).toMatchObject({
-      state: "active",
-      turnClaim: { runId: "run-reconcile-tunnel-loss" },
-    });
-    expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+    expect(recoverPendingWorkspaceResult).toHaveBeenCalledWith(ENVIRONMENT_ID);
+    expect(placements.get(SESSION_ID)).toMatchObject({ state: "failed", turnClaim: null });
+    expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
     expect(destroy).not.toHaveBeenCalled();
   });
 

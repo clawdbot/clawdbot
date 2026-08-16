@@ -95,14 +95,14 @@ describe("system-cli", () => {
       name: "invalid wake mode",
       args: ["system", "event", "--text", "hello", "--mode", "later", "--json"],
       gatewayResult: undefined,
-      expectedError: "Error: --mode must be now or next-heartbeat",
+      expectedError: "--mode must be now or next-heartbeat",
       gatewayCalls: 0,
     },
     {
       name: "rejected Gateway call",
       args: ["system", "event", "--text", "hello", "--json"],
       gatewayResult: { ok: false, reason: "unwakeable-session-key" },
-      expectedError: "Error: unwakeable-session-key",
+      expectedError: "unwakeable-session-key",
       gatewayCalls: 1,
     },
   ])(
@@ -121,6 +121,28 @@ describe("system-cli", () => {
       expect(callGatewayFromCli).toHaveBeenCalledTimes(gatewayCalls);
     },
   );
+
+  it.each([
+    { mode: "human", args: ["system", "event", "--text", "hello"] },
+    { mode: "JSON", args: ["system", "event", "--text", "hello", "--json"] },
+  ])("renders named errors without class names in $mode mode", async ({ mode, args }) => {
+    const error = new Error("Multiple agents are configured, but this operation has no owner.");
+    error.name = "AgentSelectionRequiredError";
+    callGatewayFromCli.mockRejectedValueOnce(error);
+
+    await runCli(args);
+
+    if (mode === "JSON") {
+      const payload = JSON.parse(runtimeLogs.at(-1) ?? "");
+      expect(payload).toEqual({ error: error.message });
+      expect(runtimeErrors).toEqual([]);
+    } else {
+      expect(runtimeErrors).toEqual([error.message]);
+      expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    }
+    expect([...runtimeLogs, ...runtimeErrors].join("\n")).not.toContain(error.name);
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
 
   it("forwards --session-key on system event", async () => {
     await runCli([
@@ -171,7 +193,7 @@ describe("system-cli", () => {
     expect(typeof gatewayOptions).toBe("object");
     expect(params).toBeUndefined();
     expect(requestOptions).toEqual({ expectFinal: false });
-    const expectedError = "Error: Gateway unavailable";
+    const expectedError = "Gateway unavailable";
     expect(runtimeLogs).toEqual([JSON.stringify({ error: expectedError }, null, 2)]);
     expect(runtimeErrors).toEqual([]);
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ error: expectedError });

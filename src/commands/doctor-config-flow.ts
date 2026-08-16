@@ -95,20 +95,32 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
   return Object.keys(channels).filter((channelId) => channelId !== "defaults");
 }
 
-// Past-tense "Removed X" lines must not appear under a "Doctor changes" panel
-// when the run did not write to disk; retitle to signal the preview state.
-function emitDoctorChangesPanel(
-  changeLines: ReadonlyArray<string>,
-  shouldRepair: boolean,
-  options: { sanitize?: boolean } = {},
-): void {
-  if (changeLines.length === 0) {
-    return;
-  }
-  const body = changeLines.join("\n");
-  const message = options.sanitize ? sanitizeDoctorNote(body) : body;
-  const title = shouldRepair ? "Doctor changes" : "Doctor changes preview";
-  note(message, title);
+// Repair-mode "Doctor changes" panels queue until the final candidate passes the
+// same validation the atomic writer enforces: printing "Doctor changes" and then
+// refusing the write would report repairs that never reached disk. Preview
+// panels print immediately — they promise nothing.
+type DoctorChangesPanelSink = {
+  emit: (changeLines: ReadonlyArray<string>, options?: { sanitize?: boolean }) => void;
+  drain: () => string[];
+};
+
+function createDoctorChangesPanelSink(shouldRepair: boolean): DoctorChangesPanelSink {
+  const pending: string[] = [];
+  return {
+    emit: (changeLines, options = {}) => {
+      if (changeLines.length === 0) {
+        return;
+      }
+      const body = changeLines.join("\n");
+      const message = options.sanitize ? sanitizeDoctorNote(body) : body;
+      if (shouldRepair) {
+        pending.push(message);
+        return;
+      }
+      note(message, "Doctor changes preview");
+    },
+    drain: () => pending.splice(0),
+  };
 }
 
 async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
@@ -189,15 +201,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let shouldRepairCronCodexModelRefsAfterConfigWrite = false;
   let openAICodexAuthProfileIdMap: ReadonlyMap<string, string> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
+  const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
   const applyConfigMutation = (
     mutation: DoctorConfigMutationResult & { warnings?: string[] },
     options: { fixHint: string; sanitize?: boolean; emitWarnings?: boolean },
   ): void => {
-    emitDoctorChangesPanel(
-      mutation.changes,
-      shouldRepair,
-      options.sanitize ? { sanitize: true } : {},
-    );
+    changesPanelSink.emit(mutation.changes, options.sanitize ? { sanitize: true } : {});
     if (options.emitWarnings && mutation.warnings?.length) {
       emitDoctorNotes({ note, warningNotes: mutation.warnings });
     }
@@ -238,7 +247,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
   if (snapshot.exists && rosterMigrationNeeded && !includeOwnsRoster) {
     // Runtime roster normalization is read-only; doctor --fix owns persistence.
-    const migrated = migratePersistedImplicitMainRoster(state.candidate).config as OpenClawConfig;
+    // Persist the legacy owner's workspace in doctor's canonical candidate. The writer may run
+    // again after health repairs, when the retired owner marker is no longer available to recover it.
+    const migrated = migratePersistedImplicitMainRoster(state.candidate, {
+      materializeWorkspace: true,
+    }).config as OpenClawConfig;
     const migratedRoster = readAgentRosterProperty(migrated);
     const migratedEntries = migratedRoster?.kind === "entries" ? migratedRoster.value : undefined;
     const { list: _legacyList, ...candidateAgents } = migrated.agents ?? {};
@@ -333,7 +346,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   if (legacyIssueLines.length > 0) {
     note(legacyIssueLines.join("\n"), "Legacy config keys detected");
   }
-  emitDoctorChangesPanel(legacyStep.changeLines, shouldRepair);
+  changesPanelSink.emit(legacyStep.changeLines);
   const hookTransformsDirWarnings = collectInvalidHookTransformsDirWarnings(
     state.cfg,
     snapshot.path,
@@ -478,11 +491,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     if (repairSequence.authProfilesRepaired) {
       await refreshGatewayAuthStateAfterAuthProfileRepair();
     }
+    // Committed side-effect repairs (SQLite/filesystem) already happened; report now.
+    // Candidate-config mutations stay queued until the atomic write commits.
     emitDoctorNotes({
       note,
       changeNotes: repairSequence.changeNotes,
       warningNotes: repairSequence.warningNotes,
     });
+    for (const configChange of repairSequence.configChangeNotes ?? []) {
+      changesPanelSink.emit([configChange]);
+    }
   } else {
     const { collectDoctorPreviewNotes } = await import("./doctor/shared/preview-warnings.js");
     const collectPreviewNotes = async () =>
@@ -525,8 +543,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const lines = [
       ...unknownStep.removed.map((pathLocal) => `- ${pathLocal}`),
       ...unknownStep.repairs.map((change) => `- ${change}`),
-    ].join("\n");
-    note(lines, shouldRepair ? "Doctor changes" : "Unknown config keys");
+    ];
+    if (shouldRepair) {
+      changesPanelSink.emit(lines);
+    } else {
+      note(lines.join("\n"), "Unknown config keys");
+    }
   }
   if (unknownStep.warnings.length > 0) {
     note(unknownStep.warnings.join("\n"), "Doctor warnings");
@@ -575,10 +597,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   noteSandboxOriginProxyWarning(cfg);
   noteMcpOriginWarning(cfg);
 
+  // Queued repair panels describe candidate mutations; the write runner prints
+  // them as "Doctor changes" only after the atomic write commits. A blocked
+  // write drops them — its blocking note already states nothing was changed.
+  const pendingChangePanels = changesPanelSink.drain();
+
   return {
     cfg,
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig,
+    ...(shouldWriteConfig && pendingChangePanels.length > 0 ? { pendingChangePanels } : {}),
     sourceConfigValid: snapshot.valid,
     ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
     ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),

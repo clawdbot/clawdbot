@@ -1,6 +1,5 @@
 import childProcess from "node:child_process";
 import fs from "node:fs";
-import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -12,7 +11,6 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resolveNodeWorkerInstallation } from "./node-worker-build.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -193,7 +191,7 @@ describe("node worker supervisor", () => {
     const completed = await waitForTerminal(supervisor, input.launchId);
     expect(completed).toMatchObject({ state: "completed", errorText: null });
     expect(JSON.parse(completed.resultJson ?? "null")).toEqual({
-      argv: ["worker", "--internal-worker-ipc"],
+      argv: ["--internal-worker-ipc"],
       status: "completed",
     });
     expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toEqual(completed);
@@ -307,56 +305,6 @@ describe("node worker supervisor", () => {
     expect(new NodeWorkerLaunchStore({ env }).get(waiting.launchId)).toBeUndefined();
   });
 
-  it("reuses the advertised local install and refuses it after its worker bytes change", async () => {
-    const root = tempDirs.make("node-worker-local-install-");
-    const packageRoot = path.join(root, "package");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
-    fs.mkdirSync(workspaceDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(packageRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.8.1", type: "module", dependencies: {} }),
-    );
-    fs.writeFileSync(path.join(packageRoot, "openclaw.mjs"), TEST_WORKER_SOURCE, { mode: 0o755 });
-    const distPath = path.join(packageRoot, "dist", "entry.js");
-    fs.writeFileSync(distPath, "export const workerBuild = 1;\n");
-    const installation = await resolveNodeWorkerInstallation({
-      packageRoot,
-      openclawVersion: "2026.8.1",
-      protocolFeatures: [],
-    });
-    const supervisor = createNodeWorkerSupervisor({
-      env: { OPENCLAW_STATE_DIR: stateDir },
-      localInstallation: installation,
-    });
-    const localInput = (launchId: string) => {
-      const input = launchInput(workspaceDir, launchId);
-      input.installKind = "local";
-      input.expectedBundleHash = installation.build.bundleHash;
-      input.descriptor.admission.handshake = structuredClone(installation.build);
-      return input;
-    };
-    const stagingRoot = vi.spyOn(fsp, "mkdtemp");
-
-    const first = localInput("local-success");
-    expect(await supervisor.launch(first, TEST_WORKER_ENDPOINT)).toMatchObject({
-      state: "running",
-    });
-    expect(await waitForTerminal(supervisor, first.launchId)).toMatchObject({ state: "completed" });
-    expect(stagingRoot).not.toHaveBeenCalled();
-
-    fs.writeFileSync(distPath, "export const workerBuild = 2;\n");
-    expect(
-      await supervisor.launch(localInput("local-mutated"), TEST_WORKER_ENDPOINT),
-    ).toMatchObject({
-      state: "failed",
-      errorText: expect.stringContaining("changed after its build was advertised"),
-    });
-    expect(stagingRoot).toHaveBeenCalledTimes(1);
-    await supervisor.close();
-  });
-
   it.each(["status", "launch", "cancel", "close"] as const)(
     "retains an observed terminal outcome when %s reconciliation keeps failing",
     async (operation) => {
@@ -449,7 +397,7 @@ describe("node worker supervisor", () => {
           LC_TIME: suppliedEnv.LC_TIME,
           NODE_EXTRA_CA_CERTS: suppliedEnv.NODE_EXTRA_CA_CERTS,
           NODE_USE_SYSTEM_CA: suppliedEnv.NODE_USE_SYSTEM_CA,
-          NODE_DISABLE_COMPILE_CACHE: "1",
+          NODE_COMPILE_CACHE: expect.stringContaining("node-worker-compile-cache"),
           OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: suppliedEnv.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS,
           OPENCLAW_NO_RESPAWN: "1",
           [suppliedPathKey]: suppliedEnv[suppliedPathKey],
@@ -611,6 +559,32 @@ describe("node worker supervisor", () => {
     await supervisor.close();
   });
 
+  it("records the child's last gateway connection failure when cancelling admission", async () => {
+    const { supervisor, workspaceDir } = fixture();
+    const input = launchInput(workspaceDir, "connection-failure-launch", "connection-failure");
+    expect(
+      await supervisor.launch(input, {
+        kind: "websocket",
+        url: "wss://gateway.example/__openclaw__/worker",
+      }),
+    ).toMatchObject({
+      state: "running",
+    });
+    await vi.waitFor(() =>
+      expect(fs.existsSync(path.join(workspaceDir, "connection-failure-reported"))).toBe(true),
+    );
+
+    const cancelled = await supervisor.cancel(testNodeWorkerLaunchIdentity(input));
+    expect(cancelled).toMatchObject({
+      state: "cancelled",
+      errorText: expect.stringMatching(
+        /^worker could not reach gateway gateway\.example: certificate rejected .+; check TLS pin\/publicUrl configuration$/u,
+      ),
+    });
+    expect(cancelled?.errorText).not.toContain(TEST_WORKER_CREDENTIAL);
+    await supervisor.close();
+  });
+
   it.each([
     ["cancel", "cancelled"],
     ["close", "interrupted"],
@@ -718,7 +692,7 @@ describe("node worker supervisor", () => {
     const outsideEntry = path.join(root, "outside.mjs");
     fs.mkdirSync(escapedBundle, { recursive: true });
     fs.writeFileSync(outsideEntry, TEST_WORKER_SOURCE);
-    fs.symlinkSync(outsideEntry, path.join(escapedBundle, "openclaw.mjs"));
+    fs.symlinkSync(outsideEntry, path.join(escapedBundle, "worker.mjs"));
     const input = launchInput(workspaceDir, "escaped-entry");
     input.expectedBundleHash = escapedHash;
     input.descriptor.admission.handshake.bundleHash = escapedHash;

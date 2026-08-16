@@ -56,7 +56,6 @@ export async function recoverEmbeddedRunOverflow(
     toolResultPromptProjectionState: ToolResultPromptProjectionState;
     attemptCompactionCount: number;
     prepareCurrentTranscriptRetry: () => void;
-    prepareCompactedTranscriptRetry: () => Promise<void>;
   },
 ): Promise<EmbeddedRunOverflowRecoveryOutcome> {
   const contextOverflowError =
@@ -208,6 +207,7 @@ export async function recoverEmbeddedRunOverflow(
           runtimeSettings: compaction.runtimeSettings,
           config: runParams.config,
           agentId: input.sessionAgentId,
+          contextEngineAgentId: input.contextEngineAgentId,
         });
       }
     } catch (compactErr) {
@@ -237,7 +237,6 @@ export async function recoverEmbeddedRunOverflow(
     }
 
     if (compactResult.compacted) {
-      await input.adoptCompactionTranscript(compactResult);
       const tokensAfter = compactResult.result?.tokensAfter;
       if (typeof tokensAfter === "number" && Number.isFinite(tokensAfter) && tokensAfter >= 0) {
         input.state.lastCompactionTokensAfter = Math.floor(tokensAfter);

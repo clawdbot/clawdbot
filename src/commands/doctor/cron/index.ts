@@ -2,10 +2,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import { resolveStaticSessionMcpServerNames } from "../../../agents/agent-bundle-mcp-runtime-config.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import { resolveCodexMcpToolOverridesForAgent } from "../../../agents/cli-runner/bundle-mcp-codex.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { tryResolveCronDefaultAgentId } from "../../../cron/agent-id.js";
 import { loadCronQuarantinedJobs, resolveCronJobsStorePath } from "../../../cron/store.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
@@ -506,7 +507,10 @@ export async function maybeRepairLegacyCronStore(params: {
         const agentId =
           typeof job.agentId === "string" && job.agentId.trim()
             ? job.agentId.trim()
-            : resolveDefaultAgentId(params.cfg);
+            : tryResolveCronDefaultAgentId(params.cfg);
+        if (!agentId) {
+          return false;
+        }
         const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
         const cacheKey = `${agentId}\0${workspaceDir}`;
         let hasStaticMcp = staticMcpByAgentWorkspace.get(cacheKey);

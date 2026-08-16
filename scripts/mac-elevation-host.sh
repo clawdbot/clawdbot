@@ -166,6 +166,9 @@ verify_universal_machos() {
   done < <(find "$app" -type f -perm -111 -print0)
 }
 
+# Canonical elevation identity check: a strict superset of verify_elevation_signature in
+# codesign-mac-app.sh, and the only one that runs post-notarization and on the target Mac at install
+# time. Dropping it lets the portable installer accept an archive nobody re-verified after signing.
 verify_elevation_app() {
   local app="$1"
   [[ -d "$app" && ! -L "$app" ]] || fail "elevation app not found or symlinked: $app"
@@ -327,14 +330,16 @@ write_receipt() {
 
 package_host() {
   [[ "$(uname -s)" == 'Darwin' ]] || fail 'elevation packaging requires macOS'
-  local source_commit prefix zip_path receipt_path checksum_path notary_result
+  local source_commit prefix zip_path receipt_path checksum_path installer_path installer_checksum_path notary_result
   source_commit="$(git -C "$ROOT_DIR" rev-parse HEAD)"
   [[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || fail 'could not resolve exact source commit'
   prefix="OpenClaw-${source_commit}-stable"
   zip_path="$OUTPUT_DIR/${prefix}.zip"
   receipt_path="$OUTPUT_DIR/${prefix}.json"
   checksum_path="$zip_path.sha256"
-  for output in "$zip_path" "$receipt_path" "$checksum_path"; do
+  installer_path="$OUTPUT_DIR/${prefix}-installer.sh"
+  installer_checksum_path="$installer_path.sha256"
+  for output in "$zip_path" "$receipt_path" "$checksum_path" "$installer_path" "$installer_checksum_path"; do
     [[ ! -e "$output" ]] || fail "immutable elevation output already exists: $output"
   done
   mkdir -p "$OUTPUT_DIR"
@@ -364,8 +369,16 @@ package_host() {
   extract_archive "$tmp_zip" extracted
   [[ "$(plist_value "$extracted" OpenClawGitCommit)" == "$source_commit" ]] ||
     fail 'extracted elevation source mismatch'
-  local archive_sha notary_id main_archs helper_archs main_entitlements helper_entitlements
+  local archive_sha installer_sha committed_installer_sha notary_id
+  local main_archs helper_archs main_entitlements helper_entitlements
   archive_sha="$(shasum -a 256 "$tmp_zip" | awk '{print $1}')"
+  local tmp_installer="${installer_path}.tmp.$$"
+  cp "$ROOT_DIR/scripts/mac-elevation-host.sh" "$tmp_installer"
+  chmod 555 "$tmp_installer"
+  installer_sha="$(shasum -a 256 "$tmp_installer" | awk '{print $1}')"
+  committed_installer_sha="$(git -C "$ROOT_DIR" show "${source_commit}:scripts/mac-elevation-host.sh" | shasum -a 256 | awk '{print $1}')"
+  [[ "$installer_sha" == "$committed_installer_sha" ]] ||
+    fail 'portable installer does not match the selected source commit'
   notary_id="$(jq -r '.id // empty' "$notary_result")"
   [[ -n "$notary_id" ]] || fail 'accepted notarization id was not recorded'
   main_archs="$(lipo -archs "$extracted/Contents/MacOS/OpenClaw")"
@@ -373,9 +386,14 @@ package_host() {
   main_entitlements="$(entitlements_for "$extracted/Contents/MacOS/OpenClaw" | shasum -a 256 | awk '{print $1}')"
   helper_entitlements="$(entitlements_for "$extracted/Contents/MacOS/openclaw-mlx-tts" | shasum -a 256 | awk '{print $1}')"
   mv "$tmp_zip" "$zip_path"
+  mv "$tmp_installer" "$installer_path"
   jq -n \
     --arg archive "$(basename "$zip_path")" \
     --arg archiveSha256 "$archive_sha" \
+    --arg archiveChecksum "$(basename "$checksum_path")" \
+    --arg installer "$(basename "$installer_path")" \
+    --arg installerSha256 "$installer_sha" \
+    --arg installerChecksum "$(basename "$installer_checksum_path")" \
     --arg sourceCommit "$source_commit" \
     --arg peekabooCommit "$(plist_value "$extracted" PeekabooSourceCommit)" \
     --arg version "$version" \
@@ -388,13 +406,17 @@ package_host() {
     --arg mainEntitlementsSha256 "$main_entitlements" \
     --arg helperEntitlementsSha256 "$helper_entitlements" \
     --arg notarizationId "$notary_id" \
-    '{archive:$archive,archiveSha256:$archiveSha256,sourceCommit:$sourceCommit,peekabooCommit:$peekabooCommit,version:$version,build:$build,authority:$authority,teamIdentifier:$teamIdentifier,cdhash:$cdhash,architectures:{main:$mainArchitectures,helper:$helperArchitectures},entitlementsSha256:{main:$mainEntitlementsSha256,helper:$helperEntitlementsSha256},notarizationId:$notarizationId}' >"${receipt_path}.tmp.$$"
+    '{archive:$archive,archiveSha256:$archiveSha256,archiveChecksum:$archiveChecksum,installer:$installer,installerSha256:$installerSha256,installerChecksum:$installerChecksum,sourceCommit:$sourceCommit,peekabooCommit:$peekabooCommit,version:$version,build:$build,authority:$authority,teamIdentifier:$teamIdentifier,cdhash:$cdhash,architectures:{main:$mainArchitectures,helper:$helperArchitectures},entitlementsSha256:{main:$mainEntitlementsSha256,helper:$helperEntitlementsSha256},notarizationId:$notarizationId}' >"${receipt_path}.tmp.$$"
   chmod 444 "${receipt_path}.tmp.$$"
   mv "${receipt_path}.tmp.$$" "$receipt_path"
   printf '%s  %s\n' "$archive_sha" "$(basename "$zip_path")" >"${checksum_path}.tmp.$$"
   chmod 444 "${checksum_path}.tmp.$$"
   mv "${checksum_path}.tmp.$$" "$checksum_path"
-  printf 'Elevation archive: %s\nReceipt: %s\nSHA-256: %s\n' "$zip_path" "$receipt_path" "$archive_sha"
+  printf '%s  %s\n' "$installer_sha" "$(basename "$installer_path")" >"${installer_checksum_path}.tmp.$$"
+  chmod 444 "${installer_checksum_path}.tmp.$$"
+  mv "${installer_checksum_path}.tmp.$$" "$installer_checksum_path"
+  printf 'Elevation archive: %s\nInstaller: %s\nReceipt: %s\nArchive SHA-256: %s\nInstaller SHA-256: %s\n' \
+    "$zip_path" "$installer_path" "$receipt_path" "$archive_sha" "$installer_sha"
 }
 
 install_host() {

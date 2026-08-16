@@ -2019,6 +2019,27 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     });
   });
 
+  it("binds failed side effects to the canonical plugin tool owner", async () => {
+    const { ctx } = createTestContext();
+    const ownerKey = '["memory-lancedb","memory_store"]';
+    ctx.params.sideEffectToolOwners = new Map([["memory_store", ownerKey]]);
+
+    await executeTool(ctx, {
+      toolName: "memory_store",
+      toolCallId: "tool-memory-store-failed",
+      args: { text: "The user prefers metric units." },
+      isError: true,
+      result: { details: { status: "error", error: "429 insufficient_quota" } },
+    });
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "memory_store",
+      ownerKey,
+      mutatingAction: true,
+      actionFingerprint: expect.stringContaining(`owner=${ownerKey}|args=`),
+    });
+  });
+
   it("keeps successful mutating retries replay-invalid after an earlier tool failure", async () => {
     const { ctx } = createTestContext();
 

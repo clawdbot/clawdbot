@@ -39,7 +39,7 @@ import {
 } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { HealthSummary } from "../health/types.js";
-import { createChatRunState } from "../server-chat-state.js";
+import { createChatAbortMarker, createChatRunState } from "../server-chat-state.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
@@ -2934,7 +2934,7 @@ describe("exec approval handlers", () => {
 
   it("rejects approval registration after the owning run was aborted", async () => {
     const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
-    context.chatRunState.getOrCreate("run-aborted").abortMarker = Date.now();
+    context.chatRunState.getOrCreate("run-aborted").abortMarker = createChatAbortMarker();
 
     await requestExecApproval({
       handlers,
@@ -2984,7 +2984,8 @@ describe("exec approval handlers", () => {
       "approval-allowed-before-abort",
     );
     expect(manager.resolve("approval-allowed-before-abort", "allow-once")).toBe(true);
-    context.chatRunState.getOrCreate("run-allowed-before-abort").abortMarker = Date.now();
+    context.chatRunState.getOrCreate("run-allowed-before-abort").abortMarker =
+      createChatAbortMarker();
     await requestPromise;
 
     const waitRespond = vi.fn();
@@ -3609,8 +3610,8 @@ describe("exec approval handlers", () => {
     const pendingRecord = manager.create({ command: "echo new", host: "gateway" }, 2_000, "abcdef");
     void manager.register(pendingRecord, 2_000);
 
-    expect(manager.lookupPendingId("abc")).toEqual({ kind: "none" });
-    expect(manager.lookupPendingId("abcdef")).toEqual({ kind: "exact", id: "abcdef" });
+    expect(manager.lookupApprovalId("abc")).toEqual({ kind: "none" });
+    expect(manager.lookupApprovalId("abcdef")).toEqual({ kind: "exact", id: "abcdef" });
   });
 
   it("stores versioned system.run binding and sorted env keys on approval request", async () => {

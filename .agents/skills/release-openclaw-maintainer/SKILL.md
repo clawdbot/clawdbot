@@ -42,6 +42,8 @@ a workflow fix that the existing parent run cannot consume.
   approval for its categorized set before mutating the release branch. This
   audit is required for discovery; it does not authorize optional backports on
   an already-frozen candidate.
+- Backports are optional and operator-selected. When a backport is requested
+  without a target, use the newest open `release/` branch.
 - Versions use `YYYY.M.PATCH`, where `PATCH` is the sequential release-train number within the month, not the calendar day.
 - Choose a new beta train from stable and beta releases only. Alpha-only tags do not consume or advance the beta/stable patch number. Continue the highest existing unpublished/published beta train with the next `beta.N` when appropriate; otherwise increment the highest stable/beta patch by one and start at `beta.1`.
 - Example: after stable `2026.6.5`, the next new beta train is `2026.6.6-beta.1`, even if automated alpha-only tags such as `2026.6.10-alpha.1` exist.
@@ -1020,9 +1022,9 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
    under the active release scope lock. Freeze the result as the Code SHA.
 7. Immediately dispatch Actions > `OpenClaw Performance` from the pinned
    trusted workflow source with `target_ref=<code-sha>`, `profile=release`,
-   `repeat=3`, deep profiling
-   off, live OpenAI off, and regression failure off. Let it run in parallel
-   with Code SHA validation.
+   `repeat=3`, deep profiling off, live OpenAI off, and `fail_on_regression`
+   matching Full Release Validation's profile gate: `true` for stable,
+   `false` for beta. Let it run in parallel with Code SHA validation.
 8. Run the deterministic source preflight, then Full Release Validation against
    the exact Code SHA with
    `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH`.

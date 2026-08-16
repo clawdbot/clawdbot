@@ -44,6 +44,32 @@ vi.mock("../config/config.js", async () => {
 });
 
 describe("sandbox explain command", () => {
+  it("honors an explicit agent in an ownerless multi-agent fleet", async () => {
+    mockCfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { sandbox: { mode: "off" } },
+        list: [
+          { id: "ops", workspace: "/tmp/openclaw-ops-workspace" },
+          { id: "research", workspace: "/tmp/openclaw-research-workspace" },
+        ],
+      },
+    };
+
+    const logs: string[] = [];
+    await sandboxExplainCommand({ json: true, agent: "research" }, {
+      log: (msg: string) => logs.push(msg),
+      error: (msg: string) => logs.push(msg),
+      exit: (_code: number) => {},
+    } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+
+    const parsed = JSON.parse(logs.join(""));
+    expect(parsed.agentId).toBe("research");
+    expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(
+      path.resolve("/tmp/openclaw-research-workspace"),
+    );
+  });
+
   it("reads a missing session without creating or registering an agent database", async () => {
     await withOpenClawTestState({ label: "sandbox-explain-readonly" }, async (state) => {
       const agentDatabasePath = state.statePath(

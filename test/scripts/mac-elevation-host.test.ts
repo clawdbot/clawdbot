@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/mac-elevation-host.sh";
+const codesignScriptPath = "scripts/codesign-mac-app.sh";
 
 function writeExecutable(filePath: string, contents: string): void {
   writeFileSync(filePath, contents, "utf8");
@@ -143,16 +144,18 @@ describe("mac elevation host command contract", () => {
     expect(script).not.toContain("osascript");
   });
 
-  it("scopes prerequisites to each lifecycle command", () => {
+  it("runs a copied lifecycle installer without a source checkout", () => {
     const tempRoot = tempDirs.make("openclaw-elevation-uninstall-");
     const binDir = path.join(tempRoot, "bin");
+    const installerPath = path.join(tempRoot, "portable-installer.sh");
     mkdirSync(binDir);
+    writeExecutable(installerPath, readFileSync(scriptPath, "utf8"));
     const launchctl = path.join(binDir, "launchctl");
     writeFileSync(launchctl, "#!/bin/sh\nexit 0\n", "utf8");
     chmodSync(launchctl, 0o755);
 
-    const result = spawnSync("/bin/bash", [scriptPath, "uninstall"], {
-      cwd: process.cwd(),
+    const result = spawnSync("/bin/bash", [installerPath, "uninstall"], {
+      cwd: tempRoot,
       encoding: "utf8",
       env: {
         HOME: tempRoot,
@@ -212,11 +215,37 @@ describe("mac elevation host command contract", () => {
     expect(script).toContain("SKIP_DMG=1");
     expect(script).toContain("NOTARY_RESULT_FILE");
     expect(script).toContain("archiveSha256");
+    expect(script).toContain("archiveChecksum");
+    expect(script).toContain('installer_path="$OUTPUT_DIR/${prefix}-installer.sh"');
+    expect(script).toContain("installerSha256");
+    expect(script).toContain("installerChecksum");
+    expect(script).toContain(
+      'git -C "$ROOT_DIR" show "${source_commit}:scripts/mac-elevation-host.sh"',
+    );
+    expect(script).toContain("portable installer does not match the selected source commit");
     expect(script).toContain("notarizationId");
     expect(script).toContain("entitlementsSha256");
     expect(script).toContain("elevation archive root must contain exactly OpenClaw.app");
     expect(script).toContain("codesign --verify --strict --test-requirement='=notarized'");
     expect(script).toContain('spctl --assess --type execute "$app"');
+  });
+
+  it("keeps portable signing identity aligned with the signer", () => {
+    const portableScript = readFileSync(scriptPath, "utf8");
+    const codesignScript = readFileSync(codesignScriptPath, "utf8");
+    const constant = (source: string, name: string) =>
+      source.match(new RegExp(`^${name}="([^"]+)"$`, "m"))?.[1];
+
+    expect(
+      [
+        constant(portableScript, "EXPECTED_TEAM_ID"),
+        constant(portableScript, "EXPECTED_AUTHORITY"),
+      ],
+      "mac-elevation-host.sh is a self-contained portable installer, so its duplicated signing constants must match codesign-mac-app.sh",
+    ).toEqual([
+      constant(codesignScript, "ELEVATION_TEAM_ID"),
+      constant(codesignScript, "ELEVATION_IDENTITY"),
+    ]);
   });
 
   it.skipIf(process.platform !== "darwin")(

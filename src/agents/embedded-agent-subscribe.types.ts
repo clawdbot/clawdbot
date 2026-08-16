@@ -134,6 +134,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   builtinToolNames?: ReadonlySet<string>;
   /** Exact registered tool names whose concrete instances are safe to replay. */
   replaySafeToolNames?: ReadonlySet<string>;
+  /** Canonical owner keys for unique plugin tools that can change durable state. */
+  sideEffectToolOwners?: ReadonlyMap<string, string>;
   /**
    * Exact raw names allowed to emit local media paths for this run.
    * Includes core trusted tools plus bundled plugin tools proven from the

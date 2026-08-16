@@ -253,9 +253,7 @@ async function runSetupWizardOnce(
           }
           const latestConfig = latest.exists ? (latest.sourceConfig ?? latest.config) : {};
           if (!isDeepStrictEqual(latestConfig, expectedConfig)) {
-            throw new ConfigMutationConflictError("config changed during migration promotion", {
-              currentHash: latest.hash ?? null,
-            });
+            throw new ConfigMutationConflictError("config changed during migration promotion");
           }
           return await writeWizardConfigFile(cfg, {
             allowConfigSizeDrop: true,

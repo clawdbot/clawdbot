@@ -644,6 +644,22 @@ describe("worker environment store", () => {
     ).toThrow("owner epoch changed");
   });
 
+  it("revokes one environment credential without changing lifecycle state", () => {
+    const bootstrapping = seedBootstrapping("worker-revocation", "lease-revocation");
+    store.transition({
+      environmentId: bootstrapping.environmentId,
+      from: bootstrapping.state,
+      to: "ready",
+      patch: readyPatch(),
+    });
+    expect(store.getCredential(bootstrapping.environmentId)).toBeDefined();
+
+    store.revokeEnvironmentCredential(bootstrapping.environmentId);
+
+    expect(store.getCredential(bootstrapping.environmentId)).toBeUndefined();
+    expect(store.get(bootstrapping.environmentId)?.state).toBe("ready");
+  });
+
   it("allocates globally distinct owner epochs when a session moves environments", () => {
     const makeReady = (environmentId: string, leaseId: string) => {
       const bootstrapping = seedBootstrapping(environmentId, leaseId);

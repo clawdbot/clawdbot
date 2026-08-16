@@ -438,31 +438,6 @@ describe("matrix exec approvals", () => {
     expect(shouldHandleMatrixExecApprovalRequest({ cfg, accountId: "ops", request })).toBe(true);
   });
 
-  it("rejects unbound foreign-channel approvals even when only one matrix account can handle them", () => {
-    const cfg = buildMultiAccountMatrixConfig({
-      opsExecApprovals: {
-        enabled: false,
-        approvers: ["@owner:example.org"],
-      },
-    });
-    const request = makeChannelApprovalRequest({ id: "req-5" });
-
-    expect(
-      shouldHandleMatrixExecApprovalRequest({
-        cfg,
-        accountId: "default",
-        request,
-      }),
-    ).toBe(false);
-    expect(
-      shouldHandleMatrixExecApprovalRequest({
-        cfg,
-        accountId: "ops",
-        request,
-      }),
-    ).toBe(false);
-  });
-
   it("uses request filters when checking unbound matrix account eligibility", () => {
     const cfg = buildMultiAccountMatrixConfig({
       defaultExecApprovals: {

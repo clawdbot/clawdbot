@@ -296,7 +296,8 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 ### Local gateway health
 
 - Unless you pass `--skip-health`, onboarding waits for a reachable local gateway before exiting successfully.
-- `--install-daemon` starts the managed gateway install path first. Without it, a local gateway must already be running (for example `openclaw gateway run`).
+- `--install-daemon` starts the managed gateway install path first. With no daemon flag, a local gateway must already be running (for example `openclaw gateway run`).
+- Explicit `--skip-daemon` or `--no-install-daemon` still probes for an existing gateway. If none is listening, setup reports that the gateway was not started and exits successfully; a reachable but unhealthy gateway still fails the health check.
 - `--skip-health` skips the wait if you only want config/workspace/bootstrap writes in automation.
 - `--skip-bootstrap` sets `agents.defaults.skipBootstrap: true` and skips creating `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, and `BOOTSTRAP.md`.
 - On native Windows, `--install-daemon` tries Scheduled Tasks first and falls back to a per-user Startup-folder login item if task creation is denied.

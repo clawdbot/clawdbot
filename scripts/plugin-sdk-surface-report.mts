@@ -149,7 +149,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
   // deprecated while external harnesses migrate to required-capability V2 contracts.
   "agent-harness": 2,
-  "agent-harness-runtime": 12,
+  "agent-harness-runtime": 9,
   "command-auth": 78,
   discord: 47,
   // +4: deprecated media projection type, builder, and turn aliases.
@@ -157,17 +157,20 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-lifecycle": 23,
   // +1: shared ingress error factory projected through the deprecated message barrel.
   // +1: shared ingress retention defaults projected through the deprecated message barrel.
-  "channel-message": 131,
+  // +1: WhatsApp ack-policy bridge counted via channel-message's wildcard re-export.
+  "channel-message": 132,
+  // +2: Slack progress-draft render bridge (function + mode type).
+  "channel-outbound": 2,
+  // +2: WhatsApp ack-policy bridge (function + mode type).
+  "channel-feedback": 2,
   "channel-pairing": 0,
   "channel-policy": 7,
   "channel-send-result": 1,
   "reply-runtime": 1,
   "security-runtime": 1,
   "session-store-runtime": 4,
-  // +2: shipped Slack and Discord setup helpers retained through their package migration window.
-  "setup-runtime": 2,
+  "setup-runtime": 0,
   "reply-history": 6,
-  "messaging-targets": 12,
   "provider-auth": 19,
   "telegram-account": 3,
 } satisfies Record<string, number>);
@@ -190,7 +193,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     (realtime-voice-activation is private-local and not counted here).
       // +1: registry-bound plugin command planning and exact selected execution.
       // +1: canonical Computer Use wire contract and node-host provider seam.
-      145,
+      // -1: retire the deprecated messaging-targets subpath.
+      144,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -207,7 +211,6 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: outbound formatting capability profile.
       // +3: plugin approval reviewer-detail cap/truncator and sanitize-with-status variant.
       // +1: canonical incognito session classifier for storage-safe plugin behavior.
-      // +2: shipped Slack and Discord setup compatibility helpers.
       // +3: typed channel partial-delivery error, creator, and structural guard.
       // +1: closed attempt-terminal merge, normalization, and projection helper.
       // +3: harness-native MCP App preview helper and its runtime/catalog contracts.
@@ -273,7 +276,15 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +11: Computer Use schemas/types plus parsers, compiler, and provider registration.
       // +6: Computer Use v2 action, result, and capability contracts.
       // +1: opaque channel participant evidence preservation without mint authority.
-      4341,
+      // +6: load-only bridges for published pre-split plugin artifacts
+      //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
+      //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
+      // -1: remove the orphan diagnostic traceparent propagation export.
+      // +4: registry-owned native compaction registration contracts for Codex harnesses.
+      // -17: retire the messaging-targets subpath, embedded Pi aliases, and shipped
+      // channel setup compatibility helpers.
+      // +1: concrete plugin side-effect owner resolution for agent harness runtimes.
+      4334,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -289,7 +300,6 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: agent-harness transcript visibility projector.
       // +2: plugin approval detail truncator and sanitize-with-status variant.
       // +1: canonical incognito session classifier for storage-safe plugin behavior.
-      // +2: shipped Slack and Discord setup compatibility helpers.
       // +2: channel partial-delivery error creator and structural guard.
       // +1: harness-native MCP App preview helper.
       // +1: canonical unknown-value to Error coercion.
@@ -347,13 +357,18 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -2: retire the dead progress-draft render reader; it counted twice via
       // channel-outbound and channel-message's wildcard re-export of it.
       // +4: Computer Use wire parsers, validator compiler, and provider registration.
-      2579,
+      // +3: load-only bridges for published pre-split plugin artifacts
+      //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
+      //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
+      // -1: remove the orphan diagnostic traceparent propagation export.
+      // -12: retire the callable messaging-targets, embedded Pi, and channel setup helpers.
+      // +1: concrete plugin side-effect owner resolution for agent harness runtimes.
+      2570,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
       // +3: canonical incognito classifier projected through deprecated compatibility barrels.
-      // +2: shipped Slack and Discord setup compatibility helpers.
       // +10: named media legacy projection deprecations across public compatibility barrels.
       // +7: continuation compatibility exports retained by the deprecated infra barrel.
       // +2: channel prompt-context type and metadata builder compatibility aliases.
@@ -366,7 +381,12 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +6: source-compatible harness contracts retained during the V2 migration window.
       // +4: continuation deprecated-compat surface retained through this back-merge.
       // +4: shipped default-agent resolver projections retained during explicit-owner migration.
-      1150,
+      // +5: load-only bridges for published pre-split plugin artifacts
+      //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
+      //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
+      // -18: retire the expired August compatibility exports and messaging-targets subpath.
+      // +3: resolved-tree measurement correction for combined compatibility projections.
+      1140,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

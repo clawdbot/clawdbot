@@ -21,17 +21,14 @@ import {
   resolveContextConfigProviderForRuntime,
 } from "../../agents/openai-routing.js";
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
-import {
-  resolvePersistedSessionRuntimeId,
-  resolveSessionRuntimeOverrideForProvider,
-} from "../../agents/session-runtime-compat.js";
+import { resolveManualCompactionCliTarget } from "../../agents/session-runtime-compat.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { CommandHandler } from "./commands-types.js";
+import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
 const compactRuntimeLoader = createLazyImportLoader(() => import("./commands-compact.runtime.js"));
@@ -72,7 +69,6 @@ function formatCompactionReason(reason?: string): string | undefined {
   if (!text) {
     return undefined;
   }
-
   const classification = classifyCompactionReason(reason);
   const lower = normalizeLowercaseStringOrEmpty(reason);
   switch (classification) {
@@ -88,6 +84,14 @@ function formatCompactionReason(reason?: string): string | undefined {
     default:
       return text;
   }
+}
+
+function compactionUnavailable(reason: string, text: string): CommandHandlerResult {
+  return {
+    shouldContinue: false,
+    sessionCompaction: { compacted: false, reason },
+    reply: { text, isStatusNotice: true },
+  };
 }
 
 function resolveManualCompactContextTokenBudget(params: {
@@ -200,31 +204,17 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     );
     return { shouldContinue: false };
   }
-  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const targetSessionEntry = params.commandInvocationSignal
+    ? params.compactionSessionEntry
+    : (params.sessionStore?.[params.sessionKey] ?? params.sessionEntry);
   if (!targetSessionEntry?.sessionId) {
-    return {
-      shouldContinue: false,
-      reply: {
-        text: "⚙️ Compaction unavailable (missing session id).",
-        isStatusNotice: true,
-      },
-    };
+    return compactionUnavailable(
+      "missing session id",
+      "⚙️ Compaction unavailable (missing session id).",
+    );
   }
   const runtime = await loadCompactRuntime();
   const sessionId = targetSessionEntry.sessionId;
-  if (runtime.isEmbeddedAgentRunAbortableForCompaction(sessionId)) {
-    runtime.abortEmbeddedAgentRun(sessionId);
-    const drained = await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
-    if (!drained) {
-      return {
-        shouldContinue: false,
-        reply: {
-          text: "⚙️ Compaction unavailable: the previous run is still stopping.",
-          isStatusNotice: true,
-        },
-      };
-    }
-  }
   const sessionAgentId = params.sessionKey
     ? resolveSessionAgentId({
         sessionKey: params.sessionKey,
@@ -253,9 +243,10 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     liveContextTokens: params.contextTokens,
     persistedContextTokens: targetSessionEntry.contextTokens,
   });
-  const selectedRuntime = resolveSessionRuntimeOverrideForProvider({
+  const compactionCliTarget = resolveManualCompactionCliTarget({
     provider: params.provider,
     entry: targetSessionEntry,
+    cfg: params.cfg,
   });
   const compactionStorePath = resolveSessionStorePathForScope({
     agentId: sessionAgentId,
@@ -264,8 +255,50 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       params.storePath ??
       resolveSessionStorePathCore(params.cfg.session?.store, { agentId: sessionAgentId }),
   });
+  let expectedSession = targetSessionEntry;
+  const isCurrentSession = () =>
+    runtime.isCurrentSessionEntry({
+      agentId: sessionAgentId,
+      sessionKey: params.sessionKey,
+      storePath: compactionStorePath,
+      expected: expectedSession,
+    });
+  const authorityFailure = () => {
+    const reason = params.commandInvocationSignal?.aborted
+      ? "command invocation closed"
+      : !isCurrentSession()
+        ? "command session changed"
+        : undefined;
+    return reason
+      ? compactionUnavailable(reason, `⚙️ Compaction unavailable: ${reason}.`)
+      : undefined;
+  };
+  let failure = authorityFailure();
+  if (failure) {
+    return failure;
+  }
+  if (runtime.isEmbeddedAgentRunAbortableForCompaction(sessionId)) {
+    runtime.abortEmbeddedAgentRun(sessionId);
+    const drained = await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
+    failure = authorityFailure();
+    if (failure) {
+      return failure;
+    }
+    if (!drained) {
+      return compactionUnavailable(
+        "the previous run is still stopping",
+        "⚙️ Compaction unavailable: the previous run is still stopping.",
+      );
+    }
+  }
+  const thinkLevel = params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel());
+  failure = authorityFailure();
+  if (failure) {
+    return failure;
+  }
   const result = await runtime.compactEmbeddedAgentSession({
     abortSignal: params.opts?.abortSignal,
+    contextEngineAgentId: sessionAgentId,
     sessionId,
     sessionKey: params.sessionKey,
     sessionTarget: {
@@ -294,18 +327,17 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     skillsSnapshot: targetSessionEntry.skillsSnapshot,
     provider: params.provider,
     model: params.model,
-    authProfileId: targetSessionEntry.authProfileOverride,
+    authProfileId:
+      compactionCliTarget.cliSessionBinding?.authProfileId ??
+      targetSessionEntry.authProfileOverride,
     authProfileIdSource: resolveSessionAuthProfileOverrideSource(targetSessionEntry),
     contextTokenBudget,
-    agentHarnessId:
-      targetSessionEntry.modelSelectionLocked === true
-        ? resolvePersistedSessionRuntimeId(targetSessionEntry)
-        : (selectedRuntime ??
-          (targetSessionEntry.agentRuntimeOverride
-            ? undefined
-            : targetSessionEntry.agentHarnessId)),
+    agentHarnessId: compactionCliTarget.agentHarnessId,
+    cliSessionId: compactionCliTarget.cliSessionId,
+    cliSessionBinding: compactionCliTarget.cliSessionBinding,
+    sessionEntry: targetSessionEntry,
     modelSelectionLocked: targetSessionEntry.modelSelectionLocked === true,
-    thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
+    thinkLevel,
     bashElevated: {
       enabled: false,
       allowed: false,
@@ -319,6 +351,10 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       senderIsOwner: params.command.senderIsOwner,
     }),
   });
+  failure = authorityFailure();
+  if (failure) {
+    return failure;
+  }
 
   const tokensAfterCompaction = result.result?.tokensAfter;
   const didCompact = result.ok && result.compacted;
@@ -337,7 +373,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
         : "Compaction skipped"
       : "Compaction failed";
   if (didCompact) {
-    await runtime.incrementCompactionCount({
+    const compactionCount = await runtime.incrementCompactionCount({
       agentId: sessionAgentId,
       cfg: params.cfg,
       sessionEntry: targetSessionEntry,
@@ -347,7 +383,25 @@ export const handleCompactCommand: CommandHandler = async (params) => {
       tokensAfter: result.result?.tokensAfter,
       newSessionId: result.result?.sessionId,
       compactionKind: result.compactionKind,
+      expectedSession: targetSessionEntry,
+      authorize: () => params.commandInvocationSignal?.aborted !== true,
     });
+    if (compactionCount === undefined) {
+      return (
+        authorityFailure() ??
+        compactionUnavailable(
+          "session accounting failed",
+          "⚙️ Compaction unavailable: session accounting failed.",
+        )
+      );
+    }
+    if (result.result?.sessionId) {
+      expectedSession = { ...expectedSession, sessionId: result.result.sessionId };
+    }
+    failure = authorityFailure();
+    if (failure) {
+      return failure;
+    }
   }
   const totalTokens = didCompact
     ? tokensAfterCompaction
@@ -363,6 +417,12 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   runtime.enqueueSystemEvent(line, { sessionKey: params.sessionKey });
   return {
     shouldContinue: false,
+    sessionCompaction: {
+      compacted: didCompact,
+      reason: result.reason,
+      tokensBefore: result.result?.tokensBefore,
+      tokensAfter: tokensAfterCompaction,
+    },
     reply: {
       text: `⚙️ ${line}`,
       isStatusNotice: true,

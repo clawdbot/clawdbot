@@ -842,7 +842,6 @@ function collectBundleMcpRuntimeToolSchemaFindings(params: {
       modelId: params.modelRef.model,
     }),
     warn: () => {},
-    toolPolicyAuditLogLevel: "debug",
   });
   return collectNormalizedToolSchemaFindings({
     agentId: params.agentId,
@@ -905,7 +904,6 @@ function collectAgentRuntimeToolSchemaFindings(params: {
       modelContextWindowTokens: params.model.contextWindow,
       allowGatewaySubagentBinding: true,
       emitBeforeToolCallDiagnostics: false,
-      toolPolicyAuditLogLevel: "debug",
       ...buildInventoryContinuationToolOpts(
         params.cfg.agents?.defaults?.continuation?.enabled === true,
       ),
@@ -1058,7 +1056,6 @@ function shouldReportBundleMcpRuntimeDiagnostic(params: {
         modelId: params.modelRef.model,
       }),
       warn: () => {},
-      toolPolicyAuditLogLevel: "debug",
     }).length > 0
   );
 }

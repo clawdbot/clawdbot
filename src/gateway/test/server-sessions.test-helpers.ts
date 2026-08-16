@@ -295,7 +295,8 @@ vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   movePathToTrash: vi.fn(async () => {}),
 }));
 
-vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
+vi.mock("../../agents/agent-bundle-mcp-tools.js", async (importOriginal) => ({
+  ...(await importOriginal()),
   disposeSessionMcpRuntime: bundleMcpRuntimeMocks.disposeSessionMcpRuntime,
   disposeAllSessionMcpRuntimes: bundleMcpRuntimeMocks.disposeAllSessionMcpRuntimes,
   retireSessionMcpRuntime: bundleMcpRuntimeMocks.retireSessionMcpRuntime,
@@ -315,11 +316,13 @@ export function setupGatewaySessionsTestHarness() {
 function createGatewaySessionsTestHarness(startServer: boolean) {
   installGatewayTestHooks({ scope: "suite" });
 
+  const defaultAgentWorkspace = path.join(os.tmpdir(), "openclaw-gateway-test");
   let harness: GatewayServerHarness | undefined;
   let sharedSessionStoreDir: string | undefined;
   let sessionStoreCaseSeq = 0;
 
   beforeAll(async () => {
+    await fs.mkdir(defaultAgentWorkspace, { recursive: true });
     if (startServer) {
       const { startGatewayServerHarness } = await getGatewayServerHarnessModule();
       harness = await startGatewayServerHarness();
@@ -538,6 +541,7 @@ function createGatewaySessionsTestHarness(startServer: boolean) {
     createConfiguredGlobalAgentSessionStore,
     createSessionStoreDir,
     createSelectedGlobalSessionStore,
+    defaultAgentWorkspace,
     getHarness: requireHarness,
     openClient,
     resetConfiguredGlobalAgentSessionStore,
@@ -670,14 +674,16 @@ export function expectNoSessionQueueCleanup() {
 }
 
 type SessionsHandlers = Awaited<ReturnType<typeof getSessionsHandlers>>;
+type SessionsHandlerOptions = Parameters<SessionsHandlers[keyof SessionsHandlers]>[0];
 
 export async function directSessionReq<TPayload = unknown>(
   method: keyof SessionsHandlers,
   params: Record<string, unknown>,
   opts?: {
     context?: Record<string, unknown>;
-    client?: Parameters<SessionsHandlers[keyof SessionsHandlers]>[0]["client"];
-    isWebchatConnect?: Parameters<SessionsHandlers[keyof SessionsHandlers]>[0]["isWebchatConnect"];
+    client?: SessionsHandlerOptions["client"];
+    isWebchatConnect?: SessionsHandlerOptions["isWebchatConnect"];
+    sessionMutationAuthorization?: SessionsHandlerOptions["sessionMutationAuthorization"];
     coercePayload?: (payload: unknown) => TPayload;
   },
 ): Promise<{ ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }> {
@@ -722,6 +728,7 @@ export async function directSessionReq<TPayload = unknown>(
     } as never,
     client: opts?.client ?? null,
     isWebchatConnect: opts?.isWebchatConnect ?? (() => false),
+    sessionMutationAuthorization: opts?.sessionMutationAuthorization,
   });
   if (!result) {
     throw new Error(`${method} did not respond`);

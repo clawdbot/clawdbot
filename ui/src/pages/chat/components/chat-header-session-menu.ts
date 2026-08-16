@@ -42,6 +42,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     Record<HeaderMenuActionKind, string>
   > = {};
   @property({ attribute: false }) forkDisabled = false;
+  @property({ attribute: false }) forkFromLastCompleted = false;
   @property({ attribute: false }) archiveAllowed = false;
   @property({ attribute: false }) deleteAllowed = false;
   @property({ attribute: false }) onOpen: () => void = () => {};
@@ -251,7 +252,13 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
           title=${this.actionTitle("fork")}
         >
           <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.copy}</span>
-          <span class="session-menu__text">${t("sessionsView.forkSession")}</span>
+          <span class="session-menu__text"
+            >${t(
+              this.forkFromLastCompleted
+                ? "sessionsView.forkFromLastCompleted"
+                : "sessionsView.forkSession",
+            )}</span
+          >
           ${menuShortcutHint("f")}
         </wa-dropdown-item>
         <wa-dropdown-item

@@ -29,9 +29,13 @@ describe("Codex agent harness supports()", () => {
 
   it("publishes provider ids for lightweight auto selection", () => {
     expect(harness.autoSelection?.providerIds).toEqual(["codex", "openai"]);
+    expect(
+      (harness as typeof harness & { cloudPlacement?: { mode: "remote-exec" } }).cloudPlacement,
+    ).toEqual({ mode: "remote-exec" });
   });
 
   it("keeps computer-control denies out of the native-surface exemption", () => {
+    expect(harness.conversationToolPolicySafeDenyTools).toContain("image_generate");
     expect(harness.conversationToolPolicySafeDenyTools).not.toEqual(
       expect.arrayContaining(["browser", "computer", "mobile_ui", "nodes", "screen"]),
     );

@@ -13,6 +13,101 @@ const deadSessionScreenshotPath = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_SCR
 const deadSessionVideoDir = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_VIDEO_DIR?.trim();
 
 suite.define(() => {
+  it("fences an SW-less stale build before it can restore an ownerless terminal", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gatewayUrl = suite.server.baseUrl.replace(/^http/u, "ws");
+      await page.addInitScript((url) => {
+        (
+          window as Window & {
+            ["__OPENCLAW_NATIVE_CONTROL_AUTH__"]?: { gatewayUrl: string; token: string };
+          }
+        )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+          gatewayUrl: url,
+          token: "native-build-identity-token",
+        };
+      }, gatewayUrl);
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["terminal.open"],
+        serverBuildId: "replacement-build",
+        terminalEnabled: true,
+      });
+
+      expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
+      const firstConnect = await gateway.waitForRequest("connect");
+      expect(firstConnect.params).toMatchObject({ client: { buildId: "e2e" } });
+      await page.waitForFunction(
+        () =>
+          sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId") ===
+          "replacement-build",
+      );
+      await page.getByText("Server updated", { exact: true }).waitFor();
+
+      expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
+      expect(
+        await page.locator("openclaw-terminal-panel").evaluate((element) => {
+          return (element as HTMLElement & { available: boolean }).available;
+        }),
+      ).toBe(false);
+    });
+  });
+
+  it("keeps an independently built same-origin Control UI connected", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gatewayUrl = suite.server.baseUrl.replace(/^http/u, "ws");
+      await page.addInitScript((url) => {
+        (
+          window as Window & {
+            ["__OPENCLAW_NATIVE_CONTROL_AUTH__"]?: { gatewayUrl: string; token: string };
+          }
+        )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+          gatewayUrl: url,
+          token: "native-configured-ui-token",
+        };
+      }, gatewayUrl);
+      const gateway = await installMockGateway(page, {
+        assistantAgentId: "main",
+        controlUiBuildSource: "configured",
+        featureMethods: ["terminal.open"],
+        methodResponses: {
+          "terminal.open": {
+            agentId: "main",
+            confined: false,
+            cwd: "/workspace",
+            sessionId: "configured-ui-terminal",
+            shell: "/bin/bash",
+          },
+        },
+        serverBuildId: "independent-build",
+        serverVersion: "2026.7.20",
+        terminalEnabled: true,
+      });
+
+      expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
+      await gateway.waitForRequest("connect");
+      await page.waitForFunction(() => {
+        const panel = document.querySelector("openclaw-terminal-panel") as
+          | (HTMLElement & { available: boolean })
+          | null;
+        return panel?.available === true;
+      });
+      await page.evaluate(() => {
+        window.dispatchEvent(
+          new CustomEvent("openclaw:terminal-toggle", {
+            detail: { agentId: "main", open: true },
+          }),
+        );
+      });
+
+      const terminalOpen = await gateway.waitForRequest("terminal.open");
+      expect(terminalOpen.params).toMatchObject({ agentId: "main" });
+      expect(
+        await page.evaluate(() =>
+          sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId"),
+        ),
+      ).toBeNull();
+    });
+  });
+
   it("opens a new dock terminal for a selection changed without navigation", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -47,13 +142,26 @@ suite.define(() => {
         const panel = document.querySelector("openclaw-terminal-panel") as
           | (HTMLElement & { available: boolean })
           | null;
-        return customElements.get("openclaw-terminal-panel") !== undefined && panel?.available;
+        const shell = document.querySelector("openclaw-app-shell") as
+          | (HTMLElement & {
+              runtime?: { context?: { agentSelection?: { set: (agentId: string) => void } } };
+            })
+          | null;
+        return (
+          customElements.get("openclaw-terminal-panel") !== undefined &&
+          panel?.available &&
+          typeof shell?.runtime?.context?.agentSelection?.set === "function"
+        );
       });
       await page.evaluate(() => {
         const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
           runtime?: { context?: { agentSelection?: { set: (agentId: string) => void } } };
         };
-        shell.runtime?.context?.agentSelection?.set("research");
+        const setAgent = shell.runtime?.context?.agentSelection?.set;
+        if (!setAgent) {
+          throw new Error("Agent selection is not ready");
+        }
+        setAgent("research");
         window.dispatchEvent(
           new CustomEvent("openclaw:terminal-toggle", {
             detail: { agentId: "research", open: true },

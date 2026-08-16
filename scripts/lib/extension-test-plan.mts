@@ -89,10 +89,17 @@ const EXTENSION_TEST_COST_MULTIPLIERS: Record<string, number> = {
   // overstates its real wall-clock cost during CI shard planning.
   "test/vitest/vitest.extensions.config.ts": 1.1,
 };
-export const MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT = 40;
-export const TELEGRAM_EXTENSION_TEST_PROCESS_FILE_LIMIT = 1;
-export const TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT = 10;
+const CODEX_EXTENSION_TEST_PROCESS_FILE_LIMIT = 40;
+const MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT = 40;
+const TELEGRAM_EXTENSION_TEST_PROCESS_FILE_LIMIT = 1;
+const TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT = 10;
 const EXTENSION_TEST_PROCESS_FILE_LIMITS = new Map<string, number>([
+  [
+    "test/vitest/vitest.extension-codex.config.ts",
+    // This non-isolated fileParallelism:false lane accumulates every mocked module graph.
+    // At ~166 files, one worker exhausted its heap during teardown (#124413).
+    CODEX_EXTENSION_TEST_PROCESS_FILE_LIMIT,
+  ],
   // The non-isolated Matrix suite intentionally shares module state within a process.
   // Bound its lifetime so Vite's transformed module graph cannot grow across the whole suite.
   ["test/vitest/vitest.extension-matrix.config.ts", MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT],

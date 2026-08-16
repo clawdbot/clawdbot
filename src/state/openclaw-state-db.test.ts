@@ -721,6 +721,61 @@ function materializeCurrentStateDatabase(stateDir: string): string {
   return databasePath;
 }
 
+function downgradeWorkerPlacementsToV7(db: DatabaseSync): void {
+  const row = db
+    .prepare(
+      "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'worker_session_placements'",
+    )
+    .get() as { sql?: unknown } | undefined;
+  if (typeof row?.sql !== "string") {
+    throw new Error("missing worker_session_placements table SQL");
+  }
+  const v8LocalClaim = `(turn_claim_owner IS 'local' AND (\n      state IN ('local', 'requested', 'failed')\n      OR (state IN ('active', 'draining') AND execution_mode IS 'remote-exec')\n    ))`;
+  const v7Create = row.sql
+    .replace("CREATE TABLE worker_session_placements", "CREATE TABLE worker_session_placements_v7")
+    .replace(
+      "\n  execution_mode TEXT CHECK (execution_mode IN ('worker-turn', 'remote-exec')),",
+      "",
+    )
+    .replace(
+      v8LocalClaim,
+      `(turn_claim_owner IS 'local' AND state IN ('local', 'requested', 'failed'))`,
+    )
+    .replace("\n      AND (execution_mode IS NULL OR execution_mode IS 'worker-turn')", "");
+  if (v7Create.includes("execution_mode")) {
+    throw new Error("failed to derive v7 worker placement schema");
+  }
+  const columns = (
+    db.prepare("PRAGMA table_xinfo(worker_session_placements)").all() as Array<{
+      hidden: number;
+      name: string;
+    }>
+  )
+    .filter((column) => column.hidden === 0 && column.name !== "execution_mode")
+    .map((column) => `"${column.name}"`)
+    .join(", ");
+  db.exec("PRAGMA foreign_keys = OFF;");
+  try {
+    db.exec(`
+      BEGIN IMMEDIATE;
+      ${v7Create};
+      INSERT INTO worker_session_placements_v7 (${columns})
+        SELECT ${columns} FROM worker_session_placements;
+      DROP TABLE worker_session_placements;
+      ALTER TABLE worker_session_placements_v7 RENAME TO worker_session_placements;
+      CREATE INDEX idx_worker_session_placements_session_key
+        ON worker_session_placements(agent_id, session_key);
+      CREATE INDEX idx_worker_session_placements_reconcile
+        ON worker_session_placements(updated_at_ms, session_id);
+      PRAGMA user_version = 7;
+      UPDATE schema_meta SET schema_version = 7 WHERE meta_key = 'primary';
+      COMMIT;
+    `);
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON;");
+  }
+}
+
 function openMaterializedCurrentStateDatabase(): DatabaseSync {
   const databasePath = materializeCurrentStateDatabase(createTempStateDir());
   const { DatabaseSync } = requireNodeSqlite();
@@ -1519,6 +1574,51 @@ describe("openclaw state database", () => {
   });
 
   it.each(["runtime open", "doctor repair"] as const)(
+    "migrates v7 worker placement claims through %s without losing rows",
+    (migrationPath) => {
+      const stateDir = createTempStateDir();
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      const databasePath = materializeCurrentStateDatabase(stateDir);
+      const { DatabaseSync } = requireNodeSqlite();
+      const legacy = new DatabaseSync(databasePath);
+      legacy
+        .prepare(
+          `INSERT INTO worker_session_placements (
+             session_id, agent_id, session_key, state, transition_generation,
+             created_at_ms, updated_at_ms, state_changed_at_ms
+           ) VALUES (?, ?, ?, 'local', 3, 1, 2, 2)`,
+        )
+        .run("legacy-session", "main", "agent:main:legacy");
+      downgradeWorkerPlacementsToV7(legacy);
+      legacy.close();
+
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
+        kind: "worker-placement-execution-mode-v8",
+        path: databasePath,
+      });
+      if (migrationPath === "doctor repair") {
+        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+          changes: ["Migrated cloud worker placements to execution modes"],
+          warnings: [],
+        });
+      }
+      const migrated = openOpenClawStateDatabase(options);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(8);
+      expect(
+        migrated.db
+          .prepare(
+            "SELECT session_id, transition_generation, execution_mode FROM worker_session_placements",
+          )
+          .get(),
+      ).toEqual({ session_id: "legacy-session", transition_generation: 3, execution_mode: null });
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).not.toContainEqual({
+        kind: "worker-placement-execution-mode-v8",
+        path: databasePath,
+      });
+    },
+  );
+
+  it.each(["runtime open", "doctor repair"] as const)(
     "retires v6 commitments through %s while preserving shared leases",
     (migrationPath) => {
       const stateDir = createTempStateDir();
@@ -1536,29 +1636,36 @@ describe("openclaw state database", () => {
 
       if (migrationPath === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-          changes: ["Retired shared state commitments table and indexes"],
+          changes: [
+            "Retired shared state commitments table and indexes",
+            "Migrated cloud worker placements to execution modes",
+          ],
           warnings: [],
         });
         const repaired = new DatabaseSync(databasePath, { readOnly: true });
         try {
-          expect(readSqliteNumberPragma(repaired, "user_version")).toBe(7);
+          expect(readSqliteNumberPragma(repaired, "user_version")).toBe(
+            OPENCLAW_STATE_SCHEMA_VERSION,
+          );
           expect(
             repaired
               .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
               .get(),
-          ).toEqual({ schema_version: 7 });
+          ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
         } finally {
           repaired.close();
         }
       }
       const migrated = openOpenClawStateDatabase(options);
 
-      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(7);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
       expect(
         migrated.db
           .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
           .get(),
-      ).toEqual({ schema_version: 7 });
+      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
       for (const name of RETIRED_COMMITMENT_SCHEMA_OBJECTS) {
         expect(
           migrated.db.prepare("SELECT name FROM sqlite_schema WHERE name = ?").get(name),
@@ -1694,12 +1801,14 @@ describe("openclaw state database", () => {
         expect(result.changes).toContain("Retired shared state commitments table and indexes");
       }
       const migrated = openOpenClawStateDatabase(options);
-      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(7);
+      expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
       expect(
         migrated.db
           .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
           .get(),
-      ).toEqual({ schema_version: 7 });
+      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
       for (const name of RETIRED_COMMITMENT_SCHEMA_OBJECTS) {
         expect(
           migrated.db.prepare("SELECT name FROM sqlite_schema WHERE name = ?").get(name),
@@ -2230,6 +2339,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
+        "Migrated cloud worker placements to execution modes",
         "Migrated shared state session watch cursors → provenance column (0 ambient, 0 sentinels removed)",
         "Migrated shared state tables to SQLite STRICT typing (1)",
       ],
@@ -2262,6 +2372,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ]);
     expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
       changes: [
+        "Migrated cloud worker placements to execution modes",
         "Migrated shared state session watch cursors → provenance column (2 ambient, 5 sentinels removed)",
       ],
       warnings: [],

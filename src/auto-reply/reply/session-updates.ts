@@ -331,6 +331,8 @@ export async function incrementCompactionCount(params: {
   /** Session id after compaction when a context engine changed identity. */
   newSessionId?: string;
   compactionKind?: EmbeddedAgentCompactResult["compactionKind"];
+  expectedSession?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
+  authorize?: () => boolean;
 }): Promise<number | undefined> {
   const {
     agentId,
@@ -344,12 +346,22 @@ export async function incrementCompactionCount(params: {
     tokensAfter,
     newSessionId,
     compactionKind,
+    expectedSession,
+    authorize,
   } = params;
   if (!sessionStore || !sessionKey) {
     return undefined;
   }
   const entry = sessionStore[sessionKey] ?? sessionEntry;
   if (!entry) {
+    return undefined;
+  }
+  const canApply = (current: SessionEntry) =>
+    (authorize?.() ?? true) &&
+    (!expectedSession ||
+      (current.sessionId === expectedSession.sessionId &&
+        current.lifecycleRevision === expectedSession.lifecycleRevision));
+  if (!canApply(entry)) {
     return undefined;
   }
   const incrementBy = Math.max(0, amount);
@@ -387,20 +399,49 @@ export async function incrementCompactionCount(params: {
     updates.totalTokensVersion = undefined;
   }
   const nextEntry = mergeSessionEntry(entry, updates, { now });
-  sessionStore[sessionKey] = nextEntry;
   const effectiveStorePath = storePath
     ? resolveSessionStorePathForScope({ agentId, sessionKey, storePath })
     : undefined;
   if (effectiveStorePath) {
-    const persistedEntry = await patchSessionEntryCore(
-      { ...(agentId ? { agentId } : {}), storePath: effectiveStorePath, sessionKey },
-      () => updates,
-      // Preserve the pre-rotation identity so a first-write merge can detect sessionId rollover.
-      { fallbackEntry: entry },
-    );
-    if (persistedEntry) {
-      sessionStore[sessionKey] = persistedEntry;
+    let committed = false;
+    const authorityRevoked = new Error("compaction accounting authority revoked");
+    let persistedEntry: SessionEntry | null;
+    try {
+      persistedEntry = await patchSessionEntryCore(
+        { ...(agentId ? { agentId } : {}), storePath: effectiveStorePath, sessionKey },
+        (current) => {
+          if (!canApply(current)) {
+            return null;
+          }
+          committed = true;
+          return updates;
+        },
+        {
+          // Preserve the pre-rotation identity so a first-write merge can detect sessionId rollover.
+          ...(expectedSession ? {} : { fallbackEntry: entry }),
+          ...(authorize
+            ? {
+                assertCommitAllowed: () => {
+                  if (!authorize()) {
+                    throw authorityRevoked;
+                  }
+                },
+              }
+            : {}),
+        },
+      );
+    } catch (error) {
+      if (error === authorityRevoked) {
+        return undefined;
+      }
+      throw error;
     }
+    if (!committed || !persistedEntry) {
+      return undefined;
+    }
+    sessionStore[sessionKey] = persistedEntry;
+  } else {
+    sessionStore[sessionKey] = nextEntry;
   }
   if (sessionIdChanged && cfg) {
     emitCompactionSessionLifecycleHooks({

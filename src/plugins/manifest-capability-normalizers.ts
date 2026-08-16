@@ -319,6 +319,7 @@ export function normalizePluginToolMetadata(
       ...providerMetadata,
       ...(rawMetadata.optional === true ? { optional: true } : {}),
       ...(rawMetadata.replaySafe === true ? { replaySafe: true } : {}),
+      ...(rawMetadata.sideEffecting === true ? { sideEffecting: true } : {}),
     } satisfies PluginManifestToolMetadata;
     return Object.keys(metadata).length > 0 ? metadata : undefined;
   });
@@ -346,7 +347,6 @@ const MANIFEST_CONTRACT_KEYS = [
   "trustedToolPolicies",
   "externalAuthProviders",
   "embeddingProviders",
-  "memoryEmbeddingProviders",
   "speechProviders",
   "realtimeTranscriptionProviders",
   "realtimeVoiceProviders",

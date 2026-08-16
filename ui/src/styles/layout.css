@@ -148,11 +148,7 @@
       .shell:not(.shell--mobile-nav, .shell--nav-collapsed, .shell--settings)
   )
   .content
-  > :is(
-    openclaw-update-banner,
-    openclaw-device-scope-upgrade-banner,
-    openclaw-device-auth-migration-banner
-  )
+  > :is(openclaw-update-banner, openclaw-device-scope-upgrade-banner)
   .callout {
   margin-left: var(--shell-chrome-safe-area-left);
 }
@@ -272,7 +268,6 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 }
 
 .settings-sidebar {
-  --scrollbar-size: 6px;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -481,7 +476,6 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   padding: 14px 12px 18px;
   overflow-y: auto;
   overflow-x: hidden;
-  scrollbar-width: thin;
 }
 
 .settings-sidebar__empty {
@@ -915,7 +909,6 @@ openclaw-settings-save-indicator {
   /* One rhythm for every group boundary in the sidebar (Pages and each
      session section) so the column reads as separate shelves, not one list. */
   --sidebar-group-gap: var(--space-4);
-  --scrollbar-size: 6px;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -1025,17 +1018,10 @@ openclaw-settings-save-indicator {
      horizontal scrollbar beside the divider. */
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-color: color-mix(in srgb, currentColor 8%, transparent) transparent;
-  scrollbar-width: thin;
   /* Cancel the shell's horizontal padding so the thumb hugs its right edge;
      both values share --sidebar-pad-x so they cannot drift. */
   margin-right: calc(-1 * var(--sidebar-pad-x));
   padding-right: var(--sidebar-pad-x);
-}
-
-.sidebar-shell__body::-webkit-scrollbar,
-.sidebar-shell__body::-webkit-scrollbar-track {
-  background: transparent;
 }
 
 .sidebar-shell__footer {
@@ -1387,6 +1373,7 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-nav {
+  position: relative;
   padding: 0;
 }
 
@@ -1426,7 +1413,10 @@ body.update-dialog-open .sidebar-update-card__status {
 }
 
 .sidebar-recent-sessions {
+  --sidebar-inset: 8px;
   --sidebar-lead: 20px;
+  --sidebar-row-gap: 8px;
+  --sidebar-text-offset: calc(var(--sidebar-inset) + var(--sidebar-lead) + var(--sidebar-row-gap));
 
   display: flex;
   flex-direction: column;
@@ -1501,7 +1491,7 @@ body.update-dialog-open .sidebar-update-card__status {
   align-items: center;
   gap: 8px;
   min-height: 24px;
-  padding: 0 10px 0 0;
+  padding: 0 10px 0 var(--sidebar-inset);
   color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
 }
 
@@ -1516,7 +1506,7 @@ body.update-dialog-open .sidebar-update-card__status {
 .sidebar-session-group-toggle {
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: var(--sidebar-row-gap);
   min-width: 0;
   flex: 1 1 auto;
   padding: 2px 0;
@@ -1617,8 +1607,8 @@ body.update-dialog-open .sidebar-update-card__status {
 
 .sidebar-session-catalog-load-more {
   display: block;
-  width: calc(100% - var(--sidebar-lead) - 10px);
-  margin: 3px 10px 5px var(--sidebar-lead);
+  width: calc(100% - var(--sidebar-text-offset) - 10px);
+  margin: 3px 10px 5px var(--sidebar-text-offset);
   padding: 4px 0;
   border: none;
   border-radius: var(--radius-sm);
@@ -1786,11 +1776,6 @@ body.update-dialog-open .sidebar-update-card__status {
   color: var(--muted);
 }
 
-.sidebar-session-group-toggle
-  > :not(.sidebar-session-group-toggle__lead):not(.sidebar-recent-sessions__label-text) {
-  margin-left: 5px;
-}
-
 /* Flex, not grid: WebKit does not re-run a grid flex-item's intrinsic sizing
    when rows stream in or grow a second subtitle line after first layout, so a
    grid list keeps a stale height and the next section paints over its rows. */
@@ -1813,19 +1798,23 @@ body.update-dialog-open .sidebar-update-card__status {
 
 .sidebar-session-tree__children {
   margin-left: var(--sidebar-lead);
-  box-shadow: inset 1px 0 0 color-mix(in srgb, var(--border-strong) 52%, transparent);
+  background: linear-gradient(
+      color-mix(in srgb, var(--border-strong) 52%, transparent),
+      color-mix(in srgb, var(--border-strong) 52%, transparent)
+    )
+    calc(var(--sidebar-inset) + 10px) 0 / 1px 100% no-repeat;
 }
 
 .sidebar-session-tree__loading {
   min-height: 28px;
-  padding: 6px var(--sidebar-lead);
+  padding: 6px var(--sidebar-text-offset);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
 
 .sidebar-session-tree__show-more {
   min-height: 28px;
-  padding: 6px var(--sidebar-lead);
+  padding: 6px var(--sidebar-text-offset);
   border: 0;
   background: transparent;
   color: var(--muted);
@@ -1854,7 +1843,7 @@ body.update-dialog-open .sidebar-update-card__status {
   align-items: center;
   gap: 8px;
   min-height: 19px;
-  padding: 1px 12px 1px var(--sidebar-lead);
+  padding: 1px 12px 1px var(--sidebar-inset);
   color: color-mix(in srgb, var(--muted) 82%, var(--text) 18%);
 }
 
@@ -1894,10 +1883,10 @@ body.update-dialog-open .sidebar-update-card__status {
 .sidebar-session-catalog-project__head {
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: var(--sidebar-row-gap);
   width: 100%;
   min-height: 18px;
-  padding: 2px 12px 0 0;
+  padding: 2px 12px 0 var(--sidebar-inset);
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -1959,7 +1948,7 @@ body.update-dialog-open .sidebar-update-card__status {
   display: flex;
   justify-content: flex-start;
   gap: 14px;
-  padding: 0 10px 10px var(--sidebar-lead);
+  padding: 0 10px 10px var(--sidebar-text-offset);
 }
 
 .sidebar-session-pagination__button {
@@ -1978,7 +1967,7 @@ body.update-dialog-open .sidebar-update-card__status {
 
 .sidebar-session-empty-hint {
   display: block;
-  padding: 4px 10px 10px var(--sidebar-lead);
+  padding: 4px 10px 10px var(--sidebar-text-offset);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
@@ -2054,19 +2043,13 @@ body.update-dialog-open .sidebar-update-card__status {
 .sidebar-recent-session__link {
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: var(--sidebar-row-gap);
   flex: 1 1 auto;
   min-width: 0;
-  padding: 3px 4px 3px 0;
+  padding: 3px 4px 3px var(--sidebar-inset);
   color: inherit;
   cursor: var(--cursor-action);
   text-decoration: none;
-}
-
-.sidebar-recent-sessions
-  .sidebar-recent-session__link
-  > :not(.sidebar-session-indicator):not(.sidebar-recent-session__text) {
-  margin-left: 8px;
 }
 
 .sidebar-child-session-toggle {
@@ -2827,6 +2810,197 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
+.session-menu__icon-picker {
+  padding: 2px;
+}
+
+.session-menu__icon-options {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.session-menu__icon-section-label {
+  padding: 4px 4px 2px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.session-menu__icon-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 28px);
+  gap: 3px;
+}
+
+.session-menu__icon-choice {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  cursor: var(--cursor-action);
+  font-size: 17px;
+  line-height: 1;
+}
+
+.session-menu__icon-choice:hover,
+.session-menu__icon-choice:focus-visible {
+  background: var(--bg-hover);
+}
+
+.session-menu__icon-choice:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: -2px;
+}
+
+.session-menu__icon-choice[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.session-menu__icon-choice--custom {
+  border: 1px dashed var(--border);
+  color: var(--muted);
+}
+
+.session-menu__icon-choice--custom svg,
+.session-menu__icon-choice--glyph svg {
+  width: 16px;
+  height: 16px;
+}
+
+.session-menu__icon-choice--glyph {
+  color: var(--text);
+  font-size: inherit;
+}
+
+.session-menu__icon-separator {
+  margin: 5px 4px 3px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.session-menu__icon-remove {
+  width: 100%;
+  min-height: 28px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  color: var(--text);
+  cursor: var(--cursor-action);
+  font: inherit;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  text-align: left;
+}
+
+.session-menu__icon-remove:hover,
+.session-menu__icon-remove:focus-visible {
+  background: var(--bg-hover);
+}
+
+.session-menu__icon-custom-entry {
+  width: 180px;
+}
+
+.session-menu__icon-custom-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 3px 4px;
+  color: var(--text);
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 600;
+}
+
+.session-menu__icon-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.session-menu__icon-back svg {
+  width: 15px;
+  height: 15px;
+}
+
+.session-menu__icon-back:hover,
+.session-menu__icon-back:focus-visible {
+  background: var(--bg-hover);
+}
+
+.session-menu__icon-custom-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px;
+}
+
+.session-menu__icon-custom-input {
+  min-width: 0;
+  height: 30px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--menu-item-radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.session-menu__icon-custom-input:focus {
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  outline-offset: -1px;
+}
+
+.session-menu__icon-set {
+  min-width: 42px;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: var(--accent);
+  color: var(--accent-foreground);
+  cursor: var(--cursor-action);
+  font: inherit;
+  font-size: calc(12px * var(--control-ui-text-scale));
+  font-weight: 600;
+}
+
+.session-menu__icon-set:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.session-menu__icon-custom-hint {
+  padding: 6px 2px 2px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.35;
+}
+
+.session-menu__icon-remove:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: -2px;
+}
+
 /* Nav rail entries are anchors (for middle-click/new-tab) but read as app
    chrome: override the UA link pointer back to the default arrow. */
 .nav-item {
@@ -2836,7 +3010,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   justify-content: flex-start;
   gap: 8px;
   min-height: 32px;
-  padding: 0 9px;
+  padding: 0 8px;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: transparent;
@@ -2851,16 +3025,22 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 }
 
 .nav-item__icon {
-  width: 16px;
+  width: 20px;
   height: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  flex: 0 0 20px;
   opacity: 0.72;
   transition:
     opacity var(--duration-fast) ease,
     color var(--duration-fast) ease;
+}
+
+.nav-item .session-glyph .nav-item__icon {
+  width: 16px;
+  height: 16px;
+  flex-basis: 16px;
 }
 
 .nav-item__icon svg {
@@ -2939,7 +3119,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 .sidebar-zone-entry .sidebar-recent-session {
   position: relative;
   min-height: 32px;
-  padding: 0 9px;
+  padding: 0 8px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
@@ -3109,13 +3289,14 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 
 /* "Pages" section head: zone-style label plus the pin-editor affordance. */
 .sidebar-nav__head {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 0;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   padding: 2px 8px 2px 12px;
-}
-
-.sidebar-nav__head .sidebar-recent-sessions__label-text {
-  flex: 1 1 auto;
 }
 
 .sidebar-nav__head-action {
@@ -3130,9 +3311,24 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
+  opacity: 0;
   transition:
     color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
+    background var(--duration-fast) ease,
+    opacity var(--duration-fast) ease;
+}
+
+.sidebar-nav:hover .sidebar-nav__head-action,
+.sidebar-nav:focus-within .sidebar-nav__head-action {
+  opacity: 1;
+}
+
+/* Touch has no hover: keep the Pages editor discoverable, matching the
+   child-session-toggle touch override above. */
+@media (hover: none), (pointer: coarse) {
+  .sidebar-nav__head-action {
+    opacity: 1;
+  }
 }
 
 .sidebar-nav__head-action:hover,
@@ -3151,8 +3347,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   stroke-linejoin: round;
 }
 
-/* Home carries approval and outbox counts at the row's edge; run/unread state
-   rings the leading icon instead (see .session-glyph). */
+/* Home keeps run state plus outbox/draft counts together at the row edge. */
 .nav-item__state {
   flex: none;
   margin-left: auto;
@@ -3666,6 +3861,10 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 
 .content > * + * {
   margin-top: 20px;
+}
+
+.content > openclaw-device-scope-upgrade-banner:has(.scope-upgrade-chip-row) + * {
+  margin-top: 8px;
 }
 
 .content--chat {

@@ -406,6 +406,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var profileInstanceLock: AppInstanceLock?
     private let webChatAutoLogger = Logger(subsystem: "ai.openclaw", category: "Chat")
     var nodeTerminationCleanup: @MainActor () async -> Void = {
+        // CUA shutdown drains the worker before closing the daemon socket; run it
+        // first so other cleanup cannot consume the app termination deadline.
+        await CuaDriverHostCoordinator.shared.shutdown()
         await TalkMLXSpeechSynthesizer.shared.shutdown()
         await MacNodeModeCoordinator.shared.stopAndWait()
     }
@@ -625,7 +628,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { PresenceReporter.shared.start() }
         Task { await HealthStore.shared.refresh(onDemand: true) }
         Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
-        AppStateStore.shared.applyPeekabooBridgeHostState()
+        AppStateStore.shared.applyComputerControlHostState()
         if launchPlan.allowsAutomaticPresentation {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 if !PostUpdateController.shared.startIfNeeded() {

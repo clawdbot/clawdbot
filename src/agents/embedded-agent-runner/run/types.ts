@@ -70,7 +70,7 @@ type EmbeddedRunAttemptToolTerminalObservation = {
   outcome: "success" | "failure";
   failure?: Omit<
     ToolErrorSummary,
-    "toolName" | "meta" | "mutatingAction" | "actionFingerprint" | "fileTarget"
+    "toolName" | "meta" | "mutatingAction" | "ownerKey" | "actionFingerprint" | "fileTarget"
   >;
   /** Protocol-owned mutation facts for native tools that do not use OpenClaw definitions. */
   nativeMutation?: {
@@ -78,6 +78,10 @@ type EmbeddedRunAttemptToolTerminalObservation = {
     replaySafe: boolean;
     actionFingerprint?: string;
     fileTarget?: ToolErrorSummary["fileTarget"];
+  };
+  /** Concrete plugin owner; the terminal observer derives mutation facts from executed args. */
+  ownerMutation?: {
+    ownerKey: string;
   };
 };
 
@@ -100,6 +104,8 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
+  /** Explicit session owner captured before fallback agent resolution. */
+  contextEngineAgentId?: string;
   /** Host-resolved sandbox snapshot for plugin harness tool construction. */
   sandbox?: SandboxContext | null;
   /** Host-created authority available only after harness selection. */
@@ -108,6 +114,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   operation?: EmbeddedRunAttemptOperation;
   /** Core-prepared fact that explicit requester/config policy restricts plugin-native tools. */
   pluginHarnessToolPolicyRestricted?: boolean;
+  /** Audited exact denies that the plugin harness must enforce against native equivalents. */
+  pluginHarnessToolPolicySafeDeniedTools?: readonly string[];
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   /** Active file-backed artifact target resolved by the run/session target seam. */
   sessionFile: string;
@@ -282,6 +290,8 @@ export type EmbeddedRunAttemptResult = {
     asyncTaskId?: string;
   }>;
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
+  /** This attempt accepted work whose future output has a runtime-owned delivery path. */
+  runtimeContinuationStarted?: boolean;
   lastAssistant: AssistantMessage | undefined;
   /**
    * Omission preserves the legacy `lastAssistant` fallback; explicit `undefined`

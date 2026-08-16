@@ -1,4 +1,3 @@
-import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import {
   markDelegateArtifactDeliveryUnavailable,
   prepareDelegateArtifactDelivery,
@@ -131,7 +130,9 @@ async function deliverResolvedQueuedSessionDelivery(params: {
     await deliverQueuedPostCompactionDelegate({ entry: params.entry });
     return;
   }
-  const { cfg, entry, storePath, canonicalKey } = loadSessionEntry(params.entry.sessionKey);
+  const { cfg, agentId, entry, storePath, canonicalKey } = loadSessionEntry(
+    params.entry.sessionKey,
+  );
   const queuedDeliveryContext = resolveQueuedSessionDeliveryContext(params.entry);
 
   if (params.entry.kind === "systemEvent") {
@@ -318,6 +319,8 @@ async function deliverResolvedQueuedSessionDelivery(params: {
     await deliverQueuedGeneratedMediaAgentTurn({
       entry: params.entry,
       canonicalKey,
+      agentId,
+      storePath,
       sessionEntry: entry,
       ...(params.stateDir !== undefined ? { stateDir: params.stateDir } : {}),
     })
@@ -338,10 +341,6 @@ async function deliverResolvedQueuedSessionDelivery(params: {
   const route = params.entry.route;
   const messageId = resolveQueuedRestartContinuationMessageId(params.entry);
   const userMessage = params.entry.message.trim();
-  const agentId = resolveSessionAgentId({
-    sessionKey: canonicalKey,
-    config: cfg,
-  });
   let dispatchError: unknown;
   const ctxPayload = finalizeInboundContext(
     {

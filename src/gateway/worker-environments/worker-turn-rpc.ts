@@ -20,7 +20,6 @@ import { safeEqualSecret } from "../../security/secret-equal.js";
 import type { WorkerSessionToolName } from "../../worker/tool-authority.js";
 import {
   admitWorkerConnection,
-  resolveLocalWorkerBuild,
   validateWorkerConnectionIdentity,
   type ExpectedWorkerBuild,
   type WorkerConnectionIdentity,
@@ -523,9 +522,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       }
       let expectedBuild: ExpectedWorkerBuild;
       try {
-        expectedBuild =
-          resolveLocalWorkerBuild(store.get(admission.environmentId)?.bootstrapReceipt) ??
-          (await options.prepareInstallation("bundle"));
+        expectedBuild = await options.prepareInstallation("bundle");
       } catch {
         return { ok: false, reason: "environment-unavailable" } as const;
       }

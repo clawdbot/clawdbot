@@ -65,7 +65,7 @@ import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
-import { resolveCurrentTurnImages } from "./current-turn-images.js";
+import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
@@ -74,6 +74,12 @@ import {
   isReplyOperationUserAbort,
 } from "./reply-operation-abort.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
+
+type InternalFollowupRun = FollowupRun & {
+  /** Keep admission state out of the public plugin-facing FollowupRun contract. */
+  currentTurnImagesPrepared?: true;
+  mediaImageLayout?: CurrentTurnImages["mediaImageLayout"];
+};
 
 function resolveRunStartupPhase(
   phase: EmbeddedAgentExecutionPhase,
@@ -181,7 +187,7 @@ async function executeAgentTurnInternalWithRetryState(
     });
   }
   let replyMediaContext: ReplyMediaContext;
-  let currentTurnImages: Awaited<ReturnType<typeof resolveCurrentTurnImages>>;
+  let currentTurnImages: CurrentTurnImages;
   try {
     replyMediaContext =
       params.replyMediaContext ??
@@ -202,14 +208,27 @@ async function executeAgentTurnInternalWithRetryState(
           requesterSenderE164: params.followupRun.run.senderE164,
         }),
       );
-    currentTurnImages = await agentTurnTiming.measure("current_turn_images", () =>
-      resolveCurrentTurnImages({
-        ctx: params.sessionCtx,
-        cfg: runtimeConfig,
-        images: params.followupRun.images ?? params.opts?.images,
-        imageOrder: params.followupRun.imageOrder ?? params.opts?.imageOrder,
-      }),
-    );
+    const internalFollowupRun = params.followupRun as InternalFollowupRun;
+    const hasQueuedCurrentTurnImages =
+      internalFollowupRun.currentTurnImagesPrepared === true ||
+      Object.hasOwn(params.followupRun, "images") ||
+      Object.hasOwn(params.followupRun, "imageOrder");
+    // Queue admission owns current-turn materialization, including empty results.
+    // Re-scanning here can resurrect suppressed media or duplicate loaded images.
+    currentTurnImages = hasQueuedCurrentTurnImages
+      ? {
+          images: params.followupRun.images,
+          imageOrder: params.followupRun.imageOrder,
+          mediaImageLayout: internalFollowupRun.mediaImageLayout,
+        }
+      : await agentTurnTiming.measure("current_turn_images", () =>
+          resolveCurrentTurnImages({
+            ctx: params.sessionCtx,
+            cfg: runtimeConfig,
+            images: params.opts?.images,
+            imageOrder: params.opts?.imageOrder,
+          }),
+        );
   } catch (error) {
     clearAgentRunContext(runId, lifecycleGeneration);
     throw error;

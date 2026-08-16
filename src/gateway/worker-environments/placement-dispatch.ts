@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
-import { DEVICE_WORKER_PROVIDER_ID, isDeviceWorkerAvailable } from "./device-provider.js";
+import * as device from "./device-provider.js";
 import {
   createPlacementFailureActions,
   isUnavailableEnvironment,
@@ -12,6 +12,7 @@ import {
 } from "./placement-dispatch-failure.js";
 import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js";
 import { forceAbandonWorkerEnvironment } from "./placement-force-abandon.js";
+import { placementTurnOwner } from "./placement-record.js";
 import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementReclaimRequest,
@@ -41,6 +42,7 @@ type WorkerLocalDispatchBarrier = (params: {
   sessionId: string;
   sessionKey: string;
   agentId: string;
+  executionMode: WorkerPlacementDispatchRequest["executionMode"];
   startDispatch: () => WorkerDispatchPlacement;
 }) => Promise<WorkerDispatchPlacement>;
 
@@ -80,31 +82,13 @@ type WorkerPlacementDispatchOptions = {
 function requireProvisionedEnvironment(
   environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>,
   expectedEnvironmentId: string,
-):
-  | { transport: "node"; environmentId: string; ownerEpoch: number; bundleHash: string }
-  | { transport: "ssh"; environmentId: string; ownerEpoch: number; bundleHash: string } {
+): { environmentId: string; ownerEpoch: number; bundleHash: string } {
+  // Node vs SSH transport is decided later from the environment itself; both
+  // arms of the old discriminated return carried identical fields, so this
+  // only validates dispatchability and hands back the prepared facts.
   if (
     (environment.state !== "ready" && environment.state !== "idle") ||
-    environment.environmentId !== expectedEnvironmentId
-  ) {
-    throw new Error(
-      `Worker environment is not dispatchable with the current execution-context contract: ${environment.state}`,
-    );
-  }
-  if (
-    environment.providerId === DEVICE_WORKER_PROVIDER_ID &&
-    !environment.sshEndpoint &&
-    environment.bootstrapReceipt?.installKind === "local" &&
-    supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt)
-  ) {
-    return {
-      transport: "node",
-      environmentId: environment.environmentId,
-      ownerEpoch: environment.ownerEpoch,
-      bundleHash: environment.bootstrapReceipt.bundleHash,
-    };
-  }
-  if (
+    environment.environmentId !== expectedEnvironmentId ||
     !environment.bootstrapReceipt ||
     !supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt)
   ) {
@@ -113,7 +97,6 @@ function requireProvisionedEnvironment(
     );
   }
   return {
-    transport: "ssh",
     environmentId: environment.environmentId,
     ownerEpoch: environment.ownerEpoch,
     bundleHash: environment.bootstrapReceipt.bundleHash,
@@ -170,20 +153,26 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         sessionId: request.sessionId,
         sessionKey: request.sessionKey,
         agentId: request.agentId,
+        executionMode: request.executionMode,
         startDispatch: () => {
           placement = placements.startDispatch({
             sessionId: request.sessionId,
             sessionKey: request.sessionKey,
             agentId: request.agentId,
+            executionMode: request.executionMode,
           });
           reportTransition(onTransition, placement);
           return placement;
         },
       });
-      if (request.deviceId && !(await isDeviceWorkerAvailable(environments, request.deviceId))) {
-        throw new Error(
-          `device worker requires a connected current node host; reconnect or reprovision: ${request.deviceId}`,
+      if (request.deviceId) {
+        const availability = await device.resolveDeviceWorkerAvailability(
+          environments,
+          request.deviceId,
         );
+        if (!availability.available) {
+          throw new Error(device.deviceUnavailableText(request.deviceId, availability));
+        }
       }
       const localPath = await options.resolveWorkspacePath(request);
       const idempotencyKey = `session-dispatch:${request.sessionId}:${placement.generation}`;
@@ -248,6 +237,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         sessionId: request.sessionId,
         sessionKey: request.sessionKey,
         agentId: request.agentId,
+        executionMode: request.executionMode,
         activate: () => {
           const activated = placements.transition({
             sessionId: request.sessionId,
@@ -322,11 +312,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           agentId: current.agentId,
           claimId: reclaimClaimId,
           runId: reclaimClaimId,
-          owner: {
-            kind: "worker",
-            environmentId: current.environmentId,
-            ownerEpoch: current.activeOwnerEpoch,
-          },
+          owner: placementTurnOwner(current),
         });
         const reclaimResultRef = workerWorkspaceResultRef(reclaimClaim.claimId);
         let manifestAccepted = false;
@@ -360,7 +346,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                 (allowCommitted || !manifestAccepted) &&
                 owned?.state === "active" &&
                 owned.turnClaim?.claimId === reclaimClaim.claimId &&
-                reclaimClaim.owner.kind === "worker" &&
+                reclaimClaim.owner.environmentId === current.environmentId &&
+                reclaimClaim.owner.ownerEpoch === current.activeOwnerEpoch &&
                 currentEnvironment?.state === "attached" &&
                 currentEnvironment.ownerEpoch === reclaimClaim.owner.ownerEpoch &&
                 currentEnvironment.attachedSessionIds.length === 1 &&

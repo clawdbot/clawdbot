@@ -986,9 +986,7 @@ describe("runSetupWizard", () => {
       if (writeAttempts === 1) {
         diskConfig = { ...diskConfig, ui: { ...diskConfig.ui, seamColor: "green" } };
         diskHash = "external-edit";
-        throw new ConfigMutationConflictError("config changed since last load", {
-          currentHash: diskHash,
-        });
+        throw new ConfigMutationConflictError("config changed since last load");
       }
       diskConfig = structuredClone(params.nextConfig);
       diskHash = `committed-${writeAttempts}`;
@@ -1894,9 +1892,7 @@ describe("runSetupWizard", () => {
       if (writeAttempts === 2) {
         diskConfig = { ...diskConfig, ui: { seamColor: "green" } };
         diskHash = "external-pending-edit";
-        throw new ConfigMutationConflictError("config changed since last load", {
-          currentHash: diskHash,
-        });
+        throw new ConfigMutationConflictError("config changed since last load");
       }
       diskConfig = structuredClone(params.nextConfig);
       diskHash = `pending-${writeAttempts + 1}`;
