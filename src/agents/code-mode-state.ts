@@ -130,6 +130,27 @@ export function cancelPendingBridgeStates(pending: readonly PendingBridgeState[]
   }
 }
 
+/** Apply restored-guest cancellation to the parent-owned host operations. */
+export function cancelPendingBridgeStatesById(
+  pending: PendingBridgeState[],
+  canceledRequestIds: readonly string[],
+): void {
+  if (canceledRequestIds.length === 0) {
+    return;
+  }
+  const canceled = new Set(canceledRequestIds);
+  const retained = pending.filter((entry) => {
+    if (!canceled.has(entry.id)) {
+      return true;
+    }
+    if (!entry.settled) {
+      entry.cancel?.();
+    }
+    return false;
+  });
+  pending.splice(0, pending.length, ...retained);
+}
+
 /** Deliver bridge responses in actual settlement order, not request order. */
 export function settledBridgeRequestsInCompletionOrder(
   pending: readonly PendingBridgeState[],

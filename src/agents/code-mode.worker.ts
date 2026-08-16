@@ -34,6 +34,9 @@ type VmRun = {
   didTimeout: () => boolean;
 };
 
+// Each worker handles exactly one exec/resume payload, so cancellations are run-scoped.
+const canceledBridgeRequestIds: string[] = [];
+
 // QuickJS error stacks are backtrace frames only ("    at file:line:col"), with
 // no leading "Name: message" header like V8. Returning .stack alone therefore
 // dropped the actual cause, surfacing failures to the model as a bare location
@@ -127,9 +130,10 @@ function createHostCancelRequestHandler(params: {
     const id = idHandle.toString();
     const index = params.pendingRequests.findIndex((request) => request.id === id);
     if (index >= 0) {
-      // Remove canceled timers before snapshotting so they neither consume a
-      // bridge slot nor force the parent to drain a sleep with no callback.
+      // Return the cancellation to the parent owner as well as removing it
+      // locally; restored requests may already have a live host operation.
       params.pendingRequests.splice(index, 1);
+      canceledBridgeRequestIds.push(id);
     }
     return params.vm.undefined;
   };
@@ -333,6 +337,7 @@ function waitingResult(params: {
     status: "waiting",
     snapshotBytes,
     pendingRequests: params.pendingRequests,
+    canceledRequestIds: canceledBridgeRequestIds,
     settlementMode: params.settlementMode,
     output: params.output,
   };

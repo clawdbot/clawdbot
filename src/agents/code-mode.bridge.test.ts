@@ -137,7 +137,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   it("supports a guest timer between an action and its observation", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
-      tools: { codeMode: { enabled: true, maxPendingToolCalls: 1 } },
+      tools: { codeMode: { enabled: true, maxPendingToolCalls: 2 } },
     } as never;
     const ctx = {
       config,
@@ -164,8 +164,8 @@ describe("Code Mode bridge settlement and cancellation", () => {
         "code-call-timer-observation",
         {
           code: `
-            await tools.callValue("fake_terminal_input", { data: "status\\n" });
             const cancelled = setTimeout(() => { throw new Error("cancelled timer fired"); }, 30_000);
+            await tools.callValue("fake_terminal_input", { data: "status\\n" });
             clearTimeout(cancelled);
             await new Promise((resolve) => setTimeout(resolve, 5));
             return await tools.callValue("fake_terminal_read", {});

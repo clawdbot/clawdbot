@@ -83,6 +83,7 @@ export type CodeModeWorkerThreadResult =
       status: "waiting";
       snapshotBytes: Uint8Array;
       pendingRequests: PendingBridgeRequest[];
+      canceledRequestIds: string[];
       settlementMode: CodeModeSettlementMode;
       output: unknown[];
     }

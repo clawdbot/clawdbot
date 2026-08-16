@@ -25,6 +25,7 @@ import {
 import {
   activeRuns,
   cancelPendingBridgeStates,
+  cancelPendingBridgeStatesById,
   codeModeWaitingReason,
   createPendingBridgeStates,
   disposeCodeModeRun,
@@ -238,6 +239,9 @@ async function settleCodeModeResult(params: {
 }) {
   let result = params.result;
   let pending = params.pending ?? [];
+  if (result.status === "waiting") {
+    cancelPendingBridgeStatesById(pending, result.canceledRequestIds);
+  }
   const activeRunId = params.activeRunId ?? `cm_${randomUUID()}`;
   const output = params.output;
   let deliveredOutputCount = params.deliveredOutputCount ?? 0;
@@ -387,6 +391,9 @@ async function settleCodeModeResult(params: {
           params.signal,
         ),
       );
+      if (result.status === "waiting") {
+        cancelPendingBridgeStatesById(pending, result.canceledRequestIds);
+      }
       output.push(...result.output);
       if (boundOutputToLimit(output, params.config)) {
         deliveredOutputCount = 0;
