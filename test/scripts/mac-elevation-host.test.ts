@@ -85,21 +85,21 @@ function createStatusHarness(permissionMode: "fail" | "invalid") {
   writeFileSync(
     path.join(stateDir, "elevation-host-install.json"),
     JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       kind: "openclaw-elevation-install",
       sourceCommit: "0".repeat(40),
       peekabooCommit: `${"0".repeat(39)}1`,
       archiveSha256: "a".repeat(64),
       artifactReceiptSha256: "b".repeat(64),
       installerSha256: "c".repeat(64),
-      cdhash: "TESTCDHASH",
+      cdhashes: { arm64: "TESTCDHASHARM64", x86_64: "TESTCDHASHX8664" },
       nodeId: "fixture-node",
       nodeProfile: "primary",
       appPath,
       stateDir,
       configPath,
       backupPath: "",
-      backupCDHash: "",
+      backupCDHashes: { arm64: "", x86_64: "" },
       plistPath: path.join(launchAgentsDir, "ai.openclaw.mac.elevation-host.plist"),
       previousPlist: "",
       previousPlistSha256: "",
@@ -126,9 +126,12 @@ function createStatusHarness(permissionMode: "fail" | "invalid") {
       "  exit 0",
       "fi",
       'if [[ "$*" == *"-dv"* ]]; then',
+      "  cdhash=TESTCDHASH",
+      '  if [[ "$*" == *"--arch arm64"* ]]; then cdhash=TESTCDHASHARM64; fi',
+      '  if [[ "$*" == *"--arch x86_64"* ]]; then cdhash=TESTCDHASHX8664; fi',
       "  printf '%s\\n' 'Authority=Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)' >&2",
       "  printf '%s\\n' 'TeamIdentifier=FWJYW4S8P8' >&2",
-      "  printf '%s\\n' 'CDHash=TESTCDHASH' >&2",
+      "  printf 'CDHash=%s\\n' \"$cdhash\" >&2",
       "fi",
       "exit 0",
       "",
@@ -454,6 +457,15 @@ function createArtifactVerificationHarness() {
       '  if [[ -e "$target/Contents/old-fixture" ]]; then',
       "    cdhash=OLDFIXTURECDHASH",
       "  fi",
+      '  if [[ "$*" == *"--arch arm64"* ]]; then',
+      '    cdhash="${cdhash}ARM64"',
+      '  elif [[ "$*" == *"--arch x86_64"* ]]; then',
+      '    cdhash="${cdhash}X8664"',
+      '  elif [[ "${TEST_NATIVE_ARCH:-arm64}" == "x86_64" ]]; then',
+      '    cdhash="${cdhash}X8664"',
+      "  else",
+      '    cdhash="${cdhash}ARM64"',
+      "  fi",
       "  printf '%s\\n' 'Authority=Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)' >&2",
       "  printf '%s\\n' 'TeamIdentifier=FWJYW4S8P8' >&2",
       "  printf 'CDHash=%s\\n' \"$cdhash\" >&2",
@@ -484,7 +496,7 @@ function createArtifactVerificationHarness() {
     build: "420",
     authority: "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)",
     teamIdentifier: "FWJYW4S8P8",
-    cdhashes: { arm64: "FIXTURECDHASH", x86_64: "FIXTURECDHASH" },
+    cdhashes: { arm64: "FIXTURECDHASHARM64", x86_64: "FIXTURECDHASHX8664" },
     architectures: { main: "x86_64 arm64", helper: "x86_64 arm64" },
     entitlementsSha256: { main: sha256(entitlements), helper: sha256(entitlements) },
     notarizationId: "12345678-1234-1234-1234-123456789abc",
@@ -1716,6 +1728,58 @@ describe("mac elevation host command contract", () => {
   );
 
   it.skipIf(process.platform !== "darwin")(
+    "recovers across simulated native and Rosetta host selection using both architecture CDHashes",
+    () => {
+      const harness = createInstallRollbackHarness({ launchdBootstrapFails: false });
+      const installed = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--migrate-launch-agent",
+          harness.sourcePlist,
+        ],
+        { ...harness.env, TEST_NATIVE_ARCH: "arm64" },
+      );
+      expect(installed.status, installed.stderr).toBe(0);
+
+      const receipt = JSON.parse(
+        readFileSync(path.join(harness.stateDir, "elevation-host-install.json"), "utf8"),
+      ) as {
+        backupCDHashes: { arm64: string; x86_64: string };
+        cdhashes: { arm64: string; x86_64: string };
+        schemaVersion: number;
+      };
+      expect(receipt).toMatchObject({
+        schemaVersion: 3,
+        backupCDHashes: {
+          arm64: "OLDFIXTURECDHASHARM64",
+          x86_64: "OLDFIXTURECDHASHX8664",
+        },
+        cdhashes: {
+          arm64: "FIXTURECDHASHARM64",
+          x86_64: "FIXTURECDHASHX8664",
+        },
+      });
+      expect(receipt).not.toHaveProperty("cdhash");
+      expect(receipt).not.toHaveProperty("backupCDHash");
+
+      const recovered = runInstaller(
+        harness.installerPath,
+        ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
+        { ...harness.env, TEST_NATIVE_ARCH: "x86_64" },
+      );
+      expect(recovered.status, recovered.stderr).toBe(0);
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
     "defers termination until explicit recovery commits one complete generation",
     () => {
       const harness = createInstallRollbackHarness({
@@ -1780,12 +1844,12 @@ describe("mac elevation host command contract", () => {
       expect(installed.status, installed.stderr).toBe(0);
       const installReceiptPath = path.join(harness.stateDir, "elevation-host-install.json");
       const receipt = JSON.parse(readFileSync(installReceiptPath, "utf8")) as {
-        backupCDHash: string;
+        backupCDHashes: { arm64: string; x86_64: string };
         backupPath: string;
       };
       rmSync(receipt.backupPath, { recursive: true });
       receipt.backupPath = "";
-      receipt.backupCDHash = "";
+      receipt.backupCDHashes = { arm64: "", x86_64: "" };
       writeFileSync(installReceiptPath, JSON.stringify(receipt), "utf8");
 
       const recovered = runInstaller(
@@ -2418,6 +2482,54 @@ describe("mac elevation host command contract", () => {
       expect(result.stdout).not.toContain("TCC: ready");
     },
   );
+
+  it.each([1, 2])("rejects the unshipped install receipt schema %i", (schemaVersion) => {
+    const harness = createStatusHarness("invalid");
+    const receiptPath = path.join(harness.stateDir, "elevation-host-install.json");
+    const receipt = JSON.parse(readFileSync(receiptPath, "utf8")) as Record<string, unknown>;
+    receipt.schemaVersion = schemaVersion;
+    writeFileSync(receiptPath, JSON.stringify(receipt), "utf8");
+
+    const result = runInstaller(
+      scriptPath,
+      ["status", "--app", harness.appPath, "--state-dir", harness.stateDir],
+      harness.env,
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("elevation install receipt schema is invalid");
+  });
+
+  it("rejects stale single-hash fields and inconsistent backup hash custody", () => {
+    const harness = createStatusHarness("invalid");
+    const receiptPath = path.join(harness.stateDir, "elevation-host-install.json");
+    const receipt = JSON.parse(readFileSync(receiptPath, "utf8")) as {
+      backupCDHashes: { arm64: string; x86_64: string };
+      backupPath: string;
+      cdhash?: string;
+    };
+    receipt.cdhash = "IGNORED-SINGLE-HASH";
+    writeFileSync(receiptPath, JSON.stringify(receipt), "utf8");
+
+    const staleField = runInstaller(
+      scriptPath,
+      ["status", "--app", harness.appPath, "--state-dir", harness.stateDir],
+      harness.env,
+    );
+    expect(staleField.status).toBe(1);
+    expect(staleField.stderr).toContain("elevation install receipt schema is invalid");
+
+    delete receipt.cdhash;
+    receipt.backupPath = path.join(harness.stateDir, "missing-backup.app");
+    receipt.backupCDHashes = { arm64: "", x86_64: "" };
+    writeFileSync(receiptPath, JSON.stringify(receipt), "utf8");
+    const inconsistentBackup = runInstaller(
+      scriptPath,
+      ["status", "--app", harness.appPath, "--state-dir", harness.stateDir],
+      harness.env,
+    );
+    expect(inconsistentBackup.status).toBe(1);
+    expect(inconsistentBackup.stderr).toContain("elevation install receipt schema is invalid");
+  });
 
   it("builds an immutable source-addressed notarized ZIP with a portable installer", () => {
     const script = readFileSync(scriptPath, "utf8");
