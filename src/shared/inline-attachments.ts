@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isUnsafeDeviceReadPath } from "../infra/fs-safe-advanced.js";
 
 export type InlineAttachment = {
@@ -162,10 +163,10 @@ export function prepareInlineAttachmentSnapshots(params: {
   const attachments: PreparedInlineAttachmentSnapshot[] = [];
   let totalBytes = 0;
   for (const [attachmentIndex, raw] of params.attachments.entries()) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    if (!isRecord(raw)) {
       throw new Error("attachments_invalid_member (expected object)");
     }
-    const item = raw as Record<string, unknown>;
+    const item = raw;
     if (typeof item.name !== "string" || typeof item.content !== "string") {
       throw new Error("attachments_invalid_member (name and content must be strings)");
     }

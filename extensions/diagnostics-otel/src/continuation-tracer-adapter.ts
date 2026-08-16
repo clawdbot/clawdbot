@@ -91,6 +91,7 @@ function spanAttributesToOtel(
   // runtime values are already in the accepted set.
   const out: OtelAttributes = {};
   for (const key of Object.keys(attrs)) {
+    // SAFETY: ContinuationSpanAttributes values are string|number|boolean|readonly arrays thereof, a strict subset of OTEL's AttributeValue; the cast only widens the accepted union.
     out[key] = attrs[key] as OtelAttributeValue;
   }
   return out;

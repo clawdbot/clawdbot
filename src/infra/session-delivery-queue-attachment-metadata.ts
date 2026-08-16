@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 
 interface AttachmentRef {
@@ -28,10 +29,10 @@ function hasCanonicalAttachmentRefs(raw: unknown, refs: AttachmentRef[]): boolea
     return false;
   }
   return raw.every((value, index) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
+    if (!isRecord(value)) {
       return false;
     }
-    const record = value as Record<string, unknown>;
+    const record = value;
     const ref = refs[index];
     if (!ref) {
       return false;
@@ -47,7 +48,7 @@ function hasCanonicalAttachmentRefs(raw: unknown, refs: AttachmentRef[]): boolea
 }
 
 export function normalizeQueuedAttachmentRefs<T extends object>(entry: T): T {
-  const raw = (entry as T & { attachments?: unknown }).attachments;
+  const raw = isRecord(entry) ? entry.attachments : undefined;
   if (raw === undefined) {
     return entry;
   }
@@ -56,6 +57,7 @@ export function normalizeQueuedAttachmentRefs<T extends object>(entry: T): T {
   if (hasCanonicalAttachmentRefs(raw, refs)) {
     return entry;
   }
+  // SAFETY: entry is a plain queue-payload object; the shallow copy augmented here retains T's other own keys.
   const normalized = { ...entry } as T & { attachments?: AttachmentRef[] };
   if (refs.length > 0) {
     normalized.attachments = refs;
@@ -84,10 +86,10 @@ export function stripQueuedAttachmentMountWithoutAttachments<
 }
 
 function isAttachmentRef(value: unknown): value is AttachmentRef {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
-  const record = value as Record<string, unknown>;
+  const record = value;
   if (
     record.kind !== "blob-sha256" ||
     typeof record.sha256 !== "string" ||
@@ -105,10 +107,10 @@ function isAttachmentRef(value: unknown): value is AttachmentRef {
 }
 
 export function hasOnlyGenericAttachmentRefs(entry: unknown): boolean {
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+  if (!isRecord(entry)) {
     return false;
   }
-  const record = entry as Record<string, unknown>;
+  const record = entry;
   if (Object.hasOwn(record, "attachAs")) {
     return false;
   }

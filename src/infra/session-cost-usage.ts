@@ -10,6 +10,7 @@ import {
   parseParentSessionIdFromCheckpointFileName,
 } from "../config/sessions/artifacts.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
+import { hasErrnoCode } from "./errno.js";
 import { discoverAllSessionsReporting as discoverAllSessionsFromReporting } from "./session-cost-usage-reporting.js";
 import type { DiscoveredSession } from "./session-cost-usage.types.js";
 
@@ -60,7 +61,7 @@ export async function discoverAllSessions(params?: {
   try {
     entries = await fs.readdir(sessionsDir, { withFileTypes: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return discovered;
     }
     throw error;
@@ -79,7 +80,7 @@ export async function discoverAllSessions(params?: {
     try {
       mtime = (await fs.stat(checkpointPath)).mtimeMs;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      if (hasErrnoCode(error, "ENOENT")) {
         continue;
       }
       throw error;

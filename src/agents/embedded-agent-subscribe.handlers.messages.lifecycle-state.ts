@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
@@ -14,7 +15,6 @@ import {
   makeZeroUsageSnapshot,
   normalizeUsage,
   type NormalizedUsage,
-  type UsageLike,
 } from "./usage.js";
 
 export function preservePendingAssistantUsage(
@@ -27,7 +27,7 @@ export function preservePendingAssistantUsage(
   ) {
     return message;
   }
-  const messageUsage = normalizeUsage((message as { usage?: UsageLike }).usage);
+  const messageUsage = normalizeUsage(message.usage);
   if (hasNonzeroUsage(messageUsage)) {
     return message;
   }
@@ -61,10 +61,7 @@ export function capturePendingAssistantUsage(
   if (msg?.role !== "assistant" || isSubscribeTranscriptOnlyOpenClawAssistantMessage(msg)) {
     return;
   }
-  const assistantRecord =
-    evt.assistantMessageEvent && typeof evt.assistantMessageEvent === "object"
-      ? (evt.assistantMessageEvent as Record<string, unknown>)
-      : undefined;
+  const assistantRecord = asOptionalRecord(evt.assistantMessageEvent);
   const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
   if (evtType === "text_end" || evtType === "done" || evtType === "error") {
     ctx.recordAssistantUsage(assistantRecord);

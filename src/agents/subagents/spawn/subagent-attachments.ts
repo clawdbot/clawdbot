@@ -6,6 +6,7 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { FsSafeError, type FsSafeErrorCode } from "../../../infra/fs-safe.js";
@@ -209,7 +210,7 @@ function classifyAttachmentMaterializationFailure(
   if (error instanceof FsSafeError) {
     return `fs_safe_${error.code}`;
   }
-  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  const code = asOptionalRecord(error)?.code;
   if (code === "EACCES" || code === "EPERM" || code === "EROFS") {
     return "permission_denied";
   }

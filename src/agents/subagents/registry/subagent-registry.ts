@@ -1,4 +1,5 @@
 /** Coordinates subagent registration, lifecycle, delivery, steering, recovery, and persistence. */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentWaitParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { hasLiveOrRecentlyDispatchedContinuationWork } from "../../../auto-reply/continuation/work-store.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -118,10 +119,7 @@ function hasContinuationWorkForSweepEntry(entry: SubagentRunRecord): boolean {
 
 async function callGatewayForSweep<T>(request: Parameters<typeof callGateway>[0]): Promise<T> {
   if (request.method === "sessions.delete") {
-    const key =
-      request.params && typeof request.params === "object"
-        ? (request.params as { key?: unknown }).key
-        : undefined;
+    const key = asOptionalRecord(request.params)?.key;
     if (typeof key === "string") {
       const entry = [...subagentRuns.values()].find(
         (candidate) => candidate.childSessionKey === key,

@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { createExpiringMapCache } from "../../config/cache-utils.js";
 import { formatActiveContinuationTraceparent } from "../../infra/continuation-tracer.js";
@@ -165,7 +166,10 @@ export function createRequestCompactionTool(opts: RequestCompactionToolOpts): An
     ].join(" "),
     parameters: RequestCompactionToolSchema,
     execute: async (_toolCallId, args) => {
-      const params = args as Record<string, unknown>;
+      if (!isRecord(args)) {
+        throw new ToolInputError("request_compaction arguments must be an object.");
+      }
+      const params = args;
       const sessionKey = opts.agentSessionKey;
 
       if (!sessionKey) {

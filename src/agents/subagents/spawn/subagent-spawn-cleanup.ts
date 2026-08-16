@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { callGateway } from "../../../gateway/call.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
@@ -7,14 +8,13 @@ import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
 type GatewayCall = (options: Parameters<typeof callGateway>[0]) => Promise<unknown>;
 function isMatchingAbortResponse(response: unknown, gatewayRunId: string): boolean {
-  if (!response || typeof response !== "object") {
+  if (!isRecord(response)) {
     return false;
   }
-  const result = response as { aborted?: unknown; runIds?: unknown };
   return (
-    result.aborted === true &&
-    Array.isArray(result.runIds) &&
-    result.runIds.some((runId) => runId === gatewayRunId)
+    response.aborted === true &&
+    Array.isArray(response.runIds) &&
+    response.runIds.some((runId) => runId === gatewayRunId)
   );
 }
 
@@ -22,11 +22,12 @@ function isSettledAbortResponse(response: unknown, gatewayRunId: string): boolea
   if (isMatchingAbortResponse(response, gatewayRunId)) {
     return true;
   }
-  if (!response || typeof response !== "object") {
+  if (!isRecord(response)) {
     return false;
   }
-  const result = response as { aborted?: unknown; runIds?: unknown };
-  return result.aborted === false && Array.isArray(result.runIds) && result.runIds.length === 0;
+  return (
+    response.aborted === false && Array.isArray(response.runIds) && response.runIds.length === 0
+  );
 }
 
 function hasFrozenSessionIdentity(options?: SessionCleanupOptions): boolean {

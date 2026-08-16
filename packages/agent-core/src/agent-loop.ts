@@ -11,7 +11,7 @@ import type {
 } from "@openclaw/llm-core";
 import type { EventStream as SourceEventStream } from "@openclaw/llm-core";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { TranscriptNotContinuableError } from "./errors.js";
 import { uuidv7 } from "./harness/session/uuid.js";
 import {
@@ -139,16 +139,16 @@ function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessa
 }
 
 function normalizeToolErrorValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(normalizeToolErrorValue);
-  }
-  if (value && typeof value === "object") {
+  if (isRecord(value)) {
     return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
+      Object.entries(value)
         .filter(([, entry]) => entry !== undefined)
         .toSorted(([left], [right]) => left.localeCompare(right))
         .map(([key, entry]) => [key, normalizeToolErrorValue(entry)]),
     );
+  }
+  if (Array.isArray(value)) {
+    return value.map(normalizeToolErrorValue);
   }
   return value;
 }
@@ -199,11 +199,11 @@ function normalizeOptionalToolStringArray(value: unknown): string[] | undefined 
 }
 
 function normalizeContinueDelegateToolErrorArguments(args: unknown): unknown {
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
+  if (!isRecord(args)) {
     return normalizeToolErrorValue(args);
   }
 
-  const record = args as Record<string, unknown>;
+  const record = args;
   const task = normalizeOptionalToolString(readToolArg(record, "task"));
   const delaySeconds = normalizeOptionalToolNumber(readToolArg(record, "delaySeconds"));
   const mode = normalizeOptionalToolString(readToolArg(record, "mode"))?.toLowerCase();
@@ -276,13 +276,12 @@ function summarizeNormalizedToolErrorArguments(
 
 function extractToolResultErrorText(result: ToolResultMessage): string {
   const details = result.details;
-  if (details && typeof details === "object") {
-    const record = details as Record<string, unknown>;
-    if (typeof record.error === "string" && record.error.trim()) {
-      return record.error.trim();
+  if (isRecord(details)) {
+    if (typeof details.error === "string" && details.error.trim()) {
+      return details.error.trim();
     }
-    if (typeof record.message === "string" && record.message.trim()) {
-      return record.message.trim();
+    if (typeof details.message === "string" && details.message.trim()) {
+      return details.message.trim();
     }
   }
   return result.content

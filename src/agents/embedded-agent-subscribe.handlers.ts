@@ -43,7 +43,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
       try {
         return handler();
       } catch (err) {
-        ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
+        ctx.log.debug(evt.type + " handler failed: " + String(err));
       }
     };
 
@@ -54,7 +54,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
       }
       const task = result
         .catch((err: unknown) => {
-          ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
+          ctx.log.debug(evt.type + " handler failed: " + String(err));
         })
         .finally(() => {
           if (ctx.state.pendingEventChain === task) {
@@ -71,7 +71,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
     const task = ctx.state.pendingEventChain
       .then(() => run())
       .catch((err: unknown) => {
-        ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
+        ctx.log.debug(evt.type + " handler failed: " + String(err));
       })
       .finally(() => {
         if (ctx.state.pendingEventChain === task) {
@@ -90,13 +90,16 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
     options?: { detach?: boolean },
   ): void | Promise<void> => {
     const deliveryGeneration = ctx.getBlockReplyDeliveryGeneration();
-    const message =
+    let message: AgentMessage | undefined;
+    if (
       (evt.type === "message_start" ||
         evt.type === "message_update" ||
         evt.type === "message_end") &&
       "message" in evt
-        ? (evt.message as AgentMessage | undefined)
-        : undefined;
+    ) {
+      // SAFETY: message_start/update/end variants of AgentEvent always type message as AgentMessage; the checks above already rule out the generic '{ type: string }' fallback arm of EmbeddedAgentSubscribeEvent that forces this cast.
+      message = evt.message as AgentMessage | undefined;
+    }
     const messageRole = message?.role;
     if (
       evt.type.startsWith("tool_execution_") ||

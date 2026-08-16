@@ -165,7 +165,7 @@ export function loadDeliveryQueueEntryResult(
       .where("queue_name", "=", queueName)
       .where("id", "=", id)
       .where("status", "=", "pending"),
-  ) as DeliveryQueueSqliteRow | undefined;
+  );
   return row ? inflateDeliveryQueueEntryResult(row) : null;
 }
 

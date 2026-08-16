@@ -30,19 +30,20 @@ export function buildLateResolvedMediaMessage(params: {
     content = "";
   } else if (Array.isArray(resolvedContent) && typeof admittedContent === "string") {
     content = resolvedContent.filter((block) => {
-      const textBlock = block as { type?: unknown; text?: unknown } | null;
-      return textBlock?.type !== "text" || textBlock.text !== admittedContent;
+      return block.type !== "text" || block.text !== admittedContent;
     });
   }
   const idempotencyKey =
     typeof resolvedIdempotencyKey === "string" && resolvedIdempotencyKey.length > 0
-      ? `${resolvedIdempotencyKey}:late-media`
-      : `late-media:${typeof resolvedTimestamp === "number" ? resolvedTimestamp : Date.now()}`;
+      ? resolvedIdempotencyKey + ":late-media"
+      : "late-media:" + (typeof resolvedTimestamp === "number" ? resolvedTimestamp : Date.now());
   // Late-media scaffolding is wire-only so user-facing transcript projections skip it.
-  return {
+  const lateResolvedMessage = {
     ...params.resolvedMessage,
     content,
     idempotencyKey,
     __openclaw: { ...readUserTurnMessageMeta(params.resolvedMessage), lateMedia: true },
-  } as PersistedUserTurnMessage;
+  };
+  // SAFETY: idempotencyKey and __openclaw are informal wire-only extension fields read via Reflect elsewhere, not part of PersistedUserTurnMessage's declared shape.
+  return lateResolvedMessage as PersistedUserTurnMessage;
 }

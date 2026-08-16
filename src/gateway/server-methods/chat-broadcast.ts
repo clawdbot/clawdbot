@@ -196,8 +196,8 @@ export function broadcastChatAborted(params: {
     errorMessage: params.errorMessage,
   };
   params.context.broadcast("chat", payload, {
-    sessionKeys: resolveGlobalAwareNodeChatDeliveryKeys({
-      cfg: params.context.getRuntimeConfig?.() ?? ({} as OpenClawConfig),
+    sessionKeys: resolveChatSessionKeys({
+      context: params.context,
       sessionKey: params.sessionKey,
       agentId: payloadAgentId,
     }),

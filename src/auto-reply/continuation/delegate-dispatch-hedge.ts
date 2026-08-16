@@ -56,6 +56,17 @@ function formatErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+// An unset incoming field must not erase what an earlier arm supplied: a merged
+// hedge that still claims "applyDelegateChainTokensFold" without its
+// persist/load callbacks reads as "foldWithoutPersist" in dispatch, which
+// force-claims not-yet-due delegates and loses the folded chain cost. The two
+// cutoffs below are merged explicitly and stay unaffected.
+function definedEntriesOnly(params: DelegateDispatchHedgeParams): DelegateDispatchHedgeParams {
+  const entries = Object.entries(params).filter(([, value]) => value !== undefined);
+  // SAFETY: filtering out undefined values keeps every remaining key's value type intact.
+  return Object.fromEntries(entries) as DelegateDispatchHedgeParams;
+}
+
 function surfaceHedgeDispatchFailure(sessionKey: string, errorMessage: string): void {
   try {
     enqueueSystemEvent(
@@ -76,17 +87,6 @@ function mergeOptionalUpperBound(
   return existing === undefined || incoming === undefined
     ? undefined
     : Math.max(existing, incoming);
-}
-
-// An unset incoming field must not erase what an earlier arm supplied: a merged
-// hedge that still claims `applyDelegateChainTokensFold` without its
-// persist/load callbacks reads as `foldWithoutPersist` in dispatch, which
-// force-claims not-yet-due delegates and loses the folded chain cost. The two
-// cutoffs below are merged explicitly and stay unaffected.
-function definedEntriesOnly(params: DelegateDispatchHedgeParams): DelegateDispatchHedgeParams {
-  return Object.fromEntries(
-    Object.entries(params).filter(([, value]) => value !== undefined),
-  ) as DelegateDispatchHedgeParams;
 }
 
 function mergeHedgeParams(

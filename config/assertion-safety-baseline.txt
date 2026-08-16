@@ -1919,7 +1919,7 @@ src/agents/embedded-agent-runner/tool-result-truncation.ts	23
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	2
 src/agents/embedded-agent-subscribe.handlers.compaction.ts	1
-src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	6
+src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	4
 src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	6
 src/agents/embedded-agent-subscribe.handlers.messages.update.ts	6
 src/agents/embedded-agent-subscribe.handlers.tools.completion.ts	3
@@ -2043,7 +2043,7 @@ src/agents/session-raw-append-message.ts	2
 src/agents/session-suspension.ts	2
 src/agents/session-tool-result-guard-wrapper.ts	6
 src/agents/session-tool-result-guard.ts	26
-src/agents/session-transcript-repair.ts	15
+src/agents/session-transcript-repair.ts	14
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/agent-session-compaction.ts	1
 src/agents/sessions/agent-session-extensions.ts	1
@@ -2099,7 +2099,6 @@ src/agents/subagents/registry/subagent-session-cleanup.ts	2
 src/agents/subagents/spawn/acp-spawn-admission.ts	1
 src/agents/subagents/spawn/acp-spawn-parent-stream.ts	11
 src/agents/subagents/spawn/subagent-depth.ts	1
-src/agents/subagents/spawn/subagent-spawn-cleanup.ts	1
 src/agents/subagents/spawn/subagent-spawn-gateway.ts	3
 src/agents/subagents/spawn/subagent-spawn-session-patch.ts	1
 src/agents/subagents/spawn/subagent-spawn.ts	2
@@ -2815,7 +2814,6 @@ src/config/sessions/transcript-replay.ts	1
 src/config/sessions/transcript-stream.ts	1
 src/config/sessions/transcript-tree.ts	3
 src/config/sessions/transcript.ts	16
-src/config/sessions/types.ts	1
 src/config/state-dir-dotenv.ts	1
 src/config/talk.ts	1
 src/config/validation-channel-rules.ts	1
@@ -3342,7 +3340,7 @@ src/infra/session-cost-usage-collection.ts	4
 src/infra/session-cost-usage-pricing.ts	6
 src/infra/session-cost-usage-reporting.ts	9
 src/infra/session-delivery-queue-runtime.ts	1
-src/infra/session-delivery-queue-storage.ts	6
+src/infra/session-delivery-queue-storage.ts	4
 src/infra/shell-env.ts	1
 src/infra/sqlite-audit-record-store.ts	1
 src/infra/sqlite-coordinator.ts	2
@@ -3718,7 +3716,6 @@ src/plugins/runtime/runtime-channel.ts	1
 src/plugins/runtime/runtime-llm-isolated.ts	4
 src/plugins/runtime/runtime-llm.runtime.ts	5
 src/plugins/runtime/runtime-plugin-boundary.ts	2
-src/plugins/runtime/runtime-taskflow.ts	1
 src/plugins/runtime/runtime-web-channel-plugin.ts	4
 src/plugins/schema-validator.ts	7
 src/plugins/sdk-alias.ts	3
@@ -3804,7 +3801,7 @@ src/sessions/session-upstream-links.ts	2
 src/sessions/session-upstream-monitor.ts	2
 src/sessions/user-turn-transcript-runtime-context.ts	2
 src/sessions/user-turn-transcript.media-normalize.ts	2
-src/sessions/user-turn-transcript.ts	15
+src/sessions/user-turn-transcript.ts	14
 src/shared/account-enabled.ts	1
 src/shared/assistant-error-format.ts	3
 src/shared/bounded-serial-queue.ts	1
@@ -3858,7 +3855,6 @@ src/snapshot/manifest.ts	1
 src/state/agent-deletion-journal.ts	15
 src/state/backup-run-records.ts	1
 src/state/config-machine-state.ts	2
-src/state/control-ui-device-auth-migration.ts	1
 src/state/local-onboarding-state.ts	1
 src/state/openclaw-agent-board-schema.ts	1
 src/state/openclaw-agent-db-migration-required.ts	1
@@ -4150,7 +4146,7 @@ ui/src/lib/cron/index.ts	16
 ui/src/lib/gateway-diagnostics.ts	3
 ui/src/lib/gateway-errors.ts	1
 ui/src/lib/keyboard-shortcuts.ts	1
-ui/src/lib/nodes/index.ts	4
+ui/src/lib/nodes/index.ts	3
 ui/src/lib/nodes/inventory.ts	1
 ui/src/lib/plugin-activation.ts	3
 ui/src/lib/session-pull-requests.ts	2

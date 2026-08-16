@@ -3,6 +3,7 @@
  * Keeps model-supplied tool names compact, normalized, and policy-checked
  * before routing them to any tool execution surface.
  */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 
@@ -32,11 +33,10 @@ const TRANSCRIPT_TOOL_CALL_BLOCK_TYPES = new Set([
 export function isTranscriptToolCallBlock(
   value: unknown,
 ): value is { type: string; name?: unknown; input?: unknown; arguments?: unknown } {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
-  const type = (value as { type?: unknown }).type;
-  return typeof type === "string" && TRANSCRIPT_TOOL_CALL_BLOCK_TYPES.has(type);
+  return typeof value.type === "string" && TRANSCRIPT_TOOL_CALL_BLOCK_TYPES.has(value.type);
 }
 
 /** Normalize an optional iterable of allowed tool names for lookup. */
@@ -95,10 +95,10 @@ function redactContinueDelegateAttachmentContent(
       return value;
     }
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return value;
   }
-  const input = value as Record<string, unknown>;
+  const input = value;
   let sanitized = input;
   if (Object.hasOwn(input, "attachments")) {
     if (!Array.isArray(input.attachments)) {
@@ -155,10 +155,10 @@ function sanitizeContinueDelegateAttachAs(
 }
 
 function projectContinueDelegateAttachAs(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return undefined;
   }
-  const input = value as Record<string, unknown>;
+  const input = value;
   const hasCamel = Object.hasOwn(input, "mountPath");
   const hasSnake = Object.hasOwn(input, "mount_path");
   const key = hasCamel ? "mountPath" : hasSnake ? "mount_path" : undefined;
@@ -169,10 +169,10 @@ function projectContinueDelegateAttachAs(value: unknown): Record<string, unknown
 }
 
 function isRedactedContinueDelegateAttachment(value: unknown, allowLegacyName: boolean): boolean {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
-  const attachment = value as Record<string, unknown>;
+  const attachment = value;
   if (attachment.content !== REDACTED_SENTINEL) {
     return false;
   }
@@ -183,7 +183,7 @@ function isRedactedContinueDelegateAttachment(value: unknown, allowLegacyName: b
     const allowedKeys = allowLegacyName
       ? LEGACY_CONTINUE_DELEGATE_ATTACHMENT_METADATA_KEYS
       : CONTINUE_DELEGATE_ATTACHMENT_METADATA_KEYS;
-    if (!(allowedKeys as readonly string[]).includes(key)) {
+    if (!allowedKeys.some((allowedKey) => allowedKey === key)) {
       return false;
     }
     const metadata = attachment[key];
@@ -199,10 +199,10 @@ function isRedactedContinueDelegateAttachment(value: unknown, allowLegacyName: b
 
 function redactContinueDelegateAttachment(value: unknown): Record<string, unknown> {
   const redacted: Record<string, unknown> = { content: REDACTED_SENTINEL };
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return redacted;
   }
-  const attachment = value as Record<string, unknown>;
+  const attachment = value;
   for (const key of CONTINUE_DELEGATE_ATTACHMENT_METADATA_KEYS) {
     const metadata = attachment[key];
     if (typeof metadata !== "string" || metadata.trim().length === 0) {
@@ -251,6 +251,7 @@ export function sanitizeTranscriptToolCallBlock<
   ) {
     return block;
   }
+  // SAFETY: spreading block: T preserves every own enumerable property of T; the compiler cannot prove this for a generic T, but the resulting object always structurally satisfies T.
   const next = { ...block } as T;
   if (nameChanged) {
     next.name = normalizedName;

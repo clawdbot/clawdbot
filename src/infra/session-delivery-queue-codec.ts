@@ -1,4 +1,5 @@
 // Validates and normalizes durable session delivery queue payloads.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import {
   DelegateArtifactRecipientProjectionSchema,
@@ -487,7 +488,7 @@ function normalizeQueuedPostCompactionMountForPersistence(
   if (entry.kind !== "postCompactionDelegate") {
     return entry;
   }
-  const rawAttachAs = (entry as { attachAs?: unknown }).attachAs;
+  const rawAttachAs = entry.attachAs;
   if (
     rawAttachAs === undefined ||
     !rawAttachAs ||
@@ -496,7 +497,7 @@ function normalizeQueuedPostCompactionMountForPersistence(
   ) {
     return entry;
   }
-  const mountPath = (rawAttachAs as { mountPath?: unknown }).mountPath;
+  const mountPath = rawAttachAs.mountPath;
   const parsed = parseQueuedAttachmentMountPath(mountPath);
   if (parsed.status === "invalid") {
     return entry;
@@ -511,8 +512,8 @@ function normalizeQueuedPostCompactionMountForPersistence(
   }
   return {
     ...entry,
-    attachAs: { ...(rawAttachAs as Record<string, unknown>), mountPath: parsed.mountPath },
-  } as QueuedSessionDelivery;
+    attachAs: { ...rawAttachAs, mountPath: parsed.mountPath },
+  };
 }
 
 const INVALID_POST_COMPACTION_DELIVERY_JSON =
@@ -547,7 +548,7 @@ function invalidSessionDelivery(
 function decodeLoadedSessionDelivery(
   result: Extract<DeliveryQueueEntryLoadResult, { status: "loaded" }>,
 ): DecodedSessionDelivery {
-  const item = result.entry as typeof result.entry & { kind?: unknown };
+  const item: Record<string, unknown> = isRecord(result.entry) ? result.entry : {};
   const payloadKind = typeof item.kind === "string" ? item.kind : undefined;
   if (result.entryKind !== payloadKind) {
     return invalidSessionDelivery(
@@ -563,9 +564,9 @@ function decodeLoadedSessionDelivery(
     if (!parsed.success) {
       return invalidSessionDelivery(result.entry, INVALID_GENERIC_DELIVERY_SHAPE, result.entryJson);
     }
-    const attachmentNormalized = normalizeQueuedAttachmentRefs(
-      result.entry as QueuedSessionDelivery,
-    );
+    // SAFETY: parsed.success above confirms result.entry structurally matches QueuedSessionDelivery.
+    const validatedEntry = result.entry as QueuedSessionDelivery;
+    const attachmentNormalized = normalizeQueuedAttachmentRefs(validatedEntry);
     if (
       attachmentNormalized !== result.entry ||
       !hasOnlyGenericAttachmentRefs(attachmentNormalized)
@@ -576,19 +577,21 @@ function decodeLoadedSessionDelivery(
         result.entryJson,
       );
     }
-    const normalized = normalizeQueuedSessionDeliveryTraceparent(
-      attachmentNormalized,
-    ) as QueuedSessionDelivery;
+    const traceparentNormalized = normalizeQueuedSessionDeliveryTraceparent(attachmentNormalized);
+    // SAFETY: normalizeQueuedSessionDeliveryTraceparent only rewrites traceparent fields, preserving all other input properties including the identity fields QueuedSessionDelivery adds.
+    const normalized = traceparentNormalized as QueuedSessionDelivery;
     return { status: "loaded", entry: normalized };
   }
   const parsed = QueuedPostCompactionDelegateSchema.safeParse(result.entry);
-  return parsed.success
-    ? { status: "loaded", entry: parsed.data as QueuedSessionDelivery }
-    : invalidSessionDelivery(
-        result.entry,
-        INVALID_POST_COMPACTION_DELIVERY_SHAPE,
-        result.entryJson,
-      );
+  if (!parsed.success) {
+    return invalidSessionDelivery(
+      result.entry,
+      INVALID_POST_COMPACTION_DELIVERY_SHAPE,
+      result.entryJson,
+    );
+  }
+  // SAFETY: parsed.success above confirms result.entry structurally matches QueuedSessionDelivery.
+  return { status: "loaded", entry: parsed.data as QueuedSessionDelivery };
 }
 
 export function decodeSessionDeliveryResult(
@@ -618,6 +621,7 @@ export function normalizeSessionDeliveryForPersistence(
     if (!hasOnlyGenericAttachmentRefs(parsed.data)) {
       throw new Error(INVALID_GENERIC_DELIVERY_ATTACHMENTS);
     }
+    // SAFETY: parsed.success above confirms normalized structurally matches QueuedSessionDelivery.
     return parsed.data as QueuedSessionDelivery;
   }
   const parsed = QueuedPostCompactionDelegateSchema.safeParse(
@@ -626,6 +630,7 @@ export function normalizeSessionDeliveryForPersistence(
   if (!parsed.success) {
     throw new Error(INVALID_POST_COMPACTION_DELIVERY_SHAPE);
   }
+  // SAFETY: parsed.success above confirms the normalized entry structurally matches QueuedSessionDelivery.
   return parsed.data as QueuedSessionDelivery;
 }
 

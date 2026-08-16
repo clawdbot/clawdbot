@@ -63,20 +63,12 @@ const CONTROL_PLANE_UPDATE_PENDING_RETRY_DELAY_MS = process.env.VITEST ? 1 : 2_0
 const CONTROL_PLANE_UPDATE_PENDING_MAX_ATTEMPTS = 900;
 let latestUpdateRestartSentinel: RestartSentinelPayload | null = null;
 
-type AgentOwnedQueuedSystemEventFields = {
-  agentId?: string;
-  awaitPromptAdoption?: boolean;
-  expectedSessionId?: string;
-  managedDelegateArtifactDelivery?: unknown;
-  traceparent?: string;
-};
-
 export async function deliverQueuedSessionDelivery(params: {
   deps: CliDeps;
   entry: QueuedSessionDelivery;
   stateDir?: string;
 }) {
-  const entry = params.entry as QueuedSessionDelivery & AgentOwnedQueuedSystemEventFields;
+  const entry = params.entry;
   // Only owner-tagged targetless wakes bypass the fork delivery owner. Session-bound or
   // managed rows stay on the claim-validating path so restart cannot widen their authority.
   if (
@@ -199,7 +191,7 @@ function buildQueuedRestartContinuation(params: {
       idempotencyKey,
       maxRetries: RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS,
       completionRetention: "permanent",
-    } as QueuedSessionDeliveryPayload;
+    };
   }
   return {
     kind: "agentTurn",

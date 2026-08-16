@@ -81,8 +81,8 @@ export async function pruneFailedOlderThan(
         .select((eb) => eb.fn.countAll<number>().as("count"))
         .where("queue_name", "=", SESSION_DELIVERY_QUEUE_NAME)
         .where("status", "=", "failed"),
-    ) as { count: number | bigint } | undefined;
-    return row ? Number(row.count) : 0;
+    );
+    return row?.count ?? 0;
   };
   const scanned = countFailed();
   pruneExpiredDeliveryQueueTombstones(stateDir, now);
@@ -119,36 +119,31 @@ function splitSessionDeliveryStorageEnvelope(entry: DeliveryQueueEntryState): {
   coreEntry: DeliveryQueueEntryState;
   envelope: SessionDeliveryStorageEnvelope;
 } {
-  const raw = entry as DeliveryQueueEntryState & {
-    kind?: unknown;
-    agentId?: unknown;
-    retainOnFailure?: unknown;
-  };
-  const coreEntry = { ...entry } as Record<string, unknown>;
+  const kind = "kind" in entry ? entry.kind : undefined;
+  const agentId = "agentId" in entry ? entry.agentId : undefined;
+  const coreEntry: Record<string, unknown> = { ...entry };
   const envelope: SessionDeliveryStorageEnvelope = {};
-  if (
-    raw.kind === "systemEvent" &&
-    typeof raw.agentId === "string" &&
-    raw.agentId.trim().length > 0
-  ) {
-    envelope.agentId = raw.agentId;
+  if (kind === "systemEvent" && typeof agentId === "string" && agentId.trim().length > 0) {
+    envelope.agentId = agentId;
     delete coreEntry.agentId;
-  } else if (raw.kind === "systemEvent" && raw.agentId === undefined) {
+  } else if (kind === "systemEvent" && agentId === undefined) {
     delete coreEntry.agentId;
   }
-  if (raw.retainOnFailure === true) {
+  if (entry.retainOnFailure === true) {
     envelope.retainOnFailure = true;
     delete coreEntry.retainOnFailure;
-  } else if (raw.retainOnFailure === undefined) {
+  } else if (entry.retainOnFailure === undefined) {
     delete coreEntry.retainOnFailure;
   }
+  // SAFETY: coreEntry only ever drops the two optional agentId/retainOnFailure keys from a spread of entry, so it stays a valid DeliveryQueueEntryState.
   return { coreEntry: coreEntry as DeliveryQueueEntryState, envelope };
 }
 
 function normalizeSessionDeliveryForStorage(entry: QueuedSessionDelivery): QueuedSessionDelivery {
   const { coreEntry, envelope } = splitSessionDeliveryStorageEnvelope(entry);
+  // SAFETY: callers only ever pass a coreEntry split from a QueuedSessionDelivery, so it always has the kind/sessionKey shape of CoreQueuedSessionDelivery.
   const normalized = normalizeSessionDeliveryForPersistence(coreEntry as CoreQueuedSessionDelivery);
-  return { ...normalized, ...envelope } as QueuedSessionDelivery;
+  return { ...normalized, ...envelope };
 }
 
 function decodeStoredSessionDeliveryResult(result: DeliveryQueueEntryLoadResult) {
@@ -160,7 +155,7 @@ function decodeStoredSessionDeliveryResult(result: DeliveryQueueEntryLoadResult)
   return decoded.status === "loaded"
     ? {
         status: "loaded" as const,
-        entry: { ...decoded.entry, ...envelope } as QueuedSessionDelivery,
+        entry: { ...decoded.entry, ...envelope },
       }
     : decoded;
 }
@@ -177,9 +172,7 @@ export function prepareClaimedSessionDelivery(
   initialAttemptLeaseMs: number,
   now = Date.now(),
 ): QueuedSessionDelivery {
-  const payload = normalizeQueuedSessionDeliveryTraceparent(
-    params as CoreQueuedSessionDeliveryPayload,
-  ) as QueuedSessionDeliveryPayload;
+  const payload = normalizeQueuedSessionDeliveryTraceparent(params);
   return normalizeSessionDeliveryForStorage({
     ...payload,
     retainOnFailure: true,
@@ -187,7 +180,7 @@ export function prepareClaimedSessionDelivery(
     enqueuedAt: now,
     retryCount: 0,
     availableAt: now + Math.max(0, initialAttemptLeaseMs),
-  } as QueuedSessionDelivery);
+  });
 }
 
 export class SessionDeliveryDeferredError extends Error {
@@ -319,9 +312,7 @@ export async function enqueueSessionDeliveryWithStatus(
   params: QueuedSessionDeliveryPayload,
   stateDir?: string,
 ): Promise<SessionDeliveryEnqueueResult> {
-  const payload = normalizeQueuedSessionDeliveryTraceparent(
-    params as CoreQueuedSessionDeliveryPayload,
-  ) as QueuedSessionDeliveryPayload;
+  const payload = normalizeQueuedSessionDeliveryTraceparent(params);
   const id = buildEntryId(payload.idempotencyKey);
 
   const entry = normalizeSessionDeliveryForStorage({
@@ -330,7 +321,7 @@ export async function enqueueSessionDeliveryWithStatus(
     id,
     enqueuedAt: Date.now(),
     retryCount: 0,
-  } as QueuedSessionDelivery);
+  });
   upsertDeliveryQueueEntry({
     queueName: SESSION_DELIVERY_QUEUE_NAME,
     entry,

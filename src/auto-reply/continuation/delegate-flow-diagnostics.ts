@@ -12,7 +12,7 @@ export function describeDelegateState(stateJson: unknown): string {
   if (!stateJson || typeof stateJson !== "object" || Array.isArray(stateJson)) {
     return `stateType=${Array.isArray(stateJson) ? "array" : typeof stateJson}`;
   }
-  return `stateType=object keyCount=${Object.keys(stateJson as Record<string, unknown>).length}`;
+  return `stateType=object keyCount=${Object.keys(stateJson).length}`;
 }
 
 type ContinuationQueueDiagnosticDeps = {

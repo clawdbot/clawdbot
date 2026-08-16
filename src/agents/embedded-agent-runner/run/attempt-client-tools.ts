@@ -78,6 +78,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
   const trustedPluginLocalMediaToolNames = new Set(
     params.uncompactedEffectiveTools.flatMap((tool) => {
       const name = tool.name?.trim();
+      // SAFETY: getPluginToolMeta keys its WeakMap by object identity; the cast only reconciles two structurally distinct AgentTool types.
       const meta = getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0]);
       return name && meta?.trustedLocalMedia === true ? [name] : [];
     }),

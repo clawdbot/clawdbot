@@ -20,6 +20,12 @@ export type { ContinuationSignal };
 
 export const CONTINUE_WORK_TOKEN = "CONTINUE_WORK";
 
+function isContinuationDelegateFanoutMode(
+  value: string,
+): value is (typeof CONTINUATION_DELEGATE_FANOUT_MODES)[number] {
+  return CONTINUATION_DELEGATE_FANOUT_MODES.some((mode) => mode === value);
+}
+
 type DelegateDirectiveParse = { status: "applied" } | { status: "unknown" } | { status: "invalid" };
 
 type DelegateDirectiveState = {
@@ -116,10 +122,10 @@ function parseDelegateDirective(
     assignment.key === "fanout_mode"
   ) {
     const fanoutMode = assignment.value.trim().toLowerCase();
-    if (!CONTINUATION_DELEGATE_FANOUT_MODES.includes(fanoutMode as "tree" | "all")) {
+    if (!isContinuationDelegateFanoutMode(fanoutMode)) {
       return { status: "invalid" };
     }
-    state.fanoutMode = fanoutMode as "tree" | "all";
+    state.fanoutMode = fanoutMode;
     return { status: "applied" };
   }
 

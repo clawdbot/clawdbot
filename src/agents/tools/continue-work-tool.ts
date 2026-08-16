@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import {
   clampDelayMs,
@@ -46,7 +47,10 @@ export function createContinueWorkTool(opts: ContinueWorkToolOpts): AnyAgentTool
     ].join(" "),
     parameters: ContinueWorkToolSchema,
     execute: async (_toolCallId, args) => {
-      const params = args as Record<string, unknown>;
+      if (!isRecord(args)) {
+        throw new ToolInputError("continue_work arguments must be an object.");
+      }
+      const params = args;
       const sessionKey = opts.agentSessionKey;
 
       if (!sessionKey) {

@@ -410,7 +410,7 @@ function assertSafeArtifactScalar(value: string, field: "type" | "title" | "mime
     /^[a-z][a-z0-9+.-]*:/i.test(value) ||
     /^bearer(?:\s|$)/i.test(value);
   if (unsafe || (field === "mimeType" && !MIME_PATTERN.test(value))) {
-    throw new Error(`invalid delegate artifact ${field}`);
+    throw new Error("invalid delegate artifact " + field);
   }
 }
 
@@ -433,6 +433,7 @@ export function toDelegateArtifactSummaryV1(
     sizeBytes: claim.sizeBytes,
     source: "delegate-return",
     download: { mode: "unsupported" },
+    // SAFETY: sizeBytes is always supplied above from claim.sizeBytes, so despite SummarySchema marking it optional (for unrelated reuse), the parsed output always matches this type.
   }) as DelegateArtifactSummaryV1;
 }
 

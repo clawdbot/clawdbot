@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import {
   clampDelayMs,
@@ -47,6 +48,14 @@ const log = createSubsystemLogger("continuation/delegate-tool");
 
 const DELEGATE_MODES = ["normal", "silent", "silent-wake", "post-compaction"] as const;
 const FANOUT_MODES = CONTINUATION_DELEGATE_FANOUT_MODES;
+
+function isDelegateMode(value: string): value is (typeof DELEGATE_MODES)[number] {
+  return DELEGATE_MODES.some((mode) => mode === value);
+}
+
+function isFanoutMode(value: string): value is (typeof FANOUT_MODES)[number] {
+  return FANOUT_MODES.some((mode) => mode === value);
+}
 
 const ContinueDelegateToolSchema = Type.Object({
   task: Type.String({
@@ -191,10 +200,10 @@ function readInlineAttachmentsParam(
     return undefined;
   }
   return raw.map((entry, index) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    if (!isRecord(entry)) {
       throw new ToolInputError(`attachments[${index}] must be an attachment object.`);
     }
-    const record = entry as Record<string, unknown>;
+    const record = entry;
     if (typeof record.name !== "string" || typeof record.content !== "string") {
       throw new ToolInputError(
         `attachments[${index}] must include string name and content fields.`,
@@ -230,10 +239,10 @@ function readAttachAsParam(params: Record<string, unknown>): InlineAttachmentMou
     return undefined;
   }
 
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+  if (!isRecord(raw)) {
     throw new ToolInputError("attachAs must be an object.");
   }
-  const record = raw as Record<string, unknown>;
+  const record = raw;
   const keys = Object.keys(record);
   if (
     keys.some((key) => key !== "mountPath" && key !== "mount_path") ||
@@ -267,15 +276,11 @@ function readArtifactReturnFields(params: Record<string, unknown>): {
   const rawReturnOptions = readSnakeCaseParamRaw(params, "returnOptions");
   let artifacts: "forbidden" | "optional" | "required" | undefined;
   if (rawReturnOptions !== undefined) {
-    if (
-      !rawReturnOptions ||
-      typeof rawReturnOptions !== "object" ||
-      Array.isArray(rawReturnOptions)
-    ) {
+    if (!isRecord(rawReturnOptions)) {
       throw new ToolInputError("returnOptions must be an object.");
     }
 
-    const record = rawReturnOptions as Record<string, unknown>;
+    const record = rawReturnOptions;
     if (Object.keys(record).some((key) => key !== "artifacts")) {
       throw new ToolInputError("returnOptions contains unsupported fields.");
     }
@@ -299,14 +304,10 @@ function readArtifactReturnFields(params: Record<string, unknown>): {
   const rawRecipientContext = readSnakeCaseParamRaw(params, "recipientContext");
   let purpose: string | undefined;
   if (rawRecipientContext !== undefined) {
-    if (
-      !rawRecipientContext ||
-      typeof rawRecipientContext !== "object" ||
-      Array.isArray(rawRecipientContext)
-    ) {
+    if (!isRecord(rawRecipientContext)) {
       throw new ToolInputError("recipientContext must be an object.");
     }
-    const record = rawRecipientContext as Record<string, unknown>;
+    const record = rawRecipientContext;
     if (Object.keys(record).some((key) => key !== "purpose")) {
       throw new ToolInputError("recipientContext contains unsupported fields.");
     }
@@ -406,7 +407,10 @@ export function createContinueDelegateTool(opts: {
     ].join(" "),
     parameters: ContinueDelegateToolSchema,
     execute: async (_toolCallId, args) => {
-      const params = args as Record<string, unknown>;
+      if (!isRecord(args)) {
+        throw new ToolInputError("continue_delegate arguments must be an object.");
+      }
+      const params = args;
       const sessionKey = opts.agentSessionKey;
 
       if (!sessionKey) {
@@ -441,18 +445,18 @@ export function createContinueDelegateTool(opts: {
         delaySeconds !== undefined ? Math.max(0, delaySeconds) * 1000 : undefined;
 
       const modeRaw = typeof params.mode === "string" ? params.mode.trim().toLowerCase() : "";
-      if (modeRaw && !DELEGATE_MODES.includes(modeRaw as (typeof DELEGATE_MODES)[number])) {
+      if (modeRaw && !isDelegateMode(modeRaw)) {
         throw new ToolInputError(
           `Unknown mode "${modeRaw}". Valid modes: ${DELEGATE_MODES.join(", ")}`,
         );
       }
-      const mode = (modeRaw || "normal") as (typeof DELEGATE_MODES)[number];
+      const mode = modeRaw && isDelegateMode(modeRaw) ? modeRaw : "normal";
       const isPostCompaction = mode === "post-compaction";
       const targetSessionKey = readToolStringParam(params, "targetSessionKey");
       const targetSessionKeys = readStrictStringArrayParam(params, "targetSessionKeys");
       const fanoutModeRaw = readToolStringParam(params, "fanoutMode");
       const fanoutMode = fanoutModeRaw?.toLowerCase();
-      if (fanoutMode && !FANOUT_MODES.includes(fanoutMode as (typeof FANOUT_MODES)[number])) {
+      if (fanoutMode && !isFanoutMode(fanoutMode)) {
         throw new ToolInputError(
           `Unknown fanoutMode "${fanoutMode}". Valid fanout modes: ${FANOUT_MODES.join(", ")}`,
         );
@@ -467,7 +471,7 @@ export function createContinueDelegateTool(opts: {
       const targetingFields = {
         ...(targetSessionKey ? { targetSessionKey } : {}),
         ...(targetSessionKeys && targetSessionKeys.length > 0 ? { targetSessionKeys } : {}),
-        ...(fanoutMode ? { fanoutMode: fanoutMode as (typeof FANOUT_MODES)[number] } : {}),
+        ...(fanoutMode && isFanoutMode(fanoutMode) ? { fanoutMode } : {}),
       };
       const artifactReturnFields = readArtifactReturnFields(params);
       const artifactMode = artifactReturnFields.returnOptions?.artifacts ?? "forbidden";

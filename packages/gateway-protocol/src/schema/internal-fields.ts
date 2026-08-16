@@ -23,11 +23,7 @@ export function internalProtocolField<T extends object>(schema: T): T {
 }
 
 function isInternalProtocolField(schema: unknown): boolean {
-  return (
-    typeof schema === "object" &&
-    schema !== null &&
-    (schema as Record<typeof INTERNAL_PROTOCOL_FIELD, unknown>)[INTERNAL_PROTOCOL_FIELD] === true
-  );
+  return isProtocolSchemaRecord(schema) && schema[INTERNAL_PROTOCOL_FIELD] === true;
 }
 
 type StripResult = {
@@ -117,5 +113,6 @@ function cloneSchemaNode(value: unknown): StripResult {
 
 export function stripInternalProtocolFields<T>(schema: T): T | undefined {
   const result = cloneSchemaNode(schema);
+  // SAFETY: cloneSchemaNode recursively rebuilds the exact input shape (minus internal-only fields), so a non-removed result.value always matches the original generic T.
   return result.removed ? undefined : (result.value as T);
 }

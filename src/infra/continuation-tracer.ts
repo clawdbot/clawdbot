@@ -345,6 +345,55 @@ const noopSpan: Span = Object.freeze({
 });
 
 /**
+ * Default tracer: every method is a no-op. Returned from
+ * `getContinuationTracer()` until an adapter is registered. Callers that don't
+ * opt in see no behavior change.
+ */
+export const noopTracer: Tracer = Object.freeze({
+  startSpan(_name: string, _options?: StartSpanOptions): Span {
+    return noopSpan;
+  },
+});
+
+type ContinuationTracerState = {
+  activeTracer: Tracer;
+};
+
+const CONTINUATION_TRACER_STATE_KEY = Symbol.for("openclaw.continuationTracer.state.v1");
+
+function continuationTracerState(): ContinuationTracerState {
+  // Cross-module-identity singleton store, matching the idiom used elsewhere
+  // in the codebase (see e.g. outbound-echo-state.ts).
+  // SAFETY: globalThis is widened only to read/write this well-known symbol key.
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  // SAFETY: process is widened only to read/write the same well-known symbol key.
+  const processStore = process as NodeJS.Process & Record<PropertyKey, unknown>;
+  // SAFETY: this process-local key only ever holds a ContinuationTracerState.
+  const processState = processStore[CONTINUATION_TRACER_STATE_KEY] as
+    | ContinuationTracerState
+    | undefined;
+  if (processState) {
+    globalStore[CONTINUATION_TRACER_STATE_KEY] = processState;
+    return processState;
+  }
+  // SAFETY: same key/producer guarantee as processState above.
+  const globalState = globalStore[CONTINUATION_TRACER_STATE_KEY] as
+    | ContinuationTracerState
+    | undefined;
+  if (globalState) {
+    processStore[CONTINUATION_TRACER_STATE_KEY] = globalState;
+    return globalState;
+  }
+  const created: ContinuationTracerState = { activeTracer: noopTracer };
+  globalStore[CONTINUATION_TRACER_STATE_KEY] = created;
+  // Bundled plugin code and core can use different globalThis contexts while
+  // sharing one Node process. Bridge through process so every emitter sees the
+  // diagnostics adapter instead of silently falling back to the no-op tracer.
+  processStore[CONTINUATION_TRACER_STATE_KEY] = created;
+  return created;
+}
+
+/**
  * Wrap a concrete adapter span so its methods can never throw into the caller's
  * control flow. Continuation dispatch drives `setStatus/recordException/
  * traceparent/end` inside the delegate try/catch/finally; a throwing exporter
@@ -389,49 +438,6 @@ function guardSpan(span: Span, log?: (message: string) => void): Span {
       guard("end", () => span.end());
     },
   };
-}
-
-/**
- * Default tracer: every method is a no-op. Returned from
- * `getContinuationTracer()` until an adapter is registered. Callers that don't
- * opt in see no behavior change.
- */
-export const noopTracer: Tracer = Object.freeze({
-  startSpan(_name: string, _options?: StartSpanOptions): Span {
-    return noopSpan;
-  },
-});
-
-type ContinuationTracerState = {
-  activeTracer: Tracer;
-};
-
-const CONTINUATION_TRACER_STATE_KEY = Symbol.for("openclaw.continuationTracer.state.v1");
-
-function continuationTracerState(): ContinuationTracerState {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const processStore = process as NodeJS.Process & Record<PropertyKey, unknown>;
-  const processState = processStore[CONTINUATION_TRACER_STATE_KEY] as
-    | ContinuationTracerState
-    | undefined;
-  if (processState) {
-    globalStore[CONTINUATION_TRACER_STATE_KEY] = processState;
-    return processState;
-  }
-  const globalState = globalStore[CONTINUATION_TRACER_STATE_KEY] as
-    | ContinuationTracerState
-    | undefined;
-  if (globalState) {
-    processStore[CONTINUATION_TRACER_STATE_KEY] = globalState;
-    return globalState;
-  }
-  const created: ContinuationTracerState = { activeTracer: noopTracer };
-  globalStore[CONTINUATION_TRACER_STATE_KEY] = created;
-  // Bundled plugin code and core can use different globalThis contexts while
-  // sharing one Node process. Bridge through process so every emitter sees the
-  // diagnostics adapter instead of silently falling back to the no-op tracer.
-  processStore[CONTINUATION_TRACER_STATE_KEY] = created;
-  return created;
 }
 
 /**

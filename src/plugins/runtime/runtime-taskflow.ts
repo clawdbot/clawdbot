@@ -44,13 +44,17 @@ function assertSessionKey(sessionKey: string | undefined, errorMessage: string):
   return normalized;
 }
 
+function isManagedTaskFlowRecord(flow: TaskFlowRecord): flow is ManagedTaskFlowRecord {
+  return flow.syncMode === "managed" && Boolean(flow.controllerId);
+}
+
 function asManagedTaskFlowRecord(
   flow: TaskFlowRecord | undefined,
 ): ManagedTaskFlowRecord | undefined {
-  if (!flow || flow.syncMode !== "managed" || !flow.controllerId) {
+  if (!flow || !isManagedTaskFlowRecord(flow)) {
     return undefined;
   }
-  return flow as ManagedTaskFlowRecord;
+  return flow;
 }
 
 function isContinuationDelegateControllerId(controllerId: string): boolean {
@@ -61,7 +65,7 @@ function isContinuationDelegateControllerId(controllerId: string): boolean {
   );
 }
 
-function projectTaskFlowForPublicView(flow: TaskFlowRecord): TaskFlowRecord {
+function projectTaskFlowForPublicView<T extends TaskFlowRecord>(flow: T): T {
   if (!isContinuationDelegateFlow(flow)) {
     return flow;
   }
@@ -72,7 +76,7 @@ function projectTaskFlowForPublicView(flow: TaskFlowRecord): TaskFlowRecord {
 }
 
 function projectManagedTaskFlowForPublicView(flow: ManagedTaskFlowRecord): ManagedTaskFlowRecord {
-  return projectTaskFlowForPublicView(flow) as ManagedTaskFlowRecord;
+  return projectTaskFlowForPublicView(flow);
 }
 
 function mapFlowUpdateResult(result: TaskFlowUpdateResult): ManagedTaskFlowMutationResult {

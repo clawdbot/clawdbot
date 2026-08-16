@@ -1,4 +1,5 @@
 // Reconciles stale task-flow records with their child task state.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { listTasksForFlowId } from "./runtime-internal.js";
 import { isTaskFlowCancellationPending } from "./task-cancellation-state.js";
 import {
@@ -32,12 +33,10 @@ const PENDING_OBLIGATION_STATE_KEYS = ["terminalNoticePending"] as const;
 
 function hasUnfulfilledDurableObligation(flow: TaskFlowRecord): boolean {
   const state = flow.stateJson;
-  if (!state || typeof state !== "object" || Array.isArray(state)) {
+  if (!isRecord(state)) {
     return false;
   }
-  return PENDING_OBLIGATION_STATE_KEYS.some(
-    (key) => (state as Record<string, unknown>)[key] !== undefined,
-  );
+  return PENDING_OBLIGATION_STATE_KEYS.some((key) => state[key] !== undefined);
 }
 
 /** Counts task-flow registry maintenance actions without exposing individual records. */

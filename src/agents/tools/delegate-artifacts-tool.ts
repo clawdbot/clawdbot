@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { resolveContinuationRuntimeConfig } from "../../auto-reply/continuation/config.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -236,7 +237,10 @@ export function createDelegateArtifactTools(options: {
       "Paths are relative to that output root. The host retains private bytes and returns only a typed outcome.",
     parameters: PublishSchema,
     execute: async (toolCallId, args) => {
-      const input = args as { paths?: unknown };
+      if (!isRecord(args)) {
+        throw new ToolInputError("delegate_artifacts_publish arguments must be an object.");
+      }
+      const input = args;
       if (
         !options.agentSessionKey ||
         !options.sessionId ||
@@ -317,11 +321,10 @@ export function createDelegateArtifactTools(options: {
       if (!options.agentSessionKey || !options.sessionId || !options.workspaceDir) {
         return jsonResult({ outcome: "unauthorized" });
       }
-      const input = args as {
-        action?: unknown;
-        claimId?: unknown;
-        destination?: unknown;
-      };
+      if (!isRecord(args)) {
+        throw new ToolInputError("delegate_artifacts arguments must be an object.");
+      }
+      const input = args;
       const currentConfig = resolveCurrentConfig();
       const runtime = resolveContinuationRuntimeConfig(currentConfig);
       if (resolveCurrentSessionId(currentConfig, options.agentSessionKey) !== options.sessionId) {

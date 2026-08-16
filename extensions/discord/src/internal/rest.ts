@@ -81,12 +81,15 @@ function isFormDataLike(value: unknown): value is FormDataLike {
   return (
     typeof value === "object" &&
     value !== null &&
-    typeof (value as FormDataLike).entries === "function"
+    "entries" in value &&
+    typeof value.entries === "function"
   );
 }
 
 function isMockedFetch(fetchImpl: RequestClientOptions["fetch"]): boolean {
-  return typeof (fetchImpl as (typeof fetch & { mock?: unknown }) | undefined)?.mock === "object";
+  return (
+    typeof fetchImpl === "function" && "mock" in fetchImpl && typeof fetchImpl.mock === "object"
+  );
 }
 
 function appendFormDataEntry(
@@ -94,11 +97,7 @@ function appendFormDataEntry(
   key: string,
   value: FormDataEntryValue,
 ) {
-  const filename =
-    typeof (value as FormDataEntryValue & { name?: unknown }).name === "string" &&
-    (value as FormDataEntryValue & { name?: string }).name?.trim()
-      ? (value as FormDataEntryValue & { name: string }).name
-      : undefined;
+  const filename = typeof value !== "string" && value.name.trim() ? value.name : undefined;
   if (filename) {
     target.append(key, value, filename);
     return;
@@ -125,6 +124,7 @@ function normalizeInitForCustomFetch(
   const headers = new Headers(init.headers);
   headers.delete("content-length");
   headers.delete("content-type");
+  // SAFETY: undici's FormData implements the WHATWG FormData runtime contract fetch expects; only the nominal DOM lib type differs.
   return { ...init, headers, body: formData as unknown as BodyInit };
 }
 

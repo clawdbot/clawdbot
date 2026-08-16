@@ -180,9 +180,11 @@ function mergeSessionEntryWithPolicy(
 }
 
 function stripRetiredSessionEntryLocators(entry: SessionEntry): SessionEntry {
-  const mutable = entry as SessionEntry & { sessionFile?: unknown; transcriptPath?: unknown };
-  delete mutable.sessionFile;
-  delete mutable.transcriptPath;
+  // Legacy persisted entries may still carry these retired locator fields even
+  // though SessionEntry no longer declares them; Reflect.deleteProperty removes
+  // them without needing to widen entry's static shape.
+  Reflect.deleteProperty(entry, "sessionFile");
+  Reflect.deleteProperty(entry, "transcriptPath");
   return entry;
 }
 

@@ -62,7 +62,7 @@ async function invokeHeartbeatAgentRun(
         deps: {
           ...opts.deps,
           getReplyFromConfig: trackedGetReplyFromConfig,
-        } as HeartbeatDeps,
+        },
       },
       wake,
       prepared,

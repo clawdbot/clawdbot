@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -140,14 +141,14 @@ const MESSAGE_METADATA_KEY = "__openclaw";
 
 function readSessionDeliveryAckIds(message: unknown): Set<string> {
   const ids = new Set<string>();
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
+  if (!isRecord(message)) {
     return ids;
   }
-  const metadata = (message as Record<string, unknown>)[MESSAGE_METADATA_KEY];
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+  const metadata = message[MESSAGE_METADATA_KEY];
+  if (!isRecord(metadata)) {
     return ids;
   }
-  const deliveryIds = (metadata as { sessionDeliveryAckIds?: unknown }).sessionDeliveryAckIds;
+  const deliveryIds = metadata.sessionDeliveryAckIds;
   if (!Array.isArray(deliveryIds)) {
     return ids;
   }
@@ -204,10 +205,10 @@ type ManagedDeliverySettlement = {
 function readAdoptedSessionDeliveryIds(events: readonly unknown[]): Set<string> {
   const ids = new Set<string>();
   for (const event of events) {
-    if (!event || typeof event !== "object" || Array.isArray(event)) {
+    if (!isRecord(event)) {
       continue;
     }
-    for (const id of readSessionDeliveryAckIds((event as { message?: unknown }).message)) {
+    for (const id of readSessionDeliveryAckIds(event.message)) {
       ids.add(id);
     }
   }

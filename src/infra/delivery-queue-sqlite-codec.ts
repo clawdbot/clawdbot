@@ -67,6 +67,7 @@ export function inflateDeliveryQueueEntry(
 ): DeliveryQueueEntryState | null {
   let parsed: DeliveryQueueEntryState;
   try {
+    // SAFETY: entry_json is only ever produced by this codec's own encoder.
     parsed = JSON.parse(row.entry_json) as DeliveryQueueEntryState;
   } catch {
     return null;
