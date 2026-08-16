@@ -18,6 +18,7 @@ import {
   type QuestionClient,
   type QuestionClientResolutionOwner,
 } from "./question-prompt-client.ts";
+import type { QuestionPromptCommand } from "./question-prompt-command.ts";
 
 type QuestionDraft = {
   selected: Set<string>;
@@ -664,6 +665,7 @@ async function resolveQuestionPrompt(
   state: QuestionPromptState,
   id: string,
   resolution: { answers: QuestionAnswerValues } | { cancel: true },
+  command?: QuestionPromptCommand,
 ): Promise<void> {
   const prompt = state.prompts.get(id);
   const client = state.client;
@@ -684,12 +686,18 @@ async function resolveQuestionPrompt(
   prompt.revision = ++state.revision;
   state.onChange();
   try {
-    const result = await requestQuestionGateway(
-      client,
-      "question.resolve",
-      submittedAnswers ? { id, answers: submittedAnswers } : { id, cancel: true },
-      prompt.expiresAtMs,
-    );
+    const result = command
+      ? await command({
+          id,
+          expiresAtMs: prompt.expiresAtMs,
+          ...(submittedAnswers ? { answers: submittedAnswers } : { cancel: true }),
+        })
+      : await requestQuestionGateway(
+          client,
+          "question.resolve",
+          submittedAnswers ? { id, answers: submittedAnswers } : { id, cancel: true },
+          prompt.expiresAtMs,
+        );
     const resolved = parseQuestionResolveResult(result);
     if (!resolved || resolved.status !== (submittedAnswers ? "answered" : "cancelled")) {
       throw new Error("invalid question.resolve response");
@@ -730,12 +738,17 @@ export async function submitQuestionPrompt(
   state: QuestionPromptState,
   id: string,
   answers: QuestionAnswerValues,
+  command?: QuestionPromptCommand,
 ): Promise<void> {
-  await resolveQuestionPrompt(state, id, { answers });
+  await resolveQuestionPrompt(state, id, { answers }, command);
 }
 
-export async function cancelQuestionPrompt(state: QuestionPromptState, id: string): Promise<void> {
-  await resolveQuestionPrompt(state, id, { cancel: true });
+export async function cancelQuestionPrompt(
+  state: QuestionPromptState,
+  id: string,
+  command?: QuestionPromptCommand,
+): Promise<void> {
+  await resolveQuestionPrompt(state, id, { cancel: true }, command);
 }
 
 export function listQuestionPrompts(state: QuestionPromptState): QuestionPrompt[] {

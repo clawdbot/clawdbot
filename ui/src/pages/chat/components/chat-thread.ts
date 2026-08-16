@@ -13,6 +13,7 @@ import { guard } from "lit/directives/guard.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
+import type { ControlModelConversationSnapshot } from "../../../../../packages/gateway-client/src/model/conversation.js";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import type { SessionsListResult } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
@@ -143,6 +144,7 @@ type ChatThreadProps = {
   waitingApproval?: boolean;
   planStatus?: PlanStatus | null;
   questionPrompts?: readonly QuestionPrompt[];
+  controlModelArtifacts?: ControlModelConversationSnapshot["artifacts"];
   sessions: SessionsListResult | null;
   /** Host context resolving global-alias session keys (scope=global fleets). */
   /** Includes assistantAgentId so bare-global welcome recents scope to the selected agent. */
@@ -1479,6 +1481,7 @@ function renderChatThreadContents(
     runActive: Boolean(props.runActive),
     planStatus: props.planStatus,
     questionPrompts: props.questionPrompts,
+    controlModelArtifacts: props.controlModelArtifacts,
     loading: props.loading,
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,

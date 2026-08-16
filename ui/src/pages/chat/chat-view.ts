@@ -2,6 +2,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
+import type { ControlModelConversationSnapshot } from "../../../../packages/gateway-client/src/model/conversation.js";
 import type {
   SessionSharingRole,
   SessionSuggestion,
@@ -122,6 +123,7 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onSessionRailClear?: () => void;
     onSessionRailModeChange?: (mode: SessionRailMode) => void;
     gatewayQuestionPrompts?: readonly QuestionPrompt[];
+    controlModelArtifacts?: ControlModelConversationSnapshot["artifacts"];
     onGatewayQuestionChange?: () => void;
     onGatewayQuestionSubmit?: (
       id: string,
@@ -348,6 +350,7 @@ export function renderChat(props: ChatProps) {
       waitingApproval: props.waitingApproval,
       planStatus: props.planStatus,
       questionPrompts: props.gatewayQuestionPrompts,
+      controlModelArtifacts: props.controlModelArtifacts,
       sessions: props.sessions,
       sessionHost: props.sessionHost,
       gatewayUrl: props.gatewayUrl,
@@ -708,3 +711,5 @@ export function renderChat(props: ChatProps) {
     </section>
   `;
 }
+
+/* oxlint-disable max-lines -- This boundary-only view keeps the full chat prop contract together. */

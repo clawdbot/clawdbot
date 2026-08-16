@@ -1,4 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ControlModelConversationSnapshot } from "../../../../packages/gateway-client/src/model/conversation.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -21,6 +22,11 @@ import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import {
+  controlModelArtifactPreviews,
+  controlModelArtifactSourceKeys,
+  mergeControlModelArtifactPreview,
+} from "./chat-control-model-artifacts.ts";
 import {
   buildCompactionDividerItem,
   buildResetDividerItem,
@@ -88,6 +94,7 @@ export type BuildChatItemsProps = {
   runActive?: boolean;
   planStatus?: PlanStatus | null;
   questionPrompts?: readonly QuestionPrompt[];
+  controlModelArtifacts?: ControlModelConversationSnapshot["artifacts"];
   /** True while chat history is loading (initial load or background reload). */
   loading?: boolean;
   searchOpen?: boolean;
@@ -201,11 +208,60 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     .map((message) => removeLiveToolBlocksFromHistory(message, liveToolRefs));
   const historyKeys = buildMessageKeys(history);
   const toolKeys = buildMessageKeys(tools, history.length);
-  const liftedCanvasSources = tools.flatMap((message, index) => {
+  const rawLiftedCanvasSources = tools.flatMap((message, index) => {
     const source = extractChatMessagePreview(message);
     return source ? [{ ...source, message, index }] : [];
   });
+  const modelLiftedCanvasSources: typeof rawLiftedCanvasSources = [];
+  for (const [index, source] of controlModelArtifactPreviews(props.controlModelArtifacts ?? [], [
+    ...history,
+    ...tools,
+  ]).entries()) {
+    modelLiftedCanvasSources.push({
+      preview: source.preview,
+      text: source.text,
+      timestamp: source.timestamp,
+      message: {
+        role: "toolResult",
+        messageId: source.messageId,
+        toolCallId: source.toolCallId,
+        toolName: source.toolName,
+      },
+      index: tools.length + index,
+    });
+  }
+  const remainingModelSources = [...modelLiftedCanvasSources];
+  const consumedPersistedSources: Array<{
+    fallbackKey: string;
+    timestamp: number | null;
+    rawBaseIdentity: string | null;
+  }> = [];
+  const takeModelSource = (message: unknown) => {
+    const keys = controlModelArtifactSourceKeys(message);
+    if (keys.length === 0) {
+      return undefined;
+    }
+    const canonicalKey = keys.length > 1 ? keys[0] : undefined;
+    const fallbackKey = keys.at(-1);
+    const index =
+      canonicalKey !== undefined
+        ? remainingModelSources.findIndex((source) =>
+            controlModelArtifactSourceKeys(source.message).includes(canonicalKey),
+          )
+        : remainingModelSources.findIndex((source) => {
+            const sourceKeys = controlModelArtifactSourceKeys(source.message);
+            return (
+              fallbackKey !== undefined && sourceKeys.length === 1 && sourceKeys[0] === fallbackKey
+            );
+          });
+    if (index === -1) {
+      return undefined;
+    }
+    const source = remainingModelSources.splice(index, 1)[0];
+    return source;
+  };
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
+  const persistedCanvasSourceKeys = new Set<string>();
   const persistedCanvasIdentities = new Set<string>();
   for (const message of history) {
     const source = extractChatMessagePreview(message);
@@ -214,8 +270,8 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
     const baseIdentity = canvasPreviewBaseIdentity(message, source);
     if (baseIdentity) {
-      // fetchMcpAppView assigns a fresh viewId to every invocation. Matching the call and
-      // view therefore identifies the same preview while still tolerating a reused call ID.
+      // Compatibility previews can lack canonical message provenance, so retain the
+      // incumbent call+view identity as a secondary persisted/live dedupe fence.
       persistedCanvasIdentities.add(baseIdentity);
     }
   }
@@ -247,7 +303,38 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
 
     const isToolResult = normalized.role.toLowerCase() === "toolresult";
-    const persistedCanvasSource = isToolResult ? extractChatMessagePreview(msg) : null;
+    const rawPersistedCanvasSource = isToolResult ? extractChatMessagePreview(msg) : null;
+    const projectedPersistedCanvasSource = isToolResult ? takeModelSource(msg) : undefined;
+    if (projectedPersistedCanvasSource) {
+      const fallbackKey = controlModelArtifactSourceKeys(projectedPersistedCanvasSource.message).at(
+        -1,
+      );
+      if (fallbackKey) {
+        consumedPersistedSources.push({
+          fallbackKey,
+          timestamp: projectedPersistedCanvasSource.timestamp,
+          rawBaseIdentity: rawPersistedCanvasSource
+            ? canvasPreviewBaseIdentity(msg, rawPersistedCanvasSource)
+            : null,
+        });
+      }
+    }
+    const persistedCanvasSource =
+      rawPersistedCanvasSource && projectedPersistedCanvasSource
+        ? {
+            ...rawPersistedCanvasSource,
+            preview: mergeControlModelArtifactPreview(
+              rawPersistedCanvasSource.preview,
+              projectedPersistedCanvasSource.preview,
+            ),
+          }
+        : (rawPersistedCanvasSource ?? projectedPersistedCanvasSource ?? null);
+    if (persistedCanvasSource) {
+      const sourceKeys = controlModelArtifactSourceKeys(msg);
+      if (sourceKeys.length > 1 && sourceKeys[0]) {
+        persistedCanvasSourceKeys.add(sourceKeys[0]);
+      }
+    }
     const renderPersistedPreview =
       persistedCanvasSource != null &&
       (!searchFiltering || turnHasMatchingAssistant(history, i, props.searchQuery ?? ""));
@@ -369,10 +456,41 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       : undefined;
     appendQueuedSend(queued, liveTerminal);
   }
+  const liftedCanvasSources: typeof rawLiftedCanvasSources = [];
+  for (const source of rawLiftedCanvasSources) {
+    const fallbackKey = controlModelArtifactSourceKeys(source.message).at(-1);
+    const baseIdentity = canvasPreviewBaseIdentity(source.message, source);
+    const consumedIndex = consumedPersistedSources.findIndex(
+      (consumed) =>
+        consumed.fallbackKey === fallbackKey &&
+        ((consumed.timestamp !== null &&
+          source.timestamp !== null &&
+          consumed.timestamp === source.timestamp) ||
+          (consumed.rawBaseIdentity !== null && consumed.rawBaseIdentity === baseIdentity)),
+    );
+    if (consumedIndex !== -1) {
+      consumedPersistedSources.splice(consumedIndex, 1);
+      continue;
+    }
+    const projected = takeModelSource(source.message);
+    liftedCanvasSources.push(
+      projected
+        ? {
+            ...source,
+            preview: mergeControlModelArtifactPreview(source.preview, projected.preview),
+          }
+        : source,
+    );
+  }
+  liftedCanvasSources.push(...remainingModelSources);
   const currentTurnBounds = findCurrentTurnBounds(items);
   for (const liftedCanvasSource of liftedCanvasSources) {
+    const sourceKeys = controlModelArtifactSourceKeys(liftedCanvasSource.message);
     const baseIdentity = canvasPreviewBaseIdentity(liftedCanvasSource.message, liftedCanvasSource);
-    if (baseIdentity && persistedCanvasIdentities.has(baseIdentity)) {
+    if (
+      (sourceKeys.length > 1 && sourceKeys[0] && persistedCanvasSourceKeys.has(sourceKeys[0])) ||
+      (baseIdentity && persistedCanvasIdentities.has(baseIdentity))
+    ) {
       continue;
     }
     const sourceRunId = asRecord(liftedCanvasSource.message)?.runId;
