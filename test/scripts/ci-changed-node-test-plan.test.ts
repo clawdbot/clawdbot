@@ -2,15 +2,20 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { listAvailableExtensionIds } from "../../scripts/lib/changed-extensions.mts";
 import {
   createChangedExtensionFallbackShards,
   createChangedNodeTestShards,
   hasBuildArtifactAffectingChange,
+  hasCoreExtensionImpact,
   hasPromptSnapshotAffectingChange,
   hasQaSmokeAffectingChange,
   hasSqliteSessionLifecycleAffectingChange,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
-import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
+import {
+  listExtensionTestFilesForRoots,
+  resolveExtensionTestConfig,
+} from "../../scripts/lib/extension-test-plan.mts";
 import { hasImportGraphImpactOnTargets } from "../../scripts/test-projects.test-support.mts";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
@@ -33,6 +38,20 @@ function expectBoundedCodexFallback(
   ).toBe(true);
   expect(targets).toEqual(listExtensionTestFilesForRoots(["extensions/codex"]));
   expect(new Set(targets).size).toBe(targets.length);
+}
+
+function expectAllExtensionConfigs(
+  shards: ReturnType<typeof createChangedExtensionFallbackShards>,
+) {
+  const configs = new Set(shards.flatMap((shard) => shard.configs));
+  const expectedConfigs = new Set(
+    listAvailableExtensionIds().map((extensionId) =>
+      resolveExtensionTestConfig(`extensions/${extensionId}`),
+    ),
+  );
+
+  expect(configs).toEqual(expectedConfigs);
+  expect(configs).toContain("test/vitest/vitest.extension-codex.config.ts");
 }
 
 describe("CI changed Node test plan", () => {
@@ -298,6 +317,46 @@ describe("CI changed Node test plan", () => {
     expectBoundedCodexFallback(createChangedExtensionFallbackShards(changedPaths));
   });
 
+  it("covers every extension config when core changes can impact extension consumers", () => {
+    const shards = createChangedExtensionFallbackShards([
+      "src/gateway/tool-resolution.ts",
+      "src/agents/openclaw-tools.ts",
+      "extensions/discord/src/channel.ts",
+    ]);
+
+    expectAllExtensionConfigs(shards);
+  });
+
+  it("covers every extension config when the fallback planner itself changes", () => {
+    expectAllExtensionConfigs(
+      createChangedExtensionFallbackShards(["scripts/lib/ci-changed-node-test-plan.mts"]),
+    );
+  });
+
+  it("classifies core and fallback-gate extension impact", () => {
+    expect(hasCoreExtensionImpact(["src/agents/openclaw-tools.ts"])).toBe(true);
+    expect(hasCoreExtensionImpact(["scripts/lib/ci-changed-node-test-plan.mts"])).toBe(true);
+    expect(hasCoreExtensionImpact(["scripts/lib/extension-test-plan.mts"])).toBe(true);
+    expect(hasCoreExtensionImpact(["extensions/discord/src/channel.ts"])).toBe(false);
+    expect(hasCoreExtensionImpact(["docs/ci.md"])).toBe(false);
+  });
+
+  it("keeps extension-only fallbacks scoped to the changed extension config", () => {
+    expect(createChangedExtensionFallbackShards(["extensions/discord/src/channel.ts"])).toEqual([
+      {
+        checkName: "checks-node-changed-extensions-config",
+        configs: ["test/vitest/vitest.extension-discord.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+        shardName: "changed-extensions-config",
+      },
+    ]);
+  });
+
+  it("does not create extension fallback shards for docs-only diffs", () => {
+    expect(createChangedExtensionFallbackShards(["docs/ci.md"])).toEqual([]);
+  });
+
   it.each([
     {
       changedPath: "extensions/browser/src/browser/cdp.helpers.test.ts",
@@ -352,13 +411,8 @@ describe("CI changed Node test plan", () => {
     expect(new Set(targets).size).toBe(targets.length);
   });
 
-  it("skips extension fallback when no extension paths changed", () => {
-    expect(
-      createChangedExtensionFallbackShards([
-        "packages/gateway-protocol/src/frame-guards.ts",
-        "src/agents/live-model-filter.ts",
-      ]),
-    ).toEqual([]);
+  it("skips extension fallback when the core-impact predicate does not fire", () => {
+    expect(createChangedExtensionFallbackShards(["src/agents/live-model-filter.ts"])).toEqual([]);
   });
 
   it("falls back to bounded Codex config shards for deleted sources", () => {
