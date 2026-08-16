@@ -452,6 +452,23 @@ describe("buildAgentContext", () => {
     expect(context.model).toBe("openai/gpt-5.5 (+1 fallback)");
   });
 
+  it("shows inherited skill filters in the agent context", () => {
+    const context = buildAgentContext(
+      { id: "main" },
+      {
+        agents: {
+          defaults: { skills: ["github", "weather"] },
+          entries: { main: { default: true } },
+        },
+      },
+      null,
+      "main",
+      null,
+    );
+
+    expect(context.skillsLabel).toBe("2 selected");
+  });
+
   it("prefers per-agent configured identity over runtime global identity in agent panels", () => {
     const context = buildAgentContext(
       {
