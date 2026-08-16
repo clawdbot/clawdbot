@@ -945,7 +945,8 @@ describe("exec approvals CLI", () => {
 
     await expect(runNativeApprovalsFileCommand(filePath)).rejects.toThrow("__exit__:1");
 
-    expect(runtimeErrors[0]).toContain("File exceeds 1048576 bytes");
+    expect(writtenJson().error).toContain("File exceeds 1048576 bytes");
+    expect(runtimeErrors).toHaveLength(0);
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
 
@@ -954,7 +955,8 @@ describe("exec approvals CLI", () => {
 
     await expect(runNativeApprovalsFileCommand(dir)).rejects.toThrow("__exit__:1");
 
-    expect(runtimeErrors[0]).toMatch(/EISDIR|directory/i);
+    expect(writtenJson().error).toMatch(/EISDIR|directory/i);
+    expect(runtimeErrors).toHaveLength(0);
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
 
@@ -990,7 +992,8 @@ describe("exec approvals CLI", () => {
       openSpy.mockRestore();
     }
 
-    expect(runtimeErrors[0]).toContain("File exceeds 1048576 bytes");
+    expect(writtenJson().error).toContain("File exceeds 1048576 bytes");
+    expect(runtimeErrors).toHaveLength(0);
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
 });
