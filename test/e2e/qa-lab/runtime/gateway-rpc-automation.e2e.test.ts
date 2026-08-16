@@ -419,9 +419,9 @@ describe("Gateway task and automation RPCs", () => {
                 return (
                   observedHeartbeat.ts >= wakeRequestedAt &&
                   observedHeartbeat.status === "skipped" &&
-                  observedHeartbeat.reason === "no-route" &&
+                  observedHeartbeat.reason === "target-none" &&
                   observedHeartbeat.message ===
-                    "Heartbeat has no delivery route yet. Message your bot once, or set agents.defaults.heartbeat.target." &&
+                    "Heartbeat delivery is disabled by configuration (target: none)." &&
                   observedHeartbeat.preview === `Heartbeat handled: ${wakeText}`
                 );
               },

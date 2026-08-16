@@ -99,16 +99,10 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
   },
 }));
 
-vi.mock("./reply/commands-compact.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./reply/commands-compact.runtime.js")>();
-  return {
-    ...actual,
-    incrementCompactionCount: (params: Parameters<typeof actual.incrementCompactionCount>[0]) =>
-      actual.incrementCompactionCount({ ...params, expectedSession: undefined }),
-    isCurrentSessionEntry: () => true,
-    isEmbeddedAgentRunAbortableForCompaction: () => false,
-  };
-});
+vi.mock("./reply/commands-compact.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply/commands-compact.runtime.js")>()),
+  isEmbeddedAgentRunAbortableForCompaction: () => false,
+}));
 
 let capturedGetReplyFromConfig: GetReplyFromConfig | undefined;
 installTriggerHandlingReplyHarness((impl) => {
@@ -551,13 +545,17 @@ describe("trigger handling", () => {
       const storePath = join(home, "compact-main.sessions.json");
       const cfg = makeCfg(home);
       cfg.session = { ...cfg.session, store: storePath };
-      mockSuccessfulCompaction();
-
       const request = {
         Body: "/compact focus on decisions",
         From: "+1003",
         To: "+2000",
       };
+      const sessionKey = resolveSessionKey("per-sender", request, undefined, "main");
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        { sessionId: "compact-main-session", updatedAt: Date.now() },
+      );
+      mockSuccessfulCompaction();
 
       const res = await getReplyFromConfig(
         {
@@ -570,7 +568,6 @@ describe("trigger handling", () => {
       const text = maybeReplyText(res);
       expect(text).toMatch(/^⚙️ Compacted/u);
       expect(getCompactEmbeddedAgentSessionMock()).toHaveBeenCalledOnce();
-      const sessionKey = resolveSessionKey("per-sender", request, undefined, "main");
       expect(loadSessionEntry({ storePath, sessionKey })?.compactionCount).toBe(1);
     });
   });
@@ -580,13 +577,19 @@ describe("trigger handling", () => {
       getCompactEmbeddedAgentSessionMock().mockReset();
       mockSuccessfulCompaction();
       const cfg = makeCfg(home);
-      cfg.session = { ...cfg.session, store: join(home, "compact-worker.sessions.json") };
+      const storePath = join(home, "compact-worker.sessions.json");
+      const sessionKey = "agent:worker1:telegram:12345";
+      cfg.session = { ...cfg.session, store: storePath };
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        { sessionId: "compact-worker-session", updatedAt: Date.now() },
+      );
       const res = await getReplyFromConfig(
         {
           Body: "/compact",
           From: "+1004",
           To: "+2000",
-          SessionKey: "agent:worker1:telegram:12345",
+          SessionKey: sessionKey,
           CommandAuthorized: true,
         },
         {},
