@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { linePlugin } from "./channel.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import { createLineQuickReply, lineMessageActions, renderLineCard } from "./rich-messages.js";
+import type { LineRichCard } from "./types.js";
 
 function resolveChannelDataSchema() {
   const discovery = lineMessageActions.describeMessageTool({
@@ -118,13 +119,13 @@ describe("LINE rich-message boundaries", () => {
   });
 
   it("renders each typed card through its existing LINE Flex path", () => {
-    const cards = [
+    const cards: LineRichCard[] = [
       { type: "media_player", title: "Song" },
       { type: "event", title: "Meeting", date: "Monday" },
       { type: "agenda", title: "Today", events: [{ title: "Standup" }] },
       { type: "device", name: "TV" },
       { type: "appletv_remote" },
-    ] as const;
+    ];
 
     for (const card of cards) {
       expect(renderLineCard(card).contents).toMatchObject({ type: "bubble" });

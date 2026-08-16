@@ -135,7 +135,10 @@ function toLineAction(button: MessagePresentationButton): Action | undefined {
   if (normalized?.type === "callback") {
     return postbackAction(button.label, normalized.value, button.label);
   }
-  if (normalized?.type === "url" || (normalized?.type === "web-app" && normalized.url)) {
+  if (normalized?.type === "url") {
+    return uriAction(button.label, normalized.url);
+  }
+  if (normalized?.type === "web-app" && normalized.url) {
     return uriAction(button.label, normalized.url);
   }
   return undefined;
