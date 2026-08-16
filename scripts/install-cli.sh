@@ -1762,7 +1762,7 @@ EOF
     fail "Could not activate the prewarmed OpenClaw launcher"
   fi
 
-  version_output="$($PREFIX/bin/openclaw --version 2>/dev/null || true)"
+  version_output="$("$PREFIX/bin/openclaw" --version 2>/dev/null || true)"
   if [[ "$version_output" != *"OpenClaw ${app_version}"* || "$version_output" != *"(${git_commit:0:7}"* ]]; then
     rollback_prewarmed_runtime
     fail "Installed prewarmed runtime verification failed"
