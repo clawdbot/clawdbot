@@ -637,6 +637,7 @@ suite.define(() => {
         );
       await page.getByRole("status").filter({ hasText: "Connecting to session" }).waitFor();
       await page.clock.fastForward(30_001);
+      await page.clock.runFor(100);
 
       await page.getByText("Session did not connect within 30 seconds.", { exact: true }).waitFor();
       const close = await gateway.waitForRequest("terminal.close");
@@ -742,11 +743,12 @@ suite.define(() => {
     const catalogRequestCount = (await gateway.getRequests("sessions.catalog.list")).length;
     await page.clock.install();
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-    await page.clock.fastForward(50);
+    await page.clock.runFor(50);
     await expect
       .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
       .toBeGreaterThanOrEqual(catalogRequestCount + 1);
     await page.clock.fastForward(30_000);
+    await page.clock.runFor(100);
     await expect
       .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
       .toBeGreaterThanOrEqual(catalogRequestCount + 2);
@@ -769,7 +771,7 @@ suite.define(() => {
       element.scrollTop = 0;
       element.dispatchEvent(new Event("scroll"));
     });
-    await page.clock.fastForward(100);
+    await page.clock.runFor(100);
     await catalogPane
       .locator('.chat-virtual-row:not([data-virtual-row-key="history"])')
       .first()
@@ -838,10 +840,10 @@ suite.define(() => {
     const exhaustedReadCount = (await gateway.getRequests("sessions.catalog.read")).length;
     await thread.hover();
     await page.mouse.wheel(0, -10_000);
-    await page.clock.fastForward(100);
+    await page.clock.runFor(100);
     await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
     await expect.poll(() => page.getByText("older question", { exact: true }).count()).toBe(1);
-    await page.clock.fastForward(500);
+    await page.clock.runFor(500);
     expect(await catalogPane.locator(".chat-history-loading").count()).toBe(0);
     expect(await catalogPane.getByRole("button", { name: "Load older" }).count()).toBe(0);
     expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(exhaustedReadCount);
