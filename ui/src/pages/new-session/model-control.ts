@@ -102,7 +102,6 @@ export class NewSessionModelControl {
     | {
         agentId: string;
         client: NewSessionMetadataClient;
-        controller: AbortController;
         id: number;
       }
     | undefined;
@@ -142,13 +141,11 @@ export class NewSessionModelControl {
   }
 
   private cancelMetadataRequest() {
-    const active = this.activeMetadataRequest;
-    if (!active) {
+    if (!this.activeMetadataRequest) {
       return;
     }
     this.activeMetadataRequest = undefined;
     this.metadataRequestId += 1;
-    active.controller.abort();
   }
 
   private clearCatalogTargets() {
@@ -242,12 +239,10 @@ export class NewSessionModelControl {
 
   private startMetadataRequest(client: NewSessionMetadataClient, agentId: string) {
     this.cancelMetadataRequest();
-    const controller = new AbortController();
     const requestId = ++this.metadataRequestId;
     this.activeMetadataRequest = {
       agentId,
       client,
-      controller,
       id: requestId,
     };
     const cached = peekChatMetadata(client, agentId);
@@ -261,12 +256,11 @@ export class NewSessionModelControl {
     }
 
     void revalidateChatMetadata(client, agentId, {
-      signal: controller.signal,
       startupRetryWindowMs: 60_000,
     }).then(
       (result) => {
-        // Aborted transports may still resolve. Only the request that still
-        // owns the control may publish catalog data or restore preferences.
+        // Only the request that still owns the control may publish catalog data
+        // or restore preferences.
         if (this.activeMetadataRequest?.id !== requestId) {
           return;
         }

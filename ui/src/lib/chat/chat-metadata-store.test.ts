@@ -159,10 +159,8 @@ describe("chat metadata store", () => {
       .mockRejectedValueOnce(startupUnavailableError(250))
       .mockResolvedValueOnce(result);
     const client = clientWith(request);
-    const controller = new AbortController();
 
     const refresh = revalidateChatMetadata(client, "main", {
-      signal: controller.signal,
       startupRetryWindowMs: 60_000,
     });
     await vi.advanceTimersByTimeAsync(249);
@@ -196,28 +194,6 @@ describe("chat metadata store", () => {
     await rejection;
     expect(request).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("aborts a pending startup retry", async () => {
-    vi.useFakeTimers();
-    const request = vi.fn().mockRejectedValue(startupUnavailableError(2_000));
-    const client = clientWith(request);
-    const controller = new AbortController();
-    const refresh = revalidateChatMetadata(client, "main", {
-      signal: controller.signal,
-      startupRetryWindowMs: 60_000,
-    });
-    const rejection = expect(refresh).rejects.toMatchObject({ name: "AbortError" });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(vi.getTimerCount()).toBe(1);
-
-    controller.abort();
-    await vi.advanceTimersByTimeAsync(0);
-
-    await rejection;
-    expect(vi.getTimerCount()).toBe(0);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(request).toHaveBeenCalledOnce();
   });
 
   it("stops startup retries at the configured deadline", async () => {

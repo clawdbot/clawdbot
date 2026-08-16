@@ -41,59 +41,25 @@ function metadataEntryFor(
   return entry;
 }
 
-function metadataAbortError(signal: AbortSignal): Error {
-  return signal.reason instanceof Error
-    ? signal.reason
-    : new DOMException("New-session metadata retry aborted", "AbortError");
-}
-
-function waitForMetadataRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) {
-    return Promise.reject(metadataAbortError(signal));
-  }
-
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      globalThis.clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-    };
-    const onAbort = () => {
-      cleanup();
-      if (signal) {
-        reject(metadataAbortError(signal));
-      }
-    };
-
-    signal?.addEventListener("abort", onAbort, { once: true });
-    const timer = globalThis.setTimeout(() => {
-      cleanup();
-      resolve();
-    }, delayMs);
-  });
+function waitForMetadataRetry(delayMs: number): Promise<void> {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, delayMs));
 }
 
 async function requestChatMetadata(
   client: GatewayBrowserClient,
   agentId: string | null | undefined,
-  opts?: { signal?: AbortSignal; startupRetryWindowMs?: number },
+  opts?: { startupRetryWindowMs?: number },
 ): Promise<ChatMetadataResult> {
   const params = agentId ? { agentId } : {};
   const retryWindowMs = opts?.startupRetryWindowMs;
-  const signal = opts?.signal;
   if (retryWindowMs === undefined) {
-    return signal
-      ? client.request<ChatMetadataResult>("chat.metadata", params, { signal })
-      : client.request<ChatMetadataResult>("chat.metadata", params);
+    return client.request<ChatMetadataResult>("chat.metadata", params);
   }
 
   const deadlineAt = Date.now() + retryWindowMs;
   let latestStartupError: Error | undefined;
 
   while (true) {
-    if (signal?.aborted) {
-      throw metadataAbortError(signal);
-    }
-
     const remainingMs = deadlineAt - Date.now();
     if (remainingMs <= 0) {
       throw latestStartupError ?? new Error("New-session metadata retry deadline elapsed");
@@ -101,7 +67,6 @@ async function requestChatMetadata(
 
     try {
       return await client.request<ChatMetadataResult>("chat.metadata", params, {
-        ...(signal ? { signal } : {}),
         timeoutMs: Math.min(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS, remainingMs),
       });
     } catch (error) {
@@ -120,7 +85,7 @@ async function requestChatMetadata(
       }
 
       latestStartupError = requestError;
-      await waitForMetadataRetry(Math.min(retryAfterMs, retryRemainingMs), signal);
+      await waitForMetadataRetry(Math.min(retryAfterMs, retryRemainingMs));
     }
   }
 }
@@ -176,8 +141,10 @@ export function loadChatMetadata(
 export function revalidateChatMetadata(
   client: GatewayBrowserClient,
   agentId: string | null | undefined,
-  opts?: { signal?: AbortSignal; startupRetryWindowMs?: number },
+  opts?: { startupRetryWindowMs?: number },
 ): Promise<ChatMetadataResult> {
+  // Shared revalidation outlives any one caller: consumers drop interest through
+  // ownership checks, while completion warms the cache for the next mount.
   const entry = metadataEntryFor(client, agentId);
   if (entry.revalidationPending) {
     return entry.revalidationPending;

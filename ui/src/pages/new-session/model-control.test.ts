@@ -253,6 +253,39 @@ describe("new-session model runtime", () => {
     refresh.resolve({ models });
   });
 
+  it("keeps a shared metadata request alive when its first control is torn down", async () => {
+    const models: ModelCatalogEntry[] = [
+      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
+    ];
+    const pending = deferred<{ models: ModelCatalogEntry[] }>();
+    const { context, request } = contextWith([]);
+    request.mockImplementationOnce((_method, _params, options?: { signal?: AbortSignal }) => {
+      options?.signal?.addEventListener(
+        "abort",
+        () => pending.reject(new DOMException("metadata request aborted", "AbortError")),
+        { once: true },
+      );
+      return pending.promise;
+    });
+    const firstControl = new NewSessionModelControl(() => undefined);
+    firstControl.load(context, "main", true);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+
+    firstControl.reset();
+    const remountedControl = new NewSessionModelControl(() => undefined);
+    remountedControl.load(context, "main", true);
+    pending.resolve({ models });
+
+    await vi.waitFor(() => {
+      const container = renderControl(remountedControl, context);
+      expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
+      expect(
+        container.querySelector('[data-chat-model-option="openai/gpt-5.6-luna"]'),
+      ).not.toBeNull();
+    });
+    expect(request).toHaveBeenCalledOnce();
+  });
+
   it("waits for selected-agent defaults after chat metadata resolves", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", reasoning: true },
@@ -782,15 +815,7 @@ describe("new-session model runtime", () => {
     ]);
     const control = new NewSessionModelControl(() => undefined);
     control.load(context, "main", true);
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith(
-        "chat.metadata",
-        { agentId: "main" },
-        expect.objectContaining({
-          signal: expect.any(AbortSignal),
-        }),
-      ),
-    );
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     await vi.waitFor(() => {
       control.selected = "openai/gpt-5.6-luna";
       expect(control.resolveAgentRuntime({ context })).toEqual({
