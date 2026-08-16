@@ -25,8 +25,9 @@ const BROWSER_EXTENSION_INSTALL_WAIT_DEFAULT_MS = 30_000;
 const BROWSER_EXTENSION_INSTALL_WAIT_MIN_MS = 1_000;
 const BROWSER_EXTENSION_INSTALL_WAIT_MAX_MS = 120_000;
 const NATIVE_HOST_DESCRIPTION = "OpenClaw browser extension bootstrap";
-// This exact Foundation Store identity is trusted as a caller, never as proof
-// that an arbitrary extension path is OpenClaw-owned.
+// Chrome authorizes native messaging by extension ID. This trust grant intentionally
+// includes user-loaded unpacked builds that preserve the Store ID; those builds must be trusted.
+// The ID is never proof that an arbitrary extension path is OpenClaw-owned.
 const FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID = "kcdjddhmeafeomebliikmbpblkmkfoig";
 export const FOUNDATION_CHROME_WEB_STORE_URL = `https://chromewebstore.google.com/detail/openclaw/${FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID}`;
 

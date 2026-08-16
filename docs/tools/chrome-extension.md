@@ -272,6 +272,10 @@ plus deterministic development origins in canonical order. The Store identity
 is a fixed product trust grant, not proof that an arbitrary path is
 OpenClaw-owned.
 
+Install the official Chrome Web Store build for normal use. Only load unpacked
+development copies you trust: Chrome can give a key-matched unpacked build the
+same extension identity and native-host access.
+
 The unpacked development ID calculation matches Chromium's
 `crx_file::id_util::GenerateIdForPath`: hash the canonical absolute path's raw
 bytes with SHA-256 (native UTF-16LE path bytes on Windows, with only a lowercase
