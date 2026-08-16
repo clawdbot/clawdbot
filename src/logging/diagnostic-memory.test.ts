@@ -244,6 +244,7 @@ describe("diagnostic memory", () => {
     const gb = 1024 ** 3;
 
     for (const [index, sample] of testCase.samples.entries()) {
+      const heapUsedMiB = "heapUsedMiB" in sample ? sample.heapUsedMiB : undefined;
       emitDiagnosticMemorySample({
         now: (index + 1) * 11 * 60 * 1000,
         heapSizeLimitBytes: testCase.heapSizeLimitBytes,
@@ -251,9 +252,7 @@ describe("diagnostic memory", () => {
         isBunRuntime: testCase.isBunRuntime,
         memoryUsage: memoryUsage({
           rss: Math.round(sample.rssGiB * gb),
-          ...("heapUsedMiB" in sample
-            ? { heapUsed: Math.round(sample.heapUsedMiB * 1024 ** 2) }
-            : {}),
+          ...(heapUsedMiB === undefined ? {} : { heapUsed: Math.round(heapUsedMiB * 1024 ** 2) }),
         }),
       });
     }
