@@ -8,6 +8,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { activateChatHeaderPanelAction } from "./chat-side-panel.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -18,6 +19,16 @@ let server: ControlUiE2eServer;
 // Browser contexts preserve test isolation; keep one process warm for this file.
 let browser: Browser;
 const openContexts = new Set<BrowserContext>();
+
+async function panelActionIds(page: import("playwright").Page): Promise<string[]> {
+  return page.locator("openclaw-chat-header-session-menu").evaluate((element) =>
+    (
+      element as HTMLElement & {
+        panelActions: Array<{ id: string }>;
+      }
+    ).panelActions.map((action) => action.id),
+  );
+}
 
 async function newBrowserContext(): Promise<BrowserContext> {
   const context = await browser.newContext({
@@ -206,7 +217,7 @@ describeControlUiE2e("session diff panel", () => {
     });
     await page.goto(`${server.baseUrl}chat`);
 
-    await page.locator(".chat-session-diff-toggle").first().click();
+    await activateChatHeaderPanelAction(page, "Show session changes");
 
     const panel = page.locator(".session-diff");
     await expect.poll(() => panel.count()).toBe(1);
@@ -336,8 +347,7 @@ describeControlUiE2e("session diff panel", () => {
       .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
       .toBe(1);
 
-    const toggles = page.locator(".chat-session-diff-toggle");
-    await expect.poll(() => toggles.count()).toBe(0);
+    await expect.poll(() => panelActionIds(page)).not.toContain("changes");
     await expect.poll(() => page.locator(".session-diff").count()).toBe(0);
 
     await gateway.setMethodResponse("sessions.files.list", {
@@ -352,8 +362,7 @@ describeControlUiE2e("session diff panel", () => {
       .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
       .toBe(2);
 
-    await expect.poll(() => toggles.count()).toBe(1);
-    await expect.poll(() => toggles.first().isEnabled()).toBe(true);
+    await expect.poll(() => panelActionIds(page)).toContain("changes");
   });
 
   it("keeps the panel fallback for gateways that omit checkout capability", async () => {
@@ -373,7 +382,7 @@ describeControlUiE2e("session diff panel", () => {
     });
     await page.goto(`${server.baseUrl}chat`);
 
-    await page.locator(".chat-session-diff-toggle").first().click();
+    await activateChatHeaderPanelAction(page, "Show session changes");
     await expect
       .poll(() => page.locator(".session-diff .session-diff__note").textContent())
       .toContain("not a git checkout");

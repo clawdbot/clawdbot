@@ -416,7 +416,6 @@ src/agents/system-prompt.ts
 src/agents/tool-display-common.ts
 src/agents/tool-loop-detection.test.ts
 src/agents/tool-search.test.ts
-src/agents/tools/computer-tool.ts
 src/agents/tools/cron-tool.test.ts
 src/agents/tools/image-generate-tool.test.ts
 src/agents/tools/image-generate-tool.ts

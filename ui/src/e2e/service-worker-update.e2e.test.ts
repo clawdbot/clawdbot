@@ -443,7 +443,7 @@ describe("Control UI service-worker production update E2E", () => {
       await ensureControlledPage(page, pageErrors, buildB);
       await expect.poll(() => readWorkerUpdateVersions(page)).toContain(buildB);
 
-      const terminal = page.locator("openclaw-terminal-panel");
+      const terminal = page.locator("openclaw-terminal-panel[embedded]");
       await terminal.waitFor({ state: "attached" });
       await expect
         .poll(() =>

@@ -29,7 +29,7 @@ test(
     expect(context?.workerEnvironmentService).toBeDefined();
     await expect(
       resolveDeviceWorkerAvailability(context?.workerEnvironmentService, "missing-device"),
-    ).resolves.toEqual({ available: false });
+    ).resolves.toEqual({ available: false, unavailableReason: "unpaired" });
     const placements = context?.workerSessionPlacementService as
       | WorkerSessionPlacementStore
       | undefined;

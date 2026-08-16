@@ -11,6 +11,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -223,12 +224,12 @@ describeControlUiE2e("Control UI chat file links", () => {
         await fileRow.locator(".chat-workspace-rail__file-open").click();
       };
       const closePreview = async () => {
-        await page.getByRole("button", { name: "Close Details" }).click();
+        await page.getByRole("button", { name: "Close Review" }).click();
         await page.locator("openclaw-chat-detail-panel").waitFor({ state: "detached" });
       };
 
       await page.goto(`${server.baseUrl}chat`);
-      await page.locator(".chat-workspace-toggle").click();
+      await openChatSidePanelType(page, "Files");
       await page.getByRole("complementary", { name: "Session workspace" }).waitFor();
 
       await openPreview("notes.txt");

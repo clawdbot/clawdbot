@@ -18,7 +18,10 @@ import type { ChatRunTiming } from "../server-chat-state.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
-import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
+import {
+  discardPreparedChatSendAttachments,
+  type prepareChatSendAttachments,
+} from "./chat-send-attachments.js";
 import {
   resolveWebchatPromptCacheKey,
   scheduleChatDashboardSessionTitle,
@@ -507,6 +510,13 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     .catch(dispatchErrorLifecycle.handleError)
     .finally(() => {
       dispatchErrorLifecycle.finalize();
+      if (userTurnRecorder.isBlocked() && attachments.offloadedRefs.length > 0) {
+        // A blocked turn persists only the redacted block reason — no media
+        // markers — so the prepared inbound media stays unreferenced forever
+        // (sweep is off by default). Same custody rule as the pre-ACK owner
+        // in chat-send-admission.ts: unreferenced staged media is discarded.
+        void discardPreparedChatSendAttachments(attachments.offloadedRefs);
+      }
       // Cosmetic title work starts only after the accepted turn finishes. Starting it
       // before dispatch can make a cold utility runtime starve the user's real turn.
       scheduleChatDashboardSessionTitle({

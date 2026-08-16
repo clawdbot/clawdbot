@@ -1706,6 +1706,16 @@ openclaw-chat-session-rail {
   animation: none;
 }
 
+.chat-session-rail--embedded {
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+
 .chat-session-rail__header {
   display: flex;
   flex: 0 0 auto;
@@ -1957,16 +1967,6 @@ openclaw-chat-session-rail {
   align-items: flex-start;
   gap: 6px;
   padding: 0 14px 10px;
-}
-
-/* Centred in the thread's empty space, both axes: margin auto claims the free
-   vertical room inside the flex column. */
-.chat-session-rail__empty {
-  margin: auto 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.45;
-  text-align: center;
 }
 
 .chat-session-rail__starter {

@@ -162,6 +162,24 @@ suite.define(() => {
       await page.getByRole("heading", { name: "Main" }).waitFor();
       await page.locator(".new-session-page__message").waitFor();
 
+      // Incognito is a page-level choice on the far end of the same top rail
+      // as the shell controls, rather than an option inside the composer.
+      const incognitoToggle = page.getByRole("switch", { name: "Incognito" });
+      const incognitoBox = await incognitoToggle.boundingBox();
+      const commandPaletteBox = await page
+        .getByRole("button", { name: "Open command palette" })
+        .boundingBox();
+      expect(incognitoBox).not.toBeNull();
+      expect(commandPaletteBox).not.toBeNull();
+      expect(incognitoBox?.y).toBeCloseTo(commandPaletteBox?.y ?? 0, 0);
+      expect(incognitoBox?.x ?? 0).toBeGreaterThan((commandPaletteBox?.x ?? 0) + 100);
+      expect(await page.locator('.new-session-page__composer [role="switch"]').count()).toBe(0);
+      expect(await incognitoToggle.getAttribute("aria-checked")).toBe("false");
+      await incognitoToggle.click();
+      expect(await incognitoToggle.getAttribute("aria-checked")).toBe("true");
+      await incognitoToggle.click();
+      expect(await incognitoToggle.getAttribute("aria-checked")).toBe("false");
+
       // Unified layout: the trigger row (menus above the composer) sits
       // inside the start-screen welcome, below the hero.
       const heroBox = await page.locator(".agent-chat__welcome h2").boundingBox();
@@ -174,12 +192,15 @@ suite.define(() => {
       const footerBox = await page
         .locator(".new-session-page__composer .agent-chat__composer-footer")
         .boundingBox();
+      const attachmentButton = page.getByRole("button", { name: "Add attachment" });
+      const attachmentBox = await attachmentButton.boundingBox();
       expect(heroBox).not.toBeNull();
       expect(triggersBox).not.toBeNull();
       expect(composerBox).not.toBeNull();
       expect(modelBox).not.toBeNull();
       expect(modelWrapperBox).not.toBeNull();
       expect(footerBox).not.toBeNull();
+      expect(attachmentBox).not.toBeNull();
       expect((heroBox?.y ?? 0) + (heroBox?.height ?? 0)).toBeLessThanOrEqual(
         (triggersBox?.y ?? 0) + 1,
       );
@@ -194,6 +215,17 @@ suite.define(() => {
           .locator('[data-chat-model-select="true"]')
           .evaluate((element) => element.closest(".agent-chat__composer-footer") != null),
       ).toBe(true);
+      expect(
+        await attachmentButton.evaluate(
+          (element) => element.closest(".agent-chat__composer-footer") != null,
+        ),
+      ).toBe(true);
+      expect(
+        await attachmentButton.evaluate(
+          (element) => element.closest(".agent-chat__composer-input-row") == null,
+        ),
+      ).toBe(true);
+      expect(attachmentBox?.x ?? 0).toBeLessThan(modelWrapperBox?.x ?? 0);
       expect(modelWrapperBox?.x ?? 0).toBeGreaterThan(
         (footerBox?.x ?? 0) + (footerBox?.width ?? 0) / 2,
       );
@@ -206,6 +238,7 @@ suite.define(() => {
       expect(triggersBox?.width).toBeCloseTo(composerBox?.width ?? 0, 0);
       expect(composerBox?.width).toBeCloseTo(48 * 16, 0);
       expect(await page.locator(".new-session-page__message").getAttribute("rows")).toBe("1");
+      await captureProjectUiProof(page, "new-session-control-layout.png");
 
       const projectSelect = page.locator("wa-popover.new-session-page__project-popover");
       const projectTrigger = page.locator("#new-session-project-trigger");

@@ -27,6 +27,7 @@ type DeviceWorkerRuntimeOptions = {
 type DeviceWorkerAvailability = {
   available: boolean;
   issue?: NodeRunnerInventoryIssue;
+  unavailableReason?: "unpaired" | "disconnected" | "at-capacity";
 };
 type DeviceWorkerAvailabilityResolver = (deviceId: string) => Promise<DeviceWorkerAvailability>;
 type DeviceWorkerReconciliation = (deviceId: string) => Promise<readonly string[]>;
@@ -99,19 +100,24 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
   const launchAdapter = createNodeWorkerLaunchAdapter({ getTransport: () => nodeTransport });
   const findConnectedNode = async (deviceId: string) =>
     (await nodeTransport?.listCurrentNodes())?.find((node) => node.nodeId === deviceId);
-  const findAvailableNode = async (deviceId: string) => {
-    const node = await findConnectedNode(deviceId);
-    return node && isSessionCapableNode(node) ? node : undefined;
-  };
   const resolveAvailability = async (deviceId: string): Promise<DeviceWorkerAvailability> => {
     const [paired, connected] = await Promise.all([
       options.getPairedDevice(deviceId),
-      findAvailableNode(deviceId),
+      findConnectedNode(deviceId),
     ]);
+    // NodeWorkerSupervisorNodeProof.workerRuns is omitted while a connected node is at capacity.
+    const unavailableReason = !hasPairedNodeRole(paired)
+      ? "unpaired"
+      : !connected
+        ? "disconnected"
+        : !isSessionCapableNode(connected)
+          ? "at-capacity"
+          : undefined;
     const issue = nodeTransport?.getIssue?.(deviceId);
     return {
-      available: hasPairedNodeRole(paired) && Boolean(connected),
+      available: unavailableReason === undefined,
       ...(issue ? { issue } : {}),
+      ...(unavailableReason ? { unavailableReason } : {}),
     };
   };
   const isAvailable = async (deviceId: string) => (await resolveAvailability(deviceId)).available;
@@ -122,10 +128,19 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
       const deviceId = requireDeviceId(profile);
       const availability = await resolveAvailability(deviceId);
       if (!availability.available) {
+        if (availability.issue) {
+          throw new WorkerProviderError(
+            formatNodeRunnerUpdateRequired(deviceId, availability.issue),
+          );
+        }
+        if (availability.unavailableReason === "unpaired") {
+          throw new WorkerProviderError(`device worker is not a paired node host: ${deviceId}`);
+        }
+        if (availability.unavailableReason === "disconnected") {
+          throw new WorkerProviderError(`device worker node is not connected: ${deviceId}`);
+        }
         throw new WorkerProviderError(
-          availability.issue
-            ? formatNodeRunnerUpdateRequired(deviceId, availability.issue)
-            : `device worker is not a connected session-capable paired node: ${deviceId}`,
+          `device worker is at capacity (all worker slots in use): ${deviceId}; retry after a running turn completes`,
         );
       }
       return {

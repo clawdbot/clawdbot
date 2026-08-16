@@ -2814,6 +2814,75 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
+.session-menu__icon-picker {
+  padding: 2px;
+}
+
+.session-menu__icon-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 28px);
+  gap: 3px;
+}
+
+.session-menu__icon-choice {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  cursor: var(--cursor-action);
+  font-size: 17px;
+  line-height: 1;
+}
+
+.session-menu__icon-choice:hover,
+.session-menu__icon-choice:focus-visible {
+  background: var(--bg-hover);
+}
+
+.session-menu__icon-choice:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: -2px;
+}
+
+.session-menu__icon-choice[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.session-menu__icon-separator {
+  margin: 5px 4px 3px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.session-menu__icon-remove {
+  width: 100%;
+  min-height: 28px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  color: var(--text);
+  cursor: var(--cursor-action);
+  font: inherit;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  text-align: left;
+}
+
+.session-menu__icon-remove:hover,
+.session-menu__icon-remove:focus-visible {
+  background: var(--bg-hover);
+}
+
+.session-menu__icon-remove:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: -2px;
+}
+
 /* Nav rail entries are anchors (for middle-click/new-tab) but read as app
    chrome: override the UA link pointer back to the default arrow. */
 .nav-item {
