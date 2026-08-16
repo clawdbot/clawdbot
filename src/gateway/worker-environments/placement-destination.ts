@@ -20,7 +20,7 @@ export function resolveWorkerPlacementDestination(params: {
   cfg: Pick<OpenClawConfig, "cloudWorkers">;
   profileId?: string;
   deviceId?: string;
-}): Result<WorkerPlacementDestination, string> {
+}): Result<WorkerPlacementDestination | undefined, string> {
   const profileId = normalizeOptionalString(params.profileId);
   if (profileId) {
     return Object.hasOwn(params.cfg.cloudWorkers?.profiles ?? {}, profileId)
@@ -29,7 +29,7 @@ export function resolveWorkerPlacementDestination(params: {
   }
   const deviceId = normalizeOptionalString(params.deviceId);
   if (!deviceId) {
-    return err("worker dispatch target is missing");
+    return ok(undefined);
   }
   return ok({
     profileId: `device:${deviceId}`,

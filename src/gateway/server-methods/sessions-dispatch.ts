@@ -53,15 +53,12 @@ function resolveWorkerSessionTarget(params: {
     params.respond(false, undefined, requestedAgent.error);
     return undefined;
   }
-  const destination =
-    params.profileId !== undefined || params.deviceId !== undefined
-      ? resolveWorkerPlacementDestination({
-          cfg,
-          profileId: params.profileId,
-          deviceId: params.deviceId,
-        })
-      : undefined;
-  if (destination && !destination.ok) {
+  const destination = resolveWorkerPlacementDestination({
+    cfg,
+    profileId: params.profileId,
+    deviceId: params.deviceId,
+  });
+  if (!destination.ok) {
     respondInvalidWorkerSession(params.respond, destination.error);
     return undefined;
   }
@@ -76,7 +73,7 @@ function resolveWorkerSessionTarget(params: {
     respondInvalidWorkerSession(params.respond, `session not found: ${params.key}`);
     return undefined;
   }
-  return { cfg, target, entry, sessionId, dispatchTarget: destination?.value };
+  return { cfg, target, entry, sessionId, dispatchTarget: destination.value };
 }
 
 function hasManagedSessionWorktree(params: {

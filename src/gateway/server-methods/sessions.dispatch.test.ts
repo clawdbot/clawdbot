@@ -98,6 +98,28 @@ describe("sessions.dispatch", () => {
     );
   });
 
+  it("treats a whitespace-only profile as an omitted dispatch target", async () => {
+    mocks.resolveTarget.mockReturnValue(targetWithEntry({ sessionId }));
+    const dispatch = vi.fn();
+    const respond = await invoke(
+      makeContext({
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+      { profileId: " " },
+    );
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "worker dispatch target is missing",
+      }),
+    );
+  });
+
   it("rejects sessions without their bound managed worktree", async () => {
     mocks.resolveTarget.mockReturnValue(targetWithEntry({ sessionId }));
     const dispatch = vi.fn();
