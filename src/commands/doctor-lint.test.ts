@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
+import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-record-cache.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -79,6 +80,7 @@ describe("runDoctorLintCli", () => {
     mocks.openNodeSqliteDatabase.mockImplementation((...args: unknown[]) =>
       mocks.actualOpenNodeSqliteDatabase(...args),
     );
+    mocks.prepareSqliteReadOnlyLocationSync.mockReset();
     mocks.prepareSqliteReadOnlyLocationSync.mockImplementation((...args: unknown[]) =>
       mocks.actualPrepareSqliteReadOnlyLocationSync(...args),
     );
@@ -553,6 +555,89 @@ describe("runDoctorLintCli", () => {
       });
       expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mocks.prepareSqliteReadOnlyLocationSync).not.toHaveBeenCalled();
+      expect(snapshotSqliteFamily(databasePath)).toEqual(before);
+    } finally {
+      stdout.mockRestore();
+      restoreDoctorLintTestEnv(originalEnv);
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps relevant deferred plugin inspection off the source state database", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-lint-relevant-"));
+    const stateDir = path.join(rootDir, "operator-state");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const config = {
+      gateway: { mode: "local" },
+      memory: { search: { provider: "local", fallback: "none" } },
+      models: {
+        providers: {
+          "fixture-external": {
+            baseUrl: "http://127.0.0.1:19432/v1",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(configPath, `${JSON.stringify(config)}\n`);
+    const env = {
+      ...process.env,
+      HOME: stateDir,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {},
+      { config, env, stateDir, workspaceDir: rootDir },
+    );
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    closeOpenClawStateDatabaseByPath(databasePath);
+    clearLoadInstalledPluginIndexInstallRecordsCache();
+    createSemanticIndex(stateDir);
+    const before = snapshotSqliteFamily(databasePath);
+    mocks.openNodeSqliteDatabase.mockClear();
+    const sourceOpenStacks: string[] = [];
+    mocks.openNodeSqliteDatabase.mockImplementation((...args: unknown[]) => {
+      if (args[0] === databasePath) {
+        sourceOpenStacks.push(new Error("source database opened").stack ?? "");
+      }
+      return mocks.actualOpenNodeSqliteDatabase(...args);
+    });
+    const originalEnv = {
+      HOME: process.env.HOME,
+      OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+      OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+    };
+    process.env.HOME = stateDir;
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    mocks.readConfigFileSnapshot.mockImplementation((...args: unknown[]) =>
+      mocks.actualReadConfigFileSnapshot(...args),
+    );
+
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await expect(
+        runDoctorLintCli(runtime, {
+          json: true,
+          severityMin: "error",
+          onlyIds: ["memory-core/managed-local-embedding-setup"],
+        }),
+      ).resolves.toBe(1);
+      expect(JSON.parse(String(stdout.mock.calls.at(-1)?.[0]))).toMatchObject({
+        ok: false,
+        checksRun: 1,
+        findings: [
+          {
+            checkId: "memory-core/managed-local-embedding-setup",
+            severity: "error",
+            requirement: "managed-llama-cpp-setup",
+          },
+        ],
+      });
+      expect(sourceOpenStacks).toEqual([]);
       expect(snapshotSqliteFamily(databasePath)).toEqual(before);
     } finally {
       stdout.mockRestore();

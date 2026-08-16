@@ -173,7 +173,9 @@ function validateConfigObjectWithPluginsBase(
   }
   const config = opts.applyDefaults
     ? materializeRuntimeConfig(parsedConfig, "snapshot", {
-        manifestRegistry: registryInfo?.registry,
+        manifestRegistry:
+          registryInfo?.registry ??
+          (opts.pluginValidation === "core-only" ? { plugins: [] } : undefined),
       })
     : parsedConfig;
   if (opts.pluginValidation !== "full") {

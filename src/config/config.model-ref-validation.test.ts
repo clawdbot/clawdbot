@@ -180,7 +180,18 @@ describe("config model reference validation", () => {
       manifestRegistry: createModelNormalizationRegistry(),
     }));
     const valid = validateConfigObjectWithPlugins(
-      { gateway: { mode: "local" } },
+      {
+        gateway: { mode: "local" },
+        models: {
+          providers: {
+            "fixture-external": {
+              baseUrl: "http://127.0.0.1:19432/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      },
       { pluginValidation: "core-only", loadPluginMetadataSnapshot },
     );
     const invalid = validateConfigObjectWithPlugins(
