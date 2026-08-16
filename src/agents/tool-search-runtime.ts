@@ -202,10 +202,17 @@ function findEntryByExactId(
   return entry;
 }
 
+const TOOL_SEARCH_SELECTOR_KEYS = ["id", "toolId", "name"] as const;
+
+function readToolSearchSelector(params: Record<string, unknown>): string | undefined {
+  const value = params.id ?? params.toolId ?? params.name;
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
 export function readToolSearchId(args: unknown): string {
   const params = asToolParamsRecord(args);
-  const value = params.id ?? params.toolId ?? params.name;
-  if (typeof value !== "string" || !value.trim()) {
+  const value = readToolSearchSelector(params);
+  if (value === undefined) {
     throw new ToolInputError("id must be a non-empty string.");
   }
   return value.trim();
@@ -229,9 +236,8 @@ export function readToolSearchCallArgs(
     };
   }
 
-  const selectorKeys = ["id", "toolId", "name"] as const;
   const matchingSelectors = catalog
-    ? selectorKeys.flatMap((key) => {
+    ? TOOL_SEARCH_SELECTOR_KEYS.flatMap((key) => {
         const value = params[key];
         if (typeof value !== "string") {
           return [];
@@ -251,7 +257,7 @@ export function readToolSearchCallArgs(
     );
   }
   const matchingSelector = matchingSelectors[0]?.key;
-  const selector = matchingSelector ?? selectorKeys.find((key) => params[key] != null);
+  const selector = matchingSelector ?? TOOL_SEARCH_SELECTOR_KEYS.find((key) => params[key] != null);
   const id = readToolSearchId(selector ? { [selector]: params[selector] } : params);
 
   // Remove every alias that actually identifies the selected catalog tool;
@@ -269,46 +275,15 @@ export function readToolSearchCallArgs(
   return { id, input: { ...dottedInput, ...flattenedInput } };
 }
 
-// Both tool_call/tool_describe schemas require the literal `id` key; `toolId`
-// and `name` are dispatcher-level aliases that readToolSearchId/readToolSearchCallArgs
-// resolve, but Value.Check has no knowledge of that fallback and rejects a
-// selector that only carries an alias. Hoisting must canonicalize whichever
-// alias it finds into `id`, not just relocate it a level up.
-const DISPATCHER_SELECTOR_KEYS = ["id", "toolId", "name"] as const;
-
-function readDispatcherSelectorValue(record: Record<string, unknown>): string | undefined {
-  for (const key of DISPATCHER_SELECTOR_KEYS) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim().length > 0) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-/**
- * Hoists a double-wrapped `{args:{id,...}}`/`{input:{id,...}}` dispatcher payload
- * to the canonical top-level `{id, ...}` shape the tool_call/tool_describe schemas
- * require. Some smaller models nest the selector one level too deep instead of
- * emitting it at the top level; without this, schema validation rejects the call
- * before `readToolSearchId`/`readToolSearchCallArgs` ever run, and the model has
- * no way to recover (#124084). Only acts when the outer object carries no
- * selector key at all (checked by presence, not validity — an empty-string or
- * non-string outer `id`/`toolId`/`name` already carries a selector key and
- * must keep rejecting through the established readToolSearchId path, exactly
- * as before this recovery existed) and the nested object carries a valid one.
- * The nested selector is canonicalized to `id` (whether it arrived as `id`,
- * `toolId`, or `name`) since the schema itself only recognizes `id`.
- */
 export function prepareToolSearchDispatcherArguments(args: unknown): unknown {
-  if (!isRecord(args) || DISPATCHER_SELECTOR_KEYS.some((key) => Object.hasOwn(args, key))) {
+  if (!isRecord(args) || TOOL_SEARCH_SELECTOR_KEYS.some((key) => Object.hasOwn(args, key))) {
     return args;
   }
   const nestedInput = args.args ?? args.input;
   if (!isRecord(nestedInput)) {
     return args;
   }
-  const selectorValue = readDispatcherSelectorValue(nestedInput);
+  const selectorValue = readToolSearchSelector(nestedInput);
   if (selectorValue === undefined) {
     return args;
   }

@@ -10,7 +10,6 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
-import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   initializeGlobalHookRunner,
@@ -258,12 +257,6 @@ describe("Tool Search flattened call arguments", () => {
   });
 });
 
-// #124084: some smaller models double-wrap the tool_call/tool_describe dispatcher
-// payload as {args:{id,...}}/{input:{id,...}} instead of the documented {id,...}
-// shape. The outer TypeBox schema requires a top-level `id` and rejects the call
-// before readToolSearchId/readToolSearchCallArgs ever run, so recovery must
-// happen in prepareArguments, which the agent loop invokes before schema
-// validation (see prepareToolCallArguments in packages/agent-core/src/agent-loop.ts).
 describe("Tool Search dispatcher argument preparation", () => {
   it.each([
     {
@@ -300,11 +293,10 @@ describe("Tool Search dispatcher argument preparation", () => {
     { label: "already-canonical selector", input: { id: "example_tool", args: { path: "/x" } } },
     { label: "nested wrapper without a selector", input: { args: { path: "/x" } } },
     { label: "nested wrapper that is not a record", input: { args: "not an object" } },
-    // ClawSweeper follow-up finding: a wrapper that already carries an outer
-    // selector key must keep rejecting through readToolSearchId/
-    // readToolSearchCallArgs exactly like it did before this recovery
-    // existed, even when that key's value is empty or non-string. Only a
-    // wrapper with no outer selector key at all is eligible to hoist.
+    {
+      label: "malformed nested id before a valid alias",
+      input: { args: { id: "", toolId: "example_tool" } },
+    },
     {
       label: "empty-string outer id alongside a valid nested selector",
       input: { id: "", args: { id: "example_tool" } },
@@ -325,98 +317,6 @@ describe("Tool Search dispatcher argument preparation", () => {
     expect(prepareToolSearchDispatcherArguments(input)).toBe(input);
   });
 
-  it("admits a double-wrapped tool_call payload through the real schema and dispatch", async () => {
-    const target = fakeTool("inspect_resource");
-    const { catalogRef, config } = createRuntime([target]);
-    const callTool = createToolSearchTools({ catalogRef, config }).find(
-      (tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME,
-    );
-    expect(callTool).toBeDefined();
-
-    const doubleWrapped = { args: { id: "inspect_resource", args: { path: "/x" } } };
-    const prepared = callTool!.prepareArguments?.(doubleWrapped);
-    expect(prepared).toEqual({ id: "inspect_resource", args: { path: "/x" } });
-    expect(Value.Check(callTool!.parameters, prepared)).toBe(true);
-
-    await callTool!.execute("double-wrapped-call", prepared);
-    expect(target.execute).toHaveBeenCalledOnce();
-    expect(vi.mocked(target.execute).mock.calls[0]?.[1]).toEqual({ path: "/x" });
-  });
-
-  it.each([
-    { label: "toolId", key: "toolId" as const },
-    { label: "name", key: "name" as const },
-  ])(
-    "admits a double-wrapped tool_call payload with a nested $label alias through the real schema and dispatch",
-    async ({ key }) => {
-      const target = fakeTool("inspect_resource");
-      const { catalogRef, config } = createRuntime([target]);
-      const callTool = createToolSearchTools({ catalogRef, config }).find(
-        (tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME,
-      );
-      expect(callTool).toBeDefined();
-
-      const doubleWrapped = { args: { [key]: "inspect_resource", args: { path: "/x" } } };
-      const prepared = callTool!.prepareArguments?.(doubleWrapped);
-      expect(prepared).toEqual({
-        id: "inspect_resource",
-        [key]: "inspect_resource",
-        args: { path: "/x" },
-      });
-      expect(Value.Check(callTool!.parameters, prepared)).toBe(true);
-
-      await callTool!.execute("double-wrapped-alias-call", prepared);
-      expect(target.execute).toHaveBeenCalledOnce();
-      expect(vi.mocked(target.execute).mock.calls[0]?.[1]).toEqual({ path: "/x" });
-    },
-  );
-
-  it("still rejects a double-wrapped payload with no readable selector", async () => {
-    const target = fakeTool("inspect_resource");
-    const { catalogRef, config } = createRuntime([target]);
-    const callTool = createToolSearchTools({ catalogRef, config }).find(
-      (tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME,
-    );
-    expect(callTool).toBeDefined();
-
-    const noSelector = { args: { path: "/x" } };
-    const prepared = callTool!.prepareArguments?.(noSelector);
-    expect(Value.Check(callTool!.parameters, prepared)).toBe(false);
-  });
-
-  it("still rejects a double-wrapped payload with a malformed outer selector, through the real dispatcher", async () => {
-    // ClawSweeper follow-up finding: an empty-string outer `id` must not be
-    // treated as selector-less. Before the fix, prepareArguments replaced it
-    // with the nested selector and the call executed successfully; the outer
-    // `id: ""` schema-checks fine (Type.String() accepts empty strings), so
-    // the real established rejection only shows up at dispatch time via
-    // readToolSearchCallArgs/readToolSearchId ("id must be a non-empty
-    // string"), which this test locks down as still reachable post-fix.
-    const target = fakeTool("inspect_resource");
-    const { catalogRef, config } = createRuntime([target]);
-    const callTool = createToolSearchTools({ catalogRef, config }).find(
-      (tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME,
-    );
-    expect(callTool).toBeDefined();
-
-    const malformedOuterSelector = { id: "", args: { id: "inspect_resource" } };
-    const prepared = callTool!.prepareArguments?.(malformedOuterSelector);
-    expect(prepared).toBe(malformedOuterSelector);
-    expect(Value.Check(callTool!.parameters, prepared)).toBe(true);
-
-    await expect(callTool!.execute("malformed-outer-selector-call", prepared)).rejects.toThrow(
-      "id must be a non-empty string",
-    );
-    expect(target.execute).not.toHaveBeenCalled();
-  });
-
-  // The two tests above call prepareArguments/execute on the real tool object
-  // directly, proving the normalizer and schema in isolation but skipping the
-  // agent loop's own prepare -> validate sequence (prepareToolCallArguments /
-  // validateToolArguments in packages/agent-core/src/agent-loop.ts). The tests
-  // below drive a real Agent through that exact orchestration so a
-  // double-wrapped payload is proven recoverable end to end, not just at the
-  // tool boundary (#124084 real-behavior-proof follow-up).
   describe("through the real agent loop", () => {
     const model: Model = {
       id: "test-model",
@@ -431,7 +331,9 @@ describe("Tool Search dispatcher argument preparation", () => {
       maxTokens: 1000,
     };
 
-    function makeAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
+    function makeAssistantMessage(
+      content: AssistantMessage["content"],
+    ): AssistantMessage & { stopReason: "toolUse" | "stop" } {
       return {
         role: "assistant",
         content,
@@ -456,21 +358,22 @@ describe("Tool Search dispatcher argument preparation", () => {
       name: string;
       arguments: Record<string, unknown>;
     }): StreamFn {
-      // The agent loop calls streamFn again for the turn after the tool
-      // result is appended. Return the tool call once, then a plain stop
-      // turn so the run terminates instead of replaying the same tool call.
-      const turns: { content: AssistantMessage["content"]; reason: "toolUse" | "stop" }[] = [
-        { content: [{ type: "toolCall", ...toolCall }], reason: "toolUse" },
-        { content: [{ type: "text", text: "done" }], reason: "stop" },
+      // The stop turn terminates the loop after the tool result.
+      const turns: AssistantMessage["content"][] = [
+        [{ type: "toolCall", ...toolCall }],
+        [{ type: "text", text: "done" }],
       ];
       let turnIndex = 0;
       return () => {
+        const content = turns[turnIndex];
+        if (!content) {
+          throw new Error("unexpected extra model turn");
+        }
+        turnIndex += 1;
         const stream = createAssistantMessageEventStream();
         queueMicrotask(() => {
-          const turn = turns[turnIndex] ?? turns.at(-1) ?? turns[0]!;
-          turnIndex += 1;
-          const message = makeAssistantMessage(turn.content);
-          stream.push({ type: "done", reason: turn.reason, message });
+          const message = makeAssistantMessage(content);
+          stream.push({ type: "done", reason: message.stopReason, message });
           stream.end();
         });
         return stream;
@@ -486,7 +389,7 @@ describe("Tool Search dispatcher argument preparation", () => {
       );
     }
 
-    it("dispatches a real double-wrapped tool_call payload through prepareToolCallArguments", async () => {
+    it("dispatches a double-wrapped tool_call through argument preparation", async () => {
       const target = fakeTool("inspect_resource");
       const { catalogRef, config } = createRuntime([target]);
       const callTool = createToolSearchTools({ catalogRef, config }).find(
@@ -494,7 +397,9 @@ describe("Tool Search dispatcher argument preparation", () => {
       );
       expect(callTool).toBeDefined();
 
-      const doubleWrapped = { args: { id: "inspect_resource", args: { path: "/x" } } };
+      const doubleWrapped = {
+        args: { id: "inspect_resource", args: { path: "/x" } },
+      };
       const streamFn = createSingleToolCallStreamFn({
         id: "call-1",
         name: TOOL_CALL_RAW_TOOL_NAME,
@@ -513,8 +418,6 @@ describe("Tool Search dispatcher argument preparation", () => {
 
       expect(target.execute).toHaveBeenCalledOnce();
       expect(vi.mocked(target.execute).mock.calls[0]?.[1]).toEqual({ path: "/x" });
-      // No errorKind means prepareToolCallArguments succeeded and dispatch never
-      // hit the argument-validation immediate-outcome branch (agent-loop.ts:1409).
       expect(findToolExecutionEnd(events)).toMatchObject({
         toolCallId: "call-1",
         isError: false,
