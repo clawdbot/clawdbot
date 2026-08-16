@@ -497,7 +497,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       return;
     }
     const sessionKey = scope.state.sessionKey;
-    const operation = Symbol();
+    const operation = Symbol("session-suggestion-add");
     this.sessionSuggestionAddOperation = operation;
     this.requestUpdate();
     try {
@@ -562,7 +562,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       scope.state.sessionKey === sessionKey &&
       this.sessionSuggestionTargetSignature === targetSignature;
     const previousEditDraft = resolution === "edit" ? scope.state.chatMessage : undefined;
-    const editOperation = resolution === "edit" ? Symbol() : undefined;
+    const editOperation = resolution === "edit" ? Symbol("session-suggestion-edit") : undefined;
     if (editOperation) {
       this.sessionSuggestionEditOperation = editOperation;
     }
