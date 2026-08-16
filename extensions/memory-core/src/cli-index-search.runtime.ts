@@ -350,6 +350,22 @@ export async function runMemoryPromote(
           return;
         }
       }
+      const outputLimit =
+        typeof opts.limit === "number" && Number.isFinite(opts.limit)
+          ? Math.max(0, Math.floor(opts.limit))
+          : candidates.length;
+      const rejectedCandidates = applyResult
+        ? applyResult.rejectedCandidates.slice(
+            0,
+            Math.max(0, outputLimit - applyResult.appliedCandidates.length),
+          )
+        : [];
+      const outputCandidates = applyResult
+        ? [
+            ...applyResult.appliedCandidates,
+            ...rejectedCandidates.map((rejection) => rejection.candidate),
+          ]
+        : candidates;
       const storePath = resolveShortTermRecallStorePath(workspaceDir);
       const lockPath = resolveShortTermRecallLockPath(workspaceDir);
       const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
@@ -359,7 +375,7 @@ export async function runMemoryPromote(
           storePath,
           lockPath,
           audit,
-          candidates,
+          candidates: outputCandidates,
           apply: applyResult
             ? {
                 applied: applyResult.applied,
@@ -367,7 +383,7 @@ export async function runMemoryPromote(
                 reconciledExisting: applyResult.reconciledExisting,
                 memoryPath: applyResult.memoryPath,
                 appliedCandidates: applyResult.appliedCandidates,
-                rejectedCandidates: applyResult.rejectedCandidates,
+                rejectedCandidates,
               }
             : undefined,
         });
@@ -387,7 +403,7 @@ export async function runMemoryPromote(
       lines.push(`${heading("Short-Term Promotion Candidates")} ${muted(`(${agentId})`)}`);
       lines.push(`${muted("Recall store:")} ${shortenHomePath(storePath)}`);
       lines.push(muted(`Store health: ${formatAuditCounts(audit)}`));
-      for (const candidate of candidates) {
+      for (const candidate of outputCandidates) {
         lines.push(
           `${success(candidate.score.toFixed(3))} ${accent(`${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`)}`,
         );
@@ -412,7 +428,7 @@ export async function runMemoryPromote(
         lines.push("");
       }
       if (applyResult) {
-        for (const rejection of applyResult.rejectedCandidates) {
+        for (const rejection of rejectedCandidates) {
           const candidate = rejection.candidate;
           const source = `${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`;
           lines.push(warn(`Skipped ${source}: ${rejection.reason}.`));
@@ -428,7 +444,7 @@ export async function runMemoryPromote(
               `appended=${applyResult.appended} reconciledExisting=${applyResult.reconciledExisting}`,
             ),
           );
-        } else if (applyResult.rejectedCandidates.length === 0) {
+        } else if (rejectedCandidates.length === 0) {
           lines.push(warn("No candidates met apply criteria."));
         }
       }

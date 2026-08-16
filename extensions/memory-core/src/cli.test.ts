@@ -2598,10 +2598,11 @@ describe("memory cli", () => {
         "Rare trusted note remains below the apply signal threshold.",
         "Candidate: Durable action note. confidence: 0.90 evidence: memory/.dreams/session-corpus/day.txt:1-1 recalls: 3 status: staged",
       ]);
-      mockManager({
+      const manager = {
         status: () => makeMemoryStatus({ workspaceDir }),
         close: vi.fn(async () => {}),
-      });
+      };
+      mockManager(manager);
 
       const log = spyRuntimeLogs(defaultRuntime);
       await runMemoryCli([
@@ -2619,6 +2620,47 @@ describe("memory cli", () => {
       expectLogged(log, `Skipped ${relativePath}:2-2: signal threshold (1 < 2).`);
       expectLogged(log, `Skipped ${relativePath}:3-3: contamination filter after rehydration.`);
       expectNotLogged(log, "No candidates met apply criteria.");
+
+      log.mockClear();
+      mockManager(manager);
+      await runMemoryCli([
+        "promote",
+        "--apply",
+        "--limit",
+        "1",
+        "--min-score",
+        "0",
+        "--min-recall-count",
+        "2",
+        "--min-unique-queries",
+        "0",
+      ]);
+      expect(loggedOutput(log).match(/^Skipped /gm)).toHaveLength(1);
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      mockManager(manager);
+      await runMemoryCli([
+        "promote",
+        "--apply",
+        "--limit",
+        "1",
+        "--min-score",
+        "0",
+        "--min-recall-count",
+        "2",
+        "--min-unique-queries",
+        "0",
+        "--json",
+      ]);
+      const payload = firstWrittenJsonArg<{
+        candidates: unknown[];
+        apply: { appliedCandidates: unknown[]; rejectedCandidates: unknown[] };
+      }>(writeJson);
+      expect(payload?.candidates).toHaveLength(1);
+      expect([
+        ...(payload?.apply.appliedCandidates ?? []),
+        ...(payload?.apply.rejectedCandidates ?? []),
+      ]).toHaveLength(1);
     });
   });
 
