@@ -1337,7 +1337,7 @@ export async function startGatewayPostAttachRuntime(
                 throw error;
               }
               params.log.warn(`optional gateway sidecars failed to start: ${String(error)}`);
-              return { pluginServices: null, postReadySidecars: [] };
+              throw error;
             }
           })();
           const loaderStatsAfter = getPluginModuleLoaderStats();

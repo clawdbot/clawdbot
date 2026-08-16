@@ -2803,13 +2803,15 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(startGatewaySidecarsValue).not.toHaveBeenCalled();
   });
 
-  it("unlocks core methods when deferred sidecar startup fails", async () => {
+  it("keeps core methods unavailable when deferred sidecar startup fails", async () => {
     const unavailableGatewayMethods = new Set<string>(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
     const onSidecarsReady = vi.fn();
+    const log = { info: vi.fn(), warn: vi.fn() };
 
     await startGatewayPostAttachRuntime(
       {
         ...createPostAttachParams({ sidecarStartup: "defer" }),
+        log,
         unlockStartupMethods: () => unavailableGatewayMethods.clear(),
         onSidecarsReady,
       },
@@ -2821,9 +2823,13 @@ describe("startGatewayPostAttachRuntime", () => {
     );
 
     await waitForGatewayTestState(() => {
-      expect(unavailableGatewayMethods).toEqual(new Set());
-      expect(onSidecarsReady).toHaveBeenCalledTimes(1);
+      expect(log.warn).toHaveBeenCalledWith(
+        "optional gateway sidecars failed to start: Error: channel startup failed",
+      );
     });
+    expect(unavailableGatewayMethods).toEqual(new Set(STARTUP_UNAVAILABLE_GATEWAY_METHODS));
+    expect(onSidecarsReady).not.toHaveBeenCalled();
+    expect(log.info).not.toHaveBeenCalledWith(expect.stringContaining("gateway startup outcomes:"));
   });
 
   it("does not start the worker environment sidecar after close begins", async () => {
