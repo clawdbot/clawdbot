@@ -206,45 +206,45 @@ export function createCombinedSessionMcpRuntime(params: {
         part.markUsed();
       }
     },
-    async callTool(serverName, toolName, input, options) {
+    async callTool(serverName, toolName, input, options = undefined) {
       return (await ownerForServer(serverName)).callTool(serverName, toolName, input, options);
     },
-    async listTools(serverName, requestParams, options) {
+    async listTools(serverName, requestParams, options = undefined) {
       const owner = await ownerForServer(serverName);
       if (!owner.listTools) {
         throw new Error(`bundle-mcp server "${serverName}" does not support listTools`);
       }
       return await owner.listTools(serverName, requestParams, options);
     },
-    async listResources(serverName, options) {
+    async listResources(serverName, options = undefined) {
       const owner = await ownerForServer(serverName);
       if (!owner.listResources) {
         throw new Error(`bundle-mcp server "${serverName}" does not support listResources`);
       }
       return await owner.listResources(serverName, options);
     },
-    async readResource(serverName, uri, options) {
+    async readResource(serverName, uri, options = undefined) {
       const owner = await ownerForServer(serverName);
       if (!owner.readResource) {
         throw new Error(`bundle-mcp server "${serverName}" does not support readResource`);
       }
       return await owner.readResource(serverName, uri, options);
     },
-    async listResourceTemplates(serverName, requestParams, options) {
+    async listResourceTemplates(serverName, requestParams, options = undefined) {
       const owner = await ownerForServer(serverName);
       if (!owner.listResourceTemplates) {
         throw new Error(`bundle-mcp server "${serverName}" does not support listResourceTemplates`);
       }
       return await owner.listResourceTemplates(serverName, requestParams, options);
     },
-    async listPrompts(serverName, options) {
+    async listPrompts(serverName, options = undefined) {
       const owner = await ownerForServer(serverName);
       if (!owner.listPrompts) {
         throw new Error(`bundle-mcp server "${serverName}" does not support listPrompts`);
       }
       return await owner.listPrompts(serverName, options);
     },
-    async getPrompt(serverName, name, args, options) {
+    async getPrompt(serverName, name, args, options = undefined) {
       const owner = await ownerForServer(serverName);
       if (!owner.getPrompt) {
         throw new Error(`bundle-mcp server "${serverName}" does not support getPrompt`);

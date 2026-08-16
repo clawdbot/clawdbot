@@ -54,7 +54,6 @@ import type {
   RequesterMcpConnect,
   SessionMcpRequestRuntime,
   SessionMcpRequesterScope,
-  SessionMcpRuntime,
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
 import {
@@ -1150,7 +1149,7 @@ export function createSessionMcpRuntime(params: {
     markUsed() {
       lastUsedAt = Date.now();
     },
-    async callTool(serverName, toolName, input, options) {
+    async callTool(serverName, toolName, input, options = undefined) {
       const session = await getActiveSession(serverName);
       return (await runGuardedMcpRequest(
         serverName,
@@ -1164,7 +1163,7 @@ export function createSessionMcpRuntime(params: {
         options,
       )) as CallToolResult;
     },
-    async listTools(serverName, requestParams, options) {
+    async listTools(serverName, requestParams, options = undefined) {
       const session = await getActiveSession(serverName);
       return await runGuardedMcpRequest(
         serverName,
@@ -1174,7 +1173,7 @@ export function createSessionMcpRuntime(params: {
         options,
       );
     },
-    async listResources(serverName, options) {
+    async listResources(serverName, options = undefined) {
       const session = await getActiveSession(serverName);
       return await runGuardedServerRequest(
         serverName,
@@ -1183,7 +1182,7 @@ export function createSessionMcpRuntime(params: {
         options,
       );
     },
-    async readResource(serverName, uri, options) {
+    async readResource(serverName, uri, options = undefined) {
       const session = await getActiveSession(serverName);
       return await runGuardedMcpRequest(
         serverName,
@@ -1193,7 +1192,7 @@ export function createSessionMcpRuntime(params: {
         options,
       );
     },
-    async listResourceTemplates(serverName, requestParams, options) {
+    async listResourceTemplates(serverName, requestParams, options = undefined) {
       const session = await getActiveSession(serverName);
       return await runGuardedMcpRequest(
         serverName,
@@ -1206,7 +1205,7 @@ export function createSessionMcpRuntime(params: {
         options,
       );
     },
-    async listPrompts(serverName, options) {
+    async listPrompts(serverName, options = undefined) {
       const session = await getActiveSession(serverName);
       return await runGuardedServerRequest(
         serverName,
@@ -1215,7 +1214,7 @@ export function createSessionMcpRuntime(params: {
         options,
       );
     },
-    async getPrompt(serverName, name, args, options) {
+    async getPrompt(serverName, name, args, options = undefined) {
       const session = await getActiveSession(serverName);
       return await runGuardedMcpRequest(
         serverName,

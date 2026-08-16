@@ -5,7 +5,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-runtime.js";
-import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type { SessionMcpRequestRuntime, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { clearMcpAppModelContextForView } from "./mcp-app-model-context.js";
 import { type McpAppCsp, normalizeMcpAppCsp } from "./mcp-app-sandbox.js";
 
@@ -189,7 +189,7 @@ function decodeResourceHtml(content: Record<string, unknown>): string {
 }
 
 async function resolveListingUiMeta(
-  runtime: SessionMcpRuntime,
+  runtime: SessionMcpRequestRuntime,
   serverName: string,
   uri: string,
 ): Promise<Record<string, unknown> | undefined> {
@@ -240,6 +240,7 @@ export async function fetchMcpAppView(params: {
 > {
   let releaseRuntimeLease: (() => void) | undefined;
   try {
+    const runtime = params.runtime as SessionMcpRequestRuntime;
     assertBoundedViewDescriptor(params);
     const agentId = params.agentId
       ? normalizeAgentId(params.agentId)
@@ -247,11 +248,11 @@ export async function fetchMcpAppView(params: {
     if (!agentId) {
       throw new Error("MCP App view requires a resolved session owner");
     }
-    if (!params.runtime.readResource || !params.uiResourceUri.startsWith("ui://")) {
+    if (!runtime.readResource || !params.uiResourceUri.startsWith("ui://")) {
       return undefined;
     }
     const result = asRecord(
-      await params.runtime.readResource(params.serverName, params.uiResourceUri, {
+      await runtime.readResource(params.serverName, params.uiResourceUri, {
         failureBackoff: "ignore",
         signal: params.signal,
       }),
@@ -270,7 +271,7 @@ export async function fetchMcpAppView(params: {
     const contentUiMeta = asRecord(asRecord(metadata ?? deprecatedMetadata)?.ui);
     const listingUiMeta = contentUiMeta
       ? undefined
-      : await resolveListingUiMeta(params.runtime, params.serverName, params.uiResourceUri);
+      : await resolveListingUiMeta(runtime, params.serverName, params.uiResourceUri);
     params.signal?.throwIfAborted();
     const uiMeta = contentUiMeta ?? listingUiMeta;
     const csp = normalizeMcpAppCsp(uiMeta?.csp);
