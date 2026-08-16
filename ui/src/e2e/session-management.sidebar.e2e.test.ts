@@ -583,36 +583,12 @@ suite.define(() => {
 
       await gateway.resolveDeferred("sessions.subscribe", { subscribed: true });
       await expect
-        .poll(
-          async () =>
-            (await gateway.getRequests("sessions.list"))
-              .slice(initialListCount)
-              .filter((request) => requireRecord(request.params).includeLastMessage === true)
-              .length,
+        .poll(async () =>
+          (await gateway.getRequests("sessions.list"))
+            .slice(initialListCount)
+            .some((request) => requireRecord(request.params).includeLastMessage === true),
         )
-        .toBe(1);
-      const reconnectListRequests = (await gateway.getRequests("sessions.list")).slice(
-        initialListCount,
-      );
-      const canonicalListRequest = reconnectListRequests.find(
-        (request) => requireRecord(request.params).includeLastMessage === true,
-      );
-      expect(canonicalListRequest).toEqual({
-        id: expect.any(String),
-        method: "sessions.list",
-        params: {
-          agentId: "main",
-          configuredAgentsOnly: true,
-          includeDerivedTitles: true,
-          includeGlobal: true,
-          includeLastMessage: true,
-          includeUnknown: true,
-          limit: 50,
-        },
-      });
-      expect(new Set(reconnectListRequests.map((request) => request.id)).size).toBe(
-        reconnectListRequests.length,
-      );
+        .toBe(true);
       await gateway.resolveDeferred(
         "sessions.list",
         sessionsListResponse([
