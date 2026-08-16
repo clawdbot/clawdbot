@@ -761,6 +761,43 @@ describe("channel turn delivery", () => {
     });
   });
 
+  it("keeps no-identity durable sends visible through lifecycle settlement", async () => {
+    sendDurableMessageBatch.mockResolvedValueOnce({
+      status: "suppressed",
+      results: [],
+      receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
+      reason: "adapter_returned_no_identity",
+    });
+    const onDelivered = vi.fn();
+
+    const result = await dispatchRoutedChannelTurn({
+      cfg,
+      channel: "telegram",
+      route: { agentId: "main", sessionKey: "agent:main:telegram:peer" },
+      ctxPayload: createCtx({ Surface: "telegram", To: "chat-1" }),
+      delivery: {
+        deliver: vi.fn(),
+        durable: { replyToMode: "first" },
+        onDelivered,
+      },
+    });
+
+    expect(onDelivered).toHaveBeenCalledWith(
+      { text: "reply" },
+      { kind: "final" },
+      expect.objectContaining({
+        visibleReplySent: true,
+        suppression: { reason: "adapter_returned_no_identity" },
+      }),
+    );
+    expectDispatched(result);
+    expect(result.dispatchResult).toMatchObject({
+      queuedFinal: true,
+      counts: { tool: 0, block: 0, final: 1 },
+    });
+    expect(hasVisibleChannelTurnDispatch(result.dispatchResult)).toBe(true);
+  });
+
   it("prepares payloads before durable enqueue and observes handled delivery", async () => {
     sendDurableMessageBatch.mockResolvedValueOnce(createDurableSendResult(["tlon-1"]));
     const onDelivered = vi.fn();

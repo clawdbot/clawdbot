@@ -244,3 +244,20 @@ export async function failDurableDelivery(
         markConversationDeliveryUnknown(scopeForCompletion(completion), completion.operationId),
       );
 }
+
+type DurableDeliveryTerminalEvidence =
+  | { result: OutboundDeliveryResult }
+  | { platformSendStarted: boolean };
+
+/** Settles the completion owner from the final evidence held by its lifecycle owner. */
+export async function settleDurableDelivery(
+  completion: DurableDeliveryCompletion,
+  evidence: DurableDeliveryTerminalEvidence,
+  stateDir?: string,
+): Promise<DurableDeliveryCompletionResult> {
+  return "result" in evidence
+    ? completeDurableDelivery(completion, evidence.result, stateDir)
+    : evidence.platformSendStarted
+      ? failDurableDelivery(completion, stateDir)
+      : suppressDurableDelivery(completion, stateDir);
+}
