@@ -344,6 +344,16 @@
      link pointer does not apply; they are content links and keep the hand. */
   cursor: pointer;
   text-decoration: none;
+  /* Atomic: prose cannot break between the glyph and the label, or at a hyphen
+     inside it. max-width keeps a label the parser could not shorten wrapping
+     inside the chip; the chat scroller's overflow-x: hidden would clip it.
+     The wrap policy is declared here rather than inherited: .chat-text sets
+     overflow-wrap: anywhere but .sidebar-markdown sets no wrapping policy, so
+     an unbreakable label would size the capped box past the panel, whose body
+     hides horizontal overflow, and be clipped instead of wrapping. */
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link:hover {
@@ -358,19 +368,21 @@
    keeps it on the link color in every theme. Sized in em so it tracks
    --chat-text-size and the user's text-scale setting. The default glyph is the
    generic document; kinds below match components/file-kind.ts, whose icons are
-   the same Lucide set the file preview modal renders as SVG. */
+   the same Lucide set the file preview modal renders as SVG.
+   Stays `inline`: an atomic box carries its own break opportunity and would push
+   a too-wide label whole to the next line, stranding the glyph. Inline boxes
+   ignore width/height, so 1em comes from padding-inline-start and a mask size. */
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link::before {
   --file-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z'/%3E%3Cpolyline points='14 2 14 8 20 8'/%3E%3Cline x1='16' x2='8' y1='13' y2='13'/%3E%3Cline x1='16' x2='8' y1='17' y2='17'/%3E%3Cline x1='10' x2='8' y1='9' y2='9'/%3E%3C/svg%3E");
 
   content: "";
-  display: inline-block;
-  width: 1em;
-  height: 1em;
+  display: inline;
+  padding-inline-start: 1em;
   margin-inline-end: 0.28em;
   vertical-align: -0.14em;
   background: currentColor;
-  mask: var(--file-glyph) center / contain no-repeat;
-  -webkit-mask: var(--file-glyph) center / contain no-repeat;
+  mask: var(--file-glyph) left center / 1em 1em no-repeat;
+  -webkit-mask: var(--file-glyph) left center / 1em 1em no-repeat;
 }
 
 :is(.chat-text, .sidebar-markdown) a.markdown-file-link[data-file-kind="code"]::before {

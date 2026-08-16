@@ -466,4 +466,38 @@ describe("worker turn launcher reclaimed placement", () => {
     expect(runLocal).not.toHaveBeenCalled();
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
   });
+
+  it("projects a failed placement cause with current-build recovery guidance", async () => {
+    placements.startDispatch({
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+    });
+    placements.fail({
+      sessionId: SESSION_ID,
+      recoveryError: "cloud worker disappeared: environment state destroyed",
+    });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments: unusedEnvironments(),
+      placements,
+    });
+    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+
+    await expect(
+      provider.executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "run-failed",
+        },
+        turn("run-failed"),
+        runLocal,
+      ),
+    ).rejects.toThrow(
+      "Worker turn rejected in placement failed: cloud worker disappeared: environment state destroyed; redispatch the session so its worker can bootstrap the current build before retrying.",
+    );
+    expect(runLocal).not.toHaveBeenCalled();
+    expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+  });
 });

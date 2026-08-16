@@ -462,6 +462,18 @@ Then check Codex app-server state:
 /codex binding
 ```
 
+After installing or updating OpenClaw, explicitly verify the managed package
+binary before cutover:
+
+```bash
+openclaw doctor --lint --only codex/managed-app-server --json
+```
+
+For an effective Codex route using the managed stdio app-server, this
+default-disabled check resolves the platform-native executable and requires the
+exact Codex version pinned by OpenClaw. It does not execute custom, remote, or
+macOS desktop-owned app-servers.
+
 `/status` reports the resolved OpenClaw Fast policy (`on`, `off`, or `auto`)
 and the selected runtime. It does not report the upstream service tier actually
 honored or returned for a completed request. `/codex binding` reports the

@@ -6,6 +6,7 @@ import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/direc
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { ChatQueueItem, ChatStreamSegment } from "../../lib/chat/chat-types.ts";
 import type { DiffStat } from "../../lib/chat/tool-call-diff.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
@@ -56,7 +57,7 @@ export type ToolStreamEntry = {
   message: Record<string, unknown>;
 };
 
-type ToolStreamHost = {
+export type ToolStreamHost = {
   sessionKey: string;
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null } | null;
@@ -123,7 +124,8 @@ function parseFallbackAttemptSummaries(value: unknown): string[] {
   }
   return value
     .map((entry) => toTrimmedString(entry))
-    .filter((entry): entry is string => Boolean(entry));
+    .filter((entry): entry is string => Boolean(entry))
+    .map((entry) => formatUiError(entry));
 }
 
 function parseFallbackAttempts(value: unknown): FallbackAttempt[] {
@@ -141,12 +143,13 @@ function parseFallbackAttempts(value: unknown): FallbackAttempt[] {
     if (!provider || !model) {
       continue;
     }
-    const reason =
+    const reason = formatUiError(
       toTrimmedString(item.reason)?.replace(/_/g, " ") ??
-      toTrimmedString(item.code) ??
-      (typeof item.status === "number" ? `HTTP ${item.status}` : null) ??
-      toTrimmedString(item.error) ??
-      "error";
+        toTrimmedString(item.code) ??
+        (typeof item.status === "number" ? `HTTP ${item.status}` : null) ??
+        toTrimmedString(item.error) ??
+        "error",
+    );
     out.push({ provider, model, reason });
   }
   return out;
@@ -751,7 +754,8 @@ function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventP
     return;
   }
 
-  const reason = toTrimmedString(data.reasonSummary) ?? toTrimmedString(data.reason);
+  const rawReason = toTrimmedString(data.reasonSummary) ?? toTrimmedString(data.reason);
+  const reason = rawReason ? formatUiError(rawReason) : null;
   const attempts = (() => {
     const summaries = parseFallbackAttemptSummaries(data.attemptSummaries);
     if (summaries.length > 0) {
@@ -759,7 +763,7 @@ function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventP
     }
     return parseFallbackAttempts(data.attempts).map((attempt) => {
       const modelRef = resolveModelLabel(attempt.provider, attempt.model);
-      return `${modelRef ?? `${attempt.provider}/${attempt.model}`}: ${attempt.reason}`;
+      return `${modelRef ?? `${attempt.provider}/${attempt.model}`}: ${formatUiExternalText(attempt.reason)}`;
     });
   })();
 

@@ -610,6 +610,7 @@ export function startSerializedSnapshotBuild(
   catalogMode: PreparedModelRuntimeCatalogMode = "live",
   generationGuard: () => boolean = () => true,
   prepareInboundPluginRegistry = false,
+  reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
 ): {
   pending: Promise<PreparedModelRuntimeBuildResult>;
   completion: Promise<void>;
@@ -623,6 +624,7 @@ export function startSerializedSnapshotBuild(
     new Map([[input, generationGuard]]),
     undefined,
     prepareInboundPluginRegistry ? new Set([input]) : undefined,
+    reusablePluginGeneration ? new Map([[input, reusablePluginGeneration]]) : undefined,
   );
   return {
     pending: build.pending.then((results) => results[0]!),

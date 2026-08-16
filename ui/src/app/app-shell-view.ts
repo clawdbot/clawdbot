@@ -583,26 +583,6 @@ export function renderApplicationShell(host: ShellViewHost) {
         .tabIndex=${-1}
       >
         ${renderScopeUpgradeBanner(host, gatewaySnapshot)}
-        ${gatewaySnapshot.hello?.deviceAuthMigration?.pending === true
-          ? // The migration banner is registered by a rare-flow dynamic import after first render.
-            customElements.get("openclaw-device-auth-migration-banner")
-            ? html`<openclaw-device-auth-migration-banner
-                .props=${{
-                  state: overlaySnapshot.deviceAuthMigration,
-                  onSecure: () => void context.overlays.secureThisBrowser(),
-                }}
-              ></openclaw-device-auth-migration-banner>`
-            : html`<openclaw-update-banner
-                .props=${{
-                  statusBanner: {
-                    tone: overlaySnapshot.deviceAuthMigration.error ? "danger" : "warn",
-                    text:
-                      overlaySnapshot.deviceAuthMigration.error ??
-                      t("login.deviceAuthMigration.banner"),
-                  },
-                }}
-              ></openclaw-update-banner>`
-          : nothing}
         ${renderFloatingUpdateCard({
           navigationSurfaceHidden,
           onboarding,
@@ -631,27 +611,32 @@ export function renderApplicationShell(host: ShellViewHost) {
         .available=${terminalAvailable}
         .agentId=${selectedAgentId}
         .suppressed=${settingsTakeover}
+        .sessionBottomOnly=${isSessionRouteId(activeRoute)}
         .themeMode=${resolveTerminalThemeMode()}
         .basePath=${context.basePath}
       ></openclaw-terminal-panel>
-      <openclaw-browser-panel
-        data-chat-autotype-exempt
-        .client=${gatewayConnected ? gatewaySnapshot.client : null}
-        .available=${browserPanelAvailable}
-        .suppressed=${settingsTakeover}
-        .basePath=${context.basePath}
-        .authToken=${resolveControlUiAuthToken({
-          hello: gatewaySnapshot.hello,
-          settings: { token: context.gateway.connection.token },
-          password: context.gateway.connection.password,
-        })}
-      ></openclaw-browser-panel>
-      <openclaw-desktop-panel
-        data-chat-autotype-exempt
-        .client=${gatewayConnected ? gatewaySnapshot.client : null}
-        .available=${desktopPanelAvailable}
-        .suppressed=${settingsTakeover}
-      ></openclaw-desktop-panel>
+      ${isSessionRouteId(activeRoute)
+        ? nothing
+        : html`
+            <openclaw-browser-panel
+              data-chat-autotype-exempt
+              .client=${gatewayConnected ? gatewaySnapshot.client : null}
+              .available=${browserPanelAvailable}
+              .suppressed=${settingsTakeover}
+              .basePath=${context.basePath}
+              .authToken=${resolveControlUiAuthToken({
+                hello: gatewaySnapshot.hello,
+                settings: { token: context.gateway.connection.token },
+                password: context.gateway.connection.password,
+              })}
+            ></openclaw-browser-panel>
+            <openclaw-desktop-panel
+              data-chat-autotype-exempt
+              .client=${gatewayConnected ? gatewaySnapshot.client : null}
+              .available=${desktopPanelAvailable}
+              .suppressed=${settingsTakeover}
+            ></openclaw-desktop-panel>
+          `}
       <openclaw-custodian-panel
         .available=${custodianPanelAvailable}
         .suppressed=${activeRoute === "custodian"}

@@ -38,8 +38,7 @@ function waitForNextSetMyCommands() {
 }
 
 function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsForConfig>[0]) {
-  void config;
-  return listSkillCommandsForAgents() as NonNullable<
+  return listSkillCommandsForAgents({ cfg: config }) as NonNullable<
     Parameters<typeof listNativeCommandSpecsForConfig>[1]
   >["skillCommands"];
 }

@@ -349,7 +349,6 @@ describe("buildGatewayReloadPlan", () => {
     "agents.defaults.compaction.model",
     "agents.defaults.compaction.maxActiveTranscriptBytes",
     "agents.defaults.compaction.memoryFlush.model",
-    "agents.defaults.contextTokens",
     "agents.defaults.contextPruning.mode",
     "agents.defaults.contextLimits.postCompactionMaxChars",
     "agents.defaults.timeoutSeconds",

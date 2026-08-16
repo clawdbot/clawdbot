@@ -1,6 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { readDraftCloudProfiles, readDraftEnvironments, readDraftNodes } from "./discovery.ts";
+import {
+  isDraftNodeSessionEligible,
+  readDraftCloudProfiles,
+  readDraftEnvironments,
+  readDraftNodes,
+} from "./discovery.ts";
 
 describe("readDraftNodes", () => {
   it("ignores non-record array entries without throwing", () => {
@@ -51,6 +56,59 @@ describe("readDraftNodes", () => {
         canBrowse: false,
       },
     ]);
+  });
+
+  it("keeps only the exact structured update-required issue", () => {
+    const issue = {
+      code: "update-required",
+      action: "update-and-reconnect",
+      updateCommand: "openclaw update",
+      headlessReconnectCommand: "openclaw node restart",
+    };
+    expect(
+      readDraftNodes([
+        {
+          nodeId: "outdated",
+          connected: true,
+          commands: ["system.run"],
+          issues: [issue, { ...issue, headlessReconnectCommand: "legacy restart" }],
+        },
+      ])[0]?.issues,
+    ).toEqual([issue]);
+    expect(
+      readDraftEnvironments([{ id: "node:outdated", type: "node", issues: [issue] }])[0]?.issues,
+    ).toEqual([issue]);
+  });
+
+  it("uses capability, connection, and update state for session eligibility", () => {
+    const nodes = readDraftNodes([
+      { nodeId: "eligible", connected: true, commands: ["system.run"] },
+      { nodeId: "offline", connected: false, commands: ["system.run"] },
+      { nodeId: "no-exec", connected: true, commands: ["fs.listDir"] },
+      {
+        nodeId: "outdated",
+        connected: true,
+        commands: ["system.run"],
+        issues: [
+          {
+            code: "update-required",
+            action: "update-and-reconnect",
+            updateCommand: "openclaw update",
+            headlessReconnectCommand: "openclaw node restart",
+          },
+        ],
+      },
+    ]);
+    const eligibility = Object.fromEntries(
+      nodes.map((node) => [node.nodeId, isDraftNodeSessionEligible(node)]),
+    );
+
+    expect(eligibility).toEqual({
+      eligible: true,
+      "no-exec": false,
+      offline: false,
+      outdated: false,
+    });
   });
 });
 describe("readDraftCloudProfiles", () => {

@@ -391,6 +391,31 @@ describe("scripts/run-vitest", () => {
     expect(resolveTestProjectsDelegationArgs([prefix])).toEqual([prefix]);
   });
 
+  it("delegates an existing extension root to the project router", () => {
+    const directory = "extensions/codex";
+
+    expect(resolveTestProjectsDelegationArgs([directory])).toEqual([directory]);
+    expect(resolveTestProjectsDelegationArgs(["run", directory, "--reporter=verbose"])).toEqual([
+      directory,
+      "--",
+      "--reporter=verbose",
+    ]);
+  });
+
+  it("keeps extension subdirectories and direct-mode root runs on Vitest", () => {
+    const directory = "extensions/codex";
+
+    expect(resolveTestProjectsDelegationArgs([`${directory}/src`])).toBeNull();
+    expect(
+      resolveTestProjectsDelegationArgs([
+        "--config",
+        "test/vitest/vitest.extension-codex.config.ts",
+        directory,
+      ]),
+    ).toBeNull();
+    expect(resolveTestProjectsDelegationArgs(["--watch", directory])).toBeNull();
+  });
+
   it("delegates owned agent directories with separate Vitest option values", () => {
     const directory = "src/agents/embedded-agent-runner/run";
 

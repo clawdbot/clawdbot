@@ -414,7 +414,6 @@ export function resolveGatewayScopedTools(params: {
           },
           // The MCP dispatcher is the shared hook and abort boundary for these tools.
           wrapBeforeToolCallHook: false,
-          toolPolicyAuditLogLevel: "debug",
         })
       : [];
   // CLI backends already own their local shell. This extra surface is deliberately

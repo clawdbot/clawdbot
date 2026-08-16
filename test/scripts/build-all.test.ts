@@ -362,6 +362,7 @@ describe("resolveBuildAllSteps", () => {
       "tsdown-ai",
       "tsdown-packages",
       "tsdown-unified",
+      "external-plugins:local-dist",
       "check-cli-bootstrap-imports",
       "plugins:assets:copy",
       "runtime-postbuild",
@@ -436,6 +437,7 @@ describe("resolveBuildAllSteps", () => {
     expect(resolveBuildAllSteps("ciArtifacts").map((step) => step.label)).toEqual([
       "plugins:assets:build",
       "tsdown",
+      "external-plugins:local-dist",
       "check-cli-bootstrap-imports",
       "plugins:assets:copy",
       "runtime-postbuild",
@@ -568,6 +570,7 @@ describe("resolveBuildAllSteps", () => {
   it("uses a minimal built runtime profile for gateway watch regression", () => {
     expect(resolveBuildAllSteps("gatewayWatch").map((step) => step.label)).toEqual([
       "tsdown",
+      "external-plugins:local-dist",
       "check-cli-bootstrap-imports",
       "runtime-postbuild",
       "build-stamp",
@@ -579,6 +582,7 @@ describe("resolveBuildAllSteps", () => {
     expect(resolveBuildAllSteps("qaRuntime").map((step) => step.label)).toEqual([
       "plugins:assets:build",
       "tsdown",
+      "external-plugins:local-dist",
       "check-cli-bootstrap-imports",
       "plugins:assets:copy",
       "runtime-postbuild",
@@ -591,6 +595,7 @@ describe("resolveBuildAllSteps", () => {
     expect(resolveBuildAllSteps("sourcePerformance").map((step) => step.label)).toEqual([
       "plugins:assets:build",
       "tsdown",
+      "external-plugins:local-dist",
       "check-cli-bootstrap-imports",
       "plugins:assets:copy",
       "runtime-postbuild",
@@ -604,6 +609,7 @@ describe("resolveBuildAllSteps", () => {
   it("uses a CLI startup profile without generated plugin assets", () => {
     expect(resolveBuildAllSteps("cliStartup").map((step) => step.label)).toEqual([
       "tsdown",
+      "external-plugins:local-dist",
       "check-cli-bootstrap-imports",
       "runtime-postbuild",
       "build-stamp",
@@ -671,6 +677,19 @@ describe("resolveBuildAllSteps", () => {
         labels.indexOf("plugins:assets:copy"),
       );
       expect(labels.indexOf("runtime-postbuild-stamp")).toBeGreaterThan(
+        labels.indexOf("runtime-postbuild"),
+      );
+    }
+  });
+
+  it("builds isolated external plugin output after tsdown and before runtime postbuild", () => {
+    for (const profile of Object.keys(BUILD_ALL_PROFILES)) {
+      const labels = resolveBuildAllSteps(profile).map((step) => step.label);
+      const lastTsdown = profile === "full" ? "tsdown-unified" : "tsdown";
+      expect(labels.indexOf("external-plugins:local-dist")).toBeGreaterThan(
+        labels.indexOf(lastTsdown),
+      );
+      expect(labels.indexOf("external-plugins:local-dist")).toBeLessThan(
         labels.indexOf("runtime-postbuild"),
       );
     }

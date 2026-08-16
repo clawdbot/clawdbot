@@ -7,7 +7,7 @@ import {
   createRuntimeOutboundDelegates,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
-import { projectConfigAccountIdWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import { createConditionalWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
@@ -90,6 +90,13 @@ const MSTEAMS_GROUP_MANAGEMENT_ACTIONS = new Set<ChannelMessageActionName>([
   "removeParticipant",
   "renameGroup",
 ]);
+
+const collectMSTeamsSecurityFindings = createConditionalWarningCollector.findings({
+  collectWarnings: collectMSTeamsSecurityWarnings,
+  checkId: "channels.msteams.groups.open",
+  severity: "critical",
+  title: "MS Teams security warning",
+});
 
 const loadMSTeamsChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
@@ -1128,10 +1135,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       },
     },
     security: {
-      collectWarnings: projectConfigAccountIdWarningCollector<{
-        cfg: OpenClawConfig;
-        accountId?: string | null;
-      }>(collectMSTeamsSecurityWarnings),
+      collectWarnings: ({ cfg, accountId }) => collectMSTeamsSecurityFindings({ cfg, accountId }),
     },
     pairing: {
       text: {

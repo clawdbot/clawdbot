@@ -505,8 +505,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.providers.*.apiKey": "Model Provider API Key", // pragma: allowlist secret
   "models.providers.*.auth": "Model Provider Auth Mode",
   "models.providers.*.api": "Model Provider API Adapter",
-  "models.providers.*.contextWindow": "Model Provider Context Window",
-  "models.providers.*.contextTokens": "Model Provider Context Tokens",
   "models.providers.*.maxTokens": "Model Provider Max Tokens",
   "models.providers.*.timeoutSeconds": "Model Provider Request Timeout",
   "models.providers.*.region": "Model Provider Region",
@@ -753,6 +751,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.maintenance.mode": "Session Maintenance Mode",
   "session.maintenance.pruneAfter": "Session Prune After",
   "session.maintenance.maxEntries": "Session Max Entries",
+  "session.maintenance.preserveRecent": "Preserve Recent Sessions",
   "session.maintenance.resetArchiveRetention": "Session Reset Archive Retention",
   "session.maintenance.maxDiskBytes": "Session Max Disk Budget",
   "session.maintenance.highWaterBytes": "Session Disk High-water Target",

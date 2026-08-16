@@ -23,6 +23,7 @@ import {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "../api.js";
+import type { OpenClawPluginApi } from "../api.js";
 import { isAllowlistedCaller, normalizePhoneNumber } from "./allowlist.js";
 import {
   normalizeVoiceCallConfig,
@@ -30,7 +31,6 @@ import {
   resolveVoiceCallNumberRouteKeyForCall,
   type VoiceCallConfig,
 } from "./config.js";
-import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { getHeader } from "./http-headers.js";
 import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
@@ -183,9 +183,9 @@ export class VoiceCallWebhookServer {
   private config: VoiceCallConfig;
   private manager: CallManager;
   private provider: VoiceCallProvider;
-  private coreConfig: CoreConfig | null;
+  private coreConfig: OpenClawConfig | null;
   private fullConfig: OpenClawConfig | null;
-  private agentRuntime: CoreAgentDeps | null;
+  private agentRuntime: OpenClawPluginApi["runtime"]["agent"] | null;
   private logger: Logger;
   private stopStaleCallReaper: (() => void) | null = null;
   private readonly webhookInFlightLimiter = createWebhookInFlightLimiter();
@@ -203,9 +203,9 @@ export class VoiceCallWebhookServer {
     config: VoiceCallConfig,
     manager: CallManager,
     provider: VoiceCallProvider,
-    coreConfig?: CoreConfig,
+    coreConfig?: OpenClawConfig,
     fullConfig?: OpenClawConfig,
-    agentRuntime?: CoreAgentDeps,
+    agentRuntime?: OpenClawPluginApi["runtime"]["agent"],
     logger?: Logger,
   ) {
     this.config = normalizeVoiceCallConfig(config);

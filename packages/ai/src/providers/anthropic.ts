@@ -413,7 +413,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       if (nextParams !== undefined) {
         params = nextParams as MessageCreateParamsStreaming;
       }
-      applyClaudeRequestContract(params as unknown as Record<string, unknown>, model);
+      applyClaudeRequestContract(params, model);
       const sdkRequestOptions = {
         ...(requestOptions?.signal ? { signal: requestOptions.signal } : {}),
         ...(requestOptions?.timeoutMs !== undefined ? { timeout: requestOptions.timeoutMs } : {}),
@@ -1089,13 +1089,7 @@ async function buildParams(
         params.thinking = { type: "adaptive", display };
         const effort = options?.effort ?? (mandatoryAdaptiveThinking ? "high" : undefined);
         if (effort) {
-          // The Anthropic SDK types can lag newly supported effort values such as "xhigh".
-          params.output_config =
-            effort === "xhigh"
-              ? ({ effort } as unknown as NonNullable<
-                  MessageCreateParamsStreaming["output_config"]
-                >)
-              : { effort };
+          params.output_config = { effort };
         }
       } else {
         // Budget-based thinking for older models.

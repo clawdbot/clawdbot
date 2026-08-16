@@ -413,8 +413,19 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     resolveReplyTransport: channelPlugin?.threading?.resolveReplyTransport,
     replyToIsExplicit,
     resolveOutboundSessionRoute,
-    ensureOutboundSessionEntry,
   });
+  // Durable route/session persistence commits only on send success. A failed
+  // probe (missing channel credentials above all) must not rebind the folded
+  // main session's delivery route or mint a conversation identity. Once-only:
+  // multi-payload sends report several platform results for one route.
+  let outboundRoutePersisted = false;
+  const commitOutboundSessionRoute = async () => {
+    if (outboundRoutePersisted || !outboundRoute) {
+      return;
+    }
+    outboundRoutePersisted = true;
+    await ensureOutboundSessionEntry({ cfg, channel, accountId, route: outboundRoute });
+  };
   const resolvedReplyToId = readToolStringParam(params, "replyTo");
   throwIfAborted(abortSignal);
 
@@ -479,6 +490,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
         }),
       });
   if (gatewayPluginAction) {
+    await commitOutboundSessionRoute();
     return annotateSourceDelivery(
       withSendNormalization(gatewayPluginAction, sendPayload.normalization),
       {
@@ -543,7 +555,14 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       deliveryIntentId: input.deliveryIntentId,
       deliveryCompletion: input.deliveryCompletion,
       onDeliveryIntent: input.onDeliveryIntent,
-      onDeliveryResult: input.onDeliveryResult,
+      // Identified platform evidence is the first success proof on the core
+      // path; commit the route here so the transcript mirror (which runs later
+      // in the same delivery) can resolve a just-created session entry.
+      onDeliveryResult: async (result) => {
+        await commitOutboundSessionRoute();
+        await input.onDeliveryResult?.(result);
+      },
+      onPluginSendAccepted: commitOutboundSessionRoute,
       mirror:
         !dryRun && input.transcriptMirror
           ? {
@@ -579,6 +598,14 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     replyToIdSource: resolvedReplyToId ? (replyToIsExplicit ? "explicit" : "implicit") : undefined,
     threadId: resolvedThreadId ?? undefined,
   });
+
+  // Gateway-relayed core sends return no identified platform result locally;
+  // a non-failed, non-suppressed return is their success proof. Failed and
+  // suppressed sends leave the durable route untouched.
+  const coreDeliveryStatus = send.sendResult?.deliveryStatus;
+  if (coreDeliveryStatus !== "failed" && coreDeliveryStatus !== "suppressed") {
+    await commitOutboundSessionRoute();
+  }
 
   const result: Extract<MessageActionResult, { kind: "send" }> = {
     kind: "send",

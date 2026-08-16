@@ -500,7 +500,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       ? captureDeliveredTranscriptMirror({
           dispatcher,
           metadata: transcriptMirror,
-          deliveryId: options.deliveryId,
           captureToken: finalDeliveryCapture,
         })
       : undefined;
@@ -519,8 +518,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     );
     if (queuedFinal && deliveredTranscriptMirror && finalOutcomeBefore) {
       // The common settle owner runs this after successful delivery or
-      // cancellation. Keeping reconciliation out of the reply operation lets a
-      // newer foreground turn settle without creating an operation/idle cycle.
+      // cancellation. Keeping reconciliation out of the reply operation avoids
+      // creating another operation/idle cycle during delivery settlement.
       registerReplyDispatcherSettledTask(dispatcher, () =>
         mirrorTranscriptAfterDispatcherSettled({
           dispatcher,

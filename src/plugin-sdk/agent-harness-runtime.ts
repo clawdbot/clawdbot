@@ -78,6 +78,10 @@ export type {
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
   AgentHarnessCompactResult,
+  AgentHarnessNativeCompaction,
+  AgentHarnessNativeCompactionParams,
+  AgentHarnessNativeCompactionRequest,
+  AgentHarnessRegistrationOptions,
   AgentHarnessDeliveryDefaults,
   AgentHarnessResultClassification,
   AgentHarnessRuntimeArtifactBinding,
@@ -117,8 +121,12 @@ type EmbeddedRunAttemptParamsBase = Omit<
   | "admittedRunContext"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
+  | "pluginHarnessToolPolicySafeDeniedTools"
   | "trajectoryRecorder"
->;
+> & {
+  /** Audited exact denies that the plugin harness must enforce against native equivalents. */
+  pluginHarnessToolPolicySafeDeniedTools?: readonly string[];
+};
 /**
  * @deprecated Use EmbeddedRunAttemptParamsV2. The optional capability keeps
  * existing harness source compatible through 2026-10-12.
@@ -137,16 +145,8 @@ export type {
   ContextEngineOperation,
   ContextEngineProjection,
 } from "../context-engine/types.js";
-export type {
-  CompactEmbeddedAgentSessionParams,
-  /** @deprecated Use CompactEmbeddedAgentSessionParams. */
-  CompactEmbeddedAgentSessionParams as CompactEmbeddedPiSessionParams,
-} from "../agents/embedded-agent-runner/compact.js";
-export type {
-  EmbeddedAgentCompactResult,
-  /** @deprecated Use EmbeddedAgentCompactResult. */
-  EmbeddedAgentCompactResult as EmbeddedPiCompactResult,
-} from "../agents/embedded-agent-runner/types.js";
+export type { CompactEmbeddedAgentSessionParams } from "../agents/embedded-agent-runner/compact.js";
+export type { EmbeddedAgentCompactResult } from "../agents/embedded-agent-runner/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export type {
   MessagingToolSend,
@@ -194,11 +194,7 @@ export { resolveAgentRunAbortLifecycleFields } from "../agents/run-termination.j
 export { isHostScopedAgentToolActive } from "../agents/agent-tools.ring-zero-context.js";
 export { log as embeddedAgentLog } from "../agents/embedded-agent-runner/logger.js";
 export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
-export {
-  classifyEmbeddedAgentRunResultForModelFallback,
-  /** @deprecated Use classifyEmbeddedAgentRunResultForModelFallback. */
-  classifyEmbeddedAgentRunResultForModelFallback as classifyEmbeddedPiRunResultForModelFallback,
-} from "../agents/embedded-agent-runner/result-fallback-classifier.js";
+export { classifyEmbeddedAgentRunResultForModelFallback } from "../agents/embedded-agent-runner/result-fallback-classifier.js";
 export { resolveUserPath } from "../utils.js";
 export { callGatewayTool } from "../agents/tools/gateway.js";
 export type { NodeListNode } from "../agents/tools/nodes-utils.js";
@@ -266,7 +262,7 @@ export {
   applyEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-export { getPluginToolMeta } from "../plugins/tools.js";
+export { getPluginToolMeta, getPluginToolSideEffectOwnerKey } from "../plugins/tools.js";
 export {
   attachModelProviderRequestTransport,
   getModelProviderRequestTransport,

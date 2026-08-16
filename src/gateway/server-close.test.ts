@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_eventValue) => undefined),
   disposeAllBundleLspRuntimes: vi.fn(async () => undefined),
   drainRetainedEmbeddingProviders: vi.fn(async () => undefined),
+  stopGmailWatcher: vi.fn(async () => undefined),
   disposeAcpSessionManagerInstance: vi.fn(async () => undefined),
   getAcpSessionManager: vi.fn(() => ({})),
   fenceSessionSuspensionWritesForGatewayShutdown: vi.fn(),
@@ -47,7 +48,7 @@ vi.mock("../channels/plugins/index.js", async () => ({
 }));
 
 vi.mock("../hooks/gmail-watcher.js", () => ({
-  stopGmailWatcher: vi.fn(async () => undefined),
+  stopGmailWatcher: mocks.stopGmailWatcher,
 }));
 
 vi.mock("../hooks/internal-hooks.js", async () => {
@@ -151,6 +152,11 @@ function createGatewayCloseTestDeps(
     tailscaleCleanup: null,
     stopChannel: vi.fn(async () => undefined),
     pluginServices: null,
+    disposeAllBundleLspRuntimes: mocks.disposeAllBundleLspRuntimes,
+    drainRetainedOpenAiEmbeddingProviders: mocks.drainRetainedEmbeddingProviders,
+    stopGmailWatcher: mocks.stopGmailWatcher,
+    disposeAllCodeModeRuns: mocks.disposeAllCodeModeRuns,
+    closeProviderTransportDispatcherPool: mocks.closeProviderTransportDispatcherPool,
     cron: { stop: vi.fn() },
     heartbeatRunner: { stop: vi.fn() } as never,
     updateCheckStop: null,
@@ -209,6 +215,10 @@ describe("createGatewayCloseHandler", () => {
     mocks.disposeAllBundleLspRuntimes.mockResolvedValue(undefined);
     mocks.drainRetainedEmbeddingProviders.mockClear();
     mocks.drainRetainedEmbeddingProviders.mockResolvedValue(undefined);
+    mocks.stopGmailWatcher.mockClear();
+    mocks.stopGmailWatcher.mockResolvedValue(undefined);
+    mocks.closeProviderTransportDispatcherPool.mockClear();
+    mocks.closeProviderTransportDispatcherPool.mockResolvedValue(undefined);
     mocks.disposeAcpSessionManagerInstance.mockReset();
     mocks.disposeAcpSessionManagerInstance.mockResolvedValue(undefined);
     mocks.getAcpSessionManager.mockClear();

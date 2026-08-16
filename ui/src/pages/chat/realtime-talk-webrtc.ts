@@ -1,6 +1,7 @@
-// Control UI chat module implements realtime talk webrtc behavior.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../src/talk/describe-view-tool.js";
+// Control UI chat module implements realtime talk webrtc behavior.
+import { formatUiError } from "../../lib/format-error.ts";
 import { RealtimeTalkMediaStreamMeter } from "./realtime-talk-audio.ts";
 import { RealtimeTalkCameraController } from "./realtime-talk-camera-controller.ts";
 import { openRealtimeTalkCamera, openRealtimeTalkInput } from "./realtime-talk-input.ts";
@@ -105,7 +106,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
             if (reportError && this.audio === audio && !this.closed) {
               this.ctx.callbacks.onStatus?.(
                 "error",
-                `Realtime audio playback failed: ${error instanceof Error ? error.message : String(error)}`,
+                `Realtime audio playback failed: ${formatUiError(error)}`,
               );
             }
           });
@@ -644,7 +645,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         payload: { name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME, frameAttached: true },
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = formatUiError(error);
       this.submitToolResult(callId, { ok: false, error: message });
       this.emitTalkEvent({
         type: "tool.error",
@@ -675,7 +676,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     if (this.closed) {
       return;
     }
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatUiError(error);
     this.ctx.callbacks.onStatus?.("error", message);
   }
 

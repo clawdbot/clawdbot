@@ -473,8 +473,6 @@ export async function applySessionEntryLifecycleMutation(params: {
     removedEntries: committed.removedSessionKeys.length,
     removedSessionKeys: committed.removedSessionKeys,
     archivedTranscriptDirectories,
-    unreferencedArtifacts: null,
-    maintenanceReport: null,
     afterCount,
     artifactCleanupError,
   };
@@ -580,8 +578,6 @@ export async function purgeDeletedAgentSessionEntries(
     archivedTranscriptDirectories: uniqueStrings(
       archivedTranscripts.map((transcript) => path.dirname(transcript.archivedPath)),
     ).toSorted(),
-    unreferencedArtifacts: null,
-    maintenanceReport: null,
     afterCount,
   };
 }

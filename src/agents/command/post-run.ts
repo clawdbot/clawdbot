@@ -72,7 +72,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
     agentDir,
     outboundSession,
     runId,
-    agentCfg,
   } = params.prepared;
   const {
     fallbackProvider,
@@ -147,7 +146,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
       await updateSessionStoreAfterAgentRun({
         cfg,
         agentDir,
-        contextTokensOverride: agentCfg?.contextTokens,
         sessionId: effectiveSessionId,
         sessionKey,
         storePath,

@@ -186,12 +186,6 @@ export function applyModelDefaults(
         continue;
       }
       const providerApi = normalizedProvider.api;
-      const providerContextWindow = isPositiveNumber(normalizedProvider.contextWindow)
-        ? normalizedProvider.contextWindow
-        : undefined;
-      const providerContextTokens = isPositiveNumber(normalizedProvider.contextTokens)
-        ? normalizedProvider.contextTokens
-        : undefined;
       const providerMaxTokens = isPositiveNumber(normalizedProvider.maxTokens)
         ? normalizedProvider.maxTokens
         : undefined;
@@ -233,29 +227,26 @@ export function applyModelDefaults(
           modelMutated = true;
         }
 
-        const contextWindow = isPositiveNumber(raw.contextWindow)
-          ? raw.contextWindow
-          : (providerContextWindow ?? DEFAULT_CONTEXT_TOKENS);
+        const contextWindow = isPositiveNumber(raw.contextWindow) ? raw.contextWindow : undefined;
         if (raw.contextWindow !== contextWindow) {
           modelMutated = true;
         }
 
-        const contextTokens = isPositiveNumber(raw.contextTokens)
-          ? raw.contextTokens
-          : providerContextTokens;
+        const contextTokens = isPositiveNumber(raw.contextTokens) ? raw.contextTokens : undefined;
         if (raw.contextTokens !== contextTokens) {
           modelMutated = true;
         }
 
+        const maxTokenContextWindow = contextWindow ?? DEFAULT_CONTEXT_TOKENS;
         const defaultMaxTokens = Math.min(
           providerMaxTokens ?? DEFAULT_MODEL_MAX_TOKENS,
-          contextWindow,
+          maxTokenContextWindow,
         );
         const rawMaxTokens = isPositiveNumber(raw.maxTokens) ? raw.maxTokens : defaultMaxTokens;
         const maxTokens = resolveNormalizedProviderModelMaxTokens({
           providerId,
           modelId: id,
-          contextWindow,
+          contextWindow: maxTokenContextWindow,
           rawMaxTokens,
         });
         if (raw.maxTokens !== maxTokens) {

@@ -431,7 +431,9 @@ export function settleStagedWorkspaceResult(
 export async function settleStagedWorkspaceResult(
   params: StagedWorkspaceResultSettlement,
 ): Promise<WorkerSessionPlacementRecord> {
-  await params.placements.closeWorkerTurnToolState(params.turnClaim);
+  if (params.turnClaim.owner.kind === "worker") {
+    await params.placements.closeWorkerTurnToolState(params.turnClaim);
+  }
   const cleanupRef =
     params.stagedResultRef && !params.conflictRetained
       ? isWorkerWorkspaceResultCleanupRef(params.stagedResultRef)

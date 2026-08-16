@@ -406,7 +406,7 @@ export function partitionSessionFileEntries(entries: readonly FileEntry[]): {
   for (const [originalIndex, rawEntry] of entries.entries()) {
     const entry = normalizePersistedLegacyHookMessage(rawEntry) as FileEntry;
     if (!hasHeader && isRecord(entry) && entry.type === "session" && typeof entry.id === "string") {
-      fileEntries.push(entry as unknown as SessionHeader);
+      fileEntries.push(entry);
       fileEntriesByOriginalIndex[originalIndex] = entry;
       hasHeader = true;
       continue;

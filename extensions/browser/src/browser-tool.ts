@@ -932,6 +932,7 @@ export function createBrowserTool(opts?: {
             baseUrl,
             profile,
             proxyRequest,
+            signal,
             onTabActivity: sessionTabs.touch,
           });
         case "upload": {

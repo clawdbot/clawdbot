@@ -1517,6 +1517,50 @@ describe("update-startup", () => {
     );
   });
 
+  it("keeps a new dev target visible during the automatic attempt cooldown", async () => {
+    writePersistedUpdateCheckState({
+      autoLastAttemptVersion: "upstream-one",
+      autoLastAttemptAt: new Date(Date.now()).toISOString(),
+    });
+    mockDevGitStatus({ upstreamSha: "upstream-two", behind: 3 });
+    const runAutoUpdate = createAutoUpdateSuccessMock();
+    const cfg = { update: { channel: "dev" as const, auto: { enabled: true } } };
+
+    await runGatewayUpdateCheck({
+      cfg,
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      activeWorkInspectors: idleActiveWorkInspectors(),
+      runAutoUpdate,
+    });
+
+    expect(getUpdateAvailable()).toMatchObject({ upstreamSha: "upstream-two" });
+    expect(getUpdateSchedule()?.target).toMatchObject({ upstreamSha: "upstream-two" });
+    expect(getUpdateSchedule()?.campaign).toBeUndefined();
+    expect(runAutoUpdate).not.toHaveBeenCalled();
+
+    vi.setSystemTime(Date.now() + 60 * 60 * 1000 + 1);
+    await runGatewayUpdateCheck({
+      cfg,
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      activeWorkInspectors: idleActiveWorkInspectors(),
+      runAutoUpdate,
+    });
+
+    expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
+    expect(runAutoUpdate).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(runAutoUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "dev",
+        devTarget: expect.objectContaining({ upstreamSha: "upstream-two" }),
+      }),
+    );
+  });
+
   it("supersedes and clears dev git campaigns from fresh git facts", async () => {
     mockDevGitStatus({ upstreamSha: "upstream-one" });
     const runAutoUpdate = createAutoUpdateSuccessMock();

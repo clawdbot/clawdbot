@@ -95,6 +95,8 @@ type OutboundSendContext = {
   onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
   /** Runs on identified platform evidence before queue acknowledgement. */
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
+  /** Runs once a plugin action accepted the send, before transcript mirroring. */
+  onPluginSendAccepted?: () => Promise<void>;
 };
 
 type PluginHandledResult = {
@@ -420,6 +422,9 @@ export async function executeSendAction(params: {
         ctx: pluginCtx,
         action: "send",
         onHandled: async () => {
+          // The accepted-send commit must precede the transcript mirror below:
+          // first-contact outbound routes create their session row in it.
+          await params.ctx.onPluginSendAccepted?.();
           if (!params.ctx.mirror) {
             return;
           }

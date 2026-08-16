@@ -22,14 +22,15 @@ import {
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
-import "../../components/session-menu.ts";
 import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
+import "../../components/session-menu.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
 import { openEditor } from "../../lib/editor-links.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
@@ -100,7 +101,7 @@ type SessionsPageMutationResult = "completed" | "failed" | "stale";
 /** Type-only, so the dialog itself stays behind its lazy boundary. */
 type InputDialogOpener = (typeof import("../../components/input-dialog.ts"))["showInputDialog"];
 
-type SessionDeleteRow = Pick<GatewaySessionRow, "key" | "archived">;
+type SessionDeleteRow = Pick<GatewaySessionRow, "key" | "archived" | "sessionId">;
 
 class SessionsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -274,7 +275,7 @@ class SessionsPage extends OpenClawLightDomElement {
       this.transcriptSearch = result ? { status: "results", ...result } : { status: "idle" };
     },
     onError: (error) => {
-      this.transcriptSearch = { status: "error", message: String(error) };
+      this.transcriptSearch = { status: "error", message: formatUiError(error) };
     },
   });
 
@@ -298,7 +299,7 @@ class SessionsPage extends OpenClawLightDomElement {
       if (sessionKey) {
         this.checkpointErrorByKey = {
           ...this.checkpointErrorByKey,
-          [sessionKey]: String(error),
+          [sessionKey]: formatUiError(error),
         };
       }
     },
@@ -608,7 +609,7 @@ class SessionsPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (requestId === this.sessionRequestId && this.isRequestScopeCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     } finally {
       if (requestId === this.sessionRequestId && this.isRequestScopeCurrent(scope)) {
@@ -780,6 +781,7 @@ class SessionsPage extends OpenClawLightDomElement {
       key: row.key,
       agentId: this.sessionAgentId(row.key, scope.context),
       ...options,
+      ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
       ...(row.archived === true ? { archivedOnly: true } : {}),
     }));
     for (const params of requests) {
@@ -847,11 +849,11 @@ class SessionsPage extends OpenClawLightDomElement {
         }
       }
       if (result.errors.length > 0) {
-        this.error = result.errors.join("; ");
+        this.error = formatUiExternalText(result.errors.join("; "));
       }
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     } finally {
       if (this.isRequestScopeCurrent(scope)) {
@@ -894,7 +896,7 @@ class SessionsPage extends OpenClawLightDomElement {
       rows = listed;
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
       return;
     }
@@ -973,7 +975,7 @@ class SessionsPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     } finally {
       if (this.isRequestScopeCurrent(scope)) {
@@ -1063,7 +1065,7 @@ class SessionsPage extends OpenClawLightDomElement {
     try {
       return (await import("../../components/input-dialog.ts")).showInputDialog;
     } catch (error) {
-      this.error = String(error);
+      this.error = formatUiError(error);
       return null;
     }
   }
@@ -1180,7 +1182,7 @@ class SessionsPage extends OpenClawLightDomElement {
       return "completed";
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
         return "failed";
       }
       return "stale";
@@ -1249,7 +1251,7 @@ class SessionsPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     }
   }
@@ -1344,7 +1346,7 @@ class SessionsPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     } finally {
       if (this.isRequestScopeCurrent(scope) && this.checkpointBusyKey === checkpointId) {
@@ -1381,7 +1383,7 @@ class SessionsPage extends OpenClawLightDomElement {
       });
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     } finally {
       if (this.isRequestScopeCurrent(scope) && this.checkpointBusyKey === checkpointId) {
@@ -1759,7 +1761,7 @@ class SessionsPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
-        this.error = String(error);
+        this.error = formatUiError(error);
       }
     }
   }

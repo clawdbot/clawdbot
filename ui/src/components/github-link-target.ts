@@ -66,6 +66,17 @@ export function isGitHubItemRootPath(url: URL): boolean {
   return segments.length === 4 && !url.search && !url.hash;
 }
 
+export function gitHubProfileUrl(login: string): string {
+  return `https://${GITHUB_HOST}/${encodeURIComponent(login)}`;
+}
+
+// Built from the parsed parts rather than the source href, which isGitHubItemRootPath
+// shows may already carry its own sub-path, query, or comment fragment.
+export function gitHubFilesChangedUrl(target: GitHubItemTarget): string {
+  const repoPath = `${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`;
+  return `https://${GITHUB_HOST}/${repoPath}/pull/${target.number}/files`;
+}
+
 export function githubLinkAnchorFromEvent(event: Event): HTMLAnchorElement | null {
   for (const candidate of event.composedPath()) {
     if (candidate instanceof HTMLAnchorElement) {

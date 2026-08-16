@@ -94,7 +94,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     ),
   diagnostics: () =>
     import("./server-methods/diagnostics.js").then((module) => module.diagnosticsHandlers),
-  doctor: () => import("./server-methods/doctor.js").then((module) => module.doctorHandlers),
+  doctor: () =>
+    import("./server-methods/doctor.js").then((module) => module.createDoctorHandlers()),
   environments: () =>
     import("./server-methods/environments.js").then((module) => module.environmentsHandlers),
   worktrees: () =>

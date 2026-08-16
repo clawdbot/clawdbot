@@ -4,7 +4,7 @@ import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { installGatewayTestHooks, rpcReq } from "./test-helpers.js";
-import { isDeviceWorkerAvailable } from "./worker-environments/device-provider.js";
+import { resolveDeviceWorkerAvailability } from "./worker-environments/device-provider.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -28,8 +28,8 @@ test(
     const context = getFallbackGatewayContext();
     expect(context?.workerEnvironmentService).toBeDefined();
     await expect(
-      isDeviceWorkerAvailable(context?.workerEnvironmentService, "missing-device"),
-    ).resolves.toBe(false);
+      resolveDeviceWorkerAvailability(context?.workerEnvironmentService, "missing-device"),
+    ).resolves.toEqual({ available: false, unavailableReason: "unpaired" });
     const placements = context?.workerSessionPlacementService as
       | WorkerSessionPlacementStore
       | undefined;

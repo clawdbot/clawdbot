@@ -27,6 +27,8 @@ export type ToolErrorSummary = {
   timedOut?: boolean;
   middlewareError?: boolean;
   mutatingAction?: boolean;
+  /** Canonical host-private plugin/tool identity for owner-declared side effects. */
+  ownerKey?: string;
   actionFingerprint?: string;
   fileTarget?: FileTarget;
   terminalDiagnostic?: ProcessTerminalDiagnostic;

@@ -449,6 +449,11 @@ async function runDoctorHealthContributionList(
         // ownership topology that the config writer deliberately left non-durable.
         return;
       }
+      if (ctx.configWriteBlockedByValidation === true) {
+        // Same invariant for a validation-refused write: the candidate never reached
+        // disk, so later repairs must not persist state derived from it.
+        return;
+      }
     } catch (error) {
       await (contribution.required ? Promise.reject(error as Error) : Promise.resolve());
       const { note } = await loadNoteModule();

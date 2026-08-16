@@ -735,6 +735,7 @@ export type SkillClawHubLink =
       registry: string;
       slug: string;
       ownerHandle?: string;
+      requestedReference?: string;
       installedVersion: string;
       installedAt: number;
       originPath?: string;

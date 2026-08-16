@@ -79,7 +79,7 @@ function attachHarness(params: { deferSocketSend?: boolean } = {}) {
     }),
   } as unknown as WebSocket;
   const close = vi.fn();
-  const send = vi.fn();
+  const send = vi.fn((_frame: unknown) => ({ kind: "sent" }) as const);
   const setCloseCause = vi.fn();
   const setClient = vi.fn((next: unknown) => {
     client = next;

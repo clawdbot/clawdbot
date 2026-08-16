@@ -76,6 +76,7 @@ export function createHarness(
     listWorkspaceReconciliationOwners: () => placementStore.listWorkspaceReconciliationOwners(),
     listPendingWorkspaceResults: () => placementStore.listPendingWorkspaceResults(),
     workspaceResultInstanceId: () => placementStore.workspaceResultInstanceId(),
+    validateWorkspaceResultClaim: (claim) => placementStore.validateWorkspaceResultClaim(claim),
     recordStagedWorkspaceResult: (claim, ref) =>
       placementStore.recordStagedWorkspaceResult(claim, ref),
     recordWorkspaceResultConflict: (claim, conflict) =>
@@ -371,8 +372,8 @@ export function createHarness(
     placements: {
       current: () => placementStore.get(REQUEST.sessionId),
       seedStarting: () => seedStartingPlacement(placementStore, environmentId),
-      seedActive: (ownerEpoch: number) =>
-        seedActivePlacement(placementStore, { environmentId, ownerEpoch }),
+      seedActive: (ownerEpoch: number, executionMode?: "worker-turn" | "remote-exec") =>
+        seedActivePlacement(placementStore, { environmentId, ownerEpoch, executionMode }),
       seedDraining: (ownerEpoch: number) => {
         const active = seedActivePlacement(placementStore, { environmentId, ownerEpoch });
         if (active.state !== "active") {

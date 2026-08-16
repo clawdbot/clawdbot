@@ -77,14 +77,12 @@ export type SessionListSnapshot = Pick<SessionState, "result" | "agentId" | "loa
 export type SessionDeleteOptions = {
   agentId?: string;
   deleteTranscript?: boolean;
+  expectedSessionId?: string;
   archivedOnly?: boolean;
 };
 
-export type SessionDeleteTarget = {
+export type SessionDeleteTarget = SessionDeleteOptions & {
   key: string;
-  agentId?: string;
-  deleteTranscript?: boolean;
-  archivedOnly?: boolean;
 };
 
 /** Dirty/unpushed checkouts survive session deletion; callers surface them. */

@@ -262,11 +262,15 @@ describe("plugin-sdk facade runtime", () => {
     );
   });
 
-  it("retries missing facade locations when a plugin artifact appears", () => {
+  it("memoizes missing facade locations until the plugin lifecycle clears", () => {
     const dir = createTrustedBundledFixtureRoot("openclaw-facade-location-retry-");
     useBundledPluginDirOverrideForTest(dir);
+    let registryProbes = 0;
     testing.setFacadeActivationCheckRuntimeForTest({
-      resolveRegistryPluginModuleLocation: () => null,
+      resolveRegistryPluginModuleLocation: () => {
+        registryProbes += 1;
+        return null;
+      },
     } as never);
     const params = {
       dirName: "future-demo",
@@ -274,11 +278,20 @@ describe("plugin-sdk facade runtime", () => {
     };
 
     expect(testing.resolveFacadeModuleLocation(params)).toBeNull();
+    // Plugin topology is process-stable: repeated lookups for a missing plugin
+    // must not re-walk the filesystem or registry on every request.
+    expect(testing.resolveFacadeModuleLocation(params)).toBeNull();
+    expect(registryProbes).toBe(1);
 
     const pluginDir = path.join(dir, params.dirName);
     fs.mkdirSync(pluginDir, { recursive: true });
     writePluginPackageJson(pluginDir, params.dirName);
     fs.writeFileSync(path.join(pluginDir, "api.js"), 'export const marker = "ready";\n', "utf8");
+
+    // Install/reload flows clear the metadata lifecycle memo; only then does
+    // the new artifact become visible.
+    expect(testing.resolveFacadeModuleLocation(params)).toBeNull();
+    clearPluginMetadataLifecycleCaches();
 
     expect(testing.resolveFacadeModuleLocation(params)).toEqual({
       modulePath: path.join(pluginDir, "api.js"),

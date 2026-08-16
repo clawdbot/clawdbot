@@ -27,6 +27,7 @@ import { claimAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
 import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
+import { errorShapeFromError } from "../error-shape.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import {
   isConfirmedAcpManualSpawnTaskOwner,
@@ -352,9 +353,11 @@ export async function prepareAgentRunDispatch(params: {
       params.io.emitAcceptance([
         false,
         undefined,
-        errorShape(
+        errorShapeFromError(
           ErrorCodes.UNAVAILABLE,
-          `plugin subagent registry persistence failed; run was not started: ${formatForLog(err)}`,
+          new Error("plugin subagent registry persistence failed; run was not started", {
+            cause: err,
+          }),
         ),
       ]);
       return undefined;

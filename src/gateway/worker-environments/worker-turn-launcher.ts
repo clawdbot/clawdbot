@@ -15,6 +15,7 @@ import { redactSensitiveText } from "../../logging/redact.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
+import { placementTurnOwner } from "./placement-record.js";
 import { createRemoteExecPlacementSandbox } from "./placement-sandbox.js";
 import type {
   WorkerSessionPlacementRecord,
@@ -459,11 +460,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           ...identity,
           claimId: randomUUID(),
           runId: claim.runId,
-          owner: {
-            kind: "local",
-            environmentId: placement.environmentId,
-            ownerEpoch: placement.activeOwnerEpoch,
-          },
+          owner: placementTurnOwner(placement),
         });
         const refreshed = options.placements.get(claim.sessionId);
         if (
@@ -511,16 +508,22 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       } catch (error) {
         const pendingWorkspaceResult = options.placements
           .listPendingWorkspaceResults()
-          .some(
+          .find(
             (pending) =>
               pending.sessionId === turnClaim.sessionId &&
               pending.claimId === turnClaim.claimId &&
               pending.runId === turnClaim.runId,
           );
         if (pendingWorkspaceResult) {
-          // A recovery sweep owns the still-live worker claim. Teardown here
-          // could discard the terminal event's durably fenced file results.
-          options.placements.handoffWorkspaceResultRecovery(turnClaim);
+          if (turnClaim.owner.kind === "local") {
+            // The Gateway-owned run is already terminal. Atomically record the
+            // reconciliation failure before teardown so reclaim cannot see live work.
+            options.placements.failWorkspaceResultAndReleaseTurn(pendingWorkspaceResult, error);
+          } else {
+            // A recovery sweep owns the still-live worker claim. Teardown here
+            // could discard the terminal event's durably fenced file results.
+            options.placements.handoffWorkspaceResultRecovery(turnClaim);
+          }
           await options.recoverPendingWorkspaceResult(placement.environmentId);
           throw error;
         }

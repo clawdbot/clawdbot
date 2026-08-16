@@ -464,7 +464,6 @@ export type RunReplyAgentParams = {
   runtimePolicySessionKey?: string;
   storePath?: string;
   defaultModel: string;
-  agentCfgContextTokens?: number;
   resolvedVerboseLevel: VerboseLevel;
   toolProgressDetail?: "explain" | "raw";
   isNewSession: boolean;

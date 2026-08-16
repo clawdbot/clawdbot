@@ -194,7 +194,6 @@ export type PluginManifestContractListKey =
   | "imageGenerationProviders"
   | "videoGenerationProviders"
   | "musicGenerationProviders"
-  | "memoryEmbeddingProviders"
   | "webContentExtractors"
   | "webFetchProviders"
   | "webSearchProviders"
@@ -249,6 +248,7 @@ export type PluginManifestRecord = {
   syntheticAuthRefs?: string[];
   nonSecretAuthMarkers?: string[];
   commandAliases?: PluginManifestCommandAlias[];
+  cliCommands?: PluginManifest["cliCommands"];
   providerUsageAuthEnvVars?: Record<string, string[]>;
   providerAuthAliases?: Record<string, string>;
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
@@ -420,7 +420,6 @@ function mergeManifestContracts(
     "trustedToolPolicies",
     "externalAuthProviders",
     "embeddingProviders",
-    "memoryEmbeddingProviders",
     "speechProviders",
     "realtimeTranscriptionProviders",
     "realtimeVoiceProviders",
@@ -607,6 +606,7 @@ function buildRecord(params: {
     syntheticAuthRefs: params.manifest.syntheticAuthRefs ?? [],
     nonSecretAuthMarkers: params.manifest.nonSecretAuthMarkers ?? [],
     commandAliases: params.manifest.commandAliases,
+    cliCommands: params.manifest.cliCommands,
     providerUsageAuthEnvVars: params.manifest.providerUsageAuthEnvVars,
     providerAuthAliases: params.manifest.providerAuthAliases,
     providerAuthChoices: params.manifest.providerAuthChoices,
