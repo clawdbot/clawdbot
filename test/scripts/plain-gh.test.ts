@@ -1,7 +1,6 @@
 // Plain GitHub CLI helper tests cover wrapper-safe gh execution for maintainer scripts.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -13,18 +12,12 @@ import {
   PLAIN_GH_SYSTEM_CANDIDATES,
   resolvePlainGhBin,
 } from "../../scripts/lib/plain-gh.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function makeFakeGh(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "plain-gh-"));
-  tempDirs.push(dir);
+  const dir = tempDirs.make("plain-gh-");
   const binDir = path.join(dir, "bin");
   mkdirSync(binDir);
   const ghPath = path.join(binDir, "gh");
@@ -47,8 +40,7 @@ printf 'GH_TOKEN_SET=%s\\n' "\${GH_TOKEN:+1}"
 }
 
 function makeLargeFakeGh(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), "plain-gh-large-"));
-  tempDirs.push(dir);
+  const dir = tempDirs.make("plain-gh-large-");
   const ghPath = path.join(dir, "gh");
   writeFileSync(
     ghPath,
@@ -59,6 +51,44 @@ process.stdout.write("x".repeat(bytes));
   );
   chmodSync(ghPath, 0o755);
   return ghPath;
+}
+
+function makeCredentialForwardingGh() {
+  const dir = tempDirs.make("plain-gh-auth-forward-");
+  const binDir = path.join(dir, "bin");
+  const calls = path.join(dir, "calls.log");
+  const realGh = path.join(dir, "real-gh");
+  mkdirSync(binDir);
+  writeFileSync(
+    path.join(binDir, "gh"),
+    `#!/bin/sh
+printf 'path:%s\\n' "$*" >> "$PLAIN_GH_FAKE_CALLS"
+if [ "$1 $2" = "auth token" ]; then
+  printf 'forwarded-test-token\\n'
+  exit 0
+fi
+exit 9
+`,
+  );
+  writeFileSync(
+    realGh,
+    `#!/bin/sh
+printf 'plain:%s\\n' "$*" >> "$PLAIN_GH_FAKE_CALLS"
+case "$PLAIN_GH_EXPECTED_TOKEN_ENV" in
+  GH_TOKEN) token="\${GH_TOKEN-}"; other_token="\${GH_ENTERPRISE_TOKEN-}" ;;
+  GH_ENTERPRISE_TOKEN) token="\${GH_ENTERPRISE_TOKEN-}"; other_token="\${GH_TOKEN-}" ;;
+  *) echo 'unexpected token environment' >&2; exit 7 ;;
+esac
+if [ "$token" != "forwarded-test-token" ] || [ -n "$other_token" ]; then
+  echo 'missing forwarded credentials' >&2
+  exit 8
+fi
+printf 'authenticated plain gh\\n'
+`,
+  );
+  chmodSync(path.join(binDir, "gh"), 0o755);
+  chmodSync(realGh, 0o755);
+  return { binDir, calls, realGh };
 }
 
 describe("plain gh helpers", () => {
@@ -203,44 +233,59 @@ describe("plain gh helpers", () => {
     expect(readFileSync(outputPath, "utf8")).toContain("COLORTERM_SET=");
   });
 
-  it("bridges PATH-shim credentials to the selected plain gh", () => {
-    const ghPath = makeFakeGh();
-    const shimDir = mkdtempSync(path.join(tmpdir(), "plain-gh-auth-shim-"));
-    tempDirs.push(shimDir);
-    const shimPath = path.join(shimDir, "gh");
-    writeFileSync(
-      shimPath,
-      `#!/usr/bin/env bash
-if [ "$*" = "auth token" ]; then
-  printf 'bridged-test-token\\n'
-  exit 0
-fi
-exit 2
-`,
-    );
-    chmodSync(shimPath, 0o755);
-    const script = [
-      "set -euo pipefail",
-      "source scripts/lib/plain-gh.sh",
-      `OPENCLAW_GH_BIN=${JSON.stringify(ghPath)}`,
-      "export OPENCLAW_GH_BIN",
-      "gh_plain api rate_limit",
-    ].join("\n");
+  it.each([
+    {
+      host: undefined,
+      name: "github.com",
+      tokenArgs: "auth token",
+      tokenEnv: "GH_TOKEN",
+    },
+    {
+      host: "github.example.com",
+      name: "an Enterprise host",
+      tokenArgs: "auth token --hostname github.example.com",
+      tokenEnv: "GH_ENTERPRISE_TOKEN",
+    },
+  ])("forwards $name credentials from a PATH wrapper to the plain CLI", (testCase) => {
+    const fixture = makeCredentialForwardingGh();
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      OPENCLAW_GH_BIN: fixture.realGh,
+      PATH: `${fixture.binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      PLAIN_GH_EXPECTED_TOKEN_ENV: testCase.tokenEnv,
+      PLAIN_GH_FAKE_CALLS: fixture.calls,
+    };
+    if (testCase.host) {
+      env.GH_HOST = testCase.host;
+    } else {
+      delete env.GH_HOST;
+    }
+    for (const name of [
+      "GH_TOKEN",
+      "GITHUB_TOKEN",
+      "GH_ENTERPRISE_TOKEN",
+      "GITHUB_ENTERPRISE_TOKEN",
+    ]) {
+      delete env[name];
+    }
 
-    const result = spawnSync("bash", ["-c", script], {
+    expect(execPlainGh(["api", "user"], { encoding: "utf8", env })).toBe(
+      "authenticated plain gh\n",
+    );
+    const shell = spawnSync("bash", ["-c", "source scripts/lib/plain-gh.sh; gh_plain api user"], {
+      cwd: process.cwd(),
       encoding: "utf8",
-      env: {
-        ...process.env,
-        GH_TOKEN: "",
-        GITHUB_TOKEN: "",
-        PATH: `${shimDir}${path.delimiter}/usr/bin:/bin`,
-      },
+      env,
     });
 
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("argv=api rate_limit");
-    expect(result.stdout).toContain("GH_TOKEN_SET=1");
-    expect(result.stdout).not.toContain("bridged-test-token");
+    expect(shell.status, shell.stderr).toBe(0);
+    expect(shell.stdout).toBe("authenticated plain gh\n");
+    expect(readFileSync(fixture.calls, "utf8").trim().split("\n")).toEqual([
+      `path:${testCase.tokenArgs}`,
+      "plain:api user",
+      `path:${testCase.tokenArgs}`,
+      "plain:api user",
+    ]);
   });
 
   it("captures large gh payloads by default", () => {
@@ -251,6 +296,7 @@ exit 2
       encoding: "utf8",
       env: {
         ...process.env,
+        GH_TOKEN: "large-payload-test-token",
         OPENCLAW_GH_BIN: ghPath,
         PLAIN_GH_FAKE_BYTES: String(bytes),
       },
