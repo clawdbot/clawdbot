@@ -22,6 +22,7 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import {
   applyCliBackendLiveEnv,
@@ -89,6 +90,19 @@ function createRuntimeBackendEntry(
   return ownsNativeCompaction === true
     ? { ...base, ownsNativeCompaction: true, manualCompaction }
     : { ...base, ownsNativeCompaction: false };
+}
+
+function createFreshProcessCacheProbeBackend(backend: RuntimeBackendEntry): RuntimeBackendEntry {
+  return {
+    ...backend,
+    // Keep the owning plugin's real runtime hooks, including its version-gated argv resolver,
+    // while forcing the documented restart/idle-exit resume path between probe turns.
+    normalizeConfig: (config, context) => {
+      const normalized = backend.normalizeConfig?.(config, context) ?? config;
+      const { liveSession: _liveSession, ...freshProcessConfig } = normalized;
+      return freshProcessConfig;
+    },
+  };
 }
 
 const DEFAULT_PROVIDER = "claude-cli";
@@ -390,7 +404,7 @@ describeLive("gateway live (cli backend)", () => {
       const memoryToken = `CLI-MEM-${memoryNonce}`;
       const resumeNonce = randomBytes(3).toString("hex").toUpperCase();
       const enableCliResumeContinuityProbe =
-        providerId === "claude-cli" && CLI_RESUME && !modelSwitchTarget;
+        providerId === "claude-cli" && CLI_RESUME && !CLI_CACHE_PROBE && !modelSwitchTarget;
       const resumeContinuityProbe = enableCliResumeContinuityProbe
         ? buildClaudeCliResumeContinuityProbe({
             firstTurnNonce: nonce,
@@ -490,25 +504,35 @@ describeLive("gateway live (cli backend)", () => {
             : {}),
         },
       });
-      cliBackendsTesting.setDepsForTest({
-        resolvePluginSetupCliBackend: () => undefined,
-        resolveRuntimeCliBackends: () => [liveBackend],
-      });
+      if (!CLI_CACHE_PROBE) {
+        cliBackendsTesting.setDepsForTest({
+          resolvePluginSetupCliBackend: () => undefined,
+          resolveRuntimeCliBackends: () => [liveBackend],
+        });
+      }
 
       const cfg: OpenClawConfig = {};
       const nextCfg = {
         ...cfg,
-        ...(schemaProbePluginPath
+        ...(schemaProbePluginPath || CLI_CACHE_PROBE
           ? {
               plugins: {
                 ...cfg.plugins,
-                load: {
-                  ...cfg.plugins?.load,
-                  paths: [...(cfg.plugins?.load?.paths ?? []), schemaProbePluginPath],
-                },
+                enabled: true,
+                ...(schemaProbePluginPath
+                  ? {
+                      load: {
+                        ...cfg.plugins?.load,
+                        paths: [...(cfg.plugins?.load?.paths ?? []), schemaProbePluginPath],
+                      },
+                    }
+                  : {}),
                 entries: {
                   ...cfg.plugins?.entries,
-                  [MCP_SCHEMA_PROBE_PLUGIN_ID]: { enabled: true },
+                  ...(schemaProbePluginPath
+                    ? { [MCP_SCHEMA_PROBE_PLUGIN_ID]: { enabled: true } }
+                    : {}),
+                  ...(CLI_CACHE_PROBE ? { anthropic: { enabled: true } } : {}),
                 },
               },
             }
@@ -562,6 +586,38 @@ describeLive("gateway live (cli backend)", () => {
       const tempConfigPath = path.join(tempDir, "openclaw.json");
       await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
       setTestEnvValue("OPENCLAW_CONFIG_PATH", tempConfigPath);
+      let cacheProbeBackend: RuntimeBackendEntry | undefined;
+      if (CLI_CACHE_PROBE) {
+        // This Vitest gateway uses the minimal startup path, so load the owning bundled plugin
+        // explicitly. The production Gateway loads the same runtime registration at startup.
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          config: nextCfg,
+          onlyPluginIds: ["anthropic"],
+        });
+        const registration = registry.cliBackends.find((entry) => entry.backend.id === providerId);
+        if (!registration) {
+          const pluginStates = registry.plugins
+            .map(
+              (plugin) =>
+                `${plugin.id}:${plugin.status}${plugin.error ? ` (${plugin.error})` : ""}`,
+            )
+            .join(", ");
+          throw new Error(
+            `cache probe could not load runtime CLI backend ${providerId}; plugins=${pluginStates || "none"}`,
+          );
+        }
+        cacheProbeBackend = createFreshProcessCacheProbeBackend({
+          ...registration.backend,
+          // Keep the live harness's installed command and explicit API-key passthrough while
+          // exercising the owning plugin's real prepare/argv hooks.
+          config: liveBackend.config,
+          pluginId: registration.pluginId,
+          ...(registration.builtWithOpenClawVersion
+            ? { builtWithOpenClawVersion: registration.builtWithOpenClawVersion }
+            : {}),
+        });
+      }
       const deviceIdentity = await ensurePairedTestGatewayClientIdentity();
       let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
       let client: Awaited<ReturnType<typeof connectTestGatewayClient>> | undefined;
@@ -579,6 +635,15 @@ describeLive("gateway live (cli backend)", () => {
           controlUiEnabled: false,
         });
         logCliBackendLiveStep("server-started");
+        if (CLI_CACHE_PROBE) {
+          if (!cacheProbeBackend) {
+            throw new Error("cache probe lost its loaded runtime CLI backend");
+          }
+          cliBackendsTesting.setDepsForTest({
+            resolvePluginSetupCliBackend: () => undefined,
+            resolveRuntimeCliBackends: () => [cacheProbeBackend],
+          });
+        }
         if (resumeContinuityProbe) {
           const continuityHookRegistry = createMockPluginRegistry([
             {
@@ -785,7 +850,11 @@ describeLive("gateway live (cli backend)", () => {
           }
           logCliBackendLiveStep("agent-resume:done", { status: resumePayload?.status });
           if (CLI_CACHE_PROBE) {
-            logCliCacheUsage("resume1", resolveCliCacheUsage(resumePayload.result));
+            const cacheHitRate = logCliCacheUsage(
+              "resume1",
+              resolveCliCacheUsage(resumePayload.result),
+            );
+            expect(cacheHitRate).toBeGreaterThanOrEqual(CLI_BACKEND_MIN_CACHE_HIT_RATE);
           }
           const resumeText = extractPayloadText(resumePayload?.result);
           if (providerId === "codex-cli") {
@@ -835,10 +904,6 @@ describeLive("gateway live (cli backend)", () => {
               resolveCliCacheUsage(cachePayload.result),
             );
             expect(cacheHitRate).toBeGreaterThanOrEqual(CLI_BACKEND_MIN_CACHE_HIT_RATE);
-            if (!continuityOwner || !expectedLiveSessionGeneration) {
-              throw new Error("Claude CLI cache probe lost its live-session generation");
-            }
-            expect(getClaudeGeneration(continuityOwner)).toBe(expectedLiveSessionGeneration);
           }
         }
 

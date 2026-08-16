@@ -38,6 +38,13 @@ describe("scripts/test-live-cli-backend-docker.sh", () => {
     expect(forwardedVars).toContain("OPENCLAW_LIVE_CLI_BACKEND_CACHE_PROBE");
   });
 
+  it("keeps the Anthropic runtime in Claude CLI live-test images", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain('if [[ "$CLI_PROVIDER" == "claude-cli" ]]');
+    expect(script).toContain("ensure_live_build_extension anthropic");
+  });
+
   it("forwards advisory provider-skip controls into the Docker container", () => {
     const forwardedVars = readForwardedDockerEnvVars();
 

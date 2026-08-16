@@ -2803,7 +2803,7 @@ jobs:
         run: |
           set -euo pipefail
           repository="${GITHUB_REPOSITORY,,}"
-          live_image_extensions="matrix,acpx"
+          live_image_extensions="matrix,acpx,anthropic"
           live_image_tag_suffix="${live_image_extensions//,/-}"
           if [[ "$SHARED_IMAGE_POLICY" == "no-push-artifact" ]]; then
             live_image="openclaw-live-test:${SELECTED_SHA}-${live_image_tag_suffix}"

@@ -138,6 +138,19 @@ fi
 
 openclaw_live_init_profile_mount
 
+ensure_live_build_extension() {
+  local extension="$1"
+  local current="${OPENCLAW_DOCKER_BUILD_EXTENSIONS:-${OPENCLAW_EXTENSIONS:-}}"
+  case " ${current//,/ } " in
+    *" $extension "*) ;;
+    *) export OPENCLAW_DOCKER_BUILD_EXTENSIONS="${current:+$current }$extension" ;;
+  esac
+}
+
+if [[ "$CLI_PROVIDER" == "claude-cli" ]]; then
+  ensure_live_build_extension anthropic
+fi
+
 openclaw_live_collect_auth_for_providers "$CLI_PROVIDER"
 if [[ "${CLAUDE_SUBSCRIPTION_AUTH_SOURCE:-}" == "env-token" ]]; then
   retained_auth_files=()
