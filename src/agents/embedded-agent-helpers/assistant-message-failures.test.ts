@@ -26,6 +26,7 @@ describe("classifyAssistantFailoverReason", () => {
   });
 
   it.each([
+    "ENOTFOUND",
     "UND_ERR_CONNECT_TIMEOUT",
     "UND_ERR_DNS_RESOLVE_FAILED",
     "UND_ERR_CONNECT",
