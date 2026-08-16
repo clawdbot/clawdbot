@@ -326,6 +326,7 @@ describe("scripts/changed-lanes", () => {
           ...createNestedGitEnv(),
           CI: "",
           GITHUB_ACTIONS: "",
+          AGENT_HOST_ROLE: "workstation",
           OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "",
           OPENCLAW_TESTBOX: "",
           PATH: `${binDir}:${process.env.PATH ?? ""}`,
@@ -1134,7 +1135,7 @@ describe("scripts/changed-lanes", () => {
       shouldDelegateChangedCheckToCrabbox(
         ["--base", "origin/main"],
         { PATH: "/usr/bin" },
-        { result },
+        { platform: "darwin", result },
       ),
     ).toBe(true);
     expect(changedCheckRequiresRemote(result)).toBe(true);
@@ -1171,7 +1172,7 @@ describe("scripts/changed-lanes", () => {
     const result = detectChangedLanes(["src/config/config.ts"]);
 
     expect(changedCheckRequiresRemote(result)).toBe(true);
-    expect(shouldDelegateChangedCheckToCrabbox([], {}, { result })).toBe(true);
+    expect(shouldDelegateChangedCheckToCrabbox([], {}, { platform: "darwin", result })).toBe(true);
   });
 
   it("adds the dead export scan only for production source changes", () => {
@@ -1204,9 +1205,13 @@ describe("scripts/changed-lanes", () => {
     expect(shouldDelegateChangedCheckToCrabbox([], {}, { cwd: dir, result: noChangesResult })).toBe(
       false,
     );
-    expect(shouldDelegateChangedCheckToCrabbox([], {}, { cwd: dir, result: docsResult })).toBe(
-      true,
-    );
+    expect(
+      shouldDelegateChangedCheckToCrabbox(
+        [],
+        {},
+        { cwd: dir, platform: "darwin", result: docsResult },
+      ),
+    ).toBe(true);
 
     writeRepoFile(dir, "node_modules/.modules.yaml", "layoutVersion: 5\n");
     writeRepoFile(dir, "node_modules/.bin/oxfmt", "#!/bin/sh\n");
@@ -1231,7 +1236,32 @@ describe("scripts/changed-lanes", () => {
     ]);
     expect(result.docsOnly).toBe(true);
     expect(changedCheckRequiresRemote(result)).toBe(true);
-    expect(shouldDelegateChangedCheckToCrabbox([], {}, { cwd: repoRoot, result })).toBe(true);
+    expect(
+      shouldDelegateChangedCheckToCrabbox([], {}, { cwd: repoRoot, platform: "darwin", result }),
+    ).toBe(true);
+  });
+
+  it("runs trusted changed gates on a dedicated Linux worker", () => {
+    const result = detectChangedLanes(["src/config/config.ts"]);
+    const detectedWorker = { platform: "linux" as const, result, virtualized: true };
+
+    expect(shouldDelegateChangedCheckToCrabbox([], {}, detectedWorker)).toBe(false);
+    expect(
+      shouldDelegateChangedCheckToCrabbox([], {}, { ...detectedWorker, interactive: true }),
+    ).toBe(true);
+    expect(
+      shouldDelegateChangedCheckToCrabbox(
+        [],
+        { AGENT_HOST_ROLE: "worker" },
+        { platform: "linux", result, virtualized: false },
+      ),
+    ).toBe(false);
+    expect(
+      shouldDelegateChangedCheckToCrabbox([], { AGENT_HOST_ROLE: "workstation" }, detectedWorker),
+    ).toBe(true);
+    expect(shouldDelegateChangedCheckToCrabbox([], { OPENCLAW_TESTBOX: "1" }, detectedWorker)).toBe(
+      true,
+    );
   });
 
   it("delegates staged changed gates as explicit remote paths", () => {
