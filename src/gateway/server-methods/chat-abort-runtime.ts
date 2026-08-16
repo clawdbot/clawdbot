@@ -185,6 +185,7 @@ export function cancelWorkerInferenceForSession(params: {
   context: GatewayRequestContext;
   sessionId?: string;
   runId?: string;
+  onRunsResolved?: (runIds: readonly string[]) => void;
 }): string[] {
   const sessionId = normalizeOptionalText(params.sessionId);
   if (!sessionId) {
@@ -194,6 +195,7 @@ export function cancelWorkerInferenceForSession(params: {
     asWorkerInferenceControl(params.context.workerEnvironmentService)?.cancelInferenceForSession({
       sessionId,
       ...(params.runId ? { runId: params.runId } : {}),
+      ...(params.onRunsResolved ? { onRunsResolved: params.onRunsResolved } : {}),
     }) ?? []
   );
 }
@@ -315,15 +317,31 @@ export async function abortChatRunsForSessionKeyWithPartials(params: {
     if (!hasWorkerRun || !workerSessionId || !params.requester.isAdmin || !canCancelWorkerSession) {
       return { aborted: additionalAborted, runIds: [], unauthorized: false };
     }
-    const workerRunIds = cancelWorkerInferenceForSession({
-      context: params.context,
-      sessionId: workerSessionId,
-    });
-    return {
-      aborted: additionalAborted || workerRunIds.length > 0,
-      runIds: workerRunIds,
-      unauthorized: false,
-    };
+    const cancellationSessionKey = params.persistSessionKey ?? params.sessionKey;
+    let workerReservation: ReturnType<typeof agentEndCancellation.reserve> | undefined;
+    let workerRunIds: string[] = [];
+    try {
+      workerRunIds = cancelWorkerInferenceForSession({
+        context: params.context,
+        sessionId: workerSessionId,
+        ...(params.abortOrigin === "stop-command"
+          ? {
+              onRunsResolved: (runIds: readonly string[]) => {
+                workerReservation = agentEndCancellation.reserve(cancellationSessionKey, runIds);
+              },
+            }
+          : {}),
+      });
+      return {
+        aborted: additionalAborted || workerRunIds.length > 0,
+        runIds: workerRunIds,
+        unauthorized: false,
+      };
+    } finally {
+      if (workerReservation) {
+        agentEndCancellation.reconcile(workerReservation, workerRunIds, workerRunIds.length > 0);
+      }
+    }
   }
   const snapshots = authorizedRuns.flatMap(({ runId, entry }) => {
     const text = params.context.chatRunState.resolveBuffer(runId).text;

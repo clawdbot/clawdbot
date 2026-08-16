@@ -632,16 +632,20 @@ export function createWorkerInferenceManager(options: {
     cancelWhere((entry) => entry.identity.environmentId === environmentId, reason);
   };
 
-  const cancelSession = (sessionId: string, runId?: string): string[] => {
-    const cancelledRunIds = new Set<string>();
-    cancelWhere(
-      (entry) =>
-        entry.request.sessionId === sessionId &&
-        (runId === undefined || entry.request.runId === runId),
-      "cancelled",
-      (entry) => cancelledRunIds.add(entry.request.runId),
-    );
-    return [...cancelledRunIds].toSorted();
+  const cancelSession = (
+    sessionId: string,
+    runId?: string,
+    onRunsResolved?: (runIds: readonly string[]) => void,
+  ): string[] => {
+    const matchesSession = (entry: ActiveInference) =>
+      entry.request.sessionId === sessionId &&
+      (runId === undefined || entry.request.runId === runId);
+    const resolvedRunIds = [
+      ...new Set([...active.values()].filter(matchesSession).map((entry) => entry.request.runId)),
+    ].toSorted();
+    onRunsResolved?.(resolvedRunIds);
+    cancelWhere(matchesSession, "cancelled");
+    return resolvedRunIds;
   };
 
   const hasSession = (sessionId: string, runId?: string): boolean => {

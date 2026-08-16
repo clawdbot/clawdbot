@@ -582,8 +582,11 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     executeSessionTool,
     startInference,
     cancelInference,
-    cancelInferenceForSession: (params: { sessionId: string; runId?: string }): string[] =>
-      inference.cancelSession(params.sessionId, params.runId),
+    cancelInferenceForSession: (params: {
+      sessionId: string;
+      runId?: string;
+      onRunsResolved?: (runIds: readonly string[]) => void;
+    }): string[] => inference.cancelSession(params.sessionId, params.runId, params.onRunsResolved),
     hasInferenceForSession: (sessionId: string, runId?: string): boolean =>
       inference.hasSession(sessionId, runId),
     resolveInferenceSessionForRunId: (runId: string): string | undefined =>

@@ -531,6 +531,58 @@ describe("chat abort transcript persistence", () => {
     });
   });
 
+  it("reserves a worker-only /stop before its terminal schedules experience review", async () => {
+    const terminalParams = {
+      event: { success: false, messages: [] },
+      ctx: { sessionKey: "main", runId: "worker-stop-1" },
+    } as Parameters<typeof scheduleSkillExperienceReview>[0];
+    let terminalScheduling: Promise<void> | undefined;
+    const cancelInferenceForSession = vi.fn(
+      (params: { sessionId: string; onRunsResolved?: (runIds: readonly string[]) => void }) => {
+        params.onRunsResolved?.(["worker-stop-1"]);
+        terminalScheduling = scheduleSkillExperienceReview(terminalParams);
+        return ["worker-stop-1"];
+      },
+    );
+    const context = createChatAbortContext({
+      workerEnvironmentService: {
+        cancelInferenceForSession,
+        hasInferenceForSession: () => true,
+      },
+    });
+    const respond = vi.fn();
+
+    await expectDefined(
+      chatHandlers["chat.send"],
+      'chatHandlers["chat.send"] test invariant',
+    )({
+      params: {
+        sessionKey: "main",
+        message: "/stop",
+        idempotencyKey: "idem-worker-stop-req",
+      },
+      respond,
+      context: context as never,
+      req: {} as never,
+      client: {
+        connId: "conn-worker-stop-admin",
+        connect: { scopes: ["operator.admin"] },
+      } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expectAbortPayload(requireLastRespondCall(respond)[1], {
+      aborted: true,
+      runIds: ["worker-stop-1"],
+    });
+    expect(cancelInferenceForSession).toHaveBeenCalledWith({
+      sessionId: "sess-main",
+      onRunsResolved: expect.any(Function),
+    });
+    await terminalScheduling;
+    expect(reviewScheduler.schedule).not.toHaveBeenCalledWith(terminalParams);
+  });
+
   it("releases a synchronous stopped terminal when the Gateway owner rejects abort", async () => {
     reviewScheduler.cancel.mockClear();
     const { sessionId } = await createTranscriptFixture("openclaw-chat-stop-rejected-");
