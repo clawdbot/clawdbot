@@ -134,6 +134,7 @@ describe("queued message edit round-trip", () => {
 
     await handleSendChat(host as never, edit.draftText, {
       attachmentsOverride: [...edit.attachments],
+      resumeQueuedMessageEditId: edit.id,
     });
 
     expect(storedOrder(host)).toEqual(["message 1", "message 2, corrected", "message 3"]);
@@ -149,6 +150,7 @@ describe("queued message edit round-trip", () => {
     updateQueuedMessageEdit(host as never, "message 2, corrected");
     await handleSendChat(host as never, "message 2, corrected", {
       attachmentsOverride: [kept],
+      resumeQueuedMessageEditId: host.chatQueuedEdit!.id,
     });
 
     expect(storedOrder(host)).toEqual(["message 1", "message 2, corrected", "message 3"]);
@@ -174,6 +176,24 @@ describe("queued message edit round-trip", () => {
     expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(true);
     expect(host.chatMessage).toBe("");
     expect(host.chatError).toBe(OFFLINE_QUEUE_STORAGE_ERROR);
+    unsubscribe();
+  });
+
+  it("keeps a normal composer send independent of an open row edit", async () => {
+    const { host, unsubscribe } = queueHost([{}, {}, {}]);
+    beginQueuedMessageEdit(host as never, "queued-2");
+    host.chatMessage = "a separate composer draft";
+
+    await handleSendChat(host as never);
+
+    expect(storedOrder(host)).toEqual([
+      "message 1",
+      "message 2",
+      "message 3",
+      "a separate composer draft",
+    ]);
+    expect(isQueuedMessageBeingEdited(host as never, "queued-2")).toBe(true);
+    expect(host.chatMessage).toBe("");
     unsubscribe();
   });
 

@@ -350,6 +350,7 @@ export function createPageState(
     }
     void state.handleSendChat(edit.draftText, {
       attachmentsOverride: [...edit.attachments],
+      resumeQueuedMessageEditId: edit.id,
     });
   };
   state.cancelQueuedChatMessageEdit = () => {

@@ -115,6 +115,52 @@ suite.define(() => {
     }
   });
 
+  it("keeps a normal composer send separate from an open row edit", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor({ state: "visible", timeout: 15_000 });
+      await gateway.setOnline(false);
+      await gateway.closeLatest();
+      for (const message of QUEUED) {
+        await composer.fill(message);
+        await composer.press("Enter");
+        await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
+      }
+
+      const row = page.locator(".chat-queue__item").nth(1);
+      await row.locator(".chat-queue__edit").click();
+      const rowEditor = row.locator(".chat-queue__edit-input");
+      await rowEditor.waitFor({ timeout: 10_000 });
+      await composer.fill("a separate composer send");
+      await composer.press("Enter");
+
+      await page
+        .locator(".chat-queue__item", { hasText: "a separate composer send" })
+        .waitFor({ timeout: 10_000 });
+      await expect.poll(() => rowEditor.inputValue(), { timeout: 10_000 }).toBe(QUEUED[1]);
+      expect(await composer.inputValue()).toBe("");
+      expect(await page.locator(".chat-queue__item").count()).toBe(4);
+
+      await rowEditor.press("Escape");
+      await expect
+        .poll(() => page.locator(".chat-queue__item .chat-queue__text").allTextContents(), {
+          timeout: 10_000,
+        })
+        .toEqual([...QUEUED, "a separate composer send"]);
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("keeps edit, remove, and reorder outcomes exact through reconnect", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await suite.newBrowserContext({

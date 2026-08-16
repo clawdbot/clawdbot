@@ -70,6 +70,9 @@ import {
 } from "./steer-lifecycle.ts";
 
 type ChatSendSubmitOptions = ChatSendOptions & {
+  attachmentsOverride?: readonly ChatAttachment[];
+  /** Only the inline queued-row submit may resume and replace an edited row. */
+  resumeQueuedMessageEditId?: string;
   restoreDraft?: boolean;
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
   /** Lets request-scoped UI actions recover from rejected local commands. */
@@ -480,7 +483,11 @@ export async function handleSendChat(
     const waitingForSettings = Boolean(pendingSettings);
     // The edited row hands its place to the replacement and is retired by the same
     // store write, so a rejected write leaves the original queued and editable.
-    const resumedEdit = activeQueuedMessageEdit(host);
+    const resumedEditCandidate = activeQueuedMessageEdit(host);
+    const resumedEdit =
+      opts?.resumeQueuedMessageEditId && resumedEditCandidate?.id === opts.resumeQueuedMessageEditId
+        ? resumedEditCandidate
+        : null;
     const queued = enqueuePendingSendMessage(
       host,
       effectiveMessage,
@@ -501,7 +508,9 @@ export async function handleSendChat(
       queued,
       resumedEdit?.id,
     );
-    retireEditedQueuedMessageSource(host, admittedDurably, queued.attachments);
+    if (resumedEdit) {
+      retireEditedQueuedMessageSource(host, admittedDurably, queued.attachments);
+    }
     const canSendFromMemory =
       !admittedDurably &&
       // A still-open edit means its stored source outlived the rejected write;
