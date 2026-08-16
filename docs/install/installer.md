@@ -365,6 +365,7 @@ by default, plus git-checkout installs under the same prefix flow.
 | `-NoOnboard`                | Skip onboarding                                            |
 | `-NoGitUpdate`              | Skip `git pull`                                            |
 | `-DryRun`                   | Print actions only                                         |
+| `-Help`                     | Show usage for downloaded scriptblock invocation           |
 
   </Accordion>
 
@@ -380,6 +381,10 @@ by default, plus git-checkout installs under the same prefix flow.
 
   </Accordion>
 </AccordionGroup>
+
+<Note>
+Pass installer options by name. Unknown options and positional arguments are rejected before downloads, PATH changes, or installation begin. Use `-?` with a saved `install.ps1` file, or `-Help` with the downloaded scriptblock form.
+</Note>
 
 <Note>
 If `-InstallMethod git` is used and Git is missing, the script tries a user-local MinGit bootstrap before printing the Git for Windows link.

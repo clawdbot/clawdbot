@@ -262,6 +262,50 @@ jobs:
         with:
           node-version: 24
 
+      - name: install.ps1 strict option binding
+        shell: pwsh
+        run: |
+          $scriptPath = (Resolve-Path ".\scripts\install.ps1").Path
+          $env:OPENCLAW_DRY_RUN = "1"
+          $env:OPENCLAW_NO_ONBOARD = "1"
+
+          function Invoke-InstallerProbe {
+            param(
+              [string]$HostCommand,
+              [string[]]$InstallerArgs
+            )
+
+            $output = @(& $HostCommand -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $scriptPath @InstallerArgs 2>&1 | ForEach-Object { $_.ToString() })
+            return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = ($output -join "`n") }
+          }
+
+          foreach ($hostCommand in @("powershell.exe", "pwsh.exe")) {
+            if (-not (Get-Command $hostCommand -ErrorAction SilentlyContinue)) {
+              throw "Required PowerShell host is unavailable: $hostCommand"
+            }
+
+            $invalidCases = @(
+              @{ Label = "unknown option"; Args = @("-DryRnu") },
+              @{ Label = "positional argument"; Args = @("-DryRun", "beta") }
+            )
+            foreach ($invalidCase in $invalidCases) {
+              $result = Invoke-InstallerProbe -HostCommand $hostCommand -InstallerArgs $invalidCase.Args
+              if ($result.ExitCode -eq 0 -or $result.Output -match '\[OK\] Windows detected') {
+                throw "$hostCommand accepted $($invalidCase.Label).`n$($result.Output)"
+              }
+            }
+
+            $help = Invoke-InstallerProbe -HostCommand $hostCommand -InstallerArgs @("-?")
+            if ($help.ExitCode -ne 0 -or $help.Output -match '\[OK\] Windows detected') {
+              throw "$hostCommand failed to handle -? before installer startup.`n$($help.Output)"
+            }
+
+            $valid = Invoke-InstallerProbe -HostCommand $hostCommand -InstallerArgs @("-DryRun", "-NoOnboard", "-InstallMethod", "npm")
+            if ($valid.ExitCode -ne 0 -or $valid.Output -notmatch '\[OK\] Install method: npm') {
+              throw "$hostCommand rejected documented named options.`n$($valid.Output)"
+            }
+          }
+
       - name: install.ps1 dry run
         shell: pwsh
         run: .\scripts\install.ps1 -DryRun -NoOnboard -InstallMethod npm

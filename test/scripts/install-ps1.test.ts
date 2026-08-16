@@ -74,6 +74,19 @@ describe("install.ps1 failure handling", () => {
     }
     return spawnSync(powershell, args, { encoding: "utf8" });
   };
+  const runInstallerFile = (args: string[], env: NodeJS.ProcessEnv = {}) => {
+    if (!powershell) {
+      throw new Error("PowerShell is not available");
+    }
+    return spawnSync(
+      powershell,
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", SCRIPT_PATH, ...args],
+      {
+        encoding: "utf8",
+        env: { ...process.env, ...env },
+      },
+    );
+  };
   const runPowerShellAsync = (args: string[]) => {
     if (!powershell) {
       throw new Error("PowerShell is not available");
@@ -576,6 +589,73 @@ describe("install.ps1 failure handling", () => {
   function expectBatchedPowerShellCase(name: string): void {
     expect(batchedPowerShellResults.get(name)).toEqual({ error: "", ok: true });
   }
+
+  runIfPowerShell("rejects unknown and positional options before starting the installer", () => {
+    const cases = [
+      ["-Frobnicate"],
+      ["-DryRnu"],
+      ["-NoOnbord"],
+      ["-InstallMthod", "git"],
+      ["-DryRun", "beta"],
+      ["beta", "git"],
+    ];
+
+    for (const args of cases) {
+      const result = runInstallerFile(args, {
+        OPENCLAW_DRY_RUN: "1",
+        OPENCLAW_NO_ONBOARD: "1",
+      });
+      expect(result.status, args.join(" ")).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).not.toContain("[OK] Windows detected");
+    }
+  });
+
+  runIfPowerShell("validates environment options before starting the installer", () => {
+    const result = runInstallerFile(["-NoOnboard"], {
+      OPENCLAW_DRY_RUN: "1",
+      OPENCLAW_INSTALL_METHOD: "bogus",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain("[OK] Windows detected");
+  });
+
+  runIfPowerShell("shows help without starting the installer", () => {
+    const fileResult = runInstallerFile(["-?"]);
+    expect(fileResult.status).toBe(0);
+    expect(`${fileResult.stdout}\n${fileResult.stderr}`).toContain("install.ps1");
+    expect(`${fileResult.stdout}\n${fileResult.stderr}`).not.toContain("[OK] Windows detected");
+
+    const scriptPath = toPowerShellSingleQuotedLiteral(join(process.cwd(), SCRIPT_PATH));
+    const scriptblockResult = runPowerShell([
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `& ([scriptblock]::Create((Get-Content -LiteralPath ${scriptPath} -Raw))) -Help`,
+    ]);
+    expect(scriptblockResult.status).toBe(0);
+    expect(scriptblockResult.stdout).toContain("Usage:");
+    expect(scriptblockResult.stdout).toContain("-DryRun");
+    expect(scriptblockResult.stdout).not.toContain("[OK] Windows detected");
+  });
+
+  runIfPowerShell("accepts the documented named options", () => {
+    const result = runInstallerFile([
+      "-DryRun",
+      "-NoOnboard",
+      "-InstallMethod",
+      "git",
+      "-NoGitUpdate",
+      "-Tag",
+      "main",
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("[OK] Install method: git");
+    expect(result.stdout).toContain("[OK] Git update: disabled");
+    expect(result.stdout).toContain("[OK] Onboard: skipped");
+  });
 
   it("does not exit directly from inside Main", () => {
     const mainBody = extractFunctionBody(source, "Main");
