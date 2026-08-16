@@ -1307,6 +1307,10 @@ export async function startGatewayPostAttachRuntime(
                 throw error;
               }
               params.log.warn(`worker environment sidecar failed to start: ${String(error)}`);
+              // A deferred worker failure is not an owner-approved degraded state. Keep the
+              // shared sidecar sequence failed so readiness is not reported with a missing
+              // worker runtime.
+              throw error;
             }
           }
           params.log.info("starting channels and sidecars...");

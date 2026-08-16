@@ -2756,17 +2756,23 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(workerSidecar.stop).toHaveBeenCalledTimes(1);
   });
 
-  it("continues channel startup when worker placement startup is unavailable", async () => {
+  it("keeps core startup unavailable when deferred worker placement startup fails", async () => {
     const startupError = new Error("worker environment startup failed");
     const startGatewaySidecarsValue = vi.fn(async () => ({
       pluginServices: null,
       postReadySidecars: [],
     }));
     const onSidecarsReady = vi.fn();
+    const unavailableGatewayMethods = new Set<string>(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
+    const log = { info: vi.fn(), warn: vi.fn() };
 
     await startGatewayPostAttachRuntime(
       {
-        ...createPostAttachParams({ sidecarStartup: "defer" }),
+        ...createPostAttachParams({
+          sidecarStartup: "defer",
+          log,
+          unlockStartupMethods: () => unavailableGatewayMethods.clear(),
+        }),
         startWorkerEnvironmentRuntime: vi.fn(async () => {
           throw startupError;
         }),
@@ -2776,9 +2782,16 @@ describe("startGatewayPostAttachRuntime", () => {
     );
 
     await waitForGatewayTestState(() => {
-      expect(startGatewaySidecarsValue).toHaveBeenCalledTimes(1);
-      expect(onSidecarsReady).toHaveBeenCalledTimes(1);
+      expect(log.warn).toHaveBeenCalledWith(
+        "worker environment sidecar failed to start: Error: worker environment startup failed",
+      );
+      expect(log.warn).toHaveBeenCalledWith(
+        "gateway sidecars failed to start: Error: worker environment startup failed",
+      );
     });
+    expect(startGatewaySidecarsValue).not.toHaveBeenCalled();
+    expect(unavailableGatewayMethods).toEqual(new Set(STARTUP_UNAVAILABLE_GATEWAY_METHODS));
+    expect(onSidecarsReady).not.toHaveBeenCalled();
   });
 
   it("propagates worker placement startup failures in synchronous mode", async () => {
