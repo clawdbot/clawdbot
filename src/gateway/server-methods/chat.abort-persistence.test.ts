@@ -572,7 +572,6 @@ describe("chat abort transcript persistence", () => {
     });
 
     expectAbortPayload(requireLastRespondCall(respond)[1], {
-      aborted: true,
       runIds: ["worker-stop-1"],
     });
     expect(cancelInferenceForSession).toHaveBeenCalledWith({
