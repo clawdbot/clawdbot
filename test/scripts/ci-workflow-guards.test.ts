@@ -7521,6 +7521,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       profile: "${{ steps.plan.outputs.profile }}",
       shard_count: "${{ steps.plan.outputs.shard_count }}",
     });
+    for (const job of [qaPlanJob, qaShardJob, qaAggregateJob]) {
+      const setupStep = job.steps.find(
+        (step: WorkflowStep) => step.name === "Setup Node environment",
+      );
+      expect(setupStep.with?.["use-actions-cache"]).toBe("false");
+    }
     const validateProfileStep = qaPlanJob.steps.find(
       (step: WorkflowStep) => step.name === "Resolve taxonomy profile shards",
     );
