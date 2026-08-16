@@ -704,6 +704,7 @@ describe("GatewayClient request errors", () => {
           }),
         }),
       );
+      expect(onClose).toHaveBeenCalledTimes(1);
       expect(ws.lastClose).toEqual({ code: 1013, reason: "gateway starting" });
       expect(logDebugMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
       expect(logErrorMock).not.toHaveBeenCalledWith(
