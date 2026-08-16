@@ -926,14 +926,34 @@ describe("qa-lab server", () => {
     );
 
     const lab = await startQaLabServer({ host: "127.0.0.1", port: 0 });
+    const waitForCursorAdvance = lab.state.waitForCursorAdvance.bind(lab.state);
+    let pollWaiterStarted = false;
+    let pollWaiterSettled = false;
+    lab.state.waitForCursorAdvance = async (...args) => {
+      pollWaiterStarted = true;
+      try {
+        return await waitForCursorAdvance(...args);
+      } finally {
+        pollWaiterSettled = true;
+      }
+    };
+    const poll = fetch(`${lab.listenUrl}/v1/poll`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ accountId: "cleanup", cursor: 0, timeoutMs: 30_000 }),
+    }).catch(() => undefined);
+    await vi.waitFor(() => expect(pollWaiterStarted).toBe(true));
     const stopping = lab.stop();
     await gatewayStopping;
     try {
       await expect(fetch(`${lab.baseUrl}/healthz`)).resolves.toMatchObject({ status: 200 });
+      expect(pollWaiterSettled).toBe(false);
     } finally {
       finishGatewayStop();
       await stopping;
     }
+    await poll;
+    expect(pollWaiterSettled).toBe(true);
     await expect(fetch(`${lab.baseUrl}/healthz`)).rejects.toThrow();
   });
 
