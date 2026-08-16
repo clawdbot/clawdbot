@@ -6,16 +6,16 @@ import { loadRequesterLifecycleRevision, testing } from "./subagent-requester-li
 
 const loadSessionEntry = vi.fn<(scope: SessionAccessScope) => SessionEntry | undefined>();
 const resolveStorePath = vi.fn(() => "/tmp/sessions.json");
+const resolveRequesterAgentId = vi.fn(() => "main");
 
 function setDefaultDeps() {
   testing.setDepsForTest({
     getRuntimeConfig: () => ({ session: { mainKey: "main" } }) as OpenClawConfig,
-    resolveAgentIdFromSessionKey: () => "main",
     resolveStorePath,
     loadSessionEntry,
-    resolveDefaultAgentId: () => "main",
     resolveRequesterStoreKey: (_cfg: OpenClawConfig, key: string) =>
       key.startsWith("agent:") ? key : `agent:main:${key}`,
+    resolveRequesterAgentId,
   });
 }
 
@@ -23,6 +23,7 @@ describe("loadRequesterLifecycleRevision", () => {
   beforeEach(() => {
     loadSessionEntry.mockReset();
     resolveStorePath.mockReset().mockReturnValue("/tmp/sessions.json");
+    resolveRequesterAgentId.mockReset().mockReturnValue("main");
     setDefaultDeps();
   });
 
@@ -55,6 +56,30 @@ describe("loadRequesterLifecycleRevision", () => {
     loadSessionEntry.mockReturnValue({} as SessionEntry);
 
     expect(loadRequesterLifecycleRevision("main")).toBeUndefined();
+  });
+
+  it("uses the persisted fixed-store owner for an unscoped global requester", () => {
+    const cfg = {
+      session: { mainKey: "main", scope: "global" },
+    } as OpenClawConfig;
+    testing.setDepsForTest({
+      getRuntimeConfig: () => cfg,
+      resolveStorePath,
+      loadSessionEntry,
+      resolveRequesterStoreKey: (_cfg: OpenClawConfig, key: string) => key,
+      resolveRequesterAgentId,
+    });
+    resolveRequesterAgentId.mockReturnValueOnce("ops");
+    loadSessionEntry.mockReturnValue({ lifecycleRevision: "global-revision" } as SessionEntry);
+
+    expect(loadRequesterLifecycleRevision("global")).toBe("global-revision");
+    expect(resolveRequesterAgentId).toHaveBeenCalledWith(cfg, "global", undefined);
+    expect(resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "ops" });
+    expect(loadSessionEntry).toHaveBeenCalledWith({
+      storePath: "/tmp/sessions.json",
+      sessionKey: "global",
+      clone: false,
+    });
   });
 
   it("returns undefined without reading the session store for an empty key", () => {

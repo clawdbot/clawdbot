@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   backfillSubagentRequesterAgentIds,
   resolveSubagentRequesterAgentId,
+  resolveSubagentRequesterAgentIdForSession,
 } from "./subagent-requester-owner.js";
 import { createSubagentRunRecord } from "./subagent-test-fixtures.test-helpers.js";
 import {
@@ -12,6 +13,20 @@ import {
 import { markRequesterTurnYieldedInRuns } from "./subagents/registry/subagent-registry-requester-yield.js";
 
 describe("resolveSubagentRequesterAgentId", () => {
+  it("resolves an unscoped global key to its persisted fixed-store owner", () => {
+    const cfg = {
+      session: { store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, research: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(resolveSubagentRequesterAgentIdForSession(cfg, "global")).toBe("ops");
+    expect(resolveSubagentRequesterAgentIdForSession(cfg, "global", "research")).toBeUndefined();
+  });
+
   it("attributes a legacy bare requester row only to the persisted fixed-store owner", () => {
     const cfg = {
       session: { store: "/stores/shared.sqlite" },

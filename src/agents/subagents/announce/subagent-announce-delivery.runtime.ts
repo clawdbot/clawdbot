@@ -6,10 +6,8 @@
  */
 import { resolveQueueSettings } from "../../../auto-reply/reply/queue.js";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly as loadSessionEntry } from "../../../config/sessions/session-accessor.js";
-import { resolvePersistedSessionStoreOwnerForKey } from "../../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { callGateway } from "../../../gateway/call.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
@@ -18,11 +16,7 @@ import { createBoundDeliveryRouter } from "../../../infra/outbound/bound-deliver
 import { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
 import { sendMessage } from "../../../infra/outbound/message.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-import {
-  normalizeAgentId,
-  normalizeMainKey,
-  parseAgentSessionKey,
-} from "../../../routing/session-key.js";
+import { normalizeMainKey, parseAgentSessionKey } from "../../../routing/session-key.js";
 import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
@@ -32,6 +26,7 @@ import {
   resolveActiveEmbeddedRunSessionId,
   type EmbeddedAgentQueueMessageOutcome,
 } from "../../embedded-agent-runner/runs.js";
+import { resolveSubagentRequesterAgentIdForSession } from "../../subagent-requester-owner.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 
 export {
@@ -77,30 +72,7 @@ export function tryResolveSubagentRequesterAgentId(
   requesterSessionKey: string,
   explicitAgentId?: string,
 ): string | undefined {
-  const requestedAgentId = explicitAgentId?.trim() ? normalizeAgentId(explicitAgentId) : undefined;
-  const parsedAgentId = parseAgentSessionKey(requesterSessionKey)?.agentId;
-  if (requestedAgentId && parsedAgentId && requestedAgentId !== parsedAgentId) {
-    return undefined;
-  }
-  const persistedStoreOwner = resolvePersistedSessionStoreOwnerForKey(cfg, requesterSessionKey);
-  if (persistedStoreOwner.kind === "retired") {
-    return undefined;
-  }
-  if (
-    requestedAgentId &&
-    persistedStoreOwner.kind === "configured" &&
-    requestedAgentId !== persistedStoreOwner.agentId
-  ) {
-    return undefined;
-  }
-  const resolvedAgentId = requestedAgentId ?? parsedAgentId;
-  if (resolvedAgentId) {
-    return resolvedAgentId;
-  }
-  return (
-    (persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined) ??
-    tryResolveLegacyCompatibilityAgentId(cfg)
-  );
+  return resolveSubagentRequesterAgentIdForSession(cfg, requesterSessionKey, explicitAgentId);
 }
 
 function loadDefaultRequesterSessionEntry(

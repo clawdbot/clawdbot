@@ -3,28 +3,25 @@
  * admission, so settle wakes can fence stale completions after a reset.
  */
 import { getRuntimeConfig } from "../config/config.js";
-import { resolveAgentIdFromSessionKey } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore as resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { resolveDefaultAgentId } from "./agent-scope-config.js";
+import { resolveSubagentRequesterAgentIdForSession } from "./subagent-requester-owner.js";
 import { resolveRequesterStoreKey } from "./subagents/announce/subagent-requester-store-key.js";
 
 type RequesterLifecycleDeps = {
   getRuntimeConfig: typeof getRuntimeConfig;
-  resolveAgentIdFromSessionKey: typeof resolveAgentIdFromSessionKey;
   resolveStorePath: typeof resolveStorePath;
   loadSessionEntry: typeof loadSessionEntry;
-  resolveDefaultAgentId: typeof resolveDefaultAgentId;
   resolveRequesterStoreKey: typeof resolveRequesterStoreKey;
+  resolveRequesterAgentId: typeof resolveSubagentRequesterAgentIdForSession;
 };
 
 const defaultRequesterLifecycleDeps: RequesterLifecycleDeps = {
   getRuntimeConfig,
-  resolveAgentIdFromSessionKey,
   resolveStorePath,
   loadSessionEntry,
-  resolveDefaultAgentId,
   resolveRequesterStoreKey,
+  resolveRequesterAgentId: resolveSubagentRequesterAgentIdForSession,
 };
 
 let requesterLifecycleDeps: RequesterLifecycleDeps = defaultRequesterLifecycleDeps;
@@ -52,10 +49,10 @@ export function loadRequesterLifecycleRevision(
     rawKey,
     explicitAgentId,
   );
-  const agentId = requesterLifecycleDeps.resolveAgentIdFromSessionKey(
-    canonicalKey,
-    explicitAgentId ?? requesterLifecycleDeps.resolveDefaultAgentId(cfg),
-  );
+  const agentId = requesterLifecycleDeps.resolveRequesterAgentId(cfg, rawKey, explicitAgentId);
+  if (!agentId) {
+    return undefined;
+  }
   const storePath = requesterLifecycleDeps.resolveStorePath(cfg.session?.store, { agentId });
   return requesterLifecycleDeps.loadSessionEntry({
     storePath,
