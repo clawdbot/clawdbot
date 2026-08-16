@@ -619,7 +619,7 @@ export function buildMatrixQaConfig(
   const audio = restoreOwnedFields(
     currentCfg.tools?.media?.audio,
     baselineCfg.tools?.media?.audio,
-    "providerOptions baseUrl headers request enabled preferredModel maxBytes maxChars prompt timeoutSeconds language attachments echoTranscript echoFormat".split(
+    "providerOptions baseUrl headers request enabled preferredModel maxBytes maxChars prompt timeoutSeconds language attachments echoTranscript echoFormat echoReply".split(
       " ",
     ),
   );
