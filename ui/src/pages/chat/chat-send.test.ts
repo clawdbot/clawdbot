@@ -9071,6 +9071,48 @@ describe("handleSendChat", () => {
     }
   });
 
+  it("does not steer a queued row while another pane owns its inline edit", async () => {
+    const request = makeRequestMock();
+    const original = {
+      id: "peer-edit-steer",
+      text: "original queued payload",
+      createdAt: 1,
+      sendState: "waiting-idle" as const,
+      sessionKey: "agent:main:main",
+    };
+    const host = makeChatHost({
+      client: clientWithRequest(request),
+      chatRunId: "active-run",
+      sessionKey: original.sessionKey,
+      chatQueue: [original],
+    });
+    const peer = makeChatHost({
+      client: clientWithRequest(request),
+      chatRunId: "active-run",
+      sessionKey: original.sessionKey,
+      chatQueue: [{ ...original }],
+    });
+    const stopHost = subscribeChatOutboxProjection(host);
+    const stopPeer = subscribeChatOutboxProjection(peer);
+
+    try {
+      expect(admitQueuedMessageForSession(host, host.sessionKey, original)).toBe(true);
+      expect(beginQueuedMessageEdit(host as never, original.id)).toBe("started");
+
+      await steerQueuedChatMessage(peer, original.id);
+
+      expect(request).not.toHaveBeenCalled();
+      expect(listStoredChatOutboxes(host)[0]?.queue[0]).toMatchObject({
+        id: original.id,
+        text: original.text,
+        sendState: "waiting-idle",
+      });
+    } finally {
+      stopHost();
+      stopPeer();
+    }
+  });
+
   it("keeps a definitive steer rejection retryable as the same steer", async () => {
     const payloads: Array<Record<string, unknown>> = [];
     const original = {

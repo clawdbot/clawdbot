@@ -37,6 +37,7 @@ import {
 } from "./chat-send-ack.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
+import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll, type ChatScrollHost } from "./scroll.ts";
 import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
@@ -372,6 +373,9 @@ export async function sendQueuedChatMessageWithQueueMode(
     return;
   }
   const isSteer = queueMode === "steer";
+  if (isSteer && isQueuedMessageBeingEdited(host, id)) {
+    return;
+  }
   const unconfirmedError = isSteer ? UNCONFIRMED_STEER_ERROR : UNCONFIRMED_FOLLOW_UP_ERROR;
   const item = host.chatQueue.find(
     (entry) =>
