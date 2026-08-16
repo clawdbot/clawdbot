@@ -2763,13 +2763,28 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   it("stops worker placement runtime when channel and sidecar startup fails", async () => {
-    const workerSidecar = { stop: vi.fn(async () => {}) };
+    const cleanupError = new Error("worker cleanup failed");
+    const workerSidecar = {
+      stop: vi.fn().mockRejectedValueOnce(cleanupError).mockResolvedValue(undefined),
+    };
     const startupError = new Error("sidecar startup failed");
+    const onGatewayLifetimeSidecars = vi.fn();
+    const releaseWorkerOwnership = vi.fn();
+    let ownedWorkerSidecar: typeof workerSidecar | undefined;
+    const params = createPostAttachParams({
+      onGatewayLifetimeSidecars,
+      registerGatewayLifetimeSidecar: async (sidecar) => {
+        expect(sidecar).toBe(workerSidecar);
+        ownedWorkerSidecar = workerSidecar;
+        onGatewayLifetimeSidecars([sidecar]);
+        return { release: releaseWorkerOwnership };
+      },
+    });
 
     await expect(
       startGatewayPostAttachRuntime(
         {
-          ...createPostAttachParams(),
+          ...params,
           startWorkerEnvironmentRuntime: vi.fn(() => workerSidecar),
         },
         createPostAttachRuntimeDeps({
@@ -2781,6 +2796,56 @@ describe("startGatewayPostAttachRuntime", () => {
     ).rejects.toBe(startupError);
 
     expect(workerSidecar.stop).toHaveBeenCalledTimes(1);
+    expect(onGatewayLifetimeSidecars).toHaveBeenCalledWith([workerSidecar]);
+    expect(releaseWorkerOwnership).not.toHaveBeenCalled();
+    expect(params.log.warn).toHaveBeenCalledWith(
+      `worker environment cleanup after sidecar startup failure failed: ${String(cleanupError)}`,
+    );
+
+    await ownedWorkerSidecar?.stop();
+    expect(workerSidecar.stop).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops worker placement once when close begins while it starts", async () => {
+    let closeStarted = false;
+    let releaseWorkerStart: (() => void) | undefined;
+    const workerStartBlocked = new Promise<void>((resolve) => {
+      releaseWorkerStart = resolve;
+    });
+    let markWorkerStart: (() => void) | undefined;
+    const workerStartReached = new Promise<void>((resolve) => {
+      markWorkerStart = resolve;
+    });
+    const workerSidecar = { stop: vi.fn(async () => {}) };
+    const startGatewaySidecarsValue = vi.fn();
+    const registerGatewayLifetimeSidecar: PostAttachParams["registerGatewayLifetimeSidecar"] =
+      vi.fn(async (sidecar) => {
+        expect(closeStarted).toBe(true);
+        await sidecar.stop();
+        return null;
+      });
+    const runtimePromise = startGatewayPostAttachRuntime(
+      {
+        ...createPostAttachParams(),
+        isClosing: () => closeStarted,
+        startWorkerEnvironmentRuntime: vi.fn(async () => {
+          markWorkerStart?.();
+          await workerStartBlocked;
+          return workerSidecar;
+        }),
+        registerGatewayLifetimeSidecar,
+      },
+      createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsValue }),
+    );
+
+    await workerStartReached;
+    closeStarted = true;
+    releaseWorkerStart?.();
+    await runtimePromise;
+
+    expect(registerGatewayLifetimeSidecar).toHaveBeenCalledWith(workerSidecar);
+    expect(workerSidecar.stop).toHaveBeenCalledOnce();
+    expect(startGatewaySidecarsValue).not.toHaveBeenCalled();
   });
 
   it("keeps ignored deferred sidecar failure handled for direct callers", async () => {
@@ -2885,12 +2950,8 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     const pluginServices = { stop: vi.fn(async () => {}) } as PluginServicesHandle;
     const postReadySidecar = { stop: vi.fn(async () => {}) };
-    const cleanupError = new Error("worker cleanup failed");
-    const workerSidecar = {
-      stop: vi.fn(() => {
-        throw cleanupError;
-      }),
-    };
+    const workerSidecar = { stop: vi.fn(async () => {}) };
+    let ownedWorkerSidecar: typeof workerSidecar | undefined;
     const unlockStartupMethods = vi.fn();
     const scheduleSubagentRegistrySweep = vi.fn();
     const onPluginServices = vi.fn();
@@ -2900,6 +2961,11 @@ describe("startGatewayPostAttachRuntime", () => {
         sidecarStartup: "defer",
         isClosing: () => closeStarted,
         startWorkerEnvironmentRuntime: vi.fn(() => workerSidecar),
+        registerGatewayLifetimeSidecar: async (sidecar) => {
+          expect(sidecar).toBe(workerSidecar);
+          ownedWorkerSidecar = workerSidecar;
+          return { release: () => {} };
+        },
         unlockStartupMethods,
         onPluginServices,
       },
@@ -2919,14 +2985,16 @@ describe("startGatewayPostAttachRuntime", () => {
     await recoveryLoadStarted;
     closeStarted = true;
     releaseRecoveryLoad?.();
-    await expect(runtime.startupSettled).rejects.toBe(cleanupError);
+    await expect(runtime.startupSettled).resolves.toBeUndefined();
 
     expect(scheduleSubagentRegistrySweep).not.toHaveBeenCalled();
     expect(unlockStartupMethods).not.toHaveBeenCalled();
-    expect(workerSidecar.stop).toHaveBeenCalledOnce();
+    expect(workerSidecar.stop).not.toHaveBeenCalled();
     expect(pluginServices.stop).toHaveBeenCalledOnce();
     expect(postReadySidecar.stop).toHaveBeenCalledOnce();
     expect(onPluginServices).toHaveBeenLastCalledWith(null);
+    await ownedWorkerSidecar?.stop();
+    expect(workerSidecar.stop).toHaveBeenCalledOnce();
   });
 
   it("returns before loading startup plugins with deferred sidecars", async () => {
@@ -3332,6 +3400,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     unlockStartupMethods: vi.fn(),
     residentRegistry: createGatewayResidentRegistry(),
     providerAuthPrewarm: { enabled: false },
+    registerGatewayLifetimeSidecar: async () => ({ release: () => {} }),
     ...overrides,
   };
 }

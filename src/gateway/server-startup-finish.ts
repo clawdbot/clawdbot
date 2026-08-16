@@ -321,6 +321,22 @@ export async function finishGatewayStartup(params: {
               }),
             );
           },
+          registerGatewayLifetimeSidecar: async (sidecar) => {
+            if (lifecycle.closePreludeStarted) {
+              await sidecar.stop();
+              return null;
+            }
+            kernel.addGatewayLifetimeSidecar(sidecar);
+            return {
+              release: () => {
+                kernel.setGatewayLifetimeSidecars(
+                  runtimeState.gatewayLifetimeSidecars.filter(
+                    (registered) => registered !== sidecar,
+                  ),
+                );
+              },
+            };
+          },
           ...(workerPlacementRuntime
             ? {
                 startWorkerEnvironmentRuntime: async () => {

@@ -1102,6 +1102,9 @@ export async function startGatewayPostAttachRuntime(
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
     onPostReadySidecars?: (postReadySidecars: GatewayPostReadySidecarHandle[]) => void;
     onGatewayLifetimeSidecars?: (sidecars: GatewayPostReadySidecarHandle[]) => void;
+    registerGatewayLifetimeSidecar: (
+      sidecar: GatewayPostReadySidecarHandle,
+    ) => Promise<{ release: () => void } | null>;
     startWorkerEnvironmentRuntime?: () => Awaitable<GatewayPostReadySidecarHandle | null>;
     onSidecarsReady?: () => void;
     isClosing?: () => boolean;
@@ -1312,6 +1315,12 @@ export async function startGatewayPostAttachRuntime(
           const workerEnvironmentSidecar = params.isClosing?.()
             ? null
             : ((await params.startWorkerEnvironmentRuntime?.()) ?? null);
+          const workerEnvironmentOwnership = workerEnvironmentSidecar
+            ? await params.registerGatewayLifetimeSidecar(workerEnvironmentSidecar)
+            : null;
+          if (workerEnvironmentSidecar && !workerEnvironmentOwnership) {
+            return emptySidecarResult();
+          }
           params.log.info("starting channels and sidecars...");
           const loaderStatsBefore = getPluginModuleLoaderStats();
           const result = await (async () => {
@@ -1338,7 +1347,14 @@ export async function startGatewayPostAttachRuntime(
                 }),
               );
             } catch (error) {
-              await workerEnvironmentSidecar?.stop();
+              try {
+                await workerEnvironmentSidecar?.stop();
+                workerEnvironmentOwnership?.release();
+              } catch (cleanupError) {
+                params.log.warn(
+                  `worker environment cleanup after sidecar startup failure failed: ${String(cleanupError)}`,
+                );
+              }
               throw error;
             }
           })();
@@ -1348,12 +1364,11 @@ export async function startGatewayPostAttachRuntime(
             const cleanupResults = await Promise.allSettled(
               [
                 () => mainSessionRecoverySidecar?.stop(),
-                () => workerEnvironmentSidecar?.stop(),
                 () => result.pluginServices?.stop(),
                 ...result.postReadySidecars.map((sidecar) => () => sidecar.stop()),
               ].map(async (stop) => await stop()),
             );
-            if (result.pluginServices && cleanupResults[2]?.status === "fulfilled") {
+            if (result.pluginServices && cleanupResults[1]?.status === "fulfilled") {
               reportPluginServices(null);
             }
             const cleanupFailure = cleanupResults.find(
