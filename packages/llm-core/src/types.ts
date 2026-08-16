@@ -656,7 +656,7 @@ export interface Model<TApi extends Api = Api> {
     cacheRead: number; // $/million tokens
     cacheWrite: number; // $/million tokens
   };
-  contextWindow: number;
+  contextWindow?: number;
   /**
    * Optional effective runtime cap used for compaction/session budgeting.
    * Keeps provider/native contextWindow metadata intact while allowing a

@@ -1144,6 +1144,37 @@ describe("resolveModel", () => {
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
+  it("keeps a bundled static catalog window for a transport-only configured model", () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.3-codex",
+      name: "GPT-5.3 Codex",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+    });
+    const cfg = makeProviderConfig("openai", {
+      api: "openai-responses",
+      baseUrl: "https://proxy.example.com/v1",
+      models: [{ id: "gpt-5.3-codex", name: "GPT-5.3 Codex" }],
+    });
+
+    const result = resolveModelForTest("openai", "gpt-5.3-codex", "/tmp/agent", cfg);
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "openai",
+      id: "gpt-5.3-codex",
+      api: "openai-responses",
+      baseUrl: "https://proxy.example.com/v1",
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+    });
+  });
+
   it("resolves a deferred Fireworks manifest id from the bundled static catalog", async () => {
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
       provider: "fireworks",

@@ -182,7 +182,7 @@ export type ModelDefinitionConfig = {
     }>;
   };
   /** Provider/native maximum context window in tokens. */
-  contextWindow: number;
+  contextWindow?: number;
   /**
    * Optional effective runtime cap used for compaction/session budgeting.
    * Keeps provider/native contextWindow metadata intact while letting configs

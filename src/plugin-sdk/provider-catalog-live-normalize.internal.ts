@@ -182,6 +182,26 @@ function inferLiveModelReasoning(modelId: string): boolean {
   );
 }
 
+function readLiveModelContextWindow(
+  records: readonly (Record<string, unknown> | undefined)[],
+): number | undefined {
+  return readLiveModelPositiveIntegerFromRecords(records, [
+    "context_window",
+    "contextWindow",
+    "context_length",
+    "contextLength",
+    "context_size",
+    "contextSize",
+    "max_context_length",
+    "maxModelLen",
+    "max_model_len",
+    // Anthropic names the context window by its input side. Appended so a
+    // provider already matching an earlier key keeps its current value.
+    "max_input_tokens",
+    "maxInputTokens",
+  ]);
+}
+
 function buildOpenAICompatibleLiveModel(
   row: unknown,
   fallback: ModelProviderConfig,
@@ -214,7 +234,10 @@ function buildOpenAICompatibleLiveModel(
 
   const exact = fallback.models.find((model) => model.id === id);
   if (exact) {
-    return exact;
+    const liveContextWindow = readLiveModelContextWindow([record, ...nestedRecords]);
+    return exact.contextWindow === undefined && liveContextWindow !== undefined
+      ? { ...exact, contextWindow: liveContextWindow }
+      : exact;
   }
   // Manifest-published ids returned above are known-good. Everything past this
   // point is a model the manifest has never described, so an opted-in provider
@@ -229,26 +252,7 @@ function buildOpenAICompatibleLiveModel(
     ["input_modalities", "inputModalities", "input"],
   );
   const contextWindow =
-    readLiveModelPositiveIntegerFromRecords(
-      [record, topProvider, capabilities, modelInfo],
-      [
-        "context_window",
-        "contextWindow",
-        "context_length",
-        "contextLength",
-        "context_size",
-        "contextSize",
-        "max_context_length",
-        "maxModelLen",
-        "max_model_len",
-        // Anthropic names the context window by its input side. Appended so a
-        // provider already matching an earlier key keeps its current value.
-        "max_input_tokens",
-        "maxInputTokens",
-      ],
-    ) ??
-    template?.contextWindow ??
-    128_000;
+    readLiveModelContextWindow([record, ...nestedRecords]) ?? template?.contextWindow ?? 128_000;
   const maxTokens =
     readLiveModelPositiveIntegerFromRecords(
       [record, topProvider, capabilities, modelInfo],

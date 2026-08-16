@@ -876,7 +876,28 @@ describe("provider-catalog-live-runtime", () => {
     expect((headers as Headers).get("authorization")).toBe("Bearer provider-key");
   });
 
-  it("keeps trusted static metadata for live ids already in the provider seed", async () => {
+  it("fills an omitted seed window from the matching live row", async () => {
+    const { contextWindow: _contextWindow, ...transportOnly } = buildModel("chat-v1");
+    const { fetchGuard } = buildFetchGuard({
+      data: [{ id: "chat-v1", object: "model", context_window: 262_144 }],
+    });
+
+    const provider = await buildOpenAICompatibleLiveModelProviderConfig({
+      providerId: "provider",
+      providerConfig: {
+        api: "openai-completions",
+        baseUrl: "https://provider.example.test/v1",
+        models: [transportOnly],
+      },
+      fetchGuard,
+    });
+
+    expect(provider.models).toEqual([
+      expect.objectContaining({ id: "chat-v1", contextWindow: 262_144 }),
+    ]);
+  });
+
+  it("keeps authored static metadata for live ids already in the provider seed", async () => {
     const { fetchGuard } = buildFetchGuard({
       data: [{ id: "chat-v1", object: "model", context_window: 1 }],
     });
