@@ -117,6 +117,67 @@ describe("gateway connect pairing exemptions", () => {
     },
   );
 
+  test.each([
+    {
+      name: "auth-none CLI client",
+      auth: { mode: "none" } as const,
+      client: {
+        id: GATEWAY_CLIENT_NAMES.CLI,
+        version: "1.0.0",
+        platform: "test",
+        mode: GATEWAY_CLIENT_MODES.CLI,
+      },
+    },
+    {
+      name: "token-auth native app client",
+      auth: { mode: "token", token: "local-secret" } as const,
+      client: {
+        id: GATEWAY_CLIENT_NAMES.MACOS_APP,
+        version: "1.0.0",
+        platform: "darwin",
+        mode: GATEWAY_CLIENT_MODES.UI,
+      },
+    },
+  ])("silently widens a narrow local pairing row for a $name", async ({ name, auth, client }) => {
+    testState.gatewayAuth = auth;
+    const started = await startServerWithClient(undefined, { auth });
+    const identityName = `silent-widen-${name.replaceAll(" ", "-")}`;
+    const paired = await pairDeviceIdentity({
+      name: identityName,
+      role: "operator",
+      scopes: ["operator.pairing"],
+      clientId: client.id,
+      clientMode: client.mode,
+    });
+
+    try {
+      // Deliberately NOT a superset of the row: the merge must self-grant the
+      // union (requested + already-held), not require the client to re-request
+      // its existing scopes.
+      const widened = await connectReq(started.ws, {
+        client,
+        role: "operator",
+        scopes: ["operator.write"],
+        deviceIdentityPath: paired.identityPath,
+        skipDefaultAuth: auth.mode === "none",
+        ...(auth.mode === "token" ? { token: auth.token } : {}),
+        prePairDevice: false,
+      });
+      expect(widened.ok, JSON.stringify(widened)).toBe(true);
+
+      const row = await getPairedDevice(paired.identity.deviceId);
+      // The widened grant merges into the row; the original approval
+      // provenance is retained rather than rewritten to "silent".
+      expect(row?.approvedScopes).toEqual(
+        expect.arrayContaining(["operator.pairing", "operator.write"]),
+      );
+    } finally {
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
   test("keeps a narrow pairing row as the Tailscale Control UI scope cap", async () => {
     const tailscaleOrigin = "https://gateway.tailnet.ts.net";
     const auth = {

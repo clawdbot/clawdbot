@@ -262,6 +262,7 @@ export async function authorizeGatewayConnectDevice(
           isControlUi,
           isWebchat,
           isNativeAppUi,
+          authMethod,
           reason,
         });
       const allowSilentTrustedCidrsNodePairing = shouldAutoApproveNodePairingFromTrustedCidrs({
@@ -386,15 +387,16 @@ export async function authorizeGatewayConnectDevice(
               scopes: bootstrapPairingScopes ?? [],
             }
           : {}),
+        // Scope upgrades ride the same silent-local rule as initial pairing:
+        // shouldAllowSilentLocalPairing already restricts them to local-grade
+        // auth (none/token/password), so identity-proxy and bearer-token rows
+        // stay a durable cap while owner-credentialed local clients widen
+        // without a prompt they could bypass with a fresh identity anyway.
         silent:
-          reason === "scope-upgrade" &&
-          !allowSetupCodeHandoffBootstrapPairing &&
-          !allowControlUiOwnerBootstrapPairing
-            ? false
-            : allowSilentLocalPairing ||
-              allowSilentTrustedCidrsNodePairing ||
-              allowSetupCodeHandoffBootstrapPairing ||
-              allowControlUiOperatorBootstrapPairing,
+          allowSilentLocalPairing ||
+          allowSilentTrustedCidrsNodePairing ||
+          allowSetupCodeHandoffBootstrapPairing ||
+          allowControlUiOperatorBootstrapPairing,
       });
       const trustedProxyAutoApproveScopes =
         allowTrustedProxyDeviceAutoApproval &&
@@ -459,7 +461,16 @@ export async function authorizeGatewayConnectDevice(
                   { accessMetadata: clientAccessMetadata },
                 )
               : await approveDevicePairing(pairing.request.requestId, {
-                  callerScopes: scopes,
+                  // A silent self-grant's authority is locality plus proven
+                  // local-grade auth, not the requested scope list. Approval
+                  // merges the existing row's scopes back in, so the caller
+                  // set must cover requested plus already-held — nothing new.
+                  callerScopes: uniqueStrings([
+                    ...scopes,
+                    ...(existingPairedDevice
+                      ? resolvePairedAccessScopes(existingPairedDevice)
+                      : []),
+                  ]),
                   accessMetadata: clientAccessMetadata,
                   // Same-host local approvals are prune-eligible "silent";
                   // trusted-CIDR approvals cross hosts and must never be
