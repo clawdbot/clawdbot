@@ -288,7 +288,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // channel setup compatibility helpers.
       // +1: concrete plugin side-effect owner resolution for agent harness runtimes.
       // +1: strict explicit agent-id normalization without default-agent fallback.
-      4318,
+      // +5: session-catalog paging capability, family/node-host composers, and option contracts.
+      4323,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -364,7 +365,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -12: retire the callable messaging-targets, embedded Pi, and channel setup helpers.
       // +1: concrete plugin side-effect owner resolution for agent harness runtimes.
       // +1: strict explicit agent-id normalization without default-agent fallback.
-      2566,
+      // +2: session-catalog family and node-host binding composers.
+      2568,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
