@@ -540,6 +540,36 @@ describe("channelsAddCommand", () => {
     expect(channelWizardMocks.setupChannels).not.toHaveBeenCalled();
   });
 
+  it.each(
+    [true, false].flatMap((interactive) => [
+      { label: "empty", channel: "", expectedChannel: "", interactive },
+      { label: "whitespace-only", channel: " \t ", expectedChannel: "", interactive },
+      {
+        label: "unknown",
+        channel: "unknown-channel",
+        expectedChannel: "unknown-channel",
+        interactive,
+      },
+    ]),
+  )(
+    "rejects an explicit $label guided selector when interactive=$interactive",
+    async ({ channel, expectedChannel, interactive }) => {
+      terminalMocks.isTerminalInteractive.mockReturnValue(interactive);
+      configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+      await channelsAddCommand({ channel }, runtime, { hasFlags: false });
+
+      expect(runtime.error).toHaveBeenCalledWith(
+        `Unknown channel "${expectedChannel}". Run \`openclaw channels list --all\` to see configured and installable channels.`,
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(channelWizardMocks.prompter.intro).not.toHaveBeenCalled();
+      expect(channelWizardMocks.setupChannels).not.toHaveBeenCalled();
+      expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     {
       channel: "single-env-chat",
@@ -672,20 +702,44 @@ describe("channelsAddCommand", () => {
     expect(channelWizardMocks.prompter.outro).toHaveBeenCalledWith("Channels updated.");
   });
 
-  it("preselects an installable catalog channel in guided setup", async () => {
-    const config: OpenClawConfig = { channels: {} };
+  it.each(["external-chat", "ext"])(
+    "preselects an installable catalog channel from the %s selector",
+    async (channel) => {
+      const config: OpenClawConfig = { channels: {} };
+      configMocks.readConfigFileSnapshot.mockResolvedValue({
+        ...baseConfigSnapshot,
+        sourceConfig: config,
+        config,
+      });
+      catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+        {
+          ...createExternalChatCatalogEntry(),
+          origin: "bundled",
+          trustedSourceLinkedOfficialInstall: true,
+          meta: { ...createExternalChatCatalogEntry().meta, aliases: ["ext"] },
+        },
+      ]);
+
+      await channelsAddCommand({ channel }, runtime, { hasFlags: false });
+
+      expect(setupOptions().initialSelection).toEqual(["external-chat"]);
+      expect(setupOptions().finishAfterInitialSelection).toBe(true);
+    },
+  );
+
+  it("preselects an inactive known channel in guided setup", async () => {
+    const config: OpenClawConfig = {
+      channels: { "lifecycle-chat": { enabled: false } },
+    };
     configMocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
       sourceConfig: config,
       config,
     });
-    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
-      { ...createExternalChatCatalogEntry(), origin: "workspace" },
-    ]);
 
-    await channelsAddCommand({ channel: "external-chat" }, runtime, { hasFlags: false });
+    await channelsAddCommand({ channel: "lifecycle-chat" }, runtime, { hasFlags: false });
 
-    expect(setupOptions().initialSelection).toEqual(["external-chat"]);
+    expect(setupOptions().initialSelection).toEqual(["lifecycle-chat"]);
     expect(setupOptions().finishAfterInitialSelection).toBe(true);
   });
 
