@@ -52,7 +52,7 @@ export const ConnectParamsSchema = closedObject({
   commands: Type.Optional(Type.Array(NonEmptyString)),
   /** Additive Computer Use declaration; the owning core contract validates its bounded shape. */
   computerUse: Type.Optional(Type.Unknown()),
-  /** Additive node-local worker build identity; presence advertises session hosting. */
+  /** @deprecated Accepted for the shipped v1 node-host envelope; current hosts use runner inventory. */
   workerRuns: Type.Optional(WorkerAdmissionHandshakeSchema),
   permissions: Type.Optional(Type.Record(NonEmptyString, Type.Boolean())),
   pathEnv: Type.Optional(Type.String()),

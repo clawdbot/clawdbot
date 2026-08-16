@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
-import type { WorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   isPrivateNodeInvokeCommand,
   NODE_WORKER_PRIVATE_COMMANDS,
@@ -14,8 +13,9 @@ import {
   NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE,
   type NodeRunnerInventoryIssue,
   type NodeRunnerInventoryDeclaration,
+  type NodeWorkerHostDeclaration,
 } from "../infra/node-runner-inventory.js";
-import { sameWorkerBuild, sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
+import { sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
 import type {
   NodeInvokeStreamController,
@@ -33,7 +33,6 @@ type NodeRegistryPrivateSession = {
   clientId?: string;
   clientMode?: string;
   commands: string[];
-  workerRuns?: WorkerAdmissionHandshake;
 };
 
 type NodeInvokeResult = {
@@ -75,10 +74,7 @@ export type NodeWorkerSupervisorNodeProof = {
   clientId: typeof GATEWAY_CLIENT_IDS.NODE_HOST;
   clientMode: "node";
   protocolFeature: typeof NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE;
-  /** Node-local session-host claim from the connection handshake; never execution authority. */
-  workerBuild?: WorkerAdmissionHandshake;
-  /** Transient launch capacity declaration; omitted while the node is full. */
-  workerRuns?: WorkerAdmissionHandshake;
+  workerHost: Extract<NodeWorkerHostDeclaration, { enabled: true }>;
   commands: readonly string[];
 };
 
@@ -100,10 +96,10 @@ export type NodeWorkerSupervisorTransport = {
 
 type NodeRunnerInventoryRecord = Omit<
   NodeWorkerSupervisorNodeProof,
-  "commands" | "pairingGeneration" | "protocolFeature" | "workerBuild" | "workerRuns"
+  "commands" | "pairingGeneration" | "protocolFeature" | "workerHost"
 > & {
   protocolFeatures: readonly string[];
-  workerRuns?: WorkerAdmissionHandshake;
+  workerHost?: NodeWorkerHostDeclaration;
 };
 
 type NodeRegistryPrivateContext = {
@@ -197,18 +193,14 @@ function normalizeSystemRunInvokeParams(params: { command: string; params?: unkn
   return normalized;
 }
 
-function sameOptionalWorkerBuild(
-  left: WorkerAdmissionHandshake | undefined,
-  right: WorkerAdmissionHandshake | undefined,
+function sameWorkerHostDeclaration(
+  left: NodeWorkerHostDeclaration | undefined,
+  right: NodeWorkerHostDeclaration | undefined,
 ): boolean {
-  return left === undefined || right === undefined ? left === right : sameWorkerBuild(left, right);
-}
-
-function sameOptionalWorkerRuns(
-  left: WorkerAdmissionHandshake | undefined,
-  right: WorkerAdmissionHandshake | undefined,
-): boolean {
-  return sameOptionalWorkerBuild(left, right) && left?.bundlePrewarm === right?.bundlePrewarm;
+  return (
+    left?.enabled === right?.enabled &&
+    (left?.enabled !== true || (right?.enabled === true && left.capacity === right.capacity))
+  );
 }
 
 function resolveWorkerSupervisorProof(
@@ -227,8 +219,7 @@ function resolveWorkerSupervisorProof(
     declaration.clientId !== node.clientId ||
     declaration.clientMode !== node.clientMode ||
     !declaration.protocolFeatures.includes(NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE) ||
-    (declaration.workerRuns !== undefined &&
-      !sameOptionalWorkerBuild(declaration.workerRuns, node.workerRuns))
+    declaration.workerHost?.enabled !== true
   ) {
     return undefined;
   }
@@ -240,8 +231,7 @@ function resolveWorkerSupervisorProof(
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: "node",
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    ...(node.workerRuns ? { workerBuild: structuredClone(node.workerRuns) } : {}),
-    ...(declaration.workerRuns ? { workerRuns: structuredClone(declaration.workerRuns) } : {}),
+    workerHost: { ...declaration.workerHost },
     commands: [...node.commands],
   };
 }
@@ -279,11 +269,7 @@ function isWorkerSupervisorProofCurrent(
     current.clientId === proof.clientId &&
     current.clientMode === proof.clientMode &&
     current.protocolFeature === proof.protocolFeature &&
-    sameOptionalWorkerBuild(current.workerBuild, proof.workerBuild) &&
-    (!requireLaunchEligibility ||
-      (current.workerRuns !== undefined &&
-        proof.workerRuns !== undefined &&
-        sameOptionalWorkerRuns(current.workerRuns, proof.workerRuns)))
+    (!requireLaunchEligibility || current.workerHost.capacity === "available")
   );
 }
 
@@ -315,6 +301,7 @@ function updateWorkerRunnerInventory(
     }
     return { changed };
   }
+  const workerHost = "workerHost" in params.declaration ? params.declaration.workerHost : undefined;
   const next: NodeRunnerInventoryRecord = {
     nodeId: node.nodeId,
     connId: node.connId,
@@ -322,14 +309,12 @@ function updateWorkerRunnerInventory(
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: "node",
     protocolFeatures: [...params.declaration.protocolFeatures],
-    ...(params.declaration.workerRuns
-      ? { workerRuns: structuredClone(params.declaration.workerRuns) }
-      : {}),
+    ...(workerHost ? { workerHost: { ...workerHost } } : {}),
   };
   const changed =
     !previous ||
     !sameWorkerProtocolFeatures(previous.protocolFeatures, next.protocolFeatures) ||
-    !sameOptionalWorkerRuns(previous.workerRuns, next.workerRuns);
+    !sameWorkerHostDeclaration(previous.workerHost, next.workerHost);
   if (changed) {
     state.runnerInventoryByConn.set(node.connId, next);
     state.context.publishActiveNodeContext();
@@ -640,7 +625,9 @@ export function isNodeRunnerSessionHost(params: {
   }
   const proof = resolveWorkerSupervisorProof(node, state.runnerInventoryByConn);
   return Boolean(
-    proof && proof.pairingGeneration === params.pairingGeneration && proof.workerRuns !== undefined,
+    proof &&
+    proof.pairingGeneration === params.pairingGeneration &&
+    proof.workerHost.capacity === "available",
   );
 }
 

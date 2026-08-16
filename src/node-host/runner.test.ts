@@ -28,7 +28,7 @@ const mocks = vi.hoisted(() => ({
   nodeSkillDescriptors: [] as Array<Record<string, unknown>>,
   runtimeSteps: [] as string[],
   useFakeRuntime: false,
-  fakeRuntimeWorkerRuns: false,
+  fakeRuntimeWorkerHosting: false,
   runnerAvailabilityChanged: undefined as ((available: boolean) => void) | undefined,
   nodeHostCommands: [] as string[],
   nodeHostCaps: [] as string[],
@@ -36,11 +36,6 @@ const mocks = vi.hoisted(() => ({
   availabilityChanged: undefined as (() => void) | undefined,
   normalizedPath: null as string | null,
   resolvedExecutables: new Map<string, string>(),
-  nodeWorkerBuild: {
-    bundleHash: "a".repeat(64),
-    openclawVersion: "2026.8.12",
-    protocolFeatures: ["worker-heartbeat-v1"],
-  },
   runtimeClient: undefined as
     | { request: (method: string, params?: unknown) => Promise<unknown> }
     | undefined,
@@ -166,14 +161,6 @@ vi.mock("./mcp.js", () => ({
   })),
 }));
 
-vi.mock("./node-worker-build.js", () => ({
-  resolveNodeWorkerInstallation: vi.fn(async () => ({
-    packageRoot: "/tmp/openclaw-node-worker",
-    revalidateBuild: vi.fn(async () => true),
-    build: structuredClone(mocks.nodeWorkerBuild),
-  })),
-}));
-
 vi.mock("./skills.js", () => ({
   scanNodeHostedSkills: vi.fn(() => mocks.nodeSkillDescriptors),
 }));
@@ -197,10 +184,8 @@ vi.mock("./runtime.js", async (importOriginal) => {
           caps: [],
           commands: [],
           pathEnv: process.env.PATH ?? "",
-          ...(mocks.fakeRuntimeWorkerRuns
-            ? { workerRuns: structuredClone(mocks.nodeWorkerBuild) }
-            : {}),
         },
+        workerHostingEnabled: mocks.fakeRuntimeWorkerHosting,
         initialInventory: { skills: [], pluginTools: [] },
         start: (params) => {
           mocks.runtimeClient = params.client;
@@ -236,7 +221,7 @@ describe("runNodeHost", () => {
     mocks.nodeSkillDescriptors = [];
     mocks.runtimeSteps = [];
     mocks.useFakeRuntime = false;
-    mocks.fakeRuntimeWorkerRuns = false;
+    mocks.fakeRuntimeWorkerHosting = false;
     mocks.runnerAvailabilityChanged = undefined;
     mocks.nodeHostCommands = [];
     mocks.nodeHostCaps = [];
@@ -625,7 +610,7 @@ describe("runNodeHost", () => {
     expect(lastCapturedOptions()?.workerRuns).toBeUndefined();
   });
 
-  it("keeps the initial worker build compatible before post-hello negotiation", async () => {
+  it("keeps runner consent out of the connection handshake", async () => {
     mocks.getRuntimeConfig.mockReturnValue({
       gateway: { handshakeTimeoutMs: 1_000 },
       nodeHost: { workerRuns: { enabled: true } },
@@ -635,8 +620,7 @@ describe("runNodeHost", () => {
       "event loop readiness timeout",
     );
 
-    expect(lastCapturedOptions()?.workerRuns).toEqual(mocks.nodeWorkerBuild);
-    expect(lastCapturedOptions()?.workerRuns).not.toHaveProperty("bundlePrewarm");
+    expect(lastCapturedOptions()?.workerRuns).toBeUndefined();
   });
 
   it("advertises Claude agent runs only after node-local opt-in and binary resolution", async () => {
@@ -686,10 +670,11 @@ describe("runNodeHost", () => {
     });
     expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
       protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+      workerHost: { enabled: false },
     });
   });
 
-  it("publishes the opt-in local worker build in the atomic runner inventory", async () => {
+  it("publishes opt-in consent and capacity in the atomic runner inventory", async () => {
     mocks.getRuntimeConfig.mockReturnValue({
       gateway: { handshakeTimeoutMs: 1_000 },
       nodeHost: { workerRuns: { enabled: true } },
@@ -705,39 +690,21 @@ describe("runNodeHost", () => {
       features: { methods: [], events: [] },
     } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
 
-    await vi.waitFor(() => {
-      expect(
-        client?.request.mock.calls.filter(
-          ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
-        ),
-      ).toEqual([
-        [
-          NODE_RUNNER_INVENTORY_UPDATE_METHOD,
-          {
-            protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-            workerRuns: mocks.nodeWorkerBuild,
-          },
-        ],
-        [
-          NODE_RUNNER_INVENTORY_UPDATE_METHOD,
-          {
-            protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-            workerRuns: { ...mocks.nodeWorkerBuild, bundlePrewarm: 1 },
-          },
-        ],
-      ]);
+    expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
+      protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+      workerHost: { enabled: true, capacity: "available" },
     });
   });
 
   it("withdraws and restores worker launch eligibility without reconnecting", async () => {
     mocks.useFakeRuntime = true;
-    mocks.fakeRuntimeWorkerRuns = true;
+    mocks.fakeRuntimeWorkerHosting = true;
     await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
       "event loop readiness timeout",
     );
     const options = mocks.capturedGatewayClientOptions[0];
     const client = mocks.capturedGatewayClients[0];
-    expect(options?.workerRuns).toEqual(mocks.nodeWorkerBuild);
+    expect(options?.workerRuns).toBeUndefined();
 
     mocks.runnerAvailabilityChanged?.(true);
     options?.onHelloOk?.({
@@ -747,7 +714,7 @@ describe("runNodeHost", () => {
     await vi.waitFor(() => {
       expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerRuns: mocks.nodeWorkerBuild,
+        workerHost: { enabled: true, capacity: "available" },
       });
     });
 
@@ -755,6 +722,7 @@ describe("runNodeHost", () => {
     await vi.waitFor(() => {
       expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: "full" },
       });
     });
 
@@ -762,7 +730,7 @@ describe("runNodeHost", () => {
     await vi.waitFor(() => {
       expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerRuns: mocks.nodeWorkerBuild,
+        workerHost: { enabled: true, capacity: "available" },
       });
     });
     expect(client?.updateNodeManifest).not.toHaveBeenCalled();

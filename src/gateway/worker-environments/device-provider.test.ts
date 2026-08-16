@@ -18,12 +18,6 @@ import {
 
 const DEVICE_ID = "device-session-host";
 const DAY_MS = 24 * 60 * 60 * 1_000;
-const WORKER_BUILD = {
-  bundleHash: "a".repeat(64),
-  openclawVersion: "2026.8.12",
-  protocolFeatures: ["worker-heartbeat-v1"],
-};
-
 function pairedDevice(
   deviceId = DEVICE_ID,
   nodeSurface?: PairedDevice["nodeSurface"],
@@ -47,10 +41,7 @@ function pairedDevice(
   };
 }
 
-function connectedNode(
-  deviceId = DEVICE_ID,
-  workerRuns: NodeWorkerSupervisorNodeProof["workerRuns"] | null = WORKER_BUILD,
-): NodeWorkerSupervisorNodeProof {
+function connectedNode(deviceId = DEVICE_ID, available = true): NodeWorkerSupervisorNodeProof {
   return {
     nodeId: deviceId,
     connId: `conn-${deviceId}`,
@@ -59,8 +50,8 @@ function connectedNode(
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: GATEWAY_CLIENT_MODES.NODE,
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+    workerHost: { enabled: true, capacity: available ? "available" : "full" },
     commands: ["system.run"],
-    ...(workerRuns ? { workerRuns } : {}),
   };
 }
 
@@ -132,7 +123,7 @@ describe("device worker provider", () => {
     {
       name: "connected node at capacity",
       getPairedDevice: async () => pairedDevice(),
-      listCurrentNodes: async () => [connectedNode(DEVICE_ID, null)],
+      listCurrentNodes: async () => [connectedNode(DEVICE_ID, false)],
       expectedMessage: `device worker is at capacity (all worker slots in use): ${DEVICE_ID}; retry after a running turn completes`,
     },
   ])(
@@ -206,8 +197,7 @@ describe("device worker provider", () => {
     let available = true;
     const runtime = deviceRuntime({
       getPairedDevice: async () => paired,
-      listCurrentNodes: async () =>
-        connected ? [connectedNode(DEVICE_ID, available ? WORKER_BUILD : null)] : [],
+      listCurrentNodes: async () => (connected ? [connectedNode(DEVICE_ID, available)] : []),
     });
     const provider = runtime.provider;
     const lease = { leaseId: "device-lease", profile: { device: DEVICE_ID } };

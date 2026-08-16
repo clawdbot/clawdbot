@@ -73,7 +73,7 @@ function requireDeviceId(profile: WorkerProfile): string {
 }
 
 function isSessionCapableNode(node: NodeWorkerSupervisorNodeProof): boolean {
-  return node.workerRuns !== undefined;
+  return node.workerHost.capacity === "available";
 }
 
 function hasPairedNodeRole(device: PairedDevice | null): device is PairedDevice {
@@ -105,7 +105,7 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
       options.getPairedDevice(deviceId),
       findConnectedNode(deviceId),
     ]);
-    // NodeWorkerSupervisorNodeProof.workerRuns is omitted while a connected node is at capacity.
+    // Connected hosts remain discoverable while full; capacity gates only new leases.
     const unavailableReason = !hasPairedNodeRole(paired)
       ? "unpaired"
       : !connected

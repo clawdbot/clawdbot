@@ -17,6 +17,7 @@ const node: NodeWorkerSupervisorNodeProof = {
   clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
   clientMode: "node",
   protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  workerHost: { enabled: true, capacity: "available" },
   commands: [],
 };
 const artifact = {

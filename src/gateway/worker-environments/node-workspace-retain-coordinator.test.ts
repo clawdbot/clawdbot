@@ -14,6 +14,7 @@ const node = {
   clientId: "node-host",
   clientMode: "node",
   protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  workerHost: { enabled: true, capacity: "available" },
   commands: [],
 } as const;
 

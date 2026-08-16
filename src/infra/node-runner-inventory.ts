@@ -1,8 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  type WorkerAdmissionHandshake,
-  validateWorkerAdmissionHandshake,
-} from "../../packages/gateway-protocol/src/index.js";
+import { validateWorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/index.js";
 
 export const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
 export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v2";
@@ -17,53 +14,69 @@ export const NODE_RUNNER_UPDATE_REQUIRED_ISSUE = {
 
 export type NodeRunnerInventoryIssue = typeof NODE_RUNNER_UPDATE_REQUIRED_ISSUE;
 
-type NodeWorkerSupervisorProtocolFeatures =
-  | readonly []
-  | readonly [typeof NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE]
-  | readonly [typeof NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE];
+export type NodeWorkerHostDeclaration =
+  | { enabled: false }
+  | { enabled: true; capacity: "available" | "full" };
 
-export type NodeRunnerInventoryDeclaration = {
-  protocolFeatures: NodeWorkerSupervisorProtocolFeatures;
-  workerRuns?: WorkerAdmissionHandshake;
-};
+export type NodeRunnerInventoryDeclaration =
+  | { protocolFeatures: readonly [] }
+  | { protocolFeatures: readonly [typeof NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE] }
+  | {
+      protocolFeatures: readonly [typeof NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE];
+      workerHost: NodeWorkerHostDeclaration;
+    };
+
+function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration | null {
+  if (!isRecord(value) || typeof value.enabled !== "boolean") {
+    return null;
+  }
+  const keys = Object.keys(value);
+  if (!value.enabled) {
+    return keys.length === 1 && keys[0] === "enabled" ? { enabled: false } : null;
+  }
+  return keys.length === 2 &&
+    keys.includes("enabled") &&
+    keys.includes("capacity") &&
+    (value.capacity === "available" || value.capacity === "full")
+    ? { enabled: true, capacity: value.capacity }
+    : null;
+}
 
 /** Parses the closed reconnect-scoped node-host runner declaration. */
 export function parseNodeRunnerInventoryDeclaration(
   value: unknown,
 ): NodeRunnerInventoryDeclaration | null {
-  if (!isRecord(value)) {
+  if (!isRecord(value) || !Array.isArray(value.protocolFeatures)) {
     return null;
   }
   const keys = Object.keys(value);
-  if (
-    keys.length < 1 ||
-    keys.length > 2 ||
-    !Object.hasOwn(value, "protocolFeatures") ||
-    keys.some((key) => key !== "protocolFeatures" && key !== "workerRuns") ||
-    !Array.isArray(value.protocolFeatures) ||
-    value.protocolFeatures.length > 1
-  ) {
-    return null;
-  }
-  let protocolFeatures: NodeWorkerSupervisorProtocolFeatures;
   if (value.protocolFeatures.length === 0) {
-    protocolFeatures = [];
-  } else if (
-    value.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE ||
-    value.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE
-  ) {
-    protocolFeatures = [value.protocolFeatures[0]];
-  } else {
+    return keys.length === 1 && keys.includes("protocolFeatures") ? { protocolFeatures: [] } : null;
+  }
+  if (value.protocolFeatures.length !== 1) {
     return null;
   }
-  const workerRuns = value.workerRuns;
-  if (workerRuns !== undefined) {
-    if (protocolFeatures.length === 0 || !validateWorkerAdmissionHandshake(workerRuns)) {
+  const feature = value.protocolFeatures[0];
+  if (feature === NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE) {
+    if (
+      keys.length < 1 ||
+      keys.length > 2 ||
+      keys.some((key) => key !== "protocolFeatures" && key !== "workerRuns") ||
+      (value.workerRuns !== undefined && !validateWorkerAdmissionHandshake(value.workerRuns))
+    ) {
       return null;
     }
-    return { protocolFeatures, workerRuns: structuredClone(workerRuns) };
+    // v1 carried the node-local package build in inventory. Keep wire validation
+    // only so shipped nodes receive the explicit update path; never retain it.
+    return { protocolFeatures: [NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE] };
   }
-  return { protocolFeatures };
+  if (feature !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE || keys.length !== 2) {
+    return null;
+  }
+  const workerHost = parseWorkerHostDeclaration(value.workerHost);
+  return workerHost
+    ? { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE], workerHost }
+    : null;
 }
 
 export function formatNodeRunnerUpdateRequired(

@@ -64,6 +64,7 @@ describe("node worker bundle transfer", () => {
       clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
       clientMode: "node",
       protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+      workerHost: { enabled: true, capacity: "available" },
       commands: [],
     };
     const prepared = service.prepare({
