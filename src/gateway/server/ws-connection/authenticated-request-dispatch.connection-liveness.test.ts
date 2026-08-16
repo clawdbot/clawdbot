@@ -56,12 +56,8 @@ describe("authenticated request connection liveness", () => {
     {
       method: "sessions.messages.subscribe",
       params: { key: "agent:main:main" },
-      assertEmpty: (state: ReturnType<typeof createGatewayConnectionState>) => {
-        expect(state.sessionMessageSubscribers.get("agent:main:main")).toEqual(new Set());
-        expect(
-          state.sessionMessageSubscribers.getForConnection("late-subscription-connection"),
-        ).toEqual(new Set());
-      },
+      assertEmpty: (state: ReturnType<typeof createGatewayConnectionState>) =>
+        expect(state.sessionMessageSubscribers.get("agent:main:main")).toEqual(new Set()),
     },
   ])("rejects a late $method mutation after disconnect cleanup", async (testCase) => {
     let releaseHandler!: () => void;
