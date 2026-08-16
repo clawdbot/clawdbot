@@ -116,6 +116,18 @@ describe("googlechat setup", () => {
       "webhookPath",
       "webhookUrl",
     ]);
+    // Credentials are excluded: named accounts inherit the root credential, and
+    // mergeGoogleChatAccountConfig strips credentials from accounts.default.
+    expect(googlechatSetupAdapter.namedAccountPromotionKeys).toEqual([
+      "audienceType",
+      "audience",
+      "webhookPath",
+      "webhookUrl",
+      "dmPolicy",
+      "allowFrom",
+      "groupPolicy",
+      "groupAllowFrom",
+    ]);
   });
 
   it("requires inline or file credentials when env auth is not used", () => {

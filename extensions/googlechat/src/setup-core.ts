@@ -61,6 +61,22 @@ export const googlechatSetupAdapter: ChannelSetupAdapter = {
     "webhookPath",
     "webhookUrl",
   ],
+  // mergeGoogleChatAccountConfig deliberately strips serviceAccount and
+  // serviceAccountFile when merging accounts.default into a named account:
+  // credentials are not part of the shared default-account surface. Promoting
+  // them while named accounts exist would strand named accounts that currently
+  // inherit the root credential, so named-account promotion is limited to the
+  // fields the resolver does share (webhook/audience and access policy).
+  namedAccountPromotionKeys: [
+    "audienceType",
+    "audience",
+    "webhookPath",
+    "webhookUrl",
+    "dmPolicy",
+    "allowFrom",
+    "groupPolicy",
+    "groupAllowFrom",
+  ],
 };
 
 export const googlechatSetupContract = defineChannelSetupContract({
