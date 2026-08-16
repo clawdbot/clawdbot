@@ -177,6 +177,10 @@ the limit or remove it from mxcPolicyPaths.`), so policy reads never buffer
   unbounded operator-supplied content. Policy files above the ceiling must be
   reduced below 1 MiB or removed before upgrading to this MXC version; there
   is no silent fallback to the built-in baseline.
+- `openclaw doctor` performs a read-only preflight for configured policy files
+  above the ceiling and reports them before an upgrade. Doctor does not remove,
+  rewrite, or silently drop the configured policy; reduce the file below 1 MiB
+  or remove its path, then run Doctor again.
 - A policy file that is malformed JSON or includes an unsupported field fails
   with an error naming the policy file path and the invalid field.
 - Every `filesystem.additionalReadonlyPaths` and

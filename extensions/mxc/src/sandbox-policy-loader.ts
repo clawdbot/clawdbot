@@ -100,14 +100,14 @@ export function loadSandboxBaselinePolicy(
  * Resolve configured symlinks first to preserve existing policyPaths behavior;
  * {@link readRegularFileSync} still rejects a non-regular final target.
  */
-const MX_SANDBOX_POLICY_MAX_BYTES = 1024 * 1024;
+export const MAX_SANDBOX_POLICY_FILE_BYTES = 1024 * 1024;
 
 function readSandboxPolicyFile(policyPath: string): SandboxPolicyLayer {
   let parsed: unknown;
   try {
     const { buffer } = readRegularFileSync({
       filePath: realpathSync(policyPath),
-      maxBytes: MX_SANDBOX_POLICY_MAX_BYTES,
+      maxBytes: MAX_SANDBOX_POLICY_FILE_BYTES,
     });
     parsed = JSON.parse(buffer.toString("utf-8"));
   } catch (err) {
@@ -324,7 +324,7 @@ function policyFileError(policyPath: string, err: unknown): Error {
   }
   if (err instanceof FsSafeError && err.code === "too-large") {
     return new Error(
-      `Configured sandbox policy file ${policyPath} exceeds the maximum policy file size of ${MX_SANDBOX_POLICY_MAX_BYTES} bytes (${MX_SANDBOX_POLICY_MAX_BYTES / (1024 * 1024)} MiB). Reduce the file below the limit or remove it from mxcPolicyPaths.`,
+      `Configured sandbox policy file ${policyPath} exceeds the maximum policy file size of ${MAX_SANDBOX_POLICY_FILE_BYTES} bytes (${MAX_SANDBOX_POLICY_FILE_BYTES / (1024 * 1024)} MiB). Reduce the file below the limit or remove it from mxcPolicyPaths.`,
       { cause: err },
     );
   }
