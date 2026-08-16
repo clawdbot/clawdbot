@@ -1,7 +1,6 @@
 /** Formats stable cron timeout and execution error messages. */
 import { formatEmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
-import { isAgentRunStaleLifecycleError } from "../../infra/agent-lifecycle-error.js";
-import { formatErrorMessageWithCode } from "../../infra/errors.js";
+import { extractErrorCode, formatErrorMessageWithCode } from "../../infra/errors.js";
 import {
   CRON_JOB_EXECUTION_TIMEOUT_ERROR,
   CRON_PRE_EXECUTION_TIMEOUT_ERROR,
@@ -59,8 +58,14 @@ export function resolveCronAbortReasonText(reason: unknown): string | undefined 
   if (typeof reason === "string" && reason.trim()) {
     return reason.trim();
   }
-  if (reason instanceof Error && reason.message.trim()) {
-    return reason.message.trim();
+  if (reason instanceof Error) {
+    const message = reason.message.trim();
+    // Only an empty abort or one already carrying cron's canonical timeout text
+    // is unspecified. Coded aborts and other messages retain their exact reason.
+    if (extractErrorCode(reason) === undefined && (!message || message === timeoutErrorMessage())) {
+      return undefined;
+    }
+    return formatErrorMessageWithCode(reason);
   }
   return undefined;
 }
@@ -70,19 +75,13 @@ export function abortErrorMessage(signal?: AbortSignal): string {
   return resolveCronAbortReasonText(signal?.reason) ?? timeoutErrorMessage();
 }
 
-function isUnspecifiedAbortError(err: unknown): boolean {
-  // A stale lifecycle rejection is a coordination failure with its own durable code;
-  // reporting it as elapsed cron time destroys the operator's recovery reason.
-  if (!(err instanceof Error) || isAgentRunStaleLifecycleError(err)) {
-    return false;
-  }
-  return err.name === "AbortError" || err.message === timeoutErrorMessage();
-}
-
 /** Normalizes thrown cron run failures into stable log/run-history text. */
 export function normalizeCronRunErrorText(err: unknown): string {
-  if (isUnspecifiedAbortError(err)) {
-    return timeoutErrorMessage();
+  if (
+    err instanceof Error &&
+    (err.name === "AbortError" || err.message.trim() === timeoutErrorMessage())
+  ) {
+    return resolveCronAbortReasonText(err) ?? timeoutErrorMessage();
   }
   return formatErrorMessageWithCode(err);
 }

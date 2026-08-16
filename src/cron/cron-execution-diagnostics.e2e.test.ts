@@ -2,6 +2,11 @@ import { createServer, type Server } from "node:net";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../agents/failover-error.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+  createAgentRunSupersededAbortError,
+} from "../agents/run-termination.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
@@ -256,17 +261,23 @@ describe.sequential("cron execution diagnostics", () => {
     expect(history.errorReason).toBe("model_not_found");
   });
 
-  it("persists stale gateway lifecycle rejections instead of reporting a timeout", async () => {
+  it.each([
+    ["direct abort", createAgentRunDirectAbortError],
+    ["gateway restart", createAgentRunRestartAbortError],
+    ["superseded run", createAgentRunSupersededAbortError],
+    ["stale gateway lifecycle", createAgentRunStaleLifecycleError],
+  ])("persists the coded %s reason instead of reporting a timeout", async (name, createError) => {
     const modelRef = { provider: "openai", model: "gpt-5.4" };
     resolveConfiguredModelRefMock.mockReturnValue(modelRef);
-    runWithModelFallbackMock.mockRejectedValueOnce(createAgentRunStaleLifecycleError());
+    const rejection = createError() as Error & { code: string };
+    runWithModelFallbackMock.mockRejectedValueOnce(rejection);
 
     const { finished, history, lastError } = await runPersistedDiagnosticCase({
       cfg: configFor(modelRef),
       modelRef,
-      name: "stale gateway lifecycle",
+      name,
     });
-    const expected = "Agent run belongs to a stale gateway lifecycle | ERR_STALE_GATEWAY_LIFECYCLE";
+    const expected = `${rejection.message} | ${rejection.code}`;
 
     for (const outcome of [finished, history]) {
       expect(outcome).toMatchObject({

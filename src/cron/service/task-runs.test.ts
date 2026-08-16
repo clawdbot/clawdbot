@@ -794,7 +794,7 @@ describe("cron task run terminal records", () => {
     "cron: isolated agent setup timed out before runner start (last phase: preparing)",
     "cron: isolated agent run stalled before execution start",
     "cron: isolated agent run stalled before execution start (last phase: preparing)",
-    Object.assign(new Error("request aborted"), { name: "AbortError" }),
+    Object.assign(new Error(), { name: "AbortError" }),
   ])("preserves a provisional timed-out task for case %#", async (input) => {
     const expected = input instanceof Error ? timeoutErrorMessage() : input;
     await withOpenClawTestState(
