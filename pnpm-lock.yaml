@@ -1085,6 +1085,9 @@ importers:
       '@line/bot-sdk':
         specifier: 11.2.0
         version: 11.2.0
+      typebox:
+        specifier: 1.3.6
+        version: 1.3.6
       zod:
         specifier: 4.4.3
         version: 4.4.3

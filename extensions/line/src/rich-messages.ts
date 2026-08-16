@@ -6,9 +6,13 @@ import {
   resolveMessagePresentationButtonAction,
   resolveMessagePresentationOptionAction,
   type MessagePresentation,
+  type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import { hasLineCredentials } from "./account-helpers.js";
 import { resolveLineAccount } from "./accounts.js";
@@ -21,7 +25,7 @@ import {
   createEventCard,
   createMediaPlayerCard,
 } from "./flex-templates.js";
-import type { LineChannelData, LineQuickReplyItem, LineRichCard } from "./types.js";
+import type { LineQuickReplyItem, LineRichCard } from "./types.js";
 
 const nonempty = () => Type.String({ minLength: 1 });
 const closed = <T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
@@ -123,16 +127,16 @@ export const LINE_PRESENTATION_CAPABILITIES = {
   },
 } satisfies NonNullable<ChannelOutboundAdapter["presentationCapabilities"]>;
 
-function toLineAction(label: string, action: unknown): Action | undefined {
-  const normalized = resolveMessagePresentationButtonAction({ label, action } as never);
+function toLineAction(button: MessagePresentationButton): Action | undefined {
+  const normalized = resolveMessagePresentationButtonAction(button);
   if (normalized?.type === "command") {
-    return messageAction(label, normalized.command);
+    return messageAction(button.label, normalized.command);
   }
   if (normalized?.type === "callback") {
-    return postbackAction(label, normalized.value, label);
+    return postbackAction(button.label, normalized.value, button.label);
   }
   if (normalized?.type === "url" || (normalized?.type === "web-app" && normalized.url)) {
-    return uriAction(label, normalized.url);
+    return uriAction(button.label, normalized.url);
   }
   return undefined;
 }
@@ -144,7 +148,7 @@ export function renderLinePresentation(
   const buttons = presentation.blocks.flatMap((block) =>
     block.type === "buttons" ? block.buttons : [],
   );
-  const buttonActions = buttons.map((button) => toLineAction(button.label, button.action));
+  const buttonActions = buttons.map(toLineAction);
   const options = presentation.blocks.flatMap((block) =>
     block.type === "select" ? block.options : [],
   );
@@ -162,7 +166,7 @@ export function renderLinePresentation(
     return null;
   }
 
-  const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
+  const lineData = isRecord(payload.channelData?.line) ? payload.channelData.line : {};
   const text = presentation.blocks
     .flatMap((block) => (block.type === "text" || block.type === "context" ? [block.text] : []))
     .join("\n");
@@ -245,28 +249,20 @@ export function renderLineCard(card: LineRichCard): { altText: string; contents:
       }),
     };
   }
-  const actionData = Object.fromEntries(
-    [
-      "up",
-      "down",
-      "left",
-      "right",
-      "select",
-      "menu",
-      "home",
-      "play",
-      "pause",
-      "volumeUp",
-      "volumeDown",
-      "mute",
-    ].map((key) => [
-      key,
-      lineActionData(
-        key.replace(/[A-Z]/g, (value) => `_${value.toLowerCase()}`),
-        device,
-      ),
-    ]),
-  ) as Parameters<typeof createAppleTvRemoteCard>[0]["actionData"];
+  const actionData: Parameters<typeof createAppleTvRemoteCard>[0]["actionData"] = {
+    up: lineActionData("up", device),
+    down: lineActionData("down", device),
+    left: lineActionData("left", device),
+    right: lineActionData("right", device),
+    select: lineActionData("select", device),
+    menu: lineActionData("menu", device),
+    home: lineActionData("home", device),
+    play: lineActionData("play", device),
+    pause: lineActionData("pause", device),
+    volumeUp: lineActionData("volume_up", device),
+    volumeDown: lineActionData("volume_down", device),
+    mute: lineActionData("mute", device),
+  };
   return {
     altText: `📺 ${card.name || "Apple TV"} Remote`,
     contents: createAppleTvRemoteCard({
