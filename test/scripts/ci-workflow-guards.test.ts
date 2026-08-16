@@ -7442,6 +7442,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const publisherPreflight = maturityWorkflow.jobs.publisher_preflight;
     const publishJob = maturityWorkflow.jobs.publish;
     const publishPrJob = maturityWorkflow.jobs.publish_generated_pr;
+    const qaAuthorizeJob = qaEvidenceWorkflow.jobs.authorize_actor;
     const qaPlanJob = qaEvidenceWorkflow.jobs.plan_qa_profile;
     const qaShardJob = qaEvidenceWorkflow.jobs.run_qa_profile_shard;
     const qaAggregateJob = qaEvidenceWorkflow.jobs.aggregate_qa_profile;
@@ -7539,6 +7540,24 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       profile: "${{ steps.plan.outputs.profile }}",
       shard_count: "${{ steps.plan.outputs.shard_count }}",
     });
+    const qaAuthorizeStep = expectDefined(
+      qaAuthorizeJob.steps.find(
+        (step: WorkflowStep) => step.name === "Require maintainer-level repository access",
+      ),
+      "QA workflow actor authorization",
+    );
+    expect(qaAuthorizeStep.env).toEqual({
+      CALLER_WORKFLOW_REF: "${{ github.workflow_ref }}",
+      JOB_CONTEXT: "${{ toJSON(job) }}",
+    });
+    expect(qaAuthorizeStep.with?.script).toContain("callerWorkflowRef !== calledWorkflowRef");
+    expect(qaAuthorizeStep.with?.script).toContain(
+      'job.workflow_repository === "openclaw/openclaw"',
+    );
+    expect(qaAuthorizeStep.with?.script).toContain("job.workflow_ref === calledWorkflowRef");
+    expect(qaAuthorizeStep.with?.script).toContain(
+      'core.setOutput("authorized", trustedMainCaller ? "true" : "false")',
+    );
     expect(qaValidateJob.outputs).toMatchObject({
       workflow_repository: "${{ steps.workflow.outputs.workflow_repository }}",
       workflow_sha: "${{ steps.workflow.outputs.workflow_sha }}",
@@ -7579,7 +7598,14 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(job.environment).toBe("qa-live-shared");
       const stepIndex = (name: string) =>
         job.steps.findIndex((step: WorkflowStep) => step.name === name);
-      const trustedCheckout = job.steps[0];
+      const permissionStep = expectDefined(
+        job.steps.find((step: WorkflowStep) => step.name === "Require authorized workflow actor"),
+        "selected QA actor permission check",
+      );
+      const trustedCheckout = expectDefined(
+        job.steps.find((step: WorkflowStep) => step.name === "Checkout trusted QA harness"),
+        "trusted QA harness checkout",
+      );
       const setupStep = expectDefined(
         job.steps.find((step: WorkflowStep) => step.name === "Setup Node environment"),
         "trusted QA harness Node setup",
@@ -7597,6 +7623,21 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         "selected QA dependency install",
       );
 
+      expect(permissionStep).toMatchObject({
+        uses: "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
+        env: {
+          CALLER_WORKFLOW_REF: "${{ github.workflow_ref }}",
+          JOB_CONTEXT: "${{ toJSON(job) }}",
+        },
+      });
+      expect(permissionStep.with?.script).toContain("getCollaboratorPermissionLevel");
+      expect(permissionStep.with?.script).toContain('new Set(["admin", "maintain", "write"])');
+      expect(permissionStep.with?.script).toContain("callerWorkflowRef !== calledWorkflowRef");
+      expect(permissionStep.with?.script).toContain(
+        'job.workflow_repository === "openclaw/openclaw"',
+      );
+      expect(permissionStep.with?.script).toContain("job.workflow_ref === calledWorkflowRef");
+      expect(permissionStep.with?.script).toContain("if (!trustedMainCaller)");
       expect(trustedCheckout).toMatchObject({
         name: "Checkout trusted QA harness",
         uses: CHECKOUT_V6,
@@ -7640,7 +7681,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         expect(installSelected.run).toContain(installFlag);
       }
       const ordered = [
-        0,
+        stepIndex("Require authorized workflow actor"),
+        stepIndex("Checkout trusted QA harness"),
         stepIndex("Setup Node environment"),
         stepIndex("Checkout selected ref"),
         stepIndex("Verify selected checkout SHA"),

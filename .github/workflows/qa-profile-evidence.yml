@@ -113,18 +113,27 @@ jobs:
       - name: Require maintainer-level repository access
         id: permission
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
         with:
           script: |
-            // Reusable workflow jobs inherit the caller event but run as
-            // github-actions[bot]; selected ref validation still gates secrets.
+            const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+            const callerWorkflowRef = process.env.CALLER_WORKFLOW_REF ?? "";
+            const calledWorkflowRef =
+              "openclaw/openclaw/.github/workflows/qa-profile-evidence.yml@refs/heads/main";
+            const trustedMainCaller =
+              callerWorkflowRef !== calledWorkflowRef &&
+              /^openclaw\/openclaw\/.github\/workflows\/[A-Za-z0-9_.-]+\.yml@refs\/heads\/main$/u.test(
+                callerWorkflowRef,
+              ) &&
+              job.workflow_repository === "openclaw/openclaw" &&
+              job.workflow_ref === calledWorkflowRef;
             if (context.actor === "github-actions[bot]") {
-              core.info("Skipping manual actor permission check for a reusable workflow call.");
-              core.setOutput("authorized", "true");
-              return;
-            }
-            if (context.eventName !== "workflow_dispatch") {
-              core.info(`Skipping manual actor permission check for ${context.eventName}.`);
-              core.setOutput("authorized", "true");
+              core.setOutput("authorized", trustedMainCaller ? "true" : "false");
+              if (!trustedMainCaller) {
+                core.notice("Bot invocation is not bound to a trusted main-branch caller.");
+              }
               return;
             }
             const allowed = new Set(["admin", "maintain", "write"]);
@@ -136,14 +145,12 @@ jobs:
             });
             const permission = data.permission;
             core.info(`Actor ${context.actor} permission: ${permission}`);
+            core.setOutput("authorized", allowed.has(permission) ? "true" : "false");
             if (!allowed.has(permission)) {
               core.notice(
                 `Workflow requires write/maintain/admin access. Actor "${context.actor}" has "${permission}".`,
               );
-              core.setOutput("authorized", "false");
-              return;
             }
-            core.setOutput("authorized", "true");
 
   validate_selected_ref:
     name: Validate selected ref
@@ -280,7 +287,7 @@ jobs:
     name: Plan QA profile shards
     needs: validate_selected_ref
     runs-on: blacksmith-8vcpu-ubuntu-2404
-    # Every job executing selected-revision code stays behind the protected QA environment.
+    # Selected-revision code requires the protected QA environment before runner allocation.
     environment: qa-live-shared
     outputs:
       channel_driver: ${{ steps.plan.outputs.channel_driver }}
@@ -288,6 +295,45 @@ jobs:
       profile: ${{ steps.plan.outputs.profile }}
       shard_count: ${{ steps.plan.outputs.shard_count }}
     steps:
+      # Keep the permission control in the same job as the dynamic checkouts. Besides enforcing
+      # direct dispatches, this makes the trusted caller boundary visible to static analysis.
+      - name: Require authorized workflow actor
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        with:
+          script: |
+            const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+            const callerWorkflowRef = process.env.CALLER_WORKFLOW_REF ?? "";
+            const calledWorkflowRef =
+              "openclaw/openclaw/.github/workflows/qa-profile-evidence.yml@refs/heads/main";
+            const trustedMainCaller =
+              callerWorkflowRef !== calledWorkflowRef &&
+              /^openclaw\/openclaw\/.github\/workflows\/[A-Za-z0-9_.-]+\.yml@refs\/heads\/main$/u.test(
+                callerWorkflowRef,
+              ) &&
+              job.workflow_repository === "openclaw/openclaw" &&
+              job.workflow_ref === calledWorkflowRef;
+            if (context.actor === "github-actions[bot]") {
+              if (!trustedMainCaller) {
+                throw new Error("Bot invocation is not bound to a trusted main-branch caller.");
+              }
+              return;
+            }
+            const allowed = new Set(["admin", "maintain", "write"]);
+            const { owner, repo } = context.repo;
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: context.actor,
+            });
+            if (!allowed.has(data.permission)) {
+              throw new Error(
+                `Workflow requires write/maintain/admin access; actor ${context.actor} has ${data.permission}.`,
+              );
+            }
+
       - name: Checkout trusted QA harness
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -396,6 +442,45 @@ jobs:
       max-parallel: 8
       matrix: ${{ fromJSON(needs.plan_qa_profile.outputs.matrix) }}
     steps:
+      # Keep the permission control in the same job as the dynamic checkouts. Besides enforcing
+      # direct dispatches, this makes the trusted caller boundary visible to static analysis.
+      - name: Require authorized workflow actor
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        with:
+          script: |
+            const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+            const callerWorkflowRef = process.env.CALLER_WORKFLOW_REF ?? "";
+            const calledWorkflowRef =
+              "openclaw/openclaw/.github/workflows/qa-profile-evidence.yml@refs/heads/main";
+            const trustedMainCaller =
+              callerWorkflowRef !== calledWorkflowRef &&
+              /^openclaw\/openclaw\/.github\/workflows\/[A-Za-z0-9_.-]+\.yml@refs\/heads\/main$/u.test(
+                callerWorkflowRef,
+              ) &&
+              job.workflow_repository === "openclaw/openclaw" &&
+              job.workflow_ref === calledWorkflowRef;
+            if (context.actor === "github-actions[bot]") {
+              if (!trustedMainCaller) {
+                throw new Error("Bot invocation is not bound to a trusted main-branch caller.");
+              }
+              return;
+            }
+            const allowed = new Set(["admin", "maintain", "write"]);
+            const { owner, repo } = context.repo;
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: context.actor,
+            });
+            if (!allowed.has(data.permission)) {
+              throw new Error(
+                `Workflow requires write/maintain/admin access; actor ${context.actor} has ${data.permission}.`,
+              );
+            }
+
       - name: Checkout trusted QA harness
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -634,7 +719,7 @@ jobs:
     needs: [validate_selected_ref, plan_qa_profile, run_qa_profile_shard]
     if: ${{ always() && needs.validate_selected_ref.result == 'success' && needs.plan_qa_profile.result == 'success' }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
-    # Every job executing selected-revision code stays behind the protected QA environment.
+    # Selected-revision code requires the protected QA environment before runner allocation.
     environment: qa-live-shared
     timeout-minutes: 30
     outputs:
@@ -646,6 +731,45 @@ jobs:
       trusted_reason: ${{ steps.evidence.outputs.trusted_reason }}
       qa_evidence_path: ${{ steps.evidence.outputs.qa_evidence_path }}
     steps:
+      # Keep the permission control in the same job as the dynamic checkouts. Besides enforcing
+      # direct dispatches, this makes the trusted caller boundary visible to static analysis.
+      - name: Require authorized workflow actor
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        with:
+          script: |
+            const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+            const callerWorkflowRef = process.env.CALLER_WORKFLOW_REF ?? "";
+            const calledWorkflowRef =
+              "openclaw/openclaw/.github/workflows/qa-profile-evidence.yml@refs/heads/main";
+            const trustedMainCaller =
+              callerWorkflowRef !== calledWorkflowRef &&
+              /^openclaw\/openclaw\/.github\/workflows\/[A-Za-z0-9_.-]+\.yml@refs\/heads\/main$/u.test(
+                callerWorkflowRef,
+              ) &&
+              job.workflow_repository === "openclaw/openclaw" &&
+              job.workflow_ref === calledWorkflowRef;
+            if (context.actor === "github-actions[bot]") {
+              if (!trustedMainCaller) {
+                throw new Error("Bot invocation is not bound to a trusted main-branch caller.");
+              }
+              return;
+            }
+            const allowed = new Set(["admin", "maintain", "write"]);
+            const { owner, repo } = context.repo;
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner,
+              repo,
+              username: context.actor,
+            });
+            if (!allowed.has(data.permission)) {
+              throw new Error(
+                `Workflow requires write/maintain/admin access; actor ${context.actor} has ${data.permission}.`,
+              );
+            }
+
       - name: Checkout trusted QA harness
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
