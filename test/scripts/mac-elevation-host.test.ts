@@ -511,6 +511,7 @@ function createInstallRollbackHarness(
   options: {
     failCurrentReceiptRestoreCopy?: boolean;
     failLsofInspection?: boolean;
+    hupDuringCustody?: boolean;
     launchdBootstrapFails?: boolean;
     migrationRestoreBootstrapFails?: boolean;
     recreateSourceDuringBootout?: boolean;
@@ -605,7 +606,7 @@ function createInstallRollbackHarness(
       'destination="${!#}"',
       'if [[ "$TEST_SIGNAL_DURING_CUSTODY" == "1" && "$destination" == *.custody.* ]]; then',
       '  /bin/mv "$@"',
-      '  kill -TERM "$PPID"',
+      '  kill -"$TEST_CUSTODY_SIGNAL" "$PPID"',
       "  exit 0",
       "fi",
       'if [[ "$TEST_SIGNAL_DURING_RECEIPT_COMMIT" == "1" && "$destination" == */elevation-host-install.json ]]; then',
@@ -751,6 +752,7 @@ function createInstallRollbackHarness(
       ...artifact.env,
       TEST_FAIL_CURRENT_RECEIPT_RESTORE_COPY: options.failCurrentReceiptRestoreCopy ? "1" : "0",
       TEST_FAIL_LSOF_INSPECTION: options.failLsofInspection ? "1" : "0",
+      TEST_CUSTODY_SIGNAL: options.hupDuringCustody ? "HUP" : "TERM",
       TEST_LAUNCHD_BOOTSTRAP_FAILS: options.launchdBootstrapFails === false ? "0" : "1",
       TEST_LIVE_PID: String(process.pid),
       TEST_LAUNCH_STATE_FILE: launchStateFile,
@@ -759,7 +761,8 @@ function createInstallRollbackHarness(
       TEST_RECREATE_SOURCE_DURING_BOOTOUT: options.recreateSourceDuringBootout ? "1" : "0",
       TEST_RECREATE_SOURCE_ON_FAILURE: options.recreateSourceOnFailure ? "1" : "0",
       TEST_RESTART_APP_DURING_BOOTOUT: options.restartAppDuringBootout ? "1" : "0",
-      TEST_SIGNAL_DURING_CUSTODY: options.signalDuringCustody ? "1" : "0",
+      TEST_SIGNAL_DURING_CUSTODY:
+        options.signalDuringCustody || options.hupDuringCustody ? "1" : "0",
       TEST_SIGNAL_DURING_RECOVERY_APP_MOVE: options.signalDuringRecoveryAppMove ? "1" : "0",
       TEST_SIGNAL_DURING_RECEIPT_COMMIT: options.signalDuringReceiptCommit ? "1" : "0",
       TEST_SIGNAL_BEFORE_ROLLBACK_APP_MOVE: options.signalBeforeRollbackAppMove ? "1" : "0",
@@ -1072,6 +1075,31 @@ describe("mac elevation host command contract", () => {
   );
 
   it.skipIf(process.platform !== "darwin")(
+    "refuses to adopt the launchd-owned elevation process",
+    () => {
+      const harness = createMigrationPlanHarness("loaded");
+      addRunningAppFixture(harness);
+      const result = runInstaller(
+        scriptPath,
+        [
+          "migration-plan",
+          "--app",
+          harness.appPath,
+          "--state-dir",
+          harness.stateDir,
+          "--config-path",
+          harness.configPath,
+          "--adopt-running-app",
+        ],
+        harness.env,
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("adoption refuses the launchd-owned elevation process");
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
     "fails closed when launchd ownership cannot be inspected for migration",
     () => {
       const harness = createMigrationPlanHarness("error");
@@ -1235,6 +1263,37 @@ describe("mac elevation host command contract", () => {
       );
 
       expect(result.signal).toBe("SIGTERM");
+      expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
+      expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
+      expect(readdirSync(path.dirname(harness.sourcePlist))).not.toContainEqual(
+        expect.stringContaining(".custody."),
+      );
+      expect(existsSync(path.join(harness.stateDir, "elevation-host-install.json"))).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "restores exact source ownership when hangup arrives during custody transfer",
+    () => {
+      const harness = createInstallRollbackHarness({ hupDuringCustody: true });
+      const result = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--migrate-launch-agent",
+          harness.sourcePlist,
+        ],
+        harness.env,
+      );
+
+      expect(result.signal).toBe("SIGHUP");
       expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
       expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
       expect(readdirSync(path.dirname(harness.sourcePlist))).not.toContainEqual(

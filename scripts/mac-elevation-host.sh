@@ -420,7 +420,7 @@ restore_file_without_overwrite() {
 
 finish_custody_signal_deferral() {
   local deferred_signal="$1"
-  trap - INT TERM
+  trap - HUP INT TERM
   if [[ -n "$deferred_signal" ]]; then
     kill -s "$deferred_signal" "$$"
   fi
@@ -432,6 +432,7 @@ take_migration_plist_custody() {
   # A same-directory rename takes the exact current plist without unlinking a later replacement.
   trap 'custody_signal=INT' INT
   trap 'custody_signal=TERM' TERM
+  trap 'custody_signal=HUP' HUP
   MIGRATION_CUSTODY_PATH="$(mktemp "${source}.custody.XXXXXX")"
   rm "$MIGRATION_CUSTODY_PATH"
   mv "$source" "$MIGRATION_CUSTODY_PATH" || move_status=$?
@@ -889,6 +890,10 @@ resolve_adoption_inputs() {
     fail 'adoption requires exactly one unsupervised background-only OpenClaw process'
   ADOPTION_PID="${records[0]%% *}"
   ADOPTION_ATTACH_ONLY="${records[0]##* }"
+  local elevation_pid
+  elevation_pid="$(job_pid)"
+  [[ -z "$elevation_pid" || "$ADOPTION_PID" != "$elevation_pid" ]] ||
+    fail 'adoption refuses the launchd-owned elevation process'
 }
 
 resolve_managed_upgrade_inputs() {
@@ -1485,6 +1490,7 @@ install_host() {
     adopted_app_is_current || fail 'adopted OpenClaw process changed after migration planning'
     trap 'adoption_signal=INT' INT
     trap 'adoption_signal=TERM' TERM
+    trap 'adoption_signal=HUP' HUP
     CUTOVER_ADOPTION_STOPPED=1
     kill "$ADOPTION_PID" 2>/dev/null || fail "could not stop adopted OpenClaw process: $ADOPTION_PID"
     CUTOVER_ADOPTION_TERMINATION_SENT=1
@@ -1578,6 +1584,7 @@ install_host() {
 
   trap 'commit_signal=INT' INT
   trap 'commit_signal=TERM' TERM
+  trap 'commit_signal=HUP' HUP
   write_receipt \
     "$source_commit" \
     "$peekaboo_commit" \
@@ -1978,6 +1985,7 @@ recover_host() {
   CUTOVER_RECOVERY_ATTEMPTED=1
   trap 'recovery_signal=INT' INT
   trap 'recovery_signal=TERM' TERM
+  trap 'recovery_signal=HUP' HUP
   if ! recover_install; then
     if restore_current_generation_after_recovery_failure; then
       finish_custody_signal_deferral "$recovery_signal"
