@@ -87,6 +87,7 @@ export function attachGatewayWsForTest(params: {
   headers?: Record<string, string>;
   host?: string;
   options?: Partial<AttachGatewayWsConnectionParams>;
+  prepareIngressAttribution?: typeof prepareGatewayIngressAttribution;
   socket?: GatewayWsTestSocket;
   trustedProxies?: string[];
 }) {
@@ -105,7 +106,7 @@ export function attachGatewayWsForTest(params: {
       localPort: socket["_socket"].localPort,
     },
   };
-  prepareGatewayIngressAttribution({
+  (params.prepareIngressAttribution ?? prepareGatewayIngressAttribution)({
     req: upgradeReq as never,
     trustedProxies: params.trustedProxies,
   });
