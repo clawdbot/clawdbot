@@ -4,15 +4,29 @@
  * It wires the Clack prompter to the setup wizard and restores terminal state
  * on every exit path so canceled setup cannot leave stdin paused.
  */
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { runSetupWizard } from "../wizard/setup.js";
+import { requireRiskAcknowledgement } from "../wizard/setup.shared.js";
 import {
   hasInteractiveOnboardingTty,
   runInteractiveOnboarding,
 } from "./onboard-interactive-runner.js";
 import type { OnboardOptions } from "./onboard-types.js";
+
+/** Completes the interactive risk gate before a requested reset can move state. */
+export async function acknowledgeInteractiveOnboardingRisk(
+  opts: OnboardOptions,
+  config: OpenClawConfig,
+  runtime: RuntimeEnv = defaultRuntime,
+): Promise<boolean> {
+  const prompter = createClackPrompter();
+  return await runInteractiveOnboarding(async () => {
+    await requireRiskAcknowledgement({ opts, prompter, config });
+  }, runtime);
+}
 
 /** Runs the interactive setup wizard and maps user cancellation to exit code 1. */
 export async function runInteractiveSetup(

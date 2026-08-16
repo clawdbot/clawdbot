@@ -10,14 +10,15 @@ export function hasInteractiveOnboardingTty(): boolean {
 export async function runInteractiveOnboarding(
   action: () => Promise<void>,
   runtime: RuntimeEnv,
-): Promise<void> {
+): Promise<boolean> {
   let exitCode: number | null = null;
   try {
     await action();
+    return true;
   } catch (error) {
     if (error instanceof WizardCancelledError) {
       exitCode = 1;
-      return;
+      return false;
     }
     throw error;
   } finally {

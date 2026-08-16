@@ -31,6 +31,12 @@ not install or modify anything on the remote host.
 ## Local flow details
 
 <Steps>
+  <Step title="Risk acknowledgement">
+    - Interactive onboarding asks for any required risk acknowledgement before
+      a requested reset. Declining or canceling leaves existing state untouched.
+    - Non-interactive onboarding requires `--accept-risk` and does not prompt.
+
+  </Step>
   <Step title="Existing config detection">
     - If `~/.openclaw/openclaw.json` exists, choose **Keep current values**, **Review and update**, or **Reset before setup**.
     - Re-running the wizard does not wipe anything unless you explicitly choose Reset (or pass `--reset`).

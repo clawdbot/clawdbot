@@ -15,6 +15,17 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
 ## Flow details (local mode)
 
 <Steps>
+  <Step title="Risk acknowledgement">
+    - Interactive runs complete the risk acknowledgement before a requested
+      reset can move any state to Trash. Declining or canceling leaves state
+      untouched.
+    - First run (or any run before `wizard.securityAcknowledgedAt` is set)
+      asks you to confirm you understand that agents are powerful and full
+      system access is risky.
+    - `--non-interactive` requires `--accept-risk` explicitly; without it,
+      onboarding exits with an error instead of prompting.
+
+  </Step>
   <Step title="Reset (optional)">
     - `--reset` resets state before setup runs; without it, re-running onboarding
       keeps existing config and reuses it as defaults.
@@ -24,17 +35,6 @@ behavior and outputs, see [CLI setup reference](/start/wizard-cli-reference).
     - If the config file is invalid, onboarding stops and tells you to run
       `openclaw doctor` first, then re-run setup.
     - Reset moves state to Trash (never deletes directly).
-
-  </Step>
-  <Step title="Risk acknowledgement">
-    - First run (or any run before `wizard.securityAcknowledgedAt` is set)
-      asks you to confirm you understand that agents are powerful and full
-      system access is risky.
-    - `--non-interactive` requires `--accept-risk` explicitly; without it,
-      onboarding exits with an error instead of prompting.
-    - Interactive runs get a confirm prompt instead of the flag; declining
-      cancels setup.
-
   </Step>
   <Step title="Model/Auth">
     - **Anthropic API key**: uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.

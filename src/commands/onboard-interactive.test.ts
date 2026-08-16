@@ -2,11 +2,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
-import { runInteractiveSetup } from "./onboard-interactive.js";
+import {
+  acknowledgeInteractiveOnboardingRisk,
+  runInteractiveSetup,
+} from "./onboard-interactive.js";
 
 const mocks = vi.hoisted(() => ({
   createClackPrompter: vi.fn(() => ({ id: "prompter" })),
   runSetupWizard: vi.fn(async () => {}),
+  requireRiskAcknowledgement: vi.fn(async () => ({})),
   restoreTerminalState: vi.fn(),
 }));
 
@@ -16,6 +20,10 @@ vi.mock("../wizard/clack-prompter.js", () => ({
 
 vi.mock("../wizard/setup.js", () => ({
   runSetupWizard: mocks.runSetupWizard,
+}));
+
+vi.mock("../wizard/setup.shared.js", () => ({
+  requireRiskAcknowledgement: mocks.requireRiskAcknowledgement,
 }));
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({
@@ -79,6 +87,44 @@ describe("runInteractiveSetup", () => {
     await expect(runInteractiveSetup({} as never, runtime)).rejects.toThrow("boom");
 
     expect(runtime.exit).not.toHaveBeenCalled();
+    expect(mocks.restoreTerminalState).toHaveBeenCalledWith("setup finish", {
+      resumeStdinIfPaused: false,
+    });
+  });
+});
+
+describe("acknowledgeInteractiveOnboardingRisk", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("completes one acknowledgement with the existing config", async () => {
+    const runtime = makeRuntime();
+    const config = { gateway: { port: 19_001 } };
+
+    await expect(
+      acknowledgeInteractiveOnboardingRisk({ reset: true }, config, runtime),
+    ).resolves.toBe(true);
+
+    expect(mocks.requireRiskAcknowledgement).toHaveBeenCalledOnce();
+    expect(mocks.requireRiskAcknowledgement).toHaveBeenCalledWith({
+      opts: { reset: true },
+      prompter: { id: "prompter" },
+      config,
+    });
+  });
+
+  it.each(["Ctrl-C", "EOF"])("maps %s cancellation before reset to exit 1", async () => {
+    const runtime = makeRuntime();
+    mocks.requireRiskAcknowledgement.mockRejectedValueOnce(
+      new WizardCancelledError("risk not accepted"),
+    );
+
+    await expect(acknowledgeInteractiveOnboardingRisk({ reset: true }, {}, runtime)).resolves.toBe(
+      false,
+    );
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.restoreTerminalState).toHaveBeenCalledWith("setup finish", {
       resumeStdinIfPaused: false,
     });

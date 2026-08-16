@@ -42,7 +42,10 @@ import {
 import { runGuidedOnboarding } from "./onboard-guided.js";
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
 import { hasInteractiveOnboardingTty } from "./onboard-interactive-runner.js";
-import { runInteractiveSetup } from "./onboard-interactive.js";
+import {
+  acknowledgeInteractiveOnboardingRisk,
+  runInteractiveSetup,
+} from "./onboard-interactive.js";
 import { runNonInteractiveSetup } from "./onboard-non-interactive.js";
 import { resolveNonInteractiveApiKey as resolveNonInteractiveCredential } from "./onboard-non-interactive/api-keys.js";
 import { inferAuthChoiceFromFlags } from "./onboard-non-interactive/local/auth-choice-inference.js";
@@ -575,6 +578,7 @@ export async function setupWizardCommand(
       : runGuidedOnboarding;
 
   const runSetupAfterOptionalReset = async () => {
+    let setupOpts = normalizedOpts;
     if (normalizedOpts.reset) {
       const snapshot = await readConfigFileSnapshot();
       const baseConfig = snapshot.sourceConfig ?? (snapshot.valid ? snapshot.config : {});
@@ -642,12 +646,25 @@ export async function setupWizardCommand(
       if (!validateResetMigrationImport({ opts: normalizedOpts, runtime })) {
         return;
       }
+      if (!normalizedOpts.nonInteractive) {
+        const riskAccepted = await acknowledgeInteractiveOnboardingRisk(
+          normalizedOpts,
+          baseConfig,
+          runtime,
+        );
+        if (!riskAccepted) {
+          return;
+        }
+        // The canonical preflight already completed the one interactive risk
+        // gate. Carry that fact through setup so reset cannot cause a duplicate prompt.
+        setupOpts = { ...normalizedOpts, acceptRisk: true };
+      }
       // Reset is deliberately the final pre-dispatch step: no rejectable option
-      // checks may run after user state has moved to Trash.
+      // checks or interactive gates may run after user state moves to Trash.
       await handleReset(resetScope, workspaceDir, runtime);
     }
 
-    await runSetup(normalizedOpts, runtime);
+    await runSetup(setupOpts, runtime);
   };
   await withSetupMigrationTargetLock(resolveStateDir(), runSetupAfterOptionalReset);
 }

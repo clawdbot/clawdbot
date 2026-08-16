@@ -21,6 +21,7 @@ type ProviderAuthMethodNonInteractiveValidationContext = Parameters<
 >[0];
 
 const mocks = vi.hoisted(() => ({
+  acknowledgeInteractiveOnboardingRisk: vi.fn(async () => true),
   runInteractiveSetup: vi.fn(async () => {}),
   runGuidedOnboarding: vi.fn(async () => {}),
   runNonInteractiveSetup: vi.fn(async () => {}),
@@ -85,6 +86,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./onboard-interactive.js", () => ({
+  acknowledgeInteractiveOnboardingRisk: mocks.acknowledgeInteractiveOnboardingRisk,
   runInteractiveSetup: mocks.runInteractiveSetup,
 }));
 
@@ -272,6 +274,37 @@ describe("setupWizardCommand", () => {
   });
 
   it.each([
+    ["classic", { reset: true, classic: true }],
+    ["guided", { reset: true }],
+  ] as const)("acknowledges risk before an interactive %s reset", async (_label, options) => {
+    const runtime = makeRuntime();
+
+    await setupWizardCommand(options, runtime);
+
+    expect(mocks.acknowledgeInteractiveOnboardingRisk).toHaveBeenCalledOnce();
+    expect(mocks.handleReset).toHaveBeenCalledOnce();
+    const acknowledgementOrder =
+      mocks.acknowledgeInteractiveOnboardingRisk.mock.invocationCallOrder[0];
+    const resetOrder = mocks.handleReset.mock.invocationCallOrder[0];
+    if (acknowledgementOrder === undefined || resetOrder === undefined) {
+      throw new Error("expected risk acknowledgement and reset calls");
+    }
+    expect(acknowledgementOrder).toBeLessThan(resetOrder);
+    const setup = options.classic ? mocks.runInteractiveSetup : mocks.runGuidedOnboarding;
+    expect(setup).toHaveBeenCalledWith(expect.objectContaining({ acceptRisk: true }), runtime);
+  });
+
+  it("leaves state untouched when interactive risk acknowledgement is declined", async () => {
+    const runtime = makeRuntime();
+    mocks.acknowledgeInteractiveOnboardingRisk.mockResolvedValueOnce(false);
+
+    await setupWizardCommand({ reset: true, classic: true }, runtime);
+
+    expect(mocks.handleReset).not.toHaveBeenCalled();
+    expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ["guided", { reset: true }],
     ["classic", { reset: true, classic: true }],
   ] as const)("rejects headless %s onboarding before reset", async (_label, options) => {
@@ -298,6 +331,7 @@ describe("setupWizardCommand", () => {
     await setupWizardCommand({ reset: true, nonInteractive: true, acceptRisk: true }, runtime);
 
     expect(mocks.withSetupMigrationTargetLock).toHaveBeenCalledOnce();
+    expect(mocks.acknowledgeInteractiveOnboardingRisk).not.toHaveBeenCalled();
     expect(mocks.handleReset).toHaveBeenCalledOnce();
     expect(mocks.runNonInteractiveSetup).toHaveBeenCalledOnce();
     const lockOrder = mocks.withSetupMigrationTargetLock.mock.invocationCallOrder[0];
@@ -957,6 +991,7 @@ describe("setupWizardCommand", () => {
     expect(mocks.runGuidedOnboarding).toHaveBeenCalledOnce();
     expect(mocks.runInteractiveSetup).not.toHaveBeenCalled();
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
+    expect(mocks.acknowledgeInteractiveOnboardingRisk).not.toHaveBeenCalled();
   });
 
   it.each([
