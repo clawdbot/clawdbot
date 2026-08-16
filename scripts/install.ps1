@@ -20,7 +20,6 @@ function Fail-Install {
     param([int]$Code = 1)
 
     $script:InstallExitCode = $Code
-    return $false
 }
 
 function Test-BooleanSuccessResult {
@@ -91,9 +90,7 @@ function Resolve-NodeOptionsWithMinOldSpace {
 }
 
 function Complete-Install {
-    param([bool]$Succeeded)
-
-    if ($Succeeded) {
+    if ($script:InstallExitCode -eq 0) {
         return
     }
 
@@ -189,7 +186,8 @@ Write-Host ""
 # Check if running in PowerShell
 if ($PSVersionTable.PSVersion.Major -lt 5) {
     Write-Host "Error: PowerShell 5+ required" -ForegroundColor Red
-    Complete-Install -Succeeded:$false
+    Fail-Install
+    Complete-Install
     return
 }
 
@@ -1679,7 +1677,8 @@ function Remove-LegacySubmodule {
 function Main {
     if ($InstallMethod -ne "npm" -and $InstallMethod -ne "git") {
         Write-Host "Error: invalid -InstallMethod (use npm or git)." -ForegroundColor Red
-        return (Fail-Install -Code 2)
+        Fail-Install -Code 2
+        return
     }
 
     if ($DryRun) {
@@ -1705,7 +1704,8 @@ function Main {
     # Step 1: Node.js
     if (-not (Check-Node)) {
         if (-not (Install-Node)) {
-            return (Fail-Install)
+            Fail-Install
+            return
         }
 
         # Verify installation
@@ -1713,7 +1713,8 @@ function Main {
             Write-Host ""
             Write-Host "Error: Node.js installation may require a terminal restart" -ForegroundColor Red
             Write-Host "Please close this terminal, open a new one, and run this installer again." -ForegroundColor Yellow
-            return (Fail-Install)
+            Fail-Install
+            return
         }
     }
 
@@ -1731,7 +1732,8 @@ function Main {
         $finalGitDir = $GitDir
         $gitInstallResults = @(Install-OpenClawFromGit -RepoDir $GitDir -SkipUpdate:$NoGitUpdate)
         if (-not (Test-BooleanSuccessResult -Results $gitInstallResults)) {
-            return (Fail-Install)
+            Fail-Install
+            return
         }
     } else {
         $gitWrapper = Join-Path (Join-Path $env:USERPROFILE ".local\\bin") "openclaw.cmd"
@@ -1741,7 +1743,8 @@ function Main {
         }
         $npmInstallResults = @(Install-OpenClaw)
         if (-not (Test-BooleanSuccessResult -Results $npmInstallResults)) {
-            return (Fail-Install)
+            Fail-Install
+            return
         }
     }
 
@@ -1849,6 +1852,5 @@ function Main {
     return $true
 }
 
-$mainResults = @(Main)
-$installSucceeded = Test-BooleanSuccessResult -Results $mainResults
-Complete-Install -Succeeded:$installSucceeded
+$null = Main
+Complete-Install
