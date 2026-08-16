@@ -191,6 +191,26 @@ describe("gateway usage helpers", () => {
     },
   );
 
+  it.each(["usage.cost", "sessions.usage"] as const)(
+    "%s rejects an explicit invalid utcOffset with INVALID_REQUEST",
+    async (method) => {
+      const respond = vi.fn();
+      await expectDefined(
+        usageHandlers[method],
+        "usageHandlers[method] test invariant",
+      )({
+        respond,
+        params: { mode: "specific", utcOffset: "UTC+14:30" },
+        context: { getRuntimeConfig: vi.fn(() => ({})) },
+      } as unknown as Parameters<(typeof usageHandlers)[typeof method]>[0]);
+
+      expect(respond).toHaveBeenCalledTimes(1);
+      expect(respond.mock.calls[0]?.[0]).toBe(false);
+      expect(JSON.stringify(respond.mock.calls[0]?.[2])).toContain("invalid utcOffset");
+      expect(vi.mocked(loadCostUsageSummaryFromCache)).not.toHaveBeenCalled();
+    },
+  );
+
   it("falls back to the legacy offset when Gateway ICU does not recognize the browser timezone", async () => {
     const respond = vi.fn();
     await expectDefined(
@@ -333,26 +353,66 @@ describe("gateway usage helpers", () => {
     });
   });
 
-  it("resolveDateRange falls back to UTC when specific mode offset is missing or invalid", () => {
-    const missingOffset = expectDateRange(
+  it.each([undefined, "", "   "] as const)(
+    "resolveDateRange falls back to UTC when specific mode offset is omitted or blank",
+    (utcOffset) => {
+      const range = expectDateRange(
+        testApi.resolveDateRange({
+          startDate: "2026-02-01",
+          endDate: "2026-02-02",
+          mode: "specific",
+          ...(utcOffset === undefined ? {} : { utcOffset }),
+        }),
+      );
+      expect(range.startMs).toBe(Date.UTC(2026, 1, 1));
+      expect(range.endMs).toBe(Date.UTC(2026, 1, 2) + dayMs - 1);
+    },
+  );
+
+  it.each(["UTC+14:30", "UTC+15", "UTC-13", "EST", 0] as const)(
+    "resolveDateRange rejects an explicit invalid utcOffset",
+    (utcOffset) => {
+      expect(
+        testApi.resolveDateRange({
+          startDate: "2026-02-01",
+          endDate: "2026-02-02",
+          mode: "specific",
+          utcOffset,
+        }),
+      ).toEqual({
+        ok: false,
+        error: expect.stringContaining("invalid utcOffset"),
+      });
+    },
+  );
+
+  it("resolveDateRange prefers a valid IANA timezone over an invalid utcOffset", () => {
+    const range = expectDateRange(
       testApi.resolveDateRange({
         startDate: "2026-02-01",
         endDate: "2026-02-02",
         mode: "specific",
-      }),
-    );
-    const invalidOffset = expectDateRange(
-      testApi.resolveDateRange({
-        startDate: "2026-02-01",
-        endDate: "2026-02-02",
-        mode: "specific",
+        timeZone: "America/New_York",
         utcOffset: "UTC+14:30",
       }),
     );
-    expect(missingOffset.startMs).toBe(Date.UTC(2026, 1, 1));
-    expect(missingOffset.endMs).toBe(Date.UTC(2026, 1, 2) + dayMs - 1);
-    expect(invalidOffset.startMs).toBe(Date.UTC(2026, 1, 1));
-    expect(invalidOffset.endMs).toBe(Date.UTC(2026, 1, 2) + dayMs - 1);
+    expect(range.startMs).toBe(Date.UTC(2026, 1, 1, 5));
+    expect(range.endMs).toBe(Date.UTC(2026, 1, 3, 5) - 1);
+  });
+
+  it("resolveDateRange reports invalid timeZone before an unusable utcOffset", () => {
+    expect(
+      testApi.resolveDateRange({
+        startDate: "2026-02-01",
+        endDate: "2026-02-02",
+        mode: "specific",
+        timeZone: "Invalid/Timezone",
+        utcOffset: "UTC+14:30",
+      }),
+    ).toEqual({
+      ok: false,
+      error: "invalid timeZone: expected a valid IANA time zone",
+    });
   });
 
   it("resolveDateRange uses specific offset for today/day math after UTC midnight", () => {

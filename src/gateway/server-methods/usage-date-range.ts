@@ -182,6 +182,20 @@ export const resolveDateInterpretation = (params: {
     if (utcOffsetMinutes !== undefined) {
       return { ok: true, value: { mode: "utc-offset", utcOffsetMinutes } };
     }
+    // Explicit but unparseable utcOffset must not fall through to UTC day
+    // buckets. Omitted or blank offset remains UTC for compatibility.
+    // Removing this would return a successful cost query for an unrelated range.
+    const explicitOffset = params.utcOffset;
+    if (
+      explicitOffset !== undefined &&
+      explicitOffset !== null &&
+      !(typeof explicitOffset === "string" && explicitOffset.trim() === "")
+    ) {
+      return {
+        ok: false,
+        error: "invalid utcOffset: expected a valid UTC offset (UTC±H, UTC±HH, or UTC±HH:MM)",
+      };
+    }
   }
   // Backward compatibility: when mode is missing (or invalid), keep current UTC interpretation.
   return { ok: true, value: { mode: "utc" } };
