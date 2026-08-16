@@ -11,7 +11,6 @@ import {
   buildApprovalReactionPromptPayloadForRequest,
   buildApprovalReactionHint,
   createApprovalReactionTargetStore,
-  extractApprovalReactionPromptBinding,
   listApprovalReactionBindings,
   normalizeApprovalReactionEmoji,
   readApprovalReactionDecisionList,
@@ -89,32 +88,6 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     for (const invalid of [[], ["allow-once", "allow-once"], ["always"], "deny"]) {
       expect(readApprovalReactionDecisionList(invalid)).toBeNull();
     }
-  });
-
-  it("extracts only canonical approval prompts and preserves strict reply-only channels", () => {
-    const text = [
-      "**Plugin approval required**",
-      "**ID:** plugin:approval-123",
-      "Allow Once: /approve plugin:approval-123 allow-once",
-      "Reply with: /approve plugin:approval-123 deny|always",
-    ].join("\n");
-    expect(extractApprovalReactionPromptBinding({ text })).toEqual({
-      approvalId: "plugin:approval-123",
-      approvalKind: "plugin",
-      allowedDecisions: ["allow-once", "deny", "allow-always"],
-    });
-    expect(
-      extractApprovalReactionPromptBinding({
-        text,
-        approvalKind: "plugin",
-        replyInstructionOnly: true,
-      }),
-    ).toMatchObject({ allowedDecisions: ["deny", "allow-always"] });
-    expect(
-      extractApprovalReactionPromptBinding({
-        text: "Helpful example:\n/approve plugin:approval-123 allow-once",
-      }),
-    ).toBeNull();
   });
 
   it("fails closed when typed approval presentation or delivery marker disagrees", () => {

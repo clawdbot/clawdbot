@@ -23,7 +23,6 @@ import type { ReplyPayload } from "./reply-payload.js";
 export { shouldSuppressLocalNativeExecApprovalPrompt } from "./approval-native-helpers.js";
 export {
   approvalReactionDecisionSetsMatch,
-  extractApprovalReactionPromptBinding,
   normalizeApprovalReactionDecision,
   readApprovalReactionDecisionList,
   readApprovalReactionDeliveredBinding,
