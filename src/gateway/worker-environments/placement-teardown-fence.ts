@@ -27,7 +27,7 @@ type WorkerWorkspaceOwnerIdentity = {
   placementGeneration: number;
 };
 
-export type WorkerPendingResultOwnerIdentity = WorkerWorkspaceOwnerIdentity & {
+type WorkerPendingResultOwnerIdentity = WorkerWorkspaceOwnerIdentity & {
   claimId: string;
   runId: string;
 };
@@ -57,7 +57,7 @@ function appendGrouped<K, V>(groups: Map<K, V[]>, key: K, value: V): void {
   groups.set(key, [value]);
 }
 
-export function classifyPendingWorkspaceResultOwner(
+function classifyPendingWorkspaceResultOwner(
   placement: WorkerSessionPlacementRecord | undefined,
   pending: WorkerPendingResultOwnerIdentity,
 ): WorkerEnvironmentTeardownFence["ownerState"] | undefined {

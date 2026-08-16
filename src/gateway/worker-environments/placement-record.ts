@@ -23,7 +23,7 @@ export type WorkerSessionTurnClaim = {
   owner: WorkerSessionTurnOwner;
 };
 
-export type WorkerWorkspaceResultClaimIdentity = {
+type WorkerWorkspaceResultClaimIdentity = {
   sessionId: string;
   environmentId: string;
   ownerEpoch: number;

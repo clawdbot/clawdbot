@@ -58,7 +58,7 @@ export type PlacementRecoveryDeps = {
   }) => Promise<WorkerWorkspaceResultConflict | undefined>;
 };
 
-export type WorkerWorkspaceRecoveryTunnelStarter = (
+type WorkerWorkspaceRecoveryTunnelStarter = (
   request: WorkerTunnelRequest,
   authorizePendingResult: () => boolean,
 ) => Promise<WorkerWorkspaceRecoveryTunnelHandle>;
