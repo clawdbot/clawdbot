@@ -32,6 +32,7 @@ import { readToolSearchRequest } from "./tool-search-request.js";
 import {
   formatToolSearchControlError,
   formatToolSearchControlResult,
+  prepareToolSearchDispatcherArguments,
   readToolSearchCallArgs,
   readToolSearchId,
   ToolSearchRuntime,
@@ -370,6 +371,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       parameters: Type.Object({
         id: Type.String({ description: "Tool search result id or tool name." }),
       }),
+      prepareArguments: prepareToolSearchDispatcherArguments,
       execute: async (_toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> =>
         jsonResult(await runtime.describe(readToolSearchId(args))),
     },
@@ -383,6 +385,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
           Type.Record(Type.String(), Type.Unknown(), { description: "Tool input." }),
         ),
       }),
+      prepareArguments: prepareToolSearchDispatcherArguments,
       execute: async (
         toolCallId: string,
         args: unknown,

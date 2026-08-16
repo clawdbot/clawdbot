@@ -4139,6 +4139,33 @@ describe("prepareCliRunContext", () => {
     expect(context.reusableCliSession).toEqual(testCase.expected);
   });
 
+  it("preserves a Claude native-control resume when the local transcript is absent", async () => {
+    setCliBackendForPrepareTest();
+    const transcriptCheck = vi.fn(async () => false);
+    const orphanCheck = vi.fn(async () => true);
+    setCliRunnerPrepareTestDeps({
+      claudeCliSessionTranscriptHasContent: transcriptCheck,
+      claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+    });
+
+    const context = await fixture.prepare({
+      sessionKey: "agent:main:telegram:direct:peer",
+      prompt: "/compact",
+      provider: "claude-cli",
+      model: "opus",
+      cliSessionBinding: { sessionId: "native-claude-session" },
+      cliSessionId: "native-claude-session",
+      controlOperation: "compact",
+    });
+
+    expect(transcriptCheck).not.toHaveBeenCalled();
+    expect(orphanCheck).not.toHaveBeenCalled();
+    expect(context.reusableCliSession).toEqual({
+      mode: "reuse",
+      sessionId: "native-claude-session",
+    });
+  });
+
   it("arms raw-transcript reseed for a missing claude-cli transcript so prior conversation is redelivered", async () => {
     const recoveredAt = "2020-01-02T03:04:05.000Z";
     fixture.appendTranscript({

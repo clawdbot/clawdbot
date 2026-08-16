@@ -1221,7 +1221,7 @@ export const handleNodeEvent = async (
       }
     }
     default:
-      return undefined;
+      return { ok: true, event: evt.event, handled: false, reason: "unsupported_event" };
   }
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

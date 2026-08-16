@@ -206,7 +206,6 @@ function fingerprintPreparedExtraParamsModel(model?: ProviderRuntimeModel): unkn
   if (!model) {
     return null;
   }
-  const record = model as unknown as Record<string, unknown>;
   return {
     api: model.api,
     provider: model.provider,
@@ -216,10 +215,10 @@ function fingerprintPreparedExtraParamsModel(model?: ProviderRuntimeModel): unkn
     reasoning: model.reasoning,
     input: model.input,
     cost: model.cost,
-    compat: record.compat ?? null,
+    compat: Reflect.get(model, "compat") ?? null,
     contextWindow: model.contextWindow,
     contextTokens: model.contextTokens ?? null,
-    headers: record.headers ?? null,
+    headers: Reflect.get(model, "headers") ?? null,
     maxTokens: model.maxTokens,
     maxTokensSource: model.maxTokensSource ?? null,
     params: model.params ?? null,

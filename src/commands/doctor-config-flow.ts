@@ -238,7 +238,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
   if (snapshot.exists && rosterMigrationNeeded && !includeOwnsRoster) {
     // Runtime roster normalization is read-only; doctor --fix owns persistence.
-    const migrated = migratePersistedImplicitMainRoster(state.candidate).config as OpenClawConfig;
+    // Persist the legacy owner's workspace in doctor's canonical candidate. The writer may run
+    // again after health repairs, when the retired owner marker is no longer available to recover it.
+    const migrated = migratePersistedImplicitMainRoster(state.candidate, {
+      materializeWorkspace: true,
+    }).config as OpenClawConfig;
     const migratedRoster = readAgentRosterProperty(migrated);
     const migratedEntries = migratedRoster?.kind === "entries" ? migratedRoster.value : undefined;
     const { list: _legacyList, ...candidateAgents } = migrated.agents ?? {};

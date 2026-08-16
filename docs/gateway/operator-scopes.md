@@ -155,7 +155,8 @@ that asks for a broader role or broader scopes creates a new pending upgrade
 request.
 
 A connected limited Control UI can file that same pending request through its
-**Request admin** banner without attempting a broader reconnect. The request is
+**Request admin** banner without attempting a broader reconnect. The banner can
+collapse into a persistent **Limited access** chip that reopens the action. The request is
 bound to the signed device identity on the live connection. Approval still
 comes from `device.pair.approve` and therefore requires `operator.pairing` plus
 authority for every requested scope. After approval rotates the operator token,

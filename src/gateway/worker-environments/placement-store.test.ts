@@ -9,6 +9,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
+import type { WorkerPlacementExecutionMode } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
@@ -38,8 +39,11 @@ describe("worker session placement store", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  function advanceToActive(identity: WorkerSessionPlacementIdentity = SESSION) {
-    let placement = store.startDispatch(identity);
+  function advanceToActive(
+    identity: WorkerSessionPlacementIdentity = SESSION,
+    executionMode: WorkerPlacementExecutionMode = "worker-turn",
+  ) {
+    let placement = store.startDispatch({ ...identity, executionMode });
     placement = store.transition({
       sessionId: identity.sessionId,
       from: "requested",
@@ -145,6 +149,10 @@ describe("worker session placement store", () => {
       terminalReason: "workspace synchronization failed",
       terminalAtMs: 1_000,
     });
+    database.db
+      .prepare("UPDATE worker_session_placements SET execution_mode = NULL WHERE session_id = ?")
+      .run(SESSION.sessionId);
+    expect(store.get(SESSION.sessionId)).toMatchObject({ executionMode: "worker-turn" });
   });
 
   it("requires each placement phase to persist its complete metadata", () => {
@@ -526,6 +534,37 @@ describe("worker session placement store", () => {
       localIdentity.sessionId,
       SESSION.sessionId,
     ]);
+  });
+
+  it("fences remote-exec local claims and clears them after restart", () => {
+    const active = advanceToActive(SESSION, "remote-exec");
+    const placementOwner = {
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+    };
+    expect(() =>
+      store.claimTurn({
+        ...SESSION,
+        owner: { kind: "worker", ...placementOwner },
+        claimId: "remote-worker-claim",
+        runId: "remote-worker-run",
+      }),
+    ).toThrow("stale owner");
+    const claim = store.claimTurn({
+      ...SESSION,
+      owner: { kind: "local", ...placementOwner },
+      claimId: "remote-local-claim",
+      runId: "remote-local-run",
+    });
+    expect(store.validateTurnClaim(claim)).toBe(true);
+
+    closeOpenClawStateDatabaseForTest();
+    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
+
+    expect(store.clearLocalTurnClaimsAfterRestart()).toBe(1);
+    expect(store.get(SESSION.sessionId)).toMatchObject({ state: "active", turnClaim: null });
+    expect(store.validateTurnClaim(claim)).toBe(false);
   });
 
   it("closes worker admission before draining the active turn", async () => {

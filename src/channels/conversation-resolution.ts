@@ -19,7 +19,6 @@ import { normalizeConversationTargetRef } from "../infra/outbound/session-bindin
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "./plugins/index.js";
-import { resolveExplicitDeliveryTargetCompat } from "./plugins/target-parsing-loaded.js";
 import {
   resolveBundledChannelThreadBindingDefaultPlacement,
   resolveBundledChannelThreadBindingInboundConversation,
@@ -252,18 +251,6 @@ function resolveChannelTargetId(params: {
       preserveExplicitTopicSuffix: params.preserveExplicitTopicSuffix,
     });
     return conversationId || withoutProvider || normalizedTarget;
-  }
-
-  const parsedTarget = resolveExplicitDeliveryTargetCompat({
-    channel: params.channel,
-    rawTarget: target,
-  });
-  if (parsedTarget?.to) {
-    return (
-      resolveConversationIdFromTargets({
-        targets: [parsedTarget.to],
-      }) ?? parsedTarget.to
-    );
   }
 
   return target;

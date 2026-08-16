@@ -5,10 +5,14 @@ import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-i
 import type { WorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   isPrivateNodeInvokeCommand,
-  NODE_WORKER_SUPERVISOR_COMMANDS,
+  NODE_WORKER_PRIVATE_COMMANDS,
+  NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
 } from "../infra/node-commands.js";
 import {
+  NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE,
+  type NodeRunnerInventoryIssue,
   type NodeRunnerInventoryDeclaration,
 } from "../infra/node-runner-inventory.js";
 import { sameWorkerBuild, sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
@@ -61,7 +65,7 @@ type NodeInvokeParams = {
   isDispatchAuthorized?: () => boolean;
 };
 
-type NodeWorkerSupervisorCommand = (typeof NODE_WORKER_SUPERVISOR_COMMANDS)[number];
+type NodeWorkerPrivateCommand = (typeof NODE_WORKER_PRIVATE_COMMANDS)[number];
 
 export type NodeWorkerSupervisorNodeProof = {
   nodeId: string;
@@ -71,15 +75,20 @@ export type NodeWorkerSupervisorNodeProof = {
   clientId: typeof GATEWAY_CLIENT_IDS.NODE_HOST;
   clientMode: "node";
   protocolFeature: typeof NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE;
+  /** Node-local session-host claim from the connection handshake; never execution authority. */
+  workerBuild?: WorkerAdmissionHandshake;
+  /** Transient launch capacity declaration; omitted while the node is full. */
   workerRuns?: WorkerAdmissionHandshake;
   commands: readonly string[];
 };
 
 export type NodeWorkerSupervisorTransport = {
   listCurrentNodes(): Promise<readonly NodeWorkerSupervisorNodeProof[]>;
+  getIssue?(nodeId: string): NodeRunnerInventoryIssue | undefined;
+  isCurrent(node: NodeWorkerSupervisorNodeProof, requireLaunchEligibility?: boolean): boolean;
   invoke(params: {
     node: NodeWorkerSupervisorNodeProof;
-    command: NodeWorkerSupervisorCommand;
+    command: NodeWorkerPrivateCommand;
     params?: unknown;
     timeoutMs?: number;
     signal?: AbortSignal;
@@ -91,7 +100,7 @@ export type NodeWorkerSupervisorTransport = {
 
 type NodeRunnerInventoryRecord = Omit<
   NodeWorkerSupervisorNodeProof,
-  "commands" | "pairingGeneration" | "workerRuns"
+  "commands" | "pairingGeneration" | "protocolFeature" | "workerBuild" | "workerRuns"
 > & {
   protocolFeatures: readonly string[];
   workerRuns?: WorkerAdmissionHandshake;
@@ -195,6 +204,13 @@ function sameOptionalWorkerBuild(
   return left === undefined || right === undefined ? left === right : sameWorkerBuild(left, right);
 }
 
+function sameOptionalWorkerRuns(
+  left: WorkerAdmissionHandshake | undefined,
+  right: WorkerAdmissionHandshake | undefined,
+): boolean {
+  return sameOptionalWorkerBuild(left, right) && left?.bundlePrewarm === right?.bundlePrewarm;
+}
+
 function resolveWorkerSupervisorProof(
   node: NodeRegistryPrivateSession,
   runnerInventoryByConn: ReadonlyMap<string, NodeRunnerInventoryRecord>,
@@ -210,7 +226,6 @@ function resolveWorkerSupervisorProof(
     declaration.pairingIdentity !== node.pairingIdentity ||
     declaration.clientId !== node.clientId ||
     declaration.clientMode !== node.clientMode ||
-    declaration.protocolFeature !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE ||
     !declaration.protocolFeatures.includes(NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE) ||
     (declaration.workerRuns !== undefined &&
       !sameOptionalWorkerBuild(declaration.workerRuns, node.workerRuns))
@@ -225,14 +240,33 @@ function resolveWorkerSupervisorProof(
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: "node",
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+    ...(node.workerRuns ? { workerBuild: structuredClone(node.workerRuns) } : {}),
     ...(declaration.workerRuns ? { workerRuns: structuredClone(declaration.workerRuns) } : {}),
     commands: [...node.commands],
   };
 }
 
+function resolveNodeRunnerIssue(
+  node: NodeRegistryPrivateSession,
+  runnerInventoryByConn: ReadonlyMap<string, NodeRunnerInventoryRecord>,
+): NodeRunnerInventoryIssue | undefined {
+  const declaration = runnerInventoryByConn.get(node.connId);
+  return declaration &&
+    node.client.invalidated !== true &&
+    declaration.nodeId === node.nodeId &&
+    declaration.pairingIdentity === node.pairingIdentity &&
+    declaration.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
+    declaration.clientMode === "node" &&
+    declaration.protocolFeatures.length === 1 &&
+    declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE
+    ? NODE_RUNNER_UPDATE_REQUIRED_ISSUE
+    : undefined;
+}
+
 function isWorkerSupervisorProofCurrent(
   state: NodeRegistryPrivateState,
   proof: NodeWorkerSupervisorNodeProof,
+  requireLaunchEligibility: boolean,
 ): boolean {
   const node = state.context.getNode(proof.nodeId);
   if (!node || node.client.invalidated === true || node.connId !== proof.connId) {
@@ -245,7 +279,11 @@ function isWorkerSupervisorProofCurrent(
     current.clientId === proof.clientId &&
     current.clientMode === proof.clientMode &&
     current.protocolFeature === proof.protocolFeature &&
-    sameOptionalWorkerBuild(current.workerRuns, proof.workerRuns)
+    sameOptionalWorkerBuild(current.workerBuild, proof.workerBuild) &&
+    (!requireLaunchEligibility ||
+      (current.workerRuns !== undefined &&
+        proof.workerRuns !== undefined &&
+        sameOptionalWorkerRuns(current.workerRuns, proof.workerRuns)))
   );
 }
 
@@ -258,9 +296,7 @@ function updateWorkerRunnerInventory(
   },
 ): NodeRunnerInventoryUpdateResult | null {
   const node = state.context.getNode(params.nodeId);
-  const publishesSupervisorDialect = params.declaration.protocolFeatures.some(
-    (feature) => feature === NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-  );
+  const publishesRunnerDialect = params.declaration.protocolFeatures.length === 1;
   if (
     !node ||
     node.client.invalidated === true ||
@@ -271,7 +307,7 @@ function updateWorkerRunnerInventory(
     return null;
   }
   const previous = state.runnerInventoryByConn.get(node.connId);
-  if (!publishesSupervisorDialect) {
+  if (!publishesRunnerDialect) {
     const changed = state.runnerInventoryByConn.delete(node.connId);
     if (changed) {
       state.context.publishActiveNodeContext();
@@ -285,7 +321,6 @@ function updateWorkerRunnerInventory(
     pairingIdentity: node.pairingIdentity,
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: "node",
-    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
     protocolFeatures: [...params.declaration.protocolFeatures],
     ...(params.declaration.workerRuns
       ? { workerRuns: structuredClone(params.declaration.workerRuns) }
@@ -294,7 +329,7 @@ function updateWorkerRunnerInventory(
   const changed =
     !previous ||
     !sameWorkerProtocolFeatures(previous.protocolFeatures, next.protocolFeatures) ||
-    !sameOptionalWorkerBuild(previous.workerRuns, next.workerRuns);
+    !sameOptionalWorkerRuns(previous.workerRuns, next.workerRuns);
   if (changed) {
     state.runnerInventoryByConn.set(node.connId, next);
     state.context.publishActiveNodeContext();
@@ -480,15 +515,26 @@ export function registerNodeRegistryPrivateRuntime(
         return proof ? [proof] : [];
       });
     },
+    getIssue: (nodeId) => {
+      const node = context.getNode(nodeId);
+      return node ? resolveNodeRunnerIssue(node, state.runnerInventoryByConn) : undefined;
+    },
+    isCurrent: (node, requireLaunchEligibility = false) =>
+      isWorkerSupervisorProofCurrent(state, node, requireLaunchEligibility),
     invoke: async (params) => {
-      if (!NODE_WORKER_SUPERVISOR_COMMANDS.includes(params.command)) {
+      if (!NODE_WORKER_PRIVATE_COMMANDS.includes(params.command)) {
         return {
           ok: false,
           error: { code: "INVALID_REQUEST", message: "private node command is not allowed" },
         };
       }
       const isProofCurrent = () =>
-        params.isDispatchAuthorized() && isWorkerSupervisorProofCurrent(state, params.node);
+        params.isDispatchAuthorized() &&
+        isWorkerSupervisorProofCurrent(
+          state,
+          params.node,
+          params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+        );
       if (!isProofCurrent()) {
         return {
           ok: false,
@@ -595,6 +641,35 @@ export function isNodeRunnerSessionHost(params: {
   const proof = resolveWorkerSupervisorProof(node, state.runnerInventoryByConn);
   return Boolean(
     proof && proof.pairingGeneration === params.pairingGeneration && proof.workerRuns !== undefined,
+  );
+}
+
+function getNodeRunnerInventoryIssue(params: {
+  registry: object;
+  nodeId: string;
+  connId: string;
+}): NodeRunnerInventoryIssue | undefined {
+  const state = NODE_REGISTRY_PRIVATE_STATES.get(params.registry);
+  const node = state?.context.getNode(params.nodeId);
+  return state && node?.connId === params.connId
+    ? resolveNodeRunnerIssue(node, state.runnerInventoryByConn)
+    : undefined;
+}
+
+/** Shared node/environments read-projection shape: nodeId -> runner issues. */
+export function collectNodeRunnerIssuesByNodeId(
+  registry: object,
+  connectedNodes: ReadonlyArray<{ nodeId: string; connId: string }>,
+): Map<string, NodeRunnerInventoryIssue[]> {
+  return new Map(
+    connectedNodes.flatMap((node) => {
+      const issue = getNodeRunnerInventoryIssue({
+        registry,
+        nodeId: node.nodeId,
+        connId: node.connId,
+      });
+      return issue ? [[node.nodeId, [issue]] as const] : [];
+    }),
   );
 }
 

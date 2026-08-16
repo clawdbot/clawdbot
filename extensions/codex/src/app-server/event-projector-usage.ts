@@ -16,7 +16,7 @@ function readCodexThreadTokenUsage(params: JsonObject): ReturnType<typeof normal
   return last ? normalizeCodexThreadTokenUsage(last) : undefined;
 }
 
-function readCodexThreadContextSnapshot(params: JsonObject): {
+export function readCodexThreadContextSnapshot(params: JsonObject): {
   activeContextTokens?: number;
   cachedInputTokens?: number;
   cacheWriteInputTokens?: number;

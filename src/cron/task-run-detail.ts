@@ -262,12 +262,12 @@ export function cronTaskRecordToScriptRunResult(
 
 /** Maps the cron outcome vocabulary onto generic task terminal states. */
 export function cronRunStatusToTaskStatus(
-  entry: CronRunLogEntry,
+  entry: Pick<CronRunLogEntry, "status" | "error"> & Partial<CronRunLogEntry>,
 ): Extract<TaskStatus, "succeeded" | "failed" | "timed_out"> {
-  if (entry.status === "ok" || entry.status === "skipped") {
+  if (entry.status === "ok") {
     return "succeeded";
   }
-  return isCronTimeoutErrorText(entry.error) ? "timed_out" : "failed";
+  return entry.status === "error" && isCronTimeoutErrorText(entry.error) ? "timed_out" : "failed";
 }
 
 /** Reconstructs the unchanged CronRunLogEntry wire shape from a cron task row. */

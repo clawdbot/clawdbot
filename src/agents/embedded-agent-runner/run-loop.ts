@@ -356,31 +356,42 @@ export async function runPreparedEmbeddedLoop(
         runLoopIterations: runRetryBudget.attemptsCounted,
         maxRunLoopIterations: runRetryBudget.maxAttempts,
       });
-      const dispatch = await prepareAndDispatchEmbeddedRunAttempt({
-        runInput: admittedRunInput,
-        preparedRuntime,
-        contextEngine,
-        sessionPromptState,
-        terminalRetryState,
-        replayState: accumulatedReplayState,
-        provider,
-        modelId,
-        startupStagesEmitted,
-        bootstrapPromptWarningSignaturesSeen,
-        resolveRuntimeFallbackReason,
-        observeToolOutcome,
-        isTurnTainted: turnTaintState.isTainted,
-        allocateToolOutcomeOrdinal: terminalToolPresentation.allocateOrdinal,
-        getPostCompactionAbortError: () => postCompactionAbortError,
-        setPostCompactionAbortController: (controller) => {
-          postCompactionAbortController = controller;
-        },
-        clearPostCompactionAbortController: (controller) => {
-          if (postCompactionAbortController === controller) {
-            postCompactionAbortController = undefined;
-          }
-        },
-      });
+      let dispatch: Awaited<ReturnType<typeof prepareAndDispatchEmbeddedRunAttempt>>;
+      try {
+        dispatch = await prepareAndDispatchEmbeddedRunAttempt({
+          runInput: admittedRunInput,
+          preparedRuntime,
+          contextEngine,
+          sessionPromptState,
+          terminalRetryState,
+          replayState: accumulatedReplayState,
+          provider,
+          modelId,
+          startupStagesEmitted,
+          bootstrapPromptWarningSignaturesSeen,
+          resolveRuntimeFallbackReason,
+          observeToolOutcome,
+          isTurnTainted: turnTaintState.isTainted,
+          allocateToolOutcomeOrdinal: terminalToolPresentation.allocateOrdinal,
+          getPostCompactionAbortError: () => postCompactionAbortError,
+          setPostCompactionAbortController: (controller) => {
+            postCompactionAbortController = controller;
+          },
+          clearPostCompactionAbortController: (controller) => {
+            if (postCompactionAbortController === controller) {
+              postCompactionAbortController = undefined;
+            }
+          },
+        });
+      } catch (error) {
+        const retryTrace = await failoverRetryController.recoverThrownHarnessAuthFailure(error);
+        if (!retryTrace) {
+          throw error;
+        }
+        traceAttempts.push(retryTrace);
+        lastRetryFailoverReason = retryTrace.reason;
+        continue;
+      }
       startupStagesEmitted = dispatch.startupStagesEmitted;
       const { dispatchedAttempt, runtimePlan } = dispatch;
       mcpAttemptCarryover.apply(dispatchedAttempt.rawAttempt);

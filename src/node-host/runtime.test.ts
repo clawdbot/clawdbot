@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => {
   return {
     closeMcp,
     closeWorkerSupervisor: vi.fn(async () => undefined),
+    initializeWorkerSupervisor: vi.fn(async () => undefined),
     handleInvoke: vi.fn(async () => undefined),
     progressStartHeartbeats: vi.fn(),
     progressWrite: vi.fn(async () => undefined),
@@ -45,7 +46,28 @@ vi.mock("./node-invoke-progress.js", () => ({
 }));
 
 vi.mock("./node-worker-supervisor.js", () => ({
-  createNodeWorkerSupervisor: vi.fn(() => ({ close: mocks.closeWorkerSupervisor })),
+  createNodeWorkerSupervisor: vi.fn(() => ({
+    initialize: mocks.initializeWorkerSupervisor,
+    close: mocks.closeWorkerSupervisor,
+  })),
+}));
+
+vi.mock("./node-worker-build.js", () => ({
+  resolveNodeWorkerInstallation: vi.fn(async () => ({
+    packageRoot: "/tmp/openclaw-node-worker",
+    revalidateBuild: vi.fn(async () => true),
+    build: {
+      bundleHash: "a".repeat(64),
+      openclawVersion: "2026.8.1",
+      protocolFeatures: [],
+    },
+  })),
+}));
+
+vi.mock("./node-worker-workspace.js", () => ({
+  NodeWorkerWorkspaceRuntime: class {
+    readonly exec = vi.fn();
+  },
 }));
 
 vi.mock("./plugin-node-host.js", () => ({
@@ -75,13 +97,15 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.closeMcp.mockResolvedValue(undefined);
   mocks.closeWorkerSupervisor.mockResolvedValue(undefined);
+  mocks.initializeWorkerSupervisor.mockResolvedValue(undefined);
 });
 
 async function startRuntime() {
   const prepared = await prepareNodeHostRuntime({
-    config: { nodeHost: { skills: { enabled: false } } },
+    config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
     env: { PATH: "/usr/bin" },
     enableAgentRuns: true,
+    enableWorkerRuns: true,
   });
   return prepared.start({
     client: { request: vi.fn(async () => ({ bins: [] })) } as unknown as NodeHostClient,
@@ -114,6 +138,18 @@ function holdInvoke() {
     release: () => release?.(),
   };
 }
+
+describe("node-host worker manifest", () => {
+  it("advertises the supported bundle prewarm form from the node build", async () => {
+    const prepared = await prepareNodeHostRuntime({
+      config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
+      env: { PATH: "/usr/bin" },
+      enableWorkerRuns: true,
+    });
+
+    expect(prepared.manifest.workerRuns).toMatchObject({ bundlePrewarm: 1 });
+  });
+});
 
 describe("node-host invocation cancellation", () => {
   it("cancels ordinary node invocations", async () => {

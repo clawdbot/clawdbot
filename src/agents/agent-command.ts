@@ -591,6 +591,7 @@ async function agentCommandWithAdmissionIngress(
     opts,
     runtime,
     deps,
+    operatorAuthority: admissionIngress.kind === "local-cli",
     run: async (prepared, resolvedDeps) =>
       await agentCommandInternal(prepared, prepared.opts, admissionIngress, runtime, resolvedDeps),
   });

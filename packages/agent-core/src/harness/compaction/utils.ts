@@ -1,18 +1,28 @@
 import type { AssistantMessage, Message } from "@openclaw/llm-core";
-// Agent Core helper module supports utils behavior.
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../types.js";
 import type { FileOperations } from "../types.js";
 
 export type { FileOperations } from "../types.js";
 
+function normalizeFileToolName(value: unknown): string {
+  const name = typeof value === "string" ? value.toLowerCase() : "";
+  const separator = name.indexOf("__", name.startsWith("mcp__") ? 5 : 0);
+  return separator < 0 ? name : name.slice(separator + 2);
+}
+
+function addFilePaths(target: Set<string>, value: unknown): void {
+  for (const path of Array.isArray(value) ? value : []) {
+    if (typeof path === "string") {
+      target.add(path);
+    }
+  }
+}
+
 /** Create an empty file-operation accumulator. */
 export function createFileOps(): FileOperations {
-  return {
-    read: new Set(),
-    written: new Set(),
-    edited: new Set(),
-  };
+  return { read: new Set(), written: new Set(), edited: new Set() };
 }
 
 /** Restore file metadata recorded by an earlier compaction or branch summary. */
@@ -20,45 +30,42 @@ export function mergeSummaryFileOperations(
   fileOps: FileOperations,
   details: { readFiles: string[]; modifiedFiles: string[] },
 ): void {
-  for (const path of Array.isArray(details.readFiles) ? details.readFiles : []) {
-    fileOps.read.add(path);
-  }
-  for (const path of Array.isArray(details.modifiedFiles) ? details.modifiedFiles : []) {
-    fileOps.edited.add(path);
-  }
+  addFilePaths(fileOps.read, details.readFiles);
+  addFilePaths(fileOps.edited, details.modifiedFiles);
 }
 
-/** Add file operations from assistant tool calls to an accumulator. */
+/** Add file operations from tool calls and results to an accumulator. */
 export function extractFileOpsFromMessage(message: AgentMessage, fileOps: FileOperations): void {
-  if (message.role !== "assistant") {
-    return;
-  }
-  if (!("content" in message) || !Array.isArray(message.content)) {
+  if (message.role === "toolResult") {
+    if (normalizeFileToolName(message.toolName) !== "apply_patch") {
+      return;
+    }
+    for (const result of [message, ...(Array.isArray(message.content) ? message.content : [])]) {
+      const details = asRecord(asRecord(result)?.details);
+      const summary = asRecord(details?.summary);
+      addFilePaths(fileOps.written, summary?.added);
+      addFilePaths(fileOps.edited, summary?.modified);
+    }
+    // Deleted paths no longer exist for a continuation to inspect, so omit them.
     return;
   }
 
+  if (message.role !== "assistant" || !Array.isArray(message.content)) {
+    return;
+  }
   for (const block of message.content) {
-    if (typeof block !== "object" || block === null) {
+    const toolCall = asRecord(block);
+    if (toolCall?.type !== "toolCall") {
       continue;
     }
-    if (!("type" in block) || block.type !== "toolCall") {
-      continue;
-    }
-    if (!("arguments" in block) || !("name" in block)) {
-      continue;
-    }
-
-    const args = block.arguments as Record<string, unknown> | undefined;
-    if (!args) {
-      continue;
-    }
-
-    const path = typeof args.path === "string" ? args.path : undefined;
+    const args = asRecord(toolCall.arguments);
+    const path = [args?.path, args?.file_path, args?.filePath].find(
+      (value): value is string => typeof value === "string",
+    );
     if (!path) {
       continue;
     }
-
-    switch (block.name) {
+    switch (normalizeFileToolName(toolCall.name)) {
       case "read":
         fileOps.read.add(path);
         break;
@@ -85,17 +92,11 @@ export function computeFileLists(fileOps: FileOperations): {
 
 /** Format file lists as summary metadata tags. */
 export function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
-  const sections: string[] = [];
-  if (readFiles.length > 0) {
-    sections.push(`<read-files>\n${readFiles.join("\n")}\n</read-files>`);
-  }
-  if (modifiedFiles.length > 0) {
-    sections.push(`<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>`);
-  }
-  if (sections.length === 0) {
-    return "";
-  }
-  return `\n\n${sections.join("\n\n")}`;
+  const sections = [
+    readFiles.length ? `<read-files>\n${readFiles.join("\n")}\n</read-files>` : "",
+    modifiedFiles.length ? `<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>` : "",
+  ].filter(Boolean);
+  return sections.length ? `\n\n${sections.join("\n\n")}` : "";
 }
 
 /** Extract visible summary text without normalizing valid model output. */
@@ -125,14 +126,13 @@ function truncateForSummary(text: string, maxChars: number): string {
   }
   const tailChars = Math.min(Math.floor(maxChars * 0.3), 600);
   const diagnosticSearch = sliceUtf16Safe(text, -maxChars);
-  const diagnosticMatches = Array.from(
-    diagnosticSearch.matchAll(new RegExp(IMPORTANT_TOOL_RESULT_TAIL.source, "gi")),
-  );
+  const diagnosticMatches = [
+    ...diagnosticSearch.matchAll(new RegExp(IMPORTANT_TOOL_RESULT_TAIL.source, "gi")),
+  ];
   const diagnosticMatch =
-    diagnosticMatches
-      .toReversed()
-      .find((match) => /^(error|exception|fatal|panic|errno)$/i.test(match[0])) ??
-    diagnosticMatches.at(-1);
+    diagnosticMatches.findLast((match) =>
+      /^(error|exception|fatal|panic|errno)$/i.test(match[0]),
+    ) ?? diagnosticMatches.at(-1);
   if (diagnosticMatch) {
     const head = truncateUtf16Safe(text, maxChars - tailChars);
     const displacedHead = sliceUtf16Safe(text, Math.max(0, head.length - 32), maxChars);
@@ -164,16 +164,16 @@ export function getCompactionContentBlockText(block: {
   content?: unknown;
   text?: string;
 }): string {
-  if (block.type === "text" && block.text) {
+  if (
+    (block.type === "text" || block.type === "toolResult" || block.type === "tool_result") &&
+    block.text
+  ) {
     return block.text;
   }
-  if (block.type !== "toolResult" && block.type !== "tool_result") {
-    return "";
-  }
-  if (block.text) {
-    return block.text;
-  }
-  return typeof block.content === "string" ? block.content : "";
+  return (block.type === "toolResult" || block.type === "tool_result") &&
+    typeof block.content === "string"
+    ? block.content
+    : "";
 }
 
 /** Serialize LLM messages to plain text for summarization prompts. */
@@ -185,10 +185,7 @@ export function serializeConversation(messages: Message[]): string {
       const content =
         typeof msg.content === "string"
           ? msg.content
-          : msg.content
-              .filter((c): c is { type: "text"; text: string } => c.type === "text")
-              .map((c) => c.text)
-              .join("");
+          : msg.content.map(getCompactionContentBlockText).join("");
       if (content) {
         parts.push(`[User]: ${content}`);
       }
@@ -203,8 +200,7 @@ export function serializeConversation(messages: Message[]): string {
         } else if (block.type === "thinking") {
           thinkingParts.push(block.thinking);
         } else if (block.type === "toolCall") {
-          const args = block.arguments;
-          const argsStr = Object.entries(args)
+          const argsStr = Object.entries(block.arguments)
             .map(([k, v]) => `${k}=${stringifyCompactionValue(v)}`)
             .join(", ");
           toolCalls.push(`${block.name}(${argsStr})`);

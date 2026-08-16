@@ -283,6 +283,7 @@ export type AgentsListResult = ProtocolAgentsListResult;
 export type AgentIdentityResult = {
   agentId: string;
   name: string;
+  nameSource?: "config" | "agent" | "workspace" | "default";
   avatar: string;
   avatarSource?: string | null;
   avatarStatus?: "none" | "local" | "remote" | "data" | null;
@@ -431,6 +432,7 @@ type SessionCompactionCheckpointPreview = Pick<
 
 export type GatewaySessionRow = SessionRow & {
   placement?: import("../../../packages/gateway-protocol/src/index.js").SessionPlacement;
+  icon?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
   surface?: string;
@@ -733,6 +735,7 @@ export type SkillClawHubLink =
       registry: string;
       slug: string;
       ownerHandle?: string;
+      requestedReference?: string;
       installedVersion: string;
       installedAt: number;
       originPath?: string;

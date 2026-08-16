@@ -340,6 +340,26 @@ describe("command queue", () => {
     ).toBe(true);
   });
 
+  it("logs error types separately from the actionable lane failure message", async () => {
+    const error = new Error("provider request failed");
+    error.name = "FailoverError";
+
+    await expect(
+      enqueueCommandInLane(CommandLane.Main, async () => {
+        throw error;
+      }),
+    ).rejects.toBe(error);
+
+    expect(diagnosticMocks.diag.error).toHaveBeenCalledWith(
+      expect.not.stringContaining("FailoverError:"),
+      expect.objectContaining({ errorName: "FailoverError" }),
+    );
+    expect(diagnosticMocks.diag.error).toHaveBeenCalledWith(
+      expect.stringContaining('error="provider request failed"'),
+      expect.any(Object),
+    );
+  });
+
   it.each([
     "session:probe-setup-inference:openai",
     "session:temp:setup-inference:probe-setup-inference-test-uuid",

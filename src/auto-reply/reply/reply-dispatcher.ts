@@ -58,6 +58,10 @@ export type ReplyDispatchDeliveryOutcome =
   | "failed-before-deliver"
   | "failed-deliver";
 
+export function isReplyDispatchProvenInvisible(outcome: ReplyDispatchDeliveryOutcome): boolean {
+  return outcome === "cancelled" || outcome === "failed-before-deliver";
+}
+
 function isRetryableNoSendFailure(error: unknown): boolean {
   return (
     isProvenDeliveryNotSentError(error) &&
@@ -624,10 +628,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         }
         const dispatchInfo = buildReplyDispatchRuntimeInfo(normalized, kind);
         deliveryOutcome = await deliverOnce(normalized, dispatchInfo);
-        if (
-          deliveryFallback &&
-          (deliveryOutcome === "cancelled" || deliveryOutcome === "failed-before-deliver")
-        ) {
+        if (deliveryFallback && isReplyDispatchProvenInvisible(deliveryOutcome)) {
           deliveryOutcome = await deliverOnce(deliveryFallback, dispatchInfo);
         }
         if (deliveryOutcome === "cancelled") {

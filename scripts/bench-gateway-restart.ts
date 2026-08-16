@@ -1295,11 +1295,9 @@ async function main() {
 }
 
 export const testing = {
-  classifyGatewayReadyLog,
   collectOutputLines,
   collectTraceLine,
   countLsofFileDescriptors,
-  computeResourceSlope,
   createRestartIteration,
   ensureSupportedRestartPlatform,
   finalizeRestartIteration,
@@ -1320,7 +1318,6 @@ export const testing = {
   shouldFailBenchmark,
   stopChild,
   summarizeCase,
-  validateCliArgs,
   waitForRestartProbe,
   writeConfig,
   writeRestartIntent,

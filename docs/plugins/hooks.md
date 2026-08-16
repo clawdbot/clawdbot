@@ -203,7 +203,6 @@ For `sessions.create` calls with `parentSessionKey` and `emitCommandHooks: true`
 
 - `subagent_spawned` / `subagent_ended` - observe subagent launch and completion.
 - `subagent_delivery_target` - compatibility hook for completion delivery when no core session binding can project a route.
-- `subagent_spawning` - deprecated compatibility hook. Core now prepares `thread: true` subagent bindings through channel session-binding adapters before `subagent_spawned` fires.
 - `subagent_spawned` includes `resolvedModel` and `resolvedProvider` when OpenClaw has resolved the child session's native model before launch.
 - `subagent_ended` carries `targetSessionKey` (identity - matches `subagent_spawned.childSessionKey`), `targetKind` (`"subagent"` or `"acp"`), `reason`, optional `outcome` (`"ok"`, `"error"`, `"timeout"`, `"killed"`, `"reset"`, or `"deleted"`), optional `error`, `runId`, `endedAt`, `accountId`, and `sendFarewell`. It does **not** include `agentId` or `childSessionKey`; use `targetSessionKey` to correlate with the matching `subagent_spawned` event.
 
@@ -247,6 +246,13 @@ api.on(
   { registrationId: "quality-regression", timeoutMs: 90_000 },
 );
 ```
+
+When evaluation input includes `correlationId`, OpenClaw forwards it to the
+evaluator event for both manual and apply-triggered evaluations. This value is
+caller-supplied correlation metadata, not authenticated identity or proof of
+authorization. An authorization plugin must mint or replace the value through
+a trusted entry point, bind it to the intended operation, and validate and
+consume it itself.
 
 Stored outcomes identify the evaluator, plugin id, plugin package version,
 status, and returned result. Timeouts and thrown errors are recorded as
@@ -821,7 +827,7 @@ Decision rules:
 
 ## Install hooks
 
-Use `security.installPolicy` for operator-owned allow/block decisions. That
+Use `security.installPolicy` for operator-owned allow/warn/block decisions. That
 policy runs from OpenClaw config, covers CLI install and update paths, and
 fails closed when enabled but unavailable.
 
@@ -1048,10 +1054,6 @@ before the next major release:
   handlers. Read `BodyForAgent` and the structured user-context blocks
   instead of parsing flat envelope text. See
   [Plaintext channel envelopes → BodyForAgent](/plugins/sdk-migration#removal-timeline).
-- **`subagent_spawning`** remains for compatibility with older plugins, but
-  new plugins should not return thread routing from it. Core prepares
-  `thread: true` subagent bindings through channel session-binding adapters
-  before `subagent_spawned` fires.
 - **`onResolution` in `before_tool_call`** now uses the typed
   `PluginApprovalResolution` union (`allow-once` / `allow-always` / `deny` /
   `timeout` / `cancelled`) instead of a free-form `string`.

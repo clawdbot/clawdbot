@@ -17,11 +17,11 @@ const DEFAULT_STARTUP_BUDGET_BASELINE_PATH = path.resolve(
   "../config/control-ui-startup-budget-baseline.json",
 );
 
-// This absorbs measured local-to-Linux gzip variance, but landed changes can
-// still consume the tolerance. Local zlib emits smaller streams than CI's Linux
-// builder, so baseline updates must use CI bytes via --startup-js-bytes. The
-// fixed JS baseline ceiling bounds cumulative creep.
-const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 1024;
+// This absorbs measured local-to-Linux gzip variance plus bounded Linux
+// build-to-build chunk-hash variance. Local zlib emits smaller streams than
+// CI's Linux builder, so baseline updates must use CI bytes via
+// --startup-js-bytes. The fixed JS baseline ceiling bounds cumulative creep.
+const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 1056;
 
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.

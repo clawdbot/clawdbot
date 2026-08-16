@@ -36,12 +36,10 @@ import {
   retainReplyOperationUntilComplete,
   runAfterReplyOperationClear,
   type ReplyOperation,
+  type ReplyTurnKind,
   waitForReplyRunFollowupAdmission,
   waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.js";
-
-/** Kinds of turns that compete for one reply run slot per session. */
-type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
 
 /** Admission result for a reply turn attempting to own the session run slot. */
 type ReplyTurnAdmission =
@@ -336,6 +334,7 @@ async function admitReplyTurnWithWaitSignal(
           operation = createReplyOperation({
             sessionKey: params.sessionKey,
             sessionId,
+            turnKind: params.kind,
             resetTriggered: params.resetTriggered,
             routeThreadId: params.routeThreadId,
             originatingLeafEntryId: params.originatingLeafEntryId,
@@ -441,6 +440,11 @@ async function admitReplyTurnWithWaitSignal(
         throw error;
       }
       const activeOperation = replyRunRegistry.get(params.sessionKey);
+      if (params.kind === "visible" && activeOperation?.turnKind === "heartbeat") {
+        // Background heartbeats must yield before queue policy can steer this
+        // user turn into the heartbeat's model run and lose its visible reply.
+        activeOperation.supersede();
+      }
       if (params.kind === "visible" && expireVisibleStaleOperation(activeOperation)) {
         continue;
       }

@@ -13,6 +13,7 @@ function contextWith(
   models: ModelCatalogEntry[],
   runtime = "openclaw",
   featureMethods: string[] = [],
+  cloudPlacementSupported?: boolean,
 ) {
   const request = vi.fn().mockResolvedValue({ models });
   const navigate = vi.fn();
@@ -31,7 +32,11 @@ function contextWith(
           defaults: {
             model: "openai/gpt-5.6-luna",
             modelProvider: "openai",
-            agentRuntime: { id: runtime, source: "defaults" },
+            agentRuntime: {
+              id: runtime,
+              ...(cloudPlacementSupported === undefined ? {} : { cloudPlacementSupported }),
+              source: "defaults",
+            },
           },
           sessions: [],
         },
@@ -753,7 +758,7 @@ describe("new-session model runtime", () => {
         id: "gpt-5.6-luna",
         name: "GPT-5.6 Luna",
         provider: "openai",
-        agentRuntime: { id: "codex", source: "model" },
+        agentRuntime: { id: "codex", cloudPlacementSupported: true, source: "model" },
       },
     ]);
     const control = new NewSessionModelControl(() => undefined);
@@ -769,7 +774,11 @@ describe("new-session model runtime", () => {
     );
     await vi.waitFor(() => {
       control.selected = "openai/gpt-5.6-luna";
-      expect(control.resolveAgentRuntimeId({ context })).toBe("codex");
+      expect(control.resolveAgentRuntime({ context })).toEqual({
+        id: "codex",
+        cloudPlacementSupported: true,
+        source: "model",
+      });
     });
   });
 
@@ -777,11 +786,28 @@ describe("new-session model runtime", () => {
     const { context } = contextWith([]);
     const agent = {
       id: "main",
-      agentRuntime: { id: "claude-cli", source: "agent" },
-    } satisfies GatewayAgentRow;
+      agentRuntime: { id: "claude-cli", cloudPlacementSupported: false, source: "agent" },
+    } satisfies GatewayAgentRow & {
+      agentRuntime: { id: string; cloudPlacementSupported: boolean; source: "agent" };
+    };
     const control = new NewSessionModelControl(() => undefined);
 
-    expect(control.resolveAgentRuntimeId({ agent, context })).toBe("claude-cli");
+    expect(control.resolveAgentRuntime({ agent, context })).toEqual({
+      id: "claude-cli",
+      cloudPlacementSupported: false,
+      source: "agent",
+    });
+  });
+
+  it("falls back to the session defaults runtime capability", () => {
+    const { context } = contextWith([], "codex", [], true);
+    const control = new NewSessionModelControl(() => undefined);
+
+    expect(control.resolveAgentRuntime({ context })).toEqual({
+      id: "codex",
+      cloudPlacementSupported: true,
+      source: "defaults",
+    });
   });
 
   it.each(["auto", "default"])(
@@ -790,7 +816,7 @@ describe("new-session model runtime", () => {
       const { context } = contextWith([], runtime);
       const control = new NewSessionModelControl(() => undefined);
 
-      expect(control.resolveAgentRuntimeId({ context })).toBeUndefined();
+      expect(control.resolveAgentRuntime({ context })).toBeUndefined();
     },
   );
 
@@ -803,7 +829,7 @@ describe("new-session model runtime", () => {
     control.load(context, "main", true);
     control.selected = "anthropic/sonnet-4.6";
 
-    await vi.waitFor(() => expect(control.resolveAgentRuntimeId({ context })).toBeUndefined());
+    await vi.waitFor(() => expect(control.resolveAgentRuntime({ context })).toBeUndefined());
   });
 
   it("retries canonical startup-sidecars unavailability and restores the catalog", async () => {

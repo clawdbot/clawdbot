@@ -97,6 +97,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   private gatewayConnected = false;
   // Bind mutation completions to one epoch so stale failures cannot cross reconnects.
   private sessionMutationEpoch = 0;
+  // Owns the abort signal handed to every epoch-scoped destructive confirm dialog.
+  // Retiring the epoch aborts it so a dialog open across a reconnect dismisses
+  // itself instead of confirming into a mutation scope that no longer applies.
+  private sessionMutationAbortController = new AbortController();
   private readonly scroll = new SessionDataScrollController(() => this.notify());
   private approvalBadgeQueue: ApplicationContext<RouteId>["overlays"]["snapshot"]["approvalQueue"] =
     [];
@@ -324,7 +328,12 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     event: CustomEvent<CatalogSessionContinuedDetail>,
   ) => {
     const detail = event.detail;
-    if (!detail?.sessionKey) {
+    const rawAgentId = typeof detail?.agentId === "string" ? detail.agentId.trim() : "";
+    const eventAgentId = rawAgentId ? normalizeAgentId(rawAgentId) : null;
+    const currentAgentId = this.sessionCatalogAgentId
+      ? normalizeAgentId(this.sessionCatalogAgentId)
+      : null;
+    if (!detail?.sessionKey || !eventAgentId || eventAgentId !== currentAgentId) {
       return;
     }
     this.sessionCatalogs = bindAdoptedCatalogSession(this.sessionCatalogs, detail);
@@ -716,6 +725,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   private invalidateSessionMutations(): void {
     this.sessionMutationEpoch += 1;
     this.sessionMutationError = null;
+    // Dismiss any confirm dialog still open under the retired epoch before a
+    // new one can be issued; otherwise it stays modal until manually closed.
+    this.sessionMutationAbortController.abort();
+    this.sessionMutationAbortController = new AbortController();
     this.notify();
   }
 
@@ -738,6 +751,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       sessions: context.sessions,
       client,
       selectedAgentId: this.host.selectedAgentIdForSessions(),
+      signal: this.sessionMutationAbortController.signal,
     };
   }
 
@@ -757,7 +771,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
 
   publishSessionMutationError(scope: SidebarSessionMutationScope, error: unknown): void {
     if (this.isSessionMutationScopeCurrent(scope)) {
-      this.sessionMutationError = String(error);
+      this.sessionMutationError = error instanceof Error ? error.message : String(error);
       this.notify();
     }
   }

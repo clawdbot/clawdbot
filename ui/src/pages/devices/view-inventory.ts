@@ -277,7 +277,9 @@ function renderEntryDetails(entry: DeviceInventoryEntry, props: DevicesProps) {
       ${tokens.length > 0
         ? html`
             <div class="muted">${t("devices.inventory.tokens")}</div>
-            ${tokens.map((token) => renderTokenRow(entry.id, token, props))}
+            ${tokens.map((token) =>
+              renderTokenRow({ id: entry.id, name: entry.name }, token, props),
+            )}
           `
         : nothing}
       ${renderCapabilityLine(t("devices.inventory.capabilities"), caps)}
@@ -379,7 +381,11 @@ function renderPresenceRow(
   `;
 }
 
-function renderTokenRow(deviceId: string, tokenSummary: DeviceTokenSummary, props: DevicesProps) {
+function renderTokenRow(
+  device: { id: string; name: string },
+  tokenSummary: DeviceTokenSummary,
+  props: DevicesProps,
+) {
   const status = tokenSummary.revokedAtMs
     ? t("devices.inventory.revoked")
     : t("devices.inventory.active");
@@ -393,7 +399,7 @@ function renderTokenRow(deviceId: string, tokenSummary: DeviceTokenSummary, prop
       <span class="device-entry__token-actions">
         <button
           class="btn btn--sm"
-          @click=${() => props.onDeviceRotate(deviceId, tokenSummary.role, tokenSummary.scopes)}
+          @click=${() => props.onDeviceRotate(device, tokenSummary.role, tokenSummary.scopes)}
         >
           ${t("devices.inventory.rotate")}
         </button>
@@ -402,7 +408,7 @@ function renderTokenRow(deviceId: string, tokenSummary: DeviceTokenSummary, prop
           : html`
               <button
                 class="btn btn--sm danger"
-                @click=${() => props.onDeviceRevoke(deviceId, tokenSummary.role)}
+                @click=${() => props.onDeviceRevoke(device.id, tokenSummary.role)}
               >
                 ${t("devices.inventory.revoke")}
               </button>

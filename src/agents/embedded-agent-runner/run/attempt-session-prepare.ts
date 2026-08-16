@@ -18,6 +18,7 @@ import {
   resolveEffectiveCompactionMode,
 } from "../../agent-settings.js";
 import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
+import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { resolveUserTimezone } from "../../date-time.js";
 import { bootstrapHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
 import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runtime-context.js";
@@ -317,7 +318,9 @@ export function prepareEmbeddedAttemptSessionBoundary(input: {
     // discard the merged replacement prompt.
     sessionManager.clearNextUserMessagePersistenceSuppression?.();
     attempt.onUserMessagePersistenceInvalidated?.();
-    activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
+    activeSession.agent.state.messages = sanitizeCompactionReplayMessages(
+      sessionManager.buildSessionContext().messages,
+    );
   }
 
   // This is the single timestamping source for user messages sent to the LLM.
@@ -518,6 +521,7 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
           runtimeSettings: contextParams.runtimeSettings,
           config: attempt.config,
           agentId: input.sessionAgentId,
+          contextEngineAgentId: attempt.contextEngineAgentId,
         }),
       warn: (message) => log.warn(message),
     });

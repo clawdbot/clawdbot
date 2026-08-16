@@ -50,7 +50,10 @@ openclaw memory index [--agent <id>] [--force] [--verbose]
 
 Same per-agent scoping as `status`. `--force` runs a full reindex instead of
 an incremental one. `--verbose` prints per-agent provider, model, sources, and
-extra-path details before showing indexing progress.
+extra-path details before showing indexing progress. The completion message
+reports the indexed file count. An empty corpus is a successful no-op: the
+command reports the resolved workspace path and that nothing was indexed, and
+leaves the missing `memory/` directory for the first memory write to create.
 
 ## `memory search`
 

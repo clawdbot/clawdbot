@@ -31,6 +31,11 @@ openclaw channels dead-letters list --channel telegram --account default
 
 `channels list` shows chat channels only: configured accounts by default, with `installed`, `configured`, and `enabled` status tags per account (`--json` for machine output). Pass `--all` to also surface bundled channels that have no configured account yet and installable catalog channels that are not yet on disk. Provider auth and model usage live elsewhere: `openclaw models auth list` for provider auth profiles, `openclaw status` or `openclaw models list` for usage/quota.
 
+In an explicit multi-agent setup, workspace-scoped channel plugins come from
+`agents.defaults.systemAgent.agentId`. Without that owner, `channels list`
+returns the shared bundled, managed, and global inventory with a diagnostic;
+it does not guess one agent workspace.
+
 ## Status / capabilities / resolve / logs
 
 - `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `10000`), `--json`

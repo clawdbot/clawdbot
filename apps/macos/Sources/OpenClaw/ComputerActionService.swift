@@ -341,14 +341,6 @@ struct ComputerControlPermissionSnapshot: Equatable, Sendable {
         case missing([Bucket])
         case accessibilityGrantMayBeStale
 
-        var statusText: String {
-            switch self {
-            case .granted: "Granted"
-            case .missing: "Missing permission"
-            case .accessibilityGrantMayBeStale: "Accessibility grant may be stale"
-            }
-        }
-
         var detailText: String {
             switch self {
             case .granted:
@@ -452,6 +444,10 @@ final class ComputerActionService {
         case buttonNotHeld
         case eventCreationFailed
         case lifecycleChanged
+        case invalidV2Request(String)
+        case staleObservation
+        case unsupportedAction(OpenClawComputerAction)
+        case refused(String)
 
         var errorDescription: String? {
             switch self {
@@ -490,7 +486,15 @@ final class ComputerActionService {
             case .eventCreationFailed:
                 "Failed to synthesize input event"
             case .lifecycleChanged:
-                "Computer control lifecycle changed while the action was pending"
+                "COMPUTER_STALE_OBSERVATION: provider generation changed; take a fresh observation and retry"
+            case let .invalidV2Request(message):
+                "COMPUTER_INVALID_REQUEST: \(message)"
+            case .staleObservation:
+                "COMPUTER_STALE_OBSERVATION: take a fresh observation and retry"
+            case let .unsupportedAction(action):
+                "COMPUTER_UNSUPPORTED_ACTION: \(action.rawValue)"
+            case let .refused(message):
+                "COMPUTER_REFUSED_action_refused: \(message)"
             }
         }
     }
@@ -500,6 +504,7 @@ final class ComputerActionService {
     private let mouseEventFactory: MouseEventFactory
     private let mouseEventPoster: MouseEventPoster
     private let textGraphemePoster: TextGraphemePoster
+    private lazy var v2 = ComputerActionServiceV2()
     /// Tracks whether a left_mouse_down is outstanding so mouse_move emits
     /// drag events (state persists across invokes on the shared instance).
     private var leftButtonDown = false
@@ -592,6 +597,27 @@ final class ComputerActionService {
         lifecycleGeneration: UInt64) async throws -> OpenClawComputerActResult
     {
         try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
+        if params.deliveryMode == .background,
+           params.windowRef == nil,
+           !params.action.isComputerActV2Only
+        {
+            return OpenClawComputerActResult(
+                ok: false,
+                effect: .suspectedNoop,
+                escalation: OpenClawComputerEscalation(
+                    recommended: "window-pixel",
+                    reasonCode: "no_window_target"))
+        }
+        if params.isV2Request {
+            return try await self.v2.perform(
+                params,
+                lifecycleGeneration: lifecycleGeneration,
+                checkExecutionAllowed: { [weak self] in
+                    guard let self else { throw CancellationError() }
+                    try self.executionQueue.checkExecutionAllowed(
+                        lifecycleGeneration: lifecycleGeneration)
+                })
+        }
         try Self.validateInputPermissions(ComputerControlPermissionSnapshot.probe())
         let display = try await resolveDisplay(params: params)
         try executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
@@ -704,6 +730,8 @@ final class ComputerActionService {
             let keys = try requireKeys(params.keys)
             let holdMs = min(Self.maxHoldMs, max(0, params.durationMs ?? 1000))
             try await self.automation.hotkey(keys: keys, holdDuration: holdMs)
+        default:
+            throw ComputerActionError.unsupportedAction(params.action)
         }
     }
 

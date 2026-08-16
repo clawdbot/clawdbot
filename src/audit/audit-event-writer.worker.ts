@@ -107,7 +107,9 @@ port.on("message", (message: AuditWriterRequest) => {
   clearInterval(maintenanceTimer);
   reportMaintenance();
   try {
-    closeOpenClawStateDatabase();
+    // The Gateway may still own a live connection. Leave WAL reset to the
+    // final lifecycle owner instead of waiting on or invalidating its readers.
+    closeOpenClawStateDatabase({ checkpointMode: "PASSIVE" });
   } catch (error) {
     port.postMessage({ type: "maintenance-error", error: String(error) });
   }

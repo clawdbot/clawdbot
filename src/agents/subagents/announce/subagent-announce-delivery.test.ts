@@ -60,8 +60,8 @@ vi.mock("../completion/subagent-completion-delivery.js", async (importOriginal) 
     sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery(params.payload, 125_000),
 }));
 
-vi.mock("../../../infra/session-delivery-queue.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../infra/session-delivery-queue.js")>()),
+vi.mock("../../../infra/session-delivery-queue-storage.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../infra/session-delivery-queue-storage.js")>()),
   enqueueClaimedSessionDelivery: sessionDeliveryQueueMocks.enqueueClaimedSessionDelivery,
   releaseSessionDeliveryClaim: sessionDeliveryQueueMocks.releaseSessionDeliveryClaim,
 }));

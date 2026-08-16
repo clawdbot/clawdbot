@@ -27,8 +27,9 @@ vi.mock("../../channels/account-inspection.js", () => ({
 }));
 
 vi.mock("../../channels/plugins/read-only.js", () => ({
-  resolveReadOnlyChannelPluginsForConfig: () => ({
-    plugins: mocks.listReadOnlyChannelPluginsForConfig(),
+  resolveReadOnlyChannelPluginsForConfig: (...args: unknown[]) => ({
+    plugins: mocks.listReadOnlyChannelPluginsForConfig(...args),
+    manifestRecords: [],
     configuredChannelIds: [],
     missingConfiguredChannelIds: [
       ...new Set([
@@ -106,6 +107,24 @@ describe("buildChannelsTable", () => {
     const detailRow = table.details[0]?.rows[0];
     expect(detailRow?.Status).toBe("OK");
     expect(detailRow?.Notes).toContain("credential available in gateway runtime");
+  });
+
+  it("summarizes channels without selecting an owner from an explicit multi-agent roster", async () => {
+    const config = {
+      agents: {
+        ownership: "explicit" as const,
+        entries: { ops: {}, research: {} },
+      },
+      channels: { discord: { enabled: true } },
+    };
+
+    const table = await buildChannelsTable(config);
+
+    expect(table.rows).toContainEqual(expect.objectContaining({ id: "discord", state: "warn" }));
+    expect(mocks.listReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(config, {
+      activationSourceConfig: config,
+      includeSetupFallbackPlugins: true,
+    });
   });
 
   it("warns when a configured token is unavailable and there is no live account proof", async () => {

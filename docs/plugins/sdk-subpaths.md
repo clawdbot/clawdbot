@@ -55,8 +55,9 @@ longer package exports: `agent-runtime-test-contracts`,
 `plugin-test-runtime`, `provider-http-test-mocks`, `provider-test-contracts`,
 `reply-payload-testing`, `sqlite-runtime-testing`, `test-env`, `test-fixtures`,
 `test-live`, `test-live-auth`, `test-media-generation`,
-`test-media-understanding`, `test-node-mocks`, and `testing`. The private bundled helper surface
-`ssrf-runtime-internal` is also repo-local only.
+`test-media-understanding`, `test-node-mocks`, and `testing`.
+`ssrf-runtime-internal` is a JavaScript-only host runtime reserved for exact
+trusted local-service plugins; it is not a public plugin authoring API.
 
 ### Bundled plugin helper subpaths
 
@@ -98,7 +99,6 @@ new code; see the per-row notes below.
     | `plugin-sdk/inbound-envelope` | Shared inbound route + envelope builder helpers |
     | `plugin-sdk/inbound-event-delivery` | Process-local correlation between active inbound events and successful channel sends |
     | `plugin-sdk/inbound-reply-dispatch` | Deprecated compatibility shim for `dispatchInboundReplyWithBase`; its compatibility-ledger gate is the next Plugin SDK major, not a calendar date. Use `plugin-sdk/channel-inbound` for inbound runners and `plugin-sdk/channel-outbound` for message delivery helpers. |
-    | `plugin-sdk/messaging-targets` | Deprecated target parsing alias; use `plugin-sdk/channel-targets` |
     | `plugin-sdk/outbound-media` | Private-local after July 2026; Shared outbound media loading and hosted-media state helpers |
     | `plugin-sdk/poll-runtime` | Private-local after July 2026; Narrow poll normalization helpers |
     | `plugin-sdk/thread-bindings-runtime` | Private-local after July 2026; Thread-binding lifecycle and adapter helpers |
@@ -217,6 +217,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/agent-harness-task-runtime` | Private-local after July 2026; Generic task lifecycle and completion delivery helpers for harness-backed agents using a host-issued task scope |
     | `plugin-sdk/agent-harness-runtime` | Agent-harness runtime helpers. `acquireSessionWriteLock`, `resolveSessionWriteLockAcquireTimeoutMs`, `resolveSessionWriteLockOptions`, and `SessionWriteLockAcquireTimeoutConfig` are deprecated no-op compatibility exports scheduled for removal in the 2026.10 release train. They no longer block or create lock sidecars; harnesses should rely on OpenClaw's per-session lane plus the durable writer claim and in-transaction fence. |
     | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Bundled Codex helper for projecting user MCP server config into Codex thread config; not for third-party plugins |
+    | `plugin-sdk/native-hook-relay-runtime` | Private-local bundled runtime helper for retained native direct-child hook policy; not for third-party plugins |
     | `plugin-sdk/codex-session-transcript-runtime` | Private-local bundled Codex helper for serializing transcript-mirror writes; not for third-party plugins |
     | `plugin-sdk/channel-runtime-context` | Generic channel runtime-context registration and lookup helpers |
     | `plugin-sdk/runtime-store` | `createPluginRuntimeStore` |
@@ -351,14 +352,14 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/channel-test-helpers` | Repo-local channel-oriented test helpers for generic actions/setup/status contracts, directory assertions, account startup lifecycle, send-config threading, runtime mocks, status issues, outbound delivery, and hook registration |
     | `plugin-sdk/channel-target-testing` | Repo-local shared target-resolution error-case suite for channel tests |
     | `plugin-sdk/channel-contract-testing` | Repo-local narrow channel contract test helpers without the broad testing barrel |
-    | `plugin-sdk/plugin-test-contracts` | Repo-local plugin package, registration, public artifact, direct import, runtime API, and import side-effect contract helpers |
+    | `plugin-sdk/plugin-test-contracts` | Repo-local plugin package, registration, public artifact, runtime API, and import side-effect contract helpers |
     | `plugin-sdk/plugin-state-test-runtime` | Repo-local plugin state store, ingress queue, and state DB test helpers |
     | `plugin-sdk/provider-test-contracts` | Repo-local provider runtime, auth, discovery, onboard, catalog, wizard, media capability, replay policy, realtime STT live-audio, web-search/fetch, and stream contract helpers |
     | `plugin-sdk/provider-http-test-mocks` | Private-local after July 2026; Repo-local opt-in Vitest HTTP/auth mocks for provider tests that exercise `plugin-sdk/provider-http` |
     | `plugin-sdk/reply-payload-testing` | Repo-local helpers for attaching metadata to reply payload fixtures |
     | `plugin-sdk/sqlite-runtime-testing` | Repo-local SQLite lifecycle helpers for first-party tests |
     | `plugin-sdk/test-state` | Repo-local isolated OpenClaw state, config, workspace, environment, and auth-profile fixtures for plugin tests |
-    | `plugin-sdk/test-fixtures` | Repo-local generic CLI runtime capture, sandbox context, skill writer, agent-message, system-event, module reload, bundled plugin path, terminal-text, chunking, auth-token, and typed-case fixtures |
+    | `plugin-sdk/test-fixtures` | Repo-local generic CLI runtime capture, direct-import smoke, sandbox context, skill writer, agent-message, system-event, module reload, bundled plugin path, terminal-text, chunking, auth-token, and typed-case fixtures |
     | `plugin-sdk/test-node-mocks` | Repo-local focused Node builtin mock helpers for use inside Vitest `vi.mock("node:*")` factories |
   </Accordion>
 
@@ -369,7 +370,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/memory-core-host-engine-curated` | Private-local focused curated-memory annotation parsing for doctor and promotion paths |
     | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine exports |
     | `plugin-sdk/memory-core-host-engine-fs` | Private-local focused filesystem and user-path helpers for doctor migrations |
-    | `plugin-sdk/memory-core-host-engine-embeddings` | Private-local after July 2026; Memory host embedding contracts, registry access, and generic batch/remote helpers. `registerMemoryEmbeddingProvider` on this surface is deprecated; use the generic embedding provider API for new providers. |
+    | `plugin-sdk/memory-core-host-engine-embeddings` | Private-local after July 2026; Memory host embedding contracts, generic adapter bridging, and batch/remote helpers. Providers register through the generic embedding provider API. |
     | `plugin-sdk/memory-core-host-engine-sessions` | Private-local after July 2026; Memory session transcript and query helpers |
     | `plugin-sdk/memory-core-host-engine-schema` | Private-local focused memory index schema and sqlite-vec helpers for doctor migrations |
     | `plugin-sdk/memory-core-host-engine-storage` | Private-local after July 2026; Memory host storage engine exports |
@@ -395,6 +396,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | --- | --- |
     | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Bundled Codex plugin helper for projecting user MCP server config into Codex app-server thread config (default-only package export) |
     | `plugin-sdk/codex-session-transcript-runtime` | Private-local bundled Codex plugin helper for serializing transcript-mirror writes (default-only package export) |
+    | `plugin-sdk/ssrf-runtime-internal` | Private-local host helper for configured loopback requests owned by bundled Ollama/browser and the exact official `@openclaw/llama-cpp-provider` package (default-only package export) |
 
   </Accordion>
 </AccordionGroup>

@@ -217,13 +217,13 @@ enum RemoteGatewayProbe {
     {
         do {
             let authSource = try await AsyncTimeout.withTimeout(
-                seconds: max(0.001, timeoutMs / 1000),
+                seconds: timeoutMs / 1000,
                 onTimeout: { RemoteGatewayProbeTimeout(timeoutMs: timeoutMs) },
                 operation: {
                     _ = try await connection.request(
                         method: GatewayConnection.Method.health.rawValue,
                         params: nil,
-                        timeoutMs: timeoutMs,
+                        timeoutMs: 0,
                         retryTransportFailures: false)
                     return await connection.authSource()
                 })

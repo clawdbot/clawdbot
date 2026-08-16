@@ -21,6 +21,7 @@ import {
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexServerNotification, JsonObject, JsonValue } from "./protocol.js";
+import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import {
   createCodexTestBindingStore,
   type CodexAppServerBindingStore,
@@ -704,6 +705,65 @@ describe("runCodexAppServerSideQuestion", () => {
       messageActionTurnCapability: "turn-capability-1",
     });
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
+  });
+
+  it("routes a remote-exec side question through the injected sandbox environment", async () => {
+    const client = createFakeClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "environment/add") {
+        return {};
+      }
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          client.emit(agentDelta("side-thread", "turn-1", "Remote answer."));
+          client.emit(turnCompleted("side-thread", "turn-1", "Remote answer."));
+        });
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    const sandbox = {
+      ...createSandboxContext({}),
+      placementExecutionMode: "remote-exec" as const,
+      containerWorkdir: "/remote/synced-workspace",
+    };
+
+    await expect(runCodexAppServerSideQuestion(sideParams({ sandbox }))).resolves.toEqual({
+      text: "Remote answer.",
+    });
+
+    const environmentAdd = client.request.mock.calls.find(
+      ([method]) => method === "environment/add",
+    );
+    const environment = environmentAdd?.[1] as
+      | { environmentId?: string; execServerUrl?: string }
+      | undefined;
+    expect(environment?.environmentId).toMatch(/^openclaw-sandbox-/u);
+    expect(environment?.execServerUrl).toMatch(/^ws:\/\/127\.0\.0\.1:/u);
+    const forkParams = client.request.mock.calls.find(([method]) => method === "thread/fork")?.[1];
+    expect(forkParams).toMatchObject({ cwd: "/remote/synced-workspace" });
+    expect(forkParams).not.toHaveProperty("sandbox");
+    const turnParams = client.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
+    expect(turnParams).toMatchObject({
+      cwd: "/remote/synced-workspace",
+      sandboxPolicy: { type: "externalSandbox", networkAccess: "restricted" },
+      environments: [
+        {
+          environmentId: environment?.environmentId,
+          cwd: "/remote/synced-workspace",
+        },
+      ],
+    });
   });
 
   it("rebinds side-question handlers when selection retry replaces the client", async () => {

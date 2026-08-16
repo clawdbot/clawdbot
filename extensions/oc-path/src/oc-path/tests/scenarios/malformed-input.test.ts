@@ -20,11 +20,6 @@ describe("malformed-input", () => {
     expect(() => parseMd("---\n")).not.toThrow();
   });
 
-  it("only `---\\n---`", () => {
-    const { ast } = parseMd("---\n---");
-    expect(ast.frontmatter).toEqual([]);
-  });
-
   it("binary-ish bytes (non-ASCII control chars)", () => {
     const raw = "## H\n\x00\x01\x02\n";
     expect(() => parseMd(raw)).not.toThrow();

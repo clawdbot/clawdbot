@@ -34,6 +34,7 @@ import androidx.core.net.toUri
 internal fun DesktopScreen(
   viewModel: MainViewModel,
   source: String? = null,
+  session: String? = null,
   onBack: () -> Unit,
 ) {
   val isConnected by viewModel.isConnected.collectAsState()
@@ -72,10 +73,10 @@ internal fun DesktopScreen(
         val page = controlPage
         if (isConnected && page != null) {
           // GatewayControlPage equality includes credentials and the accepted TLS pin.
-          key(page, source) {
+          key(page, source, session) {
             ControlUiWebView(
               page = page,
-              url = desktopUrl(baseUrl = page.baseUrl, source = source),
+              url = desktopUrl(baseUrl = page.baseUrl, source = source, session = session),
               modifier = Modifier.fillMaxSize(),
             )
           }
@@ -106,6 +107,7 @@ internal fun DesktopScreen(
 internal fun desktopUrl(
   baseUrl: String,
   source: String? = null,
+  session: String? = null,
 ): String {
   val baseUri = baseUrl.trimEnd('/').toUri()
   val routePath = "${baseUri.encodedPath.orEmpty().trimEnd('/')}/"
@@ -117,5 +119,6 @@ internal fun desktopUrl(
       .fragment(null)
       .appendQueryParameter("view", "desktop")
   source?.let { builder.appendQueryParameter("source", it) }
+  session?.let { builder.appendQueryParameter("session", it) }
   return builder.build().toString()
 }

@@ -472,6 +472,23 @@ describe("cron CLI with the real Gateway pagination contract", () => {
     );
   });
 
+  it("preserves hostile stored values in cron show JSON", async () => {
+    const name = "job\u001B]0;cron-json\u0007🦞\r\nname";
+    const model = "model\u001B[31m\tvariant";
+    const lastError = "failed\u001B]0;cron-error\u0007\nreason";
+    const job = createJob(123, {
+      name,
+      payload: { kind: "agentTurn", message: "test", model },
+      state: { lastError },
+    });
+    installRealCronGateway([job]);
+
+    await runCron(["show", job.id, "--json"]);
+
+    const result = mocks.runtime.writeJson.mock.calls.at(-1)?.[0] as CronJob;
+    expect(result).toMatchObject({ id: job.id, name, payload: { model }, state: { lastError } });
+  });
+
   it("finds an exact cron job name beyond the first real Gateway page", async () => {
     const jobs = Array.from({ length: 201 }, (_, index) => createJob(index));
     jobs[200] = createJob(200, { name: "Last page exact job" });

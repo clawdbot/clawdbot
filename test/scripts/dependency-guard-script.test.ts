@@ -28,7 +28,6 @@ import {
   renderClearedDependencyGuardComment,
   renderRemovalOnlyDependencyComment,
   renderTrustedDependencyComment,
-  sanitizeDisplayValue,
   securityApproverSet,
   shouldAutoscrubDependencyLockfiles,
 } from "../../scripts/github/dependency-guard.mjs";
@@ -679,11 +678,6 @@ describe("dependency guard script", () => {
     expect(securityApproverSet("vincentkoc, steipete\njoshavant")).toEqual(
       new Set(["vincentkoc", "steipete", "joshavant"]),
     );
-  });
-
-  it("sanitizes display values", () => {
-    expect(sanitizeDisplayValue("abc\u0000def")).toBe("abc?def");
-    expect(sanitizeDisplayValue("x".repeat(300))).toHaveLength(240);
   });
 
   it("bounds GitHub error bodies by content-length", async () => {

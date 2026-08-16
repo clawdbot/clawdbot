@@ -5,7 +5,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
-import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
   GatewaySessionRow,
@@ -14,8 +14,6 @@ import type {
   SessionBranch,
   SessionsListResult,
 } from "../../api/types.ts";
-import type { ApplicationInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
@@ -52,7 +50,8 @@ import {
   resolveStartupRetryDelayMs,
   sleep,
 } from "./chat-history-retry.ts";
-import type { ChatRunStartupPhase, ChatRunStartupState } from "./chat-run-startup.ts";
+import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
 import {
   getChatSessionProjection,
@@ -66,12 +65,8 @@ import {
 } from "./performance.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
-import {
-  cacheChatSessionSnapshot,
-  clearChatMessagesFromCache,
-  type ChatMessageCache,
-} from "./session-message-cache.ts";
-import { retireHistoryProvenSteeredChips } from "./steer-lifecycle.ts";
+import { cacheChatSessionSnapshot, clearChatMessagesFromCache } from "./session-message-cache.ts";
+import { retirePersistedSteeredChips } from "./steer-lifecycle.ts";
 import {
   clearToolStreamSegments,
   currentLiveToolCallIds,
@@ -260,64 +255,7 @@ function chatPersistCommentaryEnabled(state: ChatState): boolean {
   return state.settings?.chatPersistCommentary !== false;
 }
 
-export type ChatState = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
-  initialUserMessage?: ApplicationInitialUserMessageHandoff;
-  /** Monotonic owner epoch; reconnects can reuse the same client object. */
-  connectionEpoch: number;
-  sessionKey: string;
-  currentSessionId?: string | null;
-  reconnectResumeSessionId?: string | null;
-  chatLoading: boolean;
-  chatHistoryPagination?: ChatHistoryPagination;
-  chatMessages: unknown[];
-  chatMessagesBySession?: ChatMessageCache;
-  /** Active leaf of the history snapshot currently rendered by this pane. */
-  chatDisplayedLeafEntryId?: string | null;
-  chatThinkingLevel: string | null;
-  chatVerboseLevel: string | null;
-  /** Pane-owned explicit session queue override from the latest history response. */
-  chatQueueModeOverride?: GatewaySessionRow["queueMode"];
-  /** Pane-owned effective queue mode from this session's latest history response. */
-  chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
-  chatSending: boolean;
-  chatMessage: string;
-  chatAttachments: ChatAttachment[];
-  chatQueue: ChatQueueItem[];
-  chatRunId: string | null;
-  chatRunUsageById?: Map<string, number>;
-  chatStream: string | null;
-  chatStreamStartedAt: number | null;
-  chatRunStartup?: ChatRunStartupState | null;
-  planStatus?: PlanStatus | null;
-  lastError: string | null;
-  chatError?: string | null;
-  chatRunError?: { summary: string } | null;
-  lastLocalTerminalReconcile?: { runId: string | null } | null;
-  chatReplyTarget?: unknown;
-  agentsError?: string | null;
-  onAgentsList?: (agentsList: AgentsListResult, client: GatewayBrowserClient) => void;
-  resetChatInputHistoryNavigation?: () => void;
-  assistantAgentId?: string | null;
-  agentsList?: ChatAgentsListSnapshot | null;
-  agentsSelectedId?: string | null;
-  hello: GatewayHelloOk | null;
-  canvasPluginSurfaceUrl?: string | null;
-  settings?: { chatPersistCommentary?: boolean; gatewayUrl?: string | null };
-  sessions?: Partial<SessionCapability>;
-  chatSessionMessageSubscriptionRequestedKey?: string | null;
-  chatSessionMessageSubscription?: SessionMessageSubscription | null;
-  chatBranches?: SessionBranch[];
-  chatBranchesSessionKey?: string | null;
-  chatBranchesConnectionEpoch?: number | null;
-  chatBranchesLoading?: boolean;
-  requestUpdate?: () => void;
-};
-
-type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
-  agents?: AgentsListResult["agents"];
-};
+export type { ChatState } from "./chat-state-contract.ts";
 
 type ChatSessionMessageSubscriptionState = ChatState & {
   sessions: Pick<SessionCapability, "subscribeMessages" | "unsubscribeMessages">;
@@ -1371,6 +1309,15 @@ export async function switchChatHistoryBranch(
   }
 }
 
+/** Branches for the current pane; equivalence covers alias-canonicalization windows (#124020 class). */
+export function displayedChatSessionBranches(
+  state: Pick<ChatState, "chatBranches" | "chatBranchesSessionKey" | "sessionKey">,
+): SessionBranch[] {
+  return areUiSessionKeysEquivalent(state.chatBranchesSessionKey, state.sessionKey)
+    ? (state.chatBranches ?? [])
+    : [];
+}
+
 export async function loadChatBranches(state: ChatState): Promise<void> {
   const sessions = state.sessions;
   const client = state.client;
@@ -1388,7 +1335,6 @@ export async function loadChatBranches(state: ChatState): Promise<void> {
   const version = ++requests.branchVersion;
   const connectionEpoch = state.connectionEpoch;
   const agentParams = scopedAgentParamsForSession(state, sessionKey);
-  state.chatBranchesLoading = true;
   try {
     const branches = await sessions.listBranches(sessionKey, agentParams);
     if (
@@ -1404,19 +1350,11 @@ export async function loadChatBranches(state: ChatState): Promise<void> {
     state.chatBranchesSessionKey = sessionKey;
     state.chatBranchesConnectionEpoch = connectionEpoch;
   } catch {
-    if (
-      requests.branchVersion === version &&
-      state.client === client &&
-      state.connectionEpoch === connectionEpoch &&
-      visibleSessionMatches(state, sessionKey, agentParams.agentId)
-    ) {
-      state.chatBranches = [];
-      state.chatBranchesSessionKey = sessionKey;
-      state.chatBranchesConnectionEpoch = connectionEpoch;
-    }
+    // Leave chatBranchesSessionKey unset so the next history load retries;
+    // recording success here latched transient failures into a permanently
+    // hidden branch dropdown with no visible outcome.
   } finally {
     if (requests.branchVersion === version) {
-      state.chatBranchesLoading = false;
       state.requestUpdate?.();
     }
   }
@@ -1452,7 +1390,7 @@ export async function loadChatHistory(
   }
   if (
     opts.deferBranches !== true &&
-    (state.chatBranchesSessionKey !== sessionKey ||
+    (!areUiSessionKeysEquivalent(state.chatBranchesSessionKey, sessionKey) ||
       state.chatBranchesConnectionEpoch !== connectionEpoch)
   ) {
     void loadChatBranches(state);
@@ -1520,9 +1458,11 @@ export function applyChatAgentsList(
   if (!agentsList || state.client !== client || !state.connected) {
     return;
   }
+  if (state.onAgentsList && !state.onAgentsList(agentsList, client)) {
+    return;
+  }
   state.agentsList = agentsList;
   state.agentsError = null;
-  state.onAgentsList?.(agentsList, client);
   const selectedId =
     typeof state.agentsSelectedId === "string" && state.agentsSelectedId.trim()
       ? normalizeAgentId(state.agentsSelectedId)
@@ -1662,9 +1602,9 @@ async function loadChatHistoryUncached(
       },
     );
     if (Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")) {
-      state.chatDisplayedLeafEntryId = res.sessionInfo?.activeLeafEntryId?.trim() || null;
+      state.chatDisplayedLeafEntryId = nextDisplayedLeafEntryId;
     }
-    retireHistoryProvenSteeredChips(state);
+    retirePersistedSteeredChips(state);
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
     state.currentSessionId = nextSessionId;
     replaceCachedChatMessages(state, sessionKey, requestAgentId);

@@ -1,4 +1,5 @@
 // Transcript provider contracts for external and manual transcript sources.
+import type { Result } from "@openclaw/normalization-core/result";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /**
@@ -117,10 +118,47 @@ export type TranscriptImportRequest = {
   speakerLabel?: string;
 };
 
+/** Trusted caller facts projected by core; never accepted from tool arguments. */
+export type TranscriptToolCaller =
+  | {
+      kind: "operator";
+      source: "channel-owner" | "local" | "scheduled";
+    }
+  | {
+      kind: "channel";
+      channel: string;
+      accountId?: string;
+      senderId: string;
+      groupId?: string;
+      groupSpace?: string;
+      roleIds: readonly string[];
+    };
+
+export type TranscriptToolAction = "import" | "start" | "status" | "stop" | "summarize";
+
+export type TranscriptSourceAccessControl = {
+  /** Ingress channel whose trusted account owns this provider's account namespace. */
+  channelId: string;
+  /** Resolve and validate the canonical account before persistence. */
+  resolveAccountId: (params: {
+    cfg?: OpenClawConfig;
+    source: TranscriptSourceLocator;
+  }) => Result<string | undefined, string>;
+  /** Apply the provider's native access policy to the resolved source. */
+  authorize: (params: {
+    action: TranscriptToolAction;
+    caller: TranscriptToolCaller;
+    cfg?: OpenClawConfig;
+    source: TranscriptSourceLocator;
+  }) => Promise<Result<void, string>>;
+};
+
 /** Provider contract for transcript capture/import integrations. */
 export type TranscriptSourceProvider = {
   id: string;
   aliases?: readonly string[];
+  /** Closed access contract for providers sharing one inbound channel namespace. */
+  accessControl?: TranscriptSourceAccessControl;
   name: string;
   sourceKinds: readonly TranscriptSourceKind[];
   start?: (request: TranscriptStartRequest) => Promise<TranscriptsStartResult>;

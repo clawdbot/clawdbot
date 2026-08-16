@@ -178,7 +178,6 @@ function assertManagedRuntimeEnvGeneration(generation: number): void {
   if (getPublishedConfigRuntimeEnvState().generation !== generation) {
     throw new ConfigMutationConflictError(
       "active config environment changed while preparing write",
-      { currentHash: null },
     );
   }
 }
@@ -186,9 +185,7 @@ function assertManagedRuntimeEnvGeneration(generation: number): void {
 function assertBaseHashMatches(snapshot: ConfigFileSnapshot, expectedHash?: string): string | null {
   const currentHash = resolveConfigSnapshotHash(snapshot) ?? null;
   if (expectedHash !== undefined && expectedHash !== currentHash) {
-    throw new ConfigMutationConflictError("config changed since last load", {
-      currentHash,
-    });
+    throw new ConfigMutationConflictError("config changed since last load");
   }
   return currentHash;
 }
@@ -199,7 +196,6 @@ function assertExpectedConfigPathMatches(
 ): void {
   if (expectedConfigPath !== undefined && expectedConfigPath !== snapshot.path) {
     throw new ConfigMutationConflictError("config path changed since last load", {
-      currentHash: resolveConfigSnapshotHash(snapshot) ?? null,
       retryable: false,
     });
   }
@@ -309,7 +305,6 @@ async function withConfigMutationSnapshotLock<T>(
     lockPath = outcome.lockPath;
   }
   throw new ConfigMutationConflictError("config path changed repeatedly while acquiring lock", {
-    currentHash: null,
     retryable: false,
   });
 }
@@ -473,16 +468,12 @@ async function resolveExpectedRootBoundIncludeFile(params: {
       (error instanceof Error &&
         error.message.startsWith("Config include write path has no approved existing root:"))
     ) {
-      throw new ConfigMutationConflictError("included config target changed since last load", {
-        currentHash: null,
-      });
+      throw new ConfigMutationConflictError("included config target changed since last load");
     }
     throw error;
   }
   if (path.normalize(target.absolutePath) !== path.normalize(params.expectedAbsolutePath)) {
-    throw new ConfigMutationConflictError("included config target changed since last load", {
-      currentHash: null,
-    });
+    throw new ConfigMutationConflictError("included config target changed since last load");
   }
   return target;
 }
@@ -510,9 +501,7 @@ async function assertRootConfigStillMatchesSnapshot(snapshot: ConfigFileSnapshot
   const currentHash = hashConfigIncludeRaw(currentRaw);
   const expectedHash = hashConfigIncludeRaw(snapshot.exists ? (snapshot.raw ?? null) : null);
   if (currentHash !== expectedHash) {
-    throw new ConfigMutationConflictError("config changed while preparing include write", {
-      currentHash,
-    });
+    throw new ConfigMutationConflictError("config changed while preparing include write");
   }
 }
 
@@ -610,9 +599,7 @@ async function writeRootBoundJsonFile(params: {
   const currentRaw = await readRootBoundFileRawIfExists(targetAtCommit);
   const currentHash = hashConfigIncludeRaw(currentRaw);
   if (currentHash !== hashConfigIncludeRaw(params.expectedRaw)) {
-    throw new ConfigMutationConflictError("included config changed while preparing write", {
-      currentHash,
-    });
+    throw new ConfigMutationConflictError("included config changed while preparing write");
   }
   const content = formatJsonFileValue(params.value);
   // The include fast path bypasses writeConfigFile(); keep its authority guard
@@ -669,9 +656,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   const allowedRoots: readonly string[] = [];
   const expectedIncludeTarget = params.writeOptions?.includeFileTargetsForWrite?.[includePath];
   if (!expectedIncludeTarget) {
-    throw new ConfigMutationConflictError("included config target changed since last load", {
-      currentHash: null,
-    });
+    throw new ConfigMutationConflictError("included config target changed since last load");
   }
   const assertConfigPathForWrite = params.writeOptions?.assertConfigPathForWrite;
   if (!assertConfigPathForWrite) {
@@ -694,9 +679,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   const previousIncludeHash = hashConfigIncludeRaw(previousIncludeRaw);
   const expectedIncludeHash = params.writeOptions?.includeFileHashesForWrite?.[includePath];
   if (expectedIncludeHash !== undefined && expectedIncludeHash !== previousIncludeHash) {
-    throw new ConfigMutationConflictError("included config changed since last load", {
-      currentHash: previousIncludeHash,
-    });
+    throw new ConfigMutationConflictError("included config changed since last load");
   }
   const envForRestore =
     resolveWriteEnvSnapshotForPath({
@@ -711,9 +694,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     previousIncludeRaw === null &&
     (!snapshotHasBrokenInclude || expectedIncludeHash === undefined)
   ) {
-    throw new ConfigMutationConflictError("included config changed since last load", {
-      currentHash: previousIncludeHash,
-    });
+    throw new ConfigMutationConflictError("included config changed since last load");
   }
   let includedValueToWrite = nextConfigRecord[key];
   if (previousIncludeRaw !== null) {
@@ -725,9 +706,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     } catch {
       // A validated replacement is the repair path for a malformed include.
       if (!snapshotHasBrokenInclude || expectedIncludeHash === undefined) {
-        throw new ConfigMutationConflictError("included config changed since last load", {
-          currentHash: previousIncludeHash,
-        });
+        throw new ConfigMutationConflictError("included config changed since last load");
       }
     }
     if (parsedInclude) {
@@ -739,9 +718,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
       });
       const snapshotIncludedValue = (params.snapshot.sourceConfig as Record<string, unknown>)[key];
       if (!isDeepStrictEqual(currentIncludedValue, snapshotIncludedValue)) {
-        throw new ConfigMutationConflictError("included config changed since last load", {
-          currentHash: previousIncludeHash,
-        });
+        throw new ConfigMutationConflictError("included config changed since last load");
       }
       includedValueToWrite = restoreEnvVarRefs(
         includedValueToWrite,
@@ -816,9 +793,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   await assertRootConfigStillMatchesSnapshot(params.snapshot);
   const includeRawAtCommit = await readRootBoundFileRawIfExists(includeTarget);
   if (hashConfigIncludeRaw(includeRawAtCommit) !== hashConfigIncludeRaw(previousIncludeRaw)) {
-    throw new ConfigMutationConflictError("included config changed while preparing write", {
-      currentHash: hashConfigIncludeRaw(includeRawAtCommit),
-    });
+    throw new ConfigMutationConflictError("included config changed while preparing write");
   }
   await writeRootBoundJsonFile({
     configPath: params.snapshot.path,

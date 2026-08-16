@@ -185,6 +185,22 @@ export default definePluginEntry({
   startup config; command handlers should still validate availability when
   invoked.
 
+### Computer Use providers
+
+**Import:** `openclaw/plugin-sdk/computer-use`
+
+Node-local Computer Use plugins register one provider through
+`registerComputerUseProvider(api, provider)`. The helper owns the
+`screen.snapshot` and dangerous `computer.act` command registrations and the
+matching Gateway invoke policy; the provider owns availability, execution,
+serialization, frame state, driver lifecycle, and cleanup.
+
+The same entry point exports the canonical TypeBox schemas, static types, and
+compiled validators for the two command payloads and the snapshot result. A
+node host accepts one provider for the command pair; registering another
+provider conflicts with the existing command registration instead of creating
+a fallback stack.
+
 ## `defineChannelPluginEntry`
 
 **Import:** `openclaw/plugin-sdk/channel-core`

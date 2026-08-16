@@ -3,6 +3,7 @@ import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
@@ -70,7 +71,7 @@ function runChannelsCommand(action: () => Promise<void>) {
 
 function runChannelsCommandWithDanger(action: () => Promise<void>, label: string) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
-    defaultRuntime.error(danger(`${label}: ${String(err)}`));
+    defaultRuntime.error(danger(`${label}: ${formatErrorMessage(err)}`));
     defaultRuntime.exit(1);
   });
 }

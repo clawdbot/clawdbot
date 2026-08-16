@@ -16,8 +16,8 @@ import {
 import { resolveSessionStorePathCore } from "./paths.js";
 import {
   applySessionEntryLifecycleMutation,
+  inspectTranscriptEventsSync,
   listSessionEntriesCore,
-  loadTranscriptEventsSync,
   purgeDeletedAgentSessionEntries,
   type SessionEntryLifecycleRemoval,
 } from "./session-accessor.js";
@@ -26,7 +26,6 @@ import {
   inspectSqliteSessionHistoryDiskBudget,
 } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { countSessionEntryMaintenanceEligibleEntries } from "./store-maintenance-eligibility.js";
 import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
@@ -157,15 +156,16 @@ function isTranscriptMessageRecord(entry: unknown): boolean {
   return record.type === undefined && isTranscriptMessageRole(record.role);
 }
 
-function sqliteTranscriptHasMessageRecords(params: {
+function inspectConfirmedMessageFreeTranscript(params: {
   sessionId: string;
   sessionKey: string;
   storePath: string;
-}): boolean {
+}) {
   try {
-    return loadTranscriptEventsSync(params).some(isTranscriptMessageRecord);
+    const inspection = inspectTranscriptEventsSync(params);
+    return inspection.events.some(isTranscriptMessageRecord) ? undefined : inspection;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -266,21 +266,31 @@ export function serializeSessionCleanupResult(params: {
   dryRun: boolean;
   summaries: SessionCleanupSummary[];
 }): SessionsCleanupResult {
-  if (params.summaries.length === 1) {
-    return params.summaries[0] ?? ({} as SessionCleanupSummary);
+  const summaries = params.summaries.map((summary) => ({
+    ...summary,
+    storePath: resolveSqliteTargetFromSessionStorePath(summary.storePath, {
+      agentId: summary.agentId,
+    }).path,
+  }));
+  if (summaries.length === 1) {
+    return summaries[0] ?? ({} as SessionCleanupSummary);
   }
   return {
     allAgents: true,
     mode: params.mode,
     dryRun: params.dryRun,
-    stores: params.summaries,
+    stores: summaries,
   };
 }
 
 function pruneMissingTranscriptEntries(params: {
   store: Record<string, SessionEntry>;
   storePath: string;
-  onPruned?: (key: string, entry: SessionEntry) => void;
+  onPruned?: (
+    key: string,
+    entry: SessionEntry,
+    inspection?: ReturnType<typeof inspectConfirmedMessageFreeTranscript>,
+  ) => void;
 }): number {
   let removed = 0;
   for (const [key, entry] of Object.entries(params.store)) {
@@ -311,16 +321,15 @@ function pruneMissingTranscriptEntries(params: {
       params.onPruned?.(key, entry);
       continue;
     }
-    if (
-      !sqliteTranscriptHasMessageRecords({
-        sessionId: entry.sessionId,
-        sessionKey: key,
-        storePath: params.storePath,
-      })
-    ) {
+    const inspection = inspectConfirmedMessageFreeTranscript({
+      sessionId: entry.sessionId,
+      sessionKey: key,
+      storePath: params.storePath,
+    });
+    if (inspection) {
       delete params.store[key];
       removed += 1;
-      params.onPruned?.(key, entry);
+      params.onPruned?.(key, entry, inspection);
     }
   }
   return removed;
@@ -396,7 +405,7 @@ async function previewStoreCleanup(params: {
   });
   const modelRunPruned = shouldRunModelRunPrune({
     maintenance: params.maintenance,
-    entryCount: countSessionEntryMaintenanceEligibleEntries(previewStore, preserveSessionKeys),
+    entryCount: Object.keys(previewStore).length,
     // `sessions cleanup` applies the cap immediately (apply path forces maintenance and the
     // preview caps unconditionally below), so mirror that here: prune stale probes before the
     // forced cap can evict real sessions in their place.
@@ -405,6 +414,7 @@ async function previewStoreCleanup(params: {
     ? pruneStaleModelRunEntries(previewStore, params.maintenance.modelRunPruneAfterMs, {
         log: false,
         preserveKeys: preserveSessionKeys,
+        preserveRecentMs: params.maintenance.preserveRecentMs,
         onPruned: ({ key }) => {
           modelRunPrunedKeys.add(key);
         },
@@ -413,6 +423,7 @@ async function previewStoreCleanup(params: {
   const pruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {
     log: false,
     preserveKeys: preserveSessionKeys,
+    preserveRecentMs: params.maintenance.preserveRecentMs,
     onPruned: ({ key }) => {
       staleKeys.add(key);
     },
@@ -420,6 +431,7 @@ async function previewStoreCleanup(params: {
   const capped = capEntryCount(previewStore, params.maintenance.maxEntries, {
     log: false,
     preserveKeys: preserveSessionKeys,
+    preserveRecentMs: params.maintenance.preserveRecentMs,
     onCapped: ({ key }) => {
       cappedKeys.add(key);
     },
@@ -550,10 +562,12 @@ export async function runSessionsCleanup(params: {
         pruneMissingTranscriptEntries({
           store: applyStore,
           storePath: target.storePath,
-          onPruned: (sessionKey, entry) => {
+          onPruned: (sessionKey, entry, inspection) => {
             missingRemovals.push({
               sessionKey,
               expectedEntry: structuredClone(entry),
+              archiveRemovedTranscript: true,
+              ...(inspection ? { expectedTranscriptSnapshot: inspection.snapshot } : {}),
             });
           },
         });

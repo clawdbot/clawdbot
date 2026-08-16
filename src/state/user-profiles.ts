@@ -722,3 +722,10 @@ export function listProfiles(options: OpenClawStateDatabaseOptions = {}): UserPr
     { databaseLabel: database.path, operationLabel: "user-profiles.list" },
   );
 }
+
+/** True when session-sharing policy can distinguish at least two durable people. */
+export function hasMultipleSessionSharingIdentities(
+  options: OpenClawStateDatabaseOptions = {},
+): boolean {
+  return listProfiles(options).filter((profile) => !profile.mergedInto).length >= 2;
+}

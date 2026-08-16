@@ -293,7 +293,10 @@ describe("processDiscordMessage draft streaming progress", () => {
       const draftStream = createMockDraftStreamForTest();
 
       dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        expect(params?.replyOptions?.commentaryPayloadsEnabled).toBe(true);
+        expect(params?.replyOptions?.shouldDeliverCommentaryPayloads?.()).toBe(false);
         params?.replyOptions?.onVerboseProgressVisibility?.(() => durableLaneActive);
+        expect(params?.replyOptions?.shouldDeliverCommentaryPayloads?.()).toBe(durableLaneActive);
         await params?.replyOptions?.onItemEvent?.({
           itemId: "preamble-1",
           kind: "preamble",
@@ -327,6 +330,25 @@ describe("processDiscordMessage draft streaming progress", () => {
       }
     },
   );
+
+  it("omits the durable commentary owner when Discord commentary progress is disabled", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      expect(params?.replyOptions?.commentaryPayloadsEnabled).toBe(false);
+      expect(params?.replyOptions?.shouldDeliverCommentaryPayloads).toBeUndefined();
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticDraftContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: { commentary: false },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+  });
 
   it.each([
     ["active", true],

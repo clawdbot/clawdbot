@@ -126,7 +126,7 @@ export async function runHostedSkillsSetup(
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   runtime?: RuntimeEnv,
 ): Promise<HostedSetupCompletion> {
-  const [{ setupSkills }, { resolveOnboardingAgentTarget }] = await Promise.all([
+  const [{ setupSkills }, { resolveSystemAgentOnboardingTarget }] = await Promise.all([
     import("../commands/onboard-skills.js"),
     import("../commands/onboard-agent-target.js"),
   ]);
@@ -137,7 +137,7 @@ export async function runHostedSkillsSetup(
     run: async ({ baseConfig, runtime: setupRuntime }) => ({
       nextConfig: await setupSkills(
         baseConfig,
-        resolveOnboardingAgentTarget(baseConfig).workspaceDir,
+        resolveSystemAgentOnboardingTarget(baseConfig).workspaceDir,
         setupRuntime,
         prompter,
         { beforePersistentEffect: async () => await beforePersistentApply(setupRuntime) },
@@ -220,8 +220,8 @@ export async function runHostedMemoryImport(
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   onProviderOutcome: (outcome: MemoryImportProviderOutcome) => void,
 ): Promise<HostedMemoryImportOutcome> {
-  const [{ resolveAgentWorkspaceDir, resolveDefaultAgentId }, { readSetupConfigFileSnapshot }] =
-    await Promise.all([import("../agents/agent-scope.js"), loadSetupShared()]);
+  const [{ readSetupConfigFileSnapshot }, { resolveSystemAgentOnboardingTarget }] =
+    await Promise.all([loadSetupShared(), import("../commands/onboard-agent-target.js")]);
   const snapshot = await readSetupConfigFileSnapshot();
   if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
     throw new Error(
@@ -230,8 +230,7 @@ export async function runHostedMemoryImport(
   }
   const baseHash = snapshot.hash;
   const config = snapshot.config;
-  const agentId = resolveDefaultAgentId(config);
-  const workspace = resolveAgentWorkspaceDir(config, agentId);
+  const { agentId, workspaceDir: workspace } = resolveSystemAgentOnboardingTarget(config);
   try {
     if (!(await stat(workspace)).isDirectory()) {
       return { status: "workspace-missing", providers: [], workspace };
@@ -248,6 +247,7 @@ export async function runHostedMemoryImport(
   const runtime = createHostedWizardRuntime(defaultRuntime);
   return await runSetupMemoryImportStep({
     config,
+    agentId,
     prompter,
     runtime,
     beforeApply: async () => {

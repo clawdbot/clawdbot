@@ -5,6 +5,8 @@ import type {
   SessionDiscussionInfo,
   SessionDiscussionState,
 } from "../../../../../packages/gateway-protocol/src/index.js";
+import { icons } from "../../../components/icons.ts";
+import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { buildWidgetThemeMessage, postWidgetTheme } from "./widget-theme.ts";
@@ -220,14 +222,16 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
                 @load=${this.handleDiscussionFrameLoad}
               ></iframe>
             `
-          : html`<div class="session-discussion__empty">
-              <span>${t("chat.sessionDiscussion.unavailable")}</span>
-              ${openUrl
+          : renderPanelEmptyState({
+              icon: icons.messageSquare,
+              heading: t("chat.sidePanel.discussion"),
+              description: t("chat.sessionDiscussion.unavailable"),
+              action: openUrl
                 ? html`<a class="session-link" href=${openUrl} target="_blank" rel="noopener">
                     ${t("chat.sessionDiscussion.openExternal")}
                   </a>`
-                : nothing}
-            </div>`}
+                : nothing,
+            })}
       </div>
     `;
   }
@@ -259,11 +263,13 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
       return nothing;
     }
     if (info.state === "available") {
-      return html`<div class="session-discussion__empty">
-        ${this.canOpen
-          ? t("chat.sessionDiscussion.opening")
-          : t("chat.sessionDiscussion.requiresWriteAccess")}
-      </div>`;
+      return this.canOpen
+        ? html`<div class="session-discussion__empty">${t("chat.sessionDiscussion.opening")}</div>`
+        : renderPanelEmptyState({
+            icon: icons.messageSquare,
+            heading: t("chat.sidePanel.discussion"),
+            description: t("chat.sessionDiscussion.requiresWriteAccess"),
+          });
     }
     return this.renderOpen(info);
   }

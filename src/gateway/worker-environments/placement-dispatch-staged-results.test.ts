@@ -211,12 +211,23 @@ describe("staged worker placement result recovery", () => {
       }),
     ).toMatchObject({ kind: "execute" });
     placementStore.handoffWorkspaceResultRecovery(claim);
+    let signalToolAdmissionClosed!: () => void;
+    const toolAdmissionClosed = new Promise<void>((resolve) => {
+      signalToolAdmissionClosed = resolve;
+    });
+    const closeWorkerTurnToolState = placementStore.closeWorkerTurnToolState.bind(placementStore);
+    // Reconciliation performs real Git I/O before reaching this boundary, so
+    // synchronize on admission closure instead of a wall-clock polling budget.
+    vi.spyOn(placementStore, "closeWorkerTurnToolState").mockImplementation((closingClaim) => {
+      const closing = closeWorkerTurnToolState(closingClaim);
+      signalToolAdmissionClosed();
+      return closing;
+    });
 
     const reconciliation = harness.service.reconcile();
 
-    await vi.waitFor(() => {
-      expect(placementStore.isWorkerTurnToolAuthorized(binding, "sessions_send")).toBe(false);
-    });
+    await toolAdmissionClosed;
+    expect(placementStore.isWorkerTurnToolAuthorized(binding, "sessions_send")).toBe(false);
     expect(harness.environments.destroy).not.toHaveBeenCalled();
     expect(harness.placements.current()).toMatchObject({
       state: "active",

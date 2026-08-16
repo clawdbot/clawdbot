@@ -2609,6 +2609,13 @@ describe("startTelegramWebhook", () => {
     ).rejects.toThrow(/requires a non-empty secret token/i);
   });
 
+  it("rejects startup when the webhook path collides with the health path", async () => {
+    await expect(
+      withStartedWebhook({ secret: TELEGRAM_SECRET, path: "/healthz" }, async () => undefined),
+    ).rejects.toThrow(/webhook path.*conflicts with.*health/i);
+    expect(setWebhookSpy).not.toHaveBeenCalled();
+  });
+
   it("registers webhook using the bound listening port when port is 0", async () => {
     setWebhookSpy.mockClear();
     const runtimeLog = vi.fn();

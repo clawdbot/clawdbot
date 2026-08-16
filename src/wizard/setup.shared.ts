@@ -43,6 +43,41 @@ export function hasQuickstartGatewayOverrides(
   );
 }
 
+export function formatQuickstartGatewaySummary(
+  defaults: QuickstartGatewayDefaults,
+  keepExisting: boolean,
+): string {
+  const bind = {
+    auto: t("wizard.gateway.bindAuto"),
+    custom: t("wizard.gateway.bindCustom"),
+    lan: t("wizard.gateway.bindLan"),
+    loopback: t("wizard.gateway.bindLoopback"),
+    tailnet: t("wizard.gateway.bindTailnet"),
+  }[defaults.bind];
+  return [
+    ...(keepExisting ? [t("wizard.setup.quickstartKeepSettings")] : []),
+    t("wizard.setup.quickstartGatewayPort", { port: defaults.port }),
+    t("wizard.setup.quickstartGatewayBind", { bind }),
+    ...(defaults.bind === "custom" && defaults.customBindHost
+      ? [
+          t("wizard.setup.quickstartGatewayCustomIp", {
+            host: defaults.customBindHost,
+          }),
+        ]
+      : []),
+    t("wizard.setup.quickstartGatewayAuth", {
+      auth:
+        defaults.authMode === "token"
+          ? t("wizard.setup.quickstartAuthTokenDefault")
+          : t("common.password"),
+    }),
+    t("wizard.setup.quickstartTailscaleExposure", {
+      exposure: t(`wizard.gatewayTailscale.${defaults.tailscaleMode}`),
+    }),
+    t("wizard.setup.quickstartDirectChannels"),
+  ].join("\n");
+}
+
 /**
  * Config writes go through the pending-plugin-install commit helper so wizard
  * flows never drop install records that a concurrent migration already staged.

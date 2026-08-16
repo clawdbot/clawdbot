@@ -30,6 +30,8 @@ export type WsOriginCheckMetrics = {
   hostHeaderFallbackAccepted: number;
 };
 
+type WsSendResult = { kind: "sent" | "unavailable" } | { kind: "serialization"; error: unknown };
+
 export type GatewayWsMessageHandlerParams = {
   socket: WebSocket;
   upgradeReq: IncomingMessage;
@@ -63,7 +65,7 @@ export type GatewayWsMessageHandlerParams = {
   buildRequestContext: () => GatewayRequestContext;
   nodeLifecycleDispatch: GatewayNodeLifecycleDispatchTracker;
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
-  send: (obj: unknown) => void;
+  send: (obj: unknown) => WsSendResult;
   close: (code?: number, reason?: string) => void;
   isClosed: () => boolean;
   clearHandshakeTimer: () => void;

@@ -1,5 +1,6 @@
 // Discord provider module implements model/runtime integration.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -437,6 +438,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       accountId: account.accountId,
       token,
       runtime,
+      buildContext: (opts.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
+        .buildContext,
       setStatus: opts.setStatus,
       abortSignal: opts.abortSignal,
       botUserId,

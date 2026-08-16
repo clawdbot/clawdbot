@@ -226,8 +226,10 @@ function buildEffectiveKnownNode(entry: {
   pendingNodePairing?: KnownNodePendingSource;
   live?: NodeSession;
   sessionHost: boolean;
+  issues?: NodeListNode["issues"];
 }): NodeListNode {
-  const { nodeId, devicePairing, nodePairing, pendingNodePairing, live, sessionHost } = entry;
+  const { nodeId, devicePairing, nodePairing, pendingNodePairing, live, sessionHost, issues } =
+    entry;
   const lastSeen = resolveEffectiveLastSeen({ live, devicePairing, nodePairing });
   const lastConnectedAtMs = maxDefinedTimestamp(
     nodePairing?.lastConnectedAtMs,
@@ -295,7 +297,9 @@ function buildEffectiveKnownNode(entry: {
     commands: filterPublicNodeCommands(
       live ? uniqueSortedStrings(live.commands) : uniqueSortedStrings(nodePairing?.commands),
     ),
+    computerUse: live?.computerUse,
     sessionHost,
+    ...(issues?.length ? { issues: [...issues] } : {}),
     nodePluginTools: live?.nodePluginTools,
     pathEnv: live?.pathEnv,
     permissions: live?.permissions ?? nodePairing?.permissions,
@@ -345,6 +349,7 @@ export function createKnownNodeCatalog(params: {
   pendingNodes?: readonly NodePairingPendingRequest[];
   connectedNodes: readonly NodeSession[];
   sessionHostNodeIds?: ReadonlySet<string>;
+  issuesByNodeId?: ReadonlyMap<string, NodeListNode["issues"]>;
 }): KnownNodeCatalog {
   const devicePairingById = new Map(
     params.pairedDevices
@@ -398,6 +403,7 @@ export function createKnownNodeCatalog(params: {
         pendingNodePairing,
         live,
         sessionHost: params.sessionHostNodeIds?.has(nodeId) === true,
+        issues: params.issuesByNodeId?.get(nodeId),
       }),
     });
   }

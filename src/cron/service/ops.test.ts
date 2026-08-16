@@ -1450,9 +1450,7 @@ describe("cron service ops seam coverage", () => {
           expect(restored?.state.lastRunAtMs).toBe(startedAt);
           expect(restored?.state.lastRunStatus).toBe(status);
           expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-          expect(findTaskByRunId(taskRunId)?.status).toBe(
-            status === "error" ? "failed" : "succeeded",
-          );
+          expect(findTaskByRunId(taskRunId)?.status).toBe(status === "ok" ? "succeeded" : "failed");
         } finally {
           stop(state);
         }

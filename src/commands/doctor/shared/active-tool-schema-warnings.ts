@@ -38,8 +38,7 @@ async function resolveRuntimeModelContext(params: {
   provider: string;
   modelId: string;
 }): Promise<RuntimeModelContext> {
-  // Doctor runs before agent lifecycle publication; async resolution prepares discovery instead
-  // of reporting an unpublished synchronous runtime as a broken provider.
+  // Doctor diagnostics resolve static transport facts without publishing a live agent generation.
   const resolution = await resolveModelAsync(
     params.provider,
     params.modelId,
@@ -48,6 +47,9 @@ async function resolveRuntimeModelContext(params: {
     {
       agentId: params.agentId,
       workspaceDir: params.workspaceDir,
+      skipAgentDiscovery: true,
+      allowBundledStaticCatalogFallback: true,
+      preferBundledStaticCatalogTransport: true,
     },
   );
   const model = resolution.model as ProviderRuntimeModel | undefined;

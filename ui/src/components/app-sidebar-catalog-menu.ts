@@ -51,7 +51,7 @@ export class SidebarCatalogMenuController {
   ): void {
     if (action === "terminal") {
       if (menu.canOpenTerminal && this.hooks.terminalAvailable()) {
-        openCatalogSessionInTerminal(menu.key);
+        openCatalogSessionInTerminal(menu.key, menu.agentId);
       }
       return;
     }

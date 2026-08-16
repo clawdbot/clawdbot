@@ -110,7 +110,7 @@ export type ConfigIoDeps = {
 export type NormalizedConfigIoDeps = Required<ConfigIoDeps>;
 
 export type ConfigIoFactoryOptions = ConfigIoDeps & {
-  pluginValidation?: "full" | "skip";
+  pluginValidation?: "full" | "skip" | "core-only";
   preservedLegacyRootKeys?: readonly string[];
   shellEnvFallback?: "load" | "defer";
 };

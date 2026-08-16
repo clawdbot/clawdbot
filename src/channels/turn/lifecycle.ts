@@ -40,6 +40,7 @@ import {
   throwIfDurableInboundReplyDeliveryFailed,
 } from "./durable-delivery.js";
 import { runPreparedChannelTurnCore } from "./execution.js";
+import { applyRouteDmScope } from "./route-dm-scope.js";
 import type {
   AssembledChannelTurn,
   ChannelEventDeliveryAdapter,
@@ -61,7 +62,6 @@ type RoutedAssembledChannelTurn = Omit<
   delivery: ChannelTurnDeliveryAdapter;
 };
 
-type DispatchableChannelTurn = AssembledChannelTurn | RoutedAssembledChannelTurn;
 type AnyChannelDeliveryAdapter = ChannelEventDeliveryAdapter | ChannelTurnDeliveryAdapter;
 
 type PendingChannelDeliveryAttempt = {
@@ -90,7 +90,7 @@ export function assembleResolvedChannelTurn<
     const { cfg, route, ...turn } = value;
     return {
       ...turn,
-      ctxPayload: route.dmScope ? { ...turn.ctxPayload, DmScope: route.dmScope } : turn.ctxPayload,
+      ctxPayload: applyRouteDmScope(turn.ctxPayload, route.dmScope),
       routeSessionKey: route.sessionKey,
       storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: route.agentId }),
       recordInboundSession,
@@ -99,7 +99,7 @@ export function assembleResolvedChannelTurn<
   const { cfg, route, ...turn } = value;
   const assembled: RoutedAssembledChannelTurn = {
     ...turn,
-    ctxPayload: route.dmScope ? { ...turn.ctxPayload, DmScope: route.dmScope } : turn.ctxPayload,
+    ctxPayload: applyRouteDmScope(turn.ctxPayload, route.dmScope),
     cfg,
     agentId: route.agentId,
     routeSessionKey: route.sessionKey,
@@ -110,7 +110,7 @@ export function assembleResolvedChannelTurn<
 }
 
 function resolveAssembledReplyPipeline(
-  params: DispatchableChannelTurn,
+  params: AssembledChannelTurn | RoutedAssembledChannelTurn,
 ): Pick<AssembledChannelTurn, "dispatcherOptions" | "replyOptions"> {
   const adoption = params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
   let replyOptions = adoption

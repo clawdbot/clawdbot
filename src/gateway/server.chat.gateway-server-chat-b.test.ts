@@ -30,6 +30,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
+import { getMediaDir } from "../media/store.js";
 import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import { rebasePluginMetadataSnapshotManifestRegistry } from "../plugins/plugin-metadata-snapshot.js";
@@ -124,6 +125,7 @@ function createChatVisionModelCatalogSnapshot(): Awaited<
   return {
     agentId: "main",
     agentDir: "/tmp/chat-attachment-vision-agent",
+    catalogComplete: false,
     workspaceDir: "/tmp/chat-attachment-vision-workspace",
     config: {},
     entries: [
@@ -732,6 +734,66 @@ describe("gateway server chat", () => {
   );
 
   test.each(["chat.history", "chat.startup"] as const)(
+    "%s adopts the in-flight run for a non-default agent alias key",
+    async (method) => {
+      const { sessionDir } = openDirectChatSession();
+      try {
+        // Per-agent stores: bare keys then carry no persisted fixed-store
+        // owner, so an explicit non-default agentId is a valid pairing.
+        testState.sessionConfig = {
+          store: path.join(sessionDir, "sessions-{agentId}.json"),
+        };
+        await writeGatewayConfig({
+          agents: { entries: { main: { default: true }, writer: {} } },
+        });
+        await writeSessionStore({
+          agentId: "writer",
+          storePath: path.join(sessionDir, "sessions-writer.json"),
+          entries: { "agent:writer:notes": { sessionId: "sess-writer", updatedAt: Date.now() } },
+        });
+        const writerConfig = {
+          agents: { entries: { main: { default: true }, writer: {} } },
+          session: { store: path.join(sessionDir, "sessions-{agentId}.json") },
+        };
+        const context = createDirectChatContext({
+          getRuntimeConfig: () => writerConfig,
+        });
+        const controller = new AbortController();
+        // chat.send registers the agent-scoped canonical key; the handler's
+        // in-flight adoption must resolve the same scoped key for the bare
+        // alias request or the streaming run renders idle on switch-back.
+        context.chatAbortControllers.set("run-writer", {
+          controller,
+          sessionId: "sess-writer",
+          sessionKey: "agent:writer:notes",
+          agentId: "writer",
+          startedAtMs: 1_000,
+          expiresAtMs: Date.now() + 60_000,
+          projectSessionActive: true,
+        });
+        context.chatRunState.getOrCreate("run-writer").buffer = "writer partial";
+        const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+        await callDirectChat(method, {
+          id: method,
+          params: { sessionKey: "notes", agentId: "writer" },
+          respond: captureChatResponse(responses),
+          context,
+        });
+
+        expect(responses).toHaveLength(1);
+        expect(responses[0]?.ok, JSON.stringify(responses[0]?.error ?? null)).toBe(true);
+        expect(
+          (responses[0]?.payload as { inFlightRun?: unknown } | undefined)?.inFlightRun,
+        ).toMatchObject({ runId: "run-writer", text: "writer partial" });
+      } finally {
+        testState.sessionConfig = undefined;
+        testState.sessionStorePath = undefined;
+        clearConfigCache();
+      }
+    },
+  );
+
+  test.each(["chat.history", "chat.startup"] as const)(
     "%s replays bounded active progress events in inFlightRun",
     async (method) => {
       const {
@@ -941,6 +1003,7 @@ describe("gateway server chat", () => {
           .mockResolvedValue({
             agentId: "main",
             agentDir: "/tmp/chat-history-agent",
+            catalogComplete: false,
             workspaceDir: "/tmp/chat-history-workspace",
             config,
             entries: catalog,
@@ -1156,6 +1219,7 @@ describe("gateway server chat", () => {
       loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
         agentId: "main",
         agentDir: "/tmp/chat-main-agent",
+        catalogComplete: false,
         workspaceDir: "/tmp/chat-main-workspace",
         config,
         entries: [{ id: "main-only", name: "Main only", provider: "test" }],
@@ -1507,6 +1571,7 @@ describe("gateway server chat", () => {
               .mockResolvedValue({
                 agentId: "work",
                 agentDir: "/tmp/chat-work-agent",
+                catalogComplete: false,
                 workspaceDir: "/tmp/chat-work-workspace",
                 config: persistedConfig,
                 ...catalogSnapshot,
@@ -1575,7 +1640,11 @@ describe("gateway server chat", () => {
               id: "gpt-5.5",
               name: "GPT-5.5",
               provider: "openai",
-              agentRuntime: { id: "codex", source: "implicit" },
+              agentRuntime: {
+                id: "codex",
+                cloudPlacementSupported: false,
+                source: "implicit",
+              },
               contextWindow: 400_000,
               reasoning: false,
               available: true,
@@ -1759,6 +1828,7 @@ describe("gateway server chat", () => {
             return {
               agentId: "work",
               agentDir: "/tmp/chat-work-agent",
+              catalogComplete: false,
               workspaceDir: "/tmp/chat-work-workspace",
               config,
               entries,
@@ -2042,6 +2112,122 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send discards prepared inbound media when a hook blocks the turn", async () => {
+    openDirectChatSession();
+    try {
+      await writeStoredMainSession({
+        modelProvider: "test-provider",
+        model: "vision-model",
+      });
+      const context = createDirectChatContext({ getRuntimeConfig: () => ({}) });
+      const inboundDir = path.join(getMediaDir(), "inbound");
+      const inboundBaseline = new Set(await fs.readdir(inboundDir).catch(() => []));
+      // A before_agent_run block persists only the redacted reason — no media
+      // markers — so dispatch must discard the prepared refs on settle.
+      dispatchInboundMessageMock.mockImplementationOnce(async (params: unknown) => {
+        const recorder = (
+          params as {
+            replyOptions?: { userTurnTranscriptRecorder?: { markBlocked: () => void } };
+          }
+        ).replyOptions?.userTurnTranscriptRecorder;
+        recorder?.markBlocked();
+      });
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      await callDirectChat("chat.send", {
+        id: "blocked-turn-media",
+        params: makeChatSendParams({
+          message: "blocked turn with media",
+          idempotencyKey: "idem-blocked-turn-media",
+          attachments: [
+            {
+              type: "file",
+              mimeType: "text/plain",
+              fileName: "notes.txt",
+              content: Buffer.from("offloaded inbound media").toString("base64"),
+            },
+          ],
+        }),
+        client: {
+          connId: "conn-owner",
+          connect: { device: { id: "dev-owner" }, scopes: ["operator.write"] },
+        } as never,
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+      expect(responses[0]?.ok).toBe(true);
+      await waitForFast(async () => {
+        const remaining = await fs.readdir(inboundDir).catch(() => []);
+        expect(remaining.filter((name) => !inboundBaseline.has(name))).toEqual([]);
+      }, FAST_WAIT_OPTS);
+    } finally {
+      resetDirectChatSession();
+    }
+  });
+
+  test("chat.send discards prepared inbound media when setup throws before the ACK", async () => {
+    openDirectChatSession();
+    try {
+      await writeStoredMainSession({
+        modelProvider: "test-provider",
+        model: "vision-model",
+      });
+      const context = createDirectChatContext({
+        // Throwing from addChatRun exercises handleChatSendSetupError — one of
+        // the pre-persistence exits that previously leaked staged media.
+        addChatRun: vi.fn(() => {
+          throw new Error("setup exploded before ack");
+        }),
+        getRuntimeConfig: () => ({}),
+      });
+      const inboundDir = path.join(getMediaDir(), "inbound");
+      const inboundBaseline = new Set(await fs.readdir(inboundDir).catch(() => []));
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      await callDirectChat("chat.send", {
+        id: "setup-error-media",
+        params: makeChatSendParams({
+          message: "setup error with media",
+          idempotencyKey: "idem-setup-error-media",
+          attachments: [
+            {
+              // Non-image attachments always offload into the inbound media
+              // store during preparation; the failed send must discard them.
+              type: "file",
+              mimeType: "text/plain",
+              fileName: "notes.txt",
+              content: Buffer.from("offloaded inbound media").toString("base64"),
+            },
+          ],
+        }),
+        client: {
+          connId: "conn-owner",
+          connect: { device: { id: "dev-owner" }, scopes: ["operator.write"] },
+        } as never,
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+      expect(responses).toEqual([
+        {
+          ok: false,
+          payload: expect.objectContaining({ status: "error" }),
+          error: expect.anything(),
+        },
+      ]);
+      // Prepared inbound media has no transcript reference on this exit; the
+      // admission cleanup owner must discard it or the file is orphaned
+      // forever (the inbound sweep is off unless attachments.ttlHours is set).
+      await waitForFast(async () => {
+        const remaining = await fs.readdir(inboundDir).catch(() => []);
+        expect(remaining.filter((name) => !inboundBaseline.has(name))).toEqual([]);
+      }, FAST_WAIT_OPTS);
+    } finally {
+      resetDirectChatSession();
+    }
+  });
+
   test("chat.abort cancels chat.send during attachment preparation before ACK", async () => {
     openDirectChatSession();
     const firstCatalogSnapshot =
@@ -2068,6 +2254,8 @@ describe("gateway server chat", () => {
         getRuntimeConfig: () => ({}),
       });
 
+      const inboundDir = path.join(getMediaDir(), "inbound");
+      const inboundBaseline = new Set(await fs.readdir(inboundDir).catch(() => []));
       const pngB64 =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
       const params = makeChatSendParams({
@@ -2079,6 +2267,14 @@ describe("gateway server chat", () => {
             mimeType: "image/png",
             fileName: "dot.png",
             content: pngB64,
+          },
+          {
+            // Non-image attachments always offload into the inbound media
+            // store during preparation; the aborted send must discard them.
+            type: "file",
+            mimeType: "text/plain",
+            fileName: "notes.txt",
+            content: Buffer.from("offloaded inbound media").toString("base64"),
           },
         ],
       });
@@ -2177,6 +2373,13 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       expect(context.addChatRun).not.toHaveBeenCalled();
       expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      // Prepared inbound media has no transcript reference on this exit; the
+      // handler must discard it or the file is orphaned forever (the inbound
+      // sweep is disabled unless attachments.ttlHours is set).
+      await waitForFast(async () => {
+        const remaining = await fs.readdir(inboundDir).catch(() => []);
+        expect(remaining.filter((name) => !inboundBaseline.has(name))).toEqual([]);
+      }, FAST_WAIT_OPTS);
     } finally {
       firstCatalogSnapshot.resolve(createChatVisionModelCatalogSnapshot());
       resetDirectChatSession();
@@ -4146,6 +4349,18 @@ describe("gateway server chat", () => {
       expect(finalEvents).toHaveLength(1);
       expect(context.chatQueuedTurns.has("idem-queued-followup")).toBe(true);
       expect(isSessionWorkAdmissionActive(storePath, ["agent:main:main", "sess-main"])).toBe(true);
+      const { createAgentTurnService } = await import("./agent-turn/agent-turn-service.js");
+      await expect(
+        createAgentTurnService({ context, isWebchatConnect: () => true }).waitForTurn({
+          runId: "idem-queued-followup",
+          timeoutMs: 10,
+        }),
+      ).resolves.toMatchObject({
+        runId: "idem-queued-followup",
+        status: "pending",
+        timeoutPhase: "queue",
+        providerStarted: false,
+      });
 
       onQueueDisposition?.("queue-cap-old");
       expect(context.logGateway.info).toHaveBeenCalledWith(

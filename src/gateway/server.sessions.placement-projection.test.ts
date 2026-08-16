@@ -15,6 +15,7 @@ function activePlacementRecord(): WorkerSessionPlacementRecord {
     sessionId: "sess-main",
     agentId: "main",
     sessionKey: "agent:main:main",
+    executionMode: "worker-turn",
     state: "active",
     environmentId: "env-placement",
     generation: 7,

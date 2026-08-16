@@ -300,7 +300,7 @@ function buildUserInputResponse(
   questions: AgentHarnessUserInputQuestion[],
   inputText: string,
 ): JsonObject {
-  return buildAgentHarnessUserInputAnswers(questions, inputText) as unknown as JsonObject;
+  return { ...buildAgentHarnessUserInputAnswers(questions, inputText) };
 }
 
 function gatewayAnswersToCodexResponse(answers: Record<string, string[]>): JsonObject {
@@ -312,7 +312,7 @@ function gatewayAnswersToCodexResponse(answers: Record<string, string[]>): JsonO
 }
 
 function emptyUserInputResponse(): JsonObject {
-  return emptyAgentHarnessUserInputAnswers() as unknown as JsonObject;
+  return { ...emptyAgentHarnessUserInputAnswers() };
 }
 
 function readRequestId(record: JsonObject): string | number | undefined {

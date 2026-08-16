@@ -280,9 +280,10 @@ describe("cron controller", () => {
       cronModelSuggestions: [],
     };
 
-    await loadCronModelSuggestions(state);
+    await loadCronModelSuggestions(state, "writer");
 
     expect(request).toHaveBeenCalledWith("models.list", {
+      agentId: "writer",
       view: "configured",
       preparedOnly: true,
     });
@@ -676,6 +677,34 @@ describe("cron controller", () => {
     expectRecordFields(requireRecord(requestPatch(call).delivery, "delivery"), {
       mode: "announce",
       accountId: null,
+    });
+  });
+
+  it("sends null delivery.to in cron.update to clear a persisted destination", async () => {
+    const job = createCronJob({
+      id: "job-clear-to",
+      name: "clear to",
+      delivery: { mode: "announce", channel: "telegram", to: "12345" },
+    });
+    const { submit } = createCronSubmitHarness(job.id, {
+      method: "cron.update",
+      jobs: [job],
+      form: {
+        name: "clear to",
+        scheduleKind: "cron",
+        cronExpr: "0 * * * *",
+        wakeMode: "next-heartbeat",
+        payloadText: "run",
+        deliveryMode: "announce",
+        deliveryTo: "   ",
+      },
+    });
+
+    const { call } = await submit();
+
+    expectRecordFields(requireRecord(requestPatch(call).delivery, "delivery"), {
+      mode: "announce",
+      to: null,
     });
   });
 
@@ -1338,9 +1367,13 @@ describe("cron controller", () => {
   });
 
   it.each([
-    { scenario: "all agents", cronAgentId: null, expectedAgentId: "" },
-    { scenario: "the default agent", cronAgentId: "main", expectedAgentId: "main" },
-    { scenario: "a selected agent", cronAgentId: "writer", expectedAgentId: "writer" },
+    {
+      scenario: "an all-agent filter with a selected owner",
+      cronAgentId: null,
+      selectedAgentId: "writer",
+    },
+    { scenario: "the default agent", cronAgentId: "main", selectedAgentId: "main" },
+    { scenario: "a selected agent", cronAgentId: "writer", selectedAgentId: "writer" },
   ])("canceling edit resets form for $scenario and clears edit mode", (scenario) => {
     const state = createState({ cronAgentId: scenario.cronAgentId });
     const job = createCronJob({
@@ -1354,12 +1387,12 @@ describe("cron controller", () => {
     state.cronForm.name = "changed";
     state.cronFieldErrors = { name: "Name is required." };
 
-    cancelCronEdit(state);
+    cancelCronEdit(state, scenario.selectedAgentId);
 
     expect(state.cronEditingJobId).toBeNull();
     expect(state.cronForm).toEqual({
       ...DEFAULT_CRON_FORM,
-      agentId: scenario.expectedAgentId,
+      agentId: scenario.selectedAgentId,
     });
     // Fresh forms start visually clean; validation re-arms on change/submit.
     expect(state.cronFieldErrors).toEqual({});

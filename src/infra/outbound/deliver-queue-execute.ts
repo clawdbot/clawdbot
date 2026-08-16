@@ -34,7 +34,7 @@ import {
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
   markDeliveryPlatformSendDispatched,
-} from "./delivery-queue.js";
+} from "./delivery-queue-storage.js";
 import { createMessageSentEmitter, type MessageSentEvent } from "./message-sent-hook.js";
 import {
   completedOutboundAuditTerminals,

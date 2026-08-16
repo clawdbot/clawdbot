@@ -408,6 +408,10 @@ describe("normalizeInitialApplicationLocation", () => {
     };
     const context = {
       gateway,
+      agentSelection: {
+        state: { selectedId: "main" },
+        subscribe: () => () => undefined,
+      },
       replace: replaceRoute,
     } as unknown as ApplicationContext<RouteId>;
 
@@ -610,6 +614,40 @@ describe("normalizeInitialApplicationLocation", () => {
       expect(pushState).toHaveBeenCalledWith({}, "", "/new");
     } finally {
       pushState.mockRestore();
+      runtime.stop();
+      saveSettings(previousSettings);
+      window.history.replaceState({}, "", previousUrl);
+    }
+  });
+
+  it("replaces instead of pushing when re-navigating to the active location", async () => {
+    const previousSettings = loadSettings();
+    const previousUrl = window.location.href;
+    saveSettings({
+      ...previousSettings,
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+    });
+    window.history.replaceState({}, "", "/");
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
+    const pushState = vi.spyOn(window.history, "pushState");
+    const replaceState = vi.spyOn(window.history, "replaceState");
+
+    try {
+      await runtime.start();
+      await runtime.context.navigateAndWait("about");
+      expect(pushState).toHaveBeenCalledWith({}, "", "/settings/about");
+      pushState.mockClear();
+      replaceState.mockClear();
+
+      // Re-clicking the active nav item: no new history entry, Back stays live.
+      await runtime.context.navigateAndWait("about");
+
+      expect(pushState).not.toHaveBeenCalled();
+      expect(replaceState).toHaveBeenCalledWith({}, "", "/settings/about");
+    } finally {
+      pushState.mockRestore();
+      replaceState.mockRestore();
       runtime.stop();
       saveSettings(previousSettings);
       window.history.replaceState({}, "", previousUrl);

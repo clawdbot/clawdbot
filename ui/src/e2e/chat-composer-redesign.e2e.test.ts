@@ -53,6 +53,9 @@ suite.define(() => {
         if (!composerBox || !footerBox || !menuBox || !triggerBox) {
           throw new Error(`expected mobile layout boxes for ${picker.menu}`);
         }
+        expect(menuBox.x).toBeGreaterThanOrEqual(12);
+        expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(655);
+        expect(menuBox.width).toBeGreaterThanOrEqual(642);
         expect(menuBox.y).toBeGreaterThanOrEqual(0);
         expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(composerBox.y + 1);
         expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(376);
@@ -224,6 +227,7 @@ suite.define(() => {
       await effort.click();
       const thinkingSlider = composer.locator('[data-chat-thinking-slider="true"]');
       const speedToggle = composer.locator("[data-chat-speed-toggle]");
+      await expect.poll(() => thinkingSlider.isVisible()).toBe(true);
       await expect
         .poll(() => thinkingSlider.getAttribute("data-chat-thinking-values"))
         .toBe("off,low,medium,high");
@@ -544,6 +548,9 @@ suite.define(() => {
       await textarea.fill("");
       await expect.poll(() => camera.count()).toBe(0);
       await model.click();
+      await expect
+        .poll(() => composer.locator(".chat-controls__model-menu").isVisible())
+        .toBe(true);
       const mobilePickerBox = await composer.locator(".chat-controls__model-menu").boundingBox();
       expect(mobilePickerBox).not.toBeNull();
       if (!mobilePickerBox) {

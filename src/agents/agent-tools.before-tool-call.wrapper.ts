@@ -63,6 +63,9 @@ import {
   BEFORE_TOOL_CALL_HOOK_CONTEXT,
   BEFORE_TOOL_CALL_SOURCE_TOOL,
   BEFORE_TOOL_CALL_WRAPPED,
+  clearBeforeToolCallWrappedMarker,
+  getBeforeToolCallHookContext,
+  getBeforeToolCallSourceTool,
   type BeforeToolCallDiagnosticOptions,
 } from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
@@ -688,14 +691,8 @@ export function rewrapToolWithBeforeToolCallHook(
   ctx?: HookContext,
   options: { approvalMode?: "request" | "report" | "deny"; emitDiagnostics?: boolean } = {},
 ): AnyAgentTool {
-  const taggedTool = tool as unknown as Record<symbol, unknown>;
-  const source = taggedTool[BEFORE_TOOL_CALL_SOURCE_TOOL];
-  const wrappedContext = taggedTool[BEFORE_TOOL_CALL_HOOK_CONTEXT];
-  const preservedContext =
-    wrappedContext && typeof wrappedContext === "object"
-      ? (wrappedContext as HookContext)
-      : undefined;
-  const sourceTool = source && typeof source === "object" ? (source as AnyAgentTool) : tool;
+  const preservedContext = getBeforeToolCallHookContext(tool);
+  const sourceTool = getBeforeToolCallSourceTool(tool) ?? tool;
   if (sourceTool === tool) {
     return wrapToolWithBeforeToolCallHook(tool, ctx ?? preservedContext, options);
   }
@@ -704,7 +701,7 @@ export function rewrapToolWithBeforeToolCallHook(
     ...tool,
     execute: sourceTool.execute,
   };
-  delete (rewrapSource as unknown as Record<symbol, unknown>)[BEFORE_TOOL_CALL_WRAPPED];
+  clearBeforeToolCallWrappedMarker(rewrapSource);
   copyPluginToolMeta(tool, rewrapSource);
   copyChannelAgentToolMeta(tool as never, rewrapSource as never);
   copyToolTerminalPresentation(tool, rewrapSource);

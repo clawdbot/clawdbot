@@ -33,6 +33,11 @@ import {
 } from "../infra/sqlite-private-directory.js";
 import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import {
+  buildEncodedPowerShellArgs,
+  buildPowerShellFailureCause,
+  WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+} from "../infra/windows-powershell-spawn.js";
 import { runExec } from "../process/exec.js";
 import {
   copySnapshotArtifact,
@@ -1415,8 +1420,10 @@ async function assertTrustedWindowsStagingPath(rootPath: string): Promise<void> 
   let security: z.infer<typeof WINDOWS_PATH_SECURITY_SCHEMA>;
   try {
     security = await inspectWindowsPathSecurity(paths);
-  } catch {
-    throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${rootPath}`);
+  } catch (error) {
+    throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${rootPath}`, {
+      cause: error,
+    });
   }
   if (security.paths.length !== paths.length) {
     throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${rootPath}`);
@@ -1531,16 +1538,15 @@ async function runEncodedWindowsPowerShell(command: string, maxBuffer: number): 
   if (!powershell) {
     throw new Error("Unable to resolve PowerShell for Windows SQLite path security.");
   }
-  const encodedCommand = Buffer.from(command, "utf16le").toString("base64");
-  const { stdout } = await runExec(
-    powershell,
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedCommand],
-    {
-      timeoutMs: 10_000,
+  try {
+    const { stdout } = await runExec(powershell, buildEncodedPowerShellArgs(command), {
+      timeoutMs: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
       maxBuffer,
-    },
-  );
-  return stdout;
+    });
+    return stdout;
+  } catch (error) {
+    throw buildPowerShellFailureCause(error);
+  }
 }
 
 async function removePublishedSnapshotDirectoryIfOwned(

@@ -1,6 +1,7 @@
 // Imessage provider module implements model/runtime integration.
 import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelInboundDebouncer,
@@ -1055,6 +1056,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       historyLimit,
       groupHistories,
       dmHistory,
+      buildContext: (opts.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
+        .buildContext,
       media: {
         facts: mediaAttachments,
       },

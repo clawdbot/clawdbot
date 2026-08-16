@@ -9,7 +9,9 @@ private let dashboardManagerLogger = Logger(subsystem: "ai.openclaw", category: 
 @MainActor
 @Observable
 final class DashboardManager {
-    static let shared = DashboardManager()
+    static let shared = DashboardManager(
+        automaticGatewayProfileRefreshEnabled:
+        AppLaunchRuntimePlan.current.allowsGatewayUIKeychainAccess)
 
     private struct AuxiliaryWindowInstance {
         var target: DashboardGatewayTarget
@@ -46,6 +48,7 @@ final class DashboardManager {
     @ObservationIgnored private let endpointStateProvider: @Sendable () async -> GatewayEndpointState
     @ObservationIgnored private let mainWindowAutosaveName: String
     @ObservationIgnored private let observesGatewayChanges: Bool
+    @ObservationIgnored private let automaticGatewayProfileRefreshEnabled: Bool
     private(set) var gatewayEntries: [DashboardGatewayEntry] = []
     private(set) var frontmostDashboardTarget: DashboardGatewayTarget?
     @ObservationIgnored private var gatewayRefreshObservers: [NSObjectProtocol] = []
@@ -73,6 +76,7 @@ final class DashboardManager {
             await GatewayEndpointStore.shared.currentState()
         },
         observeGatewayChanges: Bool = true,
+        automaticGatewayProfileRefreshEnabled: Bool = true,
         mainWindowAutosaveName: String = DashboardWindowLayout.windowFrameAutosaveName)
     {
         self.authTokenProvider = authTokenProvider
@@ -80,7 +84,8 @@ final class DashboardManager {
         self.endpointStateProvider = endpointStateProvider
         self.mainWindowAutosaveName = mainWindowAutosaveName
         self.observesGatewayChanges = observeGatewayChanges
-        if observeGatewayChanges {
+        self.automaticGatewayProfileRefreshEnabled = automaticGatewayProfileRefreshEnabled
+        if observeGatewayChanges, automaticGatewayProfileRefreshEnabled {
             let names: [Notification.Name] = [
                 MacGatewayProfileStore.didChangeNotification,
                 .openclawConfigDidChange,
@@ -123,11 +128,6 @@ final class DashboardManager {
         // existing document after auth arrives without inventing a route change.
         let endpointState = await self.endpointStateProvider()
         await self.handleEndpointState(endpointState)
-    }
-
-    func configure(updater: UpdaterProviding) {
-        self.updater = updater
-        Task { await self.refreshGatewaySnapshots() }
     }
 
     /// The card's native update path only makes sense when the app owns the
@@ -1142,6 +1142,14 @@ extension DashboardManager {
     }
 }
 
+extension DashboardManager {
+    func configure(updater: UpdaterProviding) {
+        self.updater = updater
+        guard self.automaticGatewayProfileRefreshEnabled else { return }
+        Task { await self.refreshGatewaySnapshots() }
+    }
+}
+
 #if DEBUG
 extension DashboardManager {
     /// Test instances skip `observeEndpointChanges()` so the shared endpoint
@@ -1152,6 +1160,8 @@ extension DashboardManager {
         endpointStateProvider: @escaping @Sendable () async -> GatewayEndpointState = {
             .unavailable(mode: .unconfigured, reason: "not configured")
         },
+        observeGatewayChanges: Bool = false,
+        automaticGatewayProfileRefreshEnabled: Bool = true,
         primaryEndpointProvider: (@Sendable (AppState.ConnectionMode) async throws
             -> GatewayConnection.EndpointSnapshot)? = nil,
         profileEndpointProvider: (@Sendable (String) async throws
@@ -1163,7 +1173,8 @@ extension DashboardManager {
             authTokenProvider: authTokenProvider,
             routeProbe: routeProbe,
             endpointStateProvider: endpointStateProvider,
-            observeGatewayChanges: false,
+            observeGatewayChanges: observeGatewayChanges,
+            automaticGatewayProfileRefreshEnabled: automaticGatewayProfileRefreshEnabled,
             mainWindowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)")
         manager.testPrimaryEndpointProvider = primaryEndpointProvider
         manager.testProfileEndpointProvider = profileEndpointProvider
@@ -1181,6 +1192,10 @@ extension DashboardManager {
 
     func _testMainTarget() -> DashboardGatewayTarget {
         self.mainTarget
+    }
+
+    func _testGatewayRefreshObserverCount() -> Int {
+        self.gatewayRefreshObservers.count
     }
 
     func _testOpenWindow(for target: DashboardGatewayTarget) async {

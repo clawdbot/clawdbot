@@ -154,14 +154,12 @@ export async function invokeNodeSystemRun(params: {
             ...(params.signal ? { signal: params.signal } : {}),
           }
         : undefined;
-    const raw = callOptions
-      ? await callGatewayTool(
-          "node.invoke",
-          { timeoutMs: params.invokeWaitMs },
-          params.invoke,
-          callOptions,
-        )
-      : await callGatewayTool("node.invoke", { timeoutMs: params.invokeWaitMs }, params.invoke);
+    const raw = await callGatewayTool(
+      "node.invoke",
+      { timeoutMs: params.invokeWaitMs },
+      params.invoke,
+      callOptions,
+    );
     if (typeof asNullableRecord(asNullableRecord(raw)?.payload)?.success !== "boolean") {
       return {
         ok: false,

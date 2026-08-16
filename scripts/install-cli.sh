@@ -1448,14 +1448,6 @@ EOF
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"ok\",\"method\":\"git\"}"
 }
 
-resolve_openclaw_version() {
-  local version=""
-  if [[ -x "${PREFIX}/bin/openclaw" ]]; then
-    version="$("${PREFIX}/bin/openclaw" --version 2>/dev/null | head -n 1 | tr -d '\r')"
-  fi
-  echo "$version"
-}
-
 is_gateway_daemon_loaded() {
   local claw="$1"
   if [[ -z "$claw" || ! -x "$claw" ]]; then
@@ -1537,17 +1529,15 @@ main() {
     fail "Unknown install method: ${INSTALL_METHOD} (use npm or git)"
   fi
 
-  refresh_gateway_service_if_loaded
-
   local installed_version
-  installed_version="$(resolve_openclaw_version)"
-  if [[ -n "$installed_version" ]]; then
-    emit_json "{\"event\":\"done\",\"ok\":true,\"version\":\"${installed_version//\"/\\\"}\"}"
-    log "OpenClaw installed (${installed_version})."
-  else
-    emit_json "{\"event\":\"done\",\"ok\":true}"
-    log "OpenClaw installed."
+  if ! installed_version="$("${PREFIX}/bin/openclaw" --version 2>/dev/null | head -n 1 | tr -d '\r')" ||
+    [[ -z "$installed_version" ]]; then
+    fail "Installed OpenClaw CLI did not return a version successfully from ${PREFIX}/bin/openclaw."
   fi
+
+  refresh_gateway_service_if_loaded
+  emit_json "{\"event\":\"done\",\"ok\":true,\"version\":\"${installed_version//\"/\\\"}\"}"
+  log "OpenClaw installed (${installed_version})."
 
   if [[ "$RUN_ONBOARD" -eq 1 ]]; then
     "${PREFIX}/bin/openclaw" onboard

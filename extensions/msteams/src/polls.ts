@@ -298,8 +298,8 @@ function normalizeMSTeamsPollSelections(poll: MSTeamsPoll, selections: string[])
     .filter((value): value is number => value !== undefined)
     .filter((value) => value >= 0 && value < poll.options.length)
     .map((value) => String(value));
-  const limited = maxSelections > 1 ? mapped.slice(0, maxSelections) : mapped.slice(0, 1);
-  return uniqueStrings(limited);
+  // Deduplicate first so repeats do not consume selection slots.
+  return uniqueStrings(mapped).slice(0, maxSelections);
 }
 
 export function splitMSTeamsPoll(poll: MSTeamsPoll): {

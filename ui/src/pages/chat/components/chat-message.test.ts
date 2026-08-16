@@ -1332,6 +1332,18 @@ describe("grouped chat rendering", () => {
       10_000,
     );
     expect(outputHeavy.querySelector(".msg-meta__ctx")?.textContent).toBe("10% ctx");
+
+    // Cost is nested under usage.cost in the canonical AssistantMessage
+    // shape; the popover must surface it (it was dead reading message.cost).
+    const withCost = renderUsage(
+      {
+        input: 1_000,
+        output: 500,
+        cost: { total: 0.1234 } as unknown as number,
+      } as Record<string, number>,
+      10_000,
+    );
+    expect(withCost.querySelector(".msg-meta__cost")?.textContent).toContain("$0.12");
   });
 
   it("previews message context from the timestamp and pins it on click", () => {
@@ -4527,7 +4539,7 @@ describe("grouped chat rendering", () => {
       expect(image?.getAttribute("src")).toBe(objectUrl);
       expect(image?.getAttribute("alt")).toBe("Generated image 1");
     });
-    const thumbnailUrl = managedChatImageUrl.replace(/\/full$/u, "/thumbnail");
+    const thumbnailUrl = `/rosita${managedChatImageUrl.replace(/\/full$/u, "/thumbnail")}`;
     const [, fetchInit] = requireFetchCallForUrl(fetchMock, thumbnailUrl);
     expectSameOriginGet(fetchInit);
     expectElement(container, ".chat-message-image-button", HTMLButtonElement).click();
@@ -4540,7 +4552,7 @@ describe("grouped chat rendering", () => {
     activeItem?.release?.();
   });
 
-  it("prefers an artifact ticket without forwarding the gateway bearer", async () => {
+  it("prefixes the Control UI base path on artifact tickets without forwarding the gateway bearer", async () => {
     const artifactId = `artifact_managed_image_${crypto.randomUUID()}`;
     const managedChatImageUrl = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
     const ticketedUrl = `${managedChatImageUrl}?mediaTicket=ticket`;
@@ -4549,7 +4561,7 @@ describe("grouped chat rendering", () => {
       expiresAt: "2026-07-28T05:00:00.000Z",
     }));
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      expect(url).toBe(ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail"));
+      expect(url).toBe(`/rosita${ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail")}`);
       const headers = new Headers(init?.headers);
       expect(headers.get("Authorization")).toBeNull();
       expect(headers.get("x-openclaw-requester-session-key")).toBeNull();
@@ -4564,6 +4576,7 @@ describe("grouped chat rendering", () => {
       {
         showToolCalls: false,
         assistantAttachmentAuthToken: "must-not-be-forwarded",
+        basePath: "/rosita",
         resolveArtifactDownload,
       },
     );
@@ -5279,7 +5292,6 @@ describe("grouped chat rendering", () => {
   });
 
   function renderAssistantDisclosureActionFixture(
-    expanded: boolean,
     options: Partial<RenderMessageGroupOptions> = {},
   ) {
     const container = document.createElement("div");
@@ -5297,7 +5309,6 @@ describe("grouped chat rendering", () => {
         loadFullAssistantMessage: async () => null,
         getAssistantMessageExpansion: () => ({
           status: "loaded",
-          expanded,
           markdown: fullMessage,
           revision: 1,
         }),
@@ -5308,13 +5319,10 @@ describe("grouped chat rendering", () => {
     return { container, fullMessage, preview };
   }
 
-  it.each([
-    { expanded: false, label: "previously collapsed" },
-    { expanded: true, label: "expanded" },
-  ])("copies the full $label assistant message", async ({ expanded }) => {
+  it("copies the full loaded assistant message", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } } as unknown as Navigator);
-    const { container, fullMessage } = renderAssistantDisclosureActionFixture(expanded);
+    const { container, fullMessage } = renderAssistantDisclosureActionFixture();
 
     expect(container.querySelector(".chat-text")?.textContent).toContain(fullMessage);
     expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
@@ -5325,12 +5333,9 @@ describe("grouped chat rendering", () => {
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(fullMessage));
   });
 
-  it.each([
-    { expanded: false, label: "previously collapsed" },
-    { expanded: true, label: "expanded" },
-  ])("replies with the full $label assistant message", ({ expanded }) => {
+  it("replies with the full loaded assistant message", () => {
     const onReply = vi.fn();
-    const { container, fullMessage } = renderAssistantDisclosureActionFixture(expanded, {
+    const { container, fullMessage } = renderAssistantDisclosureActionFixture({
       onReply,
     });
 
@@ -5350,7 +5355,7 @@ describe("grouped chat rendering", () => {
     "keeps the transcript preview in %s assistant-message actions",
     (status) => {
       const onReply = vi.fn();
-      const { container, preview } = renderAssistantDisclosureActionFixture(false, {
+      const { container, preview } = renderAssistantDisclosureActionFixture({
         onReply,
         getAssistantMessageExpansion: () => ({ status, revision: 1 }),
       });
@@ -5367,17 +5372,16 @@ describe("grouped chat rendering", () => {
     },
   );
 
-  it("keeps expanded assistant thinking private while bounding reply context", async () => {
+  it("keeps loaded assistant thinking private while bounding reply context", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } } as unknown as Navigator);
     const onReply = vi.fn();
-    const visibleMessage = `${"a".repeat(499)}😀 full expanded answer`;
-    const { container } = renderAssistantDisclosureActionFixture(true, {
+    const visibleMessage = `${"a".repeat(499)}😀 full loaded answer`;
+    const { container } = renderAssistantDisclosureActionFixture({
       onReply,
       getAssistantMessageExpansion: () => ({
         status: "loaded",
-        expanded: true,
-        markdown: `<thinking>private expanded reasoning</thinking>${visibleMessage}`,
+        markdown: `<thinking>private loaded reasoning</thinking>${visibleMessage}`,
         revision: 1,
       }),
     });
@@ -5402,12 +5406,11 @@ describe("grouped chat rendering", () => {
     const onReply = vi.fn();
     const onToggleAssistantMessageExpanded = vi.fn();
     const privateThinking = "private expanded reasoning only";
-    const { container, preview } = renderAssistantDisclosureActionFixture(false, {
+    const { container, preview } = renderAssistantDisclosureActionFixture({
       onReply,
       onToggleAssistantMessageExpanded,
       getAssistantMessageExpansion: () => ({
         status: "loaded",
-        expanded: false,
         markdown: `<thinking>${privateThinking}</thinking>`,
         revision: 1,
       }),
@@ -5462,6 +5465,65 @@ describe("grouped chat rendering", () => {
       expect(container.querySelector(".chat-expand-btn")).toBeNull();
     },
   );
+
+  it.each([
+    { state: { status: "error" as const, revision: 2 }, retries: true, label: "bounded error" },
+    { state: { status: "error" as const, revision: 6 }, retries: false, label: "exhausted error" },
+    { state: { status: "loading" as const, revision: 1 }, retries: false, label: "loading" },
+  ])(
+    "retries a failed full-message load only while attempts remain ($label)",
+    ({ state, retries }) => {
+      const container = document.createElement("div");
+      const onToggleAssistantMessageExpanded = vi.fn();
+      renderAssistantMessage(
+        container,
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "abcde\n...(truncated)..." }],
+          __openclaw: { id: "msg-retry-error", seq: 1 },
+        },
+        {
+          sessionKey: "global",
+          loadFullAssistantMessage: async () => null,
+          getAssistantMessageExpansion: () => state,
+          onToggleAssistantMessageExpanded,
+        },
+      );
+
+      if (retries) {
+        expect(onToggleAssistantMessageExpanded).toHaveBeenCalledWith("msg-retry-error");
+      } else {
+        expect(onToggleAssistantMessageExpanded).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("renders a visible retry affordance once automatic full-message loads exhaust", () => {
+    const container = document.createElement("div");
+    const onToggleAssistantMessageExpanded = vi.fn();
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "abcde\n...(truncated)..." }],
+        __openclaw: { id: "msg-retry-exhausted", seq: 1 },
+      },
+      {
+        sessionKey: "global",
+        loadFullAssistantMessage: async () => null,
+        getAssistantMessageExpansion: () => ({ status: "error", revision: 6 }),
+        onToggleAssistantMessageExpanded,
+      },
+    );
+
+    const retry = container.querySelector<HTMLButtonElement>(".chat-message-load-error__retry");
+    expect(container.querySelector(".chat-message-load-error")?.textContent).toContain(
+      "Could not load the full message.",
+    );
+    expect(retry).not.toBeNull();
+    retry?.click();
+    expect(onToggleAssistantMessageExpanded).toHaveBeenCalledWith("msg-retry-exhausted");
+  });
 
   it("does not add disclosure or canvas actions to non-truncated assistant messages", () => {
     const container = document.createElement("div");

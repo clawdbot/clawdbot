@@ -89,6 +89,7 @@ export type GatewaySessionRow = {
   previousSessionId?: SessionEntry["previousSessionId"];
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
+  icon?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
   /** Preferred Control UI face for generic session navigation. */

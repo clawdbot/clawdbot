@@ -13,6 +13,46 @@ function expectEmptyLead(row: Element | null) {
 }
 
 describe("AppSidebar session indicators", () => {
+  it("places Home activity in the same trailing endcap as session activity", async () => {
+    const mainKey = "agent:main:main";
+    const workingKey = "agent:main:working";
+    const sessions = createSessionsHarness("main", [mainKey, workingKey]);
+    const result = sessions.sessions.state.result;
+    if (!result) {
+      throw new Error("expected session list");
+    }
+    for (const row of result.sessions) {
+      row.hasActiveRun = true;
+      row.status = "running";
+    }
+    const { sidebar } = await mountSidebar(
+      createGatewayHarness({} as GatewayBrowserClient).gateway,
+      sessions.sessions,
+    );
+    sidebar.outboxCountForSession = (sessionKey) => (sessionKey === mainKey ? 2 : 0);
+    sidebar.hasSessionDraft = (sessionKey) => sessionKey === mainKey;
+    sidebar.requestUpdate();
+    await sidebar.updateComplete;
+
+    const home = sidebar.querySelector(".nav-item--home");
+    const workingSession = sidebar.querySelector(`[data-session-key="${workingKey}"]`);
+    const homeSpinner = home?.querySelector(".nav-item__state .session-run-spinner");
+    const sessionSpinner = workingSession?.querySelector(".session-row-aside .session-run-spinner");
+
+    expect(home?.querySelector(".nav-item__icon")).not.toBeNull();
+    expect(home?.querySelector(".session-glyph__ring")).toBeNull();
+    expect(homeSpinner).not.toBeNull();
+    expect(homeSpinner?.className).toBe(sessionSpinner?.className);
+    expect(homeSpinner?.getAttribute("role")).toBe(sessionSpinner?.getAttribute("role"));
+    expect(homeSpinner?.getAttribute("aria-label")).toBe(
+      sessionSpinner?.getAttribute("aria-label"),
+    );
+    expect(
+      home?.querySelector(".nav-item__state .session-row-badge--queued")?.textContent,
+    ).toContain("2");
+    expect(home?.querySelector(".nav-item__state .session-row-badge--draft")).not.toBeNull();
+  });
+
   it("preserves child PR indicators and leads a pinned child like any other", async () => {
     const parentKey = "agent:main:parent";
     const pinnedKey = "agent:main:pinned-child";

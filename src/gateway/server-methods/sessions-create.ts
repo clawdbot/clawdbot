@@ -30,6 +30,7 @@ import { resolveUserPath } from "../../utils.js";
 import { buildDashboardSessionTitleSource } from "../dashboard-session-title.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { buildDashboardSessionKey, createGatewaySession } from "../session-create-service.js";
+import { ensureSessionGroupRegistered } from "../session-groups.js";
 import type { PrepareGatewaySessionLifecycle } from "../session-lifecycle-preparation.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
@@ -53,14 +54,47 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
+function registerCreatedSessionCategory(
+  category: string | undefined,
+  context: Parameters<typeof emitSessionsChanged>[0],
+): void {
+  if (!category) {
+    return;
+  }
+  try {
+    if (ensureSessionGroupRegistered(category)) {
+      // Catalog bookkeeping follows the authoritative session commit and has
+      // its own invalidation. Its failure must not make a durable create ambiguous.
+      emitSessionsChanged(context, { reason: "groups" });
+    }
+  } catch (error) {
+    sessionLog.warn(`failed to register created session category: ${formatErrorMessage(error)}`);
+  }
+}
+
 export const sessionCreateHandlers: GatewayRequestHandlers = {
-  "sessions.create": async ({ req, params, respond, context, client, isWebchatConnect }) => {
+  "sessions.create": async ({
+    req,
+    params,
+    respond,
+    context,
+    client,
+    isWebchatConnect,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateSessionsCreateParams, "sessions.create", respond)) {
       return;
     }
     const p = params;
     const cfg = context.getRuntimeConfig();
     const authority = createAgentRuntimeAuthorityGuard(client, context, respond);
+    const commitGuard =
+      authority.commitGuard || sessionMutationAuthorization
+        ? () => {
+            authority.commitGuard?.();
+            sessionMutationAuthorization?.assertCurrent();
+          }
+        : undefined;
     const catalogId = normalizeOptionalString(p.catalogId);
     if (catalogId && p.model) {
       respond(
@@ -405,7 +439,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
               // Checkout hooks and .openclaw/worktree-setup.sh run repo code; keep them
               // admin-only so this write-scoped path cannot execute gated repo scripts.
               runSetupScript: scopes.includes(ADMIN_SCOPE),
-              ...(authority.commitGuard ? { commitGuard: authority.commitGuard } : {}),
+              ...(commitGuard ? { commitGuard } : {}),
             });
             provisioned = true;
           }
@@ -489,11 +523,13 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (!authority.ensureActive()) {
       return;
     }
+    const category = normalizeOptionalString(p.category);
     const created = await createGatewaySession({
       cfg,
       key: sessionKey,
       agentId: sessionAgentId,
       label: p.label,
+      category: p.category,
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: p.model }),
       thinkingLevel: p.thinkingLevel,
       projectId: requestedProjectId,
@@ -525,6 +561,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       // A plain New Chat with no cwd must not inherit the prior session cwd.
       clearSpawnedCwd: p.worktree !== true && !sessionCwd,
       fork: p.fork,
+      forkFrom: p.forkFrom,
       succeedsParent: p.succeedsParent,
       emitCommandHooks: p.emitCommandHooks,
       resetMainWhenUnspecified: !hasInitialTurn,
@@ -533,7 +570,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       loadGatewayModelCatalog: () =>
         context.loadGatewayModelCatalog({ agentId: modelCatalogAgentId }),
-      ...(authority.commitGuard ? { commitGuard: authority.commitGuard } : {}),
+      ...(commitGuard ? { commitGuard } : {}),
       afterCreate: async ({ key, agentId, entry, storePath }) => {
         // Session persistence already committed under the guard. Closure after
         // that point may suppress follow-on work, but cannot roll back the session.
@@ -587,6 +624,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       respond(false, undefined, created.error);
       return;
     }
+    registerCreatedSessionCategory(category, context);
     if (created.resetExisting) {
       await captureCreatedSessionDiffBaseline({
         key: created.key,

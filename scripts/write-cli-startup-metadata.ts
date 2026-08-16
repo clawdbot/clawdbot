@@ -9,7 +9,7 @@ import fs, {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { availableParallelism, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
@@ -42,10 +42,9 @@ const ROOT_HELP_RENDER_TIMEOUT_MS = 120_000;
 const COMMAND_HELP_RENDER_TIMEOUT_MS = 120_000;
 const COMMAND_HELP_RENDER_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const COMMAND_HELP_RENDER_KILL_GRACE_MS = 5_000;
-// Each help render is an isolated CLI boot; concurrency only bounds process
-// fan-out, not output content, so scale with the host instead of serializing
-// eight boots two at a time.
-const COMMAND_HELP_RENDER_CONCURRENCY = Math.min(8, Math.max(2, availableParallelism()));
+// Cold CLI boots compete for the same module graph, so CPU count is not a safe
+// proxy for module-loading throughput on a disk-contended host.
+const COMMAND_HELP_RENDER_CONCURRENCY = 2;
 const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = [
   "doctor",
   "gateway",
@@ -1085,6 +1084,11 @@ async function writeCliStartupMetadata(options?: {
               taskContext,
             ),
       );
+  // Root help traverses the plugin metadata graph too; finish it before command
+  // fan-out so sibling cold boots cannot starve its bounded render.
+  const afterRootHelp = <T>(render: () => Awaitable<T>) => rootHelpTextPromise.then(render);
+  const runSourceRenderer = <T>(render: SourceHelpRenderer<T>) =>
+    afterRootHelp(() => supervisor.run((taskContext) => render(renderContext, taskContext)));
   const hasCustomCommandRenderer =
     options?.renderSourceBrowserHelpText ||
     options?.renderSourceSecretsHelpText ||
@@ -1106,37 +1110,24 @@ async function writeCliStartupMetadata(options?: {
   const commandHelpTextPromise =
     hasCustomCommandRenderer || sourceCommandsToRender.length === 0
       ? null
-      : renderSourceCommandHelpTextRecord(sourceCommandsToRender, renderContext, supervisor);
+      : afterRootHelp(() =>
+          renderSourceCommandHelpTextRecord(sourceCommandsToRender, renderContext, supervisor),
+        );
   const browserHelpTextPromise = reusableBrowserHelpText
     ? Promise.resolve(reusableBrowserHelpText)
     : commandHelpTextPromise
       ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.browser)
-      : supervisor.run((taskContext) =>
-          (options?.renderSourceBrowserHelpText ?? renderSourceBrowserHelpText)(
-            renderContext,
-            taskContext,
-          ),
-        );
+      : runSourceRenderer(options?.renderSourceBrowserHelpText ?? renderSourceBrowserHelpText);
   const secretsHelpTextPromise = reusableSecretsHelpText
     ? Promise.resolve(reusableSecretsHelpText)
     : commandHelpTextPromise
       ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.secrets)
-      : supervisor.run((taskContext) =>
-          (options?.renderSourceSecretsHelpText ?? renderSourceSecretsHelpText)(
-            renderContext,
-            taskContext,
-          ),
-        );
+      : runSourceRenderer(options?.renderSourceSecretsHelpText ?? renderSourceSecretsHelpText);
   const nodesHelpTextPromise = reusableNodesHelpText
     ? Promise.resolve(reusableNodesHelpText)
     : commandHelpTextPromise
       ? commandHelpTextPromise.then((commandHelpText) => commandHelpText.nodes)
-      : supervisor.run((taskContext) =>
-          (options?.renderSourceNodesHelpText ?? renderSourceNodesHelpText)(
-            renderContext,
-            taskContext,
-          ),
-        );
+      : runSourceRenderer(options?.renderSourceNodesHelpText ?? renderSourceNodesHelpText);
   const subcommandHelpTextPromise = reusableSubcommandHelpText
     ? Promise.resolve(reusableSubcommandHelpText)
     : commandHelpTextPromise
@@ -1150,10 +1141,8 @@ async function writeCliStartupMetadata(options?: {
             ) as PrecomputedSubcommandHelpText,
         )
       : options?.renderSourceSubcommandHelpTextRecord
-        ? supervisor.run((taskContext) =>
-            options.renderSourceSubcommandHelpTextRecord!(renderContext, taskContext),
-          )
-        : renderSourceSubcommandHelpTextRecord(renderContext, supervisor);
+        ? runSourceRenderer(options.renderSourceSubcommandHelpTextRecord)
+        : afterRootHelp(() => renderSourceSubcommandHelpTextRecord(renderContext, supervisor));
   const [rootHelpText, browserHelpText, secretsHelpText, nodesHelpText, subcommandHelpText] =
     await settleRootHelpRenderPromises(
       [

@@ -24,6 +24,8 @@ const repositoryScriptEntries = [
   "scripts/check-package-dist-imports.mjs!",
   // Cloudflare deployment template: wrangler bundles the Worker from this entry.
   "scripts/cloudflare/src/index.ts!",
+  // Invoked by the documented macOS Computer Use live-proof shell rig.
+  "scripts/dev/computer-use-macos-live-proof.ts!",
   "scripts/dev/ios-node-e2e.ts!",
   "scripts/diffs-shiki-curated.ts!",
   // Reusable Docker workflows invoke this from the downloaded .release-harness tree.
@@ -89,6 +91,8 @@ const repositoryScriptEntries = [
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
   "scripts/resolve-frozen-codex-live-suite.mjs!",
+  // Changed-file checks invoke this targeted UI Stylelint entrypoint by path.
+  "scripts/run-stylelint.mts!",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   "scripts/sqlite-session-entry-cache-lifetime-proof.ts!",
   "scripts/sync-labels.ts!",

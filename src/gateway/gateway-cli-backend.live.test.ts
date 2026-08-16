@@ -4,7 +4,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveCliBackendConfig, resolveCliBackendLiveTest } from "../agents/cli-backends.js";
+import {
+  resolveCliBackendConfig,
+  resolveCliBackendLiveTest,
+  type ResolvedCliBackend,
+} from "../agents/cli-backends.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { getClaudeGeneration } from "../agents/cli-runner/claude-live-registry.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
@@ -68,6 +72,21 @@ const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
 const MCP_SCHEMA_PROBE_PLUGIN_ID = "mcp-schema-probe";
 const MCP_SCHEMA_PROBE_TOOL_NAME = "mcp_schema_probe_no_args";
 const CLI_CONTINUITY_PROBE_PLUGIN_ID = "cli-continuity-probe";
+
+type RuntimeBackendEntry = ReturnType<
+  (typeof import("../plugins/cli-backends.runtime.js"))["resolveRuntimeCliBackends"]
+>[number];
+
+function createRuntimeBackendEntry(
+  backend: ResolvedCliBackend,
+  overrides: Pick<RuntimeBackendEntry, "pluginId" | "config" | "bundleMcp">,
+): RuntimeBackendEntry {
+  const { ownsNativeCompaction, manualCompaction, ...rest } = backend;
+  const base = { ...rest, ...overrides };
+  return ownsNativeCompaction === true
+    ? { ...base, ownsNativeCompaction: true, manualCompaction }
+    : { ...base, ownsNativeCompaction: false };
+}
 
 const DEFAULT_PROVIDER = "claude-cli";
 const DEFAULT_MODEL =
@@ -410,9 +429,9 @@ describeLive("gateway live (cli backend)", () => {
         await fs.writeFile(mcpConfigPath, `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`);
         cliArgs = withClaudeMcpConfigOverrides(baseCliArgs, mcpConfigPath);
       }
-      const liveBackend = {
-        ...backendResolved,
+      const liveBackend = createRuntimeBackendEntry(backendResolved, {
         pluginId: backendResolved.pluginId ?? providerId,
+        bundleMcp,
         config: {
           ...providerDefaults,
           command: cliCommand,
@@ -429,7 +448,7 @@ describeLive("gateway live (cli backend)", () => {
               }
             : {}),
         },
-      };
+      });
       cliBackendsTesting.setDepsForTest({
         resolvePluginSetupCliBackend: () => undefined,
         resolveRuntimeCliBackends: () => [liveBackend],

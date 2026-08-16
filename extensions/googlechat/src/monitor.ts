@@ -225,6 +225,16 @@ async function processMessageWithPipeline(params: {
     return;
   }
 
+  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
+    cfg: config,
+    channel: "googlechat",
+    accountId: account.accountId,
+    peer: {
+      kind: isGroup ? ("group" as const) : ("direct" as const),
+      id: spaceId,
+    },
+  });
+
   const access = await applyGoogleChatInboundAccessPolicy({
     account,
     config,
@@ -236,6 +246,12 @@ async function processMessageWithPipeline(params: {
     senderName,
     senderEmail,
     rawBody,
+    contextBinding: {
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      ...(message.name ? { messageId: message.name } : {}),
+      inboundEventKind: "user_request",
+    },
     statusSink,
     logVerbose: (messageLocal) => logVerbose(core, runtime, messageLocal),
   });
@@ -261,16 +277,6 @@ async function processMessageWithPipeline(params: {
   if (shouldSuppressGoogleChatBotLoop({ botLoopProtection, core, runtime })) {
     return;
   }
-
-  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
-    cfg: config,
-    channel: "googlechat",
-    accountId: account.accountId,
-    peer: {
-      kind: isGroup ? ("group" as const) : ("direct" as const),
-      id: spaceId,
-    },
-  });
 
   const mediaInputs: ChannelInboundMediaInput[] = attachments.map((attachment) => ({
     contentType: attachment.contentType,
@@ -314,6 +320,7 @@ async function processMessageWithPipeline(params: {
 
   const replyThreadName = isGroup ? message.thread?.name : undefined;
   const ctxPayload = core.channel.inbound.buildContext({
+    channelIngress: access.channelIngress,
     channel: "googlechat",
     accountId: route.accountId,
     messageId: message.name,

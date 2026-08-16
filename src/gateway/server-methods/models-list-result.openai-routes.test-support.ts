@@ -52,6 +52,7 @@ export async function listModels(params: {
     ({
       agentId: "main",
       agentDir: "/tmp/models-list-openai-agent",
+      catalogComplete: false,
       workspaceDir: "/tmp/models-list-openai-workspace",
       config,
       authModes: {},

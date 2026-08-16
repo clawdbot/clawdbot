@@ -13,15 +13,8 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppAccount } from "../../accounts.js";
 import { resolveWhatsAppGroupSessionRoute } from "../../group-session-key.js";
 import { getPrimaryIdentityId, getSenderIdentity } from "../../identity.js";
-import {
-  requireAdmittedWhatsAppInboundMessage,
-  requireWhatsAppInboundAdmission,
-} from "../../inbound/admission.js";
-import { withDeprecatedWebInboundMessageFlatAliases } from "../../inbound/message-aliases.js";
-import type {
-  AdmittedWebInboundMessage,
-  DeprecatedWebInboundAdmissionTopLevelFields,
-} from "../../inbound/types.js";
+import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
+import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { normalizeE164 } from "../../text-runtime.js";
 import { buildMentionConfig } from "../mentions.js";
 import type { MentionConfig } from "../mentions.js";
@@ -37,15 +30,6 @@ import {
   type StatusReactionController,
 } from "./status-reaction.js";
 
-function readDeprecatedAccessControlPassed(msg: AdmittedWebInboundMessage): boolean | undefined {
-  // The admitted type hides deprecated flat aliases, but normalized legacy
-  // listener inputs retain this one tri-state proof for preflight safety.
-  return (
-    msg as AdmittedWebInboundMessage &
-      Pick<DeprecatedWebInboundAdmissionTopLevelFields, "accessControlPassed">
-  ).accessControlPassed;
-}
-
 export function createWebOnMessageHandler(params: {
   cfg: OpenClawConfig;
   loadConfig?: () => OpenClawConfig;
@@ -60,13 +44,10 @@ export function createWebOnMessageHandler(params: {
   replyLogger: ReturnType<(typeof import("openclaw/plugin-sdk/runtime-env"))["getChildLogger"]>;
   baseMentionConfig: MentionConfig;
   account: { authDir?: string; accountId?: string; selfChatMode?: boolean };
+  buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
 }) {
-  const hasExplicitlyPassedInboundAccess = (msg: AdmittedWebInboundMessage): boolean => {
-    if (msg.admission.ingress.decisiveGateId === "legacy-flat-compat") {
-      return readDeprecatedAccessControlPassed(msg) === true;
-    }
-    return msg.admission.ingress.decision === "allow";
-  };
+  const hasExplicitlyPassedInboundAccess = (msg: AdmittedWebInboundMessage): boolean =>
+    msg.admission.ingress.decision === "allow";
 
   const withDirectSenderPeer = (
     msg: AdmittedWebInboundMessage,
@@ -85,16 +66,14 @@ export function createWebOnMessageHandler(params: {
     if (!normalized) {
       return msg;
     }
-    return requireAdmittedWhatsAppInboundMessage(
-      withDeprecatedWebInboundMessageFlatAliases({
-        ...msg,
-        platform: {
-          ...msg.platform,
-          sender: { ...msg.platform.sender, e164: normalized },
-          senderE164: normalized,
-        },
-      }),
-    );
+    return {
+      ...msg,
+      platform: {
+        ...msg.platform,
+        sender: { ...msg.platform.sender, e164: normalized },
+        senderE164: normalized,
+      },
+    };
   };
 
   const processForRoute = async (
@@ -125,6 +104,7 @@ export function createWebOnMessageHandler(params: {
       replyResolver: params.replyResolver,
       replyLogger: params.replyLogger,
       backgroundTasks: params.backgroundTasks,
+      buildContext: params.buildContext,
     };
     if (opts?.groupHistory !== undefined) {
       processParams.groupHistory = opts.groupHistory;

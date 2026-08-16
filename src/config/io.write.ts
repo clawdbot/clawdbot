@@ -278,7 +278,7 @@ export async function writeConfigFileFromContext(
     );
   }
   const cronOwnerRefusal = persistOwnership
-    ? await prepareCronOwnerWriteRefusal({
+    ? await prepareCronOwnerWriteRefusal(snapshot.config, {
         storePath: resolveCronJobsStorePathFromConfig(nextConfig, deps.env),
         ...(retainedFleetOwner ? { provenOwnerAgentId: retainedFleetOwner } : {}),
         env: deps.env,

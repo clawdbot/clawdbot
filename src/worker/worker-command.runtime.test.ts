@@ -4,6 +4,7 @@ import {
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
 import { runWorkerDescriptor } from "./worker.runtime.js";
@@ -64,9 +65,16 @@ function lifetimeHarness() {
     resolveStarted = resolve;
   });
   const dispose = vi.fn();
+  const reportConnectionFailure = vi.fn();
   const terminateOwnedTree = vi.fn();
   return {
-    contract: { dispose, signal: controller.signal, started, terminateOwnedTree },
+    contract: {
+      dispose,
+      reportConnectionFailure,
+      signal: controller.signal,
+      started,
+      terminateOwnedTree,
+    },
     disconnectAfterStart: () => controller.abort(new Error("worker supervisor lifetime ended")),
     disconnectBeforeStart: () => resolveStarted(false),
     dispose,
@@ -96,6 +104,20 @@ describe("worker command lifetime gate", () => {
     expect(JSON.parse(Buffer.concat(chunks).toString("utf8"))).toMatchObject({
       status: "completed",
     });
+  });
+
+  it("passes the build-composed Browser runtime into the worker boundary", async () => {
+    const output = new PassThrough();
+    const browserRuntime = {
+      createAttachedBrowserToolRuntime: vi.fn(),
+    } as unknown as WorkerBrowserRuntime;
+
+    await runWorkerCommand({ input: commandInput(), output, browserRuntime });
+
+    expect(runWorkerDescriptor).toHaveBeenCalledWith(
+      descriptor,
+      expect.objectContaining({ browserRuntime }),
+    );
   });
 
   it("does not enter the worker runtime before the explicit start message", async () => {

@@ -1578,6 +1578,8 @@ async function createChatPickerScenario(
       "sessions.groups.list": { groups: [{ name: "Research", position: 0 }] },
       // Coding session catalogs so the sidebar's catalog sections (header
       // right-click menu, hide/restore preference) are exercised in the mock.
+      // Ids must match registered plugin catalogs (`claude`, `codex`) or the
+      // sidebar cannot resolve bundled brand marks.
       "sessions.catalog.list": {
         catalogs: [
           {
@@ -1616,7 +1618,7 @@ async function createChatPickerScenario(
             ],
           },
           {
-            id: "claude-code",
+            id: "claude",
             label: "Claude Code",
             capabilities: { continueSession: true, archive: false },
             hosts: [
@@ -1679,7 +1681,7 @@ async function createChatPickerScenario(
           },
           {
             match: {
-              catalogId: "claude-code",
+              catalogId: "claude",
               hostId: "gateway",
               threadId: "claude-thread-1",
             },

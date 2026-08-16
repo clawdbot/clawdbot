@@ -5,6 +5,7 @@ import {
   type AckReactionHandle,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
+  type buildChannelInboundEventContext,
   formatMediaPlaceholderText,
   runChannelInboundEvent,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -212,6 +213,7 @@ export async function processMessage(params: {
    * - null    → preflight was attempted but failed / returned nothing; skip internal STT
    * - undefined (omitted) → caller did not attempt preflight; run internal STT as normal */
   preflightAudioTranscript?: string | null;
+  buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const admission = requireWhatsAppInboundAdmission(params.msg);
   if (admission.ingress.admission !== "dispatch" && admission.ingress.admission !== "observe") {
@@ -486,6 +488,7 @@ export async function processMessage(params: {
     msg: params.msg,
     rawBody: commandBody,
     route: params.route,
+    buildContext: params.buildContext,
     sender: {
       id: getPrimaryIdentityId(sender) ?? undefined,
       name: sender.name ?? undefined,

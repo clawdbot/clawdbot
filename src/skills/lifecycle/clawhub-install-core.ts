@@ -30,6 +30,7 @@ import { sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
+import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
 import { markClawPackageIndependentlyOwned } from "../../state/claw-package-adoption.js";
 import {
   CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
@@ -70,6 +71,7 @@ export type ClawHubInstallParams = {
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
   logger?: Logger;
   config?: OpenClawConfig;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   clawManaged?: boolean;
 };
 
@@ -309,6 +311,7 @@ async function installArchiveResolution(params: {
   force?: boolean;
   logger?: Logger;
   config?: OpenClawConfig;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
 }) {
   return await withExtractedArchiveRoot({
     archivePath: params.archivePath,
@@ -324,6 +327,7 @@ async function installArchiveResolution(params: {
         logger: params.logger,
         policy: {
           config: params.config,
+          onInstallPolicyWarning: params.onInstallPolicyWarning,
           installId: "clawhub",
           origin: {
             type: "clawhub",
@@ -355,6 +359,7 @@ async function installGitHubResolution(params: {
   force?: boolean;
   logger?: Logger;
   config?: OpenClawConfig;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
 }) {
   // Preserve the repository root for sourcePath selection. Root markers validate
   // the selected skill directory afterward, so nested paths are not applied twice.
@@ -371,6 +376,7 @@ async function installGitHubResolution(params: {
         logger: params.logger,
         policy: {
           config: params.config,
+          onInstallPolicyWarning: params.onInstallPolicyWarning,
           installId: "clawhub",
           origin: {
             type: "clawhub",
@@ -580,6 +586,7 @@ export async function performClawHubSkillInstall(
               force: params.force,
               logger: params.logger,
               config: params.config,
+              onInstallPolicyWarning: params.onInstallPolicyWarning,
             })
           : await installArchiveResolution({
               workspaceDir: params.workspaceDir,
@@ -596,6 +603,7 @@ export async function performClawHubSkillInstall(
               force: params.force,
               logger: params.logger,
               config: params.config,
+              onInstallPolicyWarning: params.onInstallPolicyWarning,
             });
       if (!install.ok) {
         return { ok: false, error: install.error };

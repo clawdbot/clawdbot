@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { icons } from "../../components/icons.ts";
+import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
@@ -22,6 +23,7 @@ import type { NewSessionVisibility } from "./create-params.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
 
 type NewSessionComposerOptions = {
+  attachmentLimits?: { maxBytes: number; maxImageBytes: number };
   attachments: ChatAttachment[];
   canSubmit: boolean;
   getAttachments: () => ChatAttachment[];
@@ -41,10 +43,10 @@ type NewSessionComposerOptions = {
   messageLocked?: boolean;
   visibility?: NewSessionVisibility;
   draftAvailable?: boolean;
-  incognitoDisabledReason?: string;
   onAttachmentsChange: (attachments: ChatAttachment[]) => void;
   onPendingReadsChange: (delta: 1 | -1) => void;
   onInput: (message: string) => void;
+  onOpenImage?: (item: ImageLightboxItem) => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
 };
@@ -141,18 +143,16 @@ export class NewSessionComposerTextareaController {
   }
 }
 
-/** Mutually exclusive visibility pills: selecting one clears the other, re-click returns to normal. */
+/** Draft visibility pill: selecting it clears incognito, re-click returns to normal. */
 function renderVisibilityPill(params: {
   mode: Exclude<NewSessionVisibility, "normal">;
   icon: unknown;
   label: string;
   description: string;
-  disabledReason?: string;
   options: NewSessionComposerOptions;
 }) {
   const active = params.options.visibility === params.mode;
-  const disabled =
-    params.options.submitting || params.options.messageLocked || Boolean(params.disabledReason);
+  const disabled = params.options.submitting || params.options.messageLocked;
   return html`
     <button
       type="button"
@@ -160,7 +160,7 @@ function renderVisibilityPill(params: {
       role="switch"
       aria-checked=${String(active)}
       ?disabled=${disabled}
-      title=${params.disabledReason ?? params.description}
+      title=${params.description}
       @click=${() => params.options.onVisibilityChange?.(active ? "normal" : params.mode)}
     >
       <span aria-hidden="true">${params.icon}</span>${params.label}
@@ -197,6 +197,7 @@ function handleComposerKeydown(event: KeyboardEvent, options: NewSessionComposer
 /** Draft message box styled as the chat composer shell so both pickers match. */
 function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const attachmentProps = {
+    attachmentLimits: options.attachmentLimits,
     attachments: options.attachments,
     disabled: options.submitting || options.messageLocked,
     getAttachments: options.getAttachments,
@@ -205,6 +206,7 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
     onAttachmentsChange: options.onAttachmentsChange,
     onDraftChange: options.onInput,
     onPendingReadsChange: options.onPendingReadsChange,
+    onOpenImage: options.onOpenImage,
     readSignal: options.readSignal,
   };
   const attachmentDropHandlers = createChatAttachmentDropHandlers({
@@ -261,14 +263,6 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
                   options,
                 })
               : nothing}
-            ${renderVisibilityPill({
-              mode: "incognito",
-              icon: icons.eyeOff,
-              label: t("newSession.incognito"),
-              description: t("newSession.incognitoDescription"),
-              disabledReason: options.incognitoDisabledReason,
-              options,
-            })}
           </div>
         </div>
         ${options.pendingAttachmentReads > 0
@@ -300,13 +294,14 @@ export function renderNewSessionDraftComposer(options: {
   };
   submitting: boolean;
   messageLocked?: boolean;
-  incognitoDisabledReason?: string;
   onInput: (message: string) => void;
+  onOpenImage?: (item: ImageLightboxItem) => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
 }) {
   const readSignal = options.attachmentDraft.readSignal;
   return renderNewSessionComposer({
+    attachmentLimits: options.context?.gateway.snapshot.hello?.policy?.attachments,
     attachments: options.attachmentDraft.attachments,
     canSubmit: options.canSubmit,
     getAttachments: () => options.attachmentDraft.attachments,
@@ -329,7 +324,6 @@ export function renderNewSessionDraftComposer(options: {
     submitting: options.submitting,
     textareaController: options.textareaController,
     messageLocked: options.messageLocked,
-    incognitoDisabledReason: options.incognitoDisabledReason,
     onAttachmentsChange: (attachments) => {
       if (!options.submitting && !options.messageLocked) {
         options.attachmentDraft.replace(attachments);
@@ -337,6 +331,7 @@ export function renderNewSessionDraftComposer(options: {
     },
     onPendingReadsChange: (delta) => options.attachmentDraft.updatePending(readSignal, delta),
     onInput: options.onInput,
+    onOpenImage: options.onOpenImage,
     onVisibilityChange: options.onVisibilityChange,
     onSubmit: options.onSubmit,
   });

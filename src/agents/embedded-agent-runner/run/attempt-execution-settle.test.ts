@@ -264,7 +264,7 @@ function createFixture() {
         yieldMessage: "yield",
       }),
     },
-    getRepairedRejectedThinkingReplay: () => true,
+    getRepairedRejectedProviderReplay: () => true,
     preparedStreamRuntime,
   } as unknown as SettledInput;
 

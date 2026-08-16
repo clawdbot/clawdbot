@@ -9,11 +9,13 @@ import {
 import { createPlacementPendingFailureOps } from "./placement-pending-failure.js";
 import {
   assertRecordShape,
+  isCurrentPlacementTurnClaim,
   nextGeneration,
   normalizeEpoch,
+  normalizeWorkerPlacementExecutionMode,
   normalizeIdentity,
   required,
-  type WorkerSessionPlacementIdentity,
+  type WorkerSessionPlacementDispatchIdentity,
   type WorkerSessionPlacementRecord,
   type WorkerSessionPlacementTransitionPatch,
   type WorkerSessionTurnClaim,
@@ -141,18 +143,7 @@ export function createWorkerSessionPlacementStore(
 
   const requireClaimOwner = (claim: WorkerSessionTurnClaim): void => {
     const current = find(read(), required(claim.sessionId, "session id"));
-    const persisted = current?.turnClaim;
-    if (
-      claim.owner.kind !== "worker" ||
-      (current?.state !== "active" && current?.state !== "draining") ||
-      current.environmentId !== claim.owner.environmentId ||
-      current.activeOwnerEpoch !== claim.owner.ownerEpoch ||
-      persisted?.owner !== "worker" ||
-      persisted.claimId !== claim.claimId ||
-      persisted.runId !== claim.runId ||
-      persisted.generation !== claim.placementGeneration ||
-      persisted.ownerEpoch !== claim.owner.ownerEpoch
-    ) {
+    if (!current || !isCurrentPlacementTurnClaim(current, claim)) {
       throw new Error(`Session ${claim.sessionId} workspace result conflict owner changed`);
     }
   };
@@ -242,8 +233,9 @@ export function createWorkerSessionPlacementStore(
       );
     },
 
-    startDispatch(input: WorkerSessionPlacementIdentity): WorkerSessionPlacementRecord {
+    startDispatch(input: WorkerSessionPlacementDispatchIdentity): WorkerSessionPlacementRecord {
       const identity = normalizeIdentity(input);
+      const executionMode = normalizeWorkerPlacementExecutionMode(input.executionMode);
       return write((db) => {
         const current = ensureLocal(db, identity, now());
         if (
@@ -264,6 +256,7 @@ export function createWorkerSessionPlacementStore(
             .updateTable("worker_session_placements")
             .set({
               state: "requested",
+              execution_mode: executionMode,
               environment_id: null,
               transition_generation: nextGeneration(current.generation),
               active_owner_epoch: null,
@@ -369,6 +362,7 @@ export function createWorkerSessionPlacementStore(
         }
         assertRecordShape({
           state: "draining",
+          executionMode: current.executionMode,
           environmentId,
           activeOwnerEpoch: ownerEpoch,
           workspaceBaseManifestRef: values.workspace_base_manifest_ref,

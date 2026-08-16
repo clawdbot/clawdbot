@@ -158,12 +158,15 @@ sync the current checkout on every run, and stop it before handoff.
   secretless fork CI. Do not select `hydrate-github` or a credential-hydrated
   Testbox workflow.
 - Do not infer "no Testbox is running" from plain `blacksmith testbox list`.
-  Use `blacksmith testbox list --all` or `blacksmith testbox status <tbx_id>`
-  before reporting cloud state.
+  Use `blacksmith testbox list --all` or `blacksmith testbox status --id
+<tbx_id>` (id is not positional) before reporting cloud state.
 - Reuse only an id/slug created in this operator session unless explicitly
   coordinating with another lane. If Testbox queues, fails capacity, or cannot
-  allocate, report the blocker or switch to direct AWS Crabbox only when that
-  still proves the requested surface.
+  allocate, switch to direct AWS Crabbox when that still proves the requested
+  surface. If the whole remote backend is unavailable (broker/DNS/network/
+  lease), trusted-source proof falls back to local execution — including heavy
+  suites and gates — instead of blocking; note the fallback and reason in the
+  proof summary. Untrusted source never falls back to local.
 - Reuse does not mean stale source: omit `--no-sync` so every run uploads the
   current checkout. Use `--no-sync` only to rerun an unchanged, already-synced
   tree intentionally.
@@ -177,12 +180,14 @@ remains bounded. If it fans out or becomes expensive, acquire a remote backend.
 pnpm changed:lanes --json
 pnpm check:changed       # local small plan or delegated heavy plan; no Vitest
 pnpm test:changed        # cheap smart changed Vitest targets
-pnpm verify              # full check, then full Vitest
 OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed
 pnpm test <path-or-filter> -- --reporter=verbose
 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test <path-or-filter>
 ```
 
+Do not run independent `pnpm test`/Vitest commands concurrently in one
+worktree; the Vitest cache races with `ENOTEMPTY`. Group one command or use
+distinct `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH` values.
 Use targeted file paths whenever possible. Avoid raw `vitest`; use the repo
 `pnpm test` wrapper so project routing, workers, and setup stay correct. If raw
 Vitest is unavoidable, use `vitest run ...`; bare `vitest ...` starts local watch

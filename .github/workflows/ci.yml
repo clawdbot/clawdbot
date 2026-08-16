@@ -73,7 +73,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     outputs:
       checkout_revision: ${{ steps.checkout_ref.outputs.sha }}
@@ -418,12 +418,19 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      # Push/PR preflight is dependency-free: the manifest planner closure and
+      # the protocol coverage script import only node builtins and relative
+      # files, and Node strips their types natively. Only manual dispatches
+      # (which may check out frozen targets with older planner syntax) still
+      # install and run through tsx.
       - name: Setup manifest pnpm
+        if: github.event_name == 'workflow_dispatch'
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install manifest dependencies
+        if: github.event_name == 'workflow_dispatch'
         run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Build CI manifest
@@ -455,7 +462,11 @@ jobs:
           OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
           OPENCLAW_CI_RUNNER_BACKEND: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND }}
         run: |
-          node --import tsx --input-type=module <<'EOF'
+          manifest_node_args=()
+          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ]; then
+            manifest_node_args+=(--import tsx)
+          fi
+          node "${manifest_node_args[@]}" --input-type=module <<'EOF'
           import { appendFileSync, existsSync, readFileSync } from "node:fs";
 
           const eventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
@@ -602,10 +613,11 @@ jobs:
           const runControlUiI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly;
           const runUiTests = parseBoolean(process.env.OPENCLAW_CI_RUN_UI_TESTS) && !docsOnly;
-          const uiE2eShardCount =
-            process.env.OPENCLAW_CI_RUNNER_BACKEND === "github" ? 8 : 4;
-          const qaSmokeCiPartCount =
-            process.env.OPENCLAW_CI_RUNNER_BACKEND === "github" ? 6 : 4;
+          const usesGithubRunnerProfile =
+            process.env.OPENCLAW_CI_RUNNER_BACKEND === "github" ||
+            process.env.OPENCLAW_CI_RUNNER_BACKEND === "hybrid";
+          const uiE2eShardCount = usesGithubRunnerProfile ? 12 : 4;
+          const qaSmokeCiPartCount = usesGithubRunnerProfile ? 6 : 4;
           const supportsNativeI18n =
             hasPackageScript("native:i18n:check") &&
             hasPackageScript("android:i18n:check") &&
@@ -765,6 +777,7 @@ jobs:
                 runner: shard.runner,
                 timeout_minutes: shard.timeoutMinutes,
                 plan_concurrency: shard.planConcurrency,
+                predicted_seconds: shard.predictedSeconds,
                 save_vitest_fs_cache: shard.saveVitestFsCache,
                 targets: shard.targets,
                 requires_go:
@@ -809,7 +822,6 @@ jobs:
                   lane: `profile-${part}`,
                   slug: `profile-${part}-of-${qaSmokeCiPartCount}`,
                   part_count: qaSmokeCiPartCount,
-                  ...(qaSmokeCiPartCount === 4 && part === 2 ? { docker_cache: true } : {}),
                 };
               }),
             ),
@@ -848,8 +860,13 @@ jobs:
             run_checks_windows: runWindows,
             checks_windows_matrix: createMatrix(
               runWindows
-                ? process.env.OPENCLAW_CI_RUNNER_BACKEND === "github"
-                  ? [1, 2].map((part) => ({
+                ? // Blacksmith's Windows runner class admits ~2 concurrent jobs, so a
+                  // 3-part split queues its tail behind a finished part there. Split
+                  // only where every part actually lands hosted: github mode and
+                  // dispatches (dispatch runs-on forces hosted in every mode).
+                  process.env.OPENCLAW_CI_RUNNER_BACKEND === "github" ||
+                  eventName === "workflow_dispatch"
+                  ? [1, 2, 3].map((part) => ({
                       check_name: `checks-windows-node-test-${part}`,
                       runtime: "node",
                       task: `test-${part}`,
@@ -913,14 +930,21 @@ jobs:
 
       - name: Check mobile protocol event coverage
         if: steps.manifest.outputs.run_protocol_event_coverage == 'true'
-        run: node scripts/check-protocol-event-coverage.mjs
+        run: |
+          # Dispatches may target frozen checkouts whose script needs the tsx
+          # shim; push/PR checkouts run the dependency-free .mts natively.
+          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ]; then
+            node scripts/check-protocol-event-coverage.mjs
+          else
+            node scripts/check-protocol-event-coverage.mts
+          fi
 
       # Publish one immutable semantic dependency archive before same-repo
       # Blacksmith jobs fan out. The GitHub backend uses the pnpm-store cache.
       # Pull-request archives remain merge-ref scoped;
       # main archives seed later pull requests through the default-branch scope.
       - name: Publish exact dependency cache
-        if: vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.repository == 'openclaw/openclaw' && steps.manifest.outputs.run_node == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
+        if: vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.repository == 'openclaw/openclaw' && steps.manifest.outputs.run_node == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
         uses: ./.github/actions/setup-node-env
         with:
           dependency-cache: "true"
@@ -1140,8 +1164,8 @@ jobs:
     permissions:
       contents: read
     needs: [preflight]
-    if: ${{ (needs.preflight.outputs.run_node == 'true' || needs.preflight.outputs.run_check_docs == 'true') && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (!(github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main') && !(github.repository == 'openclaw/openclaw' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.preflight.outputs.run_node == 'true'))) }}
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    if: ${{ (needs.preflight.outputs.run_node == 'true' || needs.preflight.outputs.run_check_docs == 'true') && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || (!(github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main') && !(github.repository == 'openclaw/openclaw' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.preflight.outputs.run_node == 'true'))) }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
       - &linux_node_checkout_step
@@ -1211,8 +1235,8 @@ jobs:
     # 32 vCPU: the dist build sits on the light-run critical path alongside
     # check-lint/check-dependencies; tsdown parallelizes across the extra
     # cores for roughly the same billed core-minutes.
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 35 || 20 }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 35 || 20 }}
     outputs:
       channels-result: ${{ steps.built_artifact_checks.outputs['channels-result'] }}
       core-support-boundary-result: ${{ steps.built_artifact_checks.outputs['core-support-boundary-result'] }}
@@ -1235,8 +1259,8 @@ jobs:
           node-compile-cache-scope: "build"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
-          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           save-node-compile-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || 'false' }}
 
       - name: Restore build-all step cache
@@ -1312,33 +1336,63 @@ jobs:
       - name: Smoke test CLI launcher status json
         run: node openclaw.mjs status --json --timeout 1
 
-      - name: Verify built Doctor plugin index persistence
-        env:
-          OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
-        run: |
-          if [[ -f test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts ]]; then
-            # Cold hosted runners can spend over five minutes in E2E setup before
-            # this proof's own bounded test can report a result.
-            env OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run \
-              --config test/vitest/vitest.e2e.config.ts \
-              test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts
-          else
-            echo "Selected target predates the built Doctor plugin index persistence proof."
-          fi
-
-      - name: Smoke test built bundled plugin singleton
-        run: pnpm test:build:singleton
-
-      - name: Check CLI startup memory
+      # Doctor index proof, singleton smoke, and startup-memory check are
+      # independent dist readers; Blacksmith runners have the cores to overlap
+      # them, while hosted 4-core runners keep the serial order so the RSS
+      # measurement stays unperturbed under its higher hosted ceiling.
+      - name: Verify built runtime artifacts
         shell: bash
         env:
+          PARALLEL_BUILT_VERIFIERS: ${{ runner.environment != 'github-hosted' && 'true' || 'false' }}
           # GitHub-hosted Linux reports a higher RSS baseline than Blacksmith for
           # the same built CLI. Keep the tighter Blacksmith regression ceiling.
           OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '400' }}
         run: |
-          set +e
-          pnpm test:startup:memory
-          status=$?
+          set -uo pipefail
+
+          run_doctor_plugin_index() {
+            if [[ -f test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts ]]; then
+              # Cold hosted runners can spend over five minutes in E2E setup before
+              # this proof's own bounded test can report a result.
+              env OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run \
+                --config test/vitest/vitest.e2e.config.ts \
+                test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts
+            else
+              echo "Selected target predates the built Doctor plugin index persistence proof."
+            fi
+          }
+
+          status=0
+          if [[ "$PARALLEL_BUILT_VERIFIERS" == "true" ]]; then
+            # A missing startup asset rebuild must finish before forking so the
+            # concurrent verifiers never read dist mid-write.
+            node --import tsx scripts/ensure-cli-startup-build.mts || status=1
+            log_dir=.artifacts/built-verifiers
+            mkdir -p "$log_dir"
+            run_doctor_plugin_index >"$log_dir/doctor-plugin-index.log" 2>&1 &
+            doctor_pid=$!
+            pnpm test:build:singleton >"$log_dir/plugin-singleton.log" 2>&1 &
+            singleton_pid=$!
+            node scripts/check-cli-startup-memory.mjs >"$log_dir/startup-memory.log" 2>&1 &
+            memory_pid=$!
+            for entry in \
+              "doctor-plugin-index:$doctor_pid" \
+              "plugin-singleton:$singleton_pid" \
+              "startup-memory:$memory_pid"; do
+              name="${entry%%:*}"
+              pid="${entry##*:}"
+              if ! wait "$pid"; then
+                status=1
+                echo "::error::built runtime verifier failed: $name"
+              fi
+              echo "== $name =="
+              cat "$log_dir/$name.log"
+            done
+          else
+            run_doctor_plugin_index || status=1
+            pnpm test:build:singleton || status=1
+            pnpm test:startup:memory || status=1
+          fi
           if [[ -f .artifacts/startup-memory/summary.md ]]; then
             cat .artifacts/startup-memory/summary.md >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -1494,7 +1548,7 @@ jobs:
     name: check-sqlite-session-lifecycle
     needs: [preflight, build-artifacts]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_sqlite_session_lifecycle == 'true' && needs.build-artifacts.result == 'success' }}
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
       - *linux_node_checkout_step
@@ -1502,8 +1556,9 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
 
       - name: Download exact-run built runtime
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -1525,7 +1580,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_native_i18n == 'true' }}
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -1540,8 +1595,8 @@ jobs:
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
-          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Verify native app i18n source
         run: |
@@ -1569,7 +1624,9 @@ jobs:
     name: checks-ui
     needs: [preflight]
     if: needs.preflight.outputs.run_ui_tests == 'true'
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    # Measured 177s body on hosted 4-core (run 31861511624); hybrid attempt 1
+    # rides the 8 vCPU class like the ui-e2e shards, retries stay hosted.
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
     timeout-minutes: 20
     env:
       COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
@@ -1582,8 +1639,17 @@ jobs:
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
-          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
+
+      - &cache_playwright_chromium
+        name: Cache Playwright Chromium
+        if: needs.preflight.outputs.compatibility_target != 'true'
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-1.62.1
 
       - &install_playwright_chromium
         name: Install Playwright Chromium
@@ -1628,16 +1694,16 @@ jobs:
     # Compatibility targets pin a frozen Control UI whose e2e expectations track
     # that release, not current main.
     if: needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'
-    # First-attempt same-repo runs use Blacksmith unless the backend breaker is
-    # set; manual dispatches, forks, and same-repo PR retries also use GitHub-hosted capacity.
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    # Hybrid attempt 1 uses Blacksmith; github mode, hybrid retries, manual
+    # dispatches, forks, and same-repo PR retries use GitHub-hosted capacity.
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     # Keep Chromium ownership serial within each independently required shard.
     timeout-minutes: 25
     env:
       OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
     strategy:
       fail-fast: false
-      max-parallel: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 8 || 4 }}
+      max-parallel: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 12 || 4 }}
       matrix: ${{ fromJson(needs.preflight.outputs.ui_e2e_matrix) }}
     steps:
       - *linux_node_checkout_step
@@ -1646,16 +1712,19 @@ jobs:
         with:
           node-version: "24.x"
           install-bun: "false"
-          # Hosted paths use the pnpm store cache; first-attempt same-repo
-          # Blacksmith runs restore the preflight-published dependency tree.
-          dependency-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
-          use-actions-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
+          # The github/hybrid planner profile uses the Actions pnpm-store cache
+          # on either runner backend; all-Blacksmith mode restores preflight's tree.
+          dependency-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
+          use-actions-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
+          restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
 
+      - *cache_playwright_chromium
       - *install_playwright_chromium
 
       - name: Test Control UI end-to-end
         if: matrix.task == 'control-ui'
         env:
+          OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           SHARD_INDEX: ${{ matrix.shard }}
           VITEST_SHARD_COUNT: ${{ matrix.vitest_shard_count }}
         run: >-
@@ -1663,6 +1732,15 @@ jobs:
           --config test/vitest/vitest.ui-e2e.config.ts
           --configLoader runner
           --shard "$SHARD_INDEX/$VITEST_SHARD_COUNT"
+
+      - name: Upload Control UI E2E timeout diagnostics
+        if: failure() && matrix.task == 'control-ui'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: control-ui-e2e-timeout-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Test browser extension bootstrap end-to-end
         if: matrix.task == 'browser-extension'
@@ -1678,7 +1756,7 @@ jobs:
     if: needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'
     # First-attempt same-repo runs use Blacksmith unless the backend breaker is
     # set; manual dispatches, forks, and same-repo PR retries also use GitHub-hosted capacity.
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
       - *linux_node_checkout_step
@@ -1689,9 +1767,10 @@ jobs:
           install-bun: "false"
           # Hosted paths use the pnpm store cache; first-attempt same-repo
           # Blacksmith runs restore the preflight-published dependency tree.
-          dependency-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
-          use-actions-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
+          dependency-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
+          use-actions-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
 
+      - *cache_playwright_chromium
       - *install_playwright_chromium
 
       - name: Test MCP app conformance with a real Gateway
@@ -1708,13 +1787,20 @@ jobs:
           --configLoader runner
           ui/src/e2e/control-ui-auth-transports.e2e.test.ts
 
+      - name: Test Control UI Logs lifecycle with a real Gateway
+        run: >-
+          node scripts/run-vitest.mjs run
+          --config test/vitest/vitest.ui-e2e.config.ts
+          --configLoader runner
+          ui/src/e2e/logs-lifecycle.e2e.test.ts
+
   control-ui-i18n:
     permissions:
       contents: read
     name: control-ui-i18n
     needs: [preflight]
     if: needs.preflight.outputs.run_control_ui_i18n == 'true'
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 10
     env:
       COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
@@ -1727,8 +1813,8 @@ jobs:
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
-          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Verify Control UI i18n source
         run: |
@@ -1754,7 +1840,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast_core == 'true'
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1815,8 +1901,9 @@ jobs:
           install-bun: ${{ matrix.task == 'bun-launcher' && 'true' || 'false' }}
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
-          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && (matrix.task == 'bundled-protocol' || matrix.task == 'contracts-plugins-ci-routing' || matrix.task == 'ci-routing' || matrix.task == 'bun-launcher') && 'true' || 'false' }}
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
@@ -1874,7 +1961,7 @@ jobs:
               fi
               pnpm check:max-lines-ratchet --base "$base_ref"
               if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then
-                node --import tsx scripts/run-oxlint-shards.mts --only=core --only=extensions --split-core --threads=1
+                node --import tsx scripts/run-oxlint-shards.mts --only=core --only=extensions --threads=1
               fi
               ;;
             bun-launcher)
@@ -1892,11 +1979,11 @@ jobs:
     name: QA Smoke CI (${{ matrix.name }})
     needs: [preflight]
     if: needs.preflight.outputs.run_qa_smoke_ci == 'true'
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 6 || 4 }}
+      max-parallel: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 6 || 4 }}
       matrix: ${{ fromJson(needs.preflight.outputs.qa_smoke_ci_matrix) }}
     steps:
       - *linux_node_checkout_step
@@ -1904,38 +1991,24 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          # Same-repo Blacksmith runs restore the dependency cache published by
-          # preflight; hosted paths use the pnpm store cache instead.
-          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
-
-      - name: Set up Blacksmith Docker layer cache
-        if: ${{ matrix.docker_cache == true && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') }}
-        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
-        with:
-          max-cache-size-mb: 800000
+          # The github/hybrid planner profile uses the Actions pnpm-store cache
+          # on either runner backend; all-Blacksmith mode restores preflight's tree.
+          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          # Reader of build-artifacts' protected daily archive: warms tsdown
+          # tooling plus the repeated openclaw.mjs boots in the scenario loop.
+          node-compile-cache: "true"
+          node-compile-cache-scope: build
 
       - name: Build QA smoke runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
         run: |
-          # Pack the public runtime before overlaying private QA artifacts so they cannot leak.
-          unset OPENCLAW_BUILD_PRIVATE_QA
-          pnpm build qaRuntime
-          pnpm ui:build
-          package_args=(
-            --skip-build
-            --output-dir .artifacts/qa-e2e/smoke-ci-package
-            --output-name openclaw-current.tgz
-          )
-          package_script="scripts/package-openclaw-for-docker.mts"
-          if [[ ! -f "$package_script" ]]; then
-            package_script="scripts/package-openclaw-for-docker.mjs"
-          fi
-          if grep -Fq -- '--allow-unreleased-changelog' "$package_script"; then
-            package_args=(--allow-unreleased-changelog "${package_args[@]}")
-          fi
-          node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
+          # The smoke coverage set contains no docker-lane or Control UI
+          # scenarios (the run step fails closed if one returns), so the
+          # public pack and ui:build are skipped: one private overlay build
+          # halves this fixed cost on every part. Never pack dist after a
+          # private build; the overlay must not leak into public artifacts.
           OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build qaRuntime
 
       - name: Run smoke profile part
@@ -1943,7 +2016,7 @@ jobs:
           PROFILE_PART: ${{ matrix.lane }}
           PROFILE_PART_COUNT: ${{ matrix.part_count }}
           PROFILE_PART_SLUG: ${{ matrix.slug }}
-          OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && '0' || '1500' }}
+          OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && '0' || '1500' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1954,7 +2027,6 @@ jobs:
           export OPENCLAW_QA_REDACT_PUBLIC_METADATA=1
           export OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS=180000
           export NODE_OPTIONS=--max-old-space-size=16384
-          export OPENCLAW_CURRENT_PACKAGE_TGZ="$PWD/.artifacts/qa-e2e/smoke-ci-package/openclaw-current.tgz"
           PROFILE_RUNS_TSV="$(
             node --import tsx --input-type=module <<'EOF'
           const smokePlan = await import("./extensions/qa-lab/src/ci-smoke-plan.ts");
@@ -2026,6 +2098,23 @@ jobs:
           } else {
             throw new Error("QA smoke plan does not expose a supported CI planner.");
           }
+          // The build step skips the public pack because no smoke scenario
+          // uses the docker lane; fail closed instead of running one without
+          // its packaged tgz.
+          const catalog = await import("./extensions/qa-lab/src/scenario-catalog.ts");
+          const scenarioById = new Map(
+            catalog.readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario]),
+          );
+          for (const run of runs) {
+            for (const scenarioId of run.scenario_ids) {
+              const executionPath = scenarioById.get(scenarioId)?.execution?.path ?? "";
+              if (executionPath.includes("docker")) {
+                throw new Error(
+                  `smoke scenario ${scenarioId} needs the docker lane; restore the public pack step in ci.yml before selecting it`,
+                );
+              }
+            }
+          }
           for (const run of runs) {
             const scenarioIds = Buffer.from(JSON.stringify(run.scenario_ids)).toString("base64");
             process.stdout.write(`${run.slug}\t${scenarioIds}\n`);
@@ -2074,7 +2163,7 @@ jobs:
     name: ${{ matrix.checkName }}
     needs: [preflight]
     if: needs.preflight.outputs.run_plugin_contracts_shards == 'true'
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -2088,8 +2177,9 @@ jobs:
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
-          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
 
       - name: Run plugin contract shard
         env:
@@ -2116,7 +2206,7 @@ jobs:
     name: ${{ matrix.checkName }}
     needs: [preflight]
     if: needs.preflight.outputs.run_channel_contracts_shards == 'true'
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -2130,8 +2220,9 @@ jobs:
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
-          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
 
       - name: Run channel contract shard
         env:
@@ -2159,7 +2250,7 @@ jobs:
     name: checks-node-compat-node22
     needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true' && github.event_name == 'workflow_dispatch'
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
     steps:
       - *linux_node_checkout_step
@@ -2189,13 +2280,13 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_node_core_nondist == 'true'
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
       # Canonical main admits only one complete run at a time, so widen this
       # matrix within the current runner-registration budget.
-      max-parallel: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 48 || 28 }}
+      max-parallel: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 96 || 28 }}
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - *linux_node_checkout_step
@@ -2204,15 +2295,16 @@ jobs:
         with:
           node-version: "${{ matrix.node_version || '24.x' }}"
           install-bun: "false"
-          # Only the preflight writer saves an archive. Same-repo Blacksmith
-          # shards restore it; hosted and non-Node-24 paths use the pnpm store.
-          dependency-cache: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          # Only the preflight writer saves an exact dependency archive.
+          # All-Blacksmith shards restore it; github/hybrid use the pnpm store.
+          dependency-cache: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           vitest-fs-cache: "true"
           node-compile-cache: "true"
           node-compile-cache-scope: "test"
-          # CI shards only read the protected immutable seed. The scheduled or
-          # explicitly dispatched warmer is the sole test-cache writer.
+          # The github/hybrid planner profile elects one in-run writer so the
+          # transform cache can recover without waiting for the cache warmer.
+          save-vitest-fs-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && matrix.save_vitest_fs_cache && 'true' || 'false' }}
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
@@ -2236,6 +2328,7 @@ jobs:
         # that can overlap Vitest processes keeps the proven 2-worker cap.
         # Timing-sensitive groups stay pinned to 2 via plan-level env.
         env:
+          PREDICTED_TEST_SECONDS: ${{ matrix.predicted_seconds || '' }}
           SHARD_PLAN_CONCURRENCY: ${{ matrix.plan_concurrency || '' }}
         run: |
           cores="$(nproc)"
@@ -2248,7 +2341,7 @@ jobs:
           else
             workers=3
           fi
-          echo "detected cores=$cores plan_concurrency=${SHARD_PLAN_CONCURRENCY:-default} -> workers=$workers"
+          echo "detected cores=$cores plan_concurrency=${SHARD_PLAN_CONCURRENCY:-default} predicted_test_seconds=${PREDICTED_TEST_SECONDS:-unknown} -> workers=$workers"
           echo "OPENCLAW_VITEST_MAX_WORKERS=$workers" >> "$GITHUB_ENV"
 
       - name: Checkout trusted Node shard runner
@@ -2300,7 +2393,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check == 'true' }}
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && (github.run_attempt > 1 || (matrix.task != 'lint' && matrix.task != 'test-types' && matrix.task != 'dependencies'))) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -2340,17 +2433,30 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          # Same-repo Blacksmith runs restore the dependency cache published by
-          # preflight; hosted paths use the pnpm store cache instead.
-          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          # The github/hybrid planner profile uses the Actions pnpm-store cache
+          # on either runner backend; all-Blacksmith mode restores preflight's tree.
+          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+
+      - name: Cache extension package boundary artifacts for hosted lint
+        if: matrix.task == 'lint' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid')
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            dist/plugin-sdk
+            packages/plugin-sdk/dist
+            extensions/*/dist/.boundary-tsc.tsbuildinfo
+            extensions/*/dist/.boundary-tsc.stamp
+          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'scripts/check-extension-package-tsc-boundary.mts', 'scripts/prepare-extension-package-boundary-artifacts.mts', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mts', 'src/plugin-sdk/**', 'src/plugins/types.ts', 'src/auto-reply/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'src/types/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-extension-package-boundary-v1-
 
       # check-lint's shard runner rebuilds the same plugin-sdk boundary
       # artifacts the boundary lane snapshots (~72s cold); restore them from
       # the shared sticky. Strictly read-only (commit: false): only the
       # protected boundary lane may publish this repository-global snapshot.
       - name: Mount extension boundary sticky disk
-        if: matrix.task == 'lint' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        if: matrix.task == 'lint' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         uses: useblacksmith/stickydisk@6d373c96a74cbde0c99fedc5ea5d3a7ba66ba494 # main (post-v1.4.0 hot-attach fix)
         with:
           # One stable disk for the whole repository. The v1 per-PR/per-config
@@ -2363,7 +2469,7 @@ jobs:
           commit: "false"
 
       - name: Restore extension boundary artifacts from sticky disk
-        if: matrix.task == 'lint' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        if: matrix.task == 'lint' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         shell: bash
         env:
           # Config/toolchain inputs the tree-OID gate below cannot see; must
@@ -2397,10 +2503,11 @@ jobs:
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
           RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
           RUN_UI_TESTS: ${{ needs.preflight.outputs.run_ui_tests }}
-          RUNNER_BACKEND: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND }}
+          RUNNER_BACKEND: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}
+          DIFF_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2447,7 +2554,23 @@ jobs:
               pnpm check:import-cycles
               ;;
             npm-lock)
-              if has_package_script "deps:npm-lock:check"; then
+              # The --all sweep resolves ~94 npm graphs against the registry
+              # (~110s). Push/PR runs use the reviewed --changed scoping (zero
+              # dependency-surface changes resolve nothing); dispatches and
+              # release validation keep the full sweep, which also covers
+              # registry-side drift on unchanged lockfiles.
+              npm_lock_base=""
+              if [[ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" && -n "$DIFF_BASE_SHA" ]] &&
+                has_package_script "deps:npm-lock:check:changed"; then
+                if timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "+${DIFF_BASE_SHA}:refs/remotes/origin/npm-lock-base"; then
+                  npm_lock_base="refs/remotes/origin/npm-lock-base"
+                else
+                  echo "::warning::npm-lock base fetch failed; falling back to the full sweep"
+                fi
+              fi
+              if [[ -n "$npm_lock_base" ]]; then
+                pnpm deps:npm-lock:check:changed --base "$npm_lock_base" --head HEAD
+              elif has_package_script "deps:npm-lock:check"; then
                 pnpm deps:npm-lock:check
               elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
                 echo "Current CI targets must provide the deps:npm-lock:check package script." >&2
@@ -2468,15 +2591,16 @@ jobs:
               # i18n-tooling diff must run it. oxlint always runs.
               lint_args=(--threads=8)
               if [ "$RUNNER_BACKEND" = "github" ]; then
-                # Three dedicated hosted jobs own the split core stripes. Keep
+                # Five dedicated hosted jobs own the aggregated core Programs. Keep
                 # extension preparation, optional UI checks, and formatting in
-                # this fourth lane so each 4-core runner stays below ~6m.
+                # this sixth lane so each 4-core runner stays below ~6m.
                 lint_args=(--only=extensions --only=scripts --threads=1)
+                export GOMAXPROCS=2
               elif [ "$(nproc)" -lt 8 ]; then
-                # Fork PRs run on 4-core hosted runners with 16GB. Bound both
-                # the core process size and its threads so type-aware oxlint
-                # does not intermittently lose the runner under memory pressure.
-                lint_args=(--split-core --threads=1)
+                # Fork PRs build each semantic Program once. Bound both oxlint
+                # and its Go helper within the 4-core/16GB hosted runner.
+                lint_args=(--threads=1)
+                export GOMAXPROCS=2
               fi
               if [ "$RUN_CONTROL_UI_I18N" = "true" ] || [ "$RUN_UI_TESTS" = "true" ]; then
                 pnpm lint "${lint_args[@]}"
@@ -2560,18 +2684,39 @@ jobs:
               fi
               ;;
             test-types)
-              pnpm check:test-types
+              # The github/hybrid planner profile moves the 14 serial core-test
+              # graphs (~70% of this lane) into the dedicated hosted stripes
+              # job; this row keeps the extensions/root/scripts tail. Targets
+              # without stripe support run the whole lane here.
+              root_covered=false
+              if [ "$RUNNER_BACKEND" = "github" ] &&
+                grep -q -- '--stripe' scripts/run-tsgo-core-test-shards.mts 2>/dev/null; then
+                pnpm tsgo:extensions:test
+              else
+                pnpm check:test-types
+                # check:test-types (pnpm tsgo:test) already runs tsgo:test:root
+                # on current targets; rerunning it below would double ~25s of
+                # wall on this slowest static lane.
+                if node -e '
+                  const scripts = require("./package.json").scripts ?? {};
+                  process.exit(/tsgo:test:root/.test(scripts["tsgo:test"] ?? "") ? 0 : 1);
+                '; then
+                  root_covered=true
+                fi
+              fi
               if pnpm run --silent 2>/dev/null | grep -q '^  tsgo:scripts$'; then
                 pnpm tsgo:scripts
               elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
                 echo "Current CI targets must provide the tsgo:scripts package script." >&2
                 exit 1
               fi
-              if pnpm run --silent 2>/dev/null | grep -q '^  tsgo:test:root$'; then
-                pnpm tsgo:test:root
-              elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
-                echo "Current CI targets must provide the tsgo:test:root package script." >&2
-                exit 1
+              if [ "$root_covered" != "true" ]; then
+                if pnpm run --silent 2>/dev/null | grep -q '^  tsgo:test:root$'; then
+                  pnpm tsgo:test:root
+                elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
+                  echo "Current CI targets must provide the tsgo:test:root package script." >&2
+                  exit 1
+                fi
               fi
               ;;
             *)
@@ -2580,37 +2725,78 @@ jobs:
               ;;
           esac
 
-  # In degraded GitHub-hosted mode, split the serial 12-minute core oxlint path
-  # across three runners. This job is absent from normal Blacksmith runs, which
-  # retain the existing single check-lint registration and runner policy.
+  # The github/hybrid planner profile aggregates core targets into five Programs
+  # across five hosted jobs. All-Blacksmith mode keeps one lint job.
   check-lint-hosted-core-shard:
     permissions:
       contents: read
     name: check-lint-core-${{ matrix.stripe }}
     needs: [preflight]
-    if: ${{ needs.preflight.outputs.run_check == 'true' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' }}
+    if: ${{ needs.preflight.outputs.run_check == 'true' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 5
       matrix:
-        stripe: [1, 2, 3]
+        stripe: [1, 2, 3, 4, 5]
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Run hosted core lint stripe
         env:
+          GOMAXPROCS: "2"
           OPENCLAW_LOCAL_CHECK: "0"
         run: >-
           node --import tsx scripts/run-oxlint-shards.mts
-          --only=core --split-core --core-stripe=${{ matrix.stripe }}/3 --threads=1
+          --only=core --split-core --core-stripe=${{ matrix.stripe }}/5 --threads=1
+
+  # The github/hybrid planner profile stripes the 14 serial core test-type
+  # graphs (~34-42s per graph on either runner class; tsgo saturates a machine
+  # per graph) across four jobs; the check-test-types row keeps the
+  # extensions/root/scripts tail. All-Blacksmith mode keeps the single
+  # 16-vCPU test-types job.
+  check-test-types-hosted-core-shard:
+    permissions:
+      contents: read
+    name: check-test-types-core-${{ matrix.stripe }}
+    needs: [preflight]
+    if: ${{ needs.preflight.outputs.run_check == 'true' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') }}
+    # Measured 232-269s per stripe on hosted 4-core; hybrid attempt 1 rides
+    # the 8 vCPU class like the compact large rows, retries stay hosted.
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        stripe: [1, 2, 3, 4, 5]
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+
+      - name: Run hosted core test-types stripe
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Frozen/historical targets predate stripe support; their whole
+          # test-types lane already runs inside the check-test-types row.
+          if ! grep -q -- '--stripe' scripts/run-tsgo-core-test-shards.mts 2>/dev/null; then
+            echo "[skip] target does not support core test-type stripes"
+            exit 0
+          fi
+          node scripts/run-tsgo-core-test-shards.mjs --stripe "${{ matrix.stripe }}/5" --concurrency 2
 
   check-additional-shard:
     permissions:
@@ -2618,7 +2804,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && (github.run_attempt > 1 || (matrix.group != 'extension-package-boundary' && matrix.group != 'runtime-topology-architecture' && matrix.group != 'plugin-sdk-api-diff'))) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -2653,7 +2839,9 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: report-plugin-sdk-api-diff
             group: plugin-sdk-api-diff
-            runner: blacksmith-4vcpu-ubuntu-2404
+            # Measured 209s hosted and 246s on 4 vCPU; diff generation is
+            # CPU-bound and the 8 vCPU class keeps it off the critical path.
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-extension-package-boundary
             group: extension-package-boundary
             # Light-run critical-path pole: cold runs spend ~100s in nine
@@ -2663,7 +2851,9 @@ jobs:
             runner: blacksmith-32vcpu-ubuntu-2404
           - check_name: check-additional-runtime-topology-architecture
             group: runtime-topology-architecture
-            runner: blacksmith-4vcpu-ubuntu-2404
+            # Measured 274s on hosted 4-core and ~170s on 4 vCPU; the 8 vCPU
+            # class keeps this off the hybrid critical path.
+            runner: blacksmith-8vcpu-ubuntu-2404
     steps:
       - *linux_node_checkout_step
       - name: Ensure Plugin SDK API diff base commit
@@ -2682,10 +2872,10 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          # Same-repo Blacksmith runs restore the dependency cache published by
-          # preflight; hosted paths use the pnpm store cache instead.
-          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          # The github/hybrid planner profile uses the Actions pnpm-store cache
+          # on either runner backend; all-Blacksmith mode restores preflight's tree.
+          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       # Same-repo runs carry boundary artifacts on a Blacksmith sticky disk:
       # the GitHub cache below is evicted so quickly under the repo quota that
@@ -2693,7 +2883,7 @@ jobs:
       # plugin-sdk declarations. Fork PRs must never produce writable
       # repository-global snapshots, so they keep the GitHub cache path.
       - name: Mount extension boundary sticky disk
-        if: matrix.group == 'extension-package-boundary' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        if: matrix.group == 'extension-package-boundary' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         uses: useblacksmith/stickydisk@6d373c96a74cbde0c99fedc5ea5d3a7ba66ba494 # main (post-v1.4.0 hot-attach fix)
         with:
           # One stable disk for the whole repository. The v1 per-PR/per-config
@@ -2714,7 +2904,7 @@ jobs:
 
       - name: Restore extension boundary artifacts from sticky disk
         id: boundary-sticky-restore
-        if: matrix.group == 'extension-package-boundary' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        if: matrix.group == 'extension-package-boundary' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         shell: bash
         env:
           # Config/toolchain inputs the tree-OID gate below cannot see; must
@@ -2890,7 +3080,13 @@ jobs:
               fi
               ;;
             plugin-sdk-api-diff)
-              if node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["plugin-sdk:api:diff"] ? 0 : 1);'; then
+              # Pure reporting: no caller passes --require-acknowledgement, so
+              # this can only surface an artifact/summary. Keep it off the
+              # push/PR critical path; dispatch (incl. release validation)
+              # still produces the report.
+              if [[ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]]; then
+                echo "[skip] plugin SDK API diff reports on manual and release dispatches only"
+              elif node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["plugin-sdk:api:diff"] ? 0 : 1);'; then
                 mkdir -p .artifacts
                 run_check "plugin-sdk:api:diff" pnpm run plugin-sdk:api:diff -- \
                   --base "${{ needs.preflight.outputs.diff_base_revision }}" \
@@ -2935,7 +3131,7 @@ jobs:
       # clone). Seed the payload before the sticky post-action flushes.
       # rsync -aR mirrors the repo-relative layout the restore step replays.
       - name: Seed extension boundary sticky disk
-        if: success() && steps.boundary-sticky-restore.outputs.restored == 'false' && matrix.group == 'extension-package-boundary' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.event_name != 'pull_request' && github.repository == 'openclaw/openclaw'
+        if: success() && steps.boundary-sticky-restore.outputs.restored == 'false' && matrix.group == 'extension-package-boundary' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.event_name != 'pull_request' && github.repository == 'openclaw/openclaw'
         shell: bash
         env:
           # Must stay identical to the restore gates above.
@@ -2963,7 +3159,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_check_docs == 'true'
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
       - *linux_node_checkout_step
@@ -2973,8 +3169,8 @@ jobs:
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
-          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Check formatting
         if: needs.preflight.outputs.run_format_check == 'true'
@@ -3032,7 +3228,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_skills_python_job == 'true'
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -3087,7 +3283,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_windows == 'true'
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'windows-2025' || github.event_name == 'workflow_dispatch' && 'windows-2025' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && (matrix.runner || 'blacksmith-8vcpu-windows-2025') || 'windows-2025') }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'windows-2025' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'windows-2025' || github.event_name == 'workflow_dispatch' && 'windows-2025' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-windows-2025' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && (matrix.runner || 'blacksmith-8vcpu-windows-2025') || 'windows-2025')) }}
     timeout-minutes: 60
     env:
       NODE_OPTIONS: --max-old-space-size=8192
@@ -3099,7 +3295,7 @@ jobs:
         shell: bash
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 3
       matrix: ${{ fromJson(needs.preflight.outputs.checks_windows_matrix) }}
     steps:
       - &platform_checkout_step
@@ -3227,6 +3423,9 @@ jobs:
             test-2)
               pnpm test:windows:ci:2
               ;;
+            test-3)
+              pnpm test:windows:ci:3
+              ;;
             *)
               echo "Unsupported Windows checks task: $TASK" >&2
               exit 1
@@ -3251,6 +3450,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          save-actions-cache: "true"
 
       - name: TS tests (macOS)
         env:
@@ -3475,15 +3675,16 @@ jobs:
         run: |
           set -euo pipefail
           swift_test_args=(--package-path apps/macos --enable-code-coverage)
-          # Hosted release and retry runs have shown test-process contention;
-          # keep the faster first-attempt Blacksmith path parallel.
-          if [[ "$SWIFT_TEST_EXECUTION" == "parallel" ]]; then
-            swift_test_args+=(--parallel)
-          else
-            swift_test_args+=(--no-parallel)
-          fi
           for attempt in 1 2 3; do
-            if swift test "${swift_test_args[@]}"; then
+            attempt_args=("${swift_test_args[@]}")
+            # Keep the fast first-attempt Blacksmith path parallel, but make
+            # in-job retries serial after any contention-driven failure.
+            if [[ "$SWIFT_TEST_EXECUTION" == "parallel" && "$attempt" -eq 1 ]]; then
+              attempt_args+=(--parallel)
+            else
+              attempt_args+=(--no-parallel)
+            fi
+            if swift test "${attempt_args[@]}"; then
               exit 0
             fi
             echo "swift test failed (attempt $attempt/3). Retrying…"
@@ -3678,7 +3879,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_android_job == 'true'
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -3752,11 +3953,11 @@ jobs:
       # build caches) on a Blacksmith sticky disk: the setup-java gradle cache
       # above is evicted so quickly under the repo quota that it rarely
       # restores, leaving every run to re-resolve the full dependency graph.
-      # Fork PRs, manual dispatches, and the GitHub backend must never produce writable
+      # Fork PRs, manual dispatches, the GitHub backend, and hosted hybrid retries must never produce writable
       # repository-global snapshots, so they keep the GitHub cache path (their
       # runs-on already selects non-Blacksmith ubuntu-24.04 runners).
       - name: Mount Gradle sticky disk
-        if: vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        if: vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !(vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         uses: useblacksmith/stickydisk@6d373c96a74cbde0c99fedc5ea5d3a7ba66ba494 # main (post-v1.4.0 hot-attach fix)
         with:
           # One stable disk per matrix task. The v1 per-PR/per-dependency-hash
@@ -3778,7 +3979,7 @@ jobs:
           commit: ${{ github.event_name != 'pull_request' && 'true' || 'false' }}
 
       - name: Point Gradle at the sticky disk
-        if: vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
+        if: vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && !(vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw')
         shell: bash
         env:
           # Gradle caches are content-addressed, so a stale snapshot is safe
@@ -3811,7 +4012,7 @@ jobs:
       - name: Run Android ${{ matrix.task }}
         working-directory: apps/android
         env:
-          CI_RUNNER_BACKEND: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND }}
+          CI_RUNNER_BACKEND: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) || github.event_name == 'workflow_dispatch' || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != 'openclaw/openclaw')) && 'github' || 'blacksmith' }}
           TASK: ${{ matrix.task }}
         shell: bash
         run: |
@@ -3905,6 +4106,7 @@ jobs:
       - checks-node-core-test-nondist-shard
       - check-shard
       - check-lint-hosted-core-shard
+      - check-test-types-hosted-core-shard
       - check-additional-shard
       - check-docs
       - skills-python
@@ -3940,6 +4142,7 @@ jobs:
             checks-node-core-test-nondist-shard=${{ needs.checks-node-core-test-nondist-shard.result }}
             check-shard=${{ needs.check-shard.result }}
             check-lint-hosted-core-shard=${{ needs.check-lint-hosted-core-shard.result }}
+            check-test-types-hosted-core-shard=${{ needs.check-test-types-hosted-core-shard.result }}
             check-additional-shard=${{ needs.check-additional-shard.result }}
             check-docs=${{ needs.check-docs.result }}
             skills-python=${{ needs.skills-python.result }}

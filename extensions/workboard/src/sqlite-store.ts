@@ -27,6 +27,7 @@ import type {
   PersistedWorkboardBoard,
   PersistedWorkboardCard,
   PersistedWorkboardNotificationSubscription,
+  WorkboardCardStore,
   WorkboardKeyedStore,
 } from "./persistence-types.js";
 const WORKBOARD_DB_RELATIVE_PATH = ["plugins", "workboard", "workboard.sqlite"] as const;
@@ -36,7 +37,7 @@ const WORKBOARD_SQLITE_DIR_MODE = 0o700;
 const WORKBOARD_SQLITE_FILE_MODE = 0o600;
 type Row = Record<string, unknown>;
 type WorkboardSqliteStores = {
-  cards: WorkboardKeyedStore;
+  cards: WorkboardCardStore;
   boards: WorkboardKeyedStore<PersistedWorkboardBoard>;
   subscriptions: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;
   attachments: WorkboardKeyedStore<PersistedWorkboardAttachment>;
@@ -1195,7 +1196,7 @@ function insertCard(db: DatabaseSync, card: WorkboardCard): void {
   }
 }
 
-class WorkboardSqliteCardStore implements WorkboardKeyedStore {
+class WorkboardSqliteCardStore implements WorkboardCardStore {
   constructor(private readonly db: DatabaseSync) {}
 
   async register(key: string, value: PersistedWorkboardCard): Promise<void> {
@@ -1239,6 +1240,31 @@ class WorkboardSqliteCardStore implements WorkboardKeyedStore {
     return rows.map((row) => ({
       key: requiredString(row, "id"),
       value: { version: 1, card: readCard(this.db, row, preloaded) },
+    }));
+  }
+
+  async listBoardAggregates() {
+    const rows = this.db
+      .prepare(
+        `
+          SELECT
+            board_id,
+            status,
+            COUNT(*) AS total,
+            SUM(CASE WHEN archived_at IS NOT NULL AND archived_at <> 0 THEN 1 ELSE 0 END) AS archived,
+            MAX(updated_at) AS updated_at
+          FROM workboard_cards
+          GROUP BY board_id, status
+          ORDER BY board_id ASC, status ASC
+        `,
+      )
+      .all() as Row[];
+    return rows.map((row) => ({
+      boardId: requiredString(row, "board_id"),
+      status: requiredString(row, "status") as WorkboardCard["status"],
+      total: requiredNumber(row, "total"),
+      archived: requiredNumber(row, "archived"),
+      updatedAt: requiredNumber(row, "updated_at"),
     }));
   }
 }
