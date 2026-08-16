@@ -24,7 +24,7 @@ import {
   type ContextTokenResolutionParams,
   type ModelsConfig,
   resolveContextTokensForModelFromCache,
-  resolveExplicitContextTokenSourceForModel as resolveExplicitContextTokenSourceForModelFromConfig,
+  resolveExplicitContextTokenSourceForModelFromConfig,
 } from "./context-resolution.js";
 import {
   beginContextWindowCacheRefresh,

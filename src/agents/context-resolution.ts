@@ -175,7 +175,7 @@ function resolveConfiguredRuntimeContextTokens(
     : undefined;
 }
 
-export function resolveExplicitContextTokenSourceForModel(
+export function resolveExplicitContextTokenSourceForModelFromConfig(
   params: Pick<
     ContextTokenResolutionParams,
     "cfg" | "model" | "modelProvider" | "provider" | "sourceCfg"
