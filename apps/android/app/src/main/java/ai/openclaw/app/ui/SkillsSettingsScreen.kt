@@ -598,9 +598,7 @@ private fun ClawHubSkillSearchPanel(
   }
   if (state.results.isNotEmpty()) {
     ClawListPanel(items = state.results) { skill ->
-      val installed =
-        skill.version?.let { version -> isClawHubSkillInstalled(installedSkills, skill.reference, version) }
-          ?: isClawHubSkillInstalled(installedSkills, skill.reference)
+      val installed = isClawHubSkillInstalled(installedSkills, skill)
       val subtitleParts =
         listOfNotNull(
           skill.summary,
@@ -769,7 +767,7 @@ private fun ClawHubInstallReviewDialog(
         review.summary?.let {
           Text(text = it, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-        review.version?.let { ReviewLine(label = nativeString("Version"), value = it) }
+        ReviewLine(label = nativeString("Version"), value = review.version)
         ReviewLine(label = nativeString("Publisher"), value = review.author)
         Text(
           text = nativeString("The Gateway will verify this exact release with ClawHub before download. If the release needs explicit risk acknowledgement, Android will show the Gateway warning before retrying."),

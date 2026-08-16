@@ -1887,6 +1887,7 @@ export const en: TranslationMap = {
     noClawHubResults: "No skills found on ClawHub.",
     notScannedByClawHub: "Not scanned by ClawHub",
     install: "Install",
+    installed: "Installed",
     installing: "Installing…",
     close: "Close",
     by: "By",

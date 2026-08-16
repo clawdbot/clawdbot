@@ -30,7 +30,7 @@ export type ClawHubSkillSearchResult = {
    * the bare slug alone resolves to 409 AMBIGUOUS_SKILL_SLUG. This names the result's own
    * source: rewriting an external reference into `@owner/slug` would install a different skill.
    */
-  installRef?: string;
+  installRef: string;
   /**
    * Set only for sources ClawHub serves install-only, so clients install directly instead of
    * opening a detail card that cannot resolve. Absence means the ordinary review-then-install
@@ -50,6 +50,7 @@ export type ClawHubSkillSearchResult = {
 /** Source variants ClawHub resolves search results from. Anything else is unidentifiable. */
 const CLAWHUB_NATIVE_SOURCE_KIND = "clawhub";
 const CLAWHUB_SKILLS_SH_SOURCE_KIND = "skills-sh";
+const CLAWHUB_SUPPORTED_INSTALL_KINDS = new Set(["clawhub", "github", "skills-sh"]);
 
 /**
  * Wire shape of one `/api/v1/search` row. ClawHub reports each result's origin under `install`,
@@ -244,10 +245,15 @@ function toClawHubSkillSearchResult(
 ): ClawHubSkillSearchResult | undefined {
   const { install: _install, source: _source, ...rest } = entry;
   const base = { ...rest, icon: resolveClawHubImageUrl(entry.icon, baseUrl) };
-  const kind =
-    normalizeOptionalString(entry.install?.kind) ?? normalizeOptionalString(entry.source);
+  const source = normalizeOptionalString(entry.source);
+  const installKind = normalizeOptionalString(entry.install?.kind);
   const reference = normalizeOptionalString(entry.install?.reference);
-  switch (kind) {
+  // Source identifies the catalog row. Install kind only describes how ClawHub will deliver it:
+  // native ClawHub rows may legitimately be GitHub-backed.
+  if (installKind && !CLAWHUB_SUPPORTED_INSTALL_KINDS.has(installKind)) {
+    return undefined;
+  }
+  switch (source) {
     case CLAWHUB_SKILLS_SH_SOURCE_KIND: {
       // An external row is only installable as itself. Without its own reference there is no
       // identity to install, so the row cannot be offered at all.

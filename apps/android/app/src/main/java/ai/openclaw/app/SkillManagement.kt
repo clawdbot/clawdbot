@@ -61,34 +61,9 @@ data class GatewayClawHubInstallReview(
   val slug: String,
   val displayName: String,
   val summary: String?,
-  /**
-   * Null for an install-only source: the Gateway pins those to a commit and rejects a version
-   * selector, so there is no release for the operator to review or acknowledge.
-   */
-  val version: String?,
+  val version: String,
   val author: String,
-  /**
-   * Set for an install-only target. Its canonical slug differs from this reference, so install
-   * readback matches the Gateway's recorded reference instead of the slug that was sent.
-   */
-  val requestedReference: String? = null,
-) {
-  companion object {
-    /**
-     * Install target for a result the Gateway serves no detail card for. It carries the search
-     * reference unchanged, so the source the operator picked is the source that gets installed.
-     */
-    fun directInstall(skill: GatewayClawHubSkillSummary): GatewayClawHubInstallReview =
-      GatewayClawHubInstallReview(
-        slug = skill.reference,
-        displayName = skill.displayName,
-        summary = skill.summary,
-        version = null,
-        author = "Unknown publisher",
-        requestedReference = skill.reference,
-      )
-  }
-}
+)
 
 internal data class GatewayClawHubInstallRejection(
   val message: String,
@@ -223,6 +198,18 @@ internal fun isClawHubSkillInstalled(
   val reference = parseClawHubSkillReference(slug) ?: return false
   return skills.any { it.matchesClawHubReference(reference) }
 }
+
+internal fun isClawHubSkillInstalled(
+  skills: List<GatewaySkillSummary>,
+  searchResult: GatewayClawHubSkillSummary,
+): Boolean =
+  if (!searchResult.canReadDetails) {
+    isClawHubSkillInstalledByReference(skills, searchResult.reference)
+  } else {
+    searchResult.version?.let { version ->
+      isClawHubSkillInstalled(skills, searchResult.reference, version)
+    } ?: isClawHubSkillInstalled(skills, searchResult.reference)
+  }
 
 /**
  * Readback for an install-only source. Its reference is not a `@owner/slug` spelling, so the slug

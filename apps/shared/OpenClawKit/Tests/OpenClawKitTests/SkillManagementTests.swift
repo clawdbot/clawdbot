@@ -77,6 +77,11 @@ struct SkillManagementTests {
         #expect(SkillManagementContract.installed(
             installed,
             requestedReference: "skills-sh:openai/skills/pdf"))
+        let external = try JSONDecoder().decode(
+            ClawHubSkillSummary.self,
+            from: Data(
+                #"{"slug":"pdf","installRef":"skills-sh:openai/skills/pdf","installOnly":true,"displayName":"Pdf"}"#.utf8))
+        #expect(SkillManagementContract.installed(installed, searchResult: external))
         #expect(!SkillManagementContract.installed(
             installed,
             requestedReference: "skills-sh:someone-else/skills/pdf"))

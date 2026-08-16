@@ -445,13 +445,11 @@ export const SkillsSearchResultSchema = closedObject({
     closedObject({
       score: Type.Number(),
       slug: NonEmptyString,
-      installRef: Type.Optional(
-        Type.String({
-          minLength: 1,
-          description:
-            "Source-qualified reference for this result. Send it as `slug` to skills.install; several publishers can share one slug.",
-        }),
-      ),
+      installRef: Type.String({
+        minLength: 1,
+        description:
+          "Source-qualified reference for this result. Send it as `slug` to skills.install; several publishers can share one slug.",
+      }),
       installOnly: Type.Optional(
         Type.Literal(true, {
           description:

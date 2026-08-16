@@ -229,6 +229,16 @@ function activeClawHubMutation(props: SkillsProps, ref: string): boolean {
   return props.operation?.kind === "clawhub" && props.operation.ref === ref;
 }
 
+function installedClawHubSearchResult(props: SkillsProps, result: ClawHubSearchResult): boolean {
+  if (result.installOnly !== true) {
+    return false;
+  }
+  const reference = clawHubSkillRef(result);
+  return (props.report?.skills ?? []).some(
+    (skill) => skill.clawhub?.valid === true && skill.clawhub.requestedReference === reference,
+  );
+}
+
 export function renderSkills(props: SkillsProps) {
   const skills = props.report?.skills ?? [];
 
@@ -461,6 +471,7 @@ function renderClawHubResults(props: SkillsProps) {
       // Detail stays available unless the result is explicitly install-only, so results from a
       // gateway that predates the flag keep the review-then-install flow.
       const detailRef = r.installOnly ? undefined : ref;
+      const installed = installedClawHubSearchResult(props, r);
       const trustSuffix = r.trustState ? ` · ${t("skillsPage.notScannedByClawHub")}` : "";
       const rowCopy = html`
         ${iconUrl
@@ -489,12 +500,18 @@ function renderClawHubResults(props: SkillsProps) {
             ${r.version ? renderSettingsValue(`v${r.version}`) : nothing}
             <button
               class="btn btn--sm"
-              ?disabled=${skillInstallLocked(props)}
-              @click=${() => props.onClawHubInstall(ref)}
+              ?disabled=${installed || skillInstallLocked(props)}
+              @click=${() => {
+                if (!installed) {
+                  props.onClawHubInstall(ref);
+                }
+              }}
             >
-              ${activeClawHubMutation(props, ref)
-                ? t("skillsPage.installing")
-                : t("skillsPage.install")}
+              ${installed
+                ? t("skillsPage.installed")
+                : activeClawHubMutation(props, ref)
+                  ? t("skillsPage.installing")
+                  : t("skillsPage.install")}
             </button>
           </div>
         </div>

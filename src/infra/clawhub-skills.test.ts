@@ -124,6 +124,14 @@ describe("clawhub skills", () => {
               source: "skills-sh",
               install: { kind: "skills-sh", reference: "skills-sh:openclaw/skills/weather" },
             },
+            {
+              score: 1,
+              slug: "github-backed",
+              ownerHandle: "openclaw",
+              displayName: "GitHub backed",
+              source: "clawhub",
+              install: { kind: "github", reference: "openclaw/github-backed" },
+            },
           ],
         }),
         { headers: { "content-type": "application/json" } },
@@ -148,6 +156,7 @@ describe("clawhub skills", () => {
         installOnly: true,
         trustState: "not-scanned-by-clawhub",
       },
+      { installRef: "@openclaw/github-backed", installOnly: undefined, trustState: undefined },
     ]);
   });
 
@@ -182,6 +191,15 @@ describe("clawhub skills", () => {
               displayName: "Mystery",
               source: "future-registry",
               install: { kind: "future-registry", reference: "acme/mystery" },
+            },
+            // A known source still needs a supported delivery mechanism.
+            {
+              score: 1,
+              slug: "future-install",
+              ownerHandle: "acme",
+              displayName: "Future install",
+              source: "clawhub",
+              install: { kind: "future-transport", reference: "acme/future-install" },
             },
             {
               score: 1,

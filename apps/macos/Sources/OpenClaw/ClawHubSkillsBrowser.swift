@@ -63,14 +63,9 @@ struct ClawHubSkillsBrowser: View {
                         ForEach(Array(self.model.results.enumerated()), id: \.element.id) { index, skill in
                             ClawHubSkillResultRow(
                                 skill: skill,
-                                installed: skill.version.map {
-                                    SkillManagementContract.installed(
-                                        self.installedSkills,
-                                        slug: skill.reference,
-                                        version: $0)
-                                } ?? SkillManagementContract.installed(
+                                installed: SkillManagementContract.installed(
                                     self.installedSkills,
-                                    slug: skill.reference),
+                                    searchResult: skill),
                                 isBusy: self.model.reviewingSlug == skill.reference || self.model.installingSlug.map {
                                     SkillManagementContract.sameClawHubSkill($0, skill.reference)
                                 } == true,

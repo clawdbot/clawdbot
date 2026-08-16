@@ -386,9 +386,9 @@ struct SettingsSkillsDestination: View {
                 }
                 ClawHubSkillRow(
                     skill: skill,
-                    installed: skill.version.map {
-                        SkillManagementContract.installed(self.installedSkills, slug: skill.reference, version: $0)
-                    } ?? SkillManagementContract.installed(self.installedSkills, slug: skill.reference),
+                    installed: SkillManagementContract.installed(
+                        self.installedSkills,
+                        searchResult: skill),
                     isBusy: self.reviewingSlug == skill.reference || self.installingSlug.map {
                         SkillManagementContract.sameClawHubSkill($0, skill.reference)
                     } == true,
@@ -520,11 +520,19 @@ struct SettingsSkillsDestination: View {
     /// install the exact reference search returned, so the picked source is the installed source.
     private func act(on skill: ClawHubSkillSummary) async {
         guard skill.canReadDetails else {
-            guard let route = try? await gatewayRoute() else { return }
-            await self.install(
-                ClawHubSkillInstallReview(directInstall: skill),
-                route: route,
-                acknowledgeRisk: false)
+            do {
+                let route = try await gatewayRoute()
+                await self.install(
+                    ClawHubSkillInstallReview(directInstall: skill),
+                    route: route,
+                    acknowledgeRisk: false)
+            } catch {
+                self.notice = SkillsNotice(
+                    title: String(localized: "Could not install skill"),
+                    message: error.localizedDescription,
+                    warning: nil,
+                    isError: true)
+            }
             return
         }
         await self.review(skill)

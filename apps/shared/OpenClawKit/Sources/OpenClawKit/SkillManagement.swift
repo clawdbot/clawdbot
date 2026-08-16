@@ -347,6 +347,19 @@ public struct ClawHubSkillInstallRejection: Equatable, Sendable {
 }
 
 public enum SkillManagementContract {
+    public static func installed(
+        _ skills: [SkillStatus],
+        searchResult: ClawHubSkillSummary) -> Bool
+    {
+        if searchResult.installOnly == true {
+            return self.installed(skills, requestedReference: searchResult.reference)
+        }
+        if let version = searchResult.version {
+            return self.installed(skills, slug: searchResult.reference, version: version)
+        }
+        return self.installed(skills, slug: searchResult.reference)
+    }
+
     public static func installed(_ skills: [SkillStatus], slug: String, version: String) -> Bool {
         guard let reference = clawHubReference(slug) else { return false }
         return skills.contains {

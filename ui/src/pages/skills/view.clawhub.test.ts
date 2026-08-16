@@ -286,6 +286,56 @@ describe("renderSkills ClawHub", () => {
     expect(onClawHubDetailOpen).not.toHaveBeenCalled();
   });
 
+  it("renders an installed external result from its exact recorded reference", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    const onClawHubInstall = vi.fn();
+
+    render(
+      renderSkills(
+        createProps({
+          clawhubQuery: "pdf",
+          clawhubResults: [
+            {
+              score: 1,
+              slug: "pdf",
+              installRef: "skills-sh:openai/skills/pdf",
+              installOnly: true,
+              displayName: "Pdf",
+            },
+          ],
+          report: {
+            workspaceDir: "/tmp/workspace",
+            managedSkillsDir: "/tmp/skills",
+            skills: [
+              createSkill({
+                clawhub: {
+                  status: "linked",
+                  valid: true,
+                  registry: "https://clawhub.ai",
+                  slug: "pdf",
+                  requestedReference: "skills-sh:openai/skills/pdf",
+                  installedVersion: "0.0.0",
+                  installedAt: 1,
+                },
+              }),
+            ],
+          },
+          onClawHubInstall,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const button = container.querySelector<HTMLButtonElement>(".btn.btn--sm")!;
+    expect(button.textContent?.trim()).toBe("Installed");
+    expect(button.disabled).toBe(true);
+    button.click();
+    expect(onClawHubInstall).not.toHaveBeenCalled();
+  });
+
   it("keeps the review flow for results from a gateway that predates the install-only flag", async () => {
     const container = document.createElement("div");
     document.body.append(container);

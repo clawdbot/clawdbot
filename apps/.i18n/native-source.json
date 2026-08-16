@@ -26357,6 +26357,17 @@
       ]
     },
     {
+      "id": "native.apple.d52e4a1639df3cbd",
+      "source": "Could not install skill",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.72a0fd50a7a6f408",
       "source": "Could not load automation",
       "surface": "apple",

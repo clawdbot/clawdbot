@@ -67,11 +67,8 @@ class SkillManagementTest {
     assertTrue(external.isUnscannedSource)
     assertTrue(native.canReadDetails)
 
-    val review = GatewayClawHubInstallReview.directInstall(external)
-    assertEquals("skills-sh:openai/skills/pdf", review.slug)
-    // The Gateway pins external sources to a commit and rejects a version selector.
-    assertNull(review.version)
-    assertEquals("skills-sh:openai/skills/pdf", review.requestedReference)
+    // Android installs this exact reference directly; it never creates a release review.
+    assertEquals("skills-sh:openai/skills/pdf", external.reference)
   }
 
   @Test
@@ -115,6 +112,20 @@ class SkillManagementTest {
     // The canonical slug is "pdf", so matching by the sent reference is the only readback that
     // identifies this install without colliding with a registry skill of the same slug.
     assertTrue(isClawHubSkillInstalledByReference(installed, "skills-sh:openai/skills/pdf"))
+    assertTrue(
+      isClawHubSkillInstalled(
+        installed,
+        GatewayClawHubSkillSummary(
+          slug = "pdf",
+          installRef = "skills-sh:openai/skills/pdf",
+          installOnly = true,
+          trustState = "not-scanned-by-clawhub",
+          displayName = "Pdf",
+          summary = null,
+          version = null,
+        ),
+      ),
+    )
     assertFalse(isClawHubSkillInstalledByReference(installed, "skills-sh:other/skills/pdf"))
   }
 
