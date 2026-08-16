@@ -636,6 +636,11 @@ suite.define(() => {
           expect.objectContaining({ catalog: expect.objectContaining({ catalogId: "claude" }) }),
         );
       await page.getByRole("status").filter({ hasText: "Connecting to session" }).waitFor();
+      await page
+        .locator("openclaw-terminal-panel .tabstrip-tab", {
+          hasText: "claude --resume claude-termi…",
+        })
+        .waitFor();
       await page.clock.fastForward(30_001);
       await page.clock.runFor(100);
 
