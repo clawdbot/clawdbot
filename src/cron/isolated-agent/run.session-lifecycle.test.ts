@@ -402,7 +402,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey)),
     ).resolves.toMatchObject({
       status: "error",
-      error: `CronSessionLifecycleClaimError: Session "${sessionKey}" changed while starting work. Retry.`,
+      error: `Session "${sessionKey}" changed while starting work. Retry.`,
       executionStarted: true,
     });
   });

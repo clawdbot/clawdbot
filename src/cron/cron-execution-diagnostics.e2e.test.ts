@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../agents/failover-error.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -253,6 +254,28 @@ describe.sequential("cron execution diagnostics", () => {
     }
     expect(lastError).toBe(`${message} | MODEL_NOT_FOUND`);
     expect(history.errorReason).toBe("model_not_found");
+  });
+
+  it("persists stale gateway lifecycle rejections instead of reporting a timeout", async () => {
+    const modelRef = { provider: "openai", model: "gpt-5.4" };
+    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+    runWithModelFallbackMock.mockRejectedValueOnce(createAgentRunStaleLifecycleError());
+
+    const { finished, history, lastError } = await runPersistedDiagnosticCase({
+      cfg: configFor(modelRef),
+      modelRef,
+      name: "stale gateway lifecycle",
+    });
+    const expected = "Agent run belongs to a stale gateway lifecycle | ERR_STALE_GATEWAY_LIFECYCLE";
+
+    for (const outcome of [finished, history]) {
+      expect(outcome).toMatchObject({
+        status: "error",
+        error: expected,
+      });
+      expect(outcome.error).not.toContain("timed out");
+    }
+    expect(lastError).toBe(expected);
   });
 
   it("persists and emits a fatal execution-denial diagnostic", async () => {

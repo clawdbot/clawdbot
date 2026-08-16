@@ -1,5 +1,6 @@
 /** Formats stable cron timeout and execution error messages. */
 import { formatEmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
+import { isAgentRunStaleLifecycleError } from "../../infra/agent-lifecycle-error.js";
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import {
   CRON_JOB_EXECUTION_TIMEOUT_ERROR,
@@ -69,8 +70,10 @@ export function abortErrorMessage(signal?: AbortSignal): string {
   return resolveCronAbortReasonText(signal?.reason) ?? timeoutErrorMessage();
 }
 
-function isAbortError(err: unknown): boolean {
-  if (!(err instanceof Error)) {
+function isUnspecifiedAbortError(err: unknown): boolean {
+  // A stale lifecycle rejection is a coordination failure with its own durable code;
+  // reporting it as elapsed cron time destroys the operator's recovery reason.
+  if (!(err instanceof Error) || isAgentRunStaleLifecycleError(err)) {
     return false;
   }
   return err.name === "AbortError" || err.message === timeoutErrorMessage();
@@ -78,7 +81,7 @@ function isAbortError(err: unknown): boolean {
 
 /** Normalizes thrown cron run failures into stable log/run-history text. */
 export function normalizeCronRunErrorText(err: unknown): string {
-  if (isAbortError(err)) {
+  if (isUnspecifiedAbortError(err)) {
     return timeoutErrorMessage();
   }
   return formatErrorMessageWithCode(err);
