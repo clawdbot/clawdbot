@@ -2346,6 +2346,7 @@ describe("startGatewayPostAttachRuntime", () => {
     stopTrackedPostReadySidecarsAfterCloseStarted({
       postReadySidecars: [postReadySidecar],
       closeStarted: true,
+      onError: vi.fn(),
     });
 
     expect(postReadySidecar.stop).toHaveBeenCalledTimes(1);
@@ -2359,10 +2360,40 @@ describe("startGatewayPostAttachRuntime", () => {
     stopTrackedPostReadySidecarsAfterCloseStarted({
       postReadySidecars: [postReadySidecar],
       closeStarted: false,
+      onError: vi.fn(),
     });
 
     expect(postReadySidecar.stop).not.toHaveBeenCalled();
     expect(publishedPostReadySidecars).toContain(postReadySidecar);
+  });
+
+  it("reports every post-ready sidecar stop failure after close started", async () => {
+    const synchronousFailure = new Error("synchronous stop failure");
+    const asynchronousFailure = new Error("asynchronous stop failure");
+    const postReadySidecars = [
+      {
+        stop: vi.fn(() => {
+          throw synchronousFailure;
+        }),
+      },
+      { stop: vi.fn().mockRejectedValue(asynchronousFailure) },
+    ];
+    const onError = vi.fn();
+    adoptSidecars(publishedPostReadySidecars, postReadySidecars);
+
+    stopTrackedPostReadySidecarsAfterCloseStarted({
+      postReadySidecars,
+      closeStarted: true,
+      onError,
+    });
+
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledTimes(2);
+    });
+    expect(onError).toHaveBeenCalledWith(synchronousFailure);
+    expect(onError).toHaveBeenCalledWith(asynchronousFailure);
+    expect(postReadySidecars[0]?.stop).toHaveBeenCalledTimes(1);
+    expect(postReadySidecars[1]?.stop).toHaveBeenCalledTimes(1);
   });
 
   it("runs Gmail watcher after sidecars are ready", async () => {
@@ -3134,6 +3165,7 @@ describe("startGatewayPostAttachRuntime", () => {
     stopTrackedPostReadySidecarsAfterCloseStarted({
       postReadySidecars: result.postReadySidecars,
       closeStarted: true,
+      onError: vi.fn(),
     });
     releasePostReadyWork();
     await vi.advanceTimersByTimeAsync(1_000);

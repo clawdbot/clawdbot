@@ -79,12 +79,14 @@ export type GatewayPostReadySidecarHandle = { stop: () => Awaitable<void> };
 export function stopPostReadySidecarsAfterCloseStarted(params: {
   postReadySidecars: readonly GatewayPostReadySidecarHandle[];
   closeStarted: boolean;
+  onError: (error: unknown) => void;
 }): void {
   if (!params.closeStarted) {
     return;
   }
   for (const postReadySidecar of params.postReadySidecars) {
-    void postReadySidecar.stop();
+    // Preserve best-effort teardown across both synchronous throws and asynchronous rejections.
+    void (async () => await postReadySidecar.stop())().catch(params.onError);
   }
 }
 

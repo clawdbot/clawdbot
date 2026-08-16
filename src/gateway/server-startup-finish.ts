@@ -306,6 +306,9 @@ export async function finishGatewayStartup(params: {
             stopPostReadySidecarsAfterCloseStarted({
               postReadySidecars,
               closeStarted: lifecycle.closePreludeStarted,
+              onError: (error) => {
+                log.warn(`post-ready sidecar stop after close failed: ${String(error)}`);
+              },
             });
             if (lifecycle.closePreludeStarted) {
               kernel.setPostReadySidecars([]);
@@ -317,7 +320,16 @@ export async function finishGatewayStartup(params: {
                 registered: runtimeState.gatewayLifetimeSidecars,
                 published: gatewayLifetimeSidecars,
                 closeStarted: lifecycle.closePreludeStarted,
-                stopAfterCloseStarted: stopPostReadySidecarsAfterCloseStarted,
+                stopAfterCloseStarted: (stopParams) => {
+                  stopPostReadySidecarsAfterCloseStarted({
+                    ...stopParams,
+                    onError: (error) => {
+                      log.warn(
+                        `gateway lifetime sidecar stop after close failed: ${String(error)}`,
+                      );
+                    },
+                  });
+                },
               }),
             );
           },
