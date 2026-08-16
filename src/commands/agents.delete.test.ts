@@ -237,10 +237,14 @@ describe("agents delete command", () => {
 
       expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
       expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
-      expect(runtime.error).toHaveBeenCalledWith(
-        'Agent "main" owns the legacy shared auth store and cannot be deleted. Run openclaw doctor --fix to migrate shared auth, then retry.',
-      );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(readJsonLogs()).toEqual([
+        {
+          error:
+            'Agent "main" owns the legacy shared auth store and cannot be deleted. Run openclaw doctor --fix to migrate shared auth, then retry.',
+        },
+      ]);
+      expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
       expectSessionStore(cfg, sessions, "main");
     });
   });
@@ -271,6 +275,36 @@ describe("agents delete command", () => {
       expect(runtime.exit).not.toHaveBeenCalledWith(1);
       expect(configMocks.replaceConfigFile).toHaveBeenCalledOnce();
       expectSessionStore(cfg, {}, "main");
+    });
+  });
+
+  it("rejects an unrepresentable id before targeting or deleting an agent", async () => {
+    await withStateDirEnv("openclaw-agents-delete-invalid-id-", async ({ stateDir }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: path.join(stateDir, "workspace-main") },
+            { id: "second", default: true, workspace: path.join(stateDir, "workspace-second") },
+          ],
+        },
+      };
+      const sessions = {
+        "agent:main:main": { sessionId: "sess-main", updatedAt: Date.now() },
+      };
+      writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+      await arrangeAgentsDeleteTest({ stateDir, cfg, deletedAgentId: "main", sessions });
+
+      await agentsDeleteCommand({ id: "агент✨", force: true }, runtime);
+
+      expect(runtime.error).toHaveBeenCalledWith(
+        'Agent "агент✨" not found. Run openclaw agents list to see configured agents.',
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
+      expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
+      expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalled();
+      expect(workspaceStateMocks.deleteWorkspaceState).not.toHaveBeenCalled();
+      expectSessionStore(cfg, sessions, "main");
     });
   });
 
@@ -609,10 +643,11 @@ describe("agents delete command", () => {
 
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
-      expect(runtime.error).toHaveBeenCalledWith(
-        'Agent "ops" is the only configured agent and cannot be deleted.',
-      );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(readJsonLogs()).toEqual([
+        { error: 'Agent "ops" is the only configured agent and cannot be deleted.' },
+      ]);
+      expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
       expectSessionStore(cfg, {
         "agent:main:main": { sessionId: "sess-default-alias", updatedAt: now + 1 },
         "agent:ops:quietchat:direct:u1": { sessionId: "sess-ops-direct", updatedAt: now + 2 },

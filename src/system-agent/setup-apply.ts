@@ -17,7 +17,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatExternalSupervisorActionRequired } from "../infra/gateway-supervision.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -161,7 +161,12 @@ function applySystemAgentModelSelectionWithModules(
 ): OpenClawConfig {
   const { agentScope, modelConfig, runtimePolicy } = modules;
   const nextConfig = structuredClone(params.config);
-  const targetAgentId = params.targetAgentId ? normalizeAgentId(params.targetAgentId) : undefined;
+  const normalizedTarget =
+    params.targetAgentId === undefined ? null : normalizeAgentIdStrict(params.targetAgentId);
+  if (normalizedTarget && !normalizedTarget.ok) {
+    throw new Error(`Could not resolve configured agent "${params.targetAgentId}".`);
+  }
+  const targetAgentId = normalizedTarget?.value;
   const agentId = targetAgentId ?? agentScope.resolveDefaultAgentId(nextConfig);
   const roster = agentScope.listAgentEntries(nextConfig);
   if (targetAgentId && !roster.some((entry) => normalizeAgentId(entry.id) === targetAgentId)) {

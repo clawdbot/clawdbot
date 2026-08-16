@@ -3,6 +3,23 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applySystemAgentModelSelection } from "./setup-apply.js";
 
 describe("applySystemAgentModelSelection", () => {
+  it("rejects an unrepresentable explicit agent instead of updating main", async () => {
+    const config = {
+      agents: {
+        entries: { main: { default: true }, ops: {} },
+      },
+    } satisfies OpenClawConfig;
+
+    await expect(
+      applySystemAgentModelSelection({
+        config,
+        model: "openai/gpt-5.5",
+        targetAgentId: "агент✨",
+      }),
+    ).rejects.toThrow('Could not resolve configured agent "агент✨".');
+    expect(config.agents.entries.main).toEqual({ default: true });
+  });
+
   it("clears stale harness pins in both model scopes for a native route", async () => {
     const config = {
       agents: {
