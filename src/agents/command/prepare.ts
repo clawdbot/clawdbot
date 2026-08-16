@@ -362,31 +362,36 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
     if (!isRawModelRun && (message.includes("$") || message.trimStart().startsWith("/"))) {
       const {
         expandExplicitSkillReferences,
+        hasSkillReferenceCandidate,
         listSkillCommandsForWorkspace,
         resolveEffectiveAgentSkillFilter,
       } = await import("../../skills/discovery/chat-commands.runtime.js");
-      const skillFilter = resolveEffectiveAgentSkillFilter(cfg, sessionAgentId);
-      const commandParams = {
-        workspaceDir,
-        cfg,
-        agentId: sessionAgentId,
-        sessionEntry: sessionEntryRaw,
-        sessionKey,
-        ...(skillFilter ? { skillFilter } : {}),
-      };
-      const skillCommands = listSkillCommandsForWorkspace(commandParams);
-      const allSkillCommands = skillFilter
-        ? listSkillCommandsForWorkspace({ ...commandParams, includeAllowlistHidden: true })
-        : skillCommands;
-      const expansion = expandExplicitSkillReferences({
-        text: message,
-        skillCommands,
-        allSkillCommands,
-      });
-      if (expansion.error) {
-        throw new Error(expansion.error);
+      const hasExplicitSkillCandidate =
+        message.trimStart().startsWith("/") || hasSkillReferenceCandidate(message);
+      if (hasExplicitSkillCandidate) {
+        const skillFilter = resolveEffectiveAgentSkillFilter(cfg, sessionAgentId);
+        const commandParams = {
+          workspaceDir,
+          cfg,
+          agentId: sessionAgentId,
+          sessionEntry: sessionEntryRaw,
+          sessionKey,
+          ...(skillFilter ? { skillFilter } : {}),
+        };
+        const skillCommands = listSkillCommandsForWorkspace(commandParams);
+        const allSkillCommands = skillFilter
+          ? listSkillCommandsForWorkspace({ ...commandParams, includeAllowlistHidden: true })
+          : skillCommands;
+        const expansion = expandExplicitSkillReferences({
+          text: message,
+          skillCommands,
+          allSkillCommands,
+        });
+        if (expansion.error) {
+          throw new Error(expansion.error);
+        }
+        promptMessage = expansion.body;
       }
-      promptMessage = expansion.body;
     }
     const body =
       !isRawModelRun && acpResolution?.kind === "ready"

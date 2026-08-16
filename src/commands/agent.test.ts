@@ -565,6 +565,25 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
+  it.each(["Echo $PATH exactly.", String.raw`Keep \$release_notes literal.`])(
+    "does not discover skills for literal dollar input: %s",
+    async (message) => {
+      await withTempHome(async (home) => {
+        const store = path.join(home, "sessions.json");
+        mockConfig(home, store);
+
+        await agentCommandFromIngress(
+          { message, agentId: "main", allowModelOverride: false },
+          runtime,
+        );
+
+        expect(getLastEmbeddedCall()?.prompt).toBe(message);
+        expect(loadVisibleSkills).not.toHaveBeenCalled();
+        expect(loadWorkspaceSkills).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it("renders a Claude bundle command template on Gateway ingress", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
