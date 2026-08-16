@@ -10,9 +10,30 @@ import {
   hasQaSmokeAffectingChange,
   hasSqliteSessionLifecycleAffectingChange,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
 import { hasImportGraphImpactOnTargets } from "../../scripts/test-projects.test-support.mts";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
+
+const CODEX_TEST_PROCESS_FILE_LIMIT = 40;
+
+function expectBoundedCodexFallback(
+  shards: ReturnType<typeof createChangedExtensionFallbackShards>,
+) {
+  const targets = shards.flatMap((shard) => shard.includePatterns ?? []);
+
+  expect(shards.length).toBeGreaterThan(1);
+  expect(
+    shards.every(
+      (shard) =>
+        shard.configs[0] === "test/vitest/vitest.extension-codex.config.ts" &&
+        (shard.includePatterns?.length ?? 0) > 0 &&
+        (shard.includePatterns?.length ?? 0) <= CODEX_TEST_PROCESS_FILE_LIMIT,
+    ),
+  ).toBe(true);
+  expect(targets).toEqual(listExtensionTestFilesForRoots(["extensions/codex"]));
+  expect(new Set(targets).size).toBe(targets.length);
+}
 
 describe("CI changed Node test plan", () => {
   it("routes Control UI style changes through source-scanning policy tests", () => {
@@ -274,15 +295,7 @@ describe("CI changed Node test plan", () => {
     ];
 
     expect(createChangedNodeTestShards(changedPaths)).toBeNull();
-    expect(createChangedExtensionFallbackShards(changedPaths)).toEqual([
-      {
-        checkName: "checks-node-changed-extensions-config",
-        configs: ["test/vitest/vitest.extension-codex.config.ts"],
-        requiresDist: false,
-        runner: "blacksmith-8vcpu-ubuntu-2404",
-        shardName: "changed-extensions-config",
-      },
-    ]);
+    expectBoundedCodexFallback(createChangedExtensionFallbackShards(changedPaths));
   });
 
   it.each([
@@ -348,22 +361,14 @@ describe("CI changed Node test plan", () => {
     ).toEqual([]);
   });
 
-  it("falls back to the affected extension config for deleted sources", () => {
+  it("falls back to bounded Codex config shards for deleted sources", () => {
     const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-ci-extension-fallback-"));
     try {
-      expect(
+      expectBoundedCodexFallback(
         createChangedExtensionFallbackShards(["extensions/codex/src/deleted-session-runtime.ts"], {
           cwd,
         }),
-      ).toEqual([
-        {
-          checkName: "checks-node-changed-extensions-config",
-          configs: ["test/vitest/vitest.extension-codex.config.ts"],
-          requiresDist: false,
-          runner: "blacksmith-8vcpu-ubuntu-2404",
-          shardName: "changed-extensions-config",
-        },
-      ]);
+      );
       expect(
         createChangedExtensionFallbackShards(
           ["extensions/codex/src/deleted-session-runtime.test.ts"],
