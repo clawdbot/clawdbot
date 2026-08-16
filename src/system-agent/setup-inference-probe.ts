@@ -1,4 +1,4 @@
-const SETUP_INFERENCE_TEST_MAX_TOKENS = 32;
+const SETUP_INFERENCE_TEST_MAX_TOKENS = 128;
 
 /** Plugin and auto-selected harnesses may not support OpenClaw's request-scoped token cap. */
 export function resolveSetupInferenceProbeStreamParams(agentHarnessId?: string): {
