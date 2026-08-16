@@ -112,7 +112,8 @@ type NodeWorkerTunnelStartRequest = {
 type NodeTunnelEntry = NodeWorkerTunnelStartRequest & {
   abortController: AbortController;
   gatewayNamespace: string;
-  handle: WorkerTunnelHandle;
+  handle?: WorkerTunnelHandle;
+  initialization?: Promise<void>;
   launchTasks: Set<Promise<unknown>>;
   readiness: Deferred<WorkerTunnelHandle>;
   stopPromise?: Promise<void>;
@@ -182,7 +183,6 @@ function raceWithSignal<T>(operation: Promise<T>, signal: AbortSignal): Promise<
 /** Owns node-channel handles without treating the persistent machine as a disposable lease. */
 export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOptions) {
   const entries = new Map<string, NodeTunnelEntry>();
-  const pendingStarts = new Map<string, { ownerEpoch: number; cancelled: boolean }>();
   let resolveWorkspaceBinding: NodeWorkerWorkspaceBindingResolver | undefined;
   const gatewayNamespace = nodeWorkerGatewayNamespace(options.gatewayDeviceId);
 
@@ -304,7 +304,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
   };
 
   const createHandle = (
-    entry: Omit<NodeTunnelEntry, "handle" | "readiness">,
+    entry: Omit<NodeTunnelEntry, "handle" | "readiness" | "initialization">,
     restoredWorkspace: NodeWorkerWorkspaceBinding | undefined,
   ): { handle: WorkerTunnelHandle; validateRestoredWorkspace: () => Promise<void> } => {
     let workspaceReady = restoredWorkspace !== undefined;
@@ -610,14 +610,16 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     if (entry.stopPromise) {
       return entry.stopPromise;
     }
+    if (entries.get(entry.environmentId) === entry) {
+      entries.delete(entry.environmentId);
+    }
     entry.abortController.abort(new Error("node worker tunnel owner stopped"));
     entry.readiness.reject(new Error("node worker tunnel stopped before connecting"));
-    entry.stopPromise = Promise.allSettled(entry.launchTasks).then(() => {
-      if (entries.get(entry.environmentId) === entry) {
-        entries.delete(entry.environmentId);
-      }
-      return options.workspaceTransfer.close(entry.environmentId);
-    });
+    entry.stopPromise = (async () => {
+      await entry.initialization?.catch(() => undefined);
+      await Promise.allSettled(entry.launchTasks);
+      await options.workspaceTransfer.close(entry.environmentId);
+    })();
     return entry.stopPromise;
   }
 
@@ -643,73 +645,64 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           return current.readiness.promise; // Share restored-workspace validation without false readiness.
         }
       }
-      const pending = { ownerEpoch: request.ownerEpoch, cancelled: false };
-      pendingStarts.set(request.environmentId, pending);
-      try {
+      const readiness = createDeferredCore<WorkerTunnelHandle>();
+      void readiness.promise.catch(() => undefined);
+      const entry: NodeTunnelEntry = {
+        ...request,
+        gatewayNamespace,
+        abortController: new AbortController(),
+        launchTasks: new Set(),
+        readiness,
+      };
+      // Publish the new epoch before any teardown or initialization await so stop and replacement
+      // can fence it, while exact same-owner callers share this readiness barrier.
+      entries.set(entry.environmentId, entry);
+      entry.initialization = (async () => {
         if (current) {
           await stopEntry(current);
         }
-        if (pending.cancelled || pendingStarts.get(request.environmentId) !== pending) {
-          throw new Error("node worker tunnel start was cancelled");
+        if (!isLiveEntry(entry)) {
+          return;
         }
         const restoredWorkspace = await resolveWorkspaceBinding?.({
           environmentId: request.environmentId,
           ownerEpoch: request.ownerEpoch,
           sessionId: request.sessionId,
         });
-        if (pending.cancelled || pendingStarts.get(request.environmentId) !== pending) {
-          throw new Error("node worker tunnel start was cancelled");
+        if (!isLiveEntry(entry)) {
+          return;
         }
-        const base = {
-          ...request,
-          gatewayNamespace,
-          abortController: new AbortController(),
-          launchTasks: new Set<Promise<unknown>>(),
-        };
-        const readiness = createDeferredCore<WorkerTunnelHandle>();
-        void readiness.promise.catch(() => undefined);
-        const created = createHandle(base, restoredWorkspace);
-        const entry = Object.assign(base, { readiness, handle: created.handle });
-        entries.set(entry.environmentId, entry);
-        try {
-          await created.validateRestoredWorkspace();
-          if (pending.cancelled || pendingStarts.get(request.environmentId) !== pending) {
-            throw new Error("node worker tunnel start was cancelled");
-          }
-          readiness.resolve(entry.handle);
-          return entry.handle;
-        } catch (error) {
-          readiness.reject(error);
-          await stopEntry(entry);
-          throw error;
+        const created = createHandle(entry, restoredWorkspace);
+        await created.validateRestoredWorkspace();
+        if (!isLiveEntry(entry)) {
+          return;
         }
-      } finally {
-        if (pendingStarts.get(request.environmentId) === pending) {
-          pendingStarts.delete(request.environmentId);
-        }
-      }
+        entry.handle = created.handle;
+        readiness.resolve(created.handle);
+      })();
+      void entry.initialization.catch((error: unknown) => {
+        readiness.reject(error);
+        void stopEntry(entry);
+      });
+      return await readiness.promise;
     },
     async stop(environmentId: string, ownerEpoch?: number): Promise<void> {
-      const pending = pendingStarts.get(environmentId);
-      if (pending && (ownerEpoch === undefined || ownerEpoch === pending.ownerEpoch)) {
-        pending.cancelled = true;
-      }
       const entry = entries.get(environmentId);
       if (entry && (ownerEpoch === undefined || ownerEpoch === entry.ownerEpoch)) {
         await stopEntry(entry);
       }
     },
     async stopAll(): Promise<void> {
-      for (const pending of pendingStarts.values()) {
-        pending.cancelled = true;
-      }
       await Promise.all([...entries.values()].map(stopEntry));
       await options.workspaceTransfer.closeAll();
     },
     status(environmentId: string): WorkerTunnelStatus {
       const entry = entries.get(environmentId);
-      const status = entry && !entry.abortController.signal.aborted ? "connected" : "stopped";
-      return pendingStarts.get(environmentId)?.cancelled === false ? "connecting" : status;
+      return entry && !entry.abortController.signal.aborted
+        ? entry.handle
+          ? "connected"
+          : "connecting"
+        : "stopped";
     },
   };
 }

@@ -194,6 +194,30 @@ describe("node worker tunnel manager", () => {
     );
   });
 
+  it("joins same-owner starts while workspace binding resolution is pending", async () => {
+    const record = environment();
+    const workspaceBinding = createDeferred<undefined>();
+    const resolveWorkspaceBinding = vi.fn(async () => await workspaceBinding.promise);
+    const manager = createNodeWorkerTunnelManager({
+      gatewayDeviceId: "gateway-device-1",
+      getEnvironment: () => record,
+      getTransport: transport,
+      launchNodeWorker: vi.fn(),
+      validateWorkerTurn: () => true,
+      workspaceTransfer: workspaceTransfer(),
+    });
+    manager.bindWorkspaceBindingResolver(resolveWorkspaceBinding);
+
+    const first = manager.start(startRequest());
+    await vi.waitFor(() => expect(resolveWorkspaceBinding).toHaveBeenCalledOnce());
+    const second = manager.start(startRequest());
+    workspaceBinding.resolve(undefined);
+
+    const [firstHandle, secondHandle] = await Promise.all([first, second]);
+    expect(resolveWorkspaceBinding).toHaveBeenCalledOnce();
+    expect(secondHandle).toBe(firstHandle);
+  });
+
   it.each(["success", "failure"] as const)(
     "keeps same-owner starts behind restored workspace validation on %s",
     async (outcome) => {
@@ -467,10 +491,17 @@ describe("node worker tunnel manager", () => {
     record.ownerEpoch = 3;
     const replacement = manager.start({ ...startRequest(), ownerEpoch: 3 });
 
-    await manager.stop("environment-1", 3);
+    const stopping = manager.stop("environment-1", 3);
+    const stopSettled = vi.fn();
+    void stopping.then(stopSettled, stopSettled);
+    await expect(replacement).rejects.toThrow("stopped before connecting");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(stopSettled).not.toHaveBeenCalled();
     releaseLaunch.resolve();
+    await stopping;
 
-    await expect(replacement).rejects.toThrow("start was cancelled");
     await expect(launched).resolves.toMatchObject({ code: 1, killed: true });
     expect(manager.status("environment-1")).toBe("stopped");
   });
