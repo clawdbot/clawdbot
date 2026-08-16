@@ -98,13 +98,16 @@ Use WebSocket signals instead of a log substring:
 3. Send `connect` with the challenge-bound device signature.
 4. Treat `hello-ok` as application readiness for authenticated RPC.
 
-The challenge is deliberately earlier than full initialization. If startup
-sidecars are still pending, `connect` returns a retryable `UNAVAILABLE` error with
-`details.reason: "startup-sidecars"`, a bounded `retryAfterMs`, and then closes
-with code `1013` and reason `gateway starting`. Use
+The challenge is deliberately earlier than full sidecar initialization. In the
+normal deferred-start mode, `connect` succeeds once the core Gateway transport
+is bound, while optional startup sidecars continue to initialize. Methods that
+depend on those sidecars return a retryable `UNAVAILABLE` error with
+`details.reason: "startup-sidecars"` and a bounded `retryAfterMs`; use
 `resolveGatewayStartupRetryAfterMs` from
-`@openclaw/gateway-protocol/startup-unavailable` or the reference client's built-in
-policy, then reconnect.
+`@openclaw/gateway-protocol/startup-unavailable` or the reference client's
+built-in policy, then retry the request. Callers that explicitly select the
+legacy synchronous sidecar-start mode can still receive that retryable connect
+error and `1013` close with reason `gateway starting` while startup is pending.
 
 ## Interpret restart and shutdown
 
