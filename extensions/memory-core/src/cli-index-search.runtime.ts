@@ -360,11 +360,14 @@ export async function runMemoryPromote(
             Math.max(0, outputLimit - applyResult.appliedCandidates.length),
           )
         : [];
-      const outputCandidates = applyResult
-        ? [
-            ...applyResult.appliedCandidates,
-            ...rejectedCandidates.map((rejection) => rejection.candidate),
-          ]
+      const outputCandidateKeys = applyResult
+        ? new Set([
+            ...applyResult.appliedCandidates.map((candidate) => candidate.key),
+            ...rejectedCandidates.map((rejection) => rejection.candidate.key),
+          ])
+        : undefined;
+      const outputCandidates = outputCandidateKeys
+        ? candidates.filter((candidate) => outputCandidateKeys.has(candidate.key))
         : candidates;
       const storePath = resolveShortTermRecallStorePath(workspaceDir);
       const lockPath = resolveShortTermRecallLockPath(workspaceDir);

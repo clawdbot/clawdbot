@@ -2664,6 +2664,105 @@ describe("memory cli", () => {
     });
   });
 
+  it("preserves score order for mixed applied and rejected promotion output", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const relativePath = "memory/2026-04-03.md";
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+        "High-score untrusted candidate.",
+        "Lower-score trusted candidate.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "candidate order",
+        results: [
+          {
+            path: relativePath,
+            startLine: 1,
+            endLine: 1,
+            score: 0.99,
+            snippet: "High-score untrusted candidate.",
+            source: "memory",
+            provenance: {
+              originClass: "untrusted",
+              sessionKind: "interactive",
+              observedAt: Date.now(),
+            },
+          },
+          {
+            path: relativePath,
+            startLine: 2,
+            endLine: 2,
+            score: 0.01,
+            snippet: "Lower-score trusted candidate.",
+            source: "memory",
+          },
+        ],
+      });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "trusted candidate",
+        results: [
+          {
+            path: relativePath,
+            startLine: 2,
+            endLine: 2,
+            score: 0.01,
+            snippet: "Lower-score trusted candidate.",
+            source: "memory",
+          },
+        ],
+      });
+      const manager = {
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close: vi.fn(async () => {}),
+      };
+      const args = [
+        "promote",
+        "--apply",
+        "--limit",
+        "2",
+        "--min-score",
+        "0",
+        "--min-recall-count",
+        "0",
+        "--min-unique-queries",
+        "0",
+      ];
+
+      mockManager(manager);
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli([...args, "--json"]);
+      const payload = firstWrittenJsonArg<{
+        candidates: Array<{ startLine: number }>;
+        apply: {
+          appliedCandidates: Array<{ startLine: number }>;
+          rejectedCandidates: Array<{ candidate: { startLine: number } }>;
+        };
+      }>(writeJson);
+      expect(payload?.candidates.map((candidate) => candidate.startLine)).toEqual([1, 2]);
+      expect(payload?.apply.appliedCandidates.map((candidate) => candidate.startLine)).toEqual([2]);
+      expect(
+        payload?.apply.rejectedCandidates.map((rejection) => rejection.candidate.startLine),
+      ).toEqual([1]);
+
+      const store = await shortTermTesting.readRecallStore(workspaceDir, new Date().toISOString());
+      for (const entry of Object.values(store.entries)) {
+        delete entry.promotedAt;
+      }
+      await shortTermTesting.writeRawRecallStore(workspaceDir, store);
+      await fs.rm(path.join(workspaceDir, "MEMORY.md"), { force: true });
+
+      mockManager(manager);
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(args);
+      const output = loggedOutput(log);
+      const rejectedIndex = output.indexOf(`${relativePath}:1-1`);
+      const appliedIndex = output.indexOf(`${relativePath}:2-2`);
+      expect(rejectedIndex).toBeGreaterThanOrEqual(0);
+      expect(rejectedIndex).toBeLessThan(appliedIndex);
+    });
+  });
+
   it("prints conceptual promotion signals", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const dayMs = 24 * 60 * 60 * 1000;
