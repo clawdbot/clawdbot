@@ -262,8 +262,15 @@ describe("subagent registry steer restarts", () => {
       task: string;
       requesterSessionKey?: string;
       requesterDisplayKey?: string;
+      expectedRequesterLifecycleRevision?: string;
     } & Partial<
-      Pick<RegisterSubagentRunInput, "spawnMode" | "requesterOrigin" | "expectsCompletionMessage">
+      Pick<
+        RegisterSubagentRunInput,
+        | "spawnMode"
+        | "requesterOrigin"
+        | "expectsCompletionMessage"
+        | "expectedRequesterLifecycleRevision"
+      >
     >,
   ): void => {
     sessionStore[params.childSessionKey] = {
@@ -281,6 +288,7 @@ describe("subagent registry steer restarts", () => {
       cleanup: "keep",
       spawnMode: params.spawnMode,
       expectsCompletionMessage: params.expectsCompletionMessage,
+      expectedRequesterLifecycleRevision: params.expectedRequesterLifecycleRevision,
     });
   };
 
@@ -673,6 +681,31 @@ describe("subagent registry steer restarts", () => {
     );
 
     expect(run.task).toBe("preserve me verbatim");
+  });
+
+  it("preserves the source requester lifecycle across steer replacement", () => {
+    registerRun({
+      runId: "run-lifecycle-old",
+      childSessionKey: "agent:main:subagent:lifecycle-replacement",
+      task: "retain the original requester lifecycle",
+      expectsCompletionMessage: true,
+      expectedRequesterLifecycleRevision: "revision-before-reset",
+    });
+    sessionStore[MAIN_REQUESTER_SESSION_KEY] = {
+      sessionId: "sess-main-after-reset",
+      lifecycleRevision: "revision-after-reset",
+      updatedAt: 2,
+    };
+
+    const run = expectDefined(
+      replaceRunAfterSteer({
+        previousRunId: "run-lifecycle-old",
+        nextRunId: "run-lifecycle-new",
+      }),
+      "replaceSubagentRunAfterSteer lifecycle test invariant",
+    );
+
+    expect(run.expectedRequesterLifecycleRevision).toBe("revision-before-reset");
   });
 
   it("retains a legacy task owner fallback across another restart", () => {

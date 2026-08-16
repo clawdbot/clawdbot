@@ -7,7 +7,6 @@ import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { finalizeTaskRunByRunId } from "../../../tasks/detached-task-runtime.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
-import { loadRequesterLifecycleRevision } from "../../subagent-requester-lifecycle.js";
 import {
   clearDeliveryState,
   ensureCompletionState,
@@ -227,7 +226,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       runId: nextRunId,
       expectedRequesterLifecycleRevision:
         source.expectsCompletionMessage === true
-          ? loadRequesterLifecycleRevision(source.requesterSessionKey)
+          ? source.expectedRequesterLifecycleRevision
           : undefined,
       // New rows carry an exact owner. Legacy replacement rows must retain an
       // unknown owner so their bounded session fallback can still find the
