@@ -39,6 +39,18 @@ import {
 } from "./plugin-node-host.js";
 import { scanNodeHostedSkills } from "./skills.js";
 
+// Start the browser control HTTP server when the node host browser proxy is enabled.
+async function startBrowserControlServerIfEnabled(config: OpenClawConfig): Promise<void> {
+  if (config.nodeHost?.browserProxy?.enabled === false) {
+    return;
+  }
+  const { startBrowserControlServerFromConfig } =
+    await import("../../extensions/browser/src/server.js");
+  await startBrowserControlServerFromConfig().catch((error: unknown) => {
+    logDebug(`node-host: browser control server startup failed: ${String(error)}`);
+  });
+}
+
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 type NodeHostManifest = {
@@ -281,6 +293,11 @@ export async function prepareNodeHostRuntime(params?: {
   const workerRunsEnabled =
     params?.enableWorkerRuns === true && config.nodeHost?.workerRuns?.enabled === true;
   const skills = config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
+
+  // Start the browser control HTTP server when the node host browser proxy is enabled.
+  // This allows the gateway to reach the node's browser control on gateway.port + 2.
+  await startBrowserControlServerIfEnabled(config);
+
   const buildManifest = (pluginManifest: typeof pluginNodeHost): NodeHostManifest => ({
     caps: [
       ...new Set([
