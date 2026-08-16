@@ -333,13 +333,17 @@ if (args[0] === "worktree" && args[1] === "add") {
   fs.mkdirSync(args[3], { recursive: true });
   if (process.env.OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET) fs.symlinkSync(process.env.OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET, path.join(args[3], ".openclaw-crabbox-changed-gate.bundle")); process.exit(0);
 }
+if (args[0] === "read-tree") { fs.writeFileSync(process.env.GIT_INDEX_FILE, ""); process.exit(0); }
+if (args[0] === "add" && process.env.GIT_INDEX_FILE) process.exit(0);
+if (args[0] === "write-tree") { process.stdout.write((process.env.OPENCLAW_FAKE_GIT_WORKTREE_TREE_SHA || "tree456") + "\n"); process.exit(0); }
 if (args[0] === "-C" && args[2] === "sparse-checkout" && args[3] === "disable") process.exit(0);
 if (args[0] === "-C" && args[2] === "rev-parse") {
-  const value = args[3] === "HEAD" ? process.env.OPENCLAW_FAKE_GIT_HEAD_SHA || "def456" : args[3] === "HEAD^{tree}" ? process.env.OPENCLAW_FAKE_GIT_HEAD_TREE_SHA || "tree456" : process.env.OPENCLAW_FAKE_GIT_BASE_SHA || "abc123";
+  const value = args[3] === "HEAD" ? process.env.OPENCLAW_FAKE_GIT_HEAD_SHA || "def456" : args[3] === "HEAD^{tree}" ? process.env.OPENCLAW_FAKE_GIT_HEAD_TREE_SHA || "tree456" : args[3].endsWith("^{tree}") ? process.env.OPENCLAW_FAKE_GIT_BASE_TREE_SHA || "base-tree123" : process.env.OPENCLAW_FAKE_GIT_BASE_SHA || "abc123";
   process.stdout.write(value + "\n"); process.exit(0);
 }
 if (args[0] === "-C" && args[2] === "-c" && args[6] === "commit-tree") {
   if (process.env.OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER && args.includes("-p")) process.exit(68);
+  if (process.env.OPENCLAW_FAKE_GIT_EXPECT_COMMIT_TREE && args[7] !== process.env.OPENCLAW_FAKE_GIT_EXPECT_COMMIT_TREE) process.exit(69);
   touch("OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER"); touch("OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER");
   process.stdout.write((process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_SHA || "synthetic789") + "\n"); process.exit(0);
 }
@@ -3303,7 +3307,7 @@ describe("scripts/crabbox-wrapper", () => {
       cleanSparseSyncOptions,
     );
     expect(result.stderr).toContain("syncing from temporary full checkout");
-    expect(result.stderr).toContain("overlaying local HEAD as worktree changes from abc123");
+    expect(result.stderr).toContain("overlaying the local worktree as changes from abc123");
     expect(output.args.join(" ")).toContain(
       "openclaw_changed_gate_bundle=.openclaw-crabbox-changed-gate.bundle",
     );
@@ -3370,7 +3374,7 @@ describe("scripts/crabbox-wrapper", () => {
         },
       },
     );
-    expect(result.stderr).toContain("overlaying local HEAD as worktree changes from release123");
+    expect(result.stderr).toContain("overlaying the local worktree as changes from release123");
     expect(remoteCommand).toContain("openclaw_changed_gate_base=release123");
     expect(remoteCommand).toContain(
       "openclaw_changed_gate_alias=refs/remotes/origin/release/2026.7.2",
@@ -3534,7 +3538,7 @@ describe("scripts/crabbox-wrapper", () => {
       },
     );
     expect(result.stderr).toContain("syncing from temporary full checkout");
-    expect(result.stderr).toContain("overlaying local HEAD as worktree changes from abc123");
+    expect(result.stderr).toContain("overlaying the local worktree as changes from abc123");
     expect(output.cwd).toContain("openclaw-crabbox-sync-");
     expect(output.args).toContain("--shell");
     expect(remoteCommand).toContain("git init -q");
@@ -3542,6 +3546,38 @@ describe("scripts/crabbox-wrapper", () => {
     expect(remoteCommand).toMatch(
       /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
     );
+  });
+
+  it("bootstraps the exact dirty worktree tree for remote changed gates", () => {
+    const dirtyTree = "dirty-tree-123";
+    const { output, remoteCommand, result } = runSuccessfulDefaultWrapper(
+      [
+        "run",
+        "--provider",
+        "blacksmith-testbox",
+        "--blacksmith-ref",
+        "main",
+        "--",
+        "corepack",
+        "pnpm",
+        "check:changed",
+      ],
+      {
+        env: {
+          OPENCLAW_FAKE_GIT_EXPECT_COMMIT_TREE: dirtyTree,
+          OPENCLAW_FAKE_GIT_WORKTREE_TREE_SHA: dirtyTree,
+        },
+        gitResponses: {
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: " M scripts/crabbox-wrapper.mts\n" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    expect(result.stderr).toContain("syncing from temporary full checkout");
+    expect(result.stderr).toContain("overlaying the local worktree as changes from abc123");
+    expect(output.cwd).toContain("openclaw-crabbox-sync-");
+    expectChangedGateGitBootstrap(remoteCommand);
   });
 
   it("bootstraps Git metadata for env-prefixed sparse changed gates", () => {
