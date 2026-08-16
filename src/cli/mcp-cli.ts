@@ -1268,7 +1268,10 @@ export function registerMcpCli(program: Command) {
         }
         const approvalMode = parseMcpApprovalModeOption(opts.approval);
         if (approvalMode) {
-          next.codex = { ...next.codex, defaultToolsApprovalMode: approvalMode };
+          next.codex = {
+            ...(asRecord(next.codex) ?? {}),
+            defaultToolsApprovalMode: approvalMode,
+          };
         }
         if (opts.clearAuth) {
           delete next.auth;
