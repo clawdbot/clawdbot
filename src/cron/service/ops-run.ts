@@ -182,9 +182,9 @@ async function finishPreparedManualRun(
     }
     const endedAt = state.deps.nowMs();
     const triggerSkipped = coreResult.status === "ok" && coreResult.triggerEval?.fired === false;
-    const emitMissingQueuedTerminal = () => {
+    const emitMissingQueuedTerminal = (required = false) => {
       const tracker = prepared.terminalTracker;
-      if (!tracker || tracker.emitted) {
+      if ((!tracker && !required) || tracker?.emitted) {
         return;
       }
       const job =
@@ -236,7 +236,7 @@ async function finishPreparedManualRun(
         error: coreResult.error,
       });
       finalized = true;
-      emitMissingQueuedTerminal();
+      emitMissingQueuedTerminal(true);
       return;
     }
     if (!isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
