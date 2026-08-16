@@ -151,6 +151,7 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
     menu = null;
   };
   const showMenu = (
+    nativePostMessage: WebKitMessageHandler["postMessage"],
     anchor: HTMLAnchorElement,
     url: URL,
     x: number,
@@ -168,7 +169,7 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
         void copyToClipboard(url.href);
         return;
       }
-      postNativeLink(postMessage, url, action);
+      postNativeLink(nativePostMessage, url, action);
     };
     menu = nextMenu;
     container.append(nextMenu);
@@ -213,7 +214,14 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
     }
     event.preventDefault();
     event.stopPropagation();
-    showMenu(link.anchor, link.url, event.clientX, event.clientY, menuContainer(event));
+    showMenu(
+      postMessage,
+      link.anchor,
+      link.url,
+      event.clientX,
+      event.clientY,
+      menuContainer(event),
+    );
   };
 
   // Run after target/document handlers so cancelled application actions remain authoritative.
