@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import * as sessionTargets from "../config/sessions/targets.js";
+import * as sessionTargetsReadAvailability from "../config/sessions/targets-read-availability.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -13,15 +13,15 @@ import { createWorkerPlacementSessionEvidenceResolver } from "./server-worker-pl
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const resolveExistingTargetsSpy = vi.spyOn(
-  sessionTargets,
-  "resolveExistingAgentSessionStoreTargetsSync",
+const resolveTargetsReadOnlySpy = vi.spyOn(
+  sessionTargetsReadAvailability,
+  "resolveExistingAgentSessionStoreTargetsReadOnlyResult",
 );
 const readIdentityEvidenceBatchSpy = vi.spyOn(sessionAccessor, "readSessionIdentityEvidenceBatch");
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
-  resolveExistingTargetsSpy.mockClear();
+  resolveTargetsReadOnlySpy.mockClear();
   readIdentityEvidenceBatchSpy.mockClear();
 });
 
@@ -60,6 +60,29 @@ async function resolvePlacementEvidence(placement: WorkerSessionPlacementRecord)
 }
 
 describe("worker placement session evidence", () => {
+  it("keeps a placement when target discovery cannot read its database", async () => {
+    const stateDir = tempDirs.make("openclaw-placement-session-read-failed-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const placement = localPlacement("session-read-failed", "agent:main:read-failed");
+      resolveTargetsReadOnlySpy.mockReturnValueOnce({
+        available: false,
+        reason: "read-failed",
+      });
+
+      await expect(resolvePlacementEvidence(placement)).resolves.toBe("unknown");
+      expect(readIdentityEvidenceBatchSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reports absence when the configured session database is genuinely missing", async () => {
+    const stateDir = tempDirs.make("openclaw-placement-session-database-missing-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      await expect(
+        resolvePlacementEvidence(localPlacement("session-missing", "agent:main:missing")),
+      ).resolves.toBe("absent");
+    });
+  });
+
   it("keeps a placement when the agent database registry is unreadable", async () => {
     const stateDir = tempDirs.make("openclaw-placement-session-registry-unreadable-");
     fsSync.mkdirSync(path.join(stateDir, "state", "openclaw.sqlite"), { recursive: true });
@@ -96,9 +119,10 @@ describe("worker placement session evidence", () => {
     const stateDir = tempDirs.make("openclaw-placement-session-evidence-batch-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const placements = Array.from({ length: 20 }, (_, index) => {
+        const agentId = index % 2 === 0 ? "main" : "ops";
         const sessionId = `session-${index}`;
-        const sessionKey = `agent:main:placement-${index}`;
-        return localPlacement(sessionId, sessionKey);
+        const sessionKey = `agent:${agentId}:placement-${index}`;
+        return localPlacement(sessionId, sessionKey, agentId);
       });
       for (const placement of placements) {
         await sessionAccessor.upsertSessionEntryCore(
@@ -120,8 +144,16 @@ describe("worker placement session evidence", () => {
       expect(listReadOnlySpy).not.toHaveBeenCalled();
       expect(readIdentityEvidenceBatchSpy).toHaveBeenCalledOnce();
       expect(readIdentityEvidenceBatchSpy.mock.calls[0]?.[0]).toHaveLength(placements.length);
-      expect(resolveExistingTargetsSpy).toHaveBeenCalledOnce();
-      expect(resolveExistingTargetsSpy).toHaveBeenCalledWith(expect.anything(), "main");
+      expect(resolveTargetsReadOnlySpy).toHaveBeenCalledTimes(2);
+      expect(resolveTargetsReadOnlySpy).toHaveBeenCalledWith(expect.anything(), "main", {
+        cache: expect.any(Map),
+      });
+      expect(resolveTargetsReadOnlySpy).toHaveBeenCalledWith(expect.anything(), "ops", {
+        cache: expect.any(Map),
+      });
+      expect(resolveTargetsReadOnlySpy.mock.calls[0]?.[2]?.cache).toBe(
+        resolveTargetsReadOnlySpy.mock.calls[1]?.[2]?.cache,
+      );
     });
   });
 });
