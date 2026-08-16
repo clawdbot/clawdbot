@@ -19,6 +19,7 @@ import {
   spyRuntimeLogs,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatMemoryIndexOutcome } from "./cli-runtime-common.js";
 import { openMemoryCoreStateStore } from "./dreaming-state.js";
 import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 import {
@@ -188,7 +189,7 @@ describe("memory cli", () => {
 
   function makeMemoryStatus(overrides: Record<string, unknown> = {}) {
     return {
-      backend: "builtin",
+      backend: "builtin" as const,
       files: 0,
       chunks: 0,
       dirty: false,
@@ -229,6 +230,27 @@ describe("memory cli", () => {
         typeof call[0] === "string" && call[0].includes(inactiveMemorySecretDiagnostic),
     );
   }
+
+  it.each([
+    {
+      name: "reports indexed SQLite session rows when the physical-file scan is empty",
+      files: 2,
+      expected: "Memory index updated (main): 2 files indexed.",
+    },
+    {
+      name: "keeps the genuine empty-index result as a no-op",
+      files: 0,
+      expected: `No memory files found in /tmp/openclaw; nothing indexed (main).`,
+    },
+  ])("$name", ({ files, expected }) => {
+    expect(
+      formatMemoryIndexOutcome(
+        makeMemoryStatus({ files }),
+        { sources: [], totalFiles: 0, issues: [] },
+        "main",
+      ),
+    ).toBe(expected);
+  });
 
   function stripAnsi(value: string) {
     let output = "";
@@ -1420,6 +1442,26 @@ describe("memory cli", () => {
       });
       expect(close).toHaveBeenCalled();
       expect(log).toHaveBeenCalledWith("Memory index updated (main): 1 file indexed.");
+    });
+  });
+
+  it("describes session index sources without implying active JSONL storage", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const close = vi.fn(async () => {});
+      const sync = vi.fn(async () => {});
+      mockManager({
+        sync,
+        status: () => makeMemoryStatus({ workspaceDir, sources: ["sessions"], files: 1 }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["index", "--verbose"]);
+
+      expectLogged(log, "sessions (current transcripts + retained transcript artifacts)");
+      expectNotLogged(log, "*.jsonl");
+      expectLogged(log, "Memory index updated (main): 1 file indexed.");
+      expect(close).toHaveBeenCalled();
     });
   });
 

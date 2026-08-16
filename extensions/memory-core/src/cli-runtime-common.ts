@@ -394,10 +394,10 @@ export function formatMemoryIndexOutcome(
   scan: MemorySourceScan | undefined,
   agentId: string,
 ): string {
-  if (status.workspaceDir && scan?.totalFiles === 0) {
+  const indexedFiles = status.files ?? 0;
+  if (indexedFiles === 0 && status.workspaceDir && scan?.totalFiles === 0) {
     return `No memory files found in ${shortenHomePath(status.workspaceDir)}; nothing indexed (${agentId}).`;
   }
-  const indexedFiles = status.files ?? 0;
   const fileLabel = indexedFiles === 1 ? "file" : "files";
   return `Memory index updated (${agentId}): ${indexedFiles} ${fileLabel} indexed.`;
 }

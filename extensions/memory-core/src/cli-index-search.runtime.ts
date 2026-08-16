@@ -1,4 +1,3 @@
-import os from "node:os";
 import path from "node:path";
 import { resolveMemorySearchStaleness } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
@@ -14,7 +13,6 @@ import {
 import {
   defaultRuntime,
   formatErrorMessage,
-  resolveStateDir,
   setVerbose,
   shortenHomeInString,
   shortenHomePath,
@@ -39,17 +37,14 @@ import {
   resolveShortTermRecallStorePath,
 } from "./short-term-promotion.js";
 const { accent, heading, info, muted, success, warn } = theme;
-function formatSourceLabel(source: string, workspaceDir: string, agentId: string): string {
+function formatSourceLabel(source: string, workspaceDir: string): string {
   if (source === "memory") {
     return shortenHomeInString(
       `memory (MEMORY.md + ${path.join(workspaceDir, "memory")}${path.sep}*.md)`,
     );
   }
   if (source === "sessions") {
-    const stateDir = resolveStateDir(process.env, os.homedir);
-    return shortenHomeInString(
-      `sessions (${path.join(stateDir, "agents", agentId, "sessions")}${path.sep}*.jsonl)`,
-    );
+    return "sessions (current transcripts + retained transcript artifacts)";
   }
   return source;
 }
@@ -71,7 +66,7 @@ export async function runMemoryIndex(
           const status = manager.status();
           const label = (text: string) => muted(`${text}:`);
           const sourceLabels = (status.sources ?? []).map((source) =>
-            formatSourceLabel(source, status.workspaceDir ?? "", agentId),
+            formatSourceLabel(source, status.workspaceDir ?? ""),
           );
           const extraPaths = status.workspaceDir
             ? formatExtraPaths(status.workspaceDir, status.extraPaths ?? [])
