@@ -313,20 +313,82 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "core-tooling-isolated",
     ]);
 
-    // Pushes retain three lanes of headroom under the workflow's 28-worker cap.
-    expect(compact).toHaveLength(25);
-    expect(pullRequestCompact).toHaveLength(34);
-    expect(githubCompact).toHaveLength(70);
-    expect(githubPullRequestCompact).toHaveLength(79);
-    expect(hybridCompact).toEqual(githubCompact);
-    expect(hybridPullRequestCompact).toEqual(githubPullRequestCompact);
+    for (const profile of [
+      {
+        name: "Blacksmith",
+        pullRequest: pullRequestCompact,
+        pullRequestJobs: 34,
+        pullRequestMax: 204,
+        push: compact,
+        pushJobs: 25,
+        pushMax: 204,
+      },
+      {
+        name: "GitHub-hosted",
+        pullRequest: githubPullRequestCompact,
+        pullRequestJobs: 79,
+        pullRequestMax: 186,
+        push: githubCompact,
+        pushJobs: 70,
+        pushMax: 149,
+      },
+      {
+        name: "hybrid",
+        pullRequest: hybridPullRequestCompact,
+        pullRequestJobs: 55,
+        pullRequestMax: 140,
+        push: hybridCompact,
+        pushJobs: 47,
+        pushMax: 140,
+      },
+    ]) {
+      expect(profile.push, `${profile.name} push jobs`).toHaveLength(profile.pushJobs);
+      expect(profile.pullRequest, `${profile.name} pull-request jobs`).toHaveLength(
+        profile.pullRequestJobs,
+      );
+      expect(
+        Math.max(...profile.push.map((shard) => shard.predictedSeconds ?? Infinity)),
+        `${profile.name} push max`,
+      ).toBe(profile.pushMax);
+      expect(
+        Math.max(...profile.pullRequest.map((shard) => shard.predictedSeconds ?? Infinity)),
+        `${profile.name} pull-request max`,
+      ).toBe(profile.pullRequestMax);
+    }
+    expect(hybridCompact.filter((shard) => !shard.requiresDist)).toHaveLength(46);
+    expect(githubCompact.length - hybridCompact.length).toBeGreaterThanOrEqual(20);
     expect(githubPullRequestCompact.length).toBeLessThanOrEqual(96);
-    // Nondist hosted lanes stay under the 150-second body ceiling; the serial
-    // TUI PTY dist descriptor keeps its indivisible measured wall.
-    expect(Math.max(...githubCompact.map((shard) => shard.predictedSeconds ?? Infinity))).toBe(149);
-    expect(
-      Math.max(...githubPullRequestCompact.map((shard) => shard.predictedSeconds ?? Infinity)),
-    ).toBe(186);
+    // Nondist expanded-profile lanes stay under the 150-second body ceiling;
+    // the hosted PR's serial TUI PTY descriptor remains indivisible.
+    for (const plan of [
+      githubCompact,
+      githubPullRequestCompact,
+      hybridCompact,
+      hybridPullRequestCompact,
+    ]) {
+      expect(
+        plan
+          .filter((shard) => !shard.requiresDist)
+          .every((shard) => (shard.predictedSeconds ?? Infinity) <= 150),
+      ).toBe(true);
+    }
+    // Historical checks-node-compact-large-2 was this gateway-core group. Its
+    // 139.5s Blacksmith spike keeps a dedicated floor and singleton bin even
+    // though compact check numbers change when the matrix shrinks.
+    const hybridLargeTail = hybridCompact.find((shard) =>
+      shard.groups.some((group) => group.shard_name === "agentic-gateway-core-3"),
+    );
+    expect(hybridLargeTail?.groups.map((group) => group.shard_name)).toEqual([
+      "agentic-gateway-core-3",
+    ]);
+    expect(hybridLargeTail?.predictedSeconds).toBe(140);
+    const hybridJobOf = (name: string) =>
+      hybridCompact.findIndex((shard) => shard.groups.some((group) => group.shard_name === name));
+    // Synthesized hosted stripes retain divided admission weights, while
+    // native hybrid groups use Blacksmith stripe hints during rebalance.
+    expect(hybridJobOf("agentic-agents-core-runtime-hosted-1")).not.toBe(
+      hybridJobOf("agentic-agents-core-tools"),
+    );
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
     expect(compact.every((shard) => shard.groups.length <= 10)).toBe(true);
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);
