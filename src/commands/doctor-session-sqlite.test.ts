@@ -2638,6 +2638,96 @@ describe("runDoctorSessionSqlite", () => {
     }
   });
 
+  it("partitions the retired top-level store without guessing unscoped ownership", async () => {
+    const stateDir = autoCleanupTempDirs.make("openclaw-doctor-retired-sessions-");
+    const sessionDir = path.join(stateDir, "sessions");
+    const storePath = path.join(sessionDir, "sessions.json");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionFile: "/retired/home/.openclaw/sessions/main-session.jsonl",
+          sessionId: "main-会議",
+          updatedAt: 20,
+        },
+        "agent:ops:main": {
+          sessionFile: "ops-session.jsonl",
+          sessionId: "ops-session",
+          updatedAt: 30,
+        },
+        "voice:ambiguous": { sessionId: "ambiguous-session", updatedAt: 40 },
+      }),
+      { mode: 0o600 },
+    );
+    fs.writeFileSync(
+      path.join(sessionDir, "main-session.jsonl"),
+      '{"type":"session","sessionId":"main-会議"}\n',
+      { mode: 0o600 },
+    );
+    fs.writeFileSync(
+      path.join(sessionDir, "ops-session.jsonl"),
+      '{"type":"session","sessionId":"ops-session"}\n',
+      { mode: 0o600 },
+    );
+
+    const cfg = {
+      agents: { ownership: "explicit" as const, entries: { main: {}, ops: {} } },
+    };
+    const report = await runDoctorSessionSqlite({
+      allAgents: true,
+      cfg,
+      env,
+      mode: "import",
+    });
+
+    expect(report.targets.map((target) => target.agentId)).toEqual(["main", "ops"]);
+    expect(report.totals).toMatchObject({
+      archivedLegacyStoreFiles: 0,
+      importedEntries: 2,
+      importedTranscriptEvents: 2,
+      legacyEntries: 2,
+      sqliteEntries: 2,
+    });
+    for (const [agentId, sessionId] of [
+      ["main", "main-会議"],
+      ["ops", "ops-session"],
+    ] as const) {
+      const agentStorePath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
+      expect(
+        loadExactSessionEntry({
+          agentId,
+          sessionKey: `agent:${agentId}:main`,
+          storePath: agentStorePath,
+        })?.entry.sessionId,
+      ).toBe(sessionId);
+      expect(
+        loadExactSessionEntry({
+          agentId,
+          sessionKey: "voice:ambiguous",
+          storePath: agentStorePath,
+        }),
+      ).toBeUndefined();
+    }
+    expect(fs.existsSync(storePath)).toBe(true);
+    expect(fs.existsSync(path.join(sessionDir, "main-session.jsonl"))).toBe(true);
+    expect(fs.existsSync(path.join(sessionDir, "ops-session.jsonl"))).toBe(true);
+
+    const owned = await runDoctorSessionSqlite({
+      allAgents: true,
+      cfg: {
+        ...cfg,
+        agents: { ...cfg.agents, defaults: { sessionStore: { agentId: "main" } } },
+      },
+      env,
+      mode: "import",
+    });
+    expect(owned.totals.archivedLegacyStoreFiles).toBe(1);
+    expect(owned.totals.importedEntries).toBe(3);
+    expect(fs.existsSync(storePath)).toBe(false);
+  });
+
   it("imports shared custom stores into per-agent SQLite targets", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-session-sqlite-"));
     try {
