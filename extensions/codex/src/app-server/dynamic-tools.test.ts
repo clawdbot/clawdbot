@@ -52,6 +52,10 @@ import {
 import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 
 const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
+const MEMORY_STORE_ARGS: JsonValue = { text: "Tuesday 09:00 release window" };
+const MEMORY_FORGET_ARGS: JsonValue = {
+  memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d",
+};
 
 const COMPUTER_FRAME_IMAGE =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
@@ -305,12 +309,12 @@ describe("createCodexDynamicToolBridge", () => {
   it.each([
     {
       name: "memory_store",
-      args: { text: "Tuesday 09:00 release window" },
+      args: MEMORY_STORE_ARGS,
       assistantText: "Got it - I'll remember the Tuesday release window.",
     },
     {
       name: "memory_forget",
-      args: { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" },
+      args: MEMORY_FORGET_ARGS,
       assistantText: "Done - I forgot that memory.",
     },
   ])("leaves unowned same-name Codex tool $name outside correction", async (testCase) => {
@@ -355,13 +359,13 @@ describe("createCodexDynamicToolBridge", () => {
   it.each([
     {
       name: "memory_store",
-      args: { text: "Tuesday 09:00 release window" },
+      args: MEMORY_STORE_ARGS,
       result: textToolResult("Stored memory.", { action: "created" }),
       assistantText: "Stored the Tuesday release window.",
     },
     {
       name: "memory_forget",
-      args: { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" },
+      args: MEMORY_FORGET_ARGS,
       result: textToolResult("Forgotten memory.", { action: "deleted" }),
       assistantText: "Forgot that memory.",
     },
