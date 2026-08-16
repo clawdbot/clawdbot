@@ -23,8 +23,6 @@ import { verifyGatewayConnectDeviceProof } from "./connect-device-proof.js";
 import {
   evaluateMissingDeviceIdentity,
   isTrustedProxyControlUiOperatorAuth,
-  resolveControlUiAuthPolicy,
-  shouldAllowControlUiDeviceAuthMigration,
   shouldClearUnboundScopesForMissingDeviceIdentity,
   shouldSkipControlUiPairing,
 } from "./connect-policy.js";
@@ -102,12 +100,7 @@ export async function authenticateGatewayConnect(
   const hasTokenAuth = Boolean(connectParams.auth?.token);
   const hasPasswordAuth = Boolean(connectParams.auth?.password);
   const hasSharedAuth = hasTokenAuth || hasPasswordAuth;
-  const controlUiAuthPolicy = resolveControlUiAuthPolicy({
-    isControlUi,
-    deviceRaw,
-    deviceAuthMigrationPending: context.handler.isControlUiDeviceAuthMigrationPending?.(),
-  });
-  const device = controlUiAuthPolicy.device;
+  const device = deviceRaw;
   const hasBootstrapProof = Boolean(connectParams.auth?.bootstrapToken);
   const hasDeviceTokenProof = Boolean(connectParams.auth?.deviceToken);
   const hasRawHandshakeCredentials =
@@ -253,30 +246,17 @@ export async function authenticateGatewayConnect(
       authOk,
       authMethod,
     });
-    const allowDeviceLessControlUiMigration =
-      !device &&
-      shouldAllowControlUiDeviceAuthMigration({
-        policy: controlUiAuthPolicy,
-        role,
-        sharedAuthOk,
-        trustedProxyAuthOk,
-        authMethod,
-      });
-    const preserveInsecureLocalControlUiScopes = allowDeviceLessControlUiMigration;
-    const decision = allowDeviceLessControlUiMigration
-      ? ({ kind: "allow" } as const)
-      : evaluateMissingDeviceIdentity({
-          hasDeviceIdentity: Boolean(device),
-          role,
-          isControlUi,
-          controlUiAuthPolicy,
-          trustedProxyAuthOk,
-          localBackendSelfPairingOk: skipLocalBackendSelfPairing,
-          sharedAuthOk,
-          authOk,
-          hasSharedAuth,
-          isLocalClient,
-        });
+    const decision = evaluateMissingDeviceIdentity({
+      hasDeviceIdentity: Boolean(device),
+      role,
+      isControlUi,
+      trustedProxyAuthOk,
+      localBackendSelfPairingOk: skipLocalBackendSelfPairing,
+      sharedAuthOk,
+      authOk,
+      hasSharedAuth,
+      isLocalClient,
+    });
     // Device-less shared auth clears self-declared scopes by default.
     // Only first-party local control paths preserve scopes: backend self-
     // calls and CLI shared-secret calls that already proved loopback auth.
@@ -284,13 +264,7 @@ export async function authenticateGatewayConnect(
       !device &&
       !skipLocalBackendSelfPairing &&
       !preserveLocalCliSharedAuthScopes &&
-      shouldClearUnboundScopesForMissingDeviceIdentity({
-        decision,
-        controlUiAuthPolicy,
-        preserveInsecureLocalControlUiScopes,
-        authMethod,
-        trustedProxyAuthOk,
-      })
+      shouldClearUnboundScopesForMissingDeviceIdentity({ decision, authMethod })
     ) {
       clearUnboundScopes();
     }
@@ -464,18 +438,11 @@ export async function authenticateGatewayConnect(
     scopes = applyConnectionScopeCap({ scopes, upgradeReq });
     connectParams.scopes = scopes;
   }
-  const controlUiPairingKind = shouldSkipControlUiPairing(
-    controlUiAuthPolicy,
+  const controlUiPairingKind = shouldSkipControlUiPairing({
+    isControlUi,
+    device,
     role,
-    trustedProxyAuthOk,
-    resolvedAuth.mode,
-    authMethod,
-  );
-  const allowControlUiDeviceAuthMigration = shouldAllowControlUiDeviceAuthMigration({
-    policy: controlUiAuthPolicy,
-    role,
-    sharedAuthOk,
-    trustedProxyAuthOk,
+    authMode: resolvedAuth.mode,
     authMethod,
   });
 
@@ -491,7 +458,6 @@ export async function authenticateGatewayConnect(
     isBrowserOperatorUi,
     isWebchat,
     isNativeAppUi,
-    controlUiAuthPolicy,
     device,
     devicePublicKey: deviceProof.devicePublicKey,
     deviceAuthPayloadVersion: deviceProof.deviceAuthPayloadVersion,
@@ -509,7 +475,6 @@ export async function authenticateGatewayConnect(
     issuedBootstrapProfile,
     handoffBootstrapProfile,
     trustedProxyAuthOk,
-    allowControlUiDeviceAuthMigration,
     controlUiPairingKind,
     skipLocalBackendSelfPairing,
     rejectUnauthorized,

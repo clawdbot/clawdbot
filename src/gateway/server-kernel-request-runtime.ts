@@ -60,9 +60,6 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     watchNodeHttpRuntime,
     sharedGatewaySessionGenerationState,
     resolveSharedGatewaySessionGenerationForRuntimeSnapshot,
-    completeControlUiDeviceAuthMigrationForEffectiveOperator,
-    claimControlUiDeviceAuthMigration,
-    releaseControlUiDeviceAuthMigrationClaim,
     nodeRegistry,
     nodeDesktopService,
     workerEnvironmentService,
@@ -161,12 +158,6 @@ export async function prepareGatewayKernelRequestRuntime(params: {
           clients,
         });
       },
-      completeControlUiDeviceAuthMigration:
-        completeControlUiDeviceAuthMigrationForEffectiveOperator,
-      claimControlUiDeviceAuthMigration: (deviceId: string) =>
-        claimControlUiDeviceAuthMigration(deviceId, { env: process.env }),
-      releaseControlUiDeviceAuthMigrationClaim: (deviceId: string) =>
-        releaseControlUiDeviceAuthMigrationClaim(deviceId, { env: process.env }),
       nodeRegistry,
       ...(nodeDesktopService ? { nodeDesktopService } : {}),
       ...(workerEnvironmentService ? { workerEnvironmentService } : {}),

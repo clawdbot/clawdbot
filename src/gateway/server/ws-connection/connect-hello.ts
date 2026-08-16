@@ -82,7 +82,6 @@ export async function sendGatewayHello(
     handoffBootstrapProfile,
     deviceToken,
     bootstrapDeviceTokens,
-    controlUiDeviceAuthMigrationPending,
   } = state;
   // Prefer the authenticated human; principal scopes never inherit device-token rows.
   const authenticatedPrincipal = authenticatedUserProfileId ?? authResult.user;
@@ -146,9 +145,6 @@ export async function sendGatewayHello(
     ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
     ...(controlUiWidgetKinds.length > 0 ? { controlUiWidgetKinds } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
-    ...(controlUiDeviceAuthMigrationPending
-      ? { deviceAuthMigration: { pending: true as const } }
-      : {}),
     auth: {
       role,
       scopes,

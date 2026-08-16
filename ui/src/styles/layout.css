@@ -148,11 +148,7 @@
       .shell:not(.shell--mobile-nav, .shell--nav-collapsed, .shell--settings)
   )
   .content
-  > :is(
-    openclaw-update-banner,
-    openclaw-device-scope-upgrade-banner,
-    openclaw-device-auth-migration-banner
-  )
+  > :is(openclaw-update-banner, openclaw-device-scope-upgrade-banner)
   .callout {
   margin-left: var(--shell-chrome-safe-area-left);
 }

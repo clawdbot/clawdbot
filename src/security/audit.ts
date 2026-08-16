@@ -39,7 +39,6 @@ import {
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { readControlUiDeviceAuthMigrationState } from "../state/control-ui-device-auth-migration.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import {
@@ -480,30 +479,6 @@ function collectGatewayConfigFindings(
     collectDangerousConfigFlags: collectEnabledInsecureOrDangerousFlags,
     gatewayAuthOverride: options.gatewayAuthOverride,
   });
-}
-
-function collectControlUiDeviceAuthMigrationFindings(params: {
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-}): SecurityAuditFinding[] {
-  const migration = readControlUiDeviceAuthMigrationState({
-    env: { ...params.env, OPENCLAW_STATE_DIR: params.stateDir },
-  });
-  if (migration?.status !== "pending") {
-    return [];
-  }
-  return [
-    {
-      checkId: "gateway.control_ui.device_auth_disabled",
-      severity: "critical",
-      title: "Control UI device-auth migration is pending",
-      detail:
-        "The retired device-auth bypass was imported into pending migration state. " +
-        "Device-less Control UI sessions with valid shared auth can still connect for remediation until an operator browser completes pairing.",
-      remediation:
-        "Reopen the Control UI over HTTPS or localhost and click Secure this browser to complete pairing and end the compatibility window.",
-    },
-  ];
 }
 
 async function collectPluginSecurityAuditFindings(
@@ -1361,7 +1336,6 @@ export async function runSecurityAuditCore(
       gatewayAuthOverride: context.auditGatewayAuthOverride,
     }),
   );
-  findings.push(...collectControlUiDeviceAuthMigrationFindings({ env, stateDir }));
   findings.push(...(await collectPluginSecurityAuditFindings(context)));
   findings.push(...collectElevatedFindings(cfg));
   findings.push(...collectExecRuntimeFindings(cfg));

@@ -190,7 +190,6 @@ export function extractQuickSettingsSecurity(config: unknown): SecurityOverview 
     return {
       gatewayAuth: "unknown",
       execPolicy: "unknown",
-      deviceAuth: false,
       browserEnabled: true,
       browserEnabledOverridden: false,
       toolProfile: "full",
@@ -202,7 +201,6 @@ export function extractQuickSettingsSecurity(config: unknown): SecurityOverview 
   const tools = asConfigRecord(root.tools);
   const exec = asConfigRecord(tools?.exec) ?? {};
   const browser = asConfigRecord(root.browser);
-  const controlUi = asConfigRecord(gateway?.controlUi);
   let gatewayAuth = "unknown";
   if (auth) {
     const mode = typeof auth.mode === "string" ? auth.mode.trim() : "";
@@ -221,7 +219,6 @@ export function extractQuickSettingsSecurity(config: unknown): SecurityOverview 
   return {
     gatewayAuth,
     execPolicy: typeof security === "string" && security.trim() ? security.trim() : "allowlist",
-    deviceAuth: controlUi?.dangerouslyDisableDeviceAuth !== true,
     browserEnabled: browser?.enabled !== false,
     browserEnabledOverridden: browser !== null && Object.hasOwn(browser, "enabled"),
     toolProfile: typeof profile === "string" && profile.trim() ? profile.trim() : "full",

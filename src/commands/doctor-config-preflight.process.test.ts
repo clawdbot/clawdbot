@@ -1,5 +1,5 @@
 // Process regression for typed gateway startup-migration refusal and lease cleanup.
-import { execFile, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,8 +8,10 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveGatewayLockDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasActiveStartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 
 const STARTUP_REFUSAL =
   "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.";
@@ -226,6 +228,100 @@ describe.concurrent("gateway startup-migration refusal", () => {
       expect(result.stderr).not.toContain("[openclaw] Could not start the CLI.");
       expect(hasActiveStartupMigrationLease({ env })).toBe(false);
     } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  }, 45_000);
+
+  it("refuses before relocating legacy state when a live gateway owns the state directory", async () => {
+    // Live owner fixture with gateway-shaped argv: on Windows no file-lock start
+    // time exists, so the lock reader validates the owner through process argv
+    // (isGatewayArgv); the Vitest process itself would read as a dead owner there.
+    const ownerChild = spawn(
+      process.execPath,
+      ["-e", "setTimeout(() => {}, 120_000)", "src/entry.ts", "gateway"],
+      { cwd: path.resolve("."), stdio: "ignore" },
+    );
+    const temporaryRoot = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-live-owner-refusal-"),
+    );
+    const root = await fs.promises.realpath(temporaryRoot);
+    const stateDir = path.join(root, "state");
+    const configPath = path.join(root, "openclaw.json");
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_TEST_FAST: "1",
+      NO_COLOR: "1",
+    };
+    delete env.NODE_ENV;
+    delete env.OPENCLAW_HOME;
+    delete env.VITEST;
+
+    try {
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({ gateway: { mode: "local", auth: { mode: "none" } } }),
+      );
+      // A pending automatic migration: legacy agent dir relocation moves this
+      // file to agents/main/agent/ on the first unguarded gateway startup.
+      const legacyAgentDir = path.join(stateDir, "agent");
+      const legacyArtifactPath = path.join(legacyAgentDir, "auth-profiles.json");
+      fs.mkdirSync(legacyAgentDir, { recursive: true });
+      fs.writeFileSync(legacyArtifactPath, JSON.stringify({ profiles: {} }));
+      // A pending state write admission side effect: a nonempty WAL beside a
+      // missing main database gets copied to an .orphaned-* quarantine file by
+      // sidecar quarantine unless the live-owner refusal runs first.
+      const sharedStateDbDir = path.join(stateDir, "state");
+      fs.mkdirSync(sharedStateDbDir, { recursive: true });
+      const orphanWalPath = path.join(sharedStateDbDir, "openclaw.sqlite-wal");
+      fs.writeFileSync(orphanWalPath, Buffer.alloc(64, 1));
+      // A live gateway owner: the spawned gateway-shaped child is alive with a
+      // matching start time, which is exactly how a real concurrent gateway verifies.
+      const lockDir = resolveGatewayLockDir(stateDir);
+      fs.mkdirSync(lockDir, { recursive: true });
+      const startTime = getFileLockProcessStartTime(ownerChild.pid!);
+      fs.writeFileSync(
+        path.join(lockDir, "gateway.state.lock"),
+        JSON.stringify({
+          pid: ownerChild.pid,
+          ownerId: "live-owner-refusal-test",
+          createdAt: new Date().toISOString(),
+          configPath,
+          port: 18789,
+          stateDir,
+          ...(startTime !== null ? { startTime } : {}),
+        }),
+      );
+
+      const result = spawnSync(
+        process.execPath,
+        ["--import", "tsx", path.resolve("src/entry.ts"), "gateway", "run", "--allow-unconfigured"],
+        {
+          cwd: path.resolve("."),
+          encoding: "utf8",
+          env,
+          timeout: 30_000,
+        },
+      );
+      const output = `${result.stderr}\n${result.stdout}`;
+
+      expect(result.error, output).toBeUndefined();
+      // The refused startup must be side-effect-free: the pending legacy
+      // relocation stayed untouched for the live owner.
+      expect(fs.existsSync(legacyArtifactPath), output).toBe(true);
+      expect(fs.existsSync(path.join(stateDir, "agents", "main", "agent")), output).toBe(false);
+      // No orphan-sidecar quarantine copy either: write admission never ran.
+      expect(fs.readdirSync(sharedStateDbDir), output).toEqual(["openclaw.sqlite-wal"]);
+      expect(result.status, output).toBe(1);
+      expect(result.stderr, output).toContain("already owns this state directory");
+      expect(hasActiveStartupMigrationLease({ env })).toBe(false);
+    } finally {
+      ownerChild.kill();
       await fs.promises.rm(root, { recursive: true, force: true });
     }
   }, 45_000);

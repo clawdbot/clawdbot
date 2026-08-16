@@ -541,9 +541,9 @@ function satisfiesMinimumCrabboxVersion(version: string, minimum: number[]) {
   return !parsed.suffix || isPostReleaseDescribeSuffix(parsed.suffix);
 }
 
-function gitOutput(commandArgs: string[]) {
+function gitOutput(commandArgs: string[], extraEnv: ProcessEnv = {}) {
   const gitBinary = resolvePathBinary("git", process.env, process.platform) ?? "git";
-  const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" };
+  const gitEnv = { ...process.env, ...extraEnv, GIT_CONFIG_GLOBAL: "/dev/null" };
   const invocation = spawnInvocation(gitBinary, commandArgs, gitEnv, process.platform);
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: repoRoot,
@@ -3200,7 +3200,13 @@ function analyzeRemoteCommand(invocation: RunInvocation) {
   };
 }
 
-function prepareRemoteWsl2JsBootstrapScript(run: RunInvocation, facts: RunFacts, provider: string) {
+function prepareRemoteWsl2JsBootstrapScript(
+  run: RunInvocation,
+  facts: RunFacts,
+  provider: string,
+  changedGateBase: string,
+  changedGateAlias: string,
+) {
   const runtimeEntrypoint = awsMacosBunEntrypoints.has(facts.runtimeEntrypoint)
     ? ""
     : facts.runtimeEntrypoint;
@@ -3220,7 +3226,7 @@ function prepareRemoteWsl2JsBootstrapScript(run: RunInvocation, facts: RunFacts,
   const originalShellCommand = facts.scopedEnvCommand?.shellCommand ?? renderRunShellCommand(run);
   const script = `${remoteWsl2JsBootstrap({
     packageManager: facts.packageManager,
-  })} || exit $?\n{ ${originalShellCommand}\n}\n`;
+  })} || exit $?\n${facts.changedGate && changedGateBase ? `${remoteGitBootstrapForChangedGate(changedGateBase, changedGateAlias)} || exit $?\n` : ""}{ ${originalShellCommand}\n}\n`;
   writeFileSync(scriptPath, script, "utf8");
   chmodSync(scriptPath, 0o700);
 
@@ -3410,21 +3416,19 @@ function isWorktreeClean() {
   return status.status === 0 && status.stdout === "";
 }
 
-function shouldUseFullCheckoutForCleanRemoteSync(commandArgs: string[], _providerName: string) {
+function shouldUseFullCheckoutForRemoteSync(commandArgs: string[], _providerName: string) {
   if (commandArgs[0] !== "run") {
     return false;
   }
   if (hasOption(commandArgs, "--no-sync")) {
     return false;
   }
-  if (!isWorktreeClean()) {
-    return false;
-  }
 
-  return (
-    isSparseCheckout() ||
-    isChangedGateCommand(parseRunInvocation(help.text, commandArgs).commandArgs)
-  );
+  const changedGate = isChangedGateCommand(parseRunInvocation(help.text, commandArgs).commandArgs);
+  if (changedGate && !isNativeWindowsRemoteTarget(commandArgs)) {
+    return true;
+  }
+  return isWorktreeClean() && (isSparseCheckout() || changedGate);
 }
 
 function defaultFullCheckoutSyncRoot() {
@@ -3498,9 +3502,27 @@ function assertFullCheckoutSyncDisk(root: string) {
   );
 }
 
+function currentWorktreeTree(syncRoot: string) {
+  const indexDir = mkdtempSync(resolve(syncRoot, "openclaw-crabbox-index-"));
+  const indexPath = resolve(indexDir, "index");
+  const indexEnv = { GIT_INDEX_FILE: indexPath };
+  try {
+    const read = gitOutput(["read-tree", "HEAD"], indexEnv);
+    const add = gitOutput(["add", "-A", "--", "."], indexEnv);
+    const tree = gitOutput(["write-tree"], indexEnv);
+    if (read.status !== 0 || add.status !== 0 || tree.status !== 0 || !tree.stdout) {
+      throw new Error(read.text || add.text || tree.text || "git write-tree failed");
+    }
+    return tree.stdout;
+  } finally {
+    rmSync(indexDir, { recursive: true, force: true });
+  }
+}
+
 function prepareFullCheckoutForSync(options: { changedGateBase?: string } = {}) {
   const syncRoot = fullCheckoutSyncRoot();
   assertFullCheckoutSyncDisk(syncRoot);
+  const changedGateTree = options.changedGateBase ? currentWorktreeTree(syncRoot) : "";
   const dir = mkdtempSync(resolve(syncRoot, "openclaw-crabbox-sync-"));
   let active = false;
   let resolvedChangedGateBase = options.changedGateBase ?? "";
@@ -3526,19 +3548,15 @@ function prepareFullCheckoutForSync(options: { changedGateBase?: string } = {}) 
       try {
         bundleTempDir = mkdtempSync(resolve(syncRoot, "openclaw-crabbox-bundle-"));
         const bundleTempPath = resolve(bundleTempDir, "changed-gate.bundle");
-        const head = gitOutput(["-C", dir, "rev-parse", "HEAD"]);
         const base = gitOutput(["-C", dir, "rev-parse", options.changedGateBase]);
-        if (head.status !== 0 || base.status !== 0 || !head.stdout || !base.stdout) {
-          throw new Error(`git rev-parse failed: ${head.text || base.text}`);
+        const baseTree = gitOutput(["-C", dir, "rev-parse", `${options.changedGateBase}^{tree}`]);
+        if (base.status !== 0 || baseTree.status !== 0 || !base.stdout || !baseTree.stdout) {
+          throw new Error(`git rev-parse failed: ${base.text || baseTree.text}`);
         }
         resolvedChangedGateBase = base.stdout;
-        if (head.stdout === base.stdout) {
+        if (changedGateTree === baseTree.stdout) {
           writeFileSync(bundleTempPath, "", "utf8");
         } else {
-          const headTree = gitOutput(["-C", dir, "rev-parse", "HEAD^{tree}"]);
-          if (headTree.status !== 0 || !headTree.stdout) {
-            throw new Error(headTree.text || "git rev-parse HEAD tree failed");
-          }
           // A parentless carrier makes the bundle self-contained while sending
           // only the final tree. The remote attaches the fetched base as parent.
           const transportCommit = gitOutput([
@@ -3549,7 +3567,7 @@ function prepareFullCheckoutForSync(options: { changedGateBase?: string } = {}) 
             "-c",
             "user.email=ci@openclaw.local",
             "commit-tree",
-            headTree.stdout,
+            changedGateTree,
             "-m",
             "remote-changed-gate-tree",
           ]);
@@ -3762,6 +3780,8 @@ function applyRunTransforms(
     invocation,
     facts,
     options.provider,
+    options.changedGateBase,
+    options.changedGateAlias,
   );
   let transformedArgs = wsl2ScriptBootstrap.args;
   invocation = parseRunInvocation(help.text, transformedArgs);
@@ -3938,7 +3958,7 @@ normalizedArgs = scriptBootstrap.args;
 const scriptStdinPrepared = scriptBootstrap.prepared;
 let wsl2ScriptBootstrap = { args: normalizedArgs, cleanup: () => {}, prepared: false };
 try {
-  if (shouldUseFullCheckoutForCleanRemoteSync(normalizedArgs, provider)) {
+  if (shouldUseFullCheckoutForRemoteSync(normalizedArgs, provider)) {
     const invocation = parseRunInvocation(help.text, normalizedArgs);
     const facts = analyzeRemoteCommand(invocation);
     const changedGate = facts.changedGate ? changedGateBaseForCommand(facts.commandArgs) : null;
@@ -3953,11 +3973,11 @@ try {
     remoteChangedGateBase = checkout.changedGateBase;
     remoteChangedGateAlias = changedGate?.remoteAlias ?? "";
     console.error(
-      `[crabbox] sparse clean checkout detected; syncing from temporary full checkout ${checkout.dir}`,
+      `[crabbox] isolated checkout sync; syncing from temporary full checkout ${checkout.dir}`,
     );
     if (checkout.changedGateBase) {
       console.error(
-        `[crabbox] remote changed gate detected; overlaying local HEAD as worktree changes from ${checkout.changedGateBase}`,
+        `[crabbox] remote changed gate detected; overlaying the local worktree as changes from ${checkout.changedGateBase}`,
       );
     }
   }
@@ -4124,7 +4144,7 @@ if (childStderr) {
   });
 }
 const childKillGraceMs = resolveChildKillGraceMs(process.env);
-let childForceKillTimer: NodeJS.Timeout | undefined;
+let childForceKillTimer: ReturnType<typeof setTimeout> | undefined;
 let childTreeShutdownStarted = false;
 if (fullCheckout) {
   try {

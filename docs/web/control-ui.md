@@ -49,20 +49,6 @@ Onboarding usually configures a gateway token for shared-secret auth. If the Gat
 
 After gateway auth succeeds, connecting from a new browser or device usually requires a **one-time pairing approval**, shown as `disconnected (1008): pairing required`. On the Gateway host, `openclaw dashboard` is the preferred owner path: it opens a short-lived, single-use pairing link and leaves that exact signed browser with a durable administrator credential. Opening a fresh link in the same browser also repairs a previously limited credential; another browser profile cannot inherit or replay the grant.
 
-<Warning>
-When upgrading directly from a release that used the retired
-`gateway.controlUi.dangerouslyDisableDeviceAuth=true` break-glass setting,
-OpenClaw keeps token/password- or trusted-proxy-authenticated Control UI access
-available for pairing-only remediation. If the browser is on plain HTTP and cannot create device identity,
-reopen it over HTTPS or localhost first. Then click **Secure this browser** in
-the warning banner. The Gateway returns to normal device-auth enforcement only
-after a signed browser pairs explicitly; it never creates or approves an
-identity for a device-less browser. The transition is not available when
-another operator device is already paired. Gateway startup and
-`openclaw doctor --fix` both report this migration explicitly instead of
-silently discarding the old key.
-</Warning>
-
 <Steps>
   <Step title="List pending requests">
     ```bash
