@@ -217,7 +217,7 @@ export async function runNativeHookRelayPermissionRequest(params: {
     if (decision === "deny") {
       return params.adapter.renderPermissionDecisionResponse("deny", "Denied by user");
     }
-    if (decision === "unavailable" && request.toolName.startsWith("mcp__")) {
+    if (decision === "timed-out" && request.toolName.startsWith("mcp__")) {
       return params.adapter.renderPermissionDecisionResponse(
         "deny",
         MCP_APPROVAL_UNAVAILABLE_REASON,
@@ -515,7 +515,7 @@ async function requestNativeHookRelayPermissionApproval(
   );
   const approvalId = requestResult?.id;
   if (!approvalId) {
-    return "unavailable";
+    return "defer";
   }
   let decision: string | null | undefined;
   if (Object.hasOwn(requestResult ?? {}, "decision")) {
@@ -528,7 +528,10 @@ async function requestNativeHookRelayPermissionApproval(
     });
     // Bind the verdict to the request that parked this call. A stale or
     // misrouted reply must never release a different tool gate.
-    decision = waitResult?.id === approvalId ? waitResult.decision : undefined;
+    if (!waitResult || waitResult.id !== approvalId) {
+      return "defer";
+    }
+    decision = waitResult.decision;
   }
   if (decision === PluginApprovalResolutions.ALLOW_ONCE) {
     return "allow";
@@ -539,7 +542,7 @@ async function requestNativeHookRelayPermissionApproval(
   if (decision === PluginApprovalResolutions.DENY) {
     return "deny";
   }
-  return "unavailable";
+  return decision == null ? "timed-out" : "defer";
 }
 
 async function waitForNativeHookRelayApprovalDecision(params: {
