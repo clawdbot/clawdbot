@@ -70,6 +70,8 @@ describe("mcp cli", () => {
         "--connect-timeout",
         "3",
         "--parallel",
+        "--approval",
+        "approve",
         "--no-probe",
       ]);
 
@@ -85,6 +87,7 @@ describe("mcp cli", () => {
         requestTimeoutMs: 12_000,
         connectionTimeoutMs: 3_000,
         supportsParallelToolCalls: true,
+        codex: { defaultToolsApprovalMode: "approve" },
       });
     });
   });
@@ -735,6 +738,60 @@ describe("mcp cli", () => {
         diagnostics: [],
       });
       expect(lastErrorLine()).toBe("");
+    });
+  });
+
+  it("warns when auto-approved Codex MCP tools have no safety annotations", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      await runMcpCommand(["mcp", "set", "memory", JSON.stringify({ command: process.execPath })]);
+      setCreateSessionMcpRuntimeOverride((params) => ({
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: "cli-probe-approval-hint",
+        createdAt: 0,
+        lastUsedAt: 0,
+        getCatalog: async () => ({
+          version: 1,
+          generatedAt: Date.now(),
+          servers: {
+            memory: {
+              serverName: "memory",
+              launchSummary: process.execPath,
+              toolCount: 1,
+              codexApprovalMode: "auto",
+            },
+          },
+          tools: [
+            {
+              serverName: "memory",
+              safeServerName: "memory",
+              toolName: "create_entities",
+              inputSchema: { type: "object" },
+              fallbackDescription: "Create entities",
+              codexAnnotations: {},
+            },
+          ],
+          diagnostics: [],
+        }),
+        peekCatalog: () => null,
+        markUsed: () => {},
+        callTool: async () => ({ content: [] }),
+        dispose: async () => {},
+      }));
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "probe", "memory"]);
+      expect(mockLog.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
+        "tools have no safety annotations; calls will require interactive approval",
+      );
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "doctor", "memory", "--probe"]);
+      expect(mockLog.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
+        "tools have no safety annotations; calls will require interactive approval",
+      );
     });
   });
 

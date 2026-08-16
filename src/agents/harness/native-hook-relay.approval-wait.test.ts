@@ -15,6 +15,31 @@ afterEach(() => {
 });
 
 describe("native hook relay approval wait handling", () => {
+  it("explains how to unblock an MCP tool when approval times out", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-timeout", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-timeout", decision: null });
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+    });
+
+    const result = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        tool_name: "mcp__memory__create_entities",
+        tool_input: { entities: [] },
+      },
+    });
+
+    expect(result.stdout).toContain("MCP tool approval timed out");
+    expect(result.stdout).toContain("mcp.servers.<id>.codex.defaultToolsApprovalMode");
+  });
+
   it("defers when waitDecision reports a stale approval id", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-stale", status: "accepted" })

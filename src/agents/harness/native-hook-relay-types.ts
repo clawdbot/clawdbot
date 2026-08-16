@@ -195,6 +195,7 @@ export type NativeHookRelayProviderAdapter = {
 export type NativeHookRelayPermissionApprovalResult =
   | NativeHookRelayPermissionDecision
   | "allow-always"
+  | "unavailable"
   | "defer";
 
 export type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {

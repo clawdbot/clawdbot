@@ -31,6 +31,7 @@ import {
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { parseConfigValue } from "../auto-reply/reply/config-value.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
+import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -101,6 +102,19 @@ function parsePositiveNumberOption(value: string | undefined, label: string): nu
   return parsed;
 }
 
+function parseMcpApprovalModeOption(
+  value: string | undefined,
+): McpCodexToolApprovalMode | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const mode = normalizeLowercaseStringOrEmpty(value);
+  if (mode !== "auto" && mode !== "prompt" && mode !== "approve") {
+    fail('--approval must be "auto", "prompt", or "approve".');
+  }
+  return mode;
+}
+
 function parseOAuthConfig(opts: {
   scope?: string;
   redirectUrl?: string;
@@ -163,6 +177,8 @@ type McpDoctorServerResult = {
 };
 
 const MCP_DOCTOR_CONCURRENCY = 4;
+const MCP_CODEX_APPROVAL_ANNOTATION_HINT =
+  "tools have no safety annotations; calls will require interactive approval";
 
 const SENSITIVE_HEADER_NAMES = new Set([
   "authorization",
@@ -364,23 +380,21 @@ async function collectMcpDoctorIssues(params: {
     server.enabled !== false &&
     !issues.some((entry) => entry.level === "error")
   ) {
-    const probeIssue = await probeMcpServerIssue({
+    const probeIssues = await probeMcpServerIssues({
       config: params.config,
       name,
       server,
     });
-    if (probeIssue) {
-      issues.push(probeIssue);
-    }
+    issues.push(...probeIssues);
   }
   return issues;
 }
 
-async function probeMcpServerIssue(params: {
+async function probeMcpServerIssues(params: {
   config: OpenClawConfig;
   name: string;
   server: Record<string, unknown>;
-}): Promise<McpDoctorIssue | null> {
+}): Promise<McpDoctorIssue[]> {
   const runtime = createSessionMcpRuntime({
     sessionId: "openclaw-cli-mcp-doctor",
     workspaceDir: process.cwd(),
@@ -394,14 +408,17 @@ async function probeMcpServerIssue(params: {
     const result = formatMcpProbeResult(await runtime.getCatalog());
     const diagnostic = result.diagnostics[0];
     if (diagnostic) {
-      return issue("error", `probe failed: ${diagnostic.message}`);
+      return [issue("error", `probe failed: ${diagnostic.message}`)];
     }
-    if (!result.servers[params.name]) {
-      return issue("error", "probe did not connect to this server");
+    const server = result.servers[params.name];
+    if (!server) {
+      return [issue("error", "probe did not connect to this server")];
     }
-    return null;
+    return server.approvalHint
+      ? [issue("info", `Codex approval mode: ${server.codexApprovalMode}; ${server.approvalHint}`)]
+      : [];
   } catch (err) {
-    return issue("error", `probe failed: ${formatErrorMessage(err)}`);
+    return [issue("error", `probe failed: ${formatErrorMessage(err)}`)];
   } finally {
     await runtime.dispose();
   }
@@ -496,31 +513,43 @@ function formatMcpProbeResult(
     servers: Object.fromEntries(
       Object.entries(catalog.servers)
         .toSorted(([a], [b]) => a.localeCompare(b))
-        .map(([name, server]) => [
-          name,
-          {
-            launch: server.launchSummary,
-            tools: server.toolCount,
-            ...(server.requestTimeoutMs ? { requestTimeoutMs: server.requestTimeoutMs } : {}),
-            ...(server.supportsParallelToolCalls
-              ? { supportsParallelToolCalls: server.supportsParallelToolCalls }
-              : {}),
-            ...(server.tools?.filteredCount ? { filteredTools: server.tools.filteredCount } : {}),
-            ...(server.resources ? { resources: true } : {}),
-            ...(server.prompts ? { prompts: true } : {}),
-            ...(server.tools?.listChanged ||
-            server.resources?.listChanged ||
-            server.prompts?.listChanged
-              ? {
-                  listChanged: {
-                    tools: server.tools?.listChanged === true,
-                    resources: server.resources?.listChanged === true,
-                    prompts: server.prompts?.listChanged === true,
-                  },
-                }
-              : {}),
-          },
-        ]),
+        .map(([name, server]) => {
+          const codexApprovalMode = server.codexApprovalMode ?? "auto";
+          const serverTools = catalog.tools.filter((tool) => tool.serverName === name);
+          const approvalHint =
+            codexApprovalMode === "auto" &&
+            serverTools.length > 0 &&
+            serverTools.every((tool) => Object.keys(tool.codexAnnotations ?? {}).length === 0)
+              ? MCP_CODEX_APPROVAL_ANNOTATION_HINT
+              : undefined;
+          return [
+            name,
+            {
+              launch: server.launchSummary,
+              tools: server.toolCount,
+              codexApprovalMode,
+              ...(approvalHint ? { approvalHint } : {}),
+              ...(server.requestTimeoutMs ? { requestTimeoutMs: server.requestTimeoutMs } : {}),
+              ...(server.supportsParallelToolCalls
+                ? { supportsParallelToolCalls: server.supportsParallelToolCalls }
+                : {}),
+              ...(server.tools?.filteredCount ? { filteredTools: server.tools.filteredCount } : {}),
+              ...(server.resources ? { resources: true } : {}),
+              ...(server.prompts ? { prompts: true } : {}),
+              ...(server.tools?.listChanged ||
+              server.resources?.listChanged ||
+              server.prompts?.listChanged
+                ? {
+                    listChanged: {
+                      tools: server.tools?.listChanged === true,
+                      resources: server.resources?.listChanged === true,
+                      prompts: server.prompts?.listChanged === true,
+                    },
+                  }
+                : {}),
+            },
+          ];
+        }),
     ),
     tools: projectedTools.map((tool) => tool.name).toSorted(),
     diagnostics: catalog.diagnostics ?? [],
@@ -815,8 +844,11 @@ export function registerMcpCli(program: Command) {
           defaultRuntime.log(`MCP probe (${loaded.path}):`);
           for (const [serverName, server] of Object.entries(result.servers)) {
             defaultRuntime.log(
-              `- ${serverName}: ${server.tools} tools${server.resources ? ", resources" : ""}${server.prompts ? ", prompts" : ""}`,
+              `- ${serverName}: ${server.tools} tools${server.resources ? ", resources" : ""}${server.prompts ? ", prompts" : ""}, Codex approval ${server.codexApprovalMode}`,
             );
+            if (server.approvalHint) {
+              defaultRuntime.log(`  i ${server.approvalHint}`);
+            }
           }
           for (const diagnostic of result.diagnostics) {
             defaultRuntime.log(`! ${diagnostic.serverName}: ${diagnostic.message}`);
@@ -931,6 +963,7 @@ export function registerMcpCli(program: Command) {
     .option("--timeout <seconds>", "Per-request timeout in seconds")
     .option("--connect-timeout <seconds>", "Connection timeout in seconds")
     .option("--parallel", "Mark this server safe for concurrent tool calls")
+    .option("--approval <mode>", "Codex MCP tool approval mode: auto, prompt, or approve")
     .option("--disabled", "Save the server disabled", false)
     .option("--ssl-verify <boolean>", "Verify HTTPS certificates: true or false")
     .option("--client-cert <path>", "HTTP mutual TLS client certificate path")
@@ -956,6 +989,7 @@ export function registerMcpCli(program: Command) {
           timeout?: string;
           connectTimeout?: string;
           parallel?: boolean;
+          approval?: string;
           disabled?: boolean;
           sslVerify?: string;
           clientCert?: string;
@@ -1021,6 +1055,10 @@ export function registerMcpCli(program: Command) {
         }
         if (opts.parallel) {
           server.supportsParallelToolCalls = true;
+        }
+        const approvalMode = parseMcpApprovalModeOption(opts.approval);
+        if (approvalMode) {
+          server.codex = { defaultToolsApprovalMode: approvalMode };
         }
         const requestTimeoutSeconds = parsePositiveNumberOption(opts.timeout, "--timeout");
         setOptionalField(
