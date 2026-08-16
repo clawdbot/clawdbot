@@ -5,6 +5,14 @@ import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
+import { TASK_FLOW_STATUSES } from "../../tasks/task-flow-registry.types.js";
+import { TASK_RUNTIMES, TASK_STATUSES } from "../../tasks/task-registry.types.js";
+import {
+  TASK_SYSTEM_AUDIT_CODES,
+  TASK_SYSTEM_AUDIT_SEVERITIES,
+  type TaskSystemAuditCode,
+  type TaskSystemAuditSeverity,
+} from "../../tasks/task-system-audit.types.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
 
@@ -591,11 +599,8 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .command("tasks")
     .description("Inspect durable background tasks and TaskFlow state")
     .option("--json", "Output as JSON", false)
-    .option("--runtime <name>", "Filter by kind (subagent, acp, cron, cli)")
-    .option(
-      "--status <name>",
-      "Filter by status (queued, running, succeeded, failed, timed_out, cancelled, lost)",
-    )
+    .option("--runtime <name>", `Filter by kind (${TASK_RUNTIMES.join(", ")})`)
+    .option("--status <name>", `Filter by status (${TASK_STATUSES.join(", ")})`)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { tasksListCommand } = await loadTasksCommands();
@@ -615,11 +620,8 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .command("list")
     .description("List tracked background tasks")
     .option("--json", "Output as JSON", false)
-    .option("--runtime <name>", "Filter by kind (subagent, acp, cron, cli)")
-    .option(
-      "--status <name>",
-      "Filter by status (queued, running, succeeded, failed, timed_out, cancelled, lost)",
-    )
+    .option("--runtime <name>", `Filter by kind (${TASK_RUNTIMES.join(", ")})`)
+    .option("--status <name>", `Filter by status (${TASK_STATUSES.join(", ")})`)
     .action(async (opts, command) => {
       const parentOpts = command.parent?.opts() as
         | {
@@ -645,11 +647,8 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .command("audit")
     .description("Show stale or broken background tasks and TaskFlows")
     .option("--json", "Output as JSON", false)
-    .option("--severity <level>", "Filter by severity (warn, error)")
-    .option(
-      "--code <name>",
-      "Filter by finding code (stale_queued, stale_running, lost, delivery_failed, missing_cleanup, inconsistent_timestamps, restore_failed, stale_waiting, stale_blocked, cancel_stuck, missing_linked_tasks, blocked_task_missing)",
-    )
+    .option("--severity <level>", `Filter by severity (${TASK_SYSTEM_AUDIT_SEVERITIES.join(", ")})`)
+    .option("--code <name>", `Filter by finding code (${TASK_SYSTEM_AUDIT_CODES.join(", ")})`)
     .option("--limit <n>", "Limit displayed findings")
     .action(async (opts, command) => {
       const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
@@ -662,21 +661,8 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         await tasksAuditCommand(
           {
             json: Boolean(opts.json || parentOpts?.json),
-            severity: opts.severity as "warn" | "error" | undefined,
-            code: opts.code as
-              | "stale_queued"
-              | "stale_running"
-              | "lost"
-              | "delivery_failed"
-              | "missing_cleanup"
-              | "inconsistent_timestamps"
-              | "restore_failed"
-              | "stale_waiting"
-              | "stale_blocked"
-              | "cancel_stuck"
-              | "missing_linked_tasks"
-              | "blocked_task_missing"
-              | undefined,
+            severity: opts.severity as TaskSystemAuditSeverity | undefined,
+            code: opts.code as TaskSystemAuditCode | undefined,
             limit,
           },
           defaultRuntime,
@@ -784,10 +770,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .command("list")
     .description("List tracked TaskFlows")
     .option("--json", "Output as JSON", false)
-    .option(
-      "--status <name>",
-      "Filter by status (queued, running, waiting, blocked, succeeded, failed, cancelled, lost)",
-    )
+    .option("--status <name>", `Filter by status (${TASK_FLOW_STATUSES.join(", ")})`)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { flowsListCommand } = await loadFlowsCommands();
