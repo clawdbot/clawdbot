@@ -1829,6 +1829,8 @@ export async function prepareSlackMessage(params: {
         threadReplyToId: threadContext.replyToId,
       }),
       chatType,
+      // Carry the prepare-resolved mode so per-channel room policy wins over account defaults.
+      replyToMode,
     });
   }
 

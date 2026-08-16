@@ -127,7 +127,7 @@ describe("createChannelPreflightAudio", () => {
     });
   });
 
-  it("forwards native message ids, chatType, and echoReply into the shared echo path", async () => {
+  it("forwards native message ids, chatType, prepared replyToMode, and echoReply into the shared echo path", async () => {
     const sendTranscriptEcho = vi.fn<SendTranscriptEcho>().mockResolvedValue(undefined);
     const preflight = createChannelPreflightAudio({
       channel: "slack",
@@ -154,6 +154,7 @@ describe("createChannelPreflightAudio", () => {
       messageThreadId: "1.000",
       messageId: "1710000.000100",
       chatType: "direct",
+      replyToMode: "off",
     });
 
     expect(sendTranscriptEcho).toHaveBeenCalledWith({
@@ -165,6 +166,7 @@ describe("createChannelPreflightAudio", () => {
         AccountId: "work",
         MessageThreadId: "1.000",
         ChatType: "direct",
+        ReplyToMode: "off",
         MessageSid: "1710000.000100",
         MessageSidFirst: "1710000.000100",
         MessageSidFull: "slack:1710000.000100",

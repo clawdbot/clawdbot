@@ -119,15 +119,28 @@ export async function sendTranscriptEcho(params: {
     let replyToId: string | undefined;
     let channelReplyToMode: "off" | "first" | "all" | "batched" | undefined;
     if (params.reply === true) {
-      // When enabled, still respect the channel's replyToMode: off (no-thread preference).
-      // Route via ambient replyToId + replyToMode rather than payload.replyToId so delivery
-      // policy treats the echo like normal channel replies (explicit payload replies bypass off).
-      channelReplyToMode = await resolveChannelReplyToMode({
-        cfg,
-        channel: normalizedChannel,
-        accountId: ctx.AccountId,
-        chatType: ctx.ChatType,
-      });
+      // Prefer an already-resolved inbound ReplyToMode (e.g. Slack per-channel room policy
+      // prepared before dispatch). Falling back to the account/chat-type resolver would drop
+      // matched-channel overrides such as channels.slack.channels.<id>.replyToMode: off.
+      const prepared = ctx.ReplyToMode;
+      if (
+        prepared === "off" ||
+        prepared === "first" ||
+        prepared === "all" ||
+        prepared === "batched"
+      ) {
+        channelReplyToMode = prepared;
+      } else {
+        // When enabled, still respect the channel's replyToMode: off (no-thread preference).
+        // Route via ambient replyToId + replyToMode rather than payload.replyToId so delivery
+        // policy treats the echo like normal channel replies (explicit payload replies bypass off).
+        channelReplyToMode = await resolveChannelReplyToMode({
+          cfg,
+          channel: normalizedChannel,
+          accountId: ctx.AccountId,
+          chatType: ctx.ChatType,
+        });
+      }
       // Do not thread on replyToMode "first": the pre-agent echo is its own outbound
       // batch, so threading here would consume a fresh "first" slot and the later
       // agent response would also reply to the same inbound message. Reserve "first"

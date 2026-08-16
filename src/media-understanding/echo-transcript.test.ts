@@ -611,6 +611,52 @@ describe("echoReply vs channel replyToMode", () => {
     expect(arg.payloads?.[0]?.text).toBe('📝 "hello"');
   });
 
+  it("honors prepared ctx.ReplyToMode off over account-level all (Slack per-channel)", async () => {
+    // Matches normal Slack prepare: room replyToMode: off while account is all.
+    await sendTranscriptEcho({
+      ctx: createCtx({
+        Provider: "slack",
+        OriginatingTo: "channel:C123",
+        AccountId: "default",
+        ChatType: "channel",
+        MessageSid: "1771999998.834199",
+        ReplyToMode: "off",
+      }),
+      cfg: { channels: { slack: { replyToMode: "all" } } } as OpenClawConfig,
+      transcript: "room policy off",
+      reply: true,
+    });
+    expect(mockDeliverOutboundPayloads).toHaveBeenCalledOnce();
+    const arg = mockDeliverOutboundPayloads.mock.calls[0]?.[0] as {
+      replyToId?: string;
+      replyToMode?: string;
+    };
+    expect(arg.replyToId).toBeUndefined();
+    expect(arg.replyToMode).toBeUndefined();
+  });
+
+  it("honors prepared ctx.ReplyToMode all when account default is off", async () => {
+    await sendTranscriptEcho({
+      ctx: createCtx({
+        Provider: "slack",
+        OriginatingTo: "channel:C123",
+        AccountId: "default",
+        ChatType: "channel",
+        MessageSid: "1771999998.834199",
+        ReplyToMode: "all",
+      }),
+      cfg: { channels: { slack: { replyToMode: "off" } } } as OpenClawConfig,
+      transcript: "room policy all",
+      reply: true,
+    });
+    const arg = mockDeliverOutboundPayloads.mock.calls[0]?.[0] as {
+      replyToId?: string;
+      replyToMode?: string;
+    };
+    expect(arg.replyToId).toBe("1771999998.834199");
+    expect(arg.replyToMode).toBe("all");
+  });
+
   it("threads via ambient replyToId when echoReply is true and replyToMode is all", async () => {
     await sendTranscriptEcho({
       ctx: createCtx({

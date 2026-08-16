@@ -92,6 +92,11 @@ export function createChannelPreflightAudio<TAudio>(params: {
       messageId?: string;
       /** Channel chat type for replyToModeByChatType / adapter policy (e.g. direct|group|channel). */
       chatType?: string;
+      /**
+       * Optional already-resolved reply policy from inbound prepare (e.g. Slack matched-room
+       * ReplyToMode). When set, echo delivery honors it over account/chat-type resolution.
+       */
+      replyToMode?: "off" | "first" | "all" | "batched";
     }): Promise<void> {
       const audio = sendParams.cfg.tools?.media?.audio;
       if (!audio?.echoTranscript) {
@@ -99,6 +104,7 @@ export function createChannelPreflightAudio<TAudio>(params: {
       }
       const messageId = typeof sendParams.messageId === "string" ? sendParams.messageId.trim() : "";
       const chatType = typeof sendParams.chatType === "string" ? sendParams.chatType.trim() : "";
+      const replyToMode = sendParams.replyToMode;
       await (params.sendTranscriptEcho ?? sendTranscriptEcho)({
         ctx: {
           Provider: params.channel,
@@ -108,6 +114,12 @@ export function createChannelPreflightAudio<TAudio>(params: {
           AccountId: sendParams.accountId,
           MessageThreadId: sendParams.messageThreadId,
           ...(chatType ? { ChatType: chatType } : {}),
+          ...(replyToMode === "off" ||
+          replyToMode === "first" ||
+          replyToMode === "all" ||
+          replyToMode === "batched"
+            ? { ReplyToMode: replyToMode }
+            : {}),
           ...(messageId
             ? {
                 MessageSid: messageId,

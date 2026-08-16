@@ -97,6 +97,8 @@ export async function sendSlackPreflightAudioTranscriptEcho(params: {
   messageId?: string;
   /** direct|group|channel — required for replyToModeByChatType precedence. */
   chatType?: string;
+  /** Prepared effective reply mode (includes matched per-channel room policy). */
+  replyToMode?: "off" | "first" | "all" | "batched";
 }): Promise<void> {
   await slackPreflightAudio.send(params);
 }
