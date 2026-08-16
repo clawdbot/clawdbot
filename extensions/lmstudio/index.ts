@@ -169,8 +169,8 @@ export default definePluginEntry({
           kind: "custom",
           appGuidedSetup: {
             detectAvailability: async (ctx) => {
-              const { detectAppGuidedLmstudioAvailability } = await import("./src/setup.js");
-              return await detectAppGuidedLmstudioAvailability(ctx);
+              const providerSetup = await loadProviderSetup();
+              return await providerSetup.detectAppGuidedLmstudioAvailability(ctx);
             },
             detect: async (ctx) => {
               const providerSetup = await loadProviderSetup();
