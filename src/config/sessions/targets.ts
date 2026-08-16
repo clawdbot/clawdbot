@@ -423,10 +423,19 @@ export function resolveExistingAgentSessionStoreTargetsSync(
     }
     return [];
   }
+  // Configured agents own canonical direct paths, including the default-root migration path.
+  // Reuse that bounded resolver so unreadable candidates remain visible without a roster scan.
+  if (isConfiguredSessionStoreAgentId(cfg, requested)) {
+    return resolveAgentSessionStoreTargetsSync(cfg, requested, { env }).flatMap((target) => {
+      const validated = resolveValidatedExistingSessionStoreTargetSync(target);
+      return validated ? [validated] : [];
+    });
+  }
   const requestedTarget = {
     agentId: requested,
     storePath: resolveSessionStorePathCore(storeConfig, { agentId: requested, env }),
   };
+  const validatedRequestedTarget = resolveValidatedExistingSessionStoreTargetSync(requestedTarget);
   // Directory discovery cannot enumerate arbitrary templates. Keep an existing retired store
   // visible by checking the requested agent's deterministic target alongside discovered stores.
   const discoveredTargets = resolveAllAgentSessionStoreTargetsSync(cfg, { env }).flatMap(
@@ -438,7 +447,6 @@ export function resolveExistingAgentSessionStoreTargetsSync(
       return validated ? [validated] : [];
     },
   );
-  const validatedRequestedTarget = resolveValidatedExistingSessionStoreTargetSync(requestedTarget);
   return dedupeSessionStoreTargetsBySqliteTarget(
     [...(validatedRequestedTarget ? [validatedRequestedTarget] : []), ...discoveredTargets],
     { defaultAgentId, env },
