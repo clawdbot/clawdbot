@@ -702,7 +702,7 @@ export async function runDoctorConfigPreflight(
           );
         }
         if (shouldRecordStartupCheckpoint) {
-          const convergedSnapshotRead = await readConfigSnapshotForPreflight();
+          const convergedSnapshotRead = await readConfigSnapshotForPreflight(false);
           const convergedBaseConfig =
             convergedSnapshotRead.snapshot.sourceConfig ??
             convergedSnapshotRead.snapshot.config ??
