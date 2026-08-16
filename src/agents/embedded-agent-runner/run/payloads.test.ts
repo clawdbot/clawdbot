@@ -134,6 +134,51 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("uses persisted delivery facts for a recovered final assistant", () => {
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Recovered answer" }],
+        openclawDelivery: {
+          audioAsVoice: true,
+          replyToCurrent: true,
+          replyToId: "message-7",
+        },
+      } as AssistantMessage & {
+        openclawDelivery: {
+          audioAsVoice: true;
+          replyToCurrent: true;
+          replyToId: string;
+        };
+      },
+    });
+
+    expect(payloads).toEqual([
+      expect.objectContaining({
+        text: "Recovered answer",
+        audioAsVoice: true,
+        replyToCurrent: true,
+        replyToId: "message-7",
+      }),
+    ]);
+  });
+
+  it("does not recover delivery facts by parsing a pre-upgrade assistant", () => {
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "[[reply_to:message-7]] Recovered answer" }],
+      } as AssistantMessage,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Recovered answer");
+    expect(payloads[0]).not.toHaveProperty("replyToCurrent");
+    expect(payloads[0]).not.toHaveProperty("replyToId");
+  });
+
   it("does not revive signed unphased text when explicit final-answer text is empty", () => {
     expectNoPayloads({
       lastAssistant: {

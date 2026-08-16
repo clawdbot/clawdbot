@@ -52,7 +52,7 @@ export function enforceSourceReplyOnlyTextDirectives(args: Record<string, unknow
     throw new Error("Completion source replies require non-empty visible text.");
   }
   // Use the outbound owner's parser: sanitization can assemble directives that
-  // change routes, attach local files, deliver audio, or perform reactions.
+  // change routes, attach local files, or deliver audio.
   const message = normalizeEscapedLineBreaksForVisibleText(args.message);
   const withoutCitationMarkers = stripUnsupportedCitationControlMarkers(message);
   for (const normalized of new Set([
@@ -65,7 +65,6 @@ export function enforceSourceReplyOnlyTextDirectives(args: Record<string, unknow
       directives.replyToTag ||
       directives.audioAsVoice ||
       directives.mediaUrls?.length ||
-      directives.reaction ||
       directives.isSilent
     ) {
       throw new Error("Completion source replies cannot contain non-text or silent directives.");

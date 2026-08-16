@@ -2,6 +2,7 @@ import {
   readActiveTranscriptEntryAnchor,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-message.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
 import {
@@ -135,6 +136,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
   ): { entryId: string; anchor?: TranscriptEntryAnchor } {
+    if (message.role === "assistant") applyAssistantDeliveryDirectives(message);
     if (options?.idempotencyLookup !== "caller-checked") {
       const currentUserId = this.resolveCurrentKeyedUserId(message);
       if (currentUserId) {

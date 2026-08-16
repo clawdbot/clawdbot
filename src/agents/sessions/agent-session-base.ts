@@ -419,6 +419,10 @@ export abstract class AgentSessionBase {
           throw error;
         }
         if (event.message.role === "assistant") {
+          const persisted = this.sessionManager.getEntry(entryId);
+          if (persisted?.type === "message" && persisted.message.role === "assistant") {
+            this.replaceMessageInPlace(event.message, persisted.message);
+          }
           this.lastAssistantEntryId = entryId;
         } else if (event.message.role === "user") {
           // A queued user message_end normally follows a committed append before listeners consume it.
