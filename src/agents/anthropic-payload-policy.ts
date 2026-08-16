@@ -133,24 +133,10 @@ function stripAnthropicSystemPromptBoundary(system: unknown): void {
   }
 }
 
-function applyAnthropicCacheControlToMessages(
-  messages: unknown,
+function tagAnthropicUserMessageForCache(
+  record: Record<string, unknown>,
   cacheControl: AnthropicEphemeralCacheControl,
 ): void {
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return;
-  }
-
-  const lastMessage = messages[messages.length - 1];
-  if (!lastMessage || typeof lastMessage !== "object") {
-    return;
-  }
-
-  const record = lastMessage as Record<string, unknown>;
-  if (record.role !== "user") {
-    return;
-  }
-
   const content = record.content;
   if (Array.isArray(content)) {
     const lastBlock = content[content.length - 1];
@@ -176,6 +162,40 @@ function applyAnthropicCacheControlToMessages(
         cache_control: cacheControl,
       },
     ];
+  }
+}
+
+function applyAnthropicCacheControlToMessages(
+  messages: unknown,
+  cacheControl: AnthropicEphemeralCacheControl,
+): void {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return;
+  }
+
+  // Tag the last TWO user turns, not just the trailing one. Anthropic reads
+  // cache only at the CURRENT request's breakpoint positions, so with a single
+  // trailing breakpoint consecutive turns can never chain: turn N+1's only
+  // message breakpoint sits past turn N's cache entry, the lookup misses, and
+  // the entire history span re-writes at 1h-write prices every turn — even
+  // when the rendered bytes are IDENTICAL (measured on staging: system text
+  // byte-equal, messages 0..49 fingerprint-equal, and still a full ~31.5k
+  // cache write per turn, $0.193). With the penultimate user turn also
+  // tagged, turn N+1's second breakpoint lands exactly where turn N wrote,
+  // the prefix hits, and only the appended tail writes. Budget: 1 system
+  // breakpoint + these 2 = 3 of Anthropic's 4.
+  let tagged = 0;
+  for (let i = messages.length - 1; i >= 0 && tagged < 2; i--) {
+    const message = messages[i];
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const record = message as Record<string, unknown>;
+    if (record.role !== "user") {
+      continue;
+    }
+    tagAnthropicUserMessageForCache(record, cacheControl);
+    tagged++;
   }
 }
 

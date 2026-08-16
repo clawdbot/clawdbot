@@ -47,6 +47,56 @@ function expectShortEphemeralTextPayload(payload: TestPayload) {
 }
 
 describe("anthropic payload policy", () => {
+  it("tags the last TWO user turns so consecutive requests can chain the cache", () => {
+    // Anthropic reads cache only at the CURRENT request breakpoint positions.
+    // With a single trailing breakpoint, turn N+1 has no breakpoint at turn
+    // N's write position, the lookup misses, and the whole history re-writes
+    // every turn even when the rendered bytes are identical (measured live:
+    // byte-equal system + fingerprint-equal history and still a full ~31.5k
+    // 1h cache write per turn). The penultimate user turn must carry a
+    // marker too, so the previous turn's entry is reachable.
+    const policy = resolveAnthropicPayloadPolicy({
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com/v1",
+      cacheRetention: "long",
+      enableCacheControl: true,
+    });
+    const payload: TestPayload = {
+      system: [{ type: "text", text: "Follow policy." }],
+      messages: [
+        { role: "user", content: [{ type: "text", text: "First ask" }] },
+        { role: "assistant", content: [{ type: "text", text: "First reply" }] },
+        { role: "user", content: [{ type: "text", text: "Second ask" }] },
+        { role: "assistant", content: [{ type: "text", text: "Second reply" }] },
+        { role: "user", content: [{ type: "text", text: "Third ask" }] },
+      ],
+    };
+
+    applyAnthropicPayloadPolicyToParams(payload, policy);
+
+    const marker = { type: "ephemeral", ttl: "1h" };
+    // Oldest user turn stays unmarked: two message breakpoints + system stay
+    // within Anthropic's four-breakpoint budget.
+    expect(payload.messages[0]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "First ask" }],
+    });
+    expect(payload.messages[2]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "Second ask", cache_control: marker }],
+    });
+    expect(payload.messages[4]).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "Third ask", cache_control: marker }],
+    });
+    // Assistant turns are never marked.
+    expect(payload.messages[1]).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "First reply" }],
+    });
+  });
+
   it("applies native Anthropic service tier and cache markers without widening cache scope", () => {
     const policy = resolveAnthropicPayloadPolicy({
       provider: "anthropic",
