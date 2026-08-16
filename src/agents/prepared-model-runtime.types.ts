@@ -111,9 +111,7 @@ export type PreparedModelRuntimeRefreshOptions = {
   gatewayLifecycle?: boolean;
   defaultWorkspaceDir?: string;
   catalogMode?: PreparedModelRuntimeCatalogMode;
-  catalogModeForAgent?: (
-    agentId: string | undefined,
-  ) => PreparedModelRuntimeCatalogMode;
+  catalogModeForAgent?: (agentId: string | undefined) => PreparedModelRuntimeCatalogMode;
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
   allowGatewaySubagentBinding?: boolean;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
