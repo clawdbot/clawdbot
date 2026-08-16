@@ -21,6 +21,8 @@ import { sessionsCommand } from "./sessions.js";
 type SessionsJsonPayload = {
   sessions?: Array<{
     key: string;
+    archived?: boolean;
+    archivedAt?: number;
     modelProvider?: string | null;
     model?: string | null;
     agentRuntime?: { id: string; source: string };
@@ -200,6 +202,77 @@ describe("sessionsCommand model resolution", () => {
           id: "codex",
           source: "session",
         });
+      },
+    );
+  });
+
+  it("reports archive state and current policy for an unlocked historical harness", async () => {
+    setMockSessionsConfig(() => ({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+          },
+          contextTokens: 200_000,
+        },
+      },
+    }));
+    const archivedAt = Date.now() - 30_000;
+    await withSqliteStore(
+      "sessions-archived-historical-runtime",
+      {
+        "agent:main:main": {
+          sessionId: "archived-historical-session",
+          updatedAt: Date.now() - 60_000,
+          archivedAt,
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "openclaw",
+        },
+      },
+      async (store) => {
+        const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
+        const session = payload.sessions?.find((row) => row.key === "agent:main:main");
+
+        expect(session).toMatchObject({
+          archived: true,
+          archivedAt,
+          agentRuntime: { id: "codex", source: "model" },
+        });
+      },
+    );
+  });
+
+  it("reports an unlocked compatible runtime override as session-key policy", async () => {
+    setMockSessionsConfig(() => ({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+          },
+          contextTokens: 200_000,
+        },
+      },
+    }));
+    await withSqliteStore(
+      "sessions-runtime-override",
+      {
+        "agent:main:main": {
+          sessionId: "runtime-override-session",
+          updatedAt: Date.now() - 60_000,
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "codex",
+          agentRuntimeOverride: "openclaw",
+        },
+      },
+      async (store) => {
+        const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
+        const session = payload.sessions?.find((row) => row.key === "agent:main:main");
+
+        expect(session?.agentRuntime).toEqual({ id: "openclaw", source: "session-key" });
       },
     );
   });

@@ -11,7 +11,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
-import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { resolveEffectiveSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import {
   prepareCliProviderClassifier,
@@ -57,7 +57,7 @@ import {
 type SessionRow = SessionDisplayRow & {
   agentId: string;
   kind: SessionKind;
-  agentRuntime: ReturnType<typeof resolveModelAgentRuntimeMetadata>;
+  agentRuntime: ReturnType<typeof resolveEffectiveSessionAgentRuntimeMetadata>;
   runtimeLabel: string;
   /** Carry the prepared identity into JSON/table emission without re-resolving plugin metadata. */
   displayModelRef: { provider: string; model: string };
@@ -199,7 +199,7 @@ const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
 function resolveSessionRuntimeLabel(params: {
   cfg: OpenClawConfig;
   entry: SessionEntry;
-  agentRuntime: ReturnType<typeof resolveModelAgentRuntimeMetadata>;
+  agentRuntime: ReturnType<typeof resolveEffectiveSessionAgentRuntimeMetadata>;
   modelProvider: string;
   classifyCliProvider: CliProviderClassifier;
 }): string {
@@ -390,7 +390,7 @@ export async function sessionsCommand(
       acpSessionKey,
       acpRuntime,
     );
-    const agentRuntime = resolveModelAgentRuntimeMetadata({
+    const agentRuntime = resolveEffectiveSessionAgentRuntimeMetadata({
       cfg,
       agentId,
       sessionEntry: entry,

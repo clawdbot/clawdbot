@@ -14,6 +14,8 @@ import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 /** Display row derived from a persisted session entry. */
 export type SessionDisplayRow = {
   key: string;
+  archived?: boolean;
+  archivedAt?: number;
   updatedAt: number | null;
   ageMs: number | null;
   sessionId?: string;
@@ -61,6 +63,8 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
   const updatedAt = entry?.updatedAt ?? null;
   return {
     key,
+    archived: entry?.archivedAt !== undefined,
+    archivedAt: entry?.archivedAt,
     updatedAt,
     ageMs: updatedAt ? Date.now() - updatedAt : null,
     sessionId: entry?.sessionId,
@@ -149,6 +153,7 @@ export function formatSessionFlagsCell(
     | "abortedLastRun"
     | "sessionId"
     | "runtimePolicySessionKey"
+    | "archived"
   >,
   rich: boolean,
 ): string {
@@ -160,6 +165,7 @@ export function formatSessionFlagsCell(
     row.elevatedLevel ? `elev:${row.elevatedLevel}` : null,
     row.responseUsage ? `usage:${row.responseUsage}` : null,
     row.groupActivation ? `activation:${row.groupActivation}` : null,
+    row.archived ? "archived" : null,
     row.systemSent ? "system" : null,
     row.abortedLastRun ? "aborted" : null,
     row.runtimePolicySessionKey ? `policy:${row.runtimePolicySessionKey}` : null,

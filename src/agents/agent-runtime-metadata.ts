@@ -4,7 +4,10 @@ import { applyAcpRuntimeOverlay, type AgentRuntimeMetadata } from "./acp-runtime
 import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
-import { resolvePersistedSessionRuntimeId } from "./session-runtime-compat.js";
+import {
+  resolvePersistedSessionRuntimeId,
+  resolveSessionRuntimeOverrideForProvider,
+} from "./session-runtime-compat.js";
 
 /** Resolves the runtime id/source that should be reported for a model-backed agent session. */
 export function resolveModelAgentRuntimeMetadata(params: {
@@ -53,4 +56,26 @@ export function resolveModelAgentRuntimeMetadata(params: {
     source: policy.runtimeSource ?? "implicit",
   };
   return applyAcpRuntimeOverlay(meta, params.sessionKey, params.acpRuntime, params.acpBackend);
+}
+
+/** Resolves the runtime that would handle the next turn for an existing session. */
+export function resolveEffectiveSessionAgentRuntimeMetadata(
+  params: Parameters<typeof resolveModelAgentRuntimeMetadata>[0],
+): AgentRuntimeMetadata {
+  const configured = resolveModelAgentRuntimeMetadata({
+    ...params,
+    sessionEntry: undefined,
+  });
+  const persistedRuntime = resolveSessionRuntimeOverrideForProvider({
+    provider: params.provider,
+    entry: params.sessionEntry,
+    cfg: params.cfg,
+  });
+  if (params.acpRuntime || !persistedRuntime) {
+    return configured;
+  }
+  return {
+    id: persistedRuntime,
+    source: params.sessionEntry?.modelSelectionLocked === true ? "session" : "session-key",
+  };
 }
