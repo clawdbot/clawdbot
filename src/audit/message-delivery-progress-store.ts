@@ -18,7 +18,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import type {
-  AuditMessageConversationKind,
   OutboundMessageAuditEventRecord,
   OutboundMessageProgressInput,
 } from "./audit-event-types.js";
@@ -165,12 +164,27 @@ function rowToProgressEvent(row: ProgressRow): OutboundMessageAuditEventRecord {
   if (
     (row.action === "message.outbound.queued" && row.outcome !== "queued") ||
     (row.action === "message.outbound.platform-started" && row.outcome !== "platform_started") ||
-    (row.action !== "message.outbound.queued" &&
-      row.action !== "message.outbound.platform-started") ||
-    (row.actor_type !== "agent" && row.actor_type !== "system") ||
-    !["direct", "group", "channel", "unknown"].includes(row.conversation_kind)
+    (row.action !== "message.outbound.queued" && row.action !== "message.outbound.platform-started")
   ) {
     throw new Error("corrupt outbound message progress row: invalid lifecycle field");
+  }
+  const actorType =
+    row.actor_type === "agent" ? "agent" : row.actor_type === "system" ? "system" : undefined;
+  if (!actorType) {
+    throw new Error("corrupt outbound message progress row: invalid actor type");
+  }
+  const conversationKind =
+    row.conversation_kind === "direct"
+      ? "direct"
+      : row.conversation_kind === "group"
+        ? "group"
+        : row.conversation_kind === "channel"
+          ? "channel"
+          : row.conversation_kind === "unknown"
+            ? "unknown"
+            : undefined;
+  if (!conversationKind) {
+    throw new Error("corrupt outbound message progress row: invalid conversation kind");
   }
   const common = {
     schemaVersion: 1 as const,
@@ -180,13 +194,13 @@ function rowToProgressEvent(row: ProgressRow): OutboundMessageAuditEventRecord {
     occurredAt,
     redaction: "metadata_only" as const,
     kind: "message" as const,
-    actorType: row.actor_type as "agent" | "system",
+    actorType,
     actorId: requiredText(row.actor_id, "actorId"),
     ...(optionalText(row.agent_id, "agentId") !== undefined ? { agentId: row.agent_id! } : {}),
     ...(optionalText(row.run_id, "runId") !== undefined ? { runId: row.run_id! } : {}),
     direction: "outbound" as const,
     channel: requiredText(row.channel, "channel"),
-    conversationKind: row.conversation_kind as AuditMessageConversationKind,
+    conversationKind,
     ...(durationMs !== undefined ? { durationMs } : {}),
     resultCount: 0,
     ...(optionalHmacRef(row.account_ref, "accountRef") !== undefined
@@ -198,7 +212,7 @@ function rowToProgressEvent(row: ProgressRow): OutboundMessageAuditEventRecord {
     ...(optionalHmacRef(row.target_ref, "targetRef") !== undefined
       ? { targetRef: row.target_ref! }
       : {}),
-  };
+  } as const;
   return row.action === "message.outbound.queued"
     ? { ...common, action: row.action, status: "started", outcome: "queued" }
     : { ...common, action: row.action, status: "started", outcome: "platform_started" };

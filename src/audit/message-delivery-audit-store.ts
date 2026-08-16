@@ -91,7 +91,10 @@ function readTerminalEventsForRun(params: {
       return executeSqliteQuerySync(
         db,
         query.orderBy("occurred_at", "asc").orderBy("sequence", "asc").limit(params.limit),
-      ).rows.map((row) => rowToAuditEvent(row) as OutboundMessageAuditEventRecord);
+      ).rows.map(
+        // SAFETY: the query fixes the row to the validated outbound terminal-message variant.
+        (row) => rowToAuditEvent(row) as OutboundMessageAuditEventRecord,
+      );
     }, params.database) ?? []
   );
 }

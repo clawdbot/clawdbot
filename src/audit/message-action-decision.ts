@@ -4,9 +4,9 @@ import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/inde
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { ExecutionIdentityAdmissionToken } from "./execution-identity-admission.js";
 
-const state = resolveGlobalSingleton(Symbol.for("openclaw.messageActionDecisionSink"), () => ({
-  sink: undefined as ((receipt: DecisionReceiptV1) => boolean) | undefined,
-}));
+const state = resolveGlobalSingleton<{
+  sink: ((receipt: DecisionReceiptV1) => boolean) | undefined;
+}>(Symbol.for("openclaw.messageActionDecisionSink"), () => ({ sink: undefined }));
 
 export function configureMessageActionDecisionSink(
   sink: (receipt: DecisionReceiptV1) => boolean,
