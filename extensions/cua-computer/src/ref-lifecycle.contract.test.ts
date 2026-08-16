@@ -17,6 +17,7 @@ type RefLifecycleCase = {
   scenario:
     | "fresh_window"
     | "fresh_element"
+    | "window_moved"
     | "generation_rotation"
     | "in_flight_generation_change"
     | "superseded_observation"
@@ -50,6 +51,15 @@ function runCase(testCase: RefLifecycleCase): void {
     case "fresh_element":
       resolveElementRef(resolveObservation(state, observation.id, windowRef), elementRef);
       return;
+    case "window_moved": {
+      // A moved window is rediscovered under the same stable identity, so the
+      // ref survives and still resolves to the live window. CUA stores only that
+      // identity, so the refreshed target is the identity itself.
+      const moved = { pid: 100, windowId: 10 };
+      expect(issueWindowRef(state, moved)).toBe(windowRef);
+      expect(resolveWindowRef(state, windowRef)).toEqual(moved);
+      return;
+    }
     case "generation_rotation":
       adoptGeneration(state, "generation-2");
       resolveWindowRef(state, windowRef);

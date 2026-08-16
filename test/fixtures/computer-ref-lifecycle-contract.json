@@ -12,6 +12,11 @@
       "expected": "valid"
     },
     {
+      "id": "window-moved-keeps-ref-and-refreshes-target",
+      "scenario": "window_moved",
+      "expected": "valid"
+    },
+    {
       "id": "generation-rotation-invalidates-refs",
       "scenario": "generation_rotation",
       "expected": "stale"
