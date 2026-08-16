@@ -74,6 +74,7 @@ type ReadSessionMessageCountAsync =
   (typeof import("./session-transcript-readers.js"))["readSessionMessageCountAsync"];
 
 const sessionDiffBaselineMocks = vi.hoisted(() => ({
+  gate: undefined as Promise<void> | undefined,
   ensure: vi.fn<EnsureSessionDiffBaseline>(),
   useReal: false,
 }));
@@ -94,11 +95,14 @@ const sessionTranscriptReaderMocks = vi.hoisted(() => ({
 
 vi.mock("../sessions/session-diff-baseline.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../sessions/session-diff-baseline.js")>();
-  sessionDiffBaselineMocks.ensure.mockImplementation(async (params) =>
-    sessionDiffBaselineMocks.useReal
+  sessionDiffBaselineMocks.ensure.mockImplementation(async (params) => {
+    if (sessionDiffBaselineMocks.gate) {
+      await sessionDiffBaselineMocks.gate;
+    }
+    return sessionDiffBaselineMocks.useReal
       ? await actual.ensureSessionDiffBaseline(params)
-      : params.entry,
-  );
+      : params.entry;
+  });
   return { ...actual, ensureSessionDiffBaseline: sessionDiffBaselineMocks.ensure };
 });
 
@@ -145,6 +149,7 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  sessionDiffBaselineMocks.gate = undefined;
   sessionDiffBaselineMocks.ensure.mockClear();
   // Baseline capture has dedicated owner coverage and one authenticated integration below.
   sessionDiffBaselineMocks.useReal = false;
@@ -963,27 +968,117 @@ test("sessions.create captures and persists the initial workspace diff baseline"
       cwd: workspace,
     });
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    expect(sessionDiffBaselineMocks.ensure).toHaveBeenCalledTimes(1);
+    await waitForFast(() => expect(sessionDiffBaselineMocks.ensure).toHaveBeenCalledTimes(1), {
+      timeout: 5_000,
+    });
     const sessionKey = requireNonEmptyString(created.payload?.key, "baseline session key");
     const sessionId = requireNonEmptyString(created.payload?.sessionId, "baseline session id");
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      sessionId,
-      spawnedCwd: workspace,
-      sessionDiffBaseline: {
-        version: 1,
-        sessionId,
-        root: workspace,
-        files: [
-          {
-            path: "README.md",
-            fingerprint: expect.any(String),
+    await waitForFast(
+      () =>
+        expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+          sessionId,
+          spawnedCwd: workspace,
+          sessionDiffBaseline: {
+            version: 1,
+            sessionId,
+            root: workspace,
+            files: [
+              {
+                path: "README.md",
+                fingerprint: expect.any(String),
+              },
+            ],
           },
-        ],
-      },
-    });
+        }),
+      { timeout: 5_000 },
+    );
   } finally {
     sessionDiffBaselineMocks.useReal = false;
     ws.close();
+  }
+});
+
+test("sessions.create admits its first turn without waiting for the diff baseline", async () => {
+  const root = tempDirs.make("openclaw-session-diff-baseline-order-");
+  const workspace = await initializeGitWorkspace(root);
+  await fs.appendFile(path.join(workspace, "README.md"), "dirty at session start\n");
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:dashboard:baseline-order";
+  const replacementSessionId = "replacement-session";
+  let releaseBaseline: (() => void) | undefined;
+  sessionDiffBaselineMocks.gate = new Promise<void>((resolve) => {
+    releaseBaseline = resolve;
+  });
+  sessionDiffBaselineMocks.useReal = true;
+  const { chatHandlers } = await import("./server-methods/chat.js");
+  const chatSend = vi.spyOn(chatHandlers, "chat.send").mockImplementation(async ({ respond }) => {
+    respond(true, { runId: "baseline-order-run", status: "started" });
+  });
+  const client = {
+    client: {
+      connect: {
+        scopes: ["operator.admin", "operator.write"],
+        client: {
+          id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+          version: "dev",
+          platform: "web",
+          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        },
+      },
+    } as never,
+  };
+  const createResult = directSessionReq<{ runStarted?: boolean; sessionId?: string }>(
+    "sessions.create",
+    {
+      agentId: "main",
+      cwd: workspace,
+      key: sessionKey,
+      message: "start immediately",
+    },
+    client,
+  );
+  let createSettled = false;
+  void createResult.then(() => {
+    createSettled = true;
+  });
+
+  try {
+    await waitForFast(() => expect(sessionDiffBaselineMocks.ensure).toHaveBeenCalledTimes(1), {
+      timeout: 10_000,
+    });
+    await waitForFast(() => expect(chatSend).toHaveBeenCalledTimes(1), { timeout: 1_000 });
+    await waitForFast(() => expect(createSettled).toBe(true), { timeout: 1_000 });
+    const created = await createResult;
+    expect(created).toMatchObject({
+      ok: true,
+      payload: { runStarted: true, sessionId: expect.any(String) },
+    });
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })?.sessionId).toBe(
+      created.payload?.sessionId,
+    );
+
+    const deleted = await directSessionReq<{ deleted?: boolean }>(
+      "sessions.delete",
+      { key: sessionKey, deleteTranscript: false },
+      client,
+    );
+    expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId: replacementSessionId, updatedAt: Date.now() },
+    );
+
+    releaseBaseline?.();
+    await sessionDiffBaselineMocks.ensure.mock.results[0]?.value;
+    const replacement = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+    expect(replacement?.sessionId).toBe(replacementSessionId);
+    expect(replacement?.sessionDiffBaseline).toBeUndefined();
+  } finally {
+    releaseBaseline?.();
+    await createResult.catch(() => undefined);
+    sessionDiffBaselineMocks.gate = undefined;
+    sessionDiffBaselineMocks.useReal = false;
+    chatSend.mockRestore();
   }
 });
 

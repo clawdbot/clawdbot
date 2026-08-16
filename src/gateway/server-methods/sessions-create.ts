@@ -580,15 +580,15 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         context.loadGatewayModelCatalog({ agentId: modelCatalogAgentId }),
       ...(commitGuard ? { commitGuard } : {}),
       afterCreate: async ({ key, agentId, entry, storePath }) => {
-        // Session persistence already committed under the guard. Closure after
-        // that point may suppress follow-on work, but cannot roll back the session.
+        // Git discovery cannot delay first-turn admission. The sessionId guard in
+        // baseline persistence fences completion from a replacement generation.
         if (!authority.hasActive()) {
           return;
         }
         if (await worktreeTitle?.persist(agentId, entry, key, storePath)) {
           emitSessionsChanged(context, { sessionKey: key, agentId, reason: "chat.title" });
         }
-        await captureCreatedSessionDiffBaseline({ key, agentId, cfg, entry, storePath });
+        void captureCreatedSessionDiffBaseline({ key, agentId, cfg, entry, storePath });
         if (hasInitialTurn) {
           if (!authority.hasActive()) {
             return;
@@ -637,7 +637,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     registerCreatedSessionCategory(normalizeOptionalString(p.category), context);
     if (created.resetExisting) {
-      await captureCreatedSessionDiffBaseline({
+      void captureCreatedSessionDiffBaseline({
         key: created.key,
         agentId: created.agentId,
         cfg,
