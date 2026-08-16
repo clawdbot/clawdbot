@@ -181,6 +181,11 @@ describe("config defaults", () => {
               { id: "gpt-no-cost", name: "gpt-no-cost" },
               { id: "gpt-empty-cost", name: "gpt-empty-cost", cost: {} },
               {
+                id: "gpt-empty-tiers",
+                name: "gpt-empty-tiers",
+                cost: { tieredPricing: [] },
+              },
+              {
                 id: "gpt-free",
                 name: "gpt-free",
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -200,11 +205,15 @@ describe("config defaults", () => {
     // An omitted or rate-less cost block defaults to all-zero rates; those
     // defaults are unknown pricing, not a confirmed free price, so the
     // materialized entry must carry the marker or downstream consumers
-    // report a confident $0.
+    // report a confident $0. An empty tieredPricing list carries no rates —
+    // normalization drops it — so it is unknown pricing too.
     expect(models.find((entry) => entry.id === "gpt-no-cost")?.cost).toMatchObject({
       pricingUnavailable: true,
     });
     expect(models.find((entry) => entry.id === "gpt-empty-cost")?.cost).toMatchObject({
+      pricingUnavailable: true,
+    });
+    expect(models.find((entry) => entry.id === "gpt-empty-tiers")?.cost).toMatchObject({
       pricingUnavailable: true,
     });
     // Explicitly configured all-zero pricing stays unmarked: confirmed free.
