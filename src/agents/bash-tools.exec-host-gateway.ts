@@ -698,7 +698,7 @@ export async function processGatewayAllowlist(
       env: params.env,
       segments: allowlistEval.segments,
     }) && !(hostSecurity === "full" && hostAsk === "off");
-  const requiresAsk =
+  const policyRequiresAsk =
     requiresExecApproval({
       ask: hostAsk,
       security: hostSecurity,
@@ -749,18 +749,47 @@ export async function processGatewayAllowlist(
       }),
     };
   }
+  let mutableFileBinding: SystemRunMutableFileBinding | undefined;
+  const durableApprovalRequiresBinding = hostSecurity === "allowlist" && durableApprovalSatisfied;
+  if (policyRequiresAsk || durableApprovalRequiresBinding) {
+    // Durable text grants cannot authorize future bytes. Prepare before they
+    // suppress prompting so mutable operands always return to one-shot review.
+    const prepared = await prepareSystemRunMutableFileBinding({
+      command: analysisOk
+        ? { kind: "segments", segments: allowlistEval.segments }
+        : { kind: "shell", text: params.command },
+      cwd: params.workdir,
+      env: params.env,
+    });
+    if (!prepared.ok) {
+      return {
+        deniedResult: buildGatewayExecApprovalDeniedToolResult({
+          deniedReason: prepared.message,
+          command: params.command,
+          cwd: params.workdir,
+        }),
+      };
+    }
+    mutableFileBinding = prepared.binding;
+  }
+  const mutableFileApprovalRequiresOneShot = (mutableFileBinding?.operands.length ?? 0) > 0;
+  const requiresAsk =
+    policyRequiresAsk || (durableApprovalRequiresBinding && mutableFileApprovalRequiresOneShot);
   const effectiveAllowAlwaysPersistence = resolveGatewayEffectiveAllowAlwaysPersistence({
     command: params.command,
     allowAlwaysPersistence,
     requiresAllowlistPlanApproval,
   });
+  const approvalAllowAlwaysPersistence = mutableFileApprovalRequiresOneShot
+    ? createOneShotAllowAlwaysDecision()
+    : effectiveAllowAlwaysPersistence;
   const approvalAllowedDecisions = resolveExecApprovalAllowedDecisions({
     ask: hostAsk,
-    allowAlwaysPersistence: effectiveAllowAlwaysPersistence,
+    allowAlwaysPersistence: approvalAllowAlwaysPersistence,
   });
   const approvalUnavailableDecisions = resolveExecApprovalUnavailableDecisions({
     ask: hostAsk,
-    allowAlwaysPersistence: effectiveAllowAlwaysPersistence,
+    allowAlwaysPersistence: approvalAllowAlwaysPersistence,
   });
   const unavailableDecisionRequestParams =
     approvalUnavailableDecisions.length > 0
@@ -789,36 +818,21 @@ export async function processGatewayAllowlist(
         },
       };
     }
-    // Approval must capture script bytes before any reviewer or operator wait;
-    // command text alone does not prevent a referenced file from changing.
-    const mutableFileBinding = await prepareSystemRunMutableFileBinding({
-      command: {
-        kind: "segments",
-        segments: analysisOk ? allowlistEval.segments : [],
-      },
-      cwd: params.workdir,
-      env: params.env,
-    });
-    if (!mutableFileBinding.ok) {
+    if (!mutableFileBinding) {
       return {
         deniedResult: buildGatewayExecApprovalDeniedToolResult({
-          deniedReason: mutableFileBinding.message,
+          deniedReason: "SYSTEM_RUN_DENIED: mutable file approval binding is unavailable",
           command: params.command,
           cwd: params.workdir,
         }),
       };
     }
-    // A reusable text grant cannot authorize future bytes at a mutable path.
-    // Treat allow-always as one-shot while retaining the operator's current allow.
-    const approvalAllowAlwaysPersistence =
-      mutableFileBinding.binding.operands.length > 0
-        ? createOneShotAllowAlwaysDecision()
-        : effectiveAllowAlwaysPersistence;
+    const approvalMutableFileBinding = mutableFileBinding;
     const revalidateBeforeExecution =
-      mutableFileBinding.binding.operands.length > 0
+      approvalMutableFileBinding.operands.length > 0
         ? () =>
             revalidateGatewayExecApprovalBinding({
-              binding: mutableFileBinding.binding,
+              binding: approvalMutableFileBinding,
               command: params.command,
               cwd: params.workdir,
             })
@@ -897,7 +911,7 @@ export async function processGatewayAllowlist(
         autoReviewEnforcedCommand
       ) {
         const currentBinding = await revalidateSystemRunMutableFileBinding({
-          binding: mutableFileBinding.binding,
+          binding: approvalMutableFileBinding,
           cwd: params.workdir,
         });
         if (!currentBinding.ok) {
@@ -1051,7 +1065,7 @@ export async function processGatewayAllowlist(
       }
 
       const currentBinding = await revalidateSystemRunMutableFileBinding({
-        binding: mutableFileBinding.binding,
+        binding: approvalMutableFileBinding,
         cwd: params.workdir,
       });
       if (!currentBinding.ok) {
@@ -1187,7 +1201,7 @@ export async function processGatewayAllowlist(
 
       if (!deniedReason && approvedByAsk) {
         const currentBinding = await revalidateSystemRunMutableFileBinding({
-          binding: mutableFileBinding.binding,
+          binding: approvalMutableFileBinding,
           cwd: params.workdir,
         });
         if (!currentBinding.ok) {
@@ -1377,7 +1391,7 @@ export async function processGatewayAllowlist(
           }
 
           const currentBinding = await revalidateSystemRunMutableFileBinding({
-            binding: mutableFileBinding.binding,
+            binding: approvalMutableFileBinding,
             cwd: params.workdir,
           });
           if (!currentBinding.ok) {

@@ -386,6 +386,37 @@ describe("mutable file operand binding", () => {
     }
   });
 
+  it.each([
+    { name: "accepts unchanged bytes", mutate: false },
+    { name: "denies changed bytes", mutate: true },
+  ])("revalidates transparent-wrapper executables: $name", async ({ mutate }) => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-wrapper-"));
+    const script = path.join(cwd, "wrapped.sh");
+    try {
+      fs.writeFileSync(script, "#!/bin/sh\necho approved\n", { mode: 0o755 });
+      const prepared = expectOk(
+        await prepareSystemRunMutableFileBinding({
+          command: { kind: "shell", text: "env WRAPPED=1 ./wrapped.sh" },
+          cwd,
+        }),
+      );
+      expect(prepared.binding.operands).toHaveLength(1);
+      if (mutate) {
+        fs.writeFileSync(script, "#!/bin/sh\necho changed\n", { mode: 0o755 });
+      }
+
+      await expect(
+        revalidateSystemRunMutableFileBinding({ binding: prepared.binding, cwd }),
+      ).resolves.toEqual(
+        mutate
+          ? { ok: false, message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE }
+          : { ok: true },
+      );
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("binds mutable native executables", async () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-native-"));
     const executable = path.join(cwd, "native-tool");

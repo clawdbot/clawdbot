@@ -1920,12 +1920,12 @@ EOF`,
   });
 
   it("allows durable exact-command trust to bypass the synchronous allowlist miss", async () => {
-    const command = "node --version";
+    const command = "/bin/echo durable";
     evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: false,
       allowlistSatisfied: false,
-      segments: [{ resolution: null, argv: ["node", "--version"] }],
+      segments: [{ resolution: null, argv: ["/bin/echo", "durable"] }],
       segmentAllowlistEntries: [],
       segmentSatisfiedBy: [],
     });
@@ -2414,18 +2414,30 @@ EOF`,
   it.each([
     { name: "denies drift", mutate: true },
     { name: "runs unchanged bytes", mutate: false },
-  ])("binds detached gateway approval script operands: $name", async ({ mutate }) => {
+  ])("re-prompts durable detached gateway script approvals: $name", async ({ mutate }) => {
     const workdir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-script-binding-"));
     const script = path.join(workdir, "script.sh");
+    const command = "sh script.sh";
     try {
       fs.writeFileSync(script, "#!/bin/sh\necho approved\n");
       evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
         allowlistMatches: [],
         analysisOk: true,
-        allowlistSatisfied: true,
+        allowlistSatisfied: false,
         segments: [{ resolution: null, argv: ["sh", "script.sh"] }],
         segmentAllowlistEntries: [],
         segmentSatisfiedBy: [],
+      });
+      hasDurableExecApprovalMock.mockReturnValue(true);
+      hasExactCommandDurableExecApprovalMock.mockReturnValue(true);
+      resolveExecHostApprovalContextMock.mockReturnValue({
+        approvals: {
+          allowlist: [{ pattern: exactCommandMarker(command), source: "allow-always" }],
+          file: { version: 1, agents: {} },
+        },
+        hostSecurity: "allowlist",
+        hostAsk: "off",
+        askFallback: "deny",
       });
       createExecApprovalDecisionStateMock.mockReturnValue({
         baseDecision: { timedOut: false },
@@ -2436,7 +2448,7 @@ EOF`,
         if (mutate) {
           fs.writeFileSync(script, "#!/bin/sh\necho mutated\n");
         }
-        return mutate ? "allow-once" : "allow-always";
+        return "allow-once";
       });
       buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
       runExecProcessMock.mockResolvedValue({
@@ -2450,12 +2462,16 @@ EOF`,
       });
 
       const result = await runGatewayAllowlist({
-        command: "sh script.sh",
+        command,
         workdir,
         turnSourceChannel: "feishu",
       });
 
       expect(result.pendingResult?.details.status).toBe("approval-pending");
+      expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
+        ask: "off",
+        allowAlwaysPersistence: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
+      });
       await vi.waitFor(() => {
         expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce();
       });
@@ -2466,11 +2482,7 @@ EOF`,
         expect(commitExecAuthorizationMock).not.toHaveBeenCalled();
         expect(runExecProcessMock).not.toHaveBeenCalled();
       } else {
-        expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            allowAlwaysDecision: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
-          }),
-        );
+        expect(commitExecAuthorizationMock).toHaveBeenCalledOnce();
         expect(runExecProcessMock).toHaveBeenCalledOnce();
       }
     } finally {

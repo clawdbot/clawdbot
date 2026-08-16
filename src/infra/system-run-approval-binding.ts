@@ -654,20 +654,18 @@ export async function revalidateSystemRunMutableFileBinding(params: {
     if (!operand.executable) {
       continue;
     }
-    let resolvedPath: string | undefined;
-    if (operand.pathSearch) {
-      const env = {
-        ...process.env,
-        ...(operand.pathSearch.path !== undefined ? { PATH: operand.pathSearch.path } : {}),
-        ...(operand.pathSearch.pathExt !== undefined
-          ? { PATHEXT: operand.pathSearch.pathExt }
-          : {}),
-      };
-      const resolution = resolveCommandResolutionFromArgv(operand.argv, params.cwd, env);
-      resolvedPath = resolution?.execution.resolvedRealPath ?? resolution?.execution.resolvedPath;
-    } else {
-      resolvedPath = path.resolve(params.cwd ?? process.cwd(), operand.argv[0] ?? "");
-    }
+    const env = operand.pathSearch
+      ? {
+          ...process.env,
+          ...(operand.pathSearch.path !== undefined ? { PATH: operand.pathSearch.path } : {}),
+          ...(operand.pathSearch.pathExt !== undefined
+            ? { PATHEXT: operand.pathSearch.pathExt }
+            : {}),
+        }
+      : undefined;
+    const resolution = resolveCommandResolutionFromArgv(operand.argv, params.cwd, env);
+    const resolvedPath =
+      resolution?.execution.resolvedRealPath ?? resolution?.execution.resolvedPath;
     if (!resolvedPath || resolvedPath !== operand.snapshot.path) {
       return { ok: false, message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE };
     }
