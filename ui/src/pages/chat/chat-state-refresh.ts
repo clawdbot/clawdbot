@@ -2,6 +2,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   loadChatMetadata,
+  peekChatMetadata,
   rememberChatMetadata,
   type ChatMetadataResult,
 } from "../../lib/chat/chat-metadata-store.ts";
@@ -17,7 +18,7 @@ import { flushChatQueueForEvent } from "./chat-send-actions.ts";
 import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import { applyModelCatalogResult, loadModels } from "./models.ts";
+import { loadModels } from "./models.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
@@ -50,8 +51,6 @@ type ChatMetadataRequest = {
 };
 
 type ChatMetadataRefreshOptions = {
-  preserveModelCatalogOnFallback?: boolean;
-  refreshModelCatalog?: boolean;
   requestVersion?: number;
 };
 
@@ -90,7 +89,8 @@ function applyChatMetadataResult(
   result: ChatMetadataResult,
   fields: { commands?: boolean; models?: boolean } = {},
 ): ChatMetadataApplyResult {
-  const models = fields.models === false ? undefined : applyModelCatalogResult(result.models);
+  const models =
+    fields.models === false || !Array.isArray(result.models) ? undefined : result.models;
   if (models) {
     host.chatModelCatalog = models;
     host.chatModelCatalogError = null;
@@ -106,6 +106,17 @@ function applyChatMetadataResult(
   return { commands: commandsApplied, models: Boolean(models) };
 }
 
+function seedChatModelCatalogFromStore(host: ChatPageHost, client: GatewayBrowserClient): void {
+  const cached = peekChatMetadata(client, resolveChatAgentId(host));
+  if (!Array.isArray(cached?.models)) {
+    return;
+  }
+  // A warm snapshot turns mount-time loading into refreshing; the in-flight
+  // request still owns the authoritative apply.
+  host.chatModelCatalog = cached.models;
+  host.chatModelCatalogError = null;
+}
+
 function ownsChatMetadataRequest(request: ChatMetadataRequest): boolean {
   return (
     request.host.client === request.client &&
@@ -115,17 +126,14 @@ function ownsChatMetadataRequest(request: ChatMetadataRequest): boolean {
   );
 }
 
-async function refreshCompatibilityModelCatalog(
-  request: ChatMetadataRequest,
-  opts?: { refresh?: boolean },
-) {
+async function refreshCompatibilityModelCatalog(request: ChatMetadataRequest) {
   const agentId = request.agentId?.trim();
   if (!agentId) {
     return;
   }
   const models = await loadModels(request.client, {
     agentId,
-    ...(opts?.refresh ? { refresh: true } : { preparedOnly: true }),
+    preparedOnly: true,
   });
   if (ownsChatMetadataRequest(request)) {
     request.host.chatModelCatalog = models;
@@ -144,7 +152,6 @@ async function refreshCompatibilityCommands(request: ChatMetadataRequest) {
 async function refreshMissingChatMetadata(
   request: ChatMetadataRequest,
   applied: ChatMetadataApplyResult,
-  opts?: ChatMetadataRefreshOptions,
 ): Promise<void> {
   if (!ownsChatMetadataRequest(request)) {
     return;
@@ -152,14 +159,9 @@ async function refreshMissingChatMetadata(
   const commandsRefresh = applied.commands
     ? Promise.resolve()
     : refreshCompatibilityCommands(request);
-  const preserveModels = opts?.preserveModelCatalogOnFallback;
-  const modelsRefresh =
-    applied.models || preserveModels
-      ? Promise.resolve()
-      : refreshCompatibilityModelCatalog(
-          request,
-          opts?.refreshModelCatalog ? { refresh: true } : undefined,
-        );
+  const modelsRefresh = applied.models
+    ? Promise.resolve()
+    : refreshCompatibilityModelCatalog(request);
   await Promise.allSettled([commandsRefresh, modelsRefresh]);
 }
 
@@ -181,9 +183,10 @@ export async function refreshChatMetadata(
   const agentId = resolveChatAgentId(host);
   const request = { host, client, agentId, version: requestVersion };
   host.chatModelsLoading = true;
+  seedChatModelCatalogFromStore(host, client);
   try {
     if (isGatewayMethodAdvertised(host, "chat.metadata") === false) {
-      await refreshMissingChatMetadata(request, EMPTY_CHAT_METADATA_APPLY_RESULT, opts);
+      await refreshMissingChatMetadata(request, EMPTY_CHAT_METADATA_APPLY_RESULT);
       return EMPTY_CHAT_METADATA_APPLY_RESULT;
     }
 
@@ -193,12 +196,12 @@ export async function refreshChatMetadata(
     }
     const metadataApplied = applyChatMetadataResult(host, client, agentId, result);
     if (!metadataApplied.models || !metadataApplied.commands) {
-      await refreshMissingChatMetadata(request, metadataApplied, opts);
+      await refreshMissingChatMetadata(request, metadataApplied);
     }
     return metadataApplied;
   } catch {
     if (ownsChatMetadataRequest(request)) {
-      await refreshMissingChatMetadata(request, EMPTY_CHAT_METADATA_APPLY_RESULT, opts);
+      await refreshMissingChatMetadata(request, EMPTY_CHAT_METADATA_APPLY_RESULT);
     }
     return EMPTY_CHAT_METADATA_APPLY_RESULT;
   } finally {
@@ -388,8 +391,9 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
   const startupMetadataRequestVersion = ownsStartupMetadata
     ? ++host.chatMetadataRequestVersion
     : null;
-  if (ownsStartupMetadata) {
+  if (ownsStartupMetadata && host.client) {
     host.chatModelsLoading = true;
+    seedChatModelCatalogFromStore(host, host.client);
   }
 
   const refresh = refreshChat(host, {

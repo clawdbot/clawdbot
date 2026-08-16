@@ -2,11 +2,13 @@
 
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
+import { render } from "lit";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { rememberChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
 import {
   buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
@@ -30,6 +32,7 @@ import { refreshChatAvatar } from "./chat-avatar.ts";
 import * as chatCommandExecutor from "./chat-command-executor.ts";
 import type { executeSlashCommand } from "./chat-command-executor.ts";
 import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
+import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
   getPendingChatPickerPatch,
@@ -421,6 +424,67 @@ describe("refreshChat", () => {
     expect(host.request).not.toHaveBeenCalledWith("chat.metadata", expect.anything());
     expect(host.request).not.toHaveBeenCalledWith("models.list", expect.anything());
     expect(host.request).not.toHaveBeenCalledWith("commands.list", expect.anything());
+  });
+
+  it("renders cached models while startup metadata refreshes", async () => {
+    const startup = createDeferred<unknown>();
+    const host = makeChatHost({
+      chatModelSwitchPromises: {},
+      hello: {
+        features: { methods: ["chat.metadata", "chat.startup"] },
+      } as TestChatHost["hello"],
+      requestHandlers: {
+        "chat.startup": () => startup.promise,
+      },
+    });
+    const cachedModel = {
+      available: true,
+      id: "cached-model",
+      name: "Cached Model",
+      provider: "openai",
+    };
+    rememberChatMetadata(expectDefined(host.client), "main", {
+      commands: [],
+      models: [cachedModel],
+    });
+
+    const refresh = refreshPageChat(asChatPageHost(host), {
+      awaitHistory: true,
+      deferBranches: true,
+      startup: true,
+    });
+
+    expect(host.chatModelCatalog).toEqual([cachedModel]);
+    expect(host.chatModelsLoading).toBe(true);
+    const container = document.createElement("div");
+    render(
+      renderChatPaneComposerControls({
+        state: asChatPageHost(host),
+        selectedSession: undefined,
+        agentDefaultModel: undefined,
+        modelAccess: { allowed: true, requiredScope: "operator.write" },
+        effortAccess: { allowed: true, requiredScope: "operator.write" },
+        onModelSetup: vi.fn(),
+      }),
+      container,
+    );
+    expect(container.querySelector('[data-chat-model-catalog-state="refreshing"]')).not.toBeNull();
+    expect(container.textContent).toContain("Refreshing models…");
+    expect(container.textContent).not.toContain("Loading models…");
+
+    startup.resolve({
+      messages: [],
+      metadata: {
+        commands: [],
+        models: [{ ...cachedModel, id: "fresh-model", name: "Fresh Model" }],
+      },
+    });
+    await expect(refresh).resolves.toBeUndefined();
+    await waitForFast(() =>
+      expect(host.chatModelCatalog).toEqual([
+        { ...cachedModel, id: "fresh-model", name: "Fresh Model" },
+      ]),
+    );
   });
 
   it("fills omitted startup metadata immediately and populates models and commands", async () => {

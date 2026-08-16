@@ -1725,29 +1725,6 @@ describe("refreshChatMetadata", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("preserves startup models when the gateway does not advertise chat metadata", async () => {
-    const request = vi.fn(async (method: string) => {
-      expect(method).toBe("commands.list");
-      return { commands: [] };
-    });
-    const startupCatalog = [
-      { id: "startup-model", name: "Startup Model", provider: "openai", available: true },
-    ];
-    const state = createMetadataState(request, {
-      chatMetadataRequestVersion: 4,
-      chatModelCatalog: startupCatalog,
-      chatModelsLoading: true,
-      hello: { features: { methods: ["chat.startup"] } },
-    });
-
-    await refreshChatMetadata(state, { preserveModelCatalogOnFallback: true });
-
-    expect(state.chatMetadataRequestVersion).toBe(5);
-    expect(state.chatModelCatalog).toBe(startupCatalog);
-    expect(state.chatModelsLoading).toBe(false);
-    expect(request).toHaveBeenCalledTimes(1);
-  });
-
   it("loads agent-scoped compatibility models for a non-default agent", async () => {
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "models.list") {
