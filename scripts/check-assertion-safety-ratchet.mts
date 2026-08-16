@@ -4,7 +4,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
 import {
-  CHAINED_ASSERTION_EXCLUDED_ROOTS,
   TYPE_ASSERTION_PRODUCTION_ROOTS,
   isSkippedTypeAssertionTestPath,
   pathMatchesTypeAssertionRoot,
@@ -85,12 +84,9 @@ function assertionOperatorPosition(sourceFile: ts.SourceFile, node: AssertionNod
   );
 }
 
-function isLedgeredUnknownLink(repoPath: string, node: AssertionNode) {
-  return (
-    ts.isAsExpression(node) &&
-    node.type.kind === ts.SyntaxKind.UnknownKeyword &&
-    CHAINED_ASSERTION_EXCLUDED_ROOTS.some((root) => pathMatchesTypeAssertionRoot(repoPath, root))
-  );
+function isUnknownAssertion(node: AssertionNode) {
+  // Casting exactly to unknown strengthens evidence; oxlint still rejects chained assertions such as `x as unknown as T`.
+  return node.type.kind === ts.SyntaxKind.UnknownKeyword;
 }
 
 export function countUnsafeAssertions(source: string, filePath = "src/source.ts") {
@@ -121,7 +117,7 @@ export function countUnsafeAssertions(source: string, filePath = "src/source.ts"
   let count = 0;
   const visit = (node: ts.Node): void => {
     if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) {
-      if (!ts.isConstTypeReference(node.type) && !isLedgeredUnknownLink(repoPath, node)) {
+      if (!ts.isConstTypeReference(node.type) && !isUnknownAssertion(node)) {
         const operatorLine = sourceFile.getLineAndCharacterOfPosition(
           assertionOperatorPosition(sourceFile, node),
         ).line;
@@ -344,6 +340,35 @@ function readBaselineAtRef(root: string, ref: string) {
   );
 }
 
+function allowanceWithExistingBaseCounts(
+  root: string,
+  baseRef: string,
+  proposed: ReadonlyMap<string, number>,
+  allowed: ReadonlyMap<string, number>,
+) {
+  const effective = new Map(allowed);
+  for (const [filePath, count] of proposed) {
+    if (count <= (effective.get(filePath) ?? 0)) {
+      continue;
+    }
+    try {
+      const source = execFileSync("git", ["show", `${baseRef}:${filePath}`], {
+        cwd: root,
+        encoding: "utf8",
+        maxBuffer: GIT_MAX_BUFFER,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const baseCount = countUnsafeAssertions(source, filePath);
+      if (baseCount > (effective.get(filePath) ?? 0)) {
+        effective.set(filePath, baseCount);
+      }
+    } catch {
+      // Missing base paths are branch additions and receive no allowance.
+    }
+  }
+  return effective;
+}
+
 function resolveDefaultBase(root: string, staged: boolean) {
   const candidates = staged ? ["HEAD"] : ["origin/main", "HEAD"];
   const resolved = candidates.find((ref) => {
@@ -448,8 +473,16 @@ export function main(root = process.cwd(), argv: string[] = process.argv.slice(2
       baseRef && baseBaseline
         ? baselineWithVerifiedRenames(root, baseRef, args.staged, baseline, baseBaseline)
         : baseBaseline;
-    const increases = findCountIncreases(current, baseline);
-    const expanded = allowedBaseline ? findCountIncreases(baseline, allowedBaseline) : [];
+    const currentAllowance =
+      baseRef && baseBaseline
+        ? allowanceWithExistingBaseCounts(root, baseRef, current, baseline)
+        : baseline;
+    const expansionAllowance =
+      baseRef && allowedBaseline
+        ? allowanceWithExistingBaseCounts(root, baseRef, baseline, allowedBaseline)
+        : allowedBaseline;
+    const increases = findCountIncreases(current, currentAllowance);
+    const expanded = expansionAllowance ? findCountIncreases(baseline, expansionAllowance) : [];
 
     if (increases.length > 0) {
       printDeltas(

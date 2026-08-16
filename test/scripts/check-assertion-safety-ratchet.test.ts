@@ -60,13 +60,15 @@ describe("check-assertion-safety-ratchet", () => {
       'const note = "// SAFETY: string content is not a comment.";',
       "const unsafe = value as Shape;",
       "const angle = <Shape>value;",
+      "const unknown = value as unknown;",
+      "const angleUnknown = <unknown>value;",
     ].join("\n");
 
     expect(countUnsafeAssertions(source, "src/example.ts")).toBe(3);
     expect(
       countUnsafeAssertions("value as unknown as Shape;", "src/agents/agent-model-discovery.ts"),
     ).toBe(1);
-    expect(countUnsafeAssertions("value as unknown as Shape;", "src/example.ts")).toBe(2);
+    expect(countUnsafeAssertions("value as unknown as Shape;", "src/example.ts")).toBe(1);
     expect(
       countUnsafeAssertions("declare const value: unknown as Shape;", "src/example.d.ts"),
     ).toBe(0);
@@ -129,5 +131,40 @@ describe("check-assertion-safety-ratchet", () => {
     expect(main(root, ["--base", "HEAD"])).toBe(1);
     expect(main(root, ["--base", "HEAD", "--prune"])).toBe(0);
     expect(parseAssertionSafetyBaseline(fs.readFileSync(baselinePath, "utf8"))).toEqual(new Map());
+  });
+
+  it("allows rebaselining assertion debt already present in the base tree", () => {
+    const root = tempDirs.make("openclaw-assertion-safety-base-drift-");
+    fs.mkdirSync(path.join(root, "config"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    const baselinePath = path.join(root, "config/assertion-safety-baseline.txt");
+    const sourcePath = path.join(root, "src/example.ts");
+    fs.writeFileSync(baselinePath, "src/example.ts\t1\n");
+    fs.writeFileSync(
+      sourcePath,
+      [
+        "export const first = value as string;",
+        "export const mergedConcurrently = value as number;",
+        "",
+      ].join("\n"),
+    );
+    for (const args of [
+      ["init"],
+      ["config", "user.email", "test@example.com"],
+      ["config", "user.name", "Test"],
+      ["add", "."],
+      ["commit", "-m", "base with stale assertion baseline"],
+    ]) {
+      git(root, args);
+    }
+
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(main(root, ["--base", "HEAD", "--prune"])).toBe(0);
+    expect(parseAssertionSafetyBaseline(fs.readFileSync(baselinePath, "utf8"))).toEqual(
+      new Map([["src/example.ts", 2]]),
+    );
   });
 });
