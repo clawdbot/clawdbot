@@ -175,6 +175,54 @@ describe("registerDirectoryCli", () => {
     });
   });
 
+  it.each([
+    {
+      mode: "human",
+      args: ["directory", "self", "--channel", "demo-directory", "--account", "account-1"],
+    },
+    {
+      mode: "JSON",
+      args: [
+        "directory",
+        "self",
+        "--channel",
+        "demo-directory",
+        "--account",
+        "account-1",
+        "--json",
+      ],
+    },
+  ])("explains an unavailable self identity in $mode mode", async ({ mode, args }) => {
+    const self = vi.fn().mockResolvedValue(null);
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: { "demo-directory": {} } },
+      channelId: "demo-directory",
+      plugin: { id: "demo-directory", directory: { self } },
+      configChanged: false,
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await program.parseAsync(args, { from: "user" });
+
+    if (mode === "JSON") {
+      expect(runtimeState.defaultRuntime.writeJson).toHaveBeenCalledWith({
+        status: "unavailable",
+        channel: "demo-directory",
+        accountId: "account-1",
+        reason: "plugin-returned-no-self-identity",
+      });
+    } else {
+      const output = runtimeState.runtimeLogs.join("\n");
+      expect(output).toContain('channel "demo-directory"');
+      expect(output).toContain('account "account-1"');
+      expect(output).toContain("returned no self identity");
+      expect(output).toContain("did not provide a reason");
+    }
+    expect(runtimeState.defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
   it("prefers live directory list readers when available", async () => {
     const listPeers = vi.fn().mockResolvedValue([{ id: "user:config", kind: "user" }]);
     const listPeersLive = vi.fn().mockResolvedValue([{ id: "user:live", kind: "user" }]);
@@ -242,6 +290,67 @@ describe("registerDirectoryCli", () => {
     expect(runtimeState.defaultRuntime.log).toHaveBeenCalledWith(
       JSON.stringify([{ id: "channel:config", kind: "group" }], null, 2),
     );
+  });
+
+  it.each([
+    {
+      label: "peers",
+      args: ["directory", "peers", "list", "--channel", "demo-directory", "--account", "account-1"],
+      expected: "No peers found",
+    },
+    {
+      label: "groups",
+      args: [
+        "directory",
+        "groups",
+        "list",
+        "--channel",
+        "demo-directory",
+        "--account",
+        "account-1",
+      ],
+      expected: "No groups found",
+    },
+    {
+      label: "group members",
+      args: [
+        "directory",
+        "groups",
+        "members",
+        "--channel",
+        "demo-directory",
+        "--account",
+        "account-1",
+        "--group-id",
+        "group-1",
+      ],
+      expected: 'No group members found for group "group-1"',
+    },
+  ])("names the query context for empty $label", async ({ args, expected }) => {
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: { "demo-directory": {} } },
+      channelId: "demo-directory",
+      plugin: {
+        id: "demo-directory",
+        directory: {
+          listPeers: vi.fn().mockResolvedValue([]),
+          listGroups: vi.fn().mockResolvedValue([]),
+          listGroupMembers: vi.fn().mockResolvedValue([]),
+        },
+      },
+      configChanged: false,
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await program.parseAsync(args, { from: "user" });
+
+    const output = runtimeState.runtimeLogs.join("\n");
+    expect(output).toContain(expected);
+    expect(output).toContain('channel "demo-directory"');
+    expect(output).toContain('account "account-1"');
+    expect(runtimeState.defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
   it("sanitizes plugin directory entries only for terminal output", async () => {

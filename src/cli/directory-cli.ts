@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   getTerminalTableWidth,
   renderTerminalSafeTable,
@@ -38,6 +39,12 @@ function buildRows(entries: Array<{ id: string; name?: string | undefined }>) {
     ID: entry.id,
     Name: normalizeOptionalString(entry.name) ?? "",
   }));
+}
+
+function formatDirectoryScope(channelId: string, accountId: string): string {
+  const channel = JSON.stringify(sanitizeTerminalText(channelId));
+  const account = JSON.stringify(sanitizeTerminalText(accountId));
+  return `channel ${channel}, account ${account}`;
 }
 
 function printDirectoryList(params: {
@@ -140,11 +147,12 @@ export function registerDirectoryCli(program: Command) {
           cfg,
           channel: opts.channel ?? null,
         });
-    const channelId = selection.channel;
+    const selectedChannelId = selection.channel;
     const plugin = selection.plugin;
     if (!plugin) {
-      throw new Error(`Unsupported channel: ${String(channelId)}`);
+      throw new Error(`Unsupported channel: ${String(selectedChannelId)}`);
     }
+    const channelId = selectedChannelId ?? plugin.id;
     const accountId =
       normalizeOptionalString(opts.account) || resolveChannelDefaultAccountId({ plugin, cfg });
     return { cfg, channelId, accountId, plugin };
@@ -186,7 +194,11 @@ export function registerDirectoryCli(program: Command) {
       defaultRuntime.writeJson(result);
       return;
     }
-    printDirectoryList({ title: params.title, emptyMessage: params.emptyMessage, entries: result });
+    printDirectoryList({
+      title: params.title,
+      emptyMessage: `${params.emptyMessage} for ${formatDirectoryScope(channelId, accountId)}.`,
+      entries: result,
+    });
   };
 
   const runDirectoryAction = async (opts: { json?: unknown }, action: () => Promise<void>) => {
@@ -215,12 +227,25 @@ export function registerDirectoryCli(program: Command) {
           throw new Error(`Channel ${channelId} does not support directory self`);
         }
         const result = await fn({ cfg, accountId, runtime: defaultRuntime });
-        if (opts.json) {
-          defaultRuntime.writeJson(result);
+        if (!result) {
+          if (opts.json) {
+            defaultRuntime.writeJson({
+              status: "unavailable",
+              channel: channelId,
+              accountId,
+              reason: "plugin-returned-no-self-identity",
+            });
+          } else {
+            defaultRuntime.log(
+              theme.muted(
+                `The channel plugin returned no self identity for ${formatDirectoryScope(channelId, accountId)}. It did not provide a reason; verify the account is configured and authenticated, then retry. Some channels do not expose a self identity.`,
+              ),
+            );
+          }
           return;
         }
-        if (!result) {
-          defaultRuntime.log(theme.muted("Not available."));
+        if (opts.json) {
+          defaultRuntime.writeJson(result);
           return;
         }
         const tableWidth = getTerminalTableWidth();
@@ -249,7 +274,7 @@ export function registerDirectoryCli(program: Command) {
           action: "listPeers",
           unsupported: "peers",
           title: "Peers",
-          emptyMessage: "No peers found.",
+          emptyMessage: "No peers found",
         });
       }),
     );
@@ -265,7 +290,7 @@ export function registerDirectoryCli(program: Command) {
           action: "listGroups",
           unsupported: "groups",
           title: "Groups",
-          emptyMessage: "No groups found.",
+          emptyMessage: "No groups found",
         });
       }),
     );
@@ -305,7 +330,7 @@ export function registerDirectoryCli(program: Command) {
         }
         printDirectoryList({
           title: "Group Members",
-          emptyMessage: "No group members found.",
+          emptyMessage: `No group members found for group ${JSON.stringify(sanitizeTerminalText(groupId))}, ${formatDirectoryScope(channelId, accountId)}.`,
           entries: result,
         });
       }),
