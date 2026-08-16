@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
+import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { listAgentIds, resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { resolveEffectiveAgentRuntime } from "openclaw/plugin-sdk/command-auth-native";
 import { getHealthCheck, type HealthCheck, type HealthFinding } from "openclaw/plugin-sdk/health";
 import {
   resolveCodexAppServerRuntimeOptions,
@@ -115,6 +117,17 @@ function createCodexManagedAppServerHealthCheck(params: {
       const env = ctx.env ?? process.env;
       let resolved;
       for (const agentId of listAgentIds(ctx.cfg)) {
+        const model = resolveDefaultModelForAgent({ cfg: ctx.cfg, agentId });
+        if (
+          resolveEffectiveAgentRuntime({
+            cfg: ctx.cfg,
+            provider: model.provider,
+            modelId: model.model,
+            agentId,
+          }) !== "codex"
+        ) {
+          continue;
+        }
         const agentStart = resolveAgentStartOptions({
           startOptions: start,
           agentDir: resolveAgentDir(ctx.cfg, agentId, env),

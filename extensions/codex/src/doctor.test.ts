@@ -264,6 +264,41 @@ describe("managed Codex doctor check", () => {
     }
   });
 
+  it("ignores managed commands for agents whose effective runtime is not Codex", async () => {
+    const desktopAgentDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-codex-doctor-desktop-agent-"),
+    );
+    try {
+      await fs.mkdir(path.join(desktopAgentDir, "codex-home"));
+      await fs.writeFile(
+        path.join(desktopAgentDir, "codex-home", "config.toml"),
+        '[plugins."computer-use@openai-bundled"]\nenabled = true\n',
+      );
+      const cfg = config();
+      cfg.agents = {
+        ...cfg.agents,
+        list: [
+          { id: "desktop", agentDir: desktopAgentDir },
+          {
+            id: "openclaw",
+            model: "anthropic/claude-opus-4-7",
+            models: {
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        ],
+      };
+      const deps = managedDeps("0.146.0");
+      const check = createCheck(deps);
+
+      await expect(check.detect(context(cfg))).resolves.toEqual([]);
+      expect(deps.resolveStartOptions).toHaveBeenCalledTimes(1);
+      expect(deps.runVersionCommand).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(desktopAgentDir, { recursive: true, force: true });
+    }
+  });
+
   it("still validates a package fallback selected after desktop-first resolution", async () => {
     const deps = managedDeps("0.146.0");
     deps.resolveStartOptions.mockImplementationOnce(async (start) => ({
