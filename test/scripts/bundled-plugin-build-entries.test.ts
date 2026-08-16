@@ -189,22 +189,22 @@ describe("bundled plugin build entries", () => {
     }
   });
 
-  it("builds external-only providers without adding them to package artifacts", () => {
+  it("keeps external-only providers out of bundled dist entries", () => {
     const entries = listBundledPluginBuildEntries();
     const artifacts = listBundledPluginPackArtifacts();
 
     for (const pluginId of ["amazon-bedrock", "amazon-bedrock-mantle", "anthropic-vertex"]) {
-      expectSomePrefixMatch(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
       expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
     }
   });
 
-  it("builds externalized runtime-dependency plugins without packaging them", () => {
+  it("keeps externalized runtime-dependency plugins out of bundled dist entries", () => {
     const entries = listBundledPluginBuildEntries();
     const artifacts = listBundledPluginPackArtifacts();
 
     for (const pluginId of ["copilot", "openshell", "slack", "tokenjuice"]) {
-      expectSomePrefixMatch(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
       expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
     }
   });
@@ -294,6 +294,7 @@ describe("bundled plugin build entries", () => {
   it("preserves known dependency-only Docker plugin selections", () => {
     const baselineEnv = { ...process.env };
     delete baselineEnv[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
+    const baselineEntries = listBundledPluginBuildEntries({ env: baselineEnv });
     const selectedEntries = listBundledPluginBuildEntries({
       env: {
         ...baselineEnv,
@@ -301,16 +302,14 @@ describe("bundled plugin build entries", () => {
       },
     });
 
+    expect(selectedEntries).toEqual(baselineEntries);
     expectNoPrefixMatches(Object.keys(selectedEntries), "extensions/whatsapp/");
-    expectNoPrefixMatches(Object.keys(selectedEntries), "extensions/slack/");
-    expect(selectedEntries["extensions/active-memory/index"]).toBe(
-      "extensions/active-memory/index.ts",
-    );
   });
 
   it("preserves known package-less bundled Docker plugin selections", () => {
     const baselineEnv = { ...process.env };
     delete baselineEnv[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
+    const baselineEntries = listBundledPluginBuildEntries({ env: baselineEnv });
     const selectedEntries = listBundledPluginBuildEntries({
       env: {
         ...baselineEnv,
@@ -318,10 +317,10 @@ describe("bundled plugin build entries", () => {
       },
     });
 
+    expect(selectedEntries).toEqual(baselineEntries);
     expect(selectedEntries["extensions/active-memory/index"]).toBe(
       "extensions/active-memory/index.ts",
     );
-    expectNoPrefixMatches(Object.keys(selectedEntries), "extensions/slack/");
   });
 
   it("rejects unknown and invalid Docker plugin selections", () => {
@@ -404,7 +403,7 @@ describe("bundled plugin build entries", () => {
     const entries = listBundledPluginBuildEntries();
     const artifacts = listBundledPluginPackArtifacts();
 
-    expectSomePrefixMatch(Object.keys(entries), "extensions/synthetic/");
+    expectNoPrefixMatches(Object.keys(entries), "extensions/synthetic/");
     expectNoPrefixMatches(artifacts, "dist/extensions/synthetic/");
   });
 
@@ -436,7 +435,7 @@ describe("bundled plugin build entries", () => {
     const entries = listBundledPluginBuildEntries();
     const artifacts = listBundledPluginPackArtifacts();
 
-    expectSomePrefixMatch(Object.keys(entries), "extensions/imessage/");
+    expectNoPrefixMatches(Object.keys(entries), "extensions/imessage/");
     expectNoPrefixMatches(artifacts, "dist/extensions/imessage/");
   });
 

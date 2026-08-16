@@ -716,11 +716,8 @@ export function runRuntimePostBuild(params: RuntimePostBuildParams = {}) {
     if (!shouldCopyStaticExtensionAssets(phaseParams)) {
       return;
     }
-    copyStaticExtensionAssets({ ...phaseParams, includeExternalPlugins: true });
-    copyStaticExtensionAssetsToRuntimeOverlay({
-      ...phaseParams,
-      includeExternalPlugins: true,
-    });
+    copyStaticExtensionAssets(phaseParams);
+    copyStaticExtensionAssetsToRuntimeOverlay(phaseParams);
   });
   runPhase("stable root runtime imports", () =>
     rewriteRootRuntimeImportsToStableAliases(phaseParams),
