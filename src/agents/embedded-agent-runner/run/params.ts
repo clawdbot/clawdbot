@@ -41,6 +41,7 @@ import type { CronCreatorAuthorityCapability } from "../../cron-creator-authorit
 import type { BlockReplyPayload } from "../../embedded-agent-payloads.js";
 import type {
   BlockReplyChunking,
+  EmbeddedAgentEvent,
   ToolProgressDetailMode,
   ToolResultFormat,
 } from "../../embedded-agent-subscribe.shared-types.js";
@@ -345,11 +346,7 @@ export type RunEmbeddedAgentParams = {
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   /** Synchronous private observer for the sanitized per-tool result. */
   onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
-  onAgentEvent?: (evt: {
-    stream: string;
-    data: Record<string, unknown>;
-    sessionKey?: string;
-  }) => void | Promise<void>;
+  onAgentEvent?: (evt: EmbeddedAgentEvent) => void | Promise<void>;
   onToolStreamBoundary?: () => void | Promise<void>;
   /**
    * Emit lifecycle "finishing" when the attempt ends; the caller owns the
