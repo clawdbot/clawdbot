@@ -494,6 +494,59 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it("keeps running when deferred startup fails after a SIGUSR1 replacement", async () => {
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const unresolvedFirstStartup = new Promise<void>(() => {});
+      const replacementError = new Error("replacement deferred startup failed");
+      const closeFirst = createCloseMock();
+      const closeSecond = createCloseMock();
+      const closeThird = createCloseMock();
+      let markThirdStarted: (() => void) | undefined;
+      const thirdStarted = new Promise<void>((resolve) => {
+        markThirdStarted = resolve;
+      });
+      const start = vi
+        .fn()
+        .mockResolvedValueOnce(createGatewayServer(closeFirst, unresolvedFirstStartup))
+        .mockImplementationOnce(async () =>
+          createGatewayServer(closeSecond, Promise.reject(replacementError)),
+        )
+        .mockImplementationOnce(async () => {
+          markThirdStarted?.();
+          return createGatewayServer(closeThird);
+        });
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      const { runGatewayLoop } = await import("./run-loop.js");
+      void runGatewayLoop({
+        start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
+        runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
+      });
+      await waitForLoopCondition(
+        () => start.mock.calls.length === 1,
+        "expected first deferred startup server",
+      );
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+
+      sigusr1();
+      await waitForLoopCondition(
+        () =>
+          gatewayLog.error.mock.calls.some(([message]) =>
+            String(message).includes(replacementError.message),
+          ),
+        "expected replacement deferred startup failure",
+      );
+      expect(closeSecond).toHaveBeenCalledWith({ reason: "gateway startup failed" });
+
+      sigusr1();
+      await thirdStarted;
+      expect(start).toHaveBeenCalledTimes(3);
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
   it("keeps truncated startup failure reasons free of lone surrogates", async () => {
     await withIsolatedSignals(async () => {
       const failure = `${"a".repeat(499)}😀tail`;

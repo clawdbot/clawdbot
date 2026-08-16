@@ -63,19 +63,6 @@ const gatewayLifecycleRuntimeLoader = createLazyImportLoader<GatewayLifecycleRun
 
 const loadGatewayLifecycleRuntimeModule = () => gatewayLifecycleRuntimeLoader.load();
 
-function createRestartIterationHook(onRestart: () => Promise<void> | void): () => Promise<boolean> {
-  // The first loop starts fresh; subsequent iterations are in-process restarts.
-  let isFirstIteration = true;
-  return async () => {
-    if (isFirstIteration) {
-      isFirstIteration = false;
-      return false;
-    }
-    await onRestart();
-    return true;
-  };
-}
-
 async function waitForGatewayPortReady(host: string, port: number): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
     const socket = net.createConnection({ host, port });
@@ -1005,7 +992,7 @@ export async function runGatewayLoop(params: {
   process.on("SIGUSR1", onSigusr1);
 
   try {
-    const onIteration = createRestartIterationHook(async () => {
+    const onRestart = async () => {
       // After an in-process restart (SIGUSR1), reset command-queue lane state.
       // Interrupted tasks from the previous lifecycle may have left `active`
       // counts elevated (their finally blocks never ran), permanently blocking
@@ -1053,18 +1040,22 @@ export async function runGatewayLoop(params: {
       }
       reloadTaskRuntimeStateFromStore();
       markGatewayRestartTrace("restart.next-start");
-    });
+    };
 
     // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).
     // SIGTERM/SIGINT still exit after a graceful shutdown.
-    let isFirstStart = true;
+    let isFirstIteration = true;
     for (;;) {
       // The restart hook reopens admission before reloading durable state. Clear
       // its local mirror first so a failed reload cannot skip the next drain.
       restartDrainingMarked = false;
       let startupFailedBeforeServerHandle = false;
+      const isRestartIteration = !isFirstIteration;
+      isFirstIteration = false;
       try {
-        await onIteration();
+        if (isRestartIteration) {
+          await onRestart();
+        }
         startupStartedAt = Date.now();
         await params.beginBoot?.(startupStartedAt);
         const startedServer = await params.start({
@@ -1078,9 +1069,7 @@ export async function runGatewayLoop(params: {
             restartResolver = null;
             resolve();
           };
-          void startedServer.startupSettled.then(() => {
-            isFirstStart = false;
-          }, reject);
+          void startedServer.startupSettled.then(undefined, reject);
           flushPendingStartupRequest();
         });
       } catch (err) {
@@ -1102,7 +1091,7 @@ export async function runGatewayLoop(params: {
         // can report "Gateway failed to start" and exit non-zero. Only
         // swallow errors on subsequent in-process restarts to keep the
         // process alive (a crash would lose macOS TCC permissions). (#35862)
-        if (isFirstStart) {
+        if (!isRestartIteration) {
           throw err;
         }
         startupFailedWithoutServerHandle = true;

@@ -249,6 +249,9 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     await splash.getByText("Gateway starting…", { exact: true }).waitFor();
     expect(await page.locator("openclaw-login-gate").count()).toBe(0);
     expect(await loginGateMounted()).toBe(false);
+    await expect
+      .poll(async () => await splash.evaluate((element) => getComputedStyle(element).opacity))
+      .toBe("1");
     await captureProof(page, "06-gateway-starting-progress");
 
     await expect
