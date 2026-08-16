@@ -294,6 +294,8 @@ class ControlModelImpl implements ControlModel {
       autoLoadHistory: this.#autoLoadConversationHistory,
       getConnectionSnapshot: () => this.#gateway.getConnectionSnapshot(),
       isRunning: () => this.#running && !this.#disposed,
+      sessionMessageKeysEquivalent: (left, right) =>
+        left === right || this.#gateway.sessionMessageKeysEquivalent?.(left, right) === true,
       getMessageSubscriptionCoordinator: () => this.#getMessageSubscriptionCoordinator(),
       onConversationReleased: async (conversation) => {
         for (const [id, value] of this.#conversations) {

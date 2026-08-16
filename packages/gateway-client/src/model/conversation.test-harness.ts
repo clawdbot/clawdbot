@@ -84,6 +84,7 @@ export function createHarness(
     approvalReplay?: unknown;
     history?: unknown;
     materialize?: boolean;
+    sessionMessageKeysEquivalent?: (left: string, right: string) => boolean;
   } = {},
 ) {
   let connection = initial;
@@ -169,7 +170,8 @@ export function createHarness(
     request: async <T>(method: string, params: Record<string, unknown>) =>
       (await request(method, params)) as T,
   };
-  const sessionMessageKeysEquivalent = (left: string, right: string) => left === right;
+  const sessionMessageKeysEquivalent =
+    options.sessionMessageKeysEquivalent ?? ((left: string, right: string) => left === right);
   const gateway: ControlModelGatewayBinding = {
     getSessionMessageSubscriptionClient: () => subscriptionClient,
     sessionMessageKeysEquivalent,

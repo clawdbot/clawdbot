@@ -10,6 +10,7 @@ export type ControlModelArtifactProjectionBounds = UiArtifactValidationBounds &
 
 export type ControlModelArtifactSourceContext = Readonly<{
   sessionKey: string;
+  sessionKeysEquivalent?: (left: string, right: string) => boolean;
   messageId?: string;
   messageSequence?: number;
   toolCallId?: string;
@@ -69,7 +70,10 @@ function normalizeCandidate(
   if (!normalized.ok) {
     return failedArtifact(context, normalized.error);
   }
-  if (normalized.value.source.sessionKey !== context.sessionKey) {
+  if (
+    normalized.value.source.sessionKey !== context.sessionKey &&
+    context.sessionKeysEquivalent?.(normalized.value.source.sessionKey, context.sessionKey) !== true
+  ) {
     return failedArtifact(context, {
       code: "ARTIFACT_SOURCE_MISMATCH",
       message: "UI artifact source does not match the selected conversation",

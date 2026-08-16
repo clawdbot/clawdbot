@@ -806,6 +806,53 @@ describe("Control Model conversations", () => {
     model.dispose();
   });
 
+  it("accepts canonical-key events and artifacts for an equivalent route alias", async () => {
+    const harness = createHarness(
+      { status: "connected", epoch: 1 },
+      {
+        sessionMessageKeysEquivalent: (left, right) =>
+          left === right ||
+          (left === "global" && right === "agent:main:main") ||
+          (right === "global" && left === "agent:main:main"),
+        history: {
+          messages: [
+            {
+              ...message(2),
+              role: "toolResult",
+              details: {
+                uiArtifacts: [
+                  uiArtifact(1, {
+                    source: { sessionKey: "global" },
+                  }),
+                ],
+              },
+            },
+          ],
+          completeSnapshot: true,
+        },
+      },
+    );
+    harness.queue("sessions.messages.subscribe", { key: "global" });
+    harness.queue("sessions.messages.subscribe", { key: "global" });
+    const model = createControlModel({ gateway: harness.gateway });
+    model.start();
+    const conversation = model.conversation("agent:main:main", { agentId: "main" });
+
+    await vi.waitFor(() => expect(conversation.getSnapshot().history.status).toBe("ready"));
+    harness.emit({
+      event: "chat",
+      payload: { sessionKey: "global", runId: "alias-run", state: "delta" },
+    });
+
+    expect(conversation.getSnapshot().activeRun?.runId).toBe("alias-run");
+    expect(conversation.getSnapshot().artifacts[0]).toMatchObject({
+      id: "artifact-calendar",
+      state: "ready",
+      source: { sessionKey: "agent:main:main" },
+    });
+    model.dispose();
+  });
+
   it("bounds tool progress by retained values and keeps oversized structured values typed", async () => {
     const { harness, model, conversation } = await activatedConversation(undefined, {
       maxConversationProgressBytes: 64,

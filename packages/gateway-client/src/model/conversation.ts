@@ -233,6 +233,7 @@ export type ControlModelConversationHost = Readonly<{
   agentId?: string;
   getConnectionSnapshot(): ControlModelConnectionSnapshot;
   isRunning(): boolean;
+  sessionMessageKeysEquivalent(left: string, right: string): boolean;
   getMessageSubscriptionCoordinator(): GatewaySessionMessageSubscriptionCoordinator;
   onConversationReleased(conversation: ControlModelConversation): Promise<void>;
   now(): number;
@@ -1688,7 +1689,7 @@ export class ControlModelConversation {
     }
     const key = this.#eventSessionKey(payload);
     if (key) {
-      return key === this.#sessionKey;
+      return this.#host.sessionMessageKeysEquivalent(key, this.#sessionKey);
     }
     const data = record(payload.data);
     const runId = text(payload.runId) ?? text(data?.runId);
@@ -1865,6 +1866,7 @@ export class ControlModelConversation {
         data,
         {
           sessionKey: this.#sessionKey,
+          sessionKeysEquivalent: this.#host.sessionMessageKeysEquivalent,
           toolCallId,
           ...(next.name ? { toolName: next.name } : {}),
           live: true,
@@ -2102,6 +2104,7 @@ export class ControlModelConversation {
           entry.message,
           {
             sessionKey: this.#sessionKey,
+            sessionKeysEquivalent: this.#host.sessionMessageKeysEquivalent,
             ...(entry.identity?.id ? { messageId: entry.identity.id } : {}),
             ...(entry.identity?.sequence !== null && entry.identity?.sequence !== undefined
               ? { messageSequence: entry.identity.sequence }
