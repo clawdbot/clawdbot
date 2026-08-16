@@ -1429,33 +1429,23 @@ describe("cron cli", () => {
     expect(params?.payload?.fallbacks).toEqual(["openrouter/gpt-4.1-mini", "openai/gpt-5"]);
   });
 
-  it("cron edit rejects blank model/thinking instead of omitting them", async () => {
-    await expectCronCommandExit([
-      "cron",
-      "edit",
-      "job-1",
-      "--message",
-      "hello",
-      "--model",
-      "   ",
-      "--thinking",
-      "  ",
-    ]);
-    expectRuntimeErrorContaining("--model must not be blank");
-    expect(callGatewayFromCli).not.toHaveBeenCalled();
-  });
-
-  it("cron edit trims model and thinking", async () => {
-    const patch = await runCronEditAndGetPatch([
-      "--message",
-      "hello",
-      "--model",
-      "  opus  ",
-      "--thinking",
-      "  high  ",
-    ]);
-    expect(patch?.patch?.payload?.model).toBe("opus");
-    expect(patch?.patch?.payload?.thinking).toBe("high");
+  it.each([
+    {
+      label: "omits empty model and thinking",
+      args: ["--message", "hello", "--model", "   ", "--thinking", "  "],
+      expectedModel: undefined,
+      expectedThinking: undefined,
+    },
+    {
+      label: "trims model and thinking",
+      args: ["--message", "hello", "--model", "  opus  ", "--thinking", "  high  "],
+      expectedModel: "opus",
+      expectedThinking: "high",
+    },
+  ])("cron edit $label", async ({ args, expectedModel, expectedThinking }) => {
+    const patch = await runCronEditAndGetPatch(args);
+    expect(patch?.patch?.payload?.model).toBe(expectedModel);
+    expect(patch?.patch?.payload?.thinking).toBe(expectedThinking);
   });
 
   it("splits PowerShell-style space-separated --tools on cron edit", async () => {

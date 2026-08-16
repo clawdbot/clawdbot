@@ -698,25 +698,24 @@ describe("cron edit command", () => {
     );
   });
 
-  it.each(["", "   "])(
-    "rejects blank --model %j instead of silently ignoring it",
-    async (model) => {
-      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-      const exitSpy = vi
-        .spyOn(defaultRuntime, "exit")
-        .mockImplementation((() => undefined) as never);
+  it.each(["", "   "])("omits blank --model %j from the update patch", async (model) => {
+    await createCronProgram().parseAsync(
+      ["edit", "job-1", "--message", "hello", "--model", model],
+      {
+        from: "user",
+      },
+    );
 
-      try {
-        await createCronProgram().parseAsync(["edit", "job-1", "--model", model], { from: "user" });
-
-        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("--model must not be blank"));
-        expect(callGatewayFromCli).not.toHaveBeenCalled();
-      } finally {
-        errorSpy.mockRestore();
-        exitSpy.mockRestore();
-      }
-    },
-  );
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: {
+        payload: {
+          kind: "agentTurn",
+          message: "hello",
+        },
+      },
+    });
+  });
 
   it.each(["", "   "])("rejects blank --model %j combined with --clear-model", async (model) => {
     const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
@@ -727,7 +726,9 @@ describe("cron edit command", () => {
         from: "user",
       });
 
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("--model must not be blank"));
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Use --model or --clear-model, not both"),
+      );
       expect(callGatewayFromCli).not.toHaveBeenCalled();
     } finally {
       errorSpy.mockRestore();
@@ -987,29 +988,22 @@ describe("cron edit command", () => {
     exitSpy.mockRestore();
   });
 
-  it.each(["", "   "])(
-    "rejects blank --thinking %j instead of silently ignoring it",
-    async (thinking) => {
-      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-      const exitSpy = vi
-        .spyOn(defaultRuntime, "exit")
-        .mockImplementation((() => undefined) as never);
+  it.each(["", "   "])("omits blank --thinking %j from the update patch", async (thinking) => {
+    await createCronProgram().parseAsync(
+      ["edit", "job-1", "--message", "hello", "--thinking", thinking],
+      { from: "user" },
+    );
 
-      try {
-        await createCronProgram().parseAsync(["edit", "job-1", "--thinking", thinking], {
-          from: "user",
-        });
-
-        expect(errorSpy).toHaveBeenCalledWith(
-          expect.stringContaining("--thinking must not be blank"),
-        );
-        expect(callGatewayFromCli).not.toHaveBeenCalled();
-      } finally {
-        errorSpy.mockRestore();
-        exitSpy.mockRestore();
-      }
-    },
-  );
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: {
+        payload: {
+          kind: "agentTurn",
+          message: "hello",
+        },
+      },
+    });
+  });
 
   it.each(["", "   "])(
     "rejects blank --thinking %j combined with --clear-thinking",
@@ -1026,7 +1020,7 @@ describe("cron edit command", () => {
         );
 
         expect(errorSpy).toHaveBeenCalledWith(
-          expect.stringContaining("--thinking must not be blank"),
+          expect.stringContaining("Use --thinking or --clear-thinking, not both"),
         );
         expect(callGatewayFromCli).not.toHaveBeenCalled();
       } finally {

@@ -34,21 +34,15 @@ export async function resolveCronEditPayloadDeliveryPatch(
     throw new Error("Pass command payload either with --command or --command-argv, not both.");
   }
   // Match delivery clears / fallbacks: presence is typeof string, not truthy
-  // normalized value. Empty Commander strings are falsy after normalize and would
-  // otherwise skip the clear-* mutex while --clear-model/--clear-thinking still apply.
+  // normalized value. Empty Commander strings stay omitted, but still conflict
+  // with --clear-model/--clear-thinking instead of silently applying the clear.
   const hasModel = typeof opts.model === "string";
   const model = normalizeOptionalString(opts.model);
-  if (hasModel && !model) {
-    throw new Error("--model must not be blank");
-  }
   if (hasModel && opts.clearModel) {
     throw new Error("Use --model or --clear-model, not both");
   }
   const hasThinking = typeof opts.thinking === "string";
   const thinking = normalizeOptionalString(opts.thinking);
-  if (hasThinking && !thinking) {
-    throw new Error("--thinking must not be blank");
-  }
   if (hasThinking && opts.clearThinking) {
     throw new Error("Use --thinking or --clear-thinking, not both");
   }
