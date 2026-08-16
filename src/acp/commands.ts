@@ -32,7 +32,7 @@ const BASE_AVAILABLE_COMMANDS: AvailableCommand[] = [
     name: "think",
     description: `Set thinking level (${THINKING_LEVELS_HELP}).`,
   },
-  { name: "verbose", description: "Set verbose mode (on|full|off)." },
+  { name: "verbose", description: "Set verbose mode (on|full|off|plain)." },
   { name: "trace", description: "Set plugin trace mode (on|off)." },
   { name: "reasoning", description: "Toggle reasoning output (on|off|stream)." },
   { name: "elevated", description: "Toggle elevated mode (on|off)." },

@@ -57,7 +57,7 @@ export function registerAgentTurnCommand(
       "--thinking <level>",
       `Thinking level: ${THINKING_LEVELS_HELP.replaceAll("|", " | ")} where supported`,
     )
-    .option("--verbose <on|off>", "Persist agent verbose level for the session")
+    .option("--verbose <on|off|full|plain>", "Persist agent verbose level for the session")
     .option(
       "--channel <channel>",
       `Delivery channel: ${args.agentChannelOptions} (omit to use the main session channel)`,

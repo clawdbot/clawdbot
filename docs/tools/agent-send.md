@@ -67,25 +67,25 @@ output projection, and process status, use [`openclaw agent exec`](/cli/agent#ag
 
 ## Flags
 
-| Flag                        | Description                                                          |
-| --------------------------- | -------------------------------------------------------------------- |
-| `--message <text>`          | Inline message to send                                               |
-| `--message-file <path>`     | Read the message from a valid UTF-8 file (max 4 MiB)                 |
-| `--to <dest>`               | Derive session key from a target (phone, chat id)                    |
-| `--session-key <key>`       | Use an explicit session key                                          |
-| `--agent <id>`              | Target a configured agent (uses its `main` session)                  |
-| `--session-id <id>`         | Reuse an existing session by id                                      |
-| `--model <id>`              | Model override for this run (`provider/model` or model id)           |
-| `--local`                   | Force local embedded runtime (skip Gateway)                          |
-| `--deliver`                 | Send the reply to a chat channel                                     |
-| `--channel <name>`          | Delivery channel; with `--agent` + `--to`, also applies DM scope     |
-| `--reply-to <target>`       | Delivery target override                                             |
-| `--reply-channel <name>`    | Delivery channel override                                            |
-| `--reply-account <id>`      | Delivery account id override                                         |
-| `--thinking <level>`        | Set thinking level for the selected model profile                    |
-| `--verbose <on\|full\|off>` | Persist verbose level for the session (`full` also logs tool output) |
-| `--timeout <seconds>`       | Override agent timeout (default 600, or config value)                |
-| `--json`                    | Output structured JSON                                               |
+| Flag                               | Description                                                                                                    |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `--message <text>`                 | Inline message to send                                                                                         |
+| `--message-file <path>`            | Read the message from a valid UTF-8 file (max 4 MiB)                                                           |
+| `--to <dest>`                      | Derive session key from a target (phone, chat id)                                                              |
+| `--session-key <key>`              | Use an explicit session key                                                                                    |
+| `--agent <id>`                     | Target a configured agent (uses its `main` session)                                                            |
+| `--session-id <id>`                | Reuse an existing session by id                                                                                |
+| `--model <id>`                     | Model override for this run (`provider/model` or model id)                                                     |
+| `--local`                          | Force local embedded runtime (skip Gateway)                                                                    |
+| `--deliver`                        | Send the reply to a chat channel                                                                               |
+| `--channel <name>`                 | Delivery channel; with `--agent` + `--to`, also applies DM scope                                               |
+| `--reply-to <target>`              | Delivery target override                                                                                       |
+| `--reply-channel <name>`           | Delivery channel override                                                                                      |
+| `--reply-account <id>`             | Delivery account id override                                                                                   |
+| `--thinking <level>`               | Set thinking level for the selected model profile                                                              |
+| `--verbose <on\|full\|off\|plain>` | Persist verbose level for the session (`full` also logs tool output; `plain` uses non-technical tool progress) |
+| `--timeout <seconds>`              | Override agent timeout (default 600, or config value)                                                          |
+| `--json`                           | Output structured JSON                                                                                         |
 
 ## Behavior
 

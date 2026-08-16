@@ -216,7 +216,7 @@ export type GetReplyOptions = {
     name?: string;
     phase?: string;
     args?: Record<string, unknown>;
-    detailMode?: "explain" | "raw";
+    detailMode?: "explain" | "raw" | "plain";
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when a concrete work item starts, updates, or completes. */
   onItemEvent?: (payload: {

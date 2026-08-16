@@ -111,7 +111,7 @@ Session controls:
 
 - `/think <off|minimal|low|medium|high>` (higher tiers may add levels like `xhigh`/`max` depending on the model)
 - `/fast <status|auto|on|off>`
-- `/verbose <on|full|off>`
+- `/verbose <on|full|off|plain>`
 - `/trace <on|off>`
 - `/reasoning <on|off|stream>`
 - `/usage <off|tokens|full|reset>` (`reset`/`inherit`/`clear`/`default` clears the session override)

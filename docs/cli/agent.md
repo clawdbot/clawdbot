@@ -135,7 +135,7 @@ This is evaluation-only evidence, not a CI or release gate. Results do not chang
 - `--agent <id>`: agent id; overrides routing bindings
 - `--model <id>`: model override for this run (`provider/model` or model id)
 - `--thinking <level>`: agent thinking level (`off`, `minimal`, `low`, `medium`, `high`, plus provider-supported custom levels such as `xhigh`, `adaptive`, or `max`)
-- `--verbose <on|off>`: persist verbose level for the session
+- `--verbose <on|off|full|plain>`: persist verbose level for the session
 - `--channel <channel>`: delivery channel; omit to use the main session channel
 - `--reply-to <target>`: delivery target override
 - `--reply-channel <channel>`: delivery channel override
