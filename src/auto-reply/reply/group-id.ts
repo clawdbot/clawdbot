@@ -45,28 +45,6 @@ function extractInferredGroupTargetId(params: {
   return undefined;
 }
 
-function extractLegacyParsedGroupTargetId(params: {
-  raw: string;
-  channelId: string;
-  messaging?: ChannelMessagingAdapter;
-}): string | undefined {
-  const parsed = params.messaging?.parseExplicitTarget?.({ raw: params.raw });
-  if (parsed?.chatType === "direct" || parsed?.chatType == null) {
-    return undefined;
-  }
-  const target = stripTargetTopicSuffix(
-    stripOutboundTargetKindPrefix(stripTargetProviderPrefix(parsed.to, params.channelId), [
-      "group",
-      "channel",
-      "conversation",
-      "room",
-      "thread",
-    ]),
-    { allowNumericShorthand: params.messaging?.numericTopicShorthand === true },
-  );
-  return target || undefined;
-}
-
 /** Extracts a group/channel target id from explicit channel target syntax. */
 export function extractExplicitGroupId(raw: string | undefined | null): string | undefined {
   const trimmed = normalizeOptionalString(raw) ?? "";
@@ -84,16 +62,9 @@ export function extractExplicitGroupId(raw: string | undefined | null): string |
   if (!channelId) {
     return undefined;
   }
-  return (
-    extractInferredGroupTargetId({
-      raw: trimmed,
-      channelId,
-      messaging,
-    }) ??
-    extractLegacyParsedGroupTargetId({
-      raw: trimmed,
-      channelId,
-      messaging,
-    })
-  );
+  return extractInferredGroupTargetId({
+    raw: trimmed,
+    channelId,
+    messaging,
+  });
 }

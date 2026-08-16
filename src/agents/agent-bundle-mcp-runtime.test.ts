@@ -106,6 +106,7 @@ async function writeListToolsMcpServer(params: {
   callToolJsonRpcError?: boolean;
   callToolJsonRpcErrorCode?: number;
   callToolResult?: CallToolResult;
+  callToolDelayMs?: number;
   resourcePageDelayMs?: number;
   resourcePageCount?: number;
   resourcePageCursors?: Array<string | null>;
@@ -150,6 +151,7 @@ const callToolIsError = ${params.callToolIsError === true};
 const callToolJsonRpcError = ${params.callToolJsonRpcError === true};
 const callToolJsonRpcErrorCode = ${params.callToolJsonRpcErrorCode ?? -32000};
 const callToolResult = ${JSON.stringify(params.callToolResult)};
+const callToolDelayMs = ${params.callToolDelayMs ?? 0};
 const resourcePageDelayMs = ${params.resourcePageDelayMs ?? 0};
 const resourcePageCount = ${params.resourcePageCount ?? 1};
 const resourcePageCursors = ${JSON.stringify(params.resourcePageCursors)};
@@ -297,16 +299,18 @@ function handle(message) {
       });
       return;
     }
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: {
-        isError: callToolIsError,
-        ...(callToolResult ?? {
-          content: [{ type: "text", text: callToolIsError ? "tool failed" : "tool ok" }],
-        }),
-      },
-    });
+    setTimeout(() => {
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          isError: callToolIsError,
+          ...(callToolResult ?? {
+            content: [{ type: "text", text: callToolIsError ? "tool failed" : "tool ok" }],
+          }),
+        },
+      });
+    }, callToolDelayMs);
   }
   if (message.method === "resources/list") {
     resourceListCount += 1;
@@ -2092,6 +2096,75 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
+  it("cancels materialized MCP calls without pausing the healthy server", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-caller-cancel-");
+    const serverPath = path.join(tempDir, "caller-cancel.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      callToolDelayMs: 250,
+      resourcePageDelayMs: 250,
+      promptPageDelayMs: 250,
+      capabilities: { tools: {}, resources: {}, prompts: {} },
+    });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-caller-cancel",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            healthy: { command: process.execPath, args: [serverPath] },
+          },
+        },
+      },
+    });
+    const materialized = await materializeBundleMcpToolsForRun({ runtime });
+    try {
+      const calls = [
+        { toolName: "healthy__slow_tool", method: "tools/call" },
+        { toolName: "healthy__resources_list", method: "resources/list" },
+        { toolName: "healthy__prompts_list", method: "prompts/list" },
+      ];
+      for (const [index, call] of calls.entries()) {
+        const attempt = index + 1;
+        const controller = new AbortController();
+        const pending = expectDefined(
+          materialized.tools.find((entry) => entry.name === call.toolName),
+          call.toolName,
+        ).execute(`cancel-${attempt}`, {}, controller.signal);
+        await waitForPredicate(
+          async () =>
+            (await fs.readFile(logPath, "utf8").catch(() => "")).includes(`recv ${call.method}`),
+          `MCP ${call.method} request to reach the server`,
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+        controller.abort(new Error(`turn cancelled ${attempt}`));
+        await expect(pending).rejects.toThrow(`turn cancelled ${attempt}`);
+      }
+
+      await waitForPredicate(
+        async () =>
+          ((await fs.readFile(logPath, "utf8").catch(() => "")).match(
+            /recv notifications\/cancelled/g,
+          )?.length ?? 0) === 3,
+        "three MCP cancellation notifications",
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+      );
+      await expect(runtime.callTool("healthy", "slow_tool", {})).resolves.toMatchObject({
+        isError: false,
+      });
+      await materialized.dispose();
+      await runtime.dispose();
+      expect(
+        (await fs.readFile(logPath, "utf8")).match(/recv notifications\/cancelled/g) ?? [],
+      ).toHaveLength(3);
+    } finally {
+      await materialized.dispose();
+      await runtime.dispose();
+    }
+  });
+
   it("pauses MCP servers after repeated tool request failures", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-request-failure-backoff-"));
     const serverPath = path.join(tempDir, "request-failure-backoff.mjs");
@@ -2465,12 +2538,13 @@ process.on("SIGINT", shutdown);`,
     });
 
     try {
-      if (!runtime.readResource) {
+      const readResource = runtime.readResource;
+      if (!readResource) {
         throw new Error("Expected test runtime to expose resource utilities");
       }
       for (let index = 0; index < 3; index += 1) {
         await expect(
-          runtime.readResource("failing", "ui://demo/app", { failureBackoff: "ignore" }),
+          readResource("failing", "ui://demo/app", { failureBackoff: "ignore" }),
         ).rejects.toThrow("resource read failed");
       }
       await expect(runtime.callTool("failing", "slow_tool", {})).resolves.toMatchObject({

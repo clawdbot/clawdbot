@@ -450,7 +450,6 @@ export type PluginManifestContracts = {
    */
   externalAuthProviders?: string[];
   embeddingProviders?: string[];
-  memoryEmbeddingProviders?: string[];
   speechProviders?: string[];
   realtimeTranscriptionProviders?: string[];
   realtimeVoiceProviders?: string[];

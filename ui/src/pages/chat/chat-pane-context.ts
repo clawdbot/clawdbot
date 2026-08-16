@@ -58,6 +58,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
   }
 
   protected async reclaimHeaderPlacement(row: GatewaySessionRow): Promise<void> {
+    const scope = this.captureConnectionScope();
+    if (!scope) {
+      return;
+    }
     const onReclaimingChange = (reclaimingKey: string | null) => {
       // A later reclaim may take ownership before this request settles. Only
       // the request that still owns the row may clear the pane's progress key.
@@ -66,16 +70,15 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       }
     };
     await reclaimChatPanePlacement({
-      client: this.connectedClient,
-      connectionGeneration: this.connectionGeneration,
-      gatewaySnapshot: this.context.gateway.snapshot,
+      client: scope.client,
+      connectionGeneration: scope.generation,
+      gatewaySnapshot: scope.context.gateway.snapshot,
       reclaimingKey: this.headerPlacementReclaimingKey,
       row,
-      isCurrent: (client, generation) =>
-        this.connectedClient === client && this.connectionGeneration === generation,
+      isCurrent: () => this.ownsHeaderOutcomeScope(scope),
       onReclaimingChange,
-      publishError: (error) => this.publishHeaderError(error),
-      refreshReplacement: (agentId) => this.context.sessions.refreshReplacement(agentId),
+      publishError: (error) => this.publishHeaderError(error, scope.headerOutcomeOwner),
+      refreshReplacement: (agentId) => scope.sessions.refreshReplacement(agentId),
       requestUpdate: () => this.requestUpdate(),
     });
   }

@@ -211,8 +211,8 @@ class FakeProcess implements WorkerSshProcess {
     this.exitDeferred.resolve({ code, signal: null });
   }
 
-  exit(code = 1) {
-    this.exitDeferred.resolve({ code, signal: null });
+  exit(code = 1, stderrTail?: string) {
+    this.exitDeferred.resolve({ code, signal: null, ...(stderrTail ? { stderrTail } : {}) });
   }
 
   blockStopUntil(barrier: Promise<void>) {
@@ -228,7 +228,10 @@ class FakeProcess implements WorkerSshProcess {
 }
 
 export function fakeRunner(
-  onRun?: (argv: string[], options: CommandOptions) => SpawnResult | undefined,
+  onRun?: (
+    argv: string[],
+    options: CommandOptions,
+  ) => SpawnResult | Promise<SpawnResult | undefined> | undefined,
 ) {
   const starts: Array<{ argv: string[]; options: CommandOptions; process: FakeProcess }> = [];
   const runs: Array<{ argv: string[]; options: CommandOptions }> = [];
@@ -240,7 +243,7 @@ export function fakeRunner(
     },
     async run(argv, options) {
       runs.push({ argv, options });
-      return onRun?.(argv, options) ?? success();
+      return (await onRun?.(argv, options)) ?? success();
     },
   };
   return { runner, runs, starts };

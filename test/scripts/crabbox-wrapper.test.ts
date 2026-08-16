@@ -583,7 +583,10 @@ function runSuccessfulNativeWindows(
 
 function expectHydratedWindowsShell(run: ParsedWrapperRun, command: string): void {
   expect(run.output.args).toContain("--shell");
-  expect(run.remoteCommand).toContain("$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR");
+  expect(run.remoteCommand).toContain(
+    "$env:CRABBOX_PNPM_MODULES_DIR) { $env:CRABBOX_PNPM_MODULES_DIR } else { $env:PNPM_CONFIG_MODULES_DIR }",
+  );
+  expect(run.remoteCommand).toContain("hydrated pnpm modules directory does not exist");
   expect(run.remoteCommand).toContain('mklink /J "$openclawSelfModules" "$openclawModulesDir"');
   expect(run.remoteCommand).toContain(
     'mklink /J "$openclawWorkspaceModules" "$openclawModulesDir"',
@@ -592,7 +595,7 @@ function expectHydratedWindowsShell(run: ParsedWrapperRun, command: string): voi
 }
 
 const remotePosixHydratedModulesBootstrap =
-  'if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ] && [ -d "$PNPM_CONFIG_MODULES_DIR" ] && [ ! -e node_modules ]; then ln -s "$PNPM_CONFIG_MODULES_DIR" node_modules; fi;';
+  'openclaw_modules_dir="${CRABBOX_PNPM_MODULES_DIR:-${PNPM_CONFIG_MODULES_DIR:-}}"; if [ -n "$openclaw_modules_dir" ] && [ -d "$openclaw_modules_dir" ] && [ ! -e node_modules ]; then ln -s "$openclaw_modules_dir" node_modules; fi;';
 
 function expectHydratedPosixShell(
   run: Pick<ParsedWrapperRun, "output" | "remoteCommand">,
@@ -3033,7 +3036,7 @@ describe("scripts/crabbox-wrapper", () => {
       "test",
     ]);
     expect(output.args).toContain("--shell");
-    expect(remoteCommand).toContain("$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR");
+    expect(remoteCommand).toContain("$env:CRABBOX_PNPM_MODULES_DIR");
     expect(remoteCommand).toContain("pnpm --filter '@openclaw/discord' test");
   });
 

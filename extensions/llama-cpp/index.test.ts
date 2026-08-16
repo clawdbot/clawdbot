@@ -9,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import {
   clearEmbeddingProviders,
-  clearMemoryEmbeddingProviders,
   createEmptyPluginRegistry,
   getActivePluginRegistry,
   getRegisteredEmbeddingProvider,
@@ -74,7 +73,7 @@ beforeEach(() => {
 
 afterEach(() => {
   clearEmbeddingProviders();
-  clearMemoryEmbeddingProviders();
+  clearEmbeddingProviders();
   setActivePluginRegistry(previousPluginRegistry ?? createEmptyPluginRegistry());
   vi.clearAllMocks();
 });

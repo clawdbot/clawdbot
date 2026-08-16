@@ -1563,6 +1563,7 @@ describe("package acceptance workflow", () => {
     );
     expect(hydratePnpm.run).toContain('echo "PNPM_CONFIG_STORE_DIR=$PNPM_CONFIG_STORE_DIR"');
     expect(hydratePnpm.run).toContain('echo "PNPM_CONFIG_MODULES_DIR=$PNPM_CONFIG_MODULES_DIR"');
+    expect(hydratePnpm.run).toContain('echo "CRABBOX_PNPM_MODULES_DIR=$PNPM_CONFIG_MODULES_DIR"');
     expect(hydratePnpm.run).toContain(
       'echo "PNPM_CONFIG_PACKAGE_IMPORT_METHOD=${PNPM_CONFIG_PACKAGE_IMPORT_METHOD:-}"',
     );
@@ -1647,7 +1648,10 @@ describe("package acceptance workflow", () => {
     const markCrabboxReady = workflowStep(hydrate, "Mark Crabbox ready").run;
     expect(markCrabboxReady).toContain("COREPACK_HOME");
     expect(markCrabboxReady).toContain("OPENCLAW_CRABBOX_DOCKER_AVAILABLE");
+    expect(markCrabboxReady).toContain("CRABBOX_PNPM_MODULES_DIR");
     expect(markCrabboxReady).toContain("PNPM_CONFIG_PACKAGE_IMPORT_METHOD");
+    expect(markCrabboxReady).not.toContain("PNPM_CONFIG_MODULES_DIR");
+    expect(markCrabboxReady).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
     expect(workflowStep(hydrate, "Hydrate provider env helper").env).toBeUndefined();
 
     expect(hydrateWindowsDaemon.if).toBe("${{ inputs.crabbox_job == 'hydrate-windows-daemon' }}");
@@ -1705,9 +1709,13 @@ describe("package acceptance workflow", () => {
     );
     expect(hydrateWindowsFetch.run).toContain('"+refs/heads/main:refs/remotes/origin/main"');
     expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").shell).toBe("powershell");
-    expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").run).toContain('"NODE_BIN"');
-    expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").run).toContain('"PNPM_HOME"');
-    expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").run).toContain('"PATH"');
+    const markWindowsCrabboxReady = workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").run;
+    expect(markWindowsCrabboxReady).toContain('"NODE_BIN"');
+    expect(markWindowsCrabboxReady).toContain('"PNPM_HOME"');
+    expect(markWindowsCrabboxReady).toContain('"CRABBOX_PNPM_MODULES_DIR"');
+    expect(markWindowsCrabboxReady).not.toContain('"PNPM_CONFIG_MODULES_DIR"');
+    expect(markWindowsCrabboxReady).not.toContain('"PNPM_CONFIG_VIRTUAL_STORE_DIR"');
+    expect(markWindowsCrabboxReady).toContain('"PATH"');
     expect(workflowText).toContain("OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_TIMEOUT_SECONDS:-300");
     expect(workflowText).toContain("OPENCLAW_CRABBOX_HYDRATE_DOWNLOAD_RETRIES:-3");
     expect(workflowText).toContain("--retry-all-errors");

@@ -7,7 +7,6 @@ import { getAiTransportHost } from "../host.js";
 import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment-map.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../providers/azure-openai-responses-client-compat.js";
 import { applyResponsesServiceTierPricing } from "../providers/openai-responses-shared.js";
-import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 import { projectProviderError } from "../utils/provider-error.js";
 import {
   createFirstStreamEventAbortController,
@@ -74,9 +73,9 @@ import {
 import { createOpenAIResponseHook, log } from "./openai-transport-shared.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 import {
+  createWritableTransportEventStream,
   mergeTransportMetadata,
   transportAbortError,
-  type WritableTransportStream,
   withProviderResponseHook,
 } from "./transport-stream-shared.js";
 import { redactIdentifier } from "./transport-utils.js";
@@ -240,8 +239,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
   return (model, context, options) => {
     const responsesOptions = options as OpenAIResponsesOptions | undefined;
     const compactRequest = claimResponsesCompactRequest(responsesOptions);
-    const eventStream = createAssistantMessageEventStream();
-    const stream = eventStream as unknown as WritableTransportStream;
+    const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {
       const output = createOpenAIResponsesAssistantOutput(model, config.outputApi);
       let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;

@@ -276,7 +276,7 @@ describe("memory index", () => {
     const manager = await getFreshManager(cfg);
     try {
       await expect(manager.search("Alpha")).rejects.toThrow(
-        /Memory search unavailable: embedding provider "openai" is configured but unavailable\.[\s\S]*agentId=main purpose=default[\s\S]*registeredMemoryEmbeddingProviders=none/,
+        /Memory search unavailable: embedding provider "openai" is configured but unavailable\.[\s\S]*agentId=main purpose=default[\s\S]*registeredMemoryEmbeddingProviders=openai-compatible/,
       );
       await expect(manager.sync({ reason: "test" })).rejects.toThrow(
         /Memory sync unavailable: embedding provider "openai" is configured but unavailable\./,

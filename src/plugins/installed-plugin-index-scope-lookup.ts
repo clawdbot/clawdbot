@@ -8,7 +8,6 @@ import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./install
 const PROVIDER_CONTRIBUTION_CONTRACTS = [
   "externalAuthProviders",
   "embeddingProviders",
-  "memoryEmbeddingProviders",
   "speechProviders",
   "realtimeTranscriptionProviders",
   "realtimeVoiceProviders",

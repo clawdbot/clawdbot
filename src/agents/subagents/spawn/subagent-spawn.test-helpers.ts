@@ -16,7 +16,7 @@ type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks"> &
   Partial<
     Pick<
       SubagentLifecycleHookRunner,
-      "runSubagentSpawning" | "runSubagentSpawned" | "runSubagentProgress" | "runSubagentEnded"
+      "runSubagentSpawned" | "runSubagentProgress" | "runSubagentEnded"
     >
   >;
 type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> & {

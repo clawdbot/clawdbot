@@ -2643,9 +2643,9 @@ function isHydratedNativeWindowsProvider(providerName: string) {
 
 function remoteWindowsHydratedNodeModulesBootstrap() {
   return [
-    "$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR",
+    "$openclawModulesDir = if ($env:CRABBOX_PNPM_MODULES_DIR) { $env:CRABBOX_PNPM_MODULES_DIR } else { $env:PNPM_CONFIG_MODULES_DIR }",
     "if ($openclawModulesDir) {",
-    'if (-not (Test-Path $openclawModulesDir)) { throw "PNPM_CONFIG_MODULES_DIR does not exist: $openclawModulesDir" }',
+    'if (-not (Test-Path $openclawModulesDir)) { throw "hydrated pnpm modules directory does not exist: $openclawModulesDir" }',
     '$openclawWorkspaceModules = Join-Path (Get-Location).Path "node_modules"',
     '$openclawSelfModules = Join-Path $openclawModulesDir "node_modules"',
     'if (-not (Test-Path $openclawSelfModules)) { cmd /c mklink /J "$openclawSelfModules" "$openclawModulesDir" | Out-Host; if ($LASTEXITCODE -ne 0) { throw "failed to link hydrated pnpm node_modules" } }',
@@ -2657,7 +2657,7 @@ function remoteWindowsHydratedNodeModulesBootstrap() {
 function remotePosixHydratedNodeModulesBootstrap() {
   // Knip and other non-pnpm tools walk node_modules, while hydrated boxes keep it external.
   // Without this link, dead-code scans silently lose consumer edges and report false positives.
-  return 'if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ] && [ -d "$PNPM_CONFIG_MODULES_DIR" ] && [ ! -e node_modules ]; then ln -s "$PNPM_CONFIG_MODULES_DIR" node_modules; fi;';
+  return 'openclaw_modules_dir="${CRABBOX_PNPM_MODULES_DIR:-${PNPM_CONFIG_MODULES_DIR:-}}"; if [ -n "$openclaw_modules_dir" ] && [ -d "$openclaw_modules_dir" ] && [ ! -e node_modules ]; then ln -s "$openclaw_modules_dir" node_modules; fi;';
 }
 
 function injectRemoteWindowsHydratedNodeModulesBootstrap(

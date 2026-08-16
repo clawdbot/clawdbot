@@ -49,8 +49,7 @@ function createWorkspaceActions(
     bundleHash: "a".repeat(64),
     environmentId: "worker:test",
     ownerSignal: new AbortController().signal,
-    isConnected: () => true,
-    getPrepared: () => prepared,
+    waitForPrepared: async () => prepared,
     runner: { run },
     tasks: new Set(),
   });

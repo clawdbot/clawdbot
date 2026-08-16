@@ -227,7 +227,7 @@ export type UiSettings = {
 };
 
 type LastActiveSessionHost = {
-  settings: UiSettings;
+  settings: Pick<UiSettings, "lastActiveSessionKey">;
   applySettings(patch: Partial<UiSettings>): void;
 };
 

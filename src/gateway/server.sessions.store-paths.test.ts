@@ -1,6 +1,8 @@
 import path from "node:path";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
+import * as sessionDirs from "../agents/session-dirs.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -49,4 +51,45 @@ test("sessions.list reports multiple physical agent stores", async () => {
   const listed = await directSessionReq<{ path: string }>("sessions.list", {});
 
   expect(listed).toMatchObject({ ok: true, payload: { path: "(multiple)" } });
+});
+
+test("configured-only parent-owned stores keep lineage children without directory discovery", async () => {
+  const rootStateDir = process.env.OPENCLAW_STATE_DIR;
+  if (!rootStateDir) {
+    throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
+  }
+  const stateDir = path.join(rootStateDir, "fixed-configured-list-regression");
+  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json");
+    const storePath = storeTemplate.replace("{agentId}", "ops");
+    const mainKey = "agent:ops:main";
+    const childKey = "agent:codex:subagent:fixed-child";
+    testState.sessionConfig = { store: storeTemplate };
+    testState.agentsConfig = { ownership: "explicit", list: [{ id: "ops" }] };
+    testState.agentConfig = { sessionStore: { agentId: "ops" } };
+    await writeSessionStore({
+      agentId: "ops",
+      storePath,
+      entries: {
+        [childKey]: { sessionId: "session-child", updatedAt: 30, parentSessionKey: mainKey },
+        [mainKey]: { sessionId: "session-main", updatedAt: 20 },
+        "agent:local:main": { sessionId: "session-local", updatedAt: 10 },
+      },
+    });
+
+    const enumerateAgentDirs = vi.spyOn(sessionDirs, "resolveAgentSessionDirsFromAgentsDirSync");
+    try {
+      const listed = await directSessionReq<{ sessions: Array<{ key: string }> }>("sessions.list", {
+        includeGlobal: false,
+        includeUnknown: false,
+        configuredAgentsOnly: true,
+      });
+
+      expect(listed.ok).toBe(true);
+      expect(listed.payload?.sessions.map((session) => session.key)).toEqual([childKey, mainKey]);
+      expect(enumerateAgentDirs).not.toHaveBeenCalled();
+    } finally {
+      enumerateAgentDirs.mockRestore();
+    }
+  });
 });

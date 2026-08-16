@@ -56,9 +56,7 @@ vi.mock("./register.runtime.js", () => ({
 import plugin from "./index.js";
 
 const tempDirs: string[] = [];
-type RegisteredMemoryEmbeddingProvider = Parameters<
-  OpenClawPluginApi["registerMemoryEmbeddingProvider"]
->[0];
+type RegisteredEmbeddingProvider = Parameters<OpenClawPluginApi["registerEmbeddingProvider"]>[0];
 type RegisteredProvider = Parameters<OpenClawPluginApi["registerProvider"]>[0];
 type GithubCopilotTestProvider = RegisteredProvider & {
   auth: Array<{
@@ -370,8 +368,7 @@ describe("github-copilot plugin", () => {
   });
 
   it("registers embedding provider", () => {
-    const registerMemoryEmbeddingProviderMock =
-      vi.fn<OpenClawPluginApi["registerMemoryEmbeddingProvider"]>();
+    const registerEmbeddingProviderMock = vi.fn<OpenClawPluginApi["registerEmbeddingProvider"]>();
 
     plugin.register(
       createTestPluginApi({
@@ -382,14 +379,14 @@ describe("github-copilot plugin", () => {
         pluginConfig: {},
         runtime: {} as never,
         registerProvider: vi.fn(),
-        registerMemoryEmbeddingProvider: registerMemoryEmbeddingProviderMock,
+        registerEmbeddingProvider: registerEmbeddingProviderMock,
       }),
     );
 
-    expect(registerMemoryEmbeddingProviderMock).toHaveBeenCalledTimes(1);
-    const adapter = requireFirstMockArg<RegisteredMemoryEmbeddingProvider>(
-      registerMemoryEmbeddingProviderMock,
-      "memory embedding provider registration",
+    expect(registerEmbeddingProviderMock).toHaveBeenCalledTimes(1);
+    const adapter = requireFirstMockArg<RegisteredEmbeddingProvider>(
+      registerEmbeddingProviderMock,
+      "embedding provider registration",
     );
     expect(adapter.id).toBe("github-copilot");
   });

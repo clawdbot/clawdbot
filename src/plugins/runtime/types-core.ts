@@ -347,8 +347,6 @@ export type PluginRuntimeCore = {
       params: PluginRuntimeThinkingPolicyRequest,
     ) => PluginRuntimeThinkingPolicy;
     runEmbeddedAgent: RuntimeRunEmbeddedAgent;
-    /** @deprecated Use runEmbeddedAgent. */
-    runEmbeddedPiAgent: RuntimeRunEmbeddedAgent;
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
     /**
      * Shares the embedded runner's CLI-backend dispatch eligibility (route,

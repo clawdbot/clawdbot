@@ -35,6 +35,8 @@ import {
   type ChatSessionSharingState,
 } from "./components/chat-session-sharing.ts";
 
+type HeaderScope = ChatPaneConnectionScope;
+
 export abstract class ChatPaneSharing extends ChatPaneBase {
   protected readonly clearSessionCompanion = async () => {
     const scope = this.captureConnectionScope();
@@ -132,7 +134,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
           : {}),
       });
       if (
-        !this.isConnectionScopeCurrent(scope) ||
+        !this.ownsHeaderOutcomeScope(scope) ||
         !this.currentSessionSharingRow(scope, currentRow) ||
         !ownsLoadingState()
       ) {
@@ -144,7 +146,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       this.setSessionSharingState(cacheKey, { loading: false, result });
     } catch (error) {
       if (
-        !this.isConnectionScopeCurrent(scope) ||
+        !this.ownsHeaderOutcomeScope(scope) ||
         !this.currentSessionSharingRow(scope, currentRow) ||
         !ownsLoadingState()
       ) {
@@ -157,15 +159,18 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     }
   }
 
-  protected publishSharingFailure(cacheKey: string, sessionKey: string, error: unknown): void {
-    this.setSessionSharingState(cacheKey, {
-      ...(this.sessionSharingStates.get(cacheKey) ?? { loading: false }),
+  protected failSharing(scope: HeaderScope, key: string, session: string, error: unknown): void {
+    if (!this.ownsHeaderOutcomeScope(scope)) {
+      return;
+    }
+    this.setSessionSharingState(key, {
+      ...(this.sessionSharingStates.get(key) ?? { loading: false }),
       loading: false,
       error: String(error),
     });
     // Sharing errors stay with their session; the visible slot belongs only to the selected session.
-    if (areUiSessionKeysEquivalent(this.state?.sessionKey, sessionKey)) {
-      this.publishHeaderError(error);
+    if (areUiSessionKeysEquivalent(this.state?.sessionKey, session)) {
+      this.publishHeaderError(error, scope.headerOutcomeOwner);
     }
   }
 
@@ -196,25 +201,25 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     try {
       await scope.client.request("session.visibility.set", params);
       if (
-        !this.isConnectionScopeCurrent(scope) ||
+        !this.ownsHeaderOutcomeScope(scope) ||
         !this.currentSessionSharingRow(scope, currentRow)
       ) {
         return;
       }
       await scope.sessions.refreshReplacement(agentId);
       const refreshedRow = this.currentSessionSharingRow(scope, currentRow);
-      if (!this.isConnectionScopeCurrent(scope) || !refreshedRow) {
+      if (!this.ownsHeaderOutcomeScope(scope) || !refreshedRow) {
         return;
       }
       await this.loadSessionSharing(refreshedRow, true);
     } catch (error) {
       if (
-        !this.isConnectionScopeCurrent(scope) ||
+        !this.ownsHeaderOutcomeScope(scope) ||
         !this.currentSessionSharingRow(scope, currentRow)
       ) {
         return;
       }
-      this.publishSharingFailure(cacheKey, currentRow.key, error);
+      this.failSharing(scope, cacheKey, currentRow.key, error);
     }
   }
 
@@ -247,14 +252,14 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
     try {
       await scope.client.request(method, params);
       if (
-        !this.isConnectionScopeCurrent(scope) ||
+        !this.ownsHeaderOutcomeScope(scope) ||
         !this.currentSessionSharingRow(scope, currentRow)
       ) {
         return;
       }
       await this.loadSessionSharing(currentRow, true);
       if (
-        !this.isConnectionScopeCurrent(scope) ||
+        !this.ownsHeaderOutcomeScope(scope) ||
         !this.currentSessionSharingRow(scope, currentRow)
       ) {
         return;
@@ -262,12 +267,12 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       await scope.sessions.refreshReplacement(agentId);
     } catch (error) {
       if (
-        !this.isConnectionScopeCurrent(scope) ||
+        !this.ownsHeaderOutcomeScope(scope) ||
         !this.currentSessionSharingRow(scope, currentRow)
       ) {
         return;
       }
-      this.publishSharingFailure(cacheKey, currentRow.key, error);
+      this.failSharing(scope, cacheKey, currentRow.key, error);
     }
   }
 
@@ -281,6 +286,7 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       state,
       client: state.client,
       generation: this.connectionGeneration,
+      headerOutcomeOwner: this.headerOutcomeOwner,
       sessions: this.context.sessions,
     };
     return this.isConnectionScopeCurrent(scope) ? scope : null;
@@ -298,6 +304,10 @@ export abstract class ChatPaneSharing extends ChatPaneBase {
       scope.context.gateway.snapshot.client === scope.client &&
       this.connectionGeneration === scope.generation
     );
+  }
+
+  protected ownsHeaderOutcomeScope(scope: HeaderScope): boolean {
+    return this.isConnectionScopeCurrent(scope) && this.ownsHeaderOutcome(scope.headerOutcomeOwner);
   }
 
   protected suggestionMatchesCurrentSession(

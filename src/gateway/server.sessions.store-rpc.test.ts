@@ -5,12 +5,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test, vi } from "vitest";
+import * as sessionDirs from "../agents/session-dirs.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
 } from "../config/sessions/session-accessor.js";
 import type { CronJob } from "../cron/types.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { agentDiscoveryMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -668,90 +670,90 @@ test("lists and patches session store via sessions.* RPC", async () => {
 });
 
 test("sessions.list configuredAgentsOnly keeps configured-agent children and hides unrelated stores", async () => {
-  const stateDir = process.env.OPENCLAW_STATE_DIR;
-  if (!stateDir) {
-    throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
-  }
-  testState.agentsConfig = { list: [{ id: "main", default: true }] };
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  if (!configPath) {
-    throw new Error("OPENCLAW_CONFIG_PATH is required for gateway session tests");
-  }
-  await fs.writeFile(
-    configPath,
-    JSON.stringify({ acp: { defaultAgent: "claude", allowedAgents: ["gemini"] } }, null, 2),
-    "utf-8",
-  );
-  testState.sessionConfig = {
-    store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
-  };
+  const rootStateDir = expectDefined(process.env.OPENCLAW_STATE_DIR, "OPENCLAW_STATE_DIR");
+  const stateDir = path.join(rootStateDir, "configured-list-regression");
+  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    testState.agentsConfig = { ownership: "explicit", list: [{ id: "ops" }] };
+    testState.agentConfig = { sessionStore: { agentId: "ops" } };
+    const configPath = expectDefined(process.env.OPENCLAW_CONFIG_PATH, "OPENCLAW_CONFIG_PATH");
+    const configJson = '{"acp":{"defaultAgent":"claude","allowedAgents":["gemini"]}}';
+    await fs.writeFile(configPath, configJson, "utf-8");
+    const agentsDir = path.join(stateDir, "agents");
+    const storeTemplate = path.join(agentsDir, "{agentId}", "sessions", "sessions.json");
+    testState.sessionConfig = { store: storeTemplate };
 
-  const mainStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-  const acpStorePath = path.join(stateDir, "agents", "claude", "sessions", "sessions.json");
-  const childStorePath = path.join(stateDir, "agents", "codex", "sessions", "sessions.json");
-  const diskOnlyStorePath = path.join(stateDir, "agents", "local", "sessions", "sessions.json");
-  await writeSessionStore({
-    storePath: mainStorePath,
-    agentId: "main",
-    entries: { main: { sessionId: "sess-main", updatedAt: 20 } },
-  });
-  await writeSessionStore({
-    storePath: acpStorePath,
-    agentId: "claude",
-    entries: {
-      "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7": {
-        sessionId: "sess-claude-acp",
-        updatedAt: 30,
-        acp: {
-          backend: "acpx",
-          agent: "claude",
-          runtimeSessionName: "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7",
-          mode: "oneshot",
-          state: "idle",
-          lastActivityAt: 30,
-        },
+    const acpStorePath = path.join(agentsDir, "claude", "sessions", "sessions.json");
+    const childStorePath = path.join(agentsDir, "codex", "sessions", "sessions.json");
+    const diskOnlyStorePath = path.join(agentsDir, "local", "sessions", "sessions.json");
+    const mainKey = "agent:ops:main";
+    const acpKey = "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7";
+    const acp = {
+      backend: "acpx",
+      agent: "claude",
+      runtimeSessionName: acpKey,
+      mode: "oneshot",
+      state: "idle",
+      lastActivityAt: 30,
+    } as const;
+    const spawnedChildKey = "agent:codex:subagent:app-server-child";
+    const parentChildKey = "agent:codex:subagent:parent-key-child";
+    await writeSessionStore({
+      storePath: path.join(agentsDir, "ops", "sessions", "sessions.json"),
+      agentId: "ops",
+      entries: { main: { sessionId: "sess-main", updatedAt: 20 } },
+    });
+    await writeSessionStore({
+      storePath: acpStorePath,
+      agentId: "claude",
+      entries: {
+        [acpKey]: { sessionId: "sess-claude-acp", updatedAt: 30, acp },
       },
-    },
-  });
-  await writeSessionStore({
-    storePath: childStorePath,
-    agentId: "codex",
-    entries: {
-      "agent:codex:subagent:app-server-child": {
-        sessionId: "sess-codex-child",
-        updatedAt: 25,
-        spawnedBy: "agent:main:main",
+    });
+    await writeSessionStore({
+      storePath: childStorePath,
+      agentId: "codex",
+      entries: {
+        [spawnedChildKey]: { sessionId: "sess-codex-child", updatedAt: 25, spawnedBy: mainKey },
+        [parentChildKey]: { sessionId: "child-2", updatedAt: 27, parentSessionKey: mainKey },
       },
-    },
-  });
-  await writeSessionStore({
-    storePath: diskOnlyStorePath,
-    agentId: "local",
-    entries: { main: { sessionId: "sess-local", updatedAt: 10 } },
-  });
+    });
+    await writeSessionStore({
+      storePath: diskOnlyStorePath,
+      agentId: "local",
+      entries: { main: { sessionId: "sess-local", updatedAt: 10 } },
+    });
+    const enumerateAgentDirs = vi.spyOn(sessionDirs, "resolveAgentSessionDirsFromAgentsDirSync");
+    try {
+      const configuredOnly = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
+        "sessions.list",
+        { includeGlobal: false, includeUnknown: false, configuredAgentsOnly: true },
+      );
+      expect(configuredOnly.ok).toBe(true);
+      expect(configuredOnly.payload?.sessions.map((session) => session.key)).toEqual([
+        acpKey,
+        parentChildKey,
+        spawnedChildKey,
+        mainKey,
+      ]);
+      expect(enumerateAgentDirs).not.toHaveBeenCalled();
 
-  const configuredOnly = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
-    "sessions.list",
-    { includeGlobal: false, includeUnknown: false, configuredAgentsOnly: true },
-  );
-  expect(configuredOnly.ok).toBe(true);
-  expect(configuredOnly.payload?.sessions.map((session) => session.key)).toEqual([
-    "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7",
-    "agent:codex:subagent:app-server-child",
-    "agent:main:main",
-  ]);
-
-  const broad = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
-    "sessions.list",
-    { includeGlobal: false, includeUnknown: false },
-  );
-  expect(broad.ok).toBe(true);
-  expect(broad.payload?.sessions.map((session) => session.key)).toEqual([
-    "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7",
-    "agent:codex:subagent:app-server-child",
-    "agent:main:main",
-    "agent:local:main",
-  ]);
+      const broad = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
+        "sessions.list",
+        { includeGlobal: false, includeUnknown: false },
+      );
+      expect(broad.ok).toBe(true);
+      expect(broad.payload?.sessions.map((session) => session.key)).toEqual([
+        acpKey,
+        parentChildKey,
+        spawnedChildKey,
+        mainKey,
+        "agent:local:main",
+      ]);
+      expect(enumerateAgentDirs).toHaveBeenCalled();
+    } finally {
+      enumerateAgentDirs.mockRestore();
+    }
+  });
 });
 
 test("sessions.list hides phantom agent store placeholder rows", async () => {

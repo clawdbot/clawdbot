@@ -33,7 +33,6 @@ import {
   loadChatBranches,
   loadChatHistory,
   shouldHideAssistantChatMessage,
-  type ChatState,
 } from "./chat-history.ts";
 import {
   readDeliveredQueuedChatSendForRun,
@@ -491,7 +490,7 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
       // Materialize it before the terminal assistant to preserve transcript order.
       preserveQueuedUserTurn(state, delivered);
     }
-    const result = handleChatGatewayEvent(state as unknown as ChatState, payload);
+    const result = handleChatGatewayEvent(state, payload);
     if (shouldCelebrateFirstReply && result === "final") {
       fireFirstReplyConfetti();
     }
