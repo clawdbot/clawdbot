@@ -75,25 +75,48 @@ Turkey-hosted:
 
 Global passthrough (snapshot selection):
 
-- `llmtr/anthropic/claude-opus-5`, `claude-sonnet-5`, `claude-opus-4.8`,
-  `claude-haiku-4.5`
-- `llmtr/openai/gpt-5.4`, `gpt-5.4-mini`, `gpt-5.2`
-- `llmtr/google/gemini-3.7-flash`, `gemini-3.5-flash`,
-  `gemini-3.1-pro-preview`
-- `llmtr/zai/glm-5.2`, `glm-5.1`, `glm-5`, `glm-5-turbo`, `glm-4.7`, `glm-4.6`,
-  `glm-4.6v` (vision)
-- `llmtr/qwen/qwen3.7-max`, `qwen3.7-plus`, `qwen3.6-flash`, `qwen3.5-plus`,
-  `qwen3-coder-plus`
-- `llmtr/deepseek/deepseek-v4-pro`, `deepseek-v4-flash`, `deepseek-reasoner`,
-  `deepseek-chat`
-- `llmtr/moonshot/kimi-k3`, `kimi-k2.7-code`, `kimi-k2.6`
-- `llmtr/minimax/minimax-m3`, `minimax-m2.7`, `minimax-m2.7-highspeed`,
-  `minimax-m2.5`, `minimax-m2.5-highspeed`
-- `llmtr/mistral/mistral-large-latest`, `mistral-medium-latest`
-- `llmtr/meta/muse-spark-1.2`, `llama-3.3-70b-instruct`
-- `llmtr/stepfun/step-3.7-flash`, `llmtr/mimo/mimo-v2.5-pro`,
-  `llmtr/kwaikat/kat-coder-pro-v2.5`,
-  `llmtr/nvidia/nemotron-3-super-120b-a12b`
+- `llmtr/anthropic/claude-opus-5`
+- `llmtr/anthropic/claude-sonnet-5`
+- `llmtr/anthropic/claude-opus-4.8`
+- `llmtr/anthropic/claude-haiku-4.5`
+- `llmtr/openai/gpt-5.4`
+- `llmtr/openai/gpt-5.4-mini`
+- `llmtr/openai/gpt-5.2`
+- `llmtr/google/gemini-3.7-flash`
+- `llmtr/google/gemini-3.5-flash`
+- `llmtr/google/gemini-3.1-pro-preview`
+- `llmtr/zai/glm-5.2`
+- `llmtr/zai/glm-5.1`
+- `llmtr/zai/glm-5`
+- `llmtr/zai/glm-5-turbo`
+- `llmtr/zai/glm-4.7`
+- `llmtr/zai/glm-4.6`
+- `llmtr/zai/glm-4.6v` (vision)
+- `llmtr/qwen/qwen3.7-max`
+- `llmtr/qwen/qwen3.7-plus`
+- `llmtr/qwen/qwen3.6-flash`
+- `llmtr/qwen/qwen3.5-plus`
+- `llmtr/qwen/qwen3-coder-plus`
+- `llmtr/deepseek/deepseek-v4-pro`
+- `llmtr/deepseek/deepseek-v4-flash`
+- `llmtr/deepseek/deepseek-reasoner`
+- `llmtr/deepseek/deepseek-chat`
+- `llmtr/moonshot/kimi-k3`
+- `llmtr/moonshot/kimi-k2.7-code`
+- `llmtr/moonshot/kimi-k2.6`
+- `llmtr/minimax/minimax-m3`
+- `llmtr/minimax/minimax-m2.7`
+- `llmtr/minimax/minimax-m2.7-highspeed`
+- `llmtr/minimax/minimax-m2.5`
+- `llmtr/minimax/minimax-m2.5-highspeed`
+- `llmtr/mistral/mistral-large-latest`
+- `llmtr/mistral/mistral-medium-latest`
+- `llmtr/meta/muse-spark-1.2`
+- `llmtr/meta/llama-3.3-70b-instruct`
+- `llmtr/stepfun/step-3.7-flash`
+- `llmtr/mimo/mimo-v2.5-pro`
+- `llmtr/kwaikat/kat-coder-pro-v2.5`
+- `llmtr/nvidia/nemotron-3-super-120b-a12b`
 
 ## Using a model that is not in the snapshot
 
