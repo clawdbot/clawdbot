@@ -3685,6 +3685,78 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
+  it("cancels a deferred restart when a partial revert restores only the restart-owned field", async () => {
+    const configA = { gateway: { reload: {} } } satisfies OpenClawConfig;
+    const configB = {
+      gateway: { reload: {}, port: 18793 },
+      agents: { defaults: { params: { temperature: 0.1 } } },
+    } satisfies OpenClawConfig;
+    // Hot-only apply: temperature reaches the runtime, port stays changed.
+    const configC = {
+      gateway: { reload: {}, port: 18793 },
+      agents: { defaults: { params: { temperature: 0.3 } } },
+    } satisfies OpenClawConfig;
+    // Partial revert: only the restart-owned field (gateway.port) returns to
+    // the running value; the retained hot value (temperature 0.3) stays.
+    const configD = {
+      gateway: { reload: {} },
+      agents: { defaults: { params: { temperature: 0.3 } } },
+    } satisfies OpenClawConfig;
+    const makeWrite = (config: OpenClawConfig, persistedHash: string): ConfigWriteNotification => ({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: config,
+      runtimeConfig: config,
+      persistedHash,
+      revision: 1,
+      fingerprint: `runtime-${persistedHash}`,
+      sourceFingerprint: `source-${persistedHash}`,
+      writtenAtMs: Date.now(),
+    });
+    const onHotReload = vi.fn(
+      async (
+        plan: GatewayReloadPlan,
+        nextConfig: OpenClawConfig,
+        ownership: GatewayConfigReloadTransactionOwnership,
+      ) => {
+        ownership.markRuntimeCommitted(nextConfig, plan);
+      },
+    );
+    const harness = createReloaderHarness(
+      vi.fn(async () => makeSnapshot()),
+      {
+        initialConfig: configA,
+        onHotReload,
+      },
+    );
+
+    // Restart-required edit A -> B (gateway.port) plans a deferred restart.
+    harness.emitWrite(makeWrite(configB, "hash-b"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+
+    // Intervening hot-only apply B -> C advances the runtime-applied baseline
+    // while the A -> B restart stays deferred.
+    harness.emitWrite(makeWrite(configC, "hash-c"));
+    await vi.runAllTimersAsync();
+    expect(onHotReload).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+
+    // Partial revert C -> D restores only the restart-owned field. The
+    // retained hot value makes the whole config differ from the deferral
+    // base, but comparing restart-owned paths (the coordinator contract)
+    // must still retire the deferred restart instead of re-arming it.
+    harness.emitWrite(makeWrite(configD, "hash-d"));
+    await vi.runAllTimersAsync();
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(
+      harness.log.info.mock.calls.some((call) =>
+        call.some((arg) => String(arg).includes("reverted to running config")),
+      ),
+    ).toBe(true);
+
+    await harness.reloader.stop();
+  });
+
   it("applies residual hot actions when a revert cancels a deferred restart", async () => {
     const configA = {
       gateway: { reload: {} },
