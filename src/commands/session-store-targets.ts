@@ -75,9 +75,11 @@ function validateExplicitSessionStorePath(params: {
   let databaseFailure: { error: unknown } | undefined;
   try {
     database = openNodeSqliteDatabase(resolvedPath, { readOnly: true });
-    const applicationTables = database
-      .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
-      .all();
+    const applicationTables =
+      // sqlite-allow-raw -- Schema introspection distinguishes empty repair targets from foreign DBs.
+      database
+        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+        .all();
     if (
       applicationTables.length > 0 &&
       !applicationTables.some((row) => row.name === "schema_meta")
