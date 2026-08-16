@@ -2394,6 +2394,15 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+  it("routes the shared ratchet base owner to both ratchets", () => {
+    const commands = createChangedCheckPlan(
+      detectChangedLanes(["scripts/lib/ratchet-base.mts"]),
+    ).commands.map((command) => command.args);
+
+    expect(commands).toContainEqual(["check:max-lines-ratchet", "--base", "origin/main"]);
+    expect(commands).toContainEqual(["check:assertion-safety", "--base", "origin/main"]);
+  });
+
   it("keeps the temp creation report out of non-test changed paths", () => {
     const result = detectChangedLanes(["scripts/check-changed.mjs"]);
     const plan = createChangedCheckPlan(result);

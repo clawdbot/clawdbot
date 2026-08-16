@@ -265,6 +265,7 @@ function runCiManifestFixture(options: {
               }
             : {}),
           ...(iosBuildCapability ? { "ios:build": "true" } : {}),
+          "check:assertion-safety": "true",
           "check:max-lines-ratchet": "true",
         }
       : {};
@@ -4181,7 +4182,7 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
         task,
       ).toBe("true");
     }
-    for (const task of ["coercion-helpers", "max-lines-ratchet"]) {
+    for (const task of ["baseline-ratchets", "coercion-helpers"]) {
       expect(
         evaluateWorkflowExpression(fastCoreSetup.with["restore-test-caches"], {
           eventName: "push",
@@ -5707,7 +5708,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toContain("--only=core --split-core --core-stripe=${{ matrix.stripe }}/5 --threads=1");
   });
 
-  it("runs the suppression-baseline max-lines ratchet against the exact tested tree", () => {
+  it("runs both baseline ratchets against the exact tested tree", () => {
     const workflow = readCiWorkflow();
     const checksFastJob = workflow.jobs["checks-fast-core"];
     const checksFastSteps = checksFastJob.steps;
@@ -5716,7 +5717,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
     );
     const releaseGateMerge = checksFastSteps.find(
-      (step: WorkflowStep) => step.name === "Prepare release-gate max-lines merge tree",
+      (step: WorkflowStep) => step.name === "Prepare release-gate ratchet merge tree",
     );
     expect(
       checksFastSteps.some((step: WorkflowStep) => step.name === "Resolve manual protocol base"),
@@ -5727,23 +5728,26 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "pull-requests": "read",
     });
     expect(checksFastJob.env.CHECKOUT_BASE_SHA).toBe(
-      "${{ matrix.task == 'max-lines-ratchet' && needs.preflight.outputs.diff_base_revision || '' }}",
+      "${{ matrix.task == 'baseline-ratchets' && needs.preflight.outputs.diff_base_revision || '' }}",
     );
     expect(checkout.run).toContain(
-      'fetch_refs+=("+${CHECKOUT_BASE_SHA}:refs/remotes/origin/ci-max-lines-base")',
+      'fetch_refs+=("+${CHECKOUT_BASE_SHA}:refs/remotes/origin/ci-ratchet-base")',
     );
     expect(checkout.run).toContain('"${fetch_refs[@]}" || return 1');
     expect(releaseGateMerge.if).toBe(
-      "matrix.task == 'max-lines-ratchet' && github.event_name == 'workflow_dispatch' && inputs.release_gate",
+      "matrix.task == 'baseline-ratchets' && github.event_name == 'workflow_dispatch' && inputs.release_gate",
     );
-    expect(checksFastRun.run).toContain("max-lines-ratchet)");
+    expect(checksFastRun.run).toContain("baseline-ratchets)");
     expect(checksFastRun.run).toContain("coercion-helpers)");
     expect(checksFastRun.run).toContain("pnpm check:coercion-helpers");
     expect(checksFastRun.run).toContain("bun-launcher)");
     expect(checksFastRun.run).toContain(
       "OPENCLAW_E2E_SKIP_BUILD=1 OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts",
     );
-    expect(checksFastRun.run).toContain('has_package_script "check:max-lines-ratchet"');
+    expect(checksFastRun.run).toContain(
+      "for required_script in check:max-lines-ratchet check:assertion-safety; do",
+    );
+    expect(checksFastRun.run).toContain('has_package_script "$required_script"');
     expect(checksFastRun.env.RATCHET_PR_HEAD_SHA).toBe(
       "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}",
     );
@@ -5762,7 +5766,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(releaseGateMerge.run).toContain("for attempt in {1..6}");
     expect(releaseGateMerge.run).toContain(
-      '"+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-max-lines-merge"',
+      '"+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-ratchet-merge"',
     );
     expect(releaseGateMerge.run).toContain('"$merge_head" == "$TARGET_SHA"');
     expect(releaseGateMerge.run).toContain('git show -s --format=%P "$merge_sha"');
@@ -5791,7 +5795,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       '"+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"',
     );
     expect(checksFastRun.run).toContain(
-      'base_ref="${RATCHET_BASE_REF:-refs/remotes/origin/ci-max-lines-base}"',
+      'base_ref="${RATCHET_BASE_REF:-refs/remotes/origin/ci-ratchet-base}"',
     );
     expect(checksFastRun.run).toContain('git cat-file -e "${base_ref}^{commit}"');
     expect(checksFastRun.run).toContain(
@@ -5801,10 +5805,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(checksFastRun.run).toContain('"${merge_parents[1]:-}" != "$RATCHET_PR_HEAD_SHA"');
     expect(checksFastRun.run).toContain('prepared_base="$(git rev-parse "$base_ref")"');
     expect(checksFastRun.run).toContain('"${merge_parents[0]}" != "$prepared_base"');
-    expect(checksFastRun.run).not.toContain("ci-max-lines-target^");
+    expect(checksFastRun.run).not.toContain("ci-ratchet-target^");
     expect(checksFastRun.run).not.toContain("resolve_manual_merge_base");
-    expect(checksFastRun.run).not.toContain("+${merge_base}:refs/remotes/origin/ci-max-lines-base");
+    expect(checksFastRun.run).not.toContain("+${merge_base}:refs/remotes/origin/ci-ratchet-base");
     expect(checksFastRun.run).toContain('pnpm check:max-lines-ratchet --base "$base_ref"');
+    expect(checksFastRun.run).toContain('pnpm check:assertion-safety --base "$base_ref"');
     expect(checksFastRun.run).toContain(
       'if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then',
     );
@@ -5830,9 +5835,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         .include,
     ).toEqual([
       {
-        check_name: "checks-fast-max-lines-ratchet",
+        check_name: "checks-fast-baseline-ratchets",
         runtime: "node",
-        task: "max-lines-ratchet",
+        task: "baseline-ratchets",
       },
       {
         check_name: "checks-fast-coercion-helpers",

@@ -639,9 +639,9 @@ jobs:
             runNode && !frozenTarget
               ? [
                   {
-                    check_name: "checks-fast-max-lines-ratchet",
+                    check_name: "checks-fast-baseline-ratchets",
                     runtime: "node",
-                    task: "max-lines-ratchet",
+                    task: "baseline-ratchets",
                   },
                   {
                     check_name: "checks-fast-coercion-helpers",
@@ -1194,7 +1194,7 @@ jobs:
 
             fetch_refs=("+${CHECKOUT_SHA}:refs/remotes/origin/ci-target")
             if [ -n "${CHECKOUT_BASE_SHA:-}" ]; then
-              fetch_refs+=("+${CHECKOUT_BASE_SHA}:refs/remotes/origin/ci-max-lines-base")
+              fetch_refs+=("+${CHECKOUT_BASE_SHA}:refs/remotes/origin/ci-ratchet-base")
             fi
 
             timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
@@ -1828,11 +1828,11 @@ jobs:
       max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
     env:
-      CHECKOUT_BASE_SHA: ${{ matrix.task == 'max-lines-ratchet' && needs.preflight.outputs.diff_base_revision || '' }}
+      CHECKOUT_BASE_SHA: ${{ matrix.task == 'baseline-ratchets' && needs.preflight.outputs.diff_base_revision || '' }}
     steps:
       - *linux_node_checkout_step
-      - name: Prepare release-gate max-lines merge tree
-        if: matrix.task == 'max-lines-ratchet' && github.event_name == 'workflow_dispatch' && inputs.release_gate
+      - name: Prepare release-gate ratchet merge tree
+        if: matrix.task == 'baseline-ratchets' && github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
           GH_TOKEN: ${{ github.token }}
           PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
@@ -1856,8 +1856,8 @@ jobs:
           prepared=false
           for attempt in {1..6}; do
             if timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=2 origin \
-              "+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-max-lines-merge"; then
-              merge_sha="$(git rev-parse refs/remotes/origin/ci-max-lines-merge)"
+              "+refs/pull/${PULL_REQUEST_NUMBER}/merge:refs/remotes/origin/ci-ratchet-merge"; then
+              merge_sha="$(git rev-parse refs/remotes/origin/ci-ratchet-merge)"
               read -r frozen_base_sha merge_head extra_parent <<<"$(git show -s --format=%P "$merge_sha")"
               if [[ "$merge_head" == "$TARGET_SHA" && -z "$extra_parent" ]]; then
                 prepared=true
@@ -1918,14 +1918,16 @@ jobs:
             coercion-helpers)
               pnpm check:coercion-helpers
               ;;
-            max-lines-ratchet)
-              if ! has_package_script "check:max-lines-ratchet"; then
-                echo "Current CI targets must provide check:max-lines-ratchet." >&2
-                exit 1
-              fi
-              base_ref="${RATCHET_BASE_REF:-refs/remotes/origin/ci-max-lines-base}"
+            baseline-ratchets)
+              for required_script in check:max-lines-ratchet check:assertion-safety; do
+                if ! has_package_script "$required_script"; then
+                  echo "Current CI targets must provide ${required_script}." >&2
+                  exit 1
+                fi
+              done
+              base_ref="${RATCHET_BASE_REF:-refs/remotes/origin/ci-ratchet-base}"
               if ! git cat-file -e "${base_ref}^{commit}" 2>/dev/null; then
-                echo "Prepared max-lines base ${base_ref} is unavailable." >&2
+                echo "Prepared ratchet base ${base_ref} is unavailable." >&2
                 exit 1
               fi
               if [[ -n "${RATCHET_PR_HEAD_SHA:-}" ]]; then
@@ -1941,6 +1943,7 @@ jobs:
                 fi
               fi
               pnpm check:max-lines-ratchet --base "$base_ref"
+              pnpm check:assertion-safety --base "$base_ref"
               if [[ "${RATCHET_RELEASE_MERGE_TREE:-}" == "true" ]]; then
                 node --import tsx scripts/run-oxlint-shards.mts --only=core --only=extensions --threads=1
               fi
