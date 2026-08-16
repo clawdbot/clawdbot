@@ -309,7 +309,7 @@ export async function finishGatewayStartup(params: {
             }),
           );
           if (lifecycle.closePreludeStarted) {
-            void stopRegisteredPostReadySidecars().catch((error) => {
+            void stopRegisteredPostReadySidecars().catch((error: unknown) => {
               log.warn(`post-ready sidecar stop after close failed: ${String(error)}`);
             });
           }
@@ -322,7 +322,7 @@ export async function finishGatewayStartup(params: {
             }),
           );
           if (lifecycle.closePreludeStarted) {
-            void stopRegisteredGatewayLifetimeSidecars().catch((error) => {
+            void stopRegisteredGatewayLifetimeSidecars().catch((error: unknown) => {
               log.warn(`gateway lifetime sidecar stop after close failed: ${String(error)}`);
             });
           }

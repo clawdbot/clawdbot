@@ -99,11 +99,9 @@ describe("createGatewayKernel", () => {
         rejectFirstStop = reject;
       });
       const reentrantSidecar = { stop: vi.fn(async () => {}) };
-      let lifetimeSidecar!: { stop: () => Promise<void> };
       let reentrantStop!: Promise<void>;
-      const failingSidecar = vi
-        .fn<() => Promise<void>>()
-        .mockImplementationOnce(() => {
+      const lifetimeSidecar = {
+        stop: vi.fn<() => Promise<void>>().mockImplementationOnce(() => {
           activeKernel.kernel.setGatewayLifetimeSidecars(
             mergeGatewaySidecarOwners({
               registered: activeKernel.runtimeState.gatewayLifetimeSidecars,
@@ -112,10 +110,10 @@ describe("createGatewayKernel", () => {
           );
           reentrantStop = activeKernel.stopRegisteredGatewayLifetimeSidecars();
           return firstStop;
-        })
-        .mockResolvedValue(undefined);
+        }),
+      };
+      lifetimeSidecar.stop.mockResolvedValue(undefined);
       const trailingSidecar = vi.fn(async () => {});
-      lifetimeSidecar = { stop: failingSidecar };
       kernel.kernel.setGatewayLifetimeSidecars([lifetimeSidecar, { stop: trailingSidecar }]);
 
       const postReadyError = new Error("post-ready sidecar cleanup failed");
@@ -127,7 +125,7 @@ describe("createGatewayKernel", () => {
 
       const closing = kernel.closeOnStartupFailure();
       await vi.waitFor(() => {
-        expect(failingSidecar).toHaveBeenCalledOnce();
+        expect(lifetimeSidecar.stop).toHaveBeenCalledOnce();
       });
       const lateSidecar = { stop: vi.fn(async () => {}) };
       kernel.kernel.setGatewayLifetimeSidecars(
@@ -142,7 +140,7 @@ describe("createGatewayKernel", () => {
       await expect(reentrantStop).resolves.toBeUndefined();
       await expect(lateStop).resolves.toBeUndefined();
       await expect(closing).resolves.toBeUndefined();
-      expect(failingSidecar).toHaveBeenCalledTimes(2);
+      expect(lifetimeSidecar.stop).toHaveBeenCalledTimes(2);
       expect(trailingSidecar).toHaveBeenCalledOnce();
       expect(reentrantSidecar.stop).toHaveBeenCalledOnce();
       expect(lateSidecar.stop).toHaveBeenCalledOnce();

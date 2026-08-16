@@ -919,7 +919,9 @@ describe("startGatewayPostAttachRuntime", () => {
         expect(releaseTailscale).toBeTypeOf("function");
         expect(logGatewayStartup).toHaveBeenCalledOnce();
       });
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(unhandledRejections).toEqual([]);
 
       releaseTailscale?.();
