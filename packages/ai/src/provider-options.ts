@@ -8,6 +8,27 @@ export type OpenAIResponsesCompactionRejection = {
   id?: string;
 };
 
+export type CodeModeToolSurfaceObservation = {
+  beforeToolIdentities: readonly string[];
+  afterToolIdentities: readonly string[];
+};
+
+const CODE_MODE_TOOL_SURFACE_OBSERVER = Symbol("openaiCodeModeToolSurfaceObserver");
+type CodeModeToolSurfaceObserver = (observation: CodeModeToolSurfaceObservation) => void;
+
+export const codeModeToolSurfaceObserver = {
+  set(options: object, observer: CodeModeToolSurfaceObserver): void {
+    Reflect.set(options, CODE_MODE_TOOL_SURFACE_OBSERVER, observer);
+  },
+  get(options: object | undefined): CodeModeToolSurfaceObserver | undefined {
+    if (!options) {
+      return undefined;
+    }
+    const observer: unknown = Reflect.get(options, CODE_MODE_TOOL_SURFACE_OBSERVER);
+    return typeof observer === "function" ? (observation) => observer(observation) : undefined;
+  },
+};
+
 export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type AnthropicThinkingDisplay = "summarized" | "omitted";

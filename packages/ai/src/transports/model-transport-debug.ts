@@ -62,8 +62,7 @@ function isModelTransportDebugEnabled(env: ModelTransportDebugEnv = process.env)
   return (
     isTruthyEnv(env.OPENCLAW_DEBUG_MODEL_TRANSPORT) ||
     resolveModelPayloadDebugMode(env) !== "off" ||
-    resolveModelSseDebugMode(env) !== "off" ||
-    isTruthyEnv(env.OPENCLAW_DEBUG_CODE_MODE)
+    resolveModelSseDebugMode(env) !== "off"
   );
 }
 

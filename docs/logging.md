@@ -239,12 +239,14 @@ Available flags:
 - `OPENCLAW_DEBUG_SSE=peek`: also emit the first five redacted SSE event
   payloads, capped per event.
 - `OPENCLAW_DEBUG_CODE_MODE=1`: emit code-mode model-surface diagnostics,
-  including when native provider tools are hidden because code mode owns the
-  tool surface.
+  including bounded activation facts, the final visible surface, and names of
+  provider-native tools filtered because code mode owns the tool surface. This
+  flag does not enable general model transport logging.
 
 These flags log through normal OpenClaw logging, so `openclaw logs --follow`
-and the Control UI Logs tab show them. Without the flags, the same diagnostics
-remain available at `debug` level.
+and the Control UI Logs tab show them. General transport diagnostics remain
+available at `debug` level without their flags; dedicated code-mode diagnostics
+are emitted only when `OPENCLAW_DEBUG_CODE_MODE` is enabled.
 
 `[model-fetch]` start and response metadata (provider, API, model, status,
 latency, and request fields such as method, URL, timeout, proxy, and policy)
