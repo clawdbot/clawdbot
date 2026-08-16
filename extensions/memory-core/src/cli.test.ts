@@ -3,9 +3,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resolveSessionTranscriptsDirForAgent as resolveTestSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import {
   firstWrittenJsonArg,
   spyRuntimeErrors,
@@ -143,6 +149,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   process.exitCode = undefined;
@@ -1572,6 +1579,64 @@ describe("memory cli", () => {
     expect(log).toHaveBeenCalledWith("Memory search disabled.");
   });
 
+  it.each([
+    ["index --force", ["index", "--force"]],
+    ["status --fix", ["status", "--fix"]],
+  ])("fails %s when the memory index has orphaned provenance", async (_label, args) => {
+    const stateDir = path.join(fixtureRoot, `corrupt-state-${workspaceCaseId++}`);
+    const workspaceDir = path.join(fixtureRoot, `corrupt-workspace-${workspaceCaseId++}`);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const agentDatabase = openOpenClawAgentDatabase({ agentId: "main", env });
+    agentDatabase.db.exec(`
+      PRAGMA foreign_keys = OFF;
+      INSERT INTO memory_index_chunks (
+        id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+      ) VALUES (
+        'orphaned-chunk', 'memory/orphan.md', 'memory', 1, 1,
+        'hash', 'none', 'orphaned memory', '[]', 1
+      );
+      INSERT INTO memory_index_chunk_provenance (
+        chunk_id, origin_class, session_kind, observed_at
+      ) VALUES ('orphaned-chunk', 'agent', 'unknown', 1);
+      DELETE FROM memory_index_chunks WHERE id = 'orphaned-chunk';
+      PRAGMA foreign_keys = ON;
+    `);
+    closeOpenClawAgentDatabasesForTest();
+
+    const cfg = {
+      memory: {
+        backend: "builtin",
+        search: {
+          provider: "none",
+          model: "",
+          rememberAcrossConversations: false,
+          sources: ["memory"],
+          store: { vector: { enabled: false } },
+          cache: { enabled: false },
+          sync: { watch: false, onSessionStart: false, onSearch: false },
+          query: { hybrid: { enabled: true } },
+        },
+      },
+      agents: {
+        defaults: { workspace: workspaceDir },
+        list: [{ id: "main", default: true }],
+      },
+      plugins: { enabled: false },
+    } as OpenClawConfig;
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    getRuntimeConfig.mockReturnValue(cfg);
+    const actualMemory =
+      await vi.importActual<typeof import("./memory/index.js")>("./memory/index.js");
+    getMemorySearchManager.mockImplementation(actualMemory.getMemorySearchManager);
+
+    const error = spyRuntimeErrors(defaultRuntime);
+    await runMemoryCli(args);
+
+    expect(resolveOpenClawAgentSqlitePath({ agentId: "main", env })).toBe(agentDatabase.path);
+    expect(process.exitCode).toBe(1);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("SQLite foreign_key_check failed"));
+  });
+
   it("logs backend unsupported message when index has no sync", async () => {
     const close = vi.fn(async () => {});
     mockManager({
@@ -2468,6 +2533,92 @@ describe("memory cli", () => {
       expectLogged(log, `Processed 1 candidate(s) for ${memoryPath}.`);
       expectLogged(log, "appended=1 reconciledExisting=0");
       expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("names the filter for each candidate rejected during promote apply", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const relativePath = "memory/2026-04-02.md";
+      await writeDailyMemoryNote(workspaceDir, "2026-04-02", [
+        "Untrusted router note must not become durable memory.",
+        "Rare trusted note remains below the apply signal threshold.",
+        "Durable action note.",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "router note",
+        results: [
+          {
+            path: relativePath,
+            startLine: 1,
+            endLine: 1,
+            score: 0.99,
+            snippet: "Untrusted router note must not become durable memory.",
+            source: "memory",
+            provenance: {
+              originClass: "untrusted",
+              sessionKind: "interactive",
+              observedAt: Date.now(),
+            },
+          },
+          {
+            path: relativePath,
+            startLine: 2,
+            endLine: 2,
+            score: 0.99,
+            snippet: "Rare trusted note remains below the apply signal threshold.",
+            source: "memory",
+          },
+          {
+            path: relativePath,
+            startLine: 3,
+            endLine: 3,
+            score: 0.99,
+            snippet: "Durable action note.",
+            source: "memory",
+          },
+        ],
+      });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "durable action",
+        results: [
+          {
+            path: relativePath,
+            startLine: 3,
+            endLine: 3,
+            score: 0.99,
+            snippet: "Durable action note.",
+            source: "memory",
+          },
+        ],
+      });
+      await writeDailyMemoryNote(workspaceDir, "2026-04-02", [
+        "Untrusted router note must not become durable memory.",
+        "Rare trusted note remains below the apply signal threshold.",
+        "Candidate: Durable action note. confidence: 0.90 evidence: memory/.dreams/session-corpus/day.txt:1-1 recalls: 3 status: staged",
+      ]);
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close: vi.fn(async () => {}),
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli([
+        "promote",
+        "--apply",
+        "--min-score",
+        "0",
+        "--min-recall-count",
+        "2",
+        "--min-unique-queries",
+        "0",
+      ]);
+
+      expectLogged(log, `Skipped ${relativePath}:1-1: origin filter (untrusted).`);
+      expectLogged(log, `Skipped ${relativePath}:2-2: signal threshold (1 < 2).`);
+      expectLogged(log, `Skipped ${relativePath}:3-3: contamination filter after rehydration.`);
+      expectNotLogged(log, "No candidates met apply criteria.");
     });
   });
 

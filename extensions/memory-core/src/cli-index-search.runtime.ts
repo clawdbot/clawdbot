@@ -312,14 +312,17 @@ export async function runMemoryPromote(
       }
       let candidates: Awaited<ReturnType<typeof rankShortTermPromotionCandidates>>;
       try {
+        const gatherAllForApply = Boolean(opts.apply);
         candidates = await rankShortTermPromotionCandidates({
           workspaceDir,
-          limit: opts.limit,
-          minScore: opts.minScore ?? dreaming.minScore,
-          minRecallCount: opts.minRecallCount ?? dreaming.minRecallCount,
-          minUniqueQueries: opts.minUniqueQueries ?? dreaming.minUniqueQueries,
+          limit: gatherAllForApply ? undefined : opts.limit,
+          minScore: gatherAllForApply ? 0 : (opts.minScore ?? dreaming.minScore),
+          minRecallCount: gatherAllForApply ? 0 : (opts.minRecallCount ?? dreaming.minRecallCount),
+          minUniqueQueries: gatherAllForApply
+            ? 0
+            : (opts.minUniqueQueries ?? dreaming.minUniqueQueries),
           recencyHalfLifeDays: dreaming.recencyHalfLifeDays,
-          maxAgeDays: dreaming.maxAgeDays,
+          maxAgeDays: gatherAllForApply ? undefined : dreaming.maxAgeDays,
           includePromoted: Boolean(opts.includePromoted),
         });
       } catch (err) {
@@ -364,6 +367,7 @@ export async function runMemoryPromote(
                 reconciledExisting: applyResult.reconciledExisting,
                 memoryPath: applyResult.memoryPath,
                 appliedCandidates: applyResult.appliedCandidates,
+                rejectedCandidates: applyResult.rejectedCandidates,
               }
             : undefined,
         });
@@ -408,6 +412,11 @@ export async function runMemoryPromote(
         lines.push("");
       }
       if (applyResult) {
+        for (const rejection of applyResult.rejectedCandidates) {
+          const candidate = rejection.candidate;
+          const source = `${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`;
+          lines.push(warn(`Skipped ${source}: ${rejection.reason}.`));
+        }
         if (applyResult.applied > 0) {
           lines.push(
             success(
@@ -419,7 +428,7 @@ export async function runMemoryPromote(
               `appended=${applyResult.appended} reconciledExisting=${applyResult.reconciledExisting}`,
             ),
           );
-        } else {
+        } else if (applyResult.rejectedCandidates.length === 0) {
           lines.push(warn("No candidates met apply criteria."));
         }
       }

@@ -161,6 +161,7 @@ export function formatExtraPaths(workspaceDir: string, extraPaths: MemoryExtraPa
   });
 }
 async function withMemoryManagerForAgent(params: {
+  commandName: string;
   cfg: OpenClawConfig;
   agentId: string;
   purpose?: MemoryManagerPurpose;
@@ -179,7 +180,14 @@ async function withMemoryManagerForAgent(params: {
   }
   await withManager<MemoryManager>({
     getManager: () => getMemorySearchManager(managerParams),
-    onMissing: (error) => defaultRuntime.log(error ?? "Memory search disabled."),
+    onMissing: (error) => {
+      if (!error?.trim()) {
+        defaultRuntime.log("Memory search disabled.");
+        return;
+      }
+      defaultRuntime.error(`${params.commandName} failed (${params.agentId}): ${error}`);
+      process.exitCode = 1;
+    },
     onCloseError: (err) =>
       defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`),
     close: async (manager) => {
@@ -207,6 +215,7 @@ export async function withMemoryCommand(params: {
     : [resolveAgent(cfg, params.agent)];
   for (const agentId of agentIds) {
     await withMemoryManagerForAgent({
+      commandName: params.commandName,
       cfg,
       agentId,
       purpose: params.purpose,
