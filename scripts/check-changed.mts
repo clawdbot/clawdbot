@@ -242,7 +242,7 @@ function isDedicatedLinuxWorker(
   if (env.DISPLAY || env.WAYLAND_DISPLAY || env.SSH_TTY) {
     return false;
   }
-  if ((options.interactive ?? process.stdin.isTTY) === true) {
+  if (options.interactive ?? process.stdin.isTTY) {
     return false;
   }
   if (options.virtualized !== undefined) {

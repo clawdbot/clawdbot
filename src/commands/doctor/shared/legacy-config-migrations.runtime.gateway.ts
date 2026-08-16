@@ -69,7 +69,7 @@ function escapeControlForLog(value: string): string {
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "gateway.control-ui-device-auth-bypass->pairing-migration",
-    describe: "Convert the retired Control UI device-auth bypass into explicit pairing",
+    describe: "Remove the retired Control UI device-auth bypass",
     legacyRules: [CONTROL_UI_DEVICE_AUTH_MIGRATION_RULE],
     apply: (raw, changes) => {
       const gateway = getRecord(raw.gateway);
@@ -77,13 +77,8 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       if (!controlUi || !Object.hasOwn(controlUi, "dangerouslyDisableDeviceAuth")) {
         return;
       }
-      const migrationRequired = controlUi.dangerouslyDisableDeviceAuth === true;
       delete controlUi.dangerouslyDisableDeviceAuth;
-      changes.push(
-        migrationRequired
-          ? "Preserved the retired Control UI device-auth bypass for remediation. Reopen the Control UI over HTTPS or localhost, then click Secure this browser."
-          : "Removed disabled gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.",
-      );
+      changes.push("Removed retired gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.");
     },
   }),
   defineLegacyConfigMigration({

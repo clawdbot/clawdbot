@@ -30,13 +30,6 @@ vi.mock("../build-info.ts", () => ({
   reloadControlUiIfStale: vi.fn(),
 }));
 vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
-const { peekStoredDeviceIdentityIdMock } = vi.hoisted(() => ({
-  peekStoredDeviceIdentityIdMock: vi.fn((): string | null => "browser-1"),
-}));
-vi.mock("../lib/nodes/index.ts", () => ({
-  peekStoredDeviceIdentityId: peekStoredDeviceIdentityIdMock,
-}));
-
 const HANDOFF_POLL_MS = 1_000;
 const RESTART_VERIFICATION_TIMEOUT_MS = 10_000;
 const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
