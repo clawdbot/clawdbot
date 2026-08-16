@@ -274,4 +274,38 @@ describe("probeVideoDimensions", () => {
       { input: buffer },
     );
   });
+
+  it("falls back to a seekable temp file when the pipe probe yields no dimensions", async () => {
+    const buffer = Buffer.from("moov-at-end video");
+    runFfprobe.mockRejectedValueOnce(new Error("pipe:0: Invalid data found when processing input"));
+    runFfprobe.mockResolvedValueOnce(
+      JSON.stringify({ streams: [{ codec_type: "video", width: 1920, height: 1080 }] }),
+    );
+
+    await expect(probeVideoDimensions(buffer)).resolves.toEqual({ width: 1920, height: 1080 });
+    expect(runFfprobe).toHaveBeenCalledTimes(2);
+    expect(runFfprobe).toHaveBeenLastCalledWith(
+      [
+        "-v",
+        "error",
+        "-protocol_whitelist",
+        "fd",
+        "-show_entries",
+        "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height:stream_disposition=default,attached_pic",
+        "-of",
+        "json",
+        "-fd",
+        "0",
+        "fd:",
+      ],
+      { stdinFileDescriptor: expect.any(Number) },
+    );
+  });
+
+  it("returns undefined when both the pipe and the temp-file probe fail", async () => {
+    const buffer = Buffer.from("not a video");
+    runFfprobe.mockRejectedValue(new Error("pipe:0: Invalid data found when processing input"));
+
+    await expect(probeVideoDimensions(buffer)).resolves.toBeUndefined();
+  });
 });

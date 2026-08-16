@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { MediaKind } from "@openclaw/media-core/constants";
 import {
   asPositiveSafeInteger as parsePositiveInteger,
@@ -261,5 +263,39 @@ type VideoDimensions = {
 /** Probes a video buffer while preserving the existing public media-runtime API. */
 export async function probeVideoDimensions(buffer: Buffer): Promise<VideoDimensions | undefined> {
   const { width, height } = (await probeMediaSource({ kind: "buffer", buffer }, "video")) ?? {};
-  return width && height ? { width, height } : undefined;
+  if (width && height) {
+    return { width, height };
+  }
+  return await probeVideoDimensionsFromTempFile(buffer);
+}
+
+/**
+ * MP4s whose moov atom trails the mdat (and other non-streamable layouts) cannot
+ * be parsed from the non-seekable stdin pipe, so large videos silently lose their
+ * dimensions and Telegram renders them with a wrong aspect ratio (#97826).
+ * Retry from a seekable temp file before degrading to absent fields.
+ */
+async function probeVideoDimensionsFromTempFile(
+  buffer: Buffer,
+): Promise<VideoDimensions | undefined> {
+  let tempDir: string | undefined;
+  try {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-video-probe-"));
+    const tempPath = path.join(tempDir, "probe.bin");
+    await fs.writeFile(tempPath, buffer);
+    const handle = await fs.open(tempPath, "r");
+    try {
+      const { width, height } =
+        (await probeMediaSource({ kind: "fileDescriptor", fd: handle.fd }, "video")) ?? {};
+      return width && height ? { width, height } : undefined;
+    } finally {
+      await handle.close().catch(() => {});
+    }
+  } catch {
+    return undefined;
+  } finally {
+    if (tempDir) {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
 }
