@@ -13,6 +13,8 @@ type DoctorConfigResult = {
   cfg: OpenClawConfig;
   path?: string;
   shouldWriteConfig?: boolean;
+  /** Repair panels held back until the atomic config write commits. */
+  pendingChangePanels?: readonly string[];
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
@@ -39,6 +41,8 @@ export type DoctorHealthFlowContext = {
   configResultWriteCommitted?: boolean;
   /** Cron ownership could not be made safe, so every config write remains deferred this run. */
   configWriteDeferredByCronOwnership?: true;
+  /** The repaired candidate failed write validation; nothing was persisted this run. */
+  configWriteBlockedByValidation?: true;
   /** One-shot repairs that require a durable config write have completed. */
   postConfigWriteRepairsCommitted?: boolean;
   sourceConfigValid: boolean;

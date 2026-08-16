@@ -34,6 +34,11 @@ export async function runWriteConfigHealth(
   if (ctx.configWriteDeferredByCronOwnership === true) {
     return;
   }
+  if (ctx.configWriteBlockedByValidation === true) {
+    // The initial write already reported the validation refusal; retrying the
+    // same candidate would fail identically and duplicate the warning.
+    return;
+  }
   const { applyWizardMetadata } = await import("../commands/onboard-helpers.js");
   const { replaceConfigFile } = await import("../config/config.js");
   const { logConfigUpdated } = await import("../config/logging.js");
@@ -75,6 +80,27 @@ export async function runWriteConfigHealth(
         },
       });
     } catch (error) {
+      const { isConfigValidationFailedError } = await import("../config/io.write-errors.js");
+      if (isConfigValidationFailedError(error)) {
+        // The repaired candidate still fails validation, so nothing was persisted.
+        // Queued "Doctor changes" panels stay unprinted: reporting them would claim
+        // repairs that never reached disk. Tell the operator what remains manual.
+        const { note } = await import("../../packages/terminal-core/src/note.js");
+        const { formatConfigIssueLines } = await import("../config/issue-format.js");
+        const issueLines = Array.isArray(error.issues)
+          ? formatConfigIssueLines(error.issues, "-", { normalizeRoot: true })
+          : [error.message];
+        note(
+          [
+            "Doctor could not apply config fixes: the repaired config still fails validation.",
+            ...issueLines,
+            `No config changes were written. Fix the value(s) above in ${shortenHomePath(ctx.configPath)} by hand, then rerun "openclaw doctor --fix".`,
+          ].join("\n"),
+          "Doctor warnings",
+        );
+        ctx.configWriteBlockedByValidation = true;
+        return;
+      }
       const { isCronOwnerWriteRefusalError } = await import("../config/io.cron-owner-refusal.js");
       if (!isCronOwnerWriteRefusalError(error)) {
         throw error;
@@ -90,6 +116,16 @@ export async function runWriteConfigHealth(
       );
       ctx.configWriteDeferredByCronOwnership = true;
       return;
+    }
+    // The atomic write committed: repair panels queued by the config flow are now
+    // true statements about disk state, so print them exactly once.
+    const pendingChangePanels = ctx.configResult.pendingChangePanels;
+    if (pendingChangePanels?.length) {
+      const { note } = await import("../../packages/terminal-core/src/note.js");
+      for (const panel of pendingChangePanels) {
+        note(panel, "Doctor changes");
+      }
+      delete ctx.configResult.pendingChangePanels;
     }
     // The final writer runs again after health repairs. Advance its baseline only
     // after the atomic write succeeds so later failures cannot mark volatile state durable.
