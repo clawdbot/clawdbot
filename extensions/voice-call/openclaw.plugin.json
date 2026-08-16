@@ -6,6 +6,13 @@
   },
   "name": "Voice Call",
   "description": "OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.",
+  "cliCommands": [
+    {
+      "name": "voicecall",
+      "description": "Voice call utilities",
+      "hasSubcommands": true
+    }
+  ],
   "skills": ["./skills"],
   "commandAliases": [{ "name": "voicecall" }],
   "activation": {

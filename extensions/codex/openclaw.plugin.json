@@ -16,6 +16,13 @@
   ],
   "name": "Codex",
   "description": "Codex app-server harness and native session catalog.",
+  "cliCommands": [
+    {
+      "name": "codex",
+      "description": "Inspect and branch from Codex sessions through the Gateway",
+      "hasSubcommands": true
+    }
+  ],
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],
     "migrationProviders": ["codex"],
