@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
@@ -18,6 +19,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { resolveAgentRestartRecoveryExecutionIdentityAdmission } from "../../gateway/agent-turn/agent-restart-recovery-context.js";
 import { callGateway } from "../../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import * as gatewaySessionUtils from "../../gateway/session-utils.js";
@@ -1432,11 +1434,22 @@ describe("main-session-restart-recovery", () => {
     ).toBe(2);
   });
 
-  it("mints a fresh transcript identity after a prior-lifecycle recovery was admitted", async () => {
+  it("rekeys recovery identity after a prior-lifecycle recovery was admitted", async () => {
     const previousRecoveryRunId = "recovery-run-a";
     const sourceRunId = "channel-run";
+    const previousExecutionIdentity = createExecutionIdentityAdmissionToken(previousRecoveryRunId, {
+      contextId: "recovery-context",
+      executionId: "recovery-execution",
+      now: 123,
+    });
     const { sessionsDir, storePath, sessionKey } = await makeMainSessionFixture({
       sessionKey: "agent:main:discord:direct:123",
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 1,
+        chargedAttempts: 1,
+        executionIdentity: previousExecutionIdentity,
+      },
       restartRecoveryDeliveryRunId: previousRecoveryRunId,
       restartRecoveryDeliverySourceRunId: sourceRunId,
       restartRecoveryDeliveryContext: discordDeliveryContext,
@@ -1462,12 +1475,33 @@ describe("main-session-restart-recovery", () => {
         sessionsDir,
       );
       try {
-        sessionManager.appendMessage(
-          makeUserMessage("[System] continue after restart", {
-            idempotencyKey: `${dispatchedRunId}:user`,
-            timestamp: Date.now(),
-          }),
-        );
+        const sessionEntry = loadSessionEntry({ sessionKey, storePath });
+        const gatewayAdmission = resolveAgentRestartRecoveryExecutionIdentityAdmission({
+          collectionEnabled: true,
+          isRestartRecoveryResumeRun: true,
+          retryOnly:
+            (params as { internalExecutionIdentityRetry?: unknown })
+              .internalExecutionIdentityRetry === true,
+          runId: dispatchedRunId,
+          sessionEntry,
+        });
+        expect(gatewayAdmission?.consume(dispatchedRunId)).toEqual({
+          accepted: true,
+          token: {
+            tokenVersion: 1,
+            contextId: previousExecutionIdentity.contextId,
+            executionId: previousExecutionIdentity.executionId,
+            runId: dispatchedRunId,
+            createdAt: previousExecutionIdentity.createdAt,
+          },
+        });
+        const recoveryMessage = {
+          role: "user" as const,
+          content: "[System] continue after restart",
+          idempotencyKey: `${dispatchedRunId}:user`,
+          timestamp: Date.now(),
+        };
+        sessionManager.appendMessage(recoveryMessage);
       } catch (error) {
         dispatchError = error;
         throw error;
@@ -1475,7 +1509,10 @@ describe("main-session-restart-recovery", () => {
       return { runId: dispatchedRunId, status: "accepted" };
     });
 
-    const recoveryResult = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+    const recoveryResult = await recoverRestartAbortedMainSessions({
+      cfg: executionIdentityEnabledConfig,
+      stateDir: tmpDir,
+    });
 
     expect(dispatchError).toBeUndefined();
     expect(recoveryResult).toEqual({ recovered: 1, failed: 0, skipped: 0 });
@@ -1487,6 +1524,15 @@ describe("main-session-restart-recovery", () => {
       to: "discord:dm:123",
     });
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      mainRestartRecovery: {
+        executionIdentity: {
+          tokenVersion: 1,
+          contextId: previousExecutionIdentity.contextId,
+          executionId: previousExecutionIdentity.executionId,
+          runId: dispatchedRunId,
+          createdAt: previousExecutionIdentity.createdAt,
+        },
+      },
       restartRecoveryDeliveryContext: discordDeliveryContext,
       restartRecoveryDeliveryRunId: dispatchedRunId,
       restartRecoveryDeliverySourceRunId: sourceRunId,
