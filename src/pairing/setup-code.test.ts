@@ -99,14 +99,6 @@ describe("pairing setup code", () => {
     }));
   }
 
-  function createTailnetIpRunner() {
-    return vi.fn(async () => ({
-      code: 0,
-      stdout: '{"Self":{"TailscaleIPs":["100.64.0.9"]}}',
-      stderr: "",
-    }));
-  }
-
   function createNoRouteRunner() {
     return vi.fn(async () => ({
       code: 1,

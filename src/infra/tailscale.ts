@@ -362,7 +362,7 @@ async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteC
     return { exited, isActive: () => active, stop };
   } catch (error) {
     await stop();
-    throw error;
+    throw failure ?? error;
   }
 }
 
