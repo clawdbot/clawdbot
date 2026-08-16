@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readCronJobNotFoundError } from "../../../packages/gateway-protocol/src/index.js";
 import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
@@ -21,6 +22,7 @@ import {
 } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { formatTimestamp } from "../../logging/timestamps.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { formatLookupMiss } from "../error-format.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
@@ -202,7 +204,16 @@ function formatCronStatusForDisplay(job: CronJob): string {
 }
 
 export function handleCronCliError(err: unknown) {
-  defaultRuntime.error(danger(formatErrorMessage(err)));
+  const missingJob = readCronJobNotFoundError(err);
+  const message = missingJob
+    ? formatLookupMiss({
+        noun: "Automation",
+        value: sanitizeTerminalText(missingJob.jobId),
+        listCommand: "openclaw cron list",
+        valueLabel: "automation id",
+      })
+    : formatErrorMessage(err);
+  defaultRuntime.error(danger(message));
   defaultRuntime.exit(1);
 }
 

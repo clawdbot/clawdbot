@@ -19,6 +19,7 @@ export * from "./schema/worker-inference.js";
 export * from "./schema/skill-history.js";
 export * from "./schema/ui-command.js";
 export type {
+  CronJobNotFoundErrorDetails,
   GatewayErrorDetails,
   McpAppViewExpiredErrorDetails,
   MissingScopeErrorDetails,
@@ -76,6 +77,7 @@ export {
   PresenceEntrySchema,
   SnapshotSchema,
   ErrorShapeSchema,
+  CronJobNotFoundErrorDetailsSchema,
   GatewayErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
   UserPrefsLimitExceededErrorDetailsSchema,
@@ -688,6 +690,7 @@ export {
   ErrorCodes,
   buildMissingScopeErrorDetails,
   GatewayErrorDetailCodes,
+  readCronJobNotFoundError,
   errorShape,
   missingScopeErrorShape,
 } from "./schema-modules.js";
