@@ -5,6 +5,7 @@ import {
   collectErrorGraphCandidates,
   extractErrorCode,
   formatErrorMessage,
+  formatErrorMessageWithCode,
   formatUncaughtError,
   hasErrnoCode,
   isErrno,
@@ -150,9 +151,8 @@ describe("error helpers", () => {
   it("redacts sensitive tokens from formatted error messages", () => {
     const token = "sk-abcdefghijklmnopqrstuv";
     const formatted = formatErrorMessage(new Error(`Authorization: Bearer ${token}`));
-    const codeFormatted = formatErrorMessage(
+    const codeFormatted = formatErrorMessageWithCode(
       Object.assign(new Error("request failed"), { code: `token=${token}` }),
-      { includeCode: true },
     );
     expect(formatted).toContain("Authorization: Bearer");
     expect(formatted).not.toContain(token);

@@ -54,11 +54,12 @@ export function collectErrorGraphCandidates(
   return candidates;
 }
 
-export function formatErrorMessage(err: unknown, options?: { includeCode?: boolean }): string {
-  return formatSharedErrorMessage(err, {
-    includeCode: options?.includeCode,
-    redact: redactSensitiveText,
-  });
+export function formatErrorMessage(err: unknown): string {
+  return formatSharedErrorMessage(err, { redact: redactSensitiveText });
+}
+
+export function formatErrorMessageWithCode(err: unknown): string {
+  return formatSharedErrorMessage(err, { includeCode: true, redact: redactSensitiveText });
 }
 
 export { stringifyNonErrorCause, toErrorObject } from "@openclaw/normalization-core/error-coercion";

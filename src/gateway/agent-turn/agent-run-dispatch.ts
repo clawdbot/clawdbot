@@ -16,7 +16,7 @@ import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-termi
 import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
-import { formatErrorMessage, readErrorName } from "../../infra/errors.js";
+import { formatErrorMessageWithCode, readErrorName } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createRunningTaskRun } from "../../tasks/detached-task-runtime.js";
 import { mapAgentRunTerminalOutcomeToTaskStatus } from "../../tasks/task-registry-common.js";
@@ -296,7 +296,7 @@ export function dispatchAgentRunFromGateway(params: {
     })
     .catch(async (err: unknown) => {
       const aborted = isGatewayAgentAbortRejection(err, params.abortController.signal);
-      const renderedErr = formatErrorMessage(err, { includeCode: true });
+      const renderedErr = formatErrorMessageWithCode(err);
       const stopReason = aborted
         ? resolveGatewayAgentAbortStopReason(params.abortController.signal)
         : isAbortError(err)
