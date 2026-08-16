@@ -238,6 +238,7 @@ export function startAgentRunExecution(params: {
       if (localUserIngress) {
         attachAgentCommandAdmissionFacts(runContext, localUserIngress.facts);
       }
+      finalizePreparedAgentRunUserTurn(prepared.userTurn);
       dispatchAgentRunFromGateway({
         cronCreatorAuthority: prepared.cronCreatorAuthority,
         ingressOpts: {
@@ -385,7 +386,6 @@ export function startAgentRunExecution(params: {
         restoreAdmittedRecovery: prepared.restoreAdmittedRestartRecoveryInterrupted,
       });
       dispatched = true;
-      finalizePreparedAgentRunUserTurn(prepared.userTurn);
     } catch (err) {
       const renderedErr = formatErrorMessageWithCode(err);
       const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);

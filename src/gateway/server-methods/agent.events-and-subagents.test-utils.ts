@@ -1078,6 +1078,62 @@ describe("gateway agent handler", () => {
     expect(callArgs.bashElevated).toEqual(bashElevated);
   });
 
+  it("fails closed when an exec approval handoff expires during durable admission", async () => {
+    vi.useFakeTimers();
+    const sessionKey = "agent:main:telegram:direct:123";
+    const bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "on" as const,
+    };
+    const registration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-elevated-expired-admission",
+      sessionKey,
+      bashElevated,
+    });
+    if (!registration) {
+      throw new Error("expected runtime handoff id");
+    }
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      lastChannel: "telegram",
+      lastTo: "123",
+    });
+    const persistTranscriptTurn = mocks.persistSessionTranscriptTurn.getMockImplementation();
+    if (!persistTranscriptTurn) {
+      throw new Error("expected transcript persistence implementation");
+    }
+    mocks.persistSessionTranscriptTurn.mockImplementationOnce(async (...args) => {
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 1);
+      return await persistTranscriptTurn(...args);
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "must not dispatch" }],
+      meta: { durationMs: 100 },
+    });
+    const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
+
+    const respond = await invokeAgent(
+      {
+        message: "exec followup",
+        sessionKey,
+        channel: "telegram",
+        idempotencyKey: registration.idempotencyKey,
+        internalRuntimeHandoffId: registration.handoffId,
+      },
+      {
+        reqId: "exec-followup-expired-admission",
+        client: backendGatewayClient(),
+      },
+    );
+
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore);
+    expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
+      runId: registration.idempotencyKey,
+      status: "error",
+    });
+  });
+
   it("materializes approved exec output only from an authenticated runtime handoff", async () => {
     const sessionKey = "agent:main:telegram:direct:123";
     const resultText = `Exec finished (gateway id=req-output, code 0)\nfirst line\n\tindented\n${"x".repeat(17_000)}`;

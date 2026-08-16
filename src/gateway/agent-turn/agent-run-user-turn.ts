@@ -238,10 +238,18 @@ export async function prepareAgentRunUserTurn(params: {
 }
 
 export function finalizePreparedAgentRunUserTurn(prepared: PreparedAgentRunUserTurn): void {
-  finalizeExecApprovalFollowupRuntimeHandoff({
-    handoffId: prepared.claimedExecApprovalFollowupHandoffId,
-    claimId: prepared.execApprovalFollowupHandoffClaimId,
-  });
+  const handoffId = prepared.claimedExecApprovalFollowupHandoffId;
+  if (!handoffId) {
+    return;
+  }
+  if (
+    !finalizeExecApprovalFollowupRuntimeHandoff({
+      handoffId,
+      claimId: prepared.execApprovalFollowupHandoffClaimId,
+    })
+  ) {
+    throw new Error("exec approval followup runtime handoff expired before dispatch");
+  }
 }
 
 export function releasePreparedAgentRunUserTurn(prepared: PreparedAgentRunUserTurn): void {
