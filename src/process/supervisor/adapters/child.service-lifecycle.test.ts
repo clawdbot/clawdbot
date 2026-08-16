@@ -144,6 +144,34 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     expect(receivedBytes).toBe(outputBytes);
   });
 
+  it("retains output emitted before adapter listeners subscribe", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const adapter = await createChildAdapter({
+      argv: [
+        process.execPath,
+        "-e",
+        'process.stdout.write("early stdout"); process.stderr.write("early stderr");',
+      ],
+      stdinMode: "pipe-closed",
+    });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 100);
+    });
+
+    let stdout = "";
+    let stderr = "";
+    adapter.onStdout((chunk) => {
+      stdout += chunk;
+    });
+    adapter.onStderr((chunk) => {
+      stderr += chunk;
+    });
+
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+    expect(stdout).toBe("early stdout");
+    expect(stderr).toBe("early stderr");
+  });
+
   it("preserves an exited root result when cleanup races forwarded output", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
     const outputBytes = 8 * 1024 * 1024;

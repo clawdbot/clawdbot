@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import type { Duplex, Writable } from "node:stream";
+import type { Duplex, Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -90,6 +90,55 @@ function createManagedStdin(stream: Writable | null): ManagedRunStdin | undefine
   };
 }
 
+function createOutputRelay(stream: Readable) {
+  const listeners = new Set<(chunk: string) => void>();
+  const pending: string[] = [];
+  let pendingBytes = 0;
+  let active = false;
+  const activate = (deliver: boolean) => {
+    if (active) {
+      return;
+    }
+    active = true;
+    if (deliver) {
+      for (const text of pending) {
+        for (const listener of listeners) {
+          listener(text);
+        }
+      }
+    }
+    pending.length = 0;
+    pendingBytes = 0;
+    stream.resume();
+  };
+  onDecodedOutput(stream, (text) => {
+    if (active) {
+      for (const listener of listeners) {
+        listener(text);
+      }
+      return;
+    }
+    pending.push(text);
+    pendingBytes += Buffer.byteLength(text);
+    // Bound host memory while retaining the rest in the native pipe until subscription.
+    if (pendingBytes >= stream.readableHighWaterMark) {
+      stream.pause();
+    }
+  });
+  return {
+    subscribe: (listener: (chunk: string) => void) => {
+      listeners.add(listener);
+      activate(true);
+    },
+    drain: () => activate(false),
+    clear: () => {
+      listeners.clear();
+      pending.length = 0;
+      pendingBytes = 0;
+    },
+  };
+}
+
 export async function createServiceChildRelayAdapter(params: {
   command: string;
   args: string[];
@@ -128,18 +177,8 @@ export async function createServiceChildRelayAdapter(params: {
   }
   const { stdout, stderr } = relay;
 
-  const stdoutListeners = new Set<(chunk: string) => void>();
-  const stderrListeners = new Set<(chunk: string) => void>();
-  onDecodedOutput(stdout, (text) => {
-    for (const listener of stdoutListeners) {
-      listener(text);
-    }
-  });
-  onDecodedOutput(stderr, (text) => {
-    for (const listener of stderrListeners) {
-      listener(text);
-    }
-  });
+  const stdoutRelay = createOutputRelay(stdout);
+  const stderrRelay = createOutputRelay(stderr);
   stdout.on("error", () => {});
   stderr.on("error", () => {});
 
@@ -346,9 +385,12 @@ export async function createServiceChildRelayAdapter(params: {
     pid: commandPid,
     stdin,
     oomScoreWrapperSelected: params.oomScoreWrapperSelected,
-    onStdout: (listener) => stdoutListeners.add(listener),
-    onStderr: (listener) => stderrListeners.add(listener),
+    onStdout: stdoutRelay.subscribe,
+    onStderr: stderrRelay.subscribe,
     wait: async () => {
+      // A caller may intentionally ignore one stream; wait still owns draining it.
+      stdoutRelay.drain();
+      stderrRelay.drain();
       settleWait();
       if (waitError) {
         throw waitError;
@@ -364,8 +406,8 @@ export async function createServiceChildRelayAdapter(params: {
     },
     kill,
     dispose: () => {
-      stdoutListeners.clear();
-      stderrListeners.clear();
+      stdoutRelay.clear();
+      stderrRelay.clear();
     },
   };
 }
