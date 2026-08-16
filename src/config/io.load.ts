@@ -79,8 +79,8 @@ export function loadConfigFromContext(
       );
     }
     for (const diagnostic of [
-      ...contextBudgetMigration.changes,
-      ...contextBudgetMigration.warnings,
+      ...contextBudgetMigration.changes.map(({ message }) => message),
+      ...contextBudgetMigration.warnings.map(({ message }) => message),
       ...rosterMigration.diagnostics,
     ]) {
       deps.logger.warn(`Config (${configPath}): ${diagnostic}`);

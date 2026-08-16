@@ -175,13 +175,14 @@ describe("config io paths", () => {
         expect.stringContaining("models.providers.<provider>.models[].contextTokens"),
       );
       expect(snapshot.warnings).toContainEqual({
-        path: "",
+        path: "agents.defaults.contextTokens",
         message: "Removed agents.defaults.contextTokens.",
       });
       expect(snapshot.warnings).toContainEqual({
-        path: "",
+        path: "agents.defaults.contextTokens",
         message: expect.stringContaining("models.providers.<provider>.models[].contextTokens"),
       });
+      expect(snapshot.warnings).not.toContainEqual(expect.objectContaining({ path: "" }));
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(raw);
     });
   });
