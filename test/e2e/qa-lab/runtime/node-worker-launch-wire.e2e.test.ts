@@ -72,10 +72,7 @@ describe("node worker launch wire", () => {
       let launchId: string | undefined;
       let observeFinalizationLoad = false;
       let finalizationStartedAt: number | undefined;
-      let resolveFinalizationStarted!: () => void;
-      const finalizationStarted = new Promise<void>((resolve) => {
-        resolveFinalizationStarted = resolve;
-      });
+      let resolveWaveFinalizationStarted: ((startedAt: number) => void) | undefined;
 
       try {
         gateway = await startPairedNodeWorkerGateway({ providerBaseUrl: provider.baseUrl });
@@ -94,10 +91,12 @@ describe("node worker launch wire", () => {
               if (
                 observeFinalizationLoad &&
                 workspaceCommand.transfer?.direction === "upload" &&
-                !finalizationStartedAt
+                resolveWaveFinalizationStarted
               ) {
-                finalizationStartedAt = performance.now();
-                resolveFinalizationStarted();
+                const startedAt = performance.now();
+                finalizationStartedAt ??= startedAt;
+                resolveWaveFinalizationStarted(startedAt);
+                resolveWaveFinalizationStarted = undefined;
               }
             }
             if (frame.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND && frame.paramsJSON) {
@@ -306,47 +305,53 @@ describe("node worker launch wire", () => {
           }
         })();
         const freshConnectionSamples: number[] = [];
-        for (let wave = 0; wave < FINALIZATION_LOAD_WAVES; wave += 1) {
-          const loadRunIds = await Promise.all(
-            loadSessions.map(async (sessionKey, index) => {
-              const runId = `node-worker-finalization-load-${wave}-${index}-${Date.now()}`;
-              const started = await operator!.request<{ runId?: string; status?: string }>(
-                "chat.send",
-                {
-                  sessionKey,
-                  message: BASELINE_PROMPT,
-                  deliver: false,
-                  idempotencyKey: runId,
-                },
-              );
-              expect(started).toMatchObject({ runId, status: "started" });
-              return runId;
-            }),
-          );
-          const waits = Promise.all(
-            loadRunIds.map(async (runId) => {
-              const completedLoad = await operator!.request<{ status?: string }>(
-                "agent.wait",
-                { runId, timeoutMs: PROOF_TIMEOUT_MS },
-                { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
-              );
-              expect(completedLoad.status).toBe("ok");
-            }),
-          );
-          await finalizationStarted;
-          const freshConnectionStartedAt = performance.now();
-          const freshClient = await connectWireClient({
-            gateway,
-            role: "operator",
-            identity: null,
-            timeoutMs: CONTROL_PROBE_MAX_MS,
-          });
-          freshConnectionSamples.push(performance.now() - freshConnectionStartedAt);
-          await freshClient.stopAndWait({ timeoutMs: 2_000 });
-          await waits;
+        try {
+          for (let wave = 0; wave < FINALIZATION_LOAD_WAVES; wave += 1) {
+            const waveFinalizationStarted = new Promise<number>((resolve) => {
+              resolveWaveFinalizationStarted = resolve;
+            });
+            const loadRunIds = await Promise.all(
+              loadSessions.map(async (sessionKey, index) => {
+                const runId = `node-worker-finalization-load-${wave}-${index}-${Date.now()}`;
+                const started = await operator!.request<{ runId?: string; status?: string }>(
+                  "chat.send",
+                  {
+                    sessionKey,
+                    message: BASELINE_PROMPT,
+                    deliver: false,
+                    idempotencyKey: runId,
+                  },
+                );
+                expect(started).toMatchObject({ runId, status: "started" });
+                return runId;
+              }),
+            );
+            const waits = Promise.all(
+              loadRunIds.map(async (runId) => {
+                const completedLoad = await operator!.request<{ status?: string }>(
+                  "agent.wait",
+                  { runId, timeoutMs: PROOF_TIMEOUT_MS },
+                  { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
+                );
+                expect(completedLoad.status).toBe("ok");
+              }),
+            );
+            await waveFinalizationStarted;
+            const freshConnectionStartedAt = performance.now();
+            const freshClient = await connectWireClient({
+              gateway,
+              role: "operator",
+              identity: null,
+              timeoutMs: CONTROL_PROBE_MAX_MS,
+            });
+            freshConnectionSamples.push(performance.now() - freshConnectionStartedAt);
+            await freshClient.stopAndWait({ timeoutMs: 2_000 });
+            await waits;
+          }
+        } finally {
+          loadSettled = true;
+          await Promise.allSettled([sampler]);
         }
-        loadSettled = true;
-        await sampler;
         const finalizationSamples = readyzSamples.filter(
           (sample) => sample.atMs >= (finalizationStartedAt ?? Number.POSITIVE_INFINITY),
         );
