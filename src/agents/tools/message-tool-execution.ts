@@ -340,8 +340,6 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     rawPollEchoSessionKey && resolvedAgentId
       ? `${resolvedAgentId}\0${rawPollEchoSessionKey}`
       : undefined;
-  const preparedMessageToolCatalog =
-    options?.preparedMessageToolCatalog ?? getPreparedMessageToolCatalog();
   const messageToolDiscoveryParams: MessageToolDiscoveryParams | undefined =
     options?.config && !options.sourceReplyOnly
       ? {
@@ -507,9 +505,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         });
       }
       if (options?.requireExplicitTarget) {
-        decisions.runBoundary(() =>
+        decisions.runBoundary(() => {
           requireExplicitMessageTarget(params, explicitMessageTargetContext);
-        );
+        });
       }
 
       const gatewayOpts = readGatewayCallOptions(params);

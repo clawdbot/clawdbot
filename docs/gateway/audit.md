@@ -339,7 +339,7 @@ Outbound `queued` and `platform-started` records live in the narrowly owned
 `outbound_message_progress` table. The table is created idempotently only on
 the first enabled progress write, remains absent after startup, read-only
 inspection, disabled collection, and terminal-only delivery, and does not
-change state schema version 7. Missing under read-only inspection means no
+advance the current state schema version 9. Missing under read-only inspection means no
 retained progress. It is capped at 200,000 rows with the same 30-day retention.
 Terminal `message.outbound.finished` rows stay in `audit_events`, so a compatible
 older Gateway can open and use the database while ignoring the additive table.

@@ -2619,6 +2619,20 @@ describe("message tool agent routing", () => {
 
 describe("message tool explicit target guard", () => {
   it("rejects a target removed by a hook before the mutation boundary", async () => {
+    const receipts: DecisionReceiptV1[] = [];
+    const clearSink = configureMessageActionDecisionSink((receipt) => {
+      receipts.push(receipt);
+      return true;
+    });
+    const identity = {
+      agentId: "main",
+      sessionKey: "agent:main:heartbeat",
+      executionIdentityToken: createExecutionIdentityAdmissionToken("run-hook-target-removal", {
+        contextId: "context-hook-target-removal",
+        executionId: "execution-hook-target-removal",
+        now: 100,
+      }),
+    };
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         {
@@ -2638,16 +2652,35 @@ describe("message tool explicit target guard", () => {
     );
     const toolCallId = "heartbeat-target-removed";
 
-    await expect(
-      tool.execute(toolCallId, {
-        action: "send",
-        target: "telegram:dm-user-1",
-        message: "HEARTBEAT_OK",
-      }),
-    ).rejects.toThrow(/Explicit message target required/i);
+    try {
+      await expect(
+        withGatewayToolCallerIdentity(identity, () =>
+          tool.execute(toolCallId, {
+            action: "send",
+            target: "telegram:dm-user-1",
+            message: "HEARTBEAT_OK",
+          }),
+        ),
+      ).rejects.toThrow(/Explicit message target required/i);
+    } finally {
+      clearSink();
+    }
 
     expect(consumePreExecutionBlockedToolCall(toolCallId)).toBe(true);
     expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(receipts).toEqual([
+      expect.objectContaining({
+        contextId: "context-hook-target-removal",
+        executionId: "execution-hook-target-removal",
+        runId: "run-hook-target-removal",
+        actionId: toolCallId,
+        decision: { outcome: "denied", reasonCode: "message_target_missing" },
+        enforcement: expect.objectContaining({
+          coverageState: "enforced",
+          policyRefs: ["message-target:explicit"],
+        }),
+      }),
+    ]);
   });
 
   it("allows explicit-target send when requireExplicitTarget is set", async () => {

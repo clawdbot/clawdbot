@@ -19,7 +19,7 @@ import {
 } from "./message-delivery-progress-store.js";
 
 const tempDirs: string[] = [];
-const RELEASED_READER_SHA = "c3887db7c174e3c6041fda6576f6d717b67edd50";
+const PINNED_PRE_C04_READER_SHA = "65922f95070abd58684675349593a217b193fe0f";
 
 function databaseOptions() {
   return { env: { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "message-progress-") } };
@@ -96,10 +96,10 @@ afterAll(() => {
 });
 
 describe("outbound message progress companion", () => {
-  it("stays absent through startup, reads, and terminal-only writes at schema v7", () => {
+  it("stays absent through startup, reads, and terminal-only writes at schema v9", () => {
     const database = databaseOptions();
     const opened = openOpenClawStateDatabase(database);
-    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(7);
+    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(9);
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
 
     expect(countOutboundMessageAuditEventsForRun({ runId: "missing", database })).toBe(0);
@@ -194,7 +194,7 @@ describe("outbound message progress companion", () => {
     ).toBe(3);
   });
 
-  it(`preserves the ${RELEASED_READER_SHA} terminal-only reader contract across reopen`, () => {
+  it(`preserves the ${PINNED_PRE_C04_READER_SHA} terminal-only reader contract across reopen`, () => {
     const database = databaseOptions();
     const occurredAt = Date.now();
     recordOutboundMessageProgress(
@@ -209,22 +209,26 @@ describe("outbound message progress companion", () => {
     const databasePath = openOpenClawStateDatabase(database).path;
     closeOpenClawStateDatabaseForTest();
 
-    // c388's released row parser accepts only terminal outbound actions. Open
-    // the candidate database in that reader's mode and exercise the same row.
-    const releasedReader = new DatabaseSync(databasePath, { readOnly: true });
+    // The exact pinned pre-C04 reader accepts only terminal outbound actions.
+    // Open the candidate database in that reader's mode and exercise the same row.
+    const pinnedReader = new DatabaseSync(databasePath, { readOnly: true });
     try {
-      expect(releasedReader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 7 });
+      expect(pinnedReader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 9 });
+      expect(pinnedReader.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
       expect(
-        releasedReader
+        pinnedReader
           .prepare(
             "SELECT action, message_outcome AS outcome FROM audit_events WHERE kind = 'message' AND direction = 'outbound' ORDER BY sequence",
           )
           .all(),
       ).toEqual([{ action: "message.outbound.finished", outcome: "sent" }]);
     } finally {
-      releasedReader.close();
+      pinnedReader.close();
     }
 
+    expect(openOpenClawStateDatabase(database).db.prepare("PRAGMA quick_check").get()).toEqual({
+      quick_check: "ok",
+    });
     expect(
       pageOutboundMessageAuditEventsForRun({
         runId: "run-progress",
