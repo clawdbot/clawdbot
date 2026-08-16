@@ -140,3 +140,292 @@ export const CONTROL_MODEL_APPROVAL_AUTHORIZATION_CONFORMANCE_FIXTURES: readonly
       terminalStatus: "expired",
     }),
   ]);
+
+type ControlModelConformanceEvent = Readonly<{
+  event: string;
+  payload: Readonly<Record<string, unknown>>;
+}>;
+
+export type ControlModelRunLifecycleConformanceFixture = Readonly<{
+  id: string;
+  events: readonly ControlModelConformanceEvent[];
+  abortRunId: string;
+  expectedActiveRunId: string;
+  expectedRuns: readonly Readonly<{
+    runId: string;
+    status: "completed" | "aborted";
+  }>[];
+}>;
+
+export const CONTROL_MODEL_RUN_LIFECYCLE_CONFORMANCE_FIXTURES: readonly ControlModelRunLifecycleConformanceFixture[] =
+  Object.freeze([
+    Object.freeze({
+      id: "runs.project-stream-completion-and-exact-abort",
+      events: Object.freeze([
+        Object.freeze({
+          event: "chat",
+          payload: Object.freeze({
+            sessionKey: "agent:main:one",
+            runId: "run-complete",
+            state: "delta",
+            message: conformanceMessage(2),
+          }),
+        }),
+        Object.freeze({
+          event: "chat",
+          payload: Object.freeze({
+            sessionKey: "agent:main:one",
+            runId: "run-complete",
+            state: "final",
+            message: Object.freeze({
+              ...conformanceMessage(2),
+              content: "complete",
+            }),
+          }),
+        }),
+        Object.freeze({
+          event: "chat",
+          payload: Object.freeze({
+            sessionKey: "agent:main:one",
+            runId: "run-abort",
+            state: "delta",
+          }),
+        }),
+        Object.freeze({
+          event: "chat",
+          payload: Object.freeze({
+            sessionKey: "agent:main:one",
+            runId: "run-active",
+            state: "delta",
+          }),
+        }),
+      ]),
+      abortRunId: "run-abort",
+      expectedActiveRunId: "run-active",
+      expectedRuns: Object.freeze([
+        Object.freeze({ runId: "run-complete", status: "completed" }),
+        Object.freeze({ runId: "run-abort", status: "aborted" }),
+      ]),
+    }),
+  ]);
+
+export type ControlModelToolLifecycleConformanceFixture = Readonly<{
+  id: string;
+  events: readonly ControlModelConformanceEvent[];
+  expectedTools: readonly Readonly<{
+    toolCallId: string;
+    status: "succeeded" | "failed" | "cancelled";
+  }>[];
+}>;
+
+export const CONTROL_MODEL_TOOL_LIFECYCLE_CONFORMANCE_FIXTURES: readonly ControlModelToolLifecycleConformanceFixture[] =
+  Object.freeze([
+    Object.freeze({
+      id: "tools.project-scoped-terminal-states",
+      events: Object.freeze([
+        Object.freeze({
+          event: "agent",
+          payload: Object.freeze({
+            sessionKey: "agent:main:one",
+            runId: "run-tools",
+            stream: "tool",
+            data: Object.freeze({
+              phase: "start",
+              name: "read",
+              toolCallId: "tool-success",
+              args: Object.freeze({ path: "a" }),
+            }),
+          }),
+        }),
+        Object.freeze({
+          event: "agent",
+          payload: Object.freeze({
+            sessionKey: "agent:main:one",
+            runId: "run-tools",
+            stream: "tool",
+            data: Object.freeze({
+              phase: "result",
+              name: "read",
+              toolCallId: "tool-success",
+              result: Object.freeze({ ok: true }),
+            }),
+          }),
+        }),
+        Object.freeze({
+          event: "agent",
+          payload: Object.freeze({
+            sessionKey: "agent:main:one",
+            runId: "run-tools",
+            stream: "tool",
+            data: Object.freeze({
+              phase: "error",
+              name: "write",
+              toolCallId: "tool-failure",
+              error: "denied",
+            }),
+          }),
+        }),
+        Object.freeze({
+          event: "agent",
+          payload: Object.freeze({
+            sessionKey: "agent:main:one",
+            runId: "run-tools",
+            stream: "tool",
+            data: Object.freeze({
+              phase: "cancel",
+              name: "exec",
+              toolCallId: "tool-cancelled",
+            }),
+          }),
+        }),
+      ]),
+      expectedTools: Object.freeze([
+        Object.freeze({ toolCallId: "tool-success", status: "succeeded" }),
+        Object.freeze({ toolCallId: "tool-failure", status: "failed" }),
+        Object.freeze({ toolCallId: "tool-cancelled", status: "cancelled" }),
+      ]),
+    }),
+  ]);
+
+export type ControlModelQuestionLifecycleConformanceFixture = Readonly<{
+  id: string;
+  initialQuestion: Readonly<Record<string, unknown>>;
+  requestedQuestion: Readonly<Record<string, unknown>>;
+  answer: Readonly<Record<string, readonly string[]>>;
+  terminalStatus: "cancelled";
+}>;
+
+export const CONTROL_MODEL_QUESTION_LIFECYCLE_CONFORMANCE_FIXTURES: readonly ControlModelQuestionLifecycleConformanceFixture[] =
+  Object.freeze([
+    Object.freeze({
+      id: "questions.hydrate-answer-cancel-and-project-resolution",
+      initialQuestion: Object.freeze({
+        id: "question-answer",
+        status: "pending",
+        sessionKey: "agent:main:one",
+      }),
+      requestedQuestion: Object.freeze({
+        id: "question-cancel",
+        status: "pending",
+        sessionKey: "agent:main:one",
+      }),
+      answer: Object.freeze({ choice: Object.freeze(["yes"]) }),
+      terminalStatus: "cancelled",
+    }),
+  ]);
+
+function conformanceArtifact(
+  id: string,
+  revision: number,
+  views: readonly Readonly<Record<string, unknown>>[],
+  overrides: Readonly<Record<string, unknown>> = {},
+): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    version: 1,
+    id,
+    revision,
+    structuredContent: Object.freeze({ title: id }),
+    views,
+    state: "ready",
+    source: Object.freeze({
+      sessionKey: "agent:main:one",
+      messageId: "message-2",
+      toolCallId: "tool-artifact",
+      toolName: "calendar",
+    }),
+    ...overrides,
+  });
+}
+
+export type ControlModelArtifactConformanceFixture = Readonly<{
+  id: string;
+  historyMessage: Readonly<Record<string, unknown>>;
+  artifactId: string;
+  artifactRevision: number;
+  selectedViewId: string;
+  materializedResponse: Readonly<Record<string, unknown>>;
+}>;
+
+export const CONTROL_MODEL_ARTIFACT_CONFORMANCE_FIXTURES: readonly ControlModelArtifactConformanceFixture[] =
+  Object.freeze([
+    Object.freeze({
+      id: "artifacts.sanitize-project-and-materialize-only-selected-view",
+      historyMessage: Object.freeze({
+        ...conformanceMessage(2),
+        role: "toolResult",
+        toolCallId: "tool-artifact",
+        toolName: "calendar",
+        details: Object.freeze({
+          uiArtifacts: Object.freeze([
+            conformanceArtifact(
+              "artifact-calendar",
+              4,
+              Object.freeze([
+                Object.freeze({
+                  id: "calendar",
+                  templateUri: "clawpilot://widgets/calendar",
+                  dataVersion: 1,
+                  availability: "deferred",
+                }),
+                Object.freeze({
+                  id: "list",
+                  templateUri: "clawpilot://widgets/list",
+                  dataVersion: 1,
+                  availability: "deferred",
+                }),
+              ]),
+              Object.freeze({
+                module: "https://attacker.invalid/component.js",
+                registerComponent: "calendar",
+              }),
+            ),
+          ]),
+        }),
+      }),
+      artifactId: "artifact-calendar",
+      artifactRevision: 4,
+      selectedViewId: "list",
+      materializedResponse: Object.freeze({
+        artifactId: "artifact-calendar",
+        artifactRevision: 4,
+        view: Object.freeze({
+          id: "list",
+          templateUri: "clawpilot://widgets/list",
+          dataVersion: 1,
+          availability: "inline",
+          data: Object.freeze({ rows: Object.freeze([Object.freeze({ id: "one" })]) }),
+        }),
+      }),
+    }),
+  ]);
+
+export type ControlModelBoundsConformanceFixture = Readonly<{
+  id: string;
+  limits: Readonly<{
+    messages: number;
+    runs: number;
+    tools: number;
+    questions: number;
+    artifacts: number;
+    progressUpdates: number;
+    progressBytes: number;
+  }>;
+  inputCount: number;
+}>;
+
+export const CONTROL_MODEL_BOUNDS_CONFORMANCE_FIXTURES: readonly ControlModelBoundsConformanceFixture[] =
+  Object.freeze([
+    Object.freeze({
+      id: "bounds.truncate-each-retained-conversation-collection",
+      limits: Object.freeze({
+        messages: 2,
+        runs: 2,
+        tools: 2,
+        questions: 2,
+        artifacts: 2,
+        progressUpdates: 2,
+        progressBytes: 64,
+      }),
+      inputCount: 4,
+    }),
+  ]);
