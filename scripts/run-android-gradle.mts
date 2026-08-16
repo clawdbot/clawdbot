@@ -74,19 +74,24 @@ export function resolveAndroidSdkEnv(options: SdkOptions = {}) {
   return { ...env, ANDROID_HOME: defaultSdkDir };
 }
 
-export function run(
+export async function run(
   command: string,
   args: readonly string[],
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ) {
-  return runManagedCommand({
-    args: [...args],
-    bin: command,
-    cwd,
-    env,
-    shell: false,
-  });
+  try {
+    return await runManagedCommand({
+      args: [...args],
+      bin: command,
+      cwd,
+      env,
+      shell: false,
+    });
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
 }
 
 export async function main(argv: string[] = process.argv.slice(2)) {

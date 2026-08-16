@@ -4,15 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   linuxArmAndroidGradleSkipMessage,
   resolveAndroidSdkEnv,
+  run,
   shouldSkipLinuxArmAndroidGradle,
   splitAndroidGradleArgs,
 } from "../../scripts/run-android-gradle.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("run-android-gradle", () => {
   it("splits Gradle args from an optional post command", () => {
@@ -99,19 +102,27 @@ describe("run-android-gradle", () => {
   });
 
   posixIt("terminates the active command tree when the wrapper is terminated", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-android-gradle-process-"));
-    const childPidPath = path.join(dir, "child.pid");
+    const dir = tempDirs.make("openclaw-android-gradle-process-");
+    const processTreePath = path.join(dir, "process-tree.json");
     const moduleUrl = pathToFileURL(path.resolve("scripts/run-android-gradle.mts")).href;
     const childSource = `
+const { spawn } = require("node:child_process");
 const fs = require("node:fs");
-fs.writeFileSync(process.argv[1], String(process.pid));
+const descendant = spawn(process.execPath, [
+  "-e",
+  "process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000);",
+], { stdio: "ignore" });
+fs.writeFileSync(
+  process.argv[1],
+  JSON.stringify({ childPid: process.pid, descendantPid: descendant.pid }),
+);
 setInterval(() => {}, 1_000);
 `;
     const runnerSource = `
 import { run } from ${JSON.stringify(moduleUrl)};
 process.exitCode = await run(
   process.execPath,
-  ["-e", ${JSON.stringify(childSource)}, ${JSON.stringify(childPidPath)}],
+  ["-e", ${JSON.stringify(childSource)}, ${JSON.stringify(processTreePath)}],
   process.cwd(),
 );
 `;
@@ -122,18 +133,28 @@ process.exitCode = await run(
     );
     const runnerPid = expectPid(runner.pid);
     let childPid = 0;
+    let descendantPid = 0;
 
     try {
-      await waitFor(() => fs.existsSync(childPidPath));
-      childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+      await waitFor(() => fs.existsSync(processTreePath));
+      const processTree = JSON.parse(fs.readFileSync(processTreePath, "utf8")) as {
+        childPid: number;
+        descendantPid: number;
+      };
+      childPid = processTree.childPid;
+      descendantPid = processTree.descendantPid;
       expect(Number.isInteger(childPid)).toBe(true);
+      expect(Number.isInteger(descendantPid)).toBe(true);
       expect(isProcessAlive(childPid)).toBe(true);
+      expect(isProcessAlive(descendantPid)).toBe(true);
 
       process.kill(runnerPid, "SIGTERM");
       const result = await waitForClose(runner);
-      await delay(100);
+      await waitFor(() => !isProcessAlive(childPid), 1_500);
+      await waitFor(() => !isProcessAlive(descendantPid), 1_500);
 
       expect(isProcessAlive(childPid)).toBe(false);
+      expect(isProcessAlive(descendantPid)).toBe(false);
       expect(result).toEqual({ code: 143, signal: null });
     } finally {
       if (isProcessAlive(runnerPid)) {
@@ -142,7 +163,21 @@ process.exitCode = await run(
       if (childPid && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");
       }
-      fs.rmSync(dir, { force: true, recursive: true });
+      if (descendantPid && isProcessAlive(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
+      }
+    }
+  });
+
+  it("reports spawn errors and returns a failure status", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const missingCommand = path.join(os.tmpdir(), `openclaw-missing-command-${process.pid}`);
+    try {
+      await expect(run(missingCommand, [], process.cwd(), {})).resolves.toBe(1);
+      expect(error).toHaveBeenCalledOnce();
+      expect(String(error.mock.calls[0]?.[0])).toContain("ENOENT");
+    } finally {
+      error.mockRestore();
     }
   });
 });
@@ -173,7 +208,15 @@ async function waitForClose(child: ReturnType<typeof spawn>) {
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  if (process.platform !== "linux") {
     return true;
+  }
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.charAt(stat.lastIndexOf(")") + 2) !== "Z";
   } catch {
     return false;
   }
