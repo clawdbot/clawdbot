@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { formatErrorMessage } from "../infra/errors.js";
 import { ensureMeetingAudioBackend, resolveMeetingAudioRuntimeForFormat } from "./audio-backend.js";
 import { createMeetingChromeTransport } from "./chrome-transport.js";
@@ -109,16 +110,57 @@ function browserResultString(result: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-function parseMeetingManualAction(value: unknown): MeetingBrowserHealth["manualAction"] {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const action = value as Record<string, unknown>;
-  if (typeof action.reason !== "string" || typeof action.message !== "string") {
-    return undefined;
-  }
-  return { reason: action.reason, message: action.message };
-}
+const optionalBrowserString = z.string().optional().catch(undefined);
+const optionalBrowserBoolean = z.boolean().optional().catch(undefined);
+const optionalBrowserNumber = z.number().optional().catch(undefined);
+const invalidBrowserArrayItemSchema = z.unknown().transform(() => null);
+const meetingTranscriptLineSchema = z
+  .object({
+    at: optionalBrowserString,
+    speaker: optionalBrowserString,
+    text: z.string().refine((value) => value.trim().length > 0),
+  })
+  .transform(({ at, speaker, text }) => ({
+    ...(at !== undefined ? { at } : {}),
+    ...(speaker !== undefined ? { speaker } : {}),
+    text,
+  }));
+
+const meetingBrowserStatusSchema = z
+  .looseObject({
+    inCall: optionalBrowserBoolean,
+    micMuted: optionalBrowserBoolean,
+    cameraOff: optionalBrowserBoolean,
+    lobbyWaiting: optionalBrowserBoolean,
+    captionCaptureRequested: optionalBrowserBoolean,
+    captioning: optionalBrowserBoolean,
+    captionsEnabledAttempted: optionalBrowserBoolean,
+    transcriptLines: optionalBrowserNumber,
+    lastCaptionAt: optionalBrowserString,
+    lastCaptionSpeaker: optionalBrowserString,
+    lastCaptionText: optionalBrowserString,
+    recentTranscript: z
+      .array(z.union([meetingTranscriptLineSchema, invalidBrowserArrayItemSchema]))
+      .transform((lines) => lines.filter((line) => line !== null))
+      .optional()
+      .catch(undefined),
+    audioInputRouted: optionalBrowserBoolean,
+    audioInputDeviceLabel: optionalBrowserString,
+    audioInputRouteError: optionalBrowserString,
+    audioOutputRouted: optionalBrowserBoolean,
+    audioOutputDeviceLabel: optionalBrowserString,
+    audioOutputRouteError: optionalBrowserString,
+    audioOutputRouteRetryable: optionalBrowserBoolean,
+    manualAction: z.object({ reason: z.string(), message: z.string() }).optional().catch(undefined),
+    url: optionalBrowserString,
+    title: optionalBrowserString,
+    notes: z
+      .array(z.union([z.string(), invalidBrowserArrayItemSchema]))
+      .transform((notes) => notes.filter((note) => note !== null))
+      .optional()
+      .catch(undefined),
+  })
+  .catch({});
 
 function parseMeetingBrowserStatus<Health extends MeetingBrowserHealth>(
   result: unknown,
@@ -133,74 +175,37 @@ function parseMeetingBrowserStatus<Health extends MeetingBrowserHealth>(
   if (!raw) {
     return undefined;
   }
-  let parsed: Record<string, unknown>;
+  let parsed: z.infer<typeof meetingBrowserStatusSchema>;
   try {
-    parsed = JSON.parse(raw) as Record<string, unknown>;
+    parsed = meetingBrowserStatusSchema.parse(JSON.parse(raw));
   } catch {
     throw new Error(options.malformedStatusMessage);
   }
   return {
-    inCall: typeof parsed.inCall === "boolean" ? parsed.inCall : undefined,
-    micMuted: typeof parsed.micMuted === "boolean" ? parsed.micMuted : undefined,
-    cameraOff: typeof parsed.cameraOff === "boolean" ? parsed.cameraOff : undefined,
-    lobbyWaiting: typeof parsed.lobbyWaiting === "boolean" ? parsed.lobbyWaiting : undefined,
-    captionCaptureRequested:
-      typeof parsed.captionCaptureRequested === "boolean"
-        ? parsed.captionCaptureRequested
-        : undefined,
-    captioning: typeof parsed.captioning === "boolean" ? parsed.captioning : undefined,
-    captionsEnabledAttempted:
-      typeof parsed.captionsEnabledAttempted === "boolean"
-        ? parsed.captionsEnabledAttempted
-        : undefined,
-    transcriptLines:
-      typeof parsed.transcriptLines === "number" ? parsed.transcriptLines : undefined,
-    lastCaptionAt: typeof parsed.lastCaptionAt === "string" ? parsed.lastCaptionAt : undefined,
-    lastCaptionSpeaker:
-      typeof parsed.lastCaptionSpeaker === "string" ? parsed.lastCaptionSpeaker : undefined,
-    lastCaptionText:
-      typeof parsed.lastCaptionText === "string" ? parsed.lastCaptionText : undefined,
-    recentTranscript: Array.isArray(parsed.recentTranscript)
-      ? parsed.recentTranscript.flatMap((value) => {
-          if (!value || typeof value !== "object") {
-            return [];
-          }
-          const line = value as { at?: unknown; speaker?: unknown; text?: unknown };
-          if (typeof line.text !== "string" || !line.text.trim()) {
-            return [];
-          }
-          return [
-            {
-              ...(typeof line.at === "string" ? { at: line.at } : {}),
-              ...(typeof line.speaker === "string" ? { speaker: line.speaker } : {}),
-              text: line.text,
-            },
-          ];
-        })
-      : undefined,
-    audioInputRouted:
-      typeof parsed.audioInputRouted === "boolean" ? parsed.audioInputRouted : undefined,
-    audioInputDeviceLabel:
-      typeof parsed.audioInputDeviceLabel === "string" ? parsed.audioInputDeviceLabel : undefined,
-    audioInputRouteError:
-      typeof parsed.audioInputRouteError === "string" ? parsed.audioInputRouteError : undefined,
-    audioOutputRouted:
-      typeof parsed.audioOutputRouted === "boolean" ? parsed.audioOutputRouted : undefined,
-    audioOutputDeviceLabel:
-      typeof parsed.audioOutputDeviceLabel === "string" ? parsed.audioOutputDeviceLabel : undefined,
-    audioOutputRouteError:
-      typeof parsed.audioOutputRouteError === "string" ? parsed.audioOutputRouteError : undefined,
-    audioOutputRouteRetryable:
-      typeof parsed.audioOutputRouteRetryable === "boolean"
-        ? parsed.audioOutputRouteRetryable
-        : undefined,
-    manualAction: parseMeetingManualAction(parsed.manualAction),
-    browserUrl: typeof parsed.url === "string" ? parsed.url : undefined,
-    browserTitle: typeof parsed.title === "string" ? parsed.title : undefined,
+    inCall: parsed.inCall,
+    micMuted: parsed.micMuted,
+    cameraOff: parsed.cameraOff,
+    lobbyWaiting: parsed.lobbyWaiting,
+    captionCaptureRequested: parsed.captionCaptureRequested,
+    captioning: parsed.captioning,
+    captionsEnabledAttempted: parsed.captionsEnabledAttempted,
+    transcriptLines: parsed.transcriptLines,
+    lastCaptionAt: parsed.lastCaptionAt,
+    lastCaptionSpeaker: parsed.lastCaptionSpeaker,
+    lastCaptionText: parsed.lastCaptionText,
+    recentTranscript: parsed.recentTranscript,
+    audioInputRouted: parsed.audioInputRouted,
+    audioInputDeviceLabel: parsed.audioInputDeviceLabel,
+    audioInputRouteError: parsed.audioInputRouteError,
+    audioOutputRouted: parsed.audioOutputRouted,
+    audioOutputDeviceLabel: parsed.audioOutputDeviceLabel,
+    audioOutputRouteError: parsed.audioOutputRouteError,
+    audioOutputRouteRetryable: parsed.audioOutputRouteRetryable,
+    manualAction: parsed.manualAction,
+    browserUrl: parsed.url,
+    browserTitle: parsed.title,
     status: "browser-control",
-    notes: Array.isArray(parsed.notes)
-      ? parsed.notes.filter((note): note is string => typeof note === "string")
-      : undefined,
+    notes: parsed.notes,
     ...options.statusFields?.(parsed),
   } as unknown as Health;
 }

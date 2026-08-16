@@ -524,7 +524,7 @@ extensions/file-transfer/src/tools/file-write-tool.ts	1
 extensions/file-transfer/src/tools/node-tool-invoke.ts	1
 extensions/firecrawl/index.ts	2
 extensions/firecrawl/src/config.ts	3
-extensions/firecrawl/src/firecrawl-client.ts	10
+extensions/firecrawl/src/firecrawl-client.ts	4
 extensions/firecrawl/src/firecrawl-fetch-provider-shared.ts	5
 extensions/firecrawl/web-search-shared.ts	1
 extensions/fish-audio-speech/speech-provider.ts	1
@@ -1490,7 +1490,7 @@ extensions/zalo/src/proxy.ts	1
 extensions/zalo/src/setup-allow-from.ts	3
 extensions/zalo/src/setup-surface.ts	10
 extensions/zalo/src/token.ts	1
-extensions/zalo/src/webhook-spool.ts	2
+extensions/zalo/src/webhook-spool.ts	1
 extensions/zalouser/src/accounts.ts	1
 extensions/zalouser/src/group-policy.ts	2
 extensions/zalouser/src/ingress.ts	2
@@ -2900,7 +2900,7 @@ src/flows/doctor-health-contributions.ts	2
 src/flows/doctor-removed-workspaces-state-check.ts	2
 src/flows/health-check-adapter.ts	2
 src/flows/search-setup.ts	6
-src/gateway/agent-runtime-identity-token.ts	6
+src/gateway/agent-runtime-identity-token.ts	1
 src/gateway/agent-turn/agent-dedupe.ts	3
 src/gateway/agent-turn/agent-job.ts	1
 src/gateway/agent-turn/agent-restart-recovery-context.ts	1
@@ -3319,7 +3319,6 @@ src/infra/provider-usage.fetch.codex.ts	1
 src/infra/provider-usage.fetch.deepseek.ts	1
 src/infra/provider-usage.fetch.minimax.ts	2
 src/infra/push-apns-http2.ts	1
-src/infra/push-apns-store.ts	3
 src/infra/push-apns.relay.ts	1
 src/infra/push-apns.ts	7
 src/infra/push-web.ts	3
@@ -3471,7 +3470,7 @@ src/meeting-bot/browser-node.ts	2
 src/meeting-bot/browser-request.ts	3
 src/meeting-bot/browser-session-control.ts	1
 src/meeting-bot/chrome-node-result.ts	2
-src/meeting-bot/platform-adapter.ts	11
+src/meeting-bot/platform-adapter.ts	8
 src/meeting-bot/plugin-entry.ts	5
 src/meeting-bot/plugin-shell.ts	1
 src/meeting-bot/realtime-tool-continuity.ts	2
@@ -4133,7 +4132,7 @@ ui/src/lib/channels/index.ts	3
 ui/src/lib/chat/current-user-identity.ts	4
 ui/src/lib/chat/heartbeat-display.ts	4
 ui/src/lib/chat/message-extract.ts	7
-ui/src/lib/chat/message-normalizer.ts	4
+ui/src/lib/chat/message-normalizer.ts	3
 ui/src/lib/chat/outbox-store-codec.ts	1
 ui/src/lib/chat/outbox-store.ts	1
 ui/src/lib/chat/tool-call-patch.ts	1
@@ -4160,7 +4159,6 @@ ui/src/lib/sessions/session-key.ts	4
 ui/src/lib/sessions/swarm-activity.ts	1
 ui/src/lib/skills/index.ts	1
 ui/src/lib/workboard/metadata-contract-normalization.ts	1
-ui/src/lib/workboard/metadata-normalization.ts	26
 ui/src/lib/workboard/normalization.ts	5
 ui/src/lib/workboard/session-card-lookup.ts	2
 ui/src/lit/stream-auto-follow-controller.ts	1
