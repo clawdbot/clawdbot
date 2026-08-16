@@ -151,7 +151,7 @@ export type SessionMcpRuntime = {
 
 type McpRequestMethodName = "callTool" | `list${string}` | `read${string}` | "getPrompt";
 /** Core-only request extension; the public harness runtime contract stays unchanged. */
-export type SessionMcpRequestRuntime = SessionMcpRuntime & {
+export type SessionMcpRequestRuntime = Omit<SessionMcpRuntime, McpRequestMethodName> & {
   [Key in Extract<keyof SessionMcpRuntime, McpRequestMethodName>]: NonNullable<
     SessionMcpRuntime[Key]
   > extends (...args: infer Args) => infer Result
