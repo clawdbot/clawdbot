@@ -179,6 +179,12 @@ export function createTelegramCallbackMessageActions(params: {
   };
 
   const deleteCallbackMessage = async () => {
+    // deleteMessage has no business_connection_id parameter at all (unlike editMessageText/
+    // sendMessage/editMessageReplyMarkup, which all accept one) -- Telegram's Bot API instead
+    // exposes a dedicated method, deleteBusinessMessages(business_connection_id, message_ids),
+    // for deleting a message sent on behalf of a business account. Calling plain deleteMessage
+    // on a business callback's picker fails (ClawSweeper follow-up finding on #124222), so the
+    // business case must switch methods entirely rather than merge in an extra param.
     return callbackBusinessParams
       ? await bot.api.deleteBusinessMessages(callbackBusinessParams.business_connection_id, [
           callbackMessage.message_id,

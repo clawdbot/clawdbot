@@ -27,12 +27,25 @@ function buildBot(
 ) {
   const editMessageText = vi.fn(async () => true as const);
   const deleteMessage = vi.fn(async () => true as const);
+  const deleteBusinessMessages = vi.fn(async () => true as const);
   const sendMessage = vi.fn(async () => ({ message_id: 333 }) as unknown as Message);
-  const api: Record<string, unknown> = { editMessageText, deleteMessage, sendMessage };
+  const api: Record<string, unknown> = {
+    editMessageText,
+    deleteMessage,
+    deleteBusinessMessages,
+    sendMessage,
+  };
   if (params.rawEditMessageText) {
     api.raw = { editMessageText: params.rawEditMessageText };
   }
-  return { bot: { api } as never, api, editMessageText, deleteMessage, sendMessage };
+  return {
+    bot: { api } as never,
+    api,
+    editMessageText,
+    deleteMessage,
+    deleteBusinessMessages,
+    sendMessage,
+  };
 }
 
 describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
@@ -153,6 +166,39 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
       actions.editCallbackMessage("hello", undefined, helloBlocksOverride),
     ).rejects.toThrow("network error");
     expect(deleteMessage).not.toHaveBeenCalled();
+  });
+
+  it("deletes a business callback's picker via deleteBusinessMessages, not the businessless deleteMessage", async () => {
+    // Regression for ClawSweeper's second follow-up P2 finding on #124222: deleteMessage has
+    // no business_connection_id parameter at all (unlike editMessageText/sendMessage, which the
+    // sibling helpers already forward it to). Calling plain deleteMessage on a message sent on
+    // behalf of a business account is the wrong Bot API call; Telegram's dedicated
+    // deleteBusinessMessages(business_connection_id, message_ids) must be used instead, or a
+    // rich-edit recovery on a Business callback can fail to remove the stale picker.
+    const rawEditMessageText = vi.fn(async () => {
+      throw new Error("400: Bad Request: some other failure");
+    });
+    const { bot, deleteMessage, deleteBusinessMessages, sendMessage } = buildBot({
+      rawEditMessageText,
+    });
+    const businessCallbackMessage = {
+      ...callbackMessage,
+      business_connection_id: "biz-conn-1",
+    } as unknown as Message;
+    const actions = createTelegramCallbackMessageActions({
+      bot,
+      callbackMessage: businessCallbackMessage,
+      isForum: false,
+      richMessages: true,
+    });
+
+    await actions.editCallbackMessage("hello", undefined, helloBlocksOverride);
+
+    expect(deleteBusinessMessages).toHaveBeenCalledWith("biz-conn-1", [222]);
+    expect(deleteMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(111, "hello", {
+      business_connection_id: "biz-conn-1",
+    });
   });
 
   it("re-raises 'message is not modified' from a rich edit without a legacy retry", async () => {
