@@ -52,9 +52,9 @@ async function startRegisteredElementFixture(): Promise<ControlUiE2eServer> {
   return {
     baseUrl: `http://127.0.0.1:${address.port}/`,
     close: () =>
-      new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      ),
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      }),
   };
 }
 
