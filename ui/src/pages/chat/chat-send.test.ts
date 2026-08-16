@@ -443,7 +443,7 @@ describe("refreshChat", () => {
       name: "Cached Model",
       provider: "openai",
     };
-    rememberChatMetadata(expectDefined(host.client), "main", {
+    rememberChatMetadata(expectDefined(host.client, "chat host client"), "main", {
       commands: [],
       models: [cachedModel],
     });
@@ -455,7 +455,7 @@ describe("refreshChat", () => {
     });
 
     expect(host.chatModelCatalog).toEqual([cachedModel]);
-    expect(host.chatModelsLoading).toBe(true);
+    expect(asChatPageHost(host).chatModelsLoading).toBe(true);
     const container = document.createElement("div");
     render(
       renderChatPaneComposerControls({
