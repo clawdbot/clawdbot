@@ -137,6 +137,11 @@ export function renderChatComposer(props: ChatComposerProps) {
           : t("chat.composer.runInterrupted");
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
+  const steerNowEnabled =
+    props.connected &&
+    sendShortcut === "enter" &&
+    showAbortableUi &&
+    props.followUpMode === "queue";
   const gatewayQuestionPrompts =
     props.gatewayQuestionPrompts?.filter(
       (prompt) =>
@@ -252,6 +257,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     commitDraft: (draft) => commitComposerDraft(props, draft),
     syncDraftAfterSend: syncComposerDraftAfterSend,
     showAbortableUi,
+    steerNowEnabled,
   });
 
   const syncComposerValue = (target: HTMLTextAreaElement) => {
@@ -492,7 +498,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     hasAttachments: !props.suggestionComposer && Boolean(props.attachments?.length),
     isBusy,
     followUpMode: props.followUpMode,
-    sendShortcut,
+    steerNowEnabled,
     suggestionComposer: props.suggestionComposer,
     sending: props.sending,
     voiceActive: props.realtimeTalkActive,
@@ -504,7 +510,6 @@ export function renderChatComposer(props: ChatComposerProps) {
     voiceVideoPending: props.realtimeTalkVideoPending,
     onAbort: props.onAbort,
     onSend: handleSend,
-    onStoreDraft: () => {},
     onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
     onToggleCamera: props.onToggleRealtimeCamera,
     microphonePicker,
