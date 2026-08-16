@@ -51,6 +51,11 @@ export function historicalV15AgentSchemaSql(): string {
   );
   sql = removeSchemaRange(
     sql,
+    "CREATE TABLE IF NOT EXISTS message_tool_run_outcomes (",
+    "CREATE TABLE IF NOT EXISTS transcript_events (",
+  );
+  sql = removeSchemaRange(
+    sql,
     "CREATE TABLE IF NOT EXISTS context_engine_turn_outbox (",
     "CREATE TABLE IF NOT EXISTS cache_entries (",
   );
