@@ -169,8 +169,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "reply-runtime": 1,
   "security-runtime": 1,
   "session-store-runtime": 4,
-  // +2: shipped Slack and Discord setup helpers retained through their package migration window.
-  "setup-runtime": 2,
+  "setup-runtime": 0,
   "reply-history": 6,
   "provider-auth": 19,
   "telegram-account": 3,
@@ -211,7 +210,6 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: outbound formatting capability profile.
       // +3: plugin approval reviewer-detail cap/truncator and sanitize-with-status variant.
       // +1: canonical incognito session classifier for storage-safe plugin behavior.
-      // +2: shipped Slack and Discord setup compatibility helpers.
       // +3: typed channel partial-delivery error, creator, and structural guard.
       // +1: closed attempt-terminal merge, normalization, and projection helper.
       // +3: harness-native MCP App preview helper and its runtime/catalog contracts.
@@ -300,7 +298,6 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: agent-harness transcript visibility projector.
       // +2: plugin approval detail truncator and sanitize-with-status variant.
       // +1: canonical incognito session classifier for storage-safe plugin behavior.
-      // +2: shipped Slack and Discord setup compatibility helpers.
       // +2: channel partial-delivery error creator and structural guard.
       // +1: harness-native MCP App preview helper.
       // +1: canonical unknown-value to Error coercion.

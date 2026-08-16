@@ -215,6 +215,19 @@ describe("plugin compatibility registry", () => {
     expect(record?.removeAfter).toBeUndefined();
   });
 
+  it("keeps removed shipped channel setup exports as a migration tombstone", () => {
+    const record = listPluginCompatRecords().find(
+      (candidate) => candidate.code === "plugin-sdk-shipped-channel-setup-exports",
+    );
+
+    expect(record).toMatchObject({
+      status: "removed",
+      replacement:
+        "plugin-owned config schemas plus generic `openclaw/plugin-sdk/channel-config-schema` and `openclaw/plugin-sdk/setup-runtime` primitives",
+    });
+    expect(record?.removeAfter).toBeUndefined();
+  });
+
   it("keeps removed channel target compatibility as migration tombstones", () => {
     const records = new Map(listPluginCompatRecords().map((record) => [record.code, record]));
 
