@@ -452,7 +452,11 @@ export function collectPromotedMainChildRows(input: {
   showCron: boolean;
   showSystem: boolean;
 }): GatewaySessionRow[] {
-  return [...input.rows, ...Object.values(input.childRowsByParent).flat()].filter((row) => {
+  // Canonical rows override stale child snapshots for lifecycle facts such as archive state.
+  const knownRows = new Map(
+    [...Object.values(input.childRowsByParent).flat(), ...input.rows].map((row) => [row.key, row]),
+  );
+  return [...knownRows.values()].filter((row) => {
     const parentKey = resolveUiSessionNavigationParentKey(row);
     return (
       parentKey != null &&

@@ -242,8 +242,8 @@ type VisibleSessionRowOptions = {
  * Accepted tradeoff: a profile-less client's unnamed `run` session (e.g. an
  * explicit `--session-key` CLI conversation without an operator profile) is
  * indistinguishable from a probe and hides by default too. It stays fully
- * reachable: the selected session always renders in the sidebar, the Sessions
- * page never applies this filter, and the sort-menu toggle reveals all rows.
+ * reachable: the selected active session always renders in the sidebar, the
+ * Sessions page never applies this filter, and the sort-menu toggle reveals all rows.
  */
 export function isSystemCreatedSessionRow(row: GatewaySessionRow): boolean {
   // Cron rows are owned by the automation toggle; cron creation stamps a
@@ -280,8 +280,7 @@ export function filterVisibleSessionRows(
   return rows.filter((row) => {
     if (
       row.key === options.currentSessionKey &&
-      ((options.archivedFilter ?? "active") === "active" ||
-        sessionMatchesArchivedFilter(row, options.archivedFilter))
+      sessionMatchesArchivedFilter(row, options.archivedFilter)
     ) {
       return true;
     }
@@ -362,8 +361,12 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
   // hides another one behind a separate route.
   let visibleSessions = sortedSessions;
   let activeRow = visibleSessions.find(matchesCurrentSession);
-  if (!activeRow && activeSession && input.archivedFilter !== "archived") {
-    // Deep-linked and archived sessions still need a visible selected row.
+  if (
+    !activeRow &&
+    activeSession &&
+    sessionMatchesArchivedFilter(activeSession, input.archivedFilter)
+  ) {
+    // Deep-linked sessions matching this list's filter still need a selected row.
     activeRow = sortedSessions.find(matchesCurrentSession) ?? activeSession;
     visibleSessions = [activeRow, ...visibleSessions.filter((row) => row !== activeRow)];
   }
