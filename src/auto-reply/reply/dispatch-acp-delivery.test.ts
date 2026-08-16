@@ -95,11 +95,32 @@ vi.mock("../../infra/outbound/message-action-runner.js", () => ({
 }));
 
 function createDispatcher(): ReplyDispatcher {
+  const sendToolResult = vi.fn(() => true);
+  const sendBlockReply = vi.fn(() => true);
+  const sendFinalReply = vi.fn(() => true);
+  const counts = (delivered: number) => ({
+    delivered,
+    deliveredNotVisible: 0,
+    cancelled: 0,
+    failedBeforeSend: 0,
+    failedAfterSend: 0,
+  });
   return {
-    sendToolResult: vi.fn(() => true),
-    sendBlockReply: vi.fn(() => true),
-    sendFinalReply: vi.fn(() => true),
-    waitForIdle: vi.fn(async () => {}),
+    sendToolResult,
+    sendBlockReply,
+    sendFinalReply,
+    waitForIdle: vi.fn(async () => ({
+      counts: {
+        tool: counts(sendToolResult.mock.calls.length),
+        block: counts(sendBlockReply.mock.calls.length),
+        final: counts(sendFinalReply.mock.calls.length),
+      },
+      anyVisibleDelivered:
+        sendToolResult.mock.calls.length +
+          sendBlockReply.mock.calls.length +
+          sendFinalReply.mock.calls.length >
+        0,
+    })),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     markComplete: vi.fn(),
   };

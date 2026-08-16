@@ -1167,10 +1167,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
   });
 
-  it("does not deliver no-visible fallback when dispatcher already queued a block", async () => {
+  it("does not infer visibility from a custom dispatcher's queued block", async () => {
     setNoAbort();
-    // Channel-owned admissions outside the dispatch pipeline have unknown
-    // settlement; the foreign-admission backstop keeps the fallback quiet.
+    // Custom admissions without a settled receipt remain unknown and therefore non-visible.
     const dispatcher = createDispatcher();
     dispatcher.getQueuedCounts = vi.fn(() => ({ tool: 0, block: 1, final: 0 }));
     const replyResolver = vi.fn(async () => undefined);
@@ -1197,11 +1196,10 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyResolver,
     });
 
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+    expect(result.queuedFinal).toBe(true);
     expect(result.counts.block).toBe(1);
-    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
-    expect(result.noVisibleReplyFallbackEligible).toBe(true);
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
   });
 
   it("keeps no-visible fallback eligible when core fallback delivery fails", async () => {

@@ -10,6 +10,32 @@ describe("channel contract testing helpers", () => {
       {
         queuedFinal: false,
         counts: { tool: 0, block: 1, final: 0 },
+        settledReceipt: {
+          counts: {
+            tool: {
+              delivered: 0,
+              deliveredNotVisible: 0,
+              cancelled: 0,
+              failedBeforeSend: 0,
+              failedAfterSend: 0,
+            },
+            block: {
+              delivered: 1,
+              deliveredNotVisible: 0,
+              cancelled: 0,
+              failedBeforeSend: 0,
+              failedAfterSend: 0,
+            },
+            final: {
+              delivered: 0,
+              deliveredNotVisible: 0,
+              cancelled: 0,
+              failedBeforeSend: 0,
+              failedAfterSend: 0,
+            },
+          },
+          anyVisibleDelivered: true,
+        },
       },
       {
         visible: true,

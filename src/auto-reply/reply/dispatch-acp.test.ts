@@ -317,11 +317,32 @@ function createDispatcher(): {
   counts: Record<"tool" | "block" | "final", number>;
 } {
   const counts = { tool: 0, block: 0, final: 0 };
+  const sendToolResult = vi.fn(() => true);
+  const sendBlockReply = vi.fn(() => true);
+  const sendFinalReply = vi.fn(() => true);
+  const settledCounts = (delivered: number) => ({
+    delivered,
+    deliveredNotVisible: 0,
+    cancelled: 0,
+    failedBeforeSend: 0,
+    failedAfterSend: 0,
+  });
   const dispatcher: ReplyDispatcher = {
-    sendToolResult: vi.fn(() => true),
-    sendBlockReply: vi.fn(() => true),
-    sendFinalReply: vi.fn(() => true),
-    waitForIdle: vi.fn(async () => {}),
+    sendToolResult,
+    sendBlockReply,
+    sendFinalReply,
+    waitForIdle: vi.fn(async () => ({
+      counts: {
+        tool: settledCounts(sendToolResult.mock.calls.length),
+        block: settledCounts(sendBlockReply.mock.calls.length),
+        final: settledCounts(sendFinalReply.mock.calls.length),
+      },
+      anyVisibleDelivered:
+        sendToolResult.mock.calls.length +
+          sendBlockReply.mock.calls.length +
+          sendFinalReply.mock.calls.length >
+        0,
+    })),
     getQueuedCounts: vi.fn(() => counts),
     markComplete: vi.fn(),
   };

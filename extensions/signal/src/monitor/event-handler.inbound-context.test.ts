@@ -144,8 +144,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
           history: resolved.history,
           admission: resolved.admission,
           botLoopProtection: resolved.botLoopProtection,
-          runDispatch: async () =>
-            await dispatchInboundMessageMock({
+          runDispatch: async () => {
+            const dispatchResult = await dispatchInboundMessageMock({
               ctx: resolved.ctxPayload,
               cfg: resolved.cfg,
               dispatcher,
@@ -153,7 +153,35 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
                 ...resolved.replyOptions,
                 onReplyStart: resolved.dispatcherOptions?.typingCallbacks?.onReplyStart,
               },
-            }),
+            });
+            if (dispatchResult.settledReceipt) {
+              return dispatchResult;
+            }
+            const counts = (kind: "tool" | "block" | "final") => {
+              const failedBeforeSend = dispatchResult.failedCounts?.[kind] ?? 0;
+              return {
+                delivered: Math.max(0, (dispatchResult.counts?.[kind] ?? 0) - failedBeforeSend),
+                deliveredNotVisible: 0,
+                cancelled: 0,
+                failedBeforeSend,
+                failedAfterSend: 0,
+              };
+            };
+            const settledCounts = {
+              tool: counts("tool"),
+              block: counts("block"),
+              final: counts("final"),
+            };
+            return {
+              ...dispatchResult,
+              settledReceipt: {
+                counts: settledCounts,
+                anyVisibleDelivered: Object.values(settledCounts).some(
+                  (entry) => entry.delivered > 0,
+                ),
+              },
+            };
+          },
         });
       };
       let result;
