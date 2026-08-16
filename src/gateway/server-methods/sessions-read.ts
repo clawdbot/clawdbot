@@ -76,11 +76,7 @@ import {
 import { emitSessionsChanged } from "./session-change-event.js";
 import { respondWithCachedSessionList } from "./sessions-list-cache.js";
 import { resolveSessionSearchScope } from "./sessions-search-scope.js";
-import {
-  filterSessionStoreToConfiguredAgents,
-  loadSessionEntriesForTarget,
-  requireSessionKey,
-} from "./sessions-shared.js";
+import { loadSessionEntriesForTarget, requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -224,11 +220,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           options: {
             allowFullReload?: boolean;
             excludedKeys?: ReadonlySet<string>;
-            loaded?: {
-              durableStorePath?: string;
-              listStore: Record<string, SessionEntry>;
+            loaded?: ReturnType<typeof loadCombinedSessionStoreForGatewayCore> & {
               modelCatalog: Awaited<ReturnType<typeof readPreparedServerMethodModelCatalog>>;
-              storePath: string;
             };
             rowRepairAttempted?: boolean;
           } = {},
@@ -247,11 +240,12 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 phase: "sessions.list",
               },
             );
-            const { durableStorePath, storePath, store } = measureDiagnosticsTimelineSpanSync(
+            const loadedStore = measureDiagnosticsTimelineSpanSync(
               "gateway.sessions.list.store_load",
               () =>
                 loadCombinedSessionStoreForGatewayCore(cfg, {
                   agentId: p.agentId,
+                  configuredAgentsOnly,
                   projection: "list",
                 }),
               {
@@ -263,19 +257,12 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 },
               },
             );
-            loaded = {
-              durableStorePath,
-              listStore: configuredAgentsOnly
-                ? filterSessionStoreToConfiguredAgents(cfg, store)
-                : store,
-              modelCatalog,
-              storePath,
-            };
+            loaded = { ...loadedStore, modelCatalog };
           }
           if (!loaded) {
             throw new Error("sessions.list store input was not loaded");
           }
-          const { durableStorePath, listStore, modelCatalog, storePath } = loaded;
+          const { durableStorePath, durableTargets, modelCatalog, storePath } = loaded;
           const visibilityFilter = createSessionListEntryFilter({ client });
           const entryFilter =
             visibilityFilter || options.excludedKeys?.size
@@ -290,7 +277,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 durableStorePath,
                 ...(entryFilter ? { entryFilter } : {}),
                 storePath,
-                store: listStore,
+                store: loaded.store,
                 modelCatalog,
                 opts: p,
               }),
@@ -307,6 +294,14 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
               // materialized every entry of a candidate store once per row.
               const sharingStoreCache: GatewaySessionStoreCache = new Map();
               const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
+              const storeConfig = cfg.session?.store;
+              for (const target of durableTargets) {
+                const agentId = target.agentId;
+                const existing = targetDiscoveryCache.get(agentId)?.existing ?? [];
+                const fallbackStorePath = resolveSessionStorePathCore(storeConfig, { agentId });
+                const fallback = { agentId, storePath: fallbackStorePath };
+                targetDiscoveryCache.set(agentId, { existing: [...existing, target], fallback });
+              }
               const resolvedSharingTargets = result.sessions.map((session) =>
                 resolveSessionSharingTarget({
                   cfg,

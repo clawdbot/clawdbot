@@ -1499,11 +1499,16 @@ describe("loadCombinedSessionStoreForGatewayCore includes disk-only agents (#328
         { sessionId: "s-legacy-ops", spawnedBy: "agent:ops:main", updatedAt: 400 },
         "ops",
       );
-      const dynamicIncognitoKey = "dashboard:incognito-dynamic";
+      const dynamicIncognitoKey = "agent:dynamic:dashboard:incognito-child";
       await seedSessionEntry(
         resolveIncognitoOpenClawAgentSqlitePath({ agentId: "dynamic" }),
         dynamicIncognitoKey,
-        { incognito: true, sessionId: "s-incognito-dynamic", updatedAt: 500 },
+        {
+          incognito: true,
+          parentSessionKey: "agent:ops:main",
+          sessionId: "s-incognito-dynamic",
+          updatedAt: 500,
+        },
         "dynamic",
       );
       await seedSessionEntry(
@@ -1531,7 +1536,7 @@ describe("loadCombinedSessionStoreForGatewayCore includes disk-only agents (#328
       expect(configuredOnly["agent:ops:legacy"]?.sessionId).toBe("s-legacy-ops");
       expect(configuredOnly["agent:ops:legacy"]?.spawnedBy).toBe("agent:ops:main");
       expect(configuredOnly["agent:dynamic:main"]).toBeUndefined();
-      expect(configuredOnly[dynamicIncognitoKey]).toBeUndefined();
+      expect(configuredOnly[dynamicIncognitoKey]?.sessionId).toBe("s-incognito-dynamic");
 
       const opsOnly = loadCombinedSessionStoreForGatewayCore(cfg, { agentId: "ops" }).store;
       expect(opsOnly["agent:ops:main"]?.sessionId).toBe("s-ops");

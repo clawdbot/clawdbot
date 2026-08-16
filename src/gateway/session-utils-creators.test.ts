@@ -1,7 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { filterSessionStoreToConfiguredAgents } from "./server-methods/sessions-shared.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
 
@@ -208,13 +207,6 @@ it("preserves legacy list output across visibility, scope, creator, and search f
       updatedAt: now - 5,
       visibility: "shared",
     },
-    "agent:retired:shared": {
-      createdActor: { type: "human", id: "profile-carol" },
-      sessionId: "session-retired-shared",
-      subject: "needle retired",
-      updatedAt: now - 6,
-      visibility: "shared",
-    },
     "agent:main:archived": {
       archivedAt: now - 10,
       createdActor: { type: "human", id: "profile-bob" },
@@ -247,14 +239,13 @@ it("preserves legacy list output across visibility, scope, creator, and search f
     },
   } as GatewayClient;
   const entryFilter = createSessionListEntryFilter({ client: viewer });
-  const configuredStore = filterSessionStoreToConfiguredAgents(cfg, store);
 
   const project = async (opts: Parameters<typeof listSessionsFromStore>[0]["opts"]) => {
     const result = await listSessionsFromStoreAsync({
       cfg,
       ...(entryFilter ? { entryFilter } : {}),
       opts,
-      store: configuredStore,
+      store,
       storePath: "/tmp/openclaw-session-filter-parity",
     });
     return {
