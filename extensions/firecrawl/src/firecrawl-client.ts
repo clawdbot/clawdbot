@@ -1,5 +1,6 @@
 // Firecrawl plugin module implements firecrawl client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
@@ -561,6 +562,13 @@ export function parseFirecrawlScrapePayload(params: {
     data.metadata && typeof data.metadata === "object"
       ? (data.metadata as Record<string, unknown>)
       : undefined;
+  const rawStatus = parseFiniteNumber(metadata?.statusCode) ?? parseFiniteNumber(data.statusCode);
+  const status = rawStatus === undefined ? undefined : Math.floor(rawStatus);
+  if (status !== undefined && (status < 200 || status >= 300)) {
+    throw new Error(
+      `Firecrawl fetch failed (${status}): target returned an unsuccessful HTTP status.`,
+    );
+  }
   const markdown =
     (typeof data.markdown === "string" && data.markdown) ||
     (typeof data.content === "string" && data.content) ||
@@ -582,10 +590,6 @@ export function parseFirecrawlScrapePayload(params: {
     source: "web_fetch",
     includeWarning: false,
   });
-  const status =
-    (typeof metadata?.statusCode === "number" && metadata.statusCode) ||
-    (typeof data.statusCode === "number" && data.statusCode) ||
-    undefined;
   const title =
     typeof metadata?.title === "string" && metadata.title
       ? wrapBoundedMetadata(metadata.title)
