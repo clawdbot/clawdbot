@@ -693,10 +693,12 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   params.logger.info(
     `memory-core: dreaming promotion complete (workspaces=${workspaces.length}, candidates=${totalCandidates}, applied=${totalApplied}, failed=${failedWorkspaces}).`,
   );
-  if (totalCandidates > 0 && totalApplied === 0) {
-    // Ranking candidates and then applying none of them means every candidate
-    // was silently dropped between rank and apply — the exact failure mode
-    // that froze MEMORY.md for weeks. Name the reasons so the drop is visible.
+  if (skipReasonCounts.size > 0 || (totalCandidates > 0 && totalApplied === 0)) {
+    // A candidate dropped between rank and apply is invisible unless named —
+    // the exact failure mode that froze MEMORY.md for weeks. The old gate
+    // only fired when applied === 0 across ALL workspaces, so a partial drop
+    // (one paragraph candidate applies, nine list candidates die) was never
+    // logged. Any non-empty skip set is worth a line.
     const skipSummary =
       skipReasonCounts.size > 0
         ? [...skipReasonCounts.entries()]
@@ -705,7 +707,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
             .join(", ")
         : "none recorded";
     params.logger.warn(
-      `memory-core: dreaming promotion ranked ${totalCandidates} candidate(s) but applied 0; skip reasons: ${skipSummary}.`,
+      `memory-core: dreaming promotion ranked ${totalCandidates} candidate(s), applied ${totalApplied}; skip reasons: ${skipSummary}.`,
     );
   }
 

@@ -174,10 +174,28 @@ describe("bundled plugin build entries", () => {
     const entries = listBundledPluginBuildEntries();
     const artifacts = listBundledPluginPackArtifacts();
 
-    for (const pluginId of ["amazon-bedrock", "amazon-bedrock-mantle", "anthropic-vertex"]) {
+    for (const pluginId of ["amazon-bedrock-mantle", "anthropic-vertex"]) {
       expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
       expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
     }
+  });
+
+  it("bundles amazon-bedrock so the memory-embedding provider ships in the gateway image", () => {
+    // The staging gateway config sets memorySearch.provider = "bedrock" and the
+    // adapter registers under exactly that id — but upstream distributes
+    // amazon-bedrock as an npm-external provider and excluded it from dist via
+    // the root package.json files negation. Result on staging: the plugin was
+    // named in OPENCLAW_EXTENSIONS, source-copied into the image, made
+    // startup-eager, credentialled — and still absent from
+    // /app/dist/extensions, so every memory_search died with "Unknown memory
+    // embedding provider: bedrock". Bundling is the load-bearing layer; this
+    // pin keeps it from silently regressing to external-only.
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expectSomePrefixMatch(Object.keys(entries), "extensions/amazon-bedrock/");
+    expectSomePrefixMatch(artifacts, "dist/extensions/amazon-bedrock/");
+    expect(artifacts).toContain("dist/extensions/amazon-bedrock/openclaw.plugin.json");
   });
 
   it("keeps externalized runtime-dependency plugins out of bundled dist entries", () => {

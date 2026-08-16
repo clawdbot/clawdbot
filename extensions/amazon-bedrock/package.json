@@ -32,7 +32,7 @@
     },
     "build": {
       "openclawVersion": "2026.5.28",
-      "bundledDist": false
+      "bundledDist": true
     },
     "release": {
       "publishToClawHub": true,

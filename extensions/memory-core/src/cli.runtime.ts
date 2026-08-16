@@ -1368,6 +1368,9 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
                 reconciledExisting: applyResult.reconciledExisting,
                 memoryPath: applyResult.memoryPath,
                 appliedCandidates: applyResult.appliedCandidates,
+                // Dropped candidates and WHY — omitting this made "applied: 0"
+                // indistinguishable from "no candidates" in scripted use.
+                skipped: applyResult.skipped,
               }
             : undefined,
         });
@@ -1446,6 +1449,21 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
           );
         } else {
           lines.push(colorize(rich, theme.warn, "No candidates met apply criteria."));
+          if (applyResult.skipped.length > 0) {
+            const reasonCounts = new Map<string, number>();
+            for (const skip of applyResult.skipped) {
+              reasonCounts.set(skip.reason, (reasonCounts.get(skip.reason) ?? 0) + 1);
+            }
+            lines.push(
+              colorize(
+                rich,
+                theme.muted,
+                `skipped: ${[...reasonCounts.entries()]
+                  .map(([reason, count]) => `${reason}=${count}`)
+                  .join(", ")}`,
+              ),
+            );
+          }
         }
       }
       defaultRuntime.log(lines.join("\n").trim());

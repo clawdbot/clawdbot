@@ -30,3 +30,18 @@ export function includesSystemEventToken(cleanedBody: string, eventText: string)
     return trimmed.replace(/^\[cron:[^\]]+\]\s*/, "") === normalizedEventText;
   });
 }
+
+/** Matches the daily-diary list markers the ingestion snippet builder strips
+ * (numbered `1. ` or bulleted `- ` / `* ` / `+ `). Shared between the builder
+ * (dreaming-phases.ts) and the apply-time relocator (short-term-promotion.ts)
+ * so the two sides can never normalize differently again: when they did, a
+ * stored list-shaped snippet ("T1; T2") could NEVER match its raw window
+ * ("- T1" / "- T2") and every list candidate died silently at apply time. */
+export const DAILY_LIST_MARKER_RE = /^(?:\d+\.|[-*+])\s+/;
+
+export function stripDailyListMarker(line: string): string {
+  return line
+    .replace(/^\d+\.\s+/, "")
+    .replace(/^[-*+]\s+/, "")
+    .trim();
+}

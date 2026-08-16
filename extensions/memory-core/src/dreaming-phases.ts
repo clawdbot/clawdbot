@@ -26,7 +26,12 @@ import {
   type NarrativePhaseData,
   runDetachedDreamNarrative,
 } from "./dreaming-narrative.js";
-import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
+import {
+  asRecord,
+  formatErrorMessage,
+  normalizeTrimmedString,
+  stripDailyListMarker,
+} from "./dreaming-shared.js";
 import { textSimilarity as snippetSimilarity } from "./memory/tokenize.js";
 import {
   filterLiveShortTermRecallEntries,
@@ -152,10 +157,11 @@ function isDayWithinLookback(day: string, cutoffMs: number): boolean {
 }
 
 function normalizeDailyListMarker(line: string): string {
-  return line
-    .replace(/^\d+\.\s+/, "")
-    .replace(/^[-*+]\s+/, "")
-    .trim();
+  // Delegates to the shared canonicalizer so the apply-time relocator
+  // (short-term-promotion.ts normalizeRangeSnippet) can never drift from the
+  // builder again — the drift is exactly what made list-shaped candidates
+  // unmatchable at apply time.
+  return stripDailyListMarker(line);
 }
 
 function normalizeDailyHeading(line: string): string | null {

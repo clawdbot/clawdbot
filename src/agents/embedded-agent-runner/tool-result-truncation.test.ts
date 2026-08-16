@@ -679,3 +679,83 @@ describe("truncateToolResultText head+tail strategy", () => {
     expect(result).toContain("truncated");
   });
 });
+
+describe("aggregate truncation is byte-stable as history grows", () => {
+  // The provider prompt cache matches byte-prefixes: if the aggregate pass
+  // gives the frontier entry a PARTIAL cut sized by the session-wide excess,
+  // that entry's bytes change on every turn that appends tool output, and the
+  // whole rendered suffix behind it re-writes (measured on staging as a full
+  // ~31.5k-token 1h cache write on every long-session turn). Truncating each
+  // selected entry to its deterministic floor makes an already-truncated
+  // entry's bytes independent of everything that comes after it.
+  const toolResultText = (msg: AgentMessage): string => {
+    const block = (msg as ToolResultMessage).content?.[0];
+    return block && block.type === "text" ? block.text : "";
+  };
+
+  it("keeps already-truncated entries byte-identical when later turns add tool output", () => {
+    const base: AgentMessage[] = [
+      makeUserMessage("start"),
+      makeAssistantMessage("working"),
+      ...Array.from({ length: 5 }, (_, i) =>
+        makeToolResult(String.fromCharCode(97 + i).repeat(3_000), `call_${i}`),
+      ),
+    ];
+    const render1 = truncateOversizedToolResultsInMessages(base, 128_000, 4_000, 8_000);
+    expect(render1.truncatedCount).toBeGreaterThan(0);
+
+    // Two more tool results arrive (a later turn); the aggregate excess grows.
+    const grown: AgentMessage[] = [
+      ...base,
+      makeToolResult("f".repeat(3_000), "call_5"),
+      makeToolResult("g".repeat(3_000), "call_6"),
+    ];
+    const render2 = truncateOversizedToolResultsInMessages(grown, 128_000, 4_000, 8_000);
+
+    for (let i = 2; i < base.length; i += 1) {
+      const before = toolResultText(render1.messages[i] as AgentMessage);
+      const after = toolResultText(render2.messages[i] as AgentMessage);
+      if (before !== toolResultText(base[i] as AgentMessage)) {
+        // This entry was truncated in render 1; growing history must not
+        // change its bytes. Under the pre-fix partial-frontier behaviour the
+        // frontier entry fails exactly here.
+        expect(after).toBe(before);
+      }
+    }
+  });
+
+  it("still spends reduction oldest-first and leaves the newest tool output intact", () => {
+    const base: AgentMessage[] = [
+      makeUserMessage("start"),
+      makeAssistantMessage("working"),
+      ...Array.from({ length: 5 }, (_, i) =>
+        makeToolResult(String.fromCharCode(97 + i).repeat(3_000), `call_${i}`),
+      ),
+    ];
+    const { messages: result, truncatedCount } = truncateOversizedToolResultsInMessages(
+      base,
+      128_000,
+      4_000,
+      8_000,
+    );
+    expect(truncatedCount).toBeGreaterThan(0);
+    // Newest tool result must be untouched: reduction is spent oldest-first.
+    expect(toolResultText(result[6] as AgentMessage)).toBe("e".repeat(3_000));
+    // Oldest is truncated to its floor.
+    expect(toolResultText(result[2] as AgentMessage)).not.toBe("a".repeat(3_000));
+  });
+
+  it("is a fixpoint: re-rendering already-truncated history changes nothing", () => {
+    const base: AgentMessage[] = [
+      makeUserMessage("start"),
+      makeAssistantMessage("working"),
+      ...Array.from({ length: 5 }, (_, i) =>
+        makeToolResult(String.fromCharCode(97 + i).repeat(3_000), `call_${i}`),
+      ),
+    ];
+    const render1 = truncateOversizedToolResultsInMessages(base, 128_000, 4_000, 8_000);
+    const render2 = truncateOversizedToolResultsInMessages(render1.messages, 128_000, 4_000, 8_000);
+    expect(render2.truncatedCount).toBe(0);
+    expect(render2.messages).toEqual(render1.messages);
+  });
+});

@@ -641,11 +641,10 @@ describe("memory-core dreaming phases", () => {
 
   it("promotes an ingested daily-file candidate into MEMORY.md through rank and apply (W10 D3)", async () => {
     const workspaceDir = await createDreamingWorkspace();
-    // Paragraph-style lines: the daily-ingestion chunk snippet then matches
-    // the file text verbatim, so the candidate survives rehydration at apply
-    // time. (List-marker lines are rewritten by ingestion — "- a" / "- b"
-    // becomes "a; b" — which can never relocate against the raw file and is
-    // reported as a content-mismatch skip.)
+    // Paragraph-style lines: the daily-ingestion chunk snippet matches the
+    // file text verbatim. (List-marker lines are rewritten by ingestion —
+    // "- a" / "- b" becomes "a; b" — and relocate through the canonicalized
+    // matcher; the bulleted test below pins that path.)
     await fs.writeFile(
       path.join(workspaceDir, "memory", "2026-04-05.md"),
       ["# 2026-04-05", "", "Move backups to S3 Glacier.", "Keep retention at 365 days."].join("\n"),
@@ -713,6 +712,80 @@ describe("memory-core dreaming phases", () => {
     expect(memoryAfter.length).toBeGreaterThan(memoryBefore.length);
     expect(memoryAfter).toContain("Move backups to S3 Glacier.");
     expect(memoryAfter).toContain("Promoted From Short-Term Memory");
+  });
+
+  it("promotes a BULLETED daily-file candidate — list snippets relocate against the raw file", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    // The ingestion snippet builder strips list markers and joins list chunks
+    // with "; " ("- a" / "- b" under "## Trading Decisions" is stored as
+    // "Trading Decisions: a; b") while the raw file keeps its markers. Until
+    // the relocator canonicalized its windows the same way, every list-shaped
+    // candidate died at apply time as a content-mismatch skip — silently, for
+    // 14 consecutive nights on staging (candidates=10, applied=0 each night).
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-05.md"),
+      [
+        "# 2026-04-05",
+        "",
+        "## Trading Decisions",
+        "- Move gold stops to breakeven after London close.",
+        "- Cap XAU risk at one percent per trade.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 20,
+                      lookbackDays: 2,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
+
+    const nowMs = Date.parse("2026-04-05T10:05:00.000Z");
+    const ranked = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs,
+    });
+    expect(ranked.length).toBeGreaterThan(0);
+
+    const applied = await applyShortTermPromotions({
+      workspaceDir,
+      candidates: ranked,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs,
+    });
+
+    // Pre-fix, the list candidate dies exactly here as content-mismatch.
+    expect(applied.skipped.filter((skip) => skip.reason === "content-mismatch")).toEqual([]);
+    expect(applied.applied).toBeGreaterThan(0);
+    const memoryAfter = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    expect(memoryAfter).toContain("Move gold stops to breakeven after London close.");
   });
 
   it("never ranks .dreams store entries left on disk as promotion candidates (W10 D1)", async () => {

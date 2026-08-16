@@ -466,7 +466,16 @@ function buildAggregateToolResultReplacements(params: {
       continue;
     }
 
-    const requestedReduction = Math.min(reducibleChars, remainingReduction);
+    // Truncate the selected entry all the way to its floor rather than by
+    // `min(reducibleChars, remainingReduction)`. A partial cut sized by the
+    // session-wide running excess makes the frontier entry's bytes depend on
+    // the TOTAL, which grows every turn — so one old message deep in history
+    // changed on every render and invalidated the provider prompt cache for
+    // the entire suffix (measured: a full ~31.5k-token 1h cache re-write per
+    // turn on a long session). Cutting to the deterministic floor makes every
+    // truncated entry byte-stable across renders; renders now diverge only
+    // when a NEW entry first crosses the budget (a one-time write).
+    const requestedReduction = reducibleChars;
     const targetChars = Math.max(minTruncatedTextChars, candidate.textLength - requestedReduction);
     const truncatedMessage = truncateToolResultMessage(candidate.message, targetChars, {
       minKeepChars,

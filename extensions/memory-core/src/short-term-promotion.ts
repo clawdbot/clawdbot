@@ -19,7 +19,7 @@ import {
   summarizeConceptTagScriptCoverage,
   type ConceptTagScriptCoverage,
 } from "./concept-vocabulary.js";
-import { asRecord } from "./dreaming-shared.js";
+import { asRecord, DAILY_LIST_MARKER_RE, stripDailyListMarker } from "./dreaming-shared.js";
 import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
 
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
@@ -1613,7 +1613,17 @@ function normalizeRangeSnippet(lines: string[], startLine: number, endLine: numb
   if (startIndex >= endIndex) {
     return "";
   }
-  return normalizeSnippet(lines.slice(startIndex, endIndex).join(" "));
+  // Canonicalize the raw window exactly like the daily-diary snippet builder
+  // (dreaming-phases.ts buildDailyChunkSnippet): strip list markers per line
+  // and join list-shaped windows with "; ". The builder stores "T1; T2" while
+  // the raw file still reads "- T1" / "- T2"; joining raw lines with " " made
+  // every multi-line or heading-prefixed list candidate fail relocation as
+  // content-mismatch — silently, every night, for 14 nights straight.
+  const slice = lines.slice(startIndex, endIndex);
+  const nonEmpty = slice.map((line) => line.trim()).filter(Boolean);
+  const isList = nonEmpty.length > 0 && nonEmpty.every((line) => DAILY_LIST_MARKER_RE.test(line));
+  const canonical = slice.map(stripDailyListMarker).filter(Boolean);
+  return normalizeSnippet(canonical.join(isList ? "; " : " "));
 }
 
 function compareCandidateWindow(
