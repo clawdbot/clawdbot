@@ -7,7 +7,6 @@ import { getAiTransportHost } from "../host.js";
 import { resolveAzureDeploymentNameFromMap } from "../providers/azure-deployment-map.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../providers/azure-openai-responses-client-compat.js";
 import { applyResponsesServiceTierPricing } from "../providers/openai-responses-shared.js";
-import { projectProviderError } from "../utils/provider-error.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
@@ -74,6 +73,8 @@ import { createOpenAIResponseHook, log } from "./openai-transport-shared.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 import {
   createWritableTransportEventStream,
+  failTransportStream,
+  finalizeTransportStream,
   mergeTransportMetadata,
   transportAbortError,
   withProviderResponseHook,
@@ -319,12 +320,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           output.usage.output = compacted.usage.output_tokens;
           output.usage.totalTokens = compacted.usage.input_tokens + compacted.usage.output_tokens;
           compactRequest.resolve(compacted);
-          stream.push({
-            type: "done",
-            reason: output.stopReason as never,
-            message: output as never,
-          });
-          stream.end();
+          finalizeTransportStream({ stream, output, signal: options?.signal });
           return;
         }
         const sessionId = options?.sessionId;
@@ -366,7 +362,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         const startStream = () => {
           if (!started) {
             started = true;
-            stream.push({ type: "start", partial: output as never });
+            stream.push({ type: "start", partial: output });
           }
         };
         const firstEvent = createFirstStreamEventAbortController(options?.signal);
@@ -560,18 +556,11 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           `[responses] completed provider=${model.provider} api=${model.api} model=${model.id} ` +
             `transport=${transport} elapsedMs=${Date.now() - requestStartedAt}`,
         );
-        stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
-        stream.end();
+        finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error) {
         if (compactRequest) {
           compactRequest.reject(error);
-          Object.assign(output, projectProviderError(error, options?.signal));
-          stream.push({
-            type: "error",
-            reason: output.stopReason as never,
-            error: output as never,
-          });
-          stream.end();
+          failTransportStream({ stream, output, signal: options?.signal, error });
           return;
         }
         if (error instanceof ResponsesStreamFailure && error.observation) {
@@ -581,9 +570,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           `[responses] error provider=${model.provider} api=${model.api} model=${model.id} ` +
             summarizeOpenAITransportError(error),
         );
-        Object.assign(output, projectProviderError(error, options?.signal));
-        stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
-        stream.end();
+        failTransportStream({ stream, output, signal: options?.signal, error });
       } finally {
         continuationClaim?.release();
         firstEventAbort?.dispose();

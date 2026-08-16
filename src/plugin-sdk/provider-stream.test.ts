@@ -1,4 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Model } from "openclaw/plugin-sdk/llm";
 // Provider stream tests cover shared stream-wrapper families and payload compatibility.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
@@ -44,6 +45,39 @@ function requireStreamFn(streamFn: StreamFn | null | undefined) {
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
+
+const streamTestModel = {
+  id: "test-model",
+  name: "Test Model",
+  api: "openai-completions",
+  provider: "test",
+  baseUrl: "https://example.test/v1",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 8_192,
+  maxTokens: 1_024,
+} satisfies Model<"openai-completions">;
+
+function streamTestMessage(text: string) {
+  return {
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text }],
+    api: streamTestModel.api,
+    provider: streamTestModel.provider,
+    model: streamTestModel.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop" as const,
+    timestamp: 1,
+  };
+}
 
 function requirePayload(payload: Record<string, unknown> | undefined): Record<string, unknown> {
   if (!payload) {
@@ -607,7 +641,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     };
     const wrapped = requireStreamFn(createPlainTextToolCallCompatWrapper(baseStreamFn));
     const output = wrapped(
-      {} as never,
+      streamTestModel,
       { tools: [{ name: "read" }] } as never,
       {},
     ) as AsyncIterable<unknown>;
@@ -618,7 +652,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       type: "text_delta",
       contentIndex: 0,
       delta: "final answer starts here",
-      partial: { role: "assistant", content: "final answer starts here" },
+      partial: streamTestMessage("final answer starts here"),
     } as never);
 
     const firstResult = await Promise.race([
@@ -635,7 +669,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
 
     pushSourceEvent?.({
       type: "done",
-      message: { role: "assistant", content: "final answer starts here" },
+      reason: "stop",
+      message: streamTestMessage("final answer starts here"),
     } as never);
     await iterator.next();
   });

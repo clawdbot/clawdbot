@@ -1,14 +1,13 @@
 import type {
+  AssistantMessage,
   AssistantMessageEvent,
-  AssistantMessageDiagnostic,
   Context,
   ImageContent,
   Model,
-  ProviderReplayState,
   SimpleStreamOptions,
   StreamFn,
   TextContent,
-  Usage,
+  ToolCall,
 } from "@openclaw/llm-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 /**
@@ -121,8 +120,6 @@ import {
   resolveSecretSentinel,
 } from "./transport-utils.js";
 
-type ContextUsage = NonNullable<Usage["contextUsage"]>;
-
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS = 400;
 const ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS = 10_000;
@@ -166,38 +163,18 @@ type TransportContentBlock =
       redacted?: boolean;
       index?: number;
     }
-  | {
+  | ({
       type: "toolCall";
       id: string;
       name: string;
-      arguments: unknown;
+      arguments: Record<string, unknown>;
       partialJson?: string;
       index?: number;
-    };
+    } & ToolCall);
 
-type MutableAssistantOutput = {
-  role: "assistant";
+type MutableAssistantOutput = Omit<AssistantMessage, "api" | "content"> & {
   content: Array<TransportContentBlock>;
   api: "anthropic-messages";
-  provider: string;
-  model: string;
-  responseModel?: string;
-  usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    cacheWrite1h?: number;
-    contextUsage?: ContextUsage;
-    totalTokens: number;
-    cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
-  };
-  stopReason: string;
-  timestamp: number;
-  responseId?: string;
-  providerReplay?: ProviderReplayState;
-  errorMessage?: string;
-  diagnostics?: AssistantMessageDiagnostic[];
 };
 
 const EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT = ".";
@@ -598,8 +575,10 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
   return { projection, tools: converted };
 }
 
-function parseAnthropicToolCallArguments(inputJson: string): unknown {
-  return parseJsonObjectPreservingUnsafeIntegers(inputJson) ?? parseStreamingJson(inputJson);
+function parseAnthropicToolCallArguments(inputJson: string): Record<string, unknown> {
+  return coerceTransportToolCallArguments(
+    parseJsonObjectPreservingUnsafeIntegers(inputJson) ?? parseStreamingJson(inputJson),
+  );
 }
 
 const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
@@ -1258,7 +1237,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             eventSink.push({
               type: "thinking_start",
               contentIndex,
-              partial: output as never,
+              partial: output,
             });
           }
           if (contentIndex === undefined) {
@@ -1270,7 +1249,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             type: "thinking_delta",
             contentIndex,
             delta: text,
-            partial: output as never,
+            partial: output,
           });
           return true;
         };
@@ -1299,7 +1278,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             eventSink.push({
               type: "text_start",
               contentIndex,
-              partial: output as never,
+              partial: output,
             });
           }
           if (contentIndex === undefined) {
@@ -1310,7 +1289,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             type: "text_delta",
             contentIndex,
             delta: text,
-            partial: output as never,
+            partial: output,
           });
           return true;
         };
@@ -1325,7 +1304,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 type: "thinking_end",
                 contentIndex: thinkingContentIndex,
                 content: block.thinking,
-                partial: output as never,
+                partial: output,
               });
             }
           }
@@ -1340,7 +1319,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               type: "text_end",
               contentIndex: textContentIndex,
               content: block.text,
-              partial: output as never,
+              partial: output,
             });
           }
         };
@@ -1362,7 +1341,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             // (e.g. invalid thinking signatures) arrive before any non-error event
             // is yielded, keeping yieldedOutput=false in pumpStreamWithRecovery
             // and allowing the thinking-block recovery retry to fire.
-            eventSink.push({ type: "start", partial: output as never });
+            eventSink.push({ type: "start", partial: output });
             continue;
           }
           if (event.type === "message_stop") {
@@ -1407,7 +1386,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 }),
               };
               calculateCost(costModel, output.usage);
-              eventSink.push({ type: "start", partial: output as never });
+              eventSink.push({ type: "start", partial: output });
               for (const [i, block] of output.content.entries()) {
                 if (block.type !== "text") {
                   continue;
@@ -1416,21 +1395,21 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 eventSink.push({
                   type: "text_start",
                   contentIndex: i,
-                  partial: output as never,
+                  partial: output,
                 });
                 if (block.text) {
                   eventSink.push({
                     type: "text_delta",
                     contentIndex: i,
                     delta: block.text,
-                    partial: output as never,
+                    partial: output,
                   });
                 }
                 pendingTextEnds.push({
                   type: "text_end",
                   contentIndex: i,
                   content: block.text,
-                  partial: output as never,
+                  partial: output,
                 });
               }
               continue;
@@ -1448,14 +1427,14 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               eventSink.push({
                 type: "text_start",
                 contentIndex,
-                partial: output as never,
+                partial: output,
               });
               if (text.length > 0) {
                 eventSink.push({
                   type: "text_delta",
                   contentIndex,
                   delta: text,
-                  partial: output as never,
+                  partial: output,
                 });
               }
               continue;
@@ -1476,14 +1455,14 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               eventSink.push({
                 type: "thinking_start",
                 contentIndex,
-                partial: output as never,
+                partial: output,
               });
               if (thinking.length > 0) {
                 eventSink.push({
                   type: "thinking_delta",
                   contentIndex,
                   delta: thinking,
-                  partial: output as never,
+                  partial: output,
                 });
               }
               continue;
@@ -1501,7 +1480,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               eventSink.push({
                 type: "thinking_start",
                 contentIndex: output.content.length - 1,
-                partial: output as never,
+                partial: output,
               });
               continue;
             }
@@ -1529,7 +1508,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               eventSink.push({
                 type: "toolcall_start",
                 contentIndex: output.content.length - 1,
-                partial: output as never,
+                partial: output,
               });
             }
             continue;
@@ -1566,7 +1545,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                       type: "text_delta",
                       contentIndex: index,
                       delta: text,
-                      partial: output as never,
+                      partial: output,
                     });
                     appendedContent = true;
                   } else {
@@ -1589,7 +1568,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               eventSink.push({
                 type: "text_start",
                 contentIndex: index,
-                partial: output as never,
+                partial: output,
               });
             }
             if (index === undefined) {
@@ -1605,7 +1584,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 type: "text_delta",
                 contentIndex: index,
                 delta: delta.text,
-                partial: output as never,
+                partial: output,
               });
               continue;
             }
@@ -1619,7 +1598,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 type: "thinking_delta",
                 contentIndex: index,
                 delta: delta.thinking,
-                partial: output as never,
+                partial: output,
               });
               continue;
             }
@@ -1635,7 +1614,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 type: "toolcall_delta",
                 contentIndex: index,
                 delta: delta.partial_json,
-                partial: output as never,
+                partial: output,
               });
               continue;
             }
@@ -1678,7 +1657,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 type: "text_end",
                 contentIndex: index,
                 content: block.text,
-                partial: output as never,
+                partial: output,
               });
               finishReasoningContentSidecars(event.index);
               continue;
@@ -1691,7 +1670,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 type: "thinking_end",
                 contentIndex: index,
                 content: block.thinking,
-                partial: output as never,
+                partial: output,
               });
               finishReasoningContentSidecars(event.index);
               continue;
@@ -1701,8 +1680,8 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               eventSink.push({
                 type: "toolcall_end",
                 contentIndex: index,
-                toolCall: block as never,
-                partial: output as never,
+                toolCall: block,
+                partial: output,
               });
               finishReasoningContentSidecars(event.index);
             }
@@ -1780,7 +1759,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         });
       }
     })();
-    return eventStream as ReturnType<StreamFn>;
+    return eventStream;
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

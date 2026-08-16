@@ -65,7 +65,6 @@ export const CHAINED_ASSERTION_EXCLUDED_ROOTS = [
   "extensions/discord/src/monitor/threading.starter.ts", // Discord thread channels narrow a dependency union after runtime checks
   "extensions/github-copilot/index.ts", // config merge patches are intentionally deeper than Partial<OpenClawConfig>
   "extensions/google/realtime-voice-provider.ts", // provider tool schemas and lifecycle fields bridge Google SDK versions
-  "extensions/google/transport-stream.ts", // transport stream seam; needs API redesign
   "extensions/googlechat/src/approval-native.ts", // approval runtime dynamically implements the public channel adapter seam
   "extensions/imessage/src/approval-native.ts", // approval runtime dynamically implements the public channel adapter seam
   "extensions/line/src/outbound.ts", // LINE batch overload requires a bounded tuple that slice cannot retain
@@ -142,7 +141,6 @@ export const CHAINED_ASSERTION_EXCLUDED_ROOTS = [
   "src/meeting-bot/platform-adapter.ts", // Generic parsers add adapter-owned health and transcript fields.
   "src/meeting-bot/plugin-shell.ts", // Type-only plugin namespace factory has no runtime value.
   "src/plugin-sdk/channel-config-helpers.ts", // Public SDK accessor generics are intentionally decoupled.
-  "src/plugin-sdk/provider-stream-shared.ts", // Untyped normalizer events need a transport stream API redesign.
   "src/plugin-sdk/qa-runtime.ts", // Public SDK lazy module exposes a narrower runtime surface.
   "src/plugins/hook-isolation.ts", // Optional WebAssembly globals bridge runtime type namespaces.
   "src/plugins/interactive.ts", // Dynamic plugin context keys cross the generic handler seam.
