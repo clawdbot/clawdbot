@@ -652,7 +652,6 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       type: "text_delta",
       contentIndex: 0,
       delta: "final answer starts here",
-      partial: streamTestMessage("final answer starts here"),
     } as never);
 
     const firstResult = await Promise.race([
@@ -666,6 +665,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       done: false,
       value: { type: "text_delta", delta: "final answer starts here" },
     });
+    expect(firstResult).not.toHaveProperty("value.partial");
 
     pushSourceEvent?.({
       type: "done",

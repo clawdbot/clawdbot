@@ -41,9 +41,11 @@ export function assertProviderStreamEvent(
     materializeMessage(event.error, model, reason);
     return;
   }
-  if (event.type !== "start") {
+  if (event.type === "text_delta" && event.partial === undefined) {
     event.contentIndex ??= 0;
+    return;
   }
+  event.contentIndex ??= 0;
   event.partial ??= { role: "assistant", content: [] };
   materializeMessage(event.partial, model, "stop");
 }
