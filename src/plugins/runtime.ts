@@ -77,12 +77,20 @@ async function cleanupPreviousPluginHostRegistry(params: {
   // Async cleanup must not clear state for a registry that has been restored
   // active, but later swaps should not strand cleanup for the retiring registry.
   const shouldCleanup = () => state.activeRegistry !== params.previousRegistry;
-  await cleanupReplacedPluginHostRegistry({
+  const { failures } = await cleanupReplacedPluginHostRegistry({
     cfg: getRuntimeConfig(),
     previousRegistry: params.previousRegistry,
     nextRegistry,
     shouldCleanup,
   });
+  // Per-hook cleanup errors are collected instead of thrown (host-hook-cleanup
+  // must finish every plugin); dropping them here would hide broken
+  // session-extension/scheduler teardown from operators entirely.
+  for (const failure of failures) {
+    log.warn(
+      `plugin host cleanup failed for ${failure.pluginId} hook ${failure.hookId}: ${String(failure.error)}`,
+    );
+  }
 }
 
 function cleanupRetiredPluginHostRegistry(previousRegistry: PluginRegistry): void {
