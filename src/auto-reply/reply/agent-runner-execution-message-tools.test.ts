@@ -80,7 +80,11 @@ describe("executeAgentTurn: message tool progress", () => {
       });
       releaseItemEvent?.();
       await itemEventPromise;
-      return { payloads: [{ text: "NO_REPLY" }], meta: {} };
+      return {
+        payloads: [{ text: "NO_REPLY" }],
+        didDeliverSourceReplyViaMessageTool: true,
+        meta: {},
+      };
     });
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
