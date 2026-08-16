@@ -246,7 +246,9 @@ describeControlUiE2e("Control UI web-search kill switch against a real Gateway",
         `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}.`,
       );
     }
-    await mkdir(artifactDir, { recursive: true });
+    if (captureUiProofEnabled) {
+      await mkdir(artifactDir, { recursive: true });
+    }
     ui = await startControlUiE2eServer();
     gateway = await startRealGateway(new URL(ui.baseUrl).origin);
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
