@@ -590,6 +590,16 @@ jobs:
             exit 1
           fi
 
+      - name: Prepare aggregate QA evidence for rendering
+        env:
+          QA_EVIDENCE_PATH: ${{ steps.evidence.outputs.qa_evidence_path }}
+        run: |
+          set -euo pipefail
+          render_evidence_dir=".artifacts/maturity-render-evidence"
+          rm -rf "$render_evidence_dir"
+          mkdir -p "$render_evidence_dir"
+          install -m 0644 "$QA_EVIDENCE_PATH" "$render_evidence_dir/qa-evidence.json"
+
       - name: Validate maturity score sources
         run: |
           node --import tsx --input-type=module <<'NODE'
@@ -617,7 +627,7 @@ jobs:
             --output-dir .artifacts/maturity-docs \
             --static-assets-dir .artifacts/maturity-docs/assets/maturity \
             --scores qa/maturity-scores.yaml \
-            --evidence-dir .artifacts/maturity-evidence \
+            --evidence-dir .artifacts/maturity-render-evidence \
             --strict-inputs \
             "${allow_failures_args[@]}"
           {
@@ -642,7 +652,7 @@ jobs:
           pnpm maturity:render -- \
             --output-dir docs \
             --scores qa/maturity-scores.yaml \
-            --evidence-dir .artifacts/maturity-evidence \
+            --evidence-dir .artifacts/maturity-render-evidence \
             --strict-inputs \
             "${allow_failures_args[@]}"
 

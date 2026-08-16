@@ -8122,11 +8122,25 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
     expect(generatedPrUploadStep.with.path.trim().split("\n")).toEqual(MATURITY_GENERATED_PR_PATHS);
 
+    const prepareRenderEvidenceStep = publishJob.steps.find(
+      (step: WorkflowStep) => step.name === "Prepare aggregate QA evidence for rendering",
+    );
+    expect(prepareRenderEvidenceStep.env.QA_EVIDENCE_PATH).toBe(
+      "${{ steps.evidence.outputs.qa_evidence_path }}",
+    );
+    expect(prepareRenderEvidenceStep.run).toContain(
+      'render_evidence_dir=".artifacts/maturity-render-evidence"',
+    );
+    expect(prepareRenderEvidenceStep.run).toContain(
+      'install -m 0644 "$QA_EVIDENCE_PATH" "$render_evidence_dir/qa-evidence.json"',
+    );
     for (const stepName of ["Render artifact docs", "Render committed docs preview"]) {
       const renderStep = publishJob.steps.find((step: WorkflowStep) => step.name === stepName);
       expect(renderStep.env.ALLOW_FAILURES).toBe("${{ inputs.allow_failures }}");
       expect(renderStep.run).toContain('[[ "$ALLOW_FAILURES" == "true" ]]');
       expect(renderStep.run).toContain("allow_failures_args+=(--allow-failures)");
+      expect(renderStep.run).toContain("--evidence-dir .artifacts/maturity-render-evidence");
+      expect(renderStep.run).not.toContain("--evidence-dir .artifacts/maturity-evidence");
       expect(renderStep.run).toContain('"${allow_failures_args[@]}"');
     }
     const renderArtifactStep = publishJob.steps.find(
