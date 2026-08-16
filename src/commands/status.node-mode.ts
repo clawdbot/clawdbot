@@ -14,7 +14,6 @@ type NodeOnlyServiceLike = {
         pid?: number;
       }
     | undefined;
-  runtimeShort?: string | null;
 };
 
 export type NodeOnlyGatewayInfo = {
@@ -51,10 +50,7 @@ function isNodeServiceActive(node: NodeOnlyServiceLike): boolean {
   if (node.loaded === true) {
     return true;
   }
-  if (hasRunningRuntime(node.runtime)) {
-    return true;
-  }
-  return typeof node.runtimeShort === "string" && node.runtimeShort.startsWith("running");
+  return hasRunningRuntime(node.runtime);
 }
 
 /** Returns node-only gateway context when node is active and the local gateway is intentionally absent. */

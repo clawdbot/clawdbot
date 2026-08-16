@@ -358,25 +358,23 @@ describe("cli program (nodes basics)", () => {
     expect(output).toContain("Catalog Only");
   });
 
-  it("runs nodes status --last-connected and filters by age", async () => {
+  it("runs nodes status --last-connected using the recorded node.list fact", async () => {
     const now = Date.now();
+    const methods: string[] = [];
     programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as { method?: string };
+      methods.push(opts.method ?? "");
       if (opts.method === "node.list") {
         return {
           ts: now,
           nodes: [
-            { nodeId: "n1", displayName: "One", connected: false },
-            { nodeId: "n2", displayName: "Two", connected: false },
-          ],
-        };
-      }
-      if (opts.method === "node.pair.list") {
-        return {
-          pending: [],
-          paired: [
-            { nodeId: "n1", lastConnectedAtMs: now - 1_000 },
-            { nodeId: "n2", lastConnectedAtMs: now - 2 * 24 * 60 * 60 * 1000 },
+            { nodeId: "n1", displayName: "One", connected: false, lastConnectedAtMs: now - 1_000 },
+            {
+              nodeId: "n2",
+              displayName: "Two",
+              connected: false,
+              lastConnectedAtMs: now - 2 * 24 * 60 * 60 * 1000,
+            },
           ],
         };
       }
@@ -384,7 +382,9 @@ describe("cli program (nodes basics)", () => {
     });
     await runProgram(["nodes", "status", "--last-connected", "24h"]);
 
-    expectGatewayRequest("node.pair.list", {});
+    // The gateway records lastConnectedAtMs on node.list rows; re-joining
+    // node.pair.list broke --last-connected for read-scoped callers.
+    expect(methods).not.toContain("node.pair.list");
     const output = getRuntimeOutput();
     expect(output).toContain("One");
     expect(output).not.toContain("Two");
