@@ -394,7 +394,7 @@ configure_clawhub_fixture() {
   local fixture_root="$ARTIFACT_ROOT/clawhub-fixture" port_file log_file
   port_file="$fixture_root/port"
   log_file="$fixture_root/server.log"
-  mkdir -p "$fixture_root"
+  mkdir -p "$fixture_root" && rm -f "$port_file"
   node "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
     prepublish-artifacts "$port_file" \
     "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR/prepublish-plugin-registry.json" >"$log_file" 2>&1 &
@@ -537,7 +537,7 @@ NODE
     return 0
   fi
 
-  mkdir -p "$fixture_root"
+  mkdir -p "$fixture_root" && rm -f "$port_file"
   OPENCLAW_NPM_REGISTRY_DIST_TAGS="beta=$candidate_version" \
   OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
     node scripts/e2e/lib/plugins/npm-registry-server.mjs \

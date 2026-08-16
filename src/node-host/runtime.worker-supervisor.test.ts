@@ -22,7 +22,6 @@ vi.mock("../infra/path-env.js", () => ({
 
 vi.mock("./mcp.js", () => ({
   startNodeHostMcpManager: vi.fn(async () => ({
-    configuredServerCount: 0,
     descriptors: [],
     callMcpTool: vi.fn(),
     close: vi.fn(async () => undefined),

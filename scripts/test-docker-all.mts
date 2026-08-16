@@ -1207,6 +1207,24 @@ async function prepareOpenClawPackage(baseEnv: NodeJS.ProcessEnv, logDir: string
   console.log(`==> OpenClaw package: ${baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ}`);
 }
 
+function preparePrepublishPluginRegistry(
+  plan: DockerCandidatePlan,
+  logDir: string,
+  sourceSha: string,
+  candidateVersion: string,
+) {
+  const registryDir = path.join(logDir, "prepublish-plugin-registry");
+  fs.rmSync(registryDir, { force: true, recursive: true });
+  const artifact = createPrepublishPluginRegistryArtifact({
+    repoRoot: ROOT_DIR,
+    outputDir: registryDir,
+    sourceSha,
+    candidateVersion,
+    requiredPackages: plan.requiredPrepublishPluginPackages,
+  });
+  return { dir: registryDir, candidateVersion, manifestSha256: artifact.manifestSha256 };
+}
+
 async function prepareDockerCandidate(
   plan: DockerCandidatePlan,
   logDir: string,
@@ -1231,20 +1249,7 @@ async function prepareDockerCandidate(
     }
     let registry = null;
     if (plan.needs.prepublishPluginRegistry) {
-      const registryDir = path.join(logDir, "prepublish-plugin-registry");
-      fs.rmSync(registryDir, { force: true, recursive: true });
-      const artifact = createPrepublishPluginRegistryArtifact({
-        repoRoot: ROOT_DIR,
-        outputDir: registryDir,
-        sourceSha,
-        candidateVersion: version,
-        requiredPackages: plan.requiredPrepublishPluginPackages,
-      });
-      registry = {
-        dir: registryDir,
-        candidateVersion: version,
-        manifestSha256: artifact.manifestSha256,
-      };
+      registry = preparePrepublishPluginRegistry(plan, logDir, sourceSha, version);
     }
     candidate = {
       package: { path: packagePath, name: packed.packageJson.name, version, sha256: packed.sha256 },
@@ -1927,6 +1932,19 @@ async function main() {
     });
   } else {
     console.log("==> OpenClaw package: not needed for selected lanes");
+  }
+  if (plan.needs.prepublishPluginRegistry && !baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR) {
+    await runPhase(phases, "prepare-prepublish-plugin-registry", {}, async () => {
+      const registry = preparePrepublishPluginRegistry(
+        plan,
+        logDir,
+        gitOutput(ROOT_DIR, ["rev-parse", "HEAD"]),
+        rootPackageVersion(ROOT_DIR),
+      );
+      baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR = registry.dir;
+      baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION = registry.candidateVersion;
+      baseEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256 = registry.manifestSha256;
+    });
   }
 
   if (buildEnabled) {

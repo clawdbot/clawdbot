@@ -78,23 +78,6 @@ function itWithFrozenClock(name: string, run: () => Promise<void>): void {
 }
 
 describe("node host MCP manager", () => {
-  it("counts only enabled servers with valid identifiers", async () => {
-    const manager = await startNodeHostMcpManager(
-      {
-        docs: { command: "docs" },
-        disabled: { command: "disabled", enabled: false },
-        " ": { command: "blank" },
-      },
-      {
-        createClient: () => createClient(),
-        resolveTransport: () => transport,
-        warn: vi.fn(),
-      },
-    );
-    expect(manager.configuredServerCount).toBe(1);
-    await manager.close();
-  });
-
   it("starts independent MCP servers concurrently", async () => {
     let releaseFirst: (() => void) | undefined;
     const firstReady = new Promise<void>((resolve) => {
@@ -140,7 +123,6 @@ describe("node host MCP manager", () => {
       warn,
     });
 
-    expect(manager.configuredServerCount).toBe(2);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('server "broken" failed'));
     expect(manager.descriptors).toEqual([
       {
@@ -206,6 +188,41 @@ describe("node host MCP manager", () => {
     await untrusted.close();
   });
 
+  it("withdraws only a closed server's descriptors and notifies the owner", async () => {
+    const closed = createClient({ tools: [tool("closed-tool")] });
+    const healthy = createClient({ tools: [tool("healthy-tool")] });
+    const onDescriptorsChanged = vi.fn();
+    const manager = await startNodeHostMcpManager(
+      { closed: { command: "closed" }, healthy: { command: "healthy" } },
+      {
+        createClient: (serverName) => (serverName === "closed" ? closed : healthy),
+        resolveTransport: () => transport,
+        onDescriptorsChanged,
+        warn: vi.fn(),
+      },
+    );
+
+    expect(manager.descriptors.map((descriptor) => descriptor.mcp?.server)).toEqual([
+      "closed",
+      "healthy",
+    ]);
+    closed.onclose?.();
+
+    expect(manager.descriptors.map((descriptor) => descriptor.mcp?.server)).toEqual(["healthy"]);
+    expect(onDescriptorsChanged).toHaveBeenCalledOnce();
+    expect(onDescriptorsChanged).toHaveBeenCalledWith();
+    await expect(
+      manager.callMcpTool({ server: "closed", tool: "closed-tool" }),
+    ).rejects.toMatchObject({ code: "MCP_SERVER_UNAVAILABLE" });
+    await expect(manager.callMcpTool({ server: "healthy", tool: "healthy-tool" })).resolves.toEqual(
+      { content: [{ type: "text", text: "ok" }] },
+    );
+
+    closed.onclose?.();
+    await manager.close();
+    expect(onDescriptorsChanged).toHaveBeenCalledOnce();
+  });
+
   itWithFrozenClock("bounds untrusted descriptor count and schema bytes", async () => {
     const tools = Array.from({ length: 130 }, (_, index) =>
       tool(`tool-${String(index).padStart(3, "0")}`),
@@ -223,6 +240,12 @@ describe("node host MCP manager", () => {
       false,
     );
     expect(Buffer.byteLength(JSON.stringify(manager.descriptors))).toBeLessThan(10 * 1024 * 1024);
+    await expect(manager.callMcpTool({ server: "docs", tool: "oversized" })).rejects.toMatchObject({
+      code: "MCP_TOOL_UNAVAILABLE",
+    });
+    await expect(manager.callMcpTool({ server: "docs", tool: "tool-129" })).rejects.toMatchObject({
+      code: "MCP_TOOL_UNAVAILABLE",
+    });
     await manager.close();
   });
 

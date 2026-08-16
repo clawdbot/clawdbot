@@ -23,8 +23,8 @@ const mocks = vi.hoisted(() => ({
     stop: ReturnType<typeof vi.fn>;
     updateNodeManifest: ReturnType<typeof vi.fn>;
   }>,
-  mcpConfiguredServerCount: 0,
   mcpDescriptors: [] as Array<Record<string, unknown>>,
+  mcpDescriptorsChanged: undefined as (() => void) | undefined,
   nodePluginTools: [] as Array<Record<string, unknown>>,
   nodeSkillDescriptors: [] as Array<Record<string, unknown>>,
   runtimeSteps: [] as string[],
@@ -154,12 +154,21 @@ vi.mock("./plugin-node-host.js", () => ({
 }));
 
 vi.mock("./mcp.js", () => ({
-  startNodeHostMcpManager: vi.fn(async () => ({
-    configuredServerCount: mocks.mcpConfiguredServerCount,
-    descriptors: mocks.mcpDescriptors,
-    callMcpTool: vi.fn(),
-    close: mocks.closeMcpManager,
-  })),
+  startNodeHostMcpManager: vi.fn(
+    async (
+      _servers: unknown,
+      deps?: {
+        onDescriptorsChanged?: () => void;
+      },
+    ) => {
+      mocks.mcpDescriptorsChanged = deps?.onDescriptorsChanged;
+      return {
+        descriptors: mocks.mcpDescriptors,
+        callMcpTool: vi.fn(),
+        close: mocks.closeMcpManager,
+      };
+    },
+  ),
 }));
 
 vi.mock("./skills.js", () => ({
@@ -208,8 +217,8 @@ describe("runNodeHost", () => {
     mocks.capturedGatewayClientOptions.length = 0;
     mocks.capturedConfiguredGatewayConfigs.length = 0;
     mocks.capturedGatewayClients.length = 0;
-    mocks.mcpConfiguredServerCount = 0;
     mocks.mcpDescriptors = [];
+    mocks.mcpDescriptorsChanged = undefined;
     mocks.nodePluginTools = [
       {
         pluginId: "test-plugin",
@@ -847,42 +856,7 @@ describe("runNodeHost", () => {
     );
   });
 
-  it("declares and publishes configured node-host MCP tools", async () => {
-    mocks.mcpConfiguredServerCount = 1;
-    mocks.mcpDescriptors = [
-      {
-        pluginId: "node-mcp",
-        name: "docs_search",
-        description: "Search docs",
-        command: "mcp.tools.call.v1",
-        mcp: { server: "docs", tool: "search" },
-      },
-    ];
-
-    await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
-      "event loop readiness timeout",
-    );
-
-    const options = lastCapturedOptions();
-    expect(options?.caps).toContain("mcp");
-    expect(options?.commands).toContain("mcp.tools.call.v1");
-    options?.onHelloOk?.({
-      protocol: 1,
-      features: { methods: [NODE_PLUGIN_TOOLS_UPDATE_METHOD], events: [] },
-    } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
-    expect(mocks.capturedGatewayClients[0]?.request).toHaveBeenCalledWith(
-      "node.pluginTools.update",
-      {
-        tools: expect.arrayContaining([
-          expect.objectContaining({ pluginId: "node-mcp", name: "docs_search" }),
-        ]),
-      },
-    );
-    expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
-  });
-
-  it("publishes plugin tools while MCP discovery is still pending", async () => {
-    mocks.mcpConfiguredServerCount = 1;
+  it("publishes plugin tools during MCP discovery and republishes catalog changes", async () => {
     let resolveReadiness:
       | ((value: { ready: false; aborted: false; elapsedMs: number }) => void)
       | undefined;
@@ -892,11 +866,12 @@ describe("runNodeHost", () => {
       }),
     );
     let resolveManager: ((manager: NodeHostMcpManager) => void) | undefined;
-    vi.mocked(startNodeHostMcpManager).mockReturnValueOnce(
-      new Promise((resolve) => {
+    vi.mocked(startNodeHostMcpManager).mockImplementationOnce(async (_servers, deps) => {
+      mocks.mcpDescriptorsChanged = deps?.onDescriptorsChanged;
+      return await new Promise((resolve) => {
         resolveManager = resolve;
-      }),
-    );
+      });
+    });
     const running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 });
     await vi.waitFor(() => expect(lastCapturedOptions()).toBeDefined());
     lastCapturedOptions()?.onHelloOk?.({
@@ -908,25 +883,43 @@ describe("runNodeHost", () => {
       { tools: [expect.objectContaining({ pluginId: "test-plugin" })] },
     );
 
+    const descriptors: NodeHostMcpManager["descriptors"] = [
+      {
+        pluginId: "node-mcp",
+        name: "closed_search",
+        description: "Search closed server",
+        command: "mcp.tools.call.v1",
+        mcp: { server: "closed", tool: "search" },
+      },
+      {
+        pluginId: "node-mcp",
+        name: "healthy_search",
+        description: "Search healthy server",
+        command: "mcp.tools.call.v1",
+        mcp: { server: "healthy", tool: "search" },
+      },
+    ];
     resolveManager?.({
-      configuredServerCount: 1,
-      descriptors: [
-        {
-          pluginId: "node-mcp",
-          name: "docs_search",
-          description: "Search docs",
-          command: "mcp.tools.call.v1",
-          mcp: { server: "docs", tool: "search" },
-        },
-      ],
+      descriptors,
       callMcpTool: vi.fn(),
       close: mocks.closeMcpManager,
     });
+    const client = mocks.capturedGatewayClients[0];
+    const publishedToolNames = () => {
+      const params = client?.request.mock.calls.findLast(
+        ([method]) => method === NODE_PLUGIN_TOOLS_UPDATE_METHOD,
+      )?.[1] as { tools: Array<{ name?: string }> } | undefined;
+      return params?.tools.map((descriptor) => descriptor.name);
+    };
     await vi.waitFor(() => {
-      expect(mocks.capturedGatewayClients[0]?.request).toHaveBeenCalledWith(
-        "node.pluginTools.update",
-        { tools: expect.arrayContaining([expect.objectContaining({ pluginId: "node-mcp" })]) },
-      );
+      expect(publishedToolNames()).toEqual(["closed_search", "healthy_search", "remote_echo"]);
+    });
+
+    descriptors.splice(0, 1);
+    expect(mocks.mcpDescriptorsChanged).toBeDefined();
+    mocks.mcpDescriptorsChanged?.();
+    await vi.waitFor(() => {
+      expect(publishedToolNames()).toEqual(["healthy_search", "remote_echo"]);
     });
     resolveReadiness?.({ ready: false, aborted: false, elapsedMs: 0 });
     await expect(running).rejects.toThrow("event loop readiness timeout");
