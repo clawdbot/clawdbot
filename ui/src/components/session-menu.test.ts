@@ -303,6 +303,9 @@ describe("session menu", () => {
     (submenu as SessionMenuItem & { submenuOpen: boolean }).submenuOpen = true;
 
     const choices = iconChoices(submenu);
+    expect(submenu.querySelector(".session-menu__icon-grid")?.getAttribute("role")).toBe(
+      "radiogroup",
+    );
     expect(choices.map((choice) => choice.textContent?.trim())).toEqual([
       "🦞",
       "🚀",
@@ -321,7 +324,7 @@ describe("session menu", () => {
     if (!current) {
       throw new Error("Expected the first icon choice");
     }
-    expect(current.getAttribute("role")).toBe("menuitemradio");
+    expect(current.getAttribute("role")).toBe("radio");
     expect(current.getAttribute("aria-checked")).toBe("true");
     expect(choices.filter((choice) => choice.tabIndex === 0)).toEqual([current]);
 

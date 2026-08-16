@@ -291,15 +291,20 @@ class SessionMenu extends OpenClawLightDomElement {
     const tabStop =
       SESSION_ICON_CHOICES.find((icon) => icon === currentIcon) ?? SESSION_ICON_CHOICES[0];
     return html`
-      <div slot="submenu" class="session-menu__icon-picker" role="group">
-        <div class="session-menu__icon-grid" @keydown=${this.handleIconGridKeydown}>
+      <div slot="submenu" class="session-menu__icon-picker">
+        <div
+          class="session-menu__icon-grid"
+          role="radiogroup"
+          aria-label=${t("sessionsView.setIconMenu")}
+          @keydown=${this.handleIconGridKeydown}
+        >
           ${SESSION_ICON_CHOICES.map((icon) => {
             const checked = currentIcon === icon;
             return html`
               <button
                 type="button"
                 class="session-menu__icon-choice"
-                role="menuitemradio"
+                role="radio"
                 aria-checked=${String(checked)}
                 tabindex=${icon === tabStop ? "0" : "-1"}
                 ?disabled=${this.actionDisabled("set-icon")}
@@ -317,7 +322,6 @@ class SessionMenu extends OpenClawLightDomElement {
               <button
                 type="button"
                 class="session-menu__icon-remove"
-                role="menuitem"
                 ?disabled=${this.actionDisabled("set-icon")}
                 title=${this.actionTitle("set-icon")}
                 @click=${this.removeIcon}
