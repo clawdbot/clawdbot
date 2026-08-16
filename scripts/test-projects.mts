@@ -293,7 +293,7 @@ async function main() {
           baseEnv,
           cwd: process.cwd(),
         });
-  let runSpecs = applyDefaultMultiSpecVitestCachePaths(
+  const runSpecs = applyDefaultMultiSpecVitestCachePaths(
     applyDefaultVitestNoOutputTimeout(
       applyFullExtensionsHeapBudget(rawRunSpecs, { env: baseEnv }),
       {
