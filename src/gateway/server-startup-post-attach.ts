@@ -20,6 +20,7 @@ import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { sweepSessionStateWatchNotices } from "../sessions/session-state-events.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   canReadDetailedUpdateMetadata,
@@ -1198,8 +1199,22 @@ export async function startGatewayPostAttachRuntime(
   });
 
   let startupLogPromise: Promise<void> | undefined;
-  const startStartupLog = () =>
-    (startupLogPromise ??= measureStartup(params.startupTrace, "post-attach.log", () =>
+  const startupLogSettled = createDeferredCore();
+  // Tailscale and sidecar work can delay the public readiness handle past log failure.
+  void startupLogSettled.promise.catch(() => {});
+  let startupLogOwnerAssigned = false;
+  const assignStartupLogOwner = (owner: Promise<void>) => {
+    if (params.sidecarStartup !== "defer" || startupLogOwnerAssigned) {
+      return;
+    }
+    startupLogOwnerAssigned = true;
+    void owner.then(startupLogSettled.resolve, startupLogSettled.reject);
+  };
+  const startStartupLog = () => {
+    if (startupLogPromise) {
+      return startupLogPromise;
+    }
+    startupLogPromise = measureStartup(params.startupTrace, "post-attach.log", () =>
       runtimeDeps.logGatewayStartup({
         cfg: params.cfgAtStart,
         activationSourceConfig: params.activationSourceConfig,
@@ -1217,7 +1232,12 @@ export async function startGatewayPostAttachRuntime(
         isNixMode: params.isNixMode,
         startupStartedAt: params.startupStartedAt,
       }),
-    ));
+    );
+    void startupLogPromise.catch(() => {});
+    assignStartupLogOwner(startupLogPromise);
+    return startupLogPromise;
+  };
+  const skipStartupLog = () => assignStartupLogOwner(Promise.resolve());
 
   const updateCheck = params.minimalTestGateway
     ? { start: () => {}, stop: () => {} }
@@ -1300,16 +1320,15 @@ export async function startGatewayPostAttachRuntime(
         }))
       : waitForSidecarStartTurn().then(async () => {
           if (params.isClosing?.()) {
+            skipStartupLog();
             return emptySidecarResult();
           }
           await startupPluginsResident.start();
           if (params.isClosing?.()) {
+            skipStartupLog();
             return emptySidecarResult();
           }
-          await startStartupLog();
-          if (params.isClosing?.()) {
-            return emptySidecarResult();
-          }
+          const startupLog = startStartupLog();
           const startupOutcomes = createGatewayStartupOutcomeRecorder({
             cfg: params.gatewayPluginConfigAtStart,
             gatewayStartHooks: hasGatewayStartHooks(pluginRegistry),
@@ -1373,6 +1392,15 @@ export async function startGatewayPostAttachRuntime(
             if (result.pluginServices && cleanupResults[1]?.status === "fulfilled") {
               reportPluginServices(null);
             }
+            if (mainSessionRecoverySidecar && cleanupResults[0]?.status === "rejected") {
+              params.onGatewayLifetimeSidecars?.([mainSessionRecoverySidecar]);
+            }
+            const failedPostReadySidecars = result.postReadySidecars.filter(
+              (_sidecar, index) => cleanupResults[index + 2]?.status === "rejected",
+            );
+            if (failedPostReadySidecars.length > 0) {
+              params.onPostReadySidecars?.(failedPostReadySidecars);
+            }
             const cleanupFailure = cleanupResults.find(
               (cleanupResult): cleanupResult is PromiseRejectedResult =>
                 cleanupResult.status === "rejected",
@@ -1427,6 +1455,21 @@ export async function startGatewayPostAttachRuntime(
             }
           } catch (err) {
             params.log.warn(`subagent restart recovery failed to schedule: ${String(err)}`);
+          }
+          if (params.isClosing?.()) {
+            return await stopUnpublishedSidecars(mainSessionRecoverySidecar);
+          }
+          try {
+            await startupLog;
+          } catch (error) {
+            try {
+              await stopUnpublishedSidecars(mainSessionRecoverySidecar);
+            } catch (cleanupError) {
+              params.log.warn(
+                `sidecar cleanup after startup logging failure failed: ${String(cleanupError)}`,
+              );
+            }
+            throw error;
           }
           if (params.isClosing?.()) {
             return await stopUnpublishedSidecars(mainSessionRecoverySidecar);
@@ -1574,7 +1617,9 @@ export async function startGatewayPostAttachRuntime(
 
   const tailscaleCleanup = await tailscaleCleanupPromise;
   updateCheckResident.start();
-  const startupSettled = sidecarsPromise.then(() => undefined);
+  const startupSettled = Promise.all([sidecarsPromise, startupLogSettled.promise]).then(
+    () => undefined,
+  );
   // Direct callers may ignore this handle; only the managed run loop observes it.
   // Pre-handle so an ignored deferred sidecar failure never becomes an unhandled rejection.
   void startupSettled.catch(() => {});

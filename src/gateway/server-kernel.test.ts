@@ -104,6 +104,14 @@ describe("createGatewayKernel", () => {
       await expect(kernel.stopRegisteredGatewayLifetimeSidecars()).rejects.toBe(cleanupError);
       expect(failingSidecar).toHaveBeenCalledOnce();
       expect(trailingSidecar).toHaveBeenCalledOnce();
+
+      const postReadySidecar = vi.fn(async () => {});
+      kernel.kernel.setGatewayLifetimeSidecars([{ stop: failingSidecar }]);
+      kernel.kernel.setPostReadySidecars([{ stop: postReadySidecar }]);
+
+      await expect(kernel.closeOnStartupFailure()).resolves.toBeUndefined();
+      expect(failingSidecar).toHaveBeenCalledTimes(2);
+      expect(postReadySidecar).toHaveBeenCalledOnce();
     } finally {
       try {
         await kernel?.closeOnStartupFailure();
@@ -270,6 +278,7 @@ describe("createGatewayKernel", () => {
         "control-ui.root",
         "tls.runtime",
         "runtime.state",
+        "gateway.shutdown-runtime-import",
         "runtime.early",
         "runtime.early.discovery",
         "runtime.post-early-imports",

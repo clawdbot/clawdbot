@@ -103,6 +103,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     startupState,
     clearFallbackGatewayContextForServer,
     kernel,
+    shutdownRuntime,
   } = runtime;
   const chatMetadataLifecycle = await createGatewayChatMetadataLifecycle({
     getConfig: getRuntimeConfig,
@@ -221,6 +222,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   await attachInitialGatewayLifetimeSidecars({
     chatMetadataLifecycle,
     gatewayRequestContext,
+    flushPendingSessionsChangedEvents: shutdownRuntime.flushPendingSessionsChangedEvents,
     sidecars: runtimeState.gatewayLifetimeSidecars,
   });
   pluginGatewayContext.current = gatewayRequestContext;

@@ -48,11 +48,9 @@ vi.mock("../auto-reply/reply/session-hooks.js", () => ({
   buildSessionStartHookPayload: vi.fn(() => ({ event: {}, context: {} })),
 }));
 
-const {
-  drainActiveSessionsForShutdown,
-  emitGatewaySessionEndPluginHook,
-  emitGatewaySessionStartPluginHook,
-} = await import("./session-reset-service.js");
+const { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook } =
+  await import("./session-reset-service.js");
+const { drainActiveSessionsForShutdown } = await import("./active-sessions-shutdown-drain.js");
 const { forgetActiveSessionForShutdown, listActiveSessionsForShutdown } =
   await import("./active-sessions-shutdown-tracker.js");
 

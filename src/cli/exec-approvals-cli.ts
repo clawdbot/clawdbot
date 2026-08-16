@@ -302,8 +302,6 @@ async function loadSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
 }
 
 function exitWithError(message: string): never {
-  defaultRuntime.error(message);
-  defaultRuntime.exit(1);
   throw new Error(message);
 }
 
@@ -380,6 +378,16 @@ function formatCliError(err: unknown): string {
   const firstLine = msg.includes("\n") ? msg.split("\n")[0] : msg;
   const safe = sanitizeForLog(expectDefined(firstLine, "exec approvals cli first line"));
   return safe.length > 300 ? `${truncateUtf16Safe(safe, 300)}...` : safe;
+}
+
+function failApprovalsCommand(err: unknown, opts: ExecApprovalsCliOpts): void {
+  const message = formatCliError(err);
+  if (opts.json) {
+    defaultRuntime.writeJson({ error: message }, 0);
+  } else {
+    defaultRuntime.error(message);
+  }
+  defaultRuntime.exit(1);
 }
 
 function isApprovalDecision(value: string): value is ApprovalDecision {
@@ -1082,8 +1090,7 @@ async function runAllowlistMutation(
       targetLabel: context.targetLabel,
     });
   } catch (err) {
-    defaultRuntime.error(formatCliError(err));
-    defaultRuntime.exit(1);
+    failApprovalsCommand(err, opts);
   }
 }
 
@@ -1132,8 +1139,7 @@ export function registerExecApprovalsCli(program: Command) {
         }
         renderPendingApprovals(entries);
       } catch (err) {
-        defaultRuntime.error(formatCliError(err));
-        defaultRuntime.exit(1);
+        failApprovalsCommand(err, opts);
       }
     });
   nodesCallOpts(pendingCmd);
@@ -1146,8 +1152,7 @@ export function registerExecApprovalsCli(program: Command) {
       try {
         await resolvePendingApproval(id, decision, opts);
       } catch (err) {
-        defaultRuntime.error(formatCliError(err));
-        defaultRuntime.exit(1);
+        failApprovalsCommand(err, opts);
       }
     });
   nodesCallOpts(resolveCmd);
@@ -1187,8 +1192,7 @@ export function registerExecApprovalsCli(program: Command) {
         renderApprovalsSnapshot(snapshot, targetLabel);
         renderEffectivePolicy({ report: effectivePolicy });
       } catch (err) {
-        defaultRuntime.error(formatCliError(err));
-        defaultRuntime.exit(1);
+        failApprovalsCommand(err, opts);
       }
     });
   nodesCallOpts(getCmd, { timeoutMs: APPROVALS_GET_DEFAULT_TIMEOUT_MS });
@@ -1236,8 +1240,7 @@ export function registerExecApprovalsCli(program: Command) {
         file.version = 1;
         await saveSnapshotTargeted({ opts, source, nodeId, file, baseHash, targetLabel });
       } catch (err) {
-        defaultRuntime.error(formatCliError(err));
-        defaultRuntime.exit(1);
+        failApprovalsCommand(err, opts);
       }
     });
   nodesCallOpts(setCmd);

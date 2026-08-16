@@ -440,6 +440,9 @@ export function createApplicationGateway(
         }
         const startupPending =
           !everConnected && willRetry && isRetryableGatewayStartupUnavailableError(error);
+        if (startupPending && snapshot.phase === "starting") {
+          return;
+        }
         setSnapshot({
           ...snapshot,
           client: nextClient,

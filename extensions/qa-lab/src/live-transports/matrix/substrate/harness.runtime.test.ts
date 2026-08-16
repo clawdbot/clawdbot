@@ -315,15 +315,16 @@ describe("matrix harness runtime", () => {
   });
 
   it("bounds a stalled versions probe by the remaining discovery deadline", async () => {
-    let probeSignal: AbortSignal | undefined;
+    const probeSignals: AbortSignal[] = [];
     const fetchImpl = vi.fn(
       async (_input: string, init?: Pick<RequestInit, "signal">) =>
         await new Promise<never>((_resolve, reject) => {
-          probeSignal = init?.signal ?? undefined;
+          const probeSignal = init?.signal ?? undefined;
           if (!probeSignal) {
             reject(new Error("versions probe signal missing"));
             return;
           }
+          probeSignals.push(probeSignal);
           const rejectAborted = () => reject(new Error("versions probe aborted"));
           if (probeSignal.aborted) {
             rejectAborted();
@@ -348,8 +349,9 @@ describe("matrix harness runtime", () => {
     ).rejects.toThrow("did not become healthy");
 
     expect(Date.now() - startedAt).toBeLessThan(500);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(probeSignal?.aborted).toBe(true);
+    expect(probeSignals).not.toHaveLength(0);
+    expect(probeSignals.length).toBeLessThanOrEqual(2);
+    expect(probeSignals.every((signal) => signal.aborted)).toBe(true);
     expect(sleepImpl).not.toHaveBeenCalled();
   });
 

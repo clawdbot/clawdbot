@@ -205,15 +205,24 @@ function configureFakeMcp(params: ReturnType<typeof createParams>): void {
   };
 }
 
-function admitLocalOperatorCronAuthority(params: ReturnType<typeof createParams>): void {
-  // Capability fixtures mirror the gateway-minted run scope: callerOrigin is
-  // contractually present since #118579, and transcript tool wiring reads it.
-  params.cronCreatorAuthorityCapability = {
+function createCronAuthorityCapabilityFixture(
+  runId: string,
+): NonNullable<ReturnType<typeof createParams>["cronCreatorAuthorityCapability"]> {
+  // Mirror the gateway-minted capability instead of casting a partial fixture;
+  // transcript tools consume callerOrigin and future contract drift must type-fail.
+  const abortController = new AbortController();
+  return {
     active: true,
-    runId: params.runId,
+    abort: () => abortController.abort(),
     callerOrigin: { kind: "local" },
-    signal: new AbortController().signal,
-  } as never;
+    grantTokens: new Set<string>(),
+    runId,
+    signal: abortController.signal,
+  };
+}
+
+function admitLocalOperatorCronAuthority(params: ReturnType<typeof createParams>): void {
+  params.cronCreatorAuthorityCapability = createCronAuthorityCapabilityFixture(params.runId);
 }
 
 describe("runCodexAppServerAttempt configured MCP ownership", () => {
@@ -480,11 +489,9 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
       params.trigger = "user";
       params.senderIsOwner = false;
       if (testCase.capabilityRunId) {
-        params.cronCreatorAuthorityCapability = {
-          active: true,
-          runId: testCase.capabilityRunId,
-          signal: new AbortController().signal,
-        } as never;
+        params.cronCreatorAuthorityCapability = createCronAuthorityCapabilityFixture(
+          testCase.capabilityRunId,
+        );
       }
 
       const harness = createStartedThreadHarness();

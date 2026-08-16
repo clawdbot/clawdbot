@@ -282,7 +282,6 @@ const preparedModelRuntimeLeaseContext = {
   getGatewayLifecycleActive: () => gatewayLifecycleActive,
   getPendingReplacement: () => pendingModelRuntimeReplacement,
   prepareSnapshot: prepareModelRuntimeSnapshot,
-  publishSnapshot: publishPreparedModelRuntimeSnapshot,
 };
 
 /** Acquires the exact writable workspace generation at agent-run admission. */

@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { formatNodeRunnerUpdateRequired } from "../../infra/node-runner-inventory.js";
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
-import { resolveDeviceWorkerAvailability } from "./device-provider.js";
+import * as device from "./device-provider.js";
 import {
   createPlacementFailureActions,
   isUnavailableEnvironment,
@@ -165,15 +164,14 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           return placement;
         },
       });
-      const deviceAvailability = request.deviceId
-        ? await resolveDeviceWorkerAvailability(environments, request.deviceId)
-        : undefined;
-      if (request.deviceId && !deviceAvailability?.available) {
-        throw new Error(
-          deviceAvailability?.issue
-            ? formatNodeRunnerUpdateRequired(request.deviceId, deviceAvailability.issue)
-            : `device worker requires a connected current node host; reconnect or reprovision: ${request.deviceId}`,
+      if (request.deviceId) {
+        const availability = await device.resolveDeviceWorkerAvailability(
+          environments,
+          request.deviceId,
         );
+        if (!availability.available) {
+          throw new Error(device.deviceUnavailableText(request.deviceId, availability));
+        }
       }
       const localPath = await options.resolveWorkspacePath(request);
       const idempotencyKey = `session-dispatch:${request.sessionId}:${placement.generation}`;

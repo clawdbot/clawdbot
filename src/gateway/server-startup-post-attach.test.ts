@@ -818,7 +818,7 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.scheduleRestartSentinelWake).not.toHaveBeenCalled();
   });
 
-  it("finishes startup logging before starting sidecars", async () => {
+  it("starts sidecars while startup logging is pending and waits for both", async () => {
     const events: string[] = [];
     let finishStartupLog: (() => void) | undefined;
     const logGatewayStartup = vi.fn(
@@ -847,9 +847,16 @@ describe("startGatewayPostAttachRuntime", () => {
 
     await waitForGatewayTestState(() => {
       expect(logGatewayStartup).toHaveBeenCalledTimes(1);
+      expect(startGatewaySidecarsScoped).toHaveBeenCalledTimes(1);
     });
-    expect(startGatewaySidecarsScoped).not.toHaveBeenCalled();
-    expect(events).toEqual(["startup-log-start"]);
+    expect(events).toEqual(["startup-log-start", "sidecars"]);
+
+    let startupSettled = false;
+    void runtimePromise.then(() => {
+      startupSettled = true;
+    });
+    await Promise.resolve();
+    expect(startupSettled).toBe(false);
 
     if (!finishStartupLog) {
       throw new Error("Expected startup log release callback to be initialized");
@@ -857,7 +864,112 @@ describe("startGatewayPostAttachRuntime", () => {
     finishStartupLog();
     await runtimePromise;
 
-    expect(events).toEqual(["startup-log-start", "startup-log-end", "sidecars"]);
+    expect(events).toEqual(["startup-log-start", "sidecars", "startup-log-end"]);
+  });
+
+  it("rejects deferred startup when logging fails while sidecars remain pending", async () => {
+    const startupError = new Error("startup logging failed");
+    let rejectStartupLog: ((error: Error) => void) | undefined;
+    let releaseSidecars: (() => void) | undefined;
+    let sidecarsCompleted = false;
+    const logGatewayStartup = vi.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectStartupLog = reject;
+        }),
+    );
+    const startGatewaySidecarsScoped = vi.fn(
+      async () =>
+        await new Promise<{ pluginServices: null; postReadySidecars: [] }>((resolve) => {
+          releaseSidecars = () => {
+            sidecarsCompleted = true;
+            resolve({ pluginServices: null, postReadySidecars: [] });
+          };
+        }),
+    );
+    const runtime = await startGatewayPostAttachRuntime(
+      createPostAttachParams({ sidecarStartup: "defer" }),
+      createPostAttachRuntimeDeps({
+        logGatewayStartup,
+        startGatewaySidecars: startGatewaySidecarsScoped,
+      }),
+    );
+
+    await waitForGatewayTestState(() => {
+      expect(rejectStartupLog).toBeTypeOf("function");
+      expect(releaseSidecars).toBeTypeOf("function");
+    });
+    rejectStartupLog?.(startupError);
+
+    await expect(runtime.startupSettled).rejects.toBe(startupError);
+    expect(sidecarsCompleted).toBe(false);
+
+    releaseSidecars?.();
+    await waitForGatewayTestState(() => expect(sidecarsCompleted).toBe(true));
+  });
+
+  it("observes deferred startup logging failure while tailscale startup is pending", async () => {
+    const startupError = new Error("startup logging failed");
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason);
+    let releaseTailscale: (() => void) | undefined;
+    const tailscaleStartup = new Promise<null>((resolve) => {
+      releaseTailscale = () => resolve(null);
+    });
+    const logGatewayStartup = vi.fn().mockRejectedValue(startupError);
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      const runtimePromise = startGatewayPostAttachRuntime(
+        createPostAttachParams({ sidecarStartup: "defer" }),
+        createPostAttachRuntimeDeps({
+          logGatewayStartup,
+          startGatewayTailscaleExposure: vi.fn(() => tailscaleStartup),
+        }),
+      );
+
+      await waitForGatewayTestState(() => {
+        expect(releaseTailscale).toBeTypeOf("function");
+        expect(logGatewayStartup).toHaveBeenCalledOnce();
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandledRejections).toEqual([]);
+
+      releaseTailscale?.();
+      const runtime = await runtimePromise;
+      await expect(runtime.startupSettled).rejects.toBe(startupError);
+    } finally {
+      releaseTailscale?.();
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
+
+  it("retains a sidecar whose cleanup fails after startup logging rejects", async () => {
+    const startupError = new Error("startup logging failed");
+    const cleanupError = new Error("sidecar cleanup failed");
+    const postReadySidecar = {
+      stop: vi.fn().mockRejectedValueOnce(cleanupError).mockResolvedValue(undefined),
+    };
+    const onPostReadySidecars = vi.fn();
+    const runtime = await startGatewayPostAttachRuntime(
+      createPostAttachParams({ sidecarStartup: "defer", onPostReadySidecars }),
+      createPostAttachRuntimeDeps({
+        logGatewayStartup: vi.fn().mockRejectedValue(startupError),
+        startGatewaySidecars: vi.fn(async () => ({
+          pluginServices: null,
+          postReadySidecars: [postReadySidecar],
+        })),
+      }),
+    );
+
+    await expect(runtime.startupSettled).rejects.toBe(startupError);
+    await waitForGatewayTestState(() => {
+      expect(onPostReadySidecars).toHaveBeenCalledWith([postReadySidecar]);
+    });
+    expect(postReadySidecar.stop).toHaveBeenCalledOnce();
+
+    await cleanupGatewayTestState();
+    expect(postReadySidecar.stop).toHaveBeenCalledTimes(2);
   });
 
   it("starts the gateway update check after post-attach returns", async () => {
@@ -2581,6 +2693,11 @@ describe("startGatewayPostAttachRuntime", () => {
       stopChannel,
       pluginServices,
       postReadySidecars,
+      disposeAllBundleLspRuntimes: vi.fn(async () => {}),
+      drainRetainedOpenAiEmbeddingProviders: vi.fn(async () => {}),
+      stopGmailWatcher: vi.fn(async () => {}),
+      disposeAllCodeModeRuns: vi.fn(async () => {}),
+      closeProviderTransportDispatcherPool: vi.fn(async () => {}),
       cron: { stop: vi.fn() },
       heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() },
       nodePresenceTimers: new Map(),

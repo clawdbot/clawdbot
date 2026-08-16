@@ -932,7 +932,7 @@ export async function runPreflightCompactionIfNeeded(params: {
         entry.sessionId === params.followupRun.run.sessionId
           ? entry.modelSelectionLocked === true
             ? resolvePersistedSessionRuntimeId(entry)
-            : entry.agentHarnessId
+            : runtimeId
           : undefined,
       modelSelectionLocked: entry.modelSelectionLocked === true,
       thinkLevel: params.followupRun.run.thinkLevel,

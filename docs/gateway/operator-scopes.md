@@ -198,10 +198,10 @@ can approve, reject, rotate, revoke, or remove only its own device entry.
 
 ## Node pairing approvals
 
-Legacy `node.pair.*` methods use a separate Gateway-owned node pairing store.
-WS nodes use device pairing (`role: node`) instead, but the same approval
-vocabulary applies. See [Gateway pairing](/gateway/pairing) for how the two
-stores relate.
+`node.pair.*` capability approvals are stored on the paired device record in
+the shared SQLite pairing store. Gateways migrate any remaining entries from
+the retired standalone `nodes/paired.json` store into those records once at
+startup. See [Gateway pairing](/gateway/pairing) for details.
 
 `node.pair.approve` derives extra required scopes from the pending request's
 command list:

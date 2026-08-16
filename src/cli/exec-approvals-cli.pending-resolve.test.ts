@@ -273,6 +273,19 @@ describe("exec approvals pending and resolve CLI", () => {
     });
   });
 
+  it("writes pending approval failures as JSON", async () => {
+    callGatewayFromCli.mockRejectedValue(new Error("gateway unavailable"));
+
+    await expect(runApprovalsCommand(["approvals", "pending", "--json"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ error: "gateway unavailable" }, 0);
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("preserves whitespace-bearing ids verbatim and keeps them distinct", async () => {
     const now = Date.now();
     callGatewayFromCli.mockImplementation(async (method: string) => {

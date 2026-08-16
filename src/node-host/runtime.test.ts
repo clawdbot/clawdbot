@@ -52,18 +52,6 @@ vi.mock("./node-worker-supervisor.js", () => ({
   })),
 }));
 
-vi.mock("./node-worker-build.js", () => ({
-  resolveNodeWorkerInstallation: vi.fn(async () => ({
-    packageRoot: "/tmp/openclaw-node-worker",
-    revalidateBuild: vi.fn(async () => true),
-    build: {
-      bundleHash: "a".repeat(64),
-      openclawVersion: "2026.8.1",
-      protocolFeatures: [],
-    },
-  })),
-}));
-
 vi.mock("./node-worker-workspace.js", () => ({
   NodeWorkerWorkspaceRuntime: class {
     readonly exec = vi.fn();
@@ -140,14 +128,15 @@ function holdInvoke() {
 }
 
 describe("node-host worker manifest", () => {
-  it("advertises the supported bundle prewarm form from the node build", async () => {
+  it("keeps local consent separate from connection metadata", async () => {
     const prepared = await prepareNodeHostRuntime({
       config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
       env: { PATH: "/usr/bin" },
       enableWorkerRuns: true,
     });
 
-    expect(prepared.manifest.workerRuns).toMatchObject({ bundlePrewarm: 1 });
+    expect(prepared.workerHostingEnabled).toBe(true);
+    expect(prepared.manifest).not.toHaveProperty("workerRuns");
   });
 });
 

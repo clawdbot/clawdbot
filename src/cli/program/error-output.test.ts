@@ -13,6 +13,29 @@ describe("formatCliParseErrorOutput", () => {
     );
   });
 
+  it("explains unknown subcommands within the active command tree", () => {
+    const output = formatCliParseErrorOutput("error: unknown command 'list'\n", {
+      argv: ["node", "openclaw", "webhooks", "list"],
+      commandPath: ["webhooks"],
+    });
+
+    expect(output).toBe(
+      'OpenClaw webhooks has no command "list".\nTry: openclaw webhooks --help\nDocs: https://docs.openclaw.ai/cli\n',
+    );
+  });
+
+  it("suggests sibling subcommands within the active command tree", () => {
+    const output = formatCliParseErrorOutput("error: unknown command 'gmial'\n", {
+      argv: ["node", "openclaw", "webhooks", "gmial"],
+      commandPath: ["webhooks"],
+      commandNames: ["gmail"],
+    });
+
+    expect(output).toBe(
+      'OpenClaw webhooks has no command "gmial".\nDid you mean this?\n  openclaw webhooks gmail\nTry: openclaw webhooks --help\nDocs: https://docs.openclaw.ai/cli\n',
+    );
+  });
+
   it("suggests close known commands for unknown commands", () => {
     const output = formatCliParseErrorOutput("error: unknown command 'upate'\n", {
       argv: ["node", "openclaw", "upate"],

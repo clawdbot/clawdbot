@@ -237,11 +237,11 @@ describe("prepared model runtime snapshots", () => {
   it("retains an exact dynamic workspace owner after gateway run admission", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = {};
+    const workspaceDir = "/tmp/spawned-workspace";
     await refreshPreparedModelRuntimeSnapshots(config, {
       gatewayLifecycle: true,
       defaultWorkspaceDir: "/tmp/gateway-launch-workspace",
     });
-    const workspaceDir = "/tmp/spawned-workspace";
     const workspacePluginRoot = path.join(workspaceDir, ".openclaw", "extensions");
     const statSpy = vi.spyOn(fsp, "stat");
 

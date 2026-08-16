@@ -506,6 +506,7 @@ describe("gateway server agent", () => {
     expect(errorMessage).toMatch(/ACP_TURN_FAILED/);
     expect(errorMessage).toMatch(/Internal error/);
     expect(errorMessage).toMatch(/upstream rejected/);
+    expect(errorMessage).not.toContain("AcpRuntimeError");
     expect(JSON.stringify(final)).not.toContain(token);
   });
 

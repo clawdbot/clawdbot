@@ -61,7 +61,7 @@ function expectMissingDeviceDecision(
 function expectSkipPairing(
   policy: Parameters<typeof shouldSkipControlUiPairing>[0],
   role: PairingRole,
-  expected: boolean,
+  expected: ReturnType<typeof shouldSkipControlUiPairing>,
   params: {
     pairingComplete?: boolean;
     authMode?: PairingAuthMode;
@@ -272,9 +272,9 @@ describe("ws connect policy", () => {
   test("strict control-ui policy does not skip pairing", () => {
     const strict = authPolicy({ isControlUi: true });
 
-    expectSkipPairing(strict, "node", false);
-    expectSkipPairing(strict, "operator", false);
-    expectSkipPairing(strict, "operator", false, { pairingComplete: true });
+    expectSkipPairing(strict, "node", null);
+    expectSkipPairing(strict, "operator", null);
+    expectSkipPairing(strict, "operator", null, { pairingComplete: true });
   });
 
   test("auth.mode=none skips pairing for operator control-ui only", () => {
@@ -282,16 +282,16 @@ describe("ws connect policy", () => {
     const nonControlUi = authPolicy();
 
     // Control UI + operator + auth.mode=none: skip pairing (the fix for #42931)
-    expectSkipPairing(controlUi, "operator", true, { authMode: "none" });
+    expectSkipPairing(controlUi, "operator", "auth-none", { authMode: "none" });
     // Control UI + node role + auth.mode=none: still require pairing
-    expectSkipPairing(controlUi, "node", false, { authMode: "none" });
+    expectSkipPairing(controlUi, "node", null, { authMode: "none" });
     // Non-Control-UI + operator + auth.mode=none: still require pairing
     // (prevents #43478 regression where ALL clients bypassed pairing)
-    expectSkipPairing(nonControlUi, "operator", false, { authMode: "none" });
+    expectSkipPairing(nonControlUi, "operator", null, { authMode: "none" });
     // Control UI + operator + auth.mode=shared-key: no change
-    expectSkipPairing(controlUi, "operator", false, { authMode: "shared-key" });
+    expectSkipPairing(controlUi, "operator", null, { authMode: "shared-key" });
     // Control UI + operator + no authMode: no change
-    expectSkipPairing(controlUi, "operator", false);
+    expectSkipPairing(controlUi, "operator", null);
   });
 
   test("tailscale auth skips pairing only for operator control-ui with device identity", () => {
@@ -305,23 +305,23 @@ describe("ws connect policy", () => {
       deviceRaw: device,
     });
 
-    expectSkipPairing(controlUiWithDevice, "operator", true, {
+    expectSkipPairing(controlUiWithDevice, "operator", "tailscale-device", {
       authMode: "token",
       authMethod: "tailscale",
     });
-    expectSkipPairing(controlUiWithoutDevice, "operator", false, {
+    expectSkipPairing(controlUiWithoutDevice, "operator", null, {
       authMode: "token",
       authMethod: "tailscale",
     });
-    expectSkipPairing(controlUiWithDevice, "node", false, {
+    expectSkipPairing(controlUiWithDevice, "node", null, {
       authMode: "token",
       authMethod: "tailscale",
     });
-    expectSkipPairing(nonControlUiWithDevice, "operator", false, {
+    expectSkipPairing(nonControlUiWithDevice, "operator", null, {
       authMode: "token",
       authMethod: "tailscale",
     });
-    expectSkipPairing(controlUiWithDevice, "operator", false, {
+    expectSkipPairing(controlUiWithDevice, "operator", null, {
       authMode: "token",
       authMethod: "token",
     });

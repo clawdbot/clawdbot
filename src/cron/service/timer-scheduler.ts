@@ -466,6 +466,14 @@ async function onAdmittedTimer(state: CronServiceState) {
         if (reaperAgentIds.size > 0) {
           const nowMs = state.deps.nowMs();
           for (const agentId of reaperAgentIds) {
+            if (state.deps.isAgentAvailable?.(agentId) === false) {
+              if (!state.reportedUnavailableReaperAgentIds.has(agentId)) {
+                state.reportedUnavailableReaperAgentIds.add(agentId);
+                state.deps.log.debug({ agentId }, "cron-reaper: skipped unavailable agent");
+              }
+              continue;
+            }
+            state.reportedUnavailableReaperAgentIds.delete(agentId);
             const storePath = state.deps.resolveSessionStorePath
               ? state.deps.resolveSessionStorePath(agentId)
               : state.deps.sessionStorePath;

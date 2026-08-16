@@ -21,6 +21,7 @@ import {
   listDevicePairing,
   requestDevicePairing,
   resolveEffectiveOperatorDeviceIdentity,
+  updatePairedDeviceMetadata,
 } from "../../../infra/device-pairing.js";
 import {
   resolveBootstrapProfileScopesForRole,
@@ -121,7 +122,7 @@ export async function authorizeGatewayConnectDevice(
     bootstrapTokenCandidate,
     pairingLocality,
     skipLocalBackendSelfPairing,
-    skipControlUiPairingForDevice,
+    controlUiPairingKind,
     allowControlUiDeviceAuthMigration,
   } = state;
   let hasServerApprovedDeviceTokenBaseline = false;
@@ -261,6 +262,7 @@ export async function authorizeGatewayConnectDevice(
           isControlUi,
           isWebchat,
           isNativeAppUi,
+          authMethod,
           reason,
         });
       const allowSilentTrustedCidrsNodePairing = shouldAutoApproveNodePairingFromTrustedCidrs({
@@ -385,15 +387,16 @@ export async function authorizeGatewayConnectDevice(
               scopes: bootstrapPairingScopes ?? [],
             }
           : {}),
+        // Scope upgrades ride the same silent-local rule as initial pairing:
+        // shouldAllowSilentLocalPairing already restricts them to local-grade
+        // auth (none/token/password), so identity-proxy and bearer-token rows
+        // stay a durable cap while owner-credentialed local clients widen
+        // without a prompt they could bypass with a fresh identity anyway.
         silent:
-          reason === "scope-upgrade" &&
-          !allowSetupCodeHandoffBootstrapPairing &&
-          !allowControlUiOwnerBootstrapPairing
-            ? false
-            : allowSilentLocalPairing ||
-              allowSilentTrustedCidrsNodePairing ||
-              allowSetupCodeHandoffBootstrapPairing ||
-              allowControlUiOperatorBootstrapPairing,
+          allowSilentLocalPairing ||
+          allowSilentTrustedCidrsNodePairing ||
+          allowSetupCodeHandoffBootstrapPairing ||
+          allowControlUiOperatorBootstrapPairing,
       });
       const trustedProxyAutoApproveScopes =
         allowTrustedProxyDeviceAutoApproval &&
@@ -458,7 +461,16 @@ export async function authorizeGatewayConnectDevice(
                   { accessMetadata: clientAccessMetadata },
                 )
               : await approveDevicePairing(pairing.request.requestId, {
-                  callerScopes: scopes,
+                  // A silent self-grant's authority is locality plus proven
+                  // local-grade auth, not the requested scope list. Approval
+                  // merges the existing row's scopes back in, so the caller
+                  // set must cover requested plus already-held — nothing new.
+                  callerScopes: uniqueStrings([
+                    ...scopes,
+                    ...(existingPairedDevice
+                      ? resolvePairedAccessScopes(existingPairedDevice)
+                      : []),
+                  ]),
                   accessMetadata: clientAccessMetadata,
                   // Same-host local approvals are prune-eligible "silent";
                   // trusted-CIDR approvals cross hosts and must never be
@@ -631,8 +643,25 @@ export async function authorizeGatewayConnectDevice(
 
     const paired = await getPairedDevice(device.id);
     const isPaired = paired?.publicKey === devicePublicKey;
-    if (!isPaired) {
-      if (!(skipLocalBackendSelfPairing || skipControlUiPairingForDevice)) {
+    const pairingRecordDoesNotAuthorizeSession =
+      skipLocalBackendSelfPairing || controlUiPairingKind === "auth-none";
+    if (pairingRecordDoesNotAuthorizeSession) {
+      if (isPaired) {
+        // Locality plus auth mode authorizes this session; the pairing row only
+        // bounds durable grants and owns last-seen diagnostics. Reapplying its
+        // scope cap here would make an unrelated narrow row deny local access.
+        pairedClientId = paired.clientId;
+        pairedBrowserOrigin = paired.browserOrigin;
+        hasServerApprovedDeviceTokenBaseline = true;
+        await updatePairedDeviceMetadata(device.id, clientAccessMetadata);
+      } else if (
+        controlUiPairingKind === "auth-none" ||
+        (skipLocalBackendSelfPairing && authMethod !== "device-token")
+      ) {
+        hasServerApprovedDeviceTokenBaseline = true;
+      }
+    } else if (!isPaired) {
+      if (controlUiPairingKind === null) {
         const ok = await requirePairing("not-paired", paired);
         if (!ok) {
           return undefined;
@@ -647,10 +676,7 @@ export async function authorizeGatewayConnectDevice(
               : undefined;
           hasServerApprovedDeviceTokenBaseline = true;
         }
-      } else if (
-        skipControlUiPairingForDevice ||
-        (skipLocalBackendSelfPairing && authMethod !== "device-token")
-      ) {
+      } else {
         hasServerApprovedDeviceTokenBaseline = true;
       }
     } else {

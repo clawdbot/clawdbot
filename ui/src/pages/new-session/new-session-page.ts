@@ -592,6 +592,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           attachmentDraft: this.submission.attachmentDraft,
           canSubmit: this.submission.canSubmit(),
           submitDisabledReason: this.submission.submitDisabledReason(),
+          blockedSubmitNotice: this.submission.blockedSubmitNotice(),
           context: this.context,
           isCatalogTarget: catalog.isTarget(this.data),
           message: this.submission.message,

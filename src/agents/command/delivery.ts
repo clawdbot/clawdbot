@@ -31,6 +31,7 @@ import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.j
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
+import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -773,7 +774,7 @@ export async function deliverAgentCommandResult(
       );
       handlePreDeliveryError(err, "channel_resolved_to_internal");
     } else if (!isDeliveryChannelKnown) {
-      const err = new Error(`Unknown channel: ${deliveryChannel}`);
+      const err = new Error(formatUnknownChannelMessage({ channel: deliveryChannel }));
       handlePreDeliveryError(err, "unknown_channel");
     } else if (resolvedTarget && !resolvedTarget.ok) {
       handlePreDeliveryError(resolvedTarget.error, "invalid_delivery_target");

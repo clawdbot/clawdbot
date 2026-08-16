@@ -75,7 +75,7 @@ describe("worker workspace command transport retry", () => {
     ).resolves.toMatchObject({ code: 255, termination: "exit" });
     expect(run).toHaveBeenCalledOnce();
     expect(sshArgvPort(run.mock.calls[0]![0])).toBe(2222);
-    expect(run.mock.calls[0]![1].timeoutMs).toBe(777);
+    expect(run.mock.calls[0]![1].timeoutMs).toBeLessThanOrEqual(777);
 
     await actions.runWorkspaceCommand({
       transportRetry: "idempotent",

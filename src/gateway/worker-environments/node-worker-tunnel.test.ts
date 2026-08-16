@@ -116,9 +116,8 @@ function transport(): NodeWorkerSupervisorTransport {
         clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
         clientMode: GATEWAY_CLIENT_MODES.NODE,
         protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+        workerHost: { enabled: true, capacity: "available" },
         commands: ["system.run"],
-        workerBuild: BUILD,
-        workerRuns: BUILD,
       },
     ],
     isCurrent: () => true,
@@ -317,9 +316,11 @@ describe("node worker tunnel manager", () => {
             return [
               {
                 ...proof,
-                workerBuild: BUILD,
-                ...(launchEligible ? {} : { workerRuns: undefined }),
-              } as typeof proof & { workerBuild: typeof BUILD },
+                workerHost: {
+                  enabled: true,
+                  capacity: launchEligible ? "available" : "full",
+                },
+              },
             ];
           },
           invoke,

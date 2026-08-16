@@ -353,7 +353,7 @@ describe("createApplicationGateway connection phase", () => {
     const { gateway, current } = createStore();
     gateway.start();
 
-    current().opts.onClose?.({
+    const startupClose = {
       code: 4013,
       reason: "gateway starting",
       willRetry: true,
@@ -364,11 +364,17 @@ describe("createApplicationGateway connection phase", () => {
         retryable: true,
         retryAfterMs: 250,
       },
-    });
+    };
+    current().opts.onClose?.(startupClose);
 
     expect(gateway.snapshot.phase).toBe("starting");
     expect(gateway.snapshot.lastError).toBeNull();
     expect(gateway.snapshot.lastErrorCode).toBeNull();
+
+    const listener = vi.fn();
+    gateway.subscribe(listener);
+    current().opts.onClose?.(startupClose);
+    expect(listener).not.toHaveBeenCalled();
   });
 
   it("returns a never-connected terminal close to stopped", () => {

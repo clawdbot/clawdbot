@@ -3211,65 +3211,72 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.sessionFile).toBe("main");
   });
 
-  it("byte-guards a Codex runtime session through SQLite semantic compaction", async () => {
-    const storePath = path.join(rootDir, "sqlite-codex-byte-guard.json");
-    const sessionKey = "agent:main:main";
-    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
-    await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
-    await replaceTranscriptEvents(scope, [
-      { message: { role: "user", content: "x".repeat(256) }, type: "message" },
-    ]);
-    expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(10);
+  it.each([
+    ["fresh session selected from the outset", "fresh", "codex"],
+    ["upgraded session with historical embedded ownership", "upgraded", "openclaw"],
+  ])(
+    "byte-guards a Codex runtime %s through native preflight",
+    async (_label, fixtureId, agentHarnessId) => {
+      const storePath = path.join(rootDir, `sqlite-codex-byte-guard-${fixtureId}.json`);
+      const sessionKey = "agent:main:main";
+      const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+      await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
+      await replaceTranscriptEvents(scope, [
+        { message: { role: "user", content: "x".repeat(256) }, type: "message" },
+      ]);
+      expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(10);
 
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 10,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      compactionCount: 0,
-      agentRuntimeOverride: "codex",
-      agentHarnessId: "openclaw",
-    };
-    const sessionStore = { [sessionKey]: sessionEntry };
-    const replyOperation = createReplyOperation();
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 10,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+        compactionCount: 0,
+        agentRuntimeOverride: "codex",
+        agentHarnessId,
+      };
+      const sessionStore = { [sessionKey]: sessionEntry };
+      const replyOperation = createReplyOperation();
 
-    const entry = await runPreflightCompactionIfNeeded({
-      cfg: {
-        agents: {
-          defaults: {
-            compaction: { maxActiveTranscriptBytes: "10b" },
+      const entry = await runPreflightCompactionIfNeeded({
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: { maxActiveTranscriptBytes: "10b" },
+            },
           },
         },
-      },
-      followupRun: createTestFollowupRun({
-        provider: "openai",
-        model: "gpt-5.5",
+        followupRun: createTestFollowupRun({
+          provider: "openai",
+          model: "gpt-5.5",
+          sessionId: "session",
+          sessionKey,
+        }),
+        defaultModel: "gpt-5.5",
+        agentCfgContextTokens: 1_000_000,
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        isHeartbeat: false,
+        replyOperation,
+      });
+
+      expect(entry?.compactionCount).toBe(1);
+      expect(replyOperation.setPhase).toHaveBeenCalledWith("preflight_compacting");
+      expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
+        agentHarnessId: "codex",
+        contextTokenBudget: 1_000_000,
+        deferOwningContextEngineCompaction: false,
+        preflightCompactionTrigger: "transcript_bytes",
+        preflightRequired: true,
         sessionId: "session",
         sessionKey,
-      }),
-      defaultModel: "gpt-5.5",
-      agentCfgContextTokens: 1_000_000,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      isHeartbeat: false,
-      replyOperation,
-    });
-
-    expect(entry?.compactionCount).toBe(1);
-    expect(replyOperation.setPhase).toHaveBeenCalledWith("preflight_compacting");
-    expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
-      agentHarnessId: "openclaw",
-      deferOwningContextEngineCompaction: false,
-      preflightCompactionTrigger: "transcript_bytes",
-      preflightRequired: true,
-      sessionId: "session",
-      sessionKey,
-      trigger: "budget",
-    });
-  });
+        trigger: "budget",
+      });
+    },
+  );
 
   it("leaves a reset SQLite Codex session below the byte fuse for native compaction", async () => {
     const storePath = path.join(rootDir, "sqlite-codex-under-byte-guard.json");

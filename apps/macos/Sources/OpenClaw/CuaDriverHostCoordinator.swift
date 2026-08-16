@@ -371,15 +371,20 @@ final class CuaDriverHostCoordinator {
                     self?.processExited(generation: generation, status: status)
                 }
             }
-            // Record the pid we spawned so startup/teardown reaping can attribute and
-            // terminate exactly this daemon; without it a reaper can only delete the
-            // directory and would leave an orphaned privileged process running.
-            Self.writeProcessIdentifier(process.processIdentifier, to: socketDirectory)
             self.runningChild = RunningChild(
                 generation: generation,
                 process: process,
                 socketDirectory: socketDirectory,
                 executableURL: executableURL)
+            // Record the pid we spawned so startup/teardown reaping can attribute and
+            // terminate exactly this daemon; without it a reaper can only delete the
+            // directory and would leave an orphaned privileged process running.
+            guard Self.writeProcessIdentifier(process.processIdentifier, to: socketDirectory) else {
+                self.logger.error("embedded CUA could not record the spawned daemon pid")
+                await self.ensureStopped()
+                self.scheduleRestartIfNeeded()
+                return
+            }
         } catch {
             Self.cleanupSocketDirectory(socketDirectory)
             self.logger.error("embedded CUA launch failed: \(error.localizedDescription, privacy: .public)")

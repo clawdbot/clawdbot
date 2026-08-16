@@ -131,6 +131,21 @@ class TasksPage extends OpenClawLightDomElement {
     }
     this.requestUpdate();
   });
+
+  private bufferTaskRefreshEvent(event: TaskRefreshEvent | null) {
+    const buffer = this.taskRefreshEvents;
+    if (
+      event &&
+      event.action !== "restored" &&
+      buffer &&
+      buffer.gateway === this.gateway.gateway &&
+      buffer.client === this.gateway.client &&
+      buffer.scopeId === this.context.agentSelection.state.scopeId
+    ) {
+      buffer.events.push(event);
+    }
+  }
+
   private readonly listTask = new Task(this, {
     autoRun: false,
     // Gateway identity retires reconnect/source replacements even when they reuse a client.
@@ -199,18 +214,12 @@ class TasksPage extends OpenClawLightDomElement {
           }
           const scopeId = this.context.agentSelection.state.scopeId;
           const normalizedEvent = normalizeTaskEventPayload(event.payload);
-          const buffer = this.taskRefreshEvents;
           if (
-            normalizedEvent &&
-            normalizedEvent.action !== "restored" &&
-            buffer &&
-            buffer.gateway === gateway &&
-            buffer.client === this.gateway.client &&
-            buffer.scopeId === scopeId &&
-            (normalizedEvent.action === "deleted" ||
+            normalizedEvent?.action === "deleted" ||
+            (normalizedEvent?.action === "upserted" &&
               taskMatchesAgentScope(normalizedEvent.task, scopeId))
           ) {
-            buffer.events.push(normalizedEvent);
+            this.bufferTaskRefreshEvent(normalizedEvent);
           }
           this.tasks = result.tasks.filter((task) => taskMatchesAgentScope(task, scopeId));
         });
@@ -271,18 +280,9 @@ class TasksPage extends OpenClawLightDomElement {
       const result = normalizeTasksCancelResult(payload);
       if (result?.task) {
         const event = normalizeTaskEventPayload({ action: "upserted", task: result.task });
-        const buffer = this.taskRefreshEvents;
-        if (
-          event &&
-          buffer &&
-          buffer.gateway === gateway &&
-          buffer.client === scope.client &&
-          buffer.scopeId === this.context.agentSelection.state.scopeId
-        ) {
-          // Cancellation replies are authoritative even if the best-effort
-          // registry event is dropped while the matching pages are in flight.
-          buffer.events.push(event);
-        }
+        // Mutation replies are authoritative even if the best-effort registry
+        // event is dropped while the matching pages are in flight.
+        this.bufferTaskRefreshEvent(event);
         this.tasks = applyTaskEvent(this.tasks, { action: "upserted", task: result.task }).tasks;
       }
       // Refusals (already terminal, stale id, no cancellation handle) are
@@ -330,10 +330,12 @@ class TasksPage extends OpenClawLightDomElement {
         return;
       }
       if (result.task) {
-        this.tasks = applyTaskEvent(this.tasks, {
+        const event = normalizeTaskEventPayload({
           action: "upserted",
           task: result.task,
-        }).tasks;
+        });
+        this.bufferTaskRefreshEvent(event);
+        this.tasks = applyTaskEvent(this.tasks, event).tasks;
       }
     } catch (error) {
       if (this.gateway.isCurrent(scope)) {

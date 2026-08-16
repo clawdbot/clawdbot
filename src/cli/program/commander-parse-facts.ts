@@ -103,3 +103,14 @@ export function getCommanderErrorCommandPath(program: Command): string[] | undef
   const command = activeErrorCommandByRoot.get(getRootCommand(program));
   return command ? getCommanderCommandPath(command) : undefined;
 }
+
+/** Return visible children of the non-root command synchronously emitting a parse error. */
+export function getCommanderErrorCommandNames(program: Command): string[] | undefined {
+  const command = activeErrorCommandByRoot.get(getRootCommand(program));
+  return command && getCommanderCommandPath(command).length
+    ? command
+        .createHelp()
+        .visibleCommands(command)
+        .map((child) => child.name())
+    : undefined;
+}
