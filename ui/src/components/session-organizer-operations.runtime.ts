@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { WorktreesRemoveResult } from "../../../packages/gateway-protocol/src/index.js";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
@@ -640,10 +641,13 @@ export async function deleteSession(
         }
         if (removeWorktree) {
           try {
-            await scope.client.request("worktrees.remove", {
+            const result = await scope.client.request<WorktreesRemoveResult>("worktrees.remove", {
               id: preserved.id,
               force: true,
             });
+            if (result.snapshotError) {
+              host.sessionData.publishSessionMutationError(scope, result.snapshotError);
+            }
           } catch (error) {
             host.sessionData.publishSessionMutationError(scope, error);
           }
