@@ -3259,7 +3259,7 @@ describe("scripts/crabbox-wrapper", () => {
     );
   });
 
-  it("parses provider choices from the --provider flag help format", () => {
+  it("parses provider choices from the supported --provider help formats", () => {
     const helpText =
       "Usage: crabbox run [options]\n  --provider hetzner|aws|local-container|blacksmith-testbox|cloudflare\n";
 
@@ -3270,6 +3270,11 @@ describe("scripts/crabbox-wrapper", () => {
       "blacksmith-testbox",
       "cloudflare",
     ]);
+    expect(
+      parseProvidersFromHelp(
+        "  -provider string\n    provider: aws, blacksmith-testbox, local-container (defaults to configured selection)\n",
+      ),
+    ).toEqual(["aws", "blacksmith-testbox", "local-container"]);
   });
 
   it("uses a temporary full checkout for clean sparse Blacksmith syncs", () => {

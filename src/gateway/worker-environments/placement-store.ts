@@ -49,6 +49,7 @@ import {
 } from "./placement-workspace-journal.js";
 import {
   createPlacementWorkspaceResultOps,
+  hasCurrentWorkspaceResultClaim,
   hasWorkerWorkspacePendingResult,
 } from "./placement-workspace-result.js";
 import { boundedWorkerError } from "./worker-error.js";
@@ -142,8 +143,12 @@ export function createWorkerSessionPlacementStore(
   };
 
   const requireClaimOwner = (claim: WorkerSessionTurnClaim): void => {
-    const current = find(read(), required(claim.sessionId, "session id"));
-    if (!current || !isCurrentPlacementTurnClaim(current, claim)) {
+    const db = read();
+    const current = find(db, required(claim.sessionId, "session id"));
+    if (
+      !current ||
+      (!isCurrentPlacementTurnClaim(current, claim) && !hasCurrentWorkspaceResultClaim(db, claim))
+    ) {
       throw new Error(`Session ${claim.sessionId} workspace result conflict owner changed`);
     }
   };

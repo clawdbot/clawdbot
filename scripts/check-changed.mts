@@ -62,6 +62,9 @@ type ChangedCheckDelegateOptions = {
   cwd?: string;
   result?: ChangedLaneResult;
   diffRefsReady?: boolean;
+  interactive?: boolean;
+  platform?: NodeJS.Platform;
+  virtualized?: boolean;
 };
 
 type ChangedCheckRunOptions = ChangedCheckPlanOptions & {
@@ -222,6 +225,37 @@ export function changedCheckRequiresRemote(result?: ChangedLaneResult) {
   );
 }
 
+function isDedicatedLinuxWorker(
+  env: NodeJS.ProcessEnv,
+  options: Pick<ChangedCheckDelegateOptions, "interactive" | "platform" | "virtualized">,
+) {
+  if ((options.platform ?? process.platform) !== "linux") {
+    return false;
+  }
+  const role = env.AGENT_HOST_ROLE?.trim().toLowerCase();
+  if (role === "worker") {
+    return true;
+  }
+  if (role === "workstation") {
+    return false;
+  }
+  if (env.DISPLAY || env.WAYLAND_DISPLAY || env.SSH_TTY) {
+    return false;
+  }
+  if ((options.interactive ?? process.stdin.isTTY) === true) {
+    return false;
+  }
+  if (options.virtualized !== undefined) {
+    return options.virtualized;
+  }
+  try {
+    execFileSync("systemd-detect-virt", ["--quiet"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function shouldDelegateChangedCheckToCrabbox(
   argv: string[] = [],
   env: NodeJS.ProcessEnv = process.env,
@@ -245,6 +279,9 @@ export function shouldDelegateChangedCheckToCrabbox(
   }
   if (isOpenEndedTruthyValue(env.OPENCLAW_TESTBOX)) {
     return true;
+  }
+  if (isDedicatedLinuxWorker(env, options)) {
+    return !changedCheckLocalDependenciesReady(options.cwd ?? process.cwd());
   }
   // Release metadata plans diff the supplied commits after classification. A missing
   // ref needs the hydrated remote checkout even when the explicit path itself is cheap.

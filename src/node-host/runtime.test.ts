@@ -16,7 +16,6 @@ const mocks = vi.hoisted(() => {
     progressStartHeartbeats: vi.fn(),
     progressWrite: vi.fn(async () => undefined),
     startMcp: vi.fn(async (_servers: unknown, _deps?: { signal?: AbortSignal }) => ({
-      configuredServerCount: 0,
       descriptors: [],
       callMcpTool: vi.fn(),
       close: closeMcp,
@@ -266,7 +265,6 @@ describe("node-host invocation cancellation", () => {
     expect(startupSignal?.aborted).toBe(true);
     await vi.waitFor(() => expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce());
     resolveStartup({
-      configuredServerCount: 0,
       descriptors: [],
       callMcpTool: vi.fn(),
       close: mocks.closeMcp,
