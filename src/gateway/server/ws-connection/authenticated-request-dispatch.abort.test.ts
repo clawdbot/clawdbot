@@ -93,7 +93,7 @@ function createDispatcher(
       connId: client.connId,
       extraHandlers: {},
       buildRequestContext: () => ({}) as never,
-      send: vi.fn(),
+      send: vi.fn((_frame: unknown) => ({ kind: "sent" }) as const),
       close: vi.fn(),
       isClosed: () => false,
       setCloseCause: vi.fn(),

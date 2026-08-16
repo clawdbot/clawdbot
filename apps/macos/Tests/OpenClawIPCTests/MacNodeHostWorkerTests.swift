@@ -51,8 +51,8 @@ struct MacNodeHostWorkerTests {
     @Test func `worker crash retry budget is bounded and exponentially delayed`() throws {
         let input = MacNodeHostWorkerRetryPolicy.Input(
             launch: MacNodeHostWorkerLaunch(
-                command: ["/usr/local/bin/openclaw", "node", "worker"]),
-            configurationGeneration: 4)
+                command: ["/usr/local/bin/openclaw", "node", "worker"],
+                configurationGeneration: 4))
         var policy = MacNodeHostWorkerRetryPolicy(maximumRetryCount: 5)
 
         try policy.prepareForStart(input)
@@ -76,11 +76,12 @@ struct MacNodeHostWorkerTests {
     @Test func `new worker input resets an exhausted crash retry budget`() throws {
         let original = MacNodeHostWorkerRetryPolicy.Input(
             launch: MacNodeHostWorkerLaunch(
-                command: ["/usr/local/bin/openclaw", "node", "worker"]),
-            configurationGeneration: 4)
+                command: ["/usr/local/bin/openclaw", "node", "worker"],
+                configurationGeneration: 4))
         let updated = MacNodeHostWorkerRetryPolicy.Input(
-            launch: original.launch,
-            configurationGeneration: 5)
+            launch: MacNodeHostWorkerLaunch(
+                command: original.launch.command,
+                configurationGeneration: 5))
         var policy = MacNodeHostWorkerRetryPolicy(maximumRetryCount: 1)
 
         try policy.prepareForStart(original)
@@ -397,39 +398,73 @@ struct MacNodeHostWorkerTests {
         }
     }
 
-    @Test func `worker forwards terminal input and cancellation frames`() async throws {
+    @Test func `worker cancellation settles when the child suppresses its result`() async throws {
         let worker = MacNodeHostWorker(session: GatewayNodeSession())
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-worker-cancel-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: marker) }
         let script = """
         printf '%s\\n' '{"type":"ready","version":"test","manifest":{"caps":["terminal"],"commands":["codex.terminal.resume.v1"],"pathEnv":"/usr/bin:/bin"},"inventory":{"skills":null,"pluginTools":[]}}'
-        IFS= read -r invoke
+        IFS= read -r buffered_invoke
         IFS= read -r input
-        IFS= read -r cancel
-        printf '%s' "$invoke" | grep -q '"id":"terminal-1"' || exit 40
+        IFS= read -r buffered_cancel
+        printf '%s' "$buffered_invoke" | grep -q '"id":"terminal-1"' || exit 40
         printf '%s' "$input" | grep -q '"type":"invoke-input"' || exit 41
         printf '%s' "$input" | grep -q '"invokeId":"terminal-1"' || exit 42
         printf '%s' "$input" | grep -q '"seq":7' || exit 43
-        printf '%s' "$cancel" | grep -q '"type":"invoke-cancel"' || exit 44
-        printf '%s' "$cancel" | grep -q '"invokeId":"terminal-1"' || exit 45
-        printf '%s\\n' '{"type":"invoke-result","result":{"id":"terminal-1","ok":true}}'
+        printf '%s' "$buffered_cancel" | grep -q '"type":"invoke-cancel"' || exit 44
+        printf '%s' "$buffered_cancel" | grep -q '"invokeId":"terminal-1"' || exit 45
+        IFS= read -r active_invoke
+        printf '%s' "$active_invoke" | grep -q '"id":"terminal-2"' || exit 46
+        printf '%s\\n' "$$" > "$1"
+        IFS= read -r active_cancel
+        printf '%s' "$active_cancel" | grep -q '"type":"invoke-cancel"' || exit 47
+        printf '%s' "$active_cancel" | grep -q '"invokeId":"terminal-2"' || exit 48
         while IFS= read -r line; do :; done
         """
 
         _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
-            command: ["/bin/sh", "-c", script]))
+            command: ["/bin/sh", "-c", script, "worker", marker.path]))
         await worker.handleInput(invokeId: "terminal-1", seq: 7, payloadJSON: #"{"data":"x"}"#)
         await worker.cancel(invokeId: "terminal-1")
-        let response = await worker.invoke(BridgeInvokeRequest(
-            id: "terminal-1",
-            command: "codex.terminal.resume.v1"))
+        do {
+            let buffered = try await AsyncTimeout.withTimeout(
+                seconds: 1,
+                onTimeout: { WorkerBackpressureTimeout() },
+                operation: {
+                    await worker.invoke(BridgeInvokeRequest(
+                        id: "terminal-1",
+                        command: "codex.terminal.resume.v1"))
+                })
+            #expect(!buffered.ok)
+            #expect(buffered.error?.message == "UNAVAILABLE: node-host worker invocation cancelled")
 
-        #expect(response.ok)
-        await worker.stop()
+            let invoking = Task {
+                await worker.invoke(BridgeInvokeRequest(
+                    id: "terminal-2",
+                    command: "codex.terminal.resume.v1"))
+            }
+            _ = try await TestProcessSupport.waitForPID(in: marker)
+            await worker.cancel(invokeId: "terminal-2")
+            let active = try await AsyncTimeout.withTimeout(
+                seconds: 1,
+                onTimeout: { WorkerBackpressureTimeout() },
+                operation: { await invoking.value })
+            await worker.stop()
+            #expect(!active.ok)
+            #expect(active.error?.message == "UNAVAILABLE: node-host worker invocation cancelled")
+        } catch {
+            await worker.stop()
+            throw error
+        }
     }
 
     @Test func `ready worker exit notifies its route owner`() async throws {
         try await confirmation("unexpected worker exit") { confirmed in
             let exitGate = AsyncTestGate()
-            let worker = MacNodeHostWorker(session: GatewayNodeSession()) {
+            let expectedGeneration: UInt64 = 42
+            let worker = MacNodeHostWorker(session: GatewayNodeSession()) { generation in
+                #expect(generation == expectedGeneration)
                 confirmed()
                 exitGate.open()
             }
@@ -440,7 +475,8 @@ struct MacNodeHostWorkerTests {
             """
 
             _ = try await worker.start(launch: MacNodeHostWorkerLaunch(
-                command: ["/bin/sh", "-c", script]))
+                command: ["/bin/sh", "-c", script],
+                configurationGeneration: expectedGeneration))
             await exitGate.wait()
         }
     }

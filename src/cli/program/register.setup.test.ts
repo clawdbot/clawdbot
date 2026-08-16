@@ -402,7 +402,7 @@ describe("registerSetupCommand", () => {
       await runCli(["setup", "--gateway-port", gatewayPort]);
 
       expect(runtime.error).toHaveBeenCalledWith(
-        "Error: --gateway-port must be an integer between 1 and 65535.",
+        "--gateway-port must be an integer between 1 and 65535.",
       );
       expect(runtime.exit).toHaveBeenCalledWith(1);
       expect(setupWizardCommandMock).not.toHaveBeenCalled();
@@ -544,7 +544,7 @@ describe("registerSetupCommand", () => {
 
     await runCli(["setup"]);
 
-    expect(runtime.error).toHaveBeenCalledWith("Error: setup failed");
+    expect(runtime.error).toHaveBeenCalledWith("setup failed");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

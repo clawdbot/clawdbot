@@ -251,23 +251,6 @@ describe("device-auth upgrade migration", () => {
 });
 
 describe("Control UI refresh nudge", () => {
-  it("flags an exact build mismatch on the first connection", () => {
-    const gatewayClient = client(async () => []);
-    const harness = createGatewayHarness(null, false);
-    const overlays = createApplicationOverlays(harness.gateway);
-
-    harness.update({
-      client: gatewayClient,
-      phase: "reconnecting",
-      hello: {
-        server: { version: "1.0.0", buildId: "other" },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-
-    expect(overlays.snapshot.controlUiRefreshRequired).toBe(true);
-    overlays.dispose();
-  });
-
   it("does not flag an independently built configured UI root", () => {
     const gatewayClient = client(async () => []);
     const harness = createGatewayHarness(null, false);

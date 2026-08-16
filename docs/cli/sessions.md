@@ -31,7 +31,7 @@ Flags:
 
 | Flag                 | Description                                                            |
 | -------------------- | ---------------------------------------------------------------------- |
-| `--agent <id>`       | One configured agent store (default: configured default agent).        |
+| `--agent <id>`       | One configured agent store (required for multiple explicit agents).    |
 | `--all-agents`       | Aggregate all configured agent stores.                                 |
 | `--store <path>`     | Explicit store path (cannot combine with `--agent` or `--all-agents`). |
 | `--active <minutes>` | Only show sessions updated within the past N minutes.                  |

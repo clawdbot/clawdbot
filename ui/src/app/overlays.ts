@@ -1,4 +1,3 @@
-import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
@@ -313,10 +312,7 @@ export function createApplicationOverlays(
       if (!next.client) {
         connectedEpoch = 0;
         snapshot = { ...snapshot, controlUiRefreshRequired: false };
-      } else if (
-        next.hello ||
-        next.lastErrorCode === ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH
-      ) {
+      } else if (next.hello) {
         snapshot = { ...snapshot, controlUiRefreshRequired: true };
       }
       clearExecApprovalTimers(promptState);

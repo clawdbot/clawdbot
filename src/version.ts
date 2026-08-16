@@ -2,8 +2,6 @@
 import { createRequire } from "node:module";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
-// oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled builds replace this compile-time define identifier.
-declare const __OPENCLAW_VERSION__: string | undefined;
 const CORE_PACKAGE_NAME = "openclaw";
 
 const PACKAGE_JSON_CANDIDATES = [
@@ -77,10 +75,6 @@ function firstNonEmpty(...values: Array<string | undefined>): string | undefined
   return undefined;
 }
 
-function readInjectedVersion(): string | undefined {
-  return typeof __OPENCLAW_VERSION__ === "string" ? __OPENCLAW_VERSION__ : undefined;
-}
-
 export function readVersionFromPackageJsonForModuleUrl(moduleUrl: string): string | null {
   return readVersionFromJsonCandidates(moduleUrl, PACKAGE_JSON_CANDIDATES, {
     requirePackageName: true,
@@ -104,12 +98,10 @@ export function resolveVersionFromModuleUrl(moduleUrl: string): string | null {
 
 export function resolveBinaryVersion(params: {
   moduleUrl: string;
-  injectedVersion?: string;
   bundledVersion?: string;
   fallback?: string;
 }): string {
   return (
-    firstNonEmpty(params.injectedVersion) ||
     resolveVersionFromModuleUrl(params.moduleUrl) ||
     firstNonEmpty(params.bundledVersion) ||
     params.fallback ||
@@ -186,10 +178,9 @@ export function resolveCompatibilityHostVersion(
 }
 
 // Single source of truth for the current OpenClaw version.
-// - Embedded/bundled builds: injected define or env var.
+// - Embedded/bundled builds: bundled-version env var.
 // - Dev/npm builds: package.json.
 export const VERSION = resolveBinaryVersion({
   moduleUrl: import.meta.url,
-  injectedVersion: readInjectedVersion(),
   bundledVersion: process.env.OPENCLAW_BUNDLED_VERSION,
 });

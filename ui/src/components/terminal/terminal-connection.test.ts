@@ -5,6 +5,7 @@ import {
   TerminalConnection,
   type TerminalGatewayClient,
   TerminalOpenTimeoutError,
+  TerminalOpenUnusableSessionError,
 } from "./terminal-connection.ts";
 
 const TERMINAL_LIVENESS_IDLE_MS = 20_000;
@@ -173,6 +174,26 @@ function setLivenessProbeOutcomes(
 }
 
 describe("TerminalConnection", () => {
+  // The gateway creates the session before answering, so a response that cannot
+  // drive a tab must not simply throw: the live server session would keep its
+  // slot against the connection cap with nothing able to close it.
+  it.each(["shell", "agentId", "cwd"] as const)(
+    "closes the opened session when the response omits %s",
+    async (field) => {
+      const { client, conn } = makeHarness();
+      const { [field]: _dropped, ...incomplete } = sessionResult();
+      client.nextResponse = incomplete;
+
+      await expect(openSession(conn)).rejects.toBeInstanceOf(TerminalOpenUnusableSessionError);
+
+      expect(client.requests.map((request) => request.method)).toEqual([
+        "terminal.open",
+        "terminal.close",
+      ]);
+      expect(client.requests[1]?.params).toEqual({ sessionId: "s1" });
+    },
+  );
+
   it("opens a session and routes its data to the registered sink", async () => {
     const { client, conn } = makeHarness();
     const data: string[] = [];
@@ -522,6 +543,29 @@ describe("TerminalConnection", () => {
       "terminal.resize",
       "terminal.close",
     ]);
+  });
+
+  it.each([
+    ["terminal.input", (conn: TerminalConnection) => conn.input("s1", "echo lost\n")],
+    ["terminal.resize", (conn: TerminalConnection) => conn.resize("s1", 120, 40)],
+  ] as const)("marks the session unavailable when %s rejects its live owner", async (_, act) => {
+    const { client, conn } = makeHarness();
+    const exits: unknown[] = [];
+    await openSession(conn, { onExit: (info) => exits.push(info) });
+    client.nextResponse = { ok: false };
+
+    await act(conn);
+
+    expect(exits).toEqual([
+      {
+        exitCode: null,
+        signal: null,
+        reason: "disconnected",
+        error: "Terminal session is no longer available. Open a new terminal session.",
+      },
+    ]);
+    expect(conn.size).toBe(0);
+    expect(client.listenerCount()).toBe(0);
   });
 
   it("buffers output that races ahead of sink registration and replays it in order", async () => {

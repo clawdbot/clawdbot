@@ -4,11 +4,14 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import {
+  CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
+  resolveCronJobEffectiveAgentId,
+} from "../agent-id.js";
 
 function requireCronAgentId(agentId: string | undefined): string {
   if (!agentId?.trim()) {
-    throw new Error("Cron task run requires an agent id or prepared configured default.");
+    throw new Error(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
   }
   return normalizeAgentId(agentId);
 }

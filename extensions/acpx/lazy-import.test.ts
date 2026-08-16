@@ -53,8 +53,8 @@ describe("acpx Pi session catalog lazy imports", () => {
     expect(nodeCommands).toHaveLength(3);
     expect(nodePolicies).toHaveLength(1);
 
-    await expect(catalogs[0]?.list({})).resolves.toEqual([]);
-    await expect(catalogs[0]?.list({})).resolves.toEqual([]);
+    await expect(catalogs[0]?.list({ agentId: "main" })).resolves.toEqual([]);
+    await expect(catalogs[0]?.list({ agentId: "main" })).resolves.toEqual([]);
     await expect(nodeCommands[0]?.handle()).resolves.toBe("[]");
     await expect(nodeCommands[0]?.handle()).resolves.toBe("[]");
     expect(runtimeImports).toBe(1);

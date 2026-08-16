@@ -230,6 +230,21 @@ describe("OpenClaw database schema preflight", () => {
     }
   });
 
+  it("accepts first-use session group columns without requiring a startup write", async () => {
+    const databasePath = createExplicitStateDatabase(
+      OPENCLAW_STATE_SCHEMA_SQL.replace(
+        "  created_at INTEGER NOT NULL,\n  cwd TEXT,\n  worktree INTEGER\n",
+        "  created_at INTEGER NOT NULL\n",
+      ),
+    );
+
+    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toMatchObject({
+      status: "exact",
+      requiresWrite: false,
+      issues: [],
+    });
+  });
+
   it("rejects an explicit preflight path with sidecars without touching it", async () => {
     const databasePath = createExplicitStateDatabase();
     const sqlite = requireNodeSqlite();

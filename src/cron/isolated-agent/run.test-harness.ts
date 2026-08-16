@@ -137,11 +137,6 @@ vi.mock("./run.runtime.js", async () => ({
   resolveAgentDir: vi.fn().mockReturnValue("/tmp/agent-dir"),
   resolveAgentModelFallbacksOverride: resolveAgentModelFallbacksOverrideMock,
   resolveAgentWorkspaceDir: resolveAgentWorkspaceDirMock,
-  tryResolveLegacyCompatibilityAgentId: (
-    await vi.importActual<typeof import("../../agents/agent-scope-config.js")>(
-      "../../agents/agent-scope-config.js",
-    )
-  ).tryResolveLegacyCompatibilityAgentId,
   resolveCronStyleNow: resolveCronStyleNowMock,
   DEFAULT_CONTEXT_TOKENS: 128000,
   isCliProvider: isCliProviderMock,

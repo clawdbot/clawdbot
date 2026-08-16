@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
+import { WORKER_BUNDLE_RSYNC_RECEIVER_PATH } from "../../shared/worker-bundle-hash.js";
 import {
   type PreparedWorkerSsh,
   workerSshCommandOptions,
@@ -39,6 +40,7 @@ const remoteWorkspaceManifestEnvelopeSchema = z
         contentHashCount: z.number().finite().nonnegative(),
         contentHashDurationMs: z.number().finite().nonnegative(),
         memoHitCount: z.number().finite().nonnegative(),
+        memoTruncatedCount: z.number().finite().nonnegative(),
         totalDurationMs: z.number().finite().nonnegative(),
       })
       .strict(),
@@ -167,7 +169,7 @@ export function workerWorkspaceRsyncReceiverEntryPath(bundleHash: string): strin
   if (!/^[a-f0-9]{64}$/u.test(bundleHash)) {
     throw new Error("Worker workspace rsync receiver bundle hash is invalid");
   }
-  return `.openclaw-worker/${bundleHash}/dist/worker/workspace-rsync-receiver.js`;
+  return `.openclaw-worker/${bundleHash}/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`;
 }
 
 export function workerWorkspaceSshArgv(

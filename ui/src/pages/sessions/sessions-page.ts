@@ -1487,6 +1487,7 @@ class SessionsPage extends OpenClawLightDomElement {
           unread: row.unread === true,
           archived: row.archived === true,
           category: normalizeOptionalString(row.category) ?? null,
+          icon: normalizeOptionalString(row.icon) ?? null,
         }}
         .anchor=${menu}
         .trigger=${this.sessionMenuTrigger}
@@ -1526,6 +1527,9 @@ class SessionsPage extends OpenClawLightDomElement {
               break;
             case "rename":
               void this.renameSession(row);
+              break;
+            case "set-icon":
+              void this.patchSession(row.key, { icon: action.icon });
               break;
             case "fork":
               void this.forkSession(row.key, row.hasActiveRun === true);

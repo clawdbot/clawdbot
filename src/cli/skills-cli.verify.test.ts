@@ -284,7 +284,7 @@ describe("skills verify CLI", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(JSON.parse(mocks.runtimeStdout.at(-1) ?? "{}")).toEqual({
-      error: "Error: ClawHub verification unavailable",
+      error: "ClawHub verification unavailable",
     });
     expect(mocks.runtimeErrors).toStrictEqual([]);
   });

@@ -2042,6 +2042,7 @@ describe("scripts/changed-lanes", () => {
 
   it("runs macOS CI tests for workspace rsync receiver owners", () => {
     for (const changedPath of [
+      "src/shared/worker-bundle-hash.ts",
       "src/worker/workspace-rsync-receiver.ts",
       "src/gateway/worker-environments/workspace-sync.ts",
       "src/gateway/worker-environments/workspace-sync-helpers.ts",

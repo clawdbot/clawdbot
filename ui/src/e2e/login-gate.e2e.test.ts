@@ -59,6 +59,62 @@ async function closeContext(context: BrowserContext): Promise<void> {
 }
 
 suite.define(() => {
+  it("cache-busts stale-build recovery on a first dashboard navigation", async () => {
+    const context = await suite.browser.newContext({
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const documentRequests: Array<{ fresh: boolean; pathname: string }> = [];
+    const appOrigin = new URL(suite.server.baseUrl).origin;
+    await page.route(`${appOrigin}/**`, async (route) => {
+      const request = route.request();
+      if (request.resourceType() === "document") {
+        const url = new URL(request.url());
+        documentRequests.push({
+          fresh: url.searchParams.has("openclaw_mount_recovery"),
+          pathname: url.pathname,
+        });
+      }
+      await route.continue();
+    });
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["connect"],
+      sessionKey: "agent:example-agent:example-session",
+    });
+    const mismatch = {
+      code: "UNAVAILABLE",
+      message: "Control UI updated; reload this page to continue",
+      details: {
+        code: ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH,
+        gatewayBuildId: "replacement-build",
+        reloadRequired: true,
+      },
+      retryable: false,
+    };
+    const target = new URL("dashboard/example-agent/example-session", suite.server.baseUrl);
+
+    try {
+      await page.goto(target.href);
+      await gateway.waitForRequest("connect");
+      await gateway.rejectDeferred("connect", mismatch);
+
+      await expect.poll(() => documentRequests.length).toBe(2);
+      await gateway.waitForRequest("connect");
+      expect(documentRequests).toEqual([
+        { fresh: false, pathname: target.pathname },
+        { fresh: true, pathname: target.pathname },
+      ]);
+      await gateway.resolveDeferred("connect");
+
+      await page.locator("openclaw-app-shell").waitFor();
+      expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+      await expect.poll(() => page.url()).toBe(target.href);
+    } finally {
+      await closeContext(context);
+    }
+  });
+
   it("reloads once for a build rejection, then keeps visible recovery guidance", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
@@ -120,7 +176,7 @@ suite.define(() => {
       await gateway.waitForRequest("connect");
       await gateway.rejectDeferred("connect", {
         code: "INVALID_REQUEST",
-        message: "protocol mismatch",
+        message: "protocol mismatch: Control UI updated; reload this page to continue",
         details: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
       });
 
@@ -129,6 +185,7 @@ suite.define(() => {
       expect((await failure.textContent())?.toLowerCase()).toContain(
         "supported connection protocol",
       );
+      expect(await page.locator(".login-gate__failure-refresh").isVisible()).toBe(true);
       await page.clock.runFor(1_600);
       expect(await gateway.getRequests("connect")).toHaveLength(1);
     } finally {

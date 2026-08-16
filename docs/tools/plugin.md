@@ -153,11 +153,15 @@ copy as suspicious ClawHub releases; policy is then re-evaluated. Reviewed
 non-interactive direct CLI commands can use `--acknowledge-install-policy-warning`.
 That flag approves every warning for the command invocation; each warning is
 still re-evaluated before the install continues.
-Gateway-backed and automatic installs remain blocked on warnings because they
-have no operator-confirmation flow. When an equivalent direct plugin or skill
-command exists, use that command to review and approve the warning. Otherwise,
-change `security.installPolicy` to return `allow` for the reviewed request, then
-retry the managed flow. Neither `--force` nor the deprecated plugin
+The Control UI shows the structured warning and offers **Install anyway**. That
+action resends the same plugin request with `acknowledgeInstallPolicyWarning:
+true`, approving every warning encountered during that install invocation;
+each warning is still re-evaluated before installation continues. Other
+Gateway-backed and automatic installs remain blocked when they have no
+operator-confirmation flow. When an equivalent direct plugin or skill command
+exists, use that command to review and approve the warning. Otherwise, change
+`security.installPolicy` to return `allow` for the reviewed request, then retry
+the managed flow. Neither `--force` nor the deprecated plugin
 install/update flag `--dangerously-force-unsafe-install` approves a policy
 warning. Plugin
 `before_install` hooks run later, and only in OpenClaw processes where plugin

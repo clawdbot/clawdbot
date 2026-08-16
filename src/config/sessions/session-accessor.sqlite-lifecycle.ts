@@ -16,6 +16,7 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import type { ResetSessionEntryLifecycleMutation } from "./session-accessor.lifecycle-types.js";
+import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import type {
   SessionLifecycleArchivedTranscript,
@@ -139,7 +140,7 @@ export async function cleanupSessionLifecycleArtifactsCore(
     });
   });
   const materializedPlans = await materializeSessionStateDeletePlans(cleanupPlan.deletePlans);
-  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+  const committed = await runExclusiveSqliteSessionWrite(resolved, async () => {
     let removedEntries = 0;
     let archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
     runOpenClawAgentWriteTransaction((transactionDb) => {
@@ -155,9 +156,17 @@ export async function cleanupSessionLifecycleArtifactsCore(
     emitCommittedSessionEntryRemovals(cleanupPlan.entries);
     return {
       removedEntries,
-      archivedTranscriptArtifacts: archivedTranscripts.length,
+      archivedTranscripts,
     };
   });
+  const archivedTranscripts = await publishSessionStateArchives(
+    resolved,
+    committed.archivedTranscripts,
+  );
+  return {
+    removedEntries: committed.removedEntries,
+    archivedTranscriptArtifacts: archivedTranscripts.length,
+  };
 }
 
 /** Resets one persisted session entry using SQLite session rows. */
@@ -371,6 +380,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
     return { archiveDirectory, current, entryPlans, historicalGenerationIds, targetSnapshot };
   });
   if (!prepared) {
+    await publishSessionStateArchives(resolved, []);
     return { archivedTranscripts: [], deleted: false };
   }
 
@@ -444,8 +454,9 @@ async function deleteSqliteSessionEntryLifecycleLocked(
     // Publish each committed generation immediately: a later archive or
     // transaction failure aborts the deletion, and observers must still see
     // the removals that already happened (retry completes the remainder).
-    emitArchivedTranscriptUpdates(archivedGeneration);
-    historicalArchivedTranscripts.push(...archivedGeneration);
+    const publishedGeneration = await publishSessionStateArchives(resolved, archivedGeneration);
+    emitArchivedTranscriptUpdates(publishedGeneration);
+    historicalArchivedTranscripts.push(...publishedGeneration);
   }
 
   // Archive materialization is the expensive phase. It must run between short
@@ -505,6 +516,10 @@ async function deleteSqliteSessionEntryLifecycleLocked(
       },
     });
   }
+  result.archivedTranscripts = await publishSessionStateArchives(
+    resolved,
+    result.archivedTranscripts,
+  );
   emitArchivedTranscriptUpdates(result.archivedTranscripts);
   // Historical generations were emitted per commit above; merge them into
   // the result after the final emit so callers still see every archive.

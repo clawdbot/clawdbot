@@ -1,17 +1,19 @@
+import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  createSessionCatalogAdoptionCoordinator,
+  sessionCatalogAdoptedSourceKey,
+} from "openclaw/plugin-sdk/session-catalog";
 import type { CodexThread } from "./app-server/protocol.js";
 import { withTimeout } from "./app-server/timeout.js";
 import { createCodexCliNodeConversationBindingData } from "./conversation-binding-data.js";
 import { CODEX_CLI_SESSION_RESUME_COMMAND } from "./node-cli-sessions.js";
 import {
-  adoptedSourceKey,
-  continueOperations,
   createOrReuseNodeAdoptedSession,
   finalizeNodeAdoptedSession,
   findNodeAdoptedSessionEntry,
-  lastTerminalTurnId,
   nodeSessionMarker,
   runSessionActionExclusive,
   type AdoptedSessionEntry,
@@ -24,8 +26,10 @@ import {
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
   CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
+  MAX_SESSION_ID_LENGTH,
   filterCatalogPageByTitle,
   isInteractiveThreadSource,
+  boundedCatalogString,
   MAX_ACTION_CATALOG_PAGES,
   MAX_TRANSCRIPT_PAGE_LIMIT,
   NODE_INVOKE_TIMEOUT_MS,
@@ -38,6 +42,7 @@ import type {
   CodexSessionCatalogParams,
   CodexSessionCatalogSession,
 } from "./session-catalog-types.js";
+import { codexLastTerminalTurnId } from "./session-upstream-marker.js";
 
 const CODEX_NODE_CONTINUE_COMMANDS = [
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
@@ -48,6 +53,10 @@ const CODEX_NODE_CONTINUE_COMMANDS = [
 // Catalog refresh is fail-soft: one unhealthy machine must not hold the whole sidebar.
 // The node invoke keeps running so cold native discovery can warm the next poll.
 const NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS = 8_000;
+const continueNodeAdoption =
+  createSessionCatalogAdoptionCoordinator<
+    Awaited<ReturnType<typeof continueNodeCodexSessionInner>>
+  >();
 
 export type CatalogNode = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"][number];
 
@@ -79,6 +88,7 @@ function canContinueCodexOnNode(node: CatalogNode): boolean {
 }
 
 export async function listPairedNode(params: {
+  agentId: string;
   runtime: PluginRuntime;
   node: CatalogNode;
   query: CodexSessionCatalogParams;
@@ -109,6 +119,7 @@ export async function listPairedNode(params: {
         nodeId: params.node.nodeId,
         command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
         params: {
+          agentId: params.agentId,
           cursor: params.query.cursors?.[hostId],
           limit: params.query.limitPerHost,
           searchTerm: params.query.search,
@@ -125,7 +136,9 @@ export async function listPairedNode(params: {
         connected: true,
         ...page,
         sessions: page.sessions.map((session) => {
-          const adopted = params.adoptedSessions.get(adoptedSourceKey(hostId, session.threadId));
+          const adopted = params.adoptedSessions.get(
+            sessionCatalogAdoptedSourceKey(hostId, session.threadId),
+          );
           return adopted ? Object.assign({}, session, { sessionKey: adopted.key }) : session;
         }),
       };
@@ -175,6 +188,7 @@ async function requireNodeForCodexContinue(params: {
 }
 
 async function resolveNodeCodexRecord(params: {
+  agentId: string;
   runtime: PluginRuntime;
   nodeId: string;
   threadId: string;
@@ -186,6 +200,7 @@ async function resolveNodeCodexRecord(params: {
       nodeId: params.nodeId,
       command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
       params: {
+        agentId: params.agentId,
         limit: CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
         ...(cursor ? { cursor } : {}),
       },
@@ -231,6 +246,7 @@ function requireContinuableNodeRecord(record: CodexSessionCatalogSession): void 
 }
 
 async function readNodeCodexHistory(params: {
+  agentId: string;
   runtime: PluginRuntime;
   nodeId: string;
   record: CodexSessionCatalogSession;
@@ -239,6 +255,7 @@ async function readNodeCodexHistory(params: {
     nodeId: params.nodeId,
     command: CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
     params: {
+      agentId: params.agentId,
       threadId: params.record.threadId,
       limit: MAX_TRANSCRIPT_PAGE_LIMIT,
     },
@@ -252,10 +269,17 @@ async function readNodeCodexHistory(params: {
     modelProvider: params.record.modelProvider ?? "openai",
     turns: page.data.toReversed(),
   };
-  return { thread, throughTurnId: lastTerminalTurnId(thread) ?? null };
+  return {
+    thread,
+    throughTurnId:
+      codexLastTerminalTurnId(thread, (value) =>
+        boundedCatalogString(value, MAX_SESSION_ID_LENGTH),
+      ) ?? null,
+  };
 }
 
 async function continueNodeCodexSessionInner(params: {
+  agentId: string;
   api: OpenClawPluginApi;
   config: OpenClawConfig;
   hostId: string;
@@ -276,12 +300,14 @@ async function continueNodeCodexSessionInner(params: {
     hostId: params.hostId,
   });
   const record = await resolveNodeCodexRecord({
+    agentId: params.agentId,
     runtime: params.api.runtime,
     nodeId,
     threadId: params.threadId,
   });
   requireContinuableNodeRecord(record);
   const existing = findNodeAdoptedSessionEntry({
+    agentId: params.agentId,
     config: params.config,
     runtime: params.api.runtime,
     hostId: params.hostId,
@@ -297,11 +323,13 @@ async function continueNodeCodexSessionInner(params: {
     disposition = "existing";
   } else {
     const history = await readNodeCodexHistory({
+      agentId: params.agentId,
       runtime: params.api.runtime,
       nodeId,
       record,
     });
     adopted = await createOrReuseNodeAdoptedSession({
+      agentId: params.agentId,
       api: params.api,
       config: params.config,
       hostId: params.hostId,
@@ -337,6 +365,7 @@ async function continueNodeCodexSessionInner(params: {
 }
 
 export async function continueNodeCodexSession(params: {
+  agentId?: string;
   api: OpenClawPluginApi;
   config: OpenClawConfig;
   hostId: string;
@@ -353,22 +382,23 @@ export async function continueNodeCodexSession(params: {
   if (!nodeId || params.hostId !== `node:${nodeId}`) {
     throw new CatalogParamsError("Codex session catalog hostId is invalid");
   }
-  const sourceKey = adoptedSourceKey(`node:${nodeId}`, params.threadId);
-  const current = continueOperations.get(sourceKey) as
-    | Promise<Awaited<ReturnType<typeof continueNodeCodexSessionInner>>>
-    | undefined;
-  if (current) {
-    return await current;
-  }
-  const operation = runSessionActionExclusive(sourceKey, async () =>
-    continueNodeCodexSessionInner(params),
-  );
-  continueOperations.set(sourceKey, operation);
-  try {
-    return await operation;
-  } finally {
-    if (continueOperations.get(sourceKey) === operation) {
-      continueOperations.delete(sourceKey);
-    }
-  }
+  const agentId = resolveSessionAgentIds({
+    config: params.config,
+    agentId: params.agentId,
+  }).defaultAgentId;
+  const sourceKey = sessionCatalogAdoptedSourceKey(`node:${nodeId}`, params.threadId);
+  const operationKey = sessionCatalogAdoptedSourceKey(agentId, sourceKey);
+  // Memoization is agent-qualified while the native action lock is source-qualified,
+  // so different agents serialize on one thread without joining one adoption result.
+  // The exclusive inner operation owns both its existing lookup and raced recovery.
+  return await continueNodeAdoption({
+    sourceKey: operationKey,
+    findExisting: () => undefined,
+    create: () =>
+      runSessionActionExclusive(sourceKey, async () =>
+        continueNodeCodexSessionInner({ ...params, agentId }),
+      ),
+    complete: async (continued) =>
+      continued as Awaited<ReturnType<typeof continueNodeCodexSessionInner>>,
+  });
 }

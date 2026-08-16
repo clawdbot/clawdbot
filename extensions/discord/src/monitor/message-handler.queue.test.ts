@@ -24,6 +24,7 @@ import {
   preflightDiscordMessageMock,
   processDiscordMessageMock,
 } from "./message-handler.module-test-helpers.js";
+import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
 import {
   createDiscordHandlerParams,
@@ -564,6 +565,69 @@ describe("createDiscordMessageHandler queue behavior", () => {
             true,
           );
           expect(runtimeErrors.join("\n")).not.toContain("hello");
+        } finally {
+          await handler.deactivate();
+        }
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("dead-letters an exhausted queued processing failure and releases its Discord lane", async () => {
+    vi.useFakeTimers();
+    try {
+      await withDiscordQueue(async (queue) => {
+        const receivedAt = 1;
+        const ingressPayload = (id: string): DiscordIngressPayload => ({
+          version: 1,
+          receivedAt,
+          rawMessage: createRawMessage(id, "lane-a"),
+        });
+        const poisonPayload = ingressPayload("processing-poison");
+        const followerPayload = ingressPayload("processing-follower");
+        const lane = { laneKey: "channel:lane-a" };
+        await queue.enqueue("processing-poison", poisonPayload, { ...lane, receivedAt });
+        await queue.enqueue("processing-follower", followerPayload, {
+          ...lane,
+          receivedAt: receivedAt + 1,
+        });
+        for (let attempt = 1; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
+          const claim = await queue.claim("processing-poison", {
+            ownerId: `seed-failure-${attempt}`,
+          });
+          if (!claim) {
+            throw new Error(`failed to seed retry ${attempt}`);
+          }
+          await queue.release(claim, {
+            lastError: `seed processing failure ${attempt}`,
+            releasedAt: poisonPayload.receivedAt + attempt,
+          });
+        }
+        const processed: string[] = [];
+        const handler = createDurableDiscordMessageHandler({
+          ...createDiscordHandlerParams(),
+          client: {} as never,
+          testing: {
+            preflightDiscordMessage: (async (preflightParams: DiscordMessagePreflightParams) => ({
+              ...createPreflightContextForMessage(preflightParams.data),
+              turnAdoptionLifecycle: preflightParams.turnAdoptionLifecycle,
+            })) as never,
+            processDiscordMessage: async (ctx) => {
+              processed.push(ctx.message.id);
+              if (ctx.message.id === "processing-poison") {
+                throw new Error("deterministic queued processing failure");
+              }
+            },
+            createIngressMonitor: (monitorParams) =>
+              createDiscordIngressMonitor({ ...monitorParams, queue }),
+          },
+        });
+        try {
+          await vi.advanceTimersByTimeAsync(1_000);
+          await vi.waitFor(() => expect(processed).toHaveLength(2));
+          expect(processed).toEqual(["processing-poison", "processing-follower"]);
+          expect((await queue.listFailed?.())?.[0]?.reason).toBe("retry-limit-exceeded");
         } finally {
           await handler.deactivate();
         }

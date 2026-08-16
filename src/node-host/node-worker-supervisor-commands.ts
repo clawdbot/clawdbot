@@ -1,5 +1,6 @@
 import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
+  NODE_WORKER_BUNDLE_INSTALL_COMMAND,
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
@@ -7,6 +8,12 @@ import {
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
   NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
 } from "../infra/node-commands.js";
+import {
+  NODE_WORKER_BUNDLE_INSTALL_ERROR_CODE,
+  NodeWorkerBundleInstallError,
+  parseNodeWorkerBundleInstallInput,
+  type NodeWorkerBundleInstallResult,
+} from "../worker/node-bundle-install-protocol.js";
 import {
   parseNodeWorkerWorkspaceExecInput,
   type NodeWorkerWorkspaceExecResult,
@@ -23,6 +30,7 @@ import {
   parseWorkerConnectionEndpoint,
   type WorkerConnectionEndpoint,
 } from "../worker/worker-connection-endpoint.js";
+import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
 import { NodeWorkerCapacityExhaustedError } from "./node-worker-capacity.js";
 import {
   parseNodeWorkerCancelInput,
@@ -40,6 +48,7 @@ type NodeWorkerSupervisorCommandResult =
       handled: true;
       ok: true;
       payload:
+        | NodeWorkerBundleInstallResult
         | NodeWorkerSupervisorReceipt
         | NodeWorkerWorkspaceExecResult
         | NodeWorkerWorkspaceRetainResult
@@ -51,6 +60,7 @@ type NodeWorkerSupervisorCommandResult =
       code:
         | "INVALID_REQUEST"
         | "UNAVAILABLE"
+        | typeof NODE_WORKER_BUNDLE_INSTALL_ERROR_CODE
         | typeof NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE
         | typeof NODE_WORKSPACE_TRANSFER_ERROR_CODE;
       message: string;
@@ -93,12 +103,14 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
   command: string;
   paramsJSON?: string | null;
   supervisor?: NodeWorkerSupervisorControl;
+  bundleInstaller?: NodeWorkerBundleInstallerControl;
   workspace?: NodeWorkerWorkspaceRuntime;
   gatewayUrl?: string;
   gatewayTlsFingerprint?: string;
   signal?: AbortSignal;
 }): Promise<NodeWorkerSupervisorCommandResult> {
   const recognized =
+    params.command === NODE_WORKER_BUNDLE_INSTALL_COMMAND ||
     params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND ||
     params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND ||
     params.command === NODE_WORKER_SUPERVISOR_CANCEL_COMMAND ||
@@ -108,8 +120,11 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
     return { handled: false };
   }
   if (
+    (params.command === NODE_WORKER_BUNDLE_INSTALL_COMMAND && !params.bundleInstaller) ||
     (params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND && !params.workspace) ||
-    (params.command !== NODE_WORKER_WORKSPACE_EXEC_COMMAND && !params.supervisor)
+    (params.command !== NODE_WORKER_BUNDLE_INSTALL_COMMAND &&
+      params.command !== NODE_WORKER_WORKSPACE_EXEC_COMMAND &&
+      !params.supervisor)
   ) {
     return {
       handled: true,
@@ -119,6 +134,23 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
     };
   }
   try {
+    if (params.command === NODE_WORKER_BUNDLE_INSTALL_COMMAND) {
+      if (!params.gatewayUrl) {
+        throw new Error("node worker gateway connection unavailable");
+      }
+      return {
+        handled: true,
+        ok: true,
+        payload: await params.bundleInstaller!.ensure({
+          input: parseNodeWorkerBundleInstallInput(params.paramsJSON),
+          gatewayUrl: params.gatewayUrl,
+          ...(params.gatewayTlsFingerprint
+            ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
+            : {}),
+          signal: params.signal,
+        }),
+      };
+    }
     if (params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND) {
       return {
         handled: true,
@@ -164,6 +196,7 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
     };
   } catch (error) {
     const invalid = error instanceof Error && error.message.startsWith("INVALID_REQUEST:");
+    const bundleInstallFailure = error instanceof NodeWorkerBundleInstallError;
     const capacityFailure = error instanceof NodeWorkerCapacityExhaustedError;
     const transferFailure = error instanceof NodeWorkerWorkspaceTransferError;
     return {
@@ -171,13 +204,15 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
       ok: false,
       code: invalid
         ? "INVALID_REQUEST"
-        : capacityFailure
-          ? NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE
-          : transferFailure
-            ? NODE_WORKSPACE_TRANSFER_ERROR_CODE
-            : "UNAVAILABLE",
+        : bundleInstallFailure
+          ? NODE_WORKER_BUNDLE_INSTALL_ERROR_CODE
+          : capacityFailure
+            ? NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE
+            : transferFailure
+              ? NODE_WORKSPACE_TRANSFER_ERROR_CODE
+              : "UNAVAILABLE",
       message:
-        invalid || capacityFailure || transferFailure
+        invalid || bundleInstallFailure || capacityFailure || transferFailure
           ? error.message
           : "node worker supervisor command failed",
     };

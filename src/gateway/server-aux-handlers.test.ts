@@ -325,6 +325,44 @@ describe("gateway aux handlers", () => {
     gatewayAux.unregisterApprovalAuthorityObserver();
   });
 
+  it("publishes exec.approval.resolved when the gateway timeout expires an approval", async () => {
+    vi.useFakeTimers();
+    try {
+      const gatewayAux = createSecretsReloadHarness({
+        activateRuntimeSecrets: mockResolvedSecrets(asConfig({})),
+      });
+      const broadcast = vi.fn();
+      const publishResolved = vi.fn();
+      gatewayAux.bindApprovalPublicationContext({
+        broadcast,
+        broadcastToConnIds: vi.fn(),
+        approvalEvents: { publishResolved },
+        logGateway: { error: vi.fn() },
+      } as never);
+      const record = gatewayAux.execApprovalManager.create(
+        { command: "echo expires" },
+        1_000,
+        "exec-timeout-publish",
+      );
+      const decision = gatewayAux.execApprovalManager.register(record, 1_000);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      await expect(decision).resolves.toBeNull();
+      // The gateway clock owns expiry: reviewer surfaces must receive the
+      // terminal event instead of pruning on their own (skewed) clocks.
+      await vi.waitFor(() => expect(publishResolved).toHaveBeenCalledTimes(1));
+      expect(broadcast).toHaveBeenCalledWith(
+        "exec.approval.resolved",
+        expect.objectContaining({ id: "exec-timeout-publish", decision: "deny" }),
+        expect.anything(),
+      );
+      gatewayAux.unregisterApprovalAuthorityObserver();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("settles and publishes both approval kinds from the production worker-claim observer", async () => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "openclaw-aux-worker-"));
     closeOpenClawStateDatabaseForTest();

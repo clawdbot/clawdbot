@@ -19,7 +19,6 @@ import {
   type DiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
 import {
-  formatPropagatedDiagnosticTraceparent,
   prepareDiagnosticTracePropagation,
   resetDiagnosticTracePropagationForTest,
   shouldPrepareDiagnosticTracePropagation,
@@ -959,7 +958,6 @@ type DiagnosticEventsGlobalState = {
 const MAX_ASYNC_DIAGNOSTIC_EVENTS = 10_000;
 const MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN = 100;
 const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEvents.state.v1");
-const dispatchedTrustedDiagnosticMetadata = new WeakSet<object>();
 const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "tool.execution.started",
   "tool.execution.completed",
@@ -1145,11 +1143,7 @@ function dispatchDiagnosticEvent(
 function createDiagnosticMetadataForListener(
   metadata: DiagnosticEventMetadata,
 ): DiagnosticEventMetadata {
-  const listenerMetadata = Object.freeze({ ...metadata });
-  if (listenerMetadata.trusted) {
-    dispatchedTrustedDiagnosticMetadata.add(listenerMetadata);
-  }
-  return listenerMetadata;
+  return Object.freeze({ ...metadata });
 }
 
 function cloneDiagnosticEventForListener(event: DiagnosticEventPayload): DiagnosticEventPayload {
@@ -1583,17 +1577,6 @@ export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => voi
     }
     listener(event);
   });
-}
-
-/** Formats traceparent only for trusted metadata created by the diagnostic dispatcher. */
-export function formatDiagnosticTraceparentForPropagation(
-  event: { trace?: DiagnosticTraceContext },
-  metadata: DiagnosticEventMetadata,
-): string | undefined {
-  if (!metadata.trusted || !dispatchedTrustedDiagnosticMetadata.has(metadata)) {
-    return undefined;
-  }
-  return formatPropagatedDiagnosticTraceparent(event.trace);
 }
 
 /** Returns whether listener metadata marks dispatcher-internal provenance. */

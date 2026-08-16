@@ -1,6 +1,7 @@
 // Structural formatting stays policy-free. Core and memory-host adapters intentionally inject
 // owner-specific redactors; bypassing them would weaken redaction and break one-argument APIs.
 export type FormatErrorMessageOptions = {
+  includeCode?: boolean;
   redact: (text: string) => string;
 };
 
@@ -86,6 +87,12 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
       formatted += ` | ${message}`;
       seenMessages.add(message);
     };
+    if (options.includeCode) {
+      const code = readProperty(value, "code");
+      if (typeof code === "string" || typeof code === "number") {
+        appendCauseMessage(String(code));
+      }
+    }
     while (cause && !seen.has(cause)) {
       seen.add(cause);
       if (cause instanceof Error) {

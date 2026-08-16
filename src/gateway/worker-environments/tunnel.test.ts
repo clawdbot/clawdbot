@@ -112,9 +112,7 @@ describe("worker tunnel manager", () => {
     const launch = fake.runs.at(-1);
     const remoteLaunchCommand = launch?.argv.at(-1) ?? "";
     expect(remoteLaunchCommand).toContain("'sh' '-c'");
-    expect(remoteLaunchCommand).toContain(
-      'exec node "$HOME/.openclaw-worker/$1/openclaw.mjs" worker',
-    );
+    expect(remoteLaunchCommand).toContain('exec node "$HOME/.openclaw-worker/$1/worker.mjs"');
     expect(remoteLaunchCommand).toContain(`'${BUNDLE_HASH}'`);
     expect(launch?.options.input).toContain('"connectionEndpoint":{"kind":"unix"');
     expect(launch?.options.timeoutMs).toBe(123);

@@ -25,6 +25,9 @@ const CLAW_LAZY_ADDITIVE_STATE_COLUMNS = CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINIT
 const CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS = CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
   ({ columnName, tableName }) => `${tableName}.${columnName}`,
 );
+const CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_SET = new Set<string>(
+  CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS,
+);
 const CLAW_STARTUP_ADDITIVE_STATE_COLUMN_SET = new Set<string>(
   CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS.map(
     ({ columnName, tableName }) => `${tableName}.${columnName}`,
@@ -129,5 +132,13 @@ export function isOpenClawStateStartupRepairableSchemaIssue(issue: SqliteSchemaI
   return (
     issue.code === "missing-or-drifted-index" &&
     getOpenClawStateCanonicalNamedIndexSet().has(issue.objectName)
+  );
+}
+
+/** Identify compatible schema differences repaired only by their feature owner. */
+export function isOpenClawStateFirstUseSchemaIssue(issue: SqliteSchemaIssue): boolean {
+  return (
+    issue.code === "missing-column" &&
+    CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_SET.has(issue.objectName)
   );
 }

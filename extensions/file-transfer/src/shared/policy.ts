@@ -356,8 +356,7 @@ export async function persistAllowAlways(input: {
     mutate: (draft) => {
       // Plugin config is intentionally plugin-owned; the root OpenClawConfig
       // type only guarantees `Record<string, unknown>` here.
-      const root = draft as unknown as Record<string, unknown>;
-      const plugins = (root.plugins ??= {}) as Record<string, unknown>;
+      const plugins = (draft.plugins ??= {}) as Record<string, unknown>;
       const entries = (plugins.entries ??= {}) as Record<string, unknown>;
       const pluginEntry = (entries["file-transfer"] ??= {}) as Record<string, unknown>;
       const pluginConfig = (pluginEntry.config ??= {}) as Record<string, unknown>;

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { SidebarSessionSortMode } from "../../components/app-sidebar-session-types.ts";
 import {
   createContext,
   createGateway,
@@ -14,6 +15,30 @@ import {
 } from "../app-sidebar.ts";
 import "./session-pagination.ts";
 import "./session-navigation.ts";
+
+type SidebarSortModeHost = {
+  sessionSortMode: SidebarSessionSortMode;
+  setSessionSortMode: (mode: SidebarSessionSortMode) => void;
+};
+
+describe("AppSidebar session sort persistence", () => {
+  it("restores the selected sort mode on a later mount", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const first = await mountSidebar(gateway, createSessions("main", ["agent:main:session-a"]));
+    const firstSidebar = first.sidebar as unknown as SidebarSortModeHost;
+    expect(firstSidebar.sessionSortMode).toBe("created");
+
+    firstSidebar.setSessionSortMode("updated");
+    expect(localStorage.getItem("openclaw:sidebar:sessions:sort-mode")).toBe("updated");
+
+    // A remount is what a reload does to this element; the preference must
+    // survive it like every other stored sidebar choice.
+    document.body.replaceChildren();
+    const second = await mountSidebar(gateway, createSessions("main", ["agent:main:session-a"]));
+
+    expect((second.sidebar as unknown as SidebarSortModeHost).sessionSortMode).toBe("updated");
+  });
+});
 
 describe("AppSidebar session pagination", () => {
   it("does not show pagination controls at the ten-session boundary", async () => {
@@ -367,7 +392,9 @@ describe("AppSidebar session accessibility", () => {
     expect(row?.hasAttribute("aria-label")).toBe(false);
     expect(link?.hasAttribute("aria-label")).toBe(false);
     expect(link?.getAttribute("aria-current")).toBe("page");
-    expect(link?.querySelector(".sidebar-session-indicator")).toBeNull();
+    const lead = link?.querySelector(".sidebar-session-indicator");
+    expect(lead).not.toBeNull();
+    expect(lead?.childElementCount).toBe(0);
     expect(link?.querySelector(".sidebar-recent-session__text")).not.toBeNull();
     const rowState = row?.querySelector(".session-row-state");
     expect(rowState?.getAttribute("role")).toBe("img");

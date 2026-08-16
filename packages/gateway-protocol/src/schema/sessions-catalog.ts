@@ -11,6 +11,8 @@ export const SessionCatalogLocatorSchema = closedObject({
   catalogId: NonEmptyString,
   hostId: NonEmptyString,
   threadId: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  sourceHomeId: Type.Optional(NonEmptyString),
 });
 
 export const SessionCatalogCapabilitiesSchema = closedObject({
@@ -47,6 +49,7 @@ export const SessionCatalogPullRequestSummarySchema = closedObject({
 
 export const SessionCatalogSessionSchema = closedObject({
   threadId: NonEmptyString,
+  sourceHomeId: Type.Optional(NonEmptyString),
   name: Type.Optional(Type.String()),
   cwd: Type.Optional(Type.String()),
   status: NonEmptyString,

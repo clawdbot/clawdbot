@@ -14,11 +14,17 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
+import { takeSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import { i18n } from "../i18n/index.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../lib/sessions/route-navigation.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
-import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
+import {
+  createLazyElementSpec,
+  resetAppHostTestGlobals,
+  type ShellKeyboardState,
+  type TestOptionalCustomElement,
+} from "./app-host.test-support.ts";
 import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
 import "./app-host.ts";
 import type {
@@ -73,17 +79,12 @@ type ShellServerPreferencesState = {
   reconcileServerUiPrefs: (runtimeConfig: ApplicationContext["runtimeConfig"]) => void;
 };
 
-type TestOptionalCustomElement = {
-  tagName: string;
-  label: string;
-  loadModule: () => Promise<unknown>;
-};
-
 type ShellLazySurfaceState = ShellKeyboardState & {
   browserPanelElement: TestOptionalCustomElement;
   commandPaletteElement: TestOptionalCustomElement;
   handleDeferredBrowserToggle: (event: Event) => void;
   handleDeferredTerminalToggle: (event: Event) => void;
+  routeState: { routeId: string };
   terminalPanelElement: TestOptionalCustomElement;
 };
 
@@ -147,20 +148,6 @@ function createRosterRefreshContext(params: {
     ensureIdentity,
     setSelection,
     refreshConfig,
-  };
-}
-
-let lazyElementSequence = 0;
-
-function createLazyElementSpec(label: string): TestOptionalCustomElement {
-  lazyElementSequence += 1;
-  const tagName = `openclaw-app-host-lazy-${lazyElementSequence}`;
-  return {
-    tagName,
-    label,
-    loadModule: async () => {
-      customElements.define(tagName, class extends HTMLElement {});
-    },
   };
 }
 
@@ -926,6 +913,19 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       expect(terminalToggle).toHaveBeenCalledWith(terminalEvent);
       expect(browserToggle).toHaveBeenCalledWith(browserEvent);
     });
+  });
+
+  it("buffers panel toggle events until the active chat pane mounts", () => {
+    const terminalElement = createLazyElementSpec("session terminal panel");
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellLazySurfaceState;
+    shell.terminalPanelElement = terminalElement;
+    shell.routeState = { routeId: "chat" };
+
+    const event = new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, { detail: { open: true } });
+    shell.handleDeferredTerminalToggle(event);
+
+    expect(customElements.get(terminalElement.tagName)).toBeUndefined();
+    expect(takeSessionPanelToggle("terminal")).toBe(event);
   });
 
   it("opens approvals after the modal module loads on demand", async () => {

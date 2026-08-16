@@ -62,29 +62,35 @@ export function isOpenAIResponsesReplayContext(
   );
 }
 
-function readOpenAIResponsesCompactionReplayState(
-  value: unknown,
-): OpenAIResponsesCompactionReplayState | OpenAIResponsesCompactionSuppressionState | undefined {
-  if (
-    !isOpenAIResponsesReplayContext(value) ||
-    typeof value.baseUrlHash !== "string" ||
-    (value as Record<string, unknown>).v !== 1
-  ) {
-    return undefined;
+function isOpenAIResponsesCompactionState(
+  state: OpenAIResponsesReplayContext & Record<string, unknown>,
+): state is Record<string, unknown> &
+  (OpenAIResponsesCompactionReplayState | OpenAIResponsesCompactionSuppressionState) {
+  if (typeof state.baseUrlHash !== "string" || state.v !== 1) {
+    return false;
   }
-  const state = value as OpenAIResponsesReplayContext & Record<string, unknown>;
   if (state.type === OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE) {
-    return state.data === OPENAI_RESPONSES_COMPACTION_SUPPRESSION_DATA
-      ? (state as unknown as OpenAIResponsesCompactionSuppressionState)
-      : undefined;
+    return state.data === OPENAI_RESPONSES_COMPACTION_SUPPRESSION_DATA;
   }
-  return state.type === OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE &&
+  return (
+    state.type === OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE &&
     typeof state.data === "string" &&
     state.data.length > 0 &&
     (state.id === undefined || typeof state.id === "string") &&
     (state.replayIndex === undefined ||
-      (Number.isSafeInteger(state.replayIndex) && (state.replayIndex as number) >= 0))
-    ? (state as unknown as OpenAIResponsesCompactionReplayState)
+      (typeof state.replayIndex === "number" &&
+        Number.isSafeInteger(state.replayIndex) &&
+        state.replayIndex >= 0))
+  );
+}
+
+function readOpenAIResponsesCompactionReplayState(
+  value: unknown,
+): OpenAIResponsesCompactionReplayState | OpenAIResponsesCompactionSuppressionState | undefined {
+  return isRecord(value) &&
+    isOpenAIResponsesReplayContext(value) &&
+    isOpenAIResponsesCompactionState(value)
+    ? value
     : undefined;
 }
 

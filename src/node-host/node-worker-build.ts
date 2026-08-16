@@ -18,7 +18,7 @@ type NodeWorkerBuildOptions = {
   protocolFeatures?: readonly string[];
 };
 
-export type NodeWorkerInstallation = {
+type NodeWorkerInstallation = {
   packageRoot: string;
   build: WorkerAdmissionHandshake;
   revalidateBuild(): Promise<boolean>;

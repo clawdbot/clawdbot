@@ -100,6 +100,18 @@ describe("native link routing", () => {
     ]);
   });
 
+  it("preserves link handlers that cancel an external click", () => {
+    const bridge = installBridge();
+    routing = startNativeLinkRouting();
+    const anchor = appendLink("https://example.com/handled");
+    anchor.addEventListener("click", (event) => event.preventDefault());
+
+    const event = click(anchor);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(bridge.messages).toEqual([]);
+  });
+
   it("defines the hovercard once across duplicate bootstrap module instances", async () => {
     // Regression: the non-isolated jsdom lane evaluates the registration
     // module once per sibling file against one persistent document, so stale

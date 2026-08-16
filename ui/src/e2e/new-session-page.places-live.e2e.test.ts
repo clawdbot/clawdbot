@@ -39,6 +39,12 @@ suite.define(() => {
   });
 
   it("refreshes destinations from gateway events while the picker stays open", async () => {
+    const updateIssue = {
+      code: "update-required",
+      action: "update-and-reconnect",
+      updateCommand: "openclaw update",
+      headlessReconnectCommand: "openclaw node restart",
+    };
     const lifecycleNowMs = Date.now();
     const disconnectedAtMs = lifecycleNowMs - 2 * 60_000;
     const connectedAtMs = disconnectedAtMs - 3 * 60_000;
@@ -70,6 +76,7 @@ suite.define(() => {
             },
           ],
         },
+        "sessions.create": { key: "agent:main:picker-refresh" },
         "environments.list": {
           environments: [
             { id: "gateway", type: "local", status: "available" },
@@ -241,6 +248,51 @@ suite.define(() => {
       await place.getByRole("button", { name: "Cloud · aws" }).waitFor();
       expect(await place.getAttribute("open")).not.toBeNull();
       await captureUiProof(page, "picker-after-live-regroup.png");
+
+      await newMac.click();
+      await expect.poll(() => trigger.getAttribute("data-exec-node")).toBe("new-mac");
+      const outdatedNodeRequests = (await gateway.getRequests("node.list")).length;
+      await gateway.setMethodResponse("node.list", {
+        nodes: [
+          {
+            nodeId: "existing-mac",
+            displayName: "Existing Mac",
+            connected: true,
+            commands: ["system.run"],
+          },
+          {
+            nodeId: "new-mac",
+            displayName: "New Mac",
+            connected: true,
+            commands: ["system.run"],
+            issues: [updateIssue],
+          },
+        ],
+      });
+      await gateway.setMethodResponse("environments.list", {
+        environments: [
+          { id: "gateway", type: "local", status: "available" },
+          { id: "node:existing-mac", type: "node", status: "available" },
+          {
+            id: "node:new-mac",
+            type: "node",
+            status: "available",
+            issues: [updateIssue],
+          },
+        ],
+        profiles: [{ id: "aws", providerId: "crabbox", trust: "disposable" }],
+      });
+      await gateway.emitGatewayEvent("node.runnerInventory.changed", { nodeId: "new-mac" });
+      await expect
+        .poll(async () => (await gateway.getRequests("node.list")).length)
+        .toBeGreaterThan(outdatedNodeRequests);
+      await expect.poll(() => trigger.getAttribute("data-exec-node")).toBeNull();
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
+
+      await page.locator(".new-session-page__message").fill("use an eligible place");
+      await page.getByRole("button", { name: "Start session" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).not.toHaveProperty("execNode");
     } finally {
       await context.close();
     }

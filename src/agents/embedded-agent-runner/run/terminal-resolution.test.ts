@@ -5,6 +5,7 @@ import {
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import { TRUNCATED_REPLY_NOTICE_TEXT } from "./incomplete-turn-resolution.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 import {
   copyAttemptDeliveryState,
@@ -245,6 +246,40 @@ describe("terminal resolution", () => {
     expect(resolved.result.payloads).toEqual([{ text: SILENT_REPLY_TOKEN }]);
     expect(resolved.result.meta.livenessState).toBe("working");
     expect(activateInternalPrompt).not.toHaveBeenCalled();
+  });
+
+  it("keeps a length-stopped silent cron result silent", async () => {
+    // The only payload is the synthesized silent result of a successful tool and
+    // the assistant produced no prose, so there is no partial reply to label; a
+    // truncation notice here would turn intentional silence into a message.
+    const assistant = emptyAssistant({ stopReason: "length" });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "exec" }],
+      messagesSnapshot: [
+        {
+          role: "toolResult",
+          content: [{ type: "text", text: SILENT_REPLY_TOKEN }],
+          details: { aggregated: SILENT_REPLY_TOKEN },
+        } as never,
+        assistant,
+      ],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+    });
+    const input = makeTerminalInput({
+      attempt,
+      attemptAssistant: assistant,
+      runParams: { trigger: "cron", terminalReplyExpectation: "required" },
+    });
+
+    const resolved = await resolveEmbeddedRunTerminal(input);
+
+    expect(resolved.action).toBe("complete");
+    if (resolved.action !== "complete") {
+      return;
+    }
+    expect(resolved.result.payloads).toEqual([{ text: SILENT_REPLY_TOKEN }]);
   });
 
   it("completes a reply-optional side-effecting turn as intentional silence", async () => {
@@ -574,5 +609,86 @@ describe("terminal resolution", () => {
 
     expect(resolved.action).toBe("complete");
     expect(activateInternalPrompt).not.toHaveBeenCalled();
+  });
+
+  it("delivers partial text with a truncation notice when the output budget ends", async () => {
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "length",
+      content: [{ type: "text", text: "Here is the first half of the answer" }],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: ["Here is the first half of the answer"],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+    const resolved = await resolveEmbeddedRunTerminal(
+      makeTerminalInput({
+        attempt,
+        attemptAssistant: assistant,
+        payloadsWithToolMedia: [{ text: "Here is the first half of the answer" }],
+      }),
+    );
+
+    expect(resolved.action).toBe("complete");
+    if (resolved.action !== "complete") {
+      return;
+    }
+    expect(resolved.result.payloads).toEqual([
+      { text: "Here is the first half of the answer" },
+      { text: TRUNCATED_REPLY_NOTICE_TEXT },
+    ]);
+    expect(resolved.result.meta.error).toBeUndefined();
+    expect(resolved.result.meta.livenessState).toBe("working");
+  });
+
+  it("does not add a truncation notice to a length stop that already has terminal output", async () => {
+    // Terminal tool media was already a complete outcome before this fix, so it
+    // must not gain a notice telling the user to ask for a continuation.
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "length",
+      content: [{ type: "text", text: "Chart attached" }],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: ["Chart attached"],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      toolMediaUrls: ["https://example.invalid/chart.png"],
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+    const resolved = await resolveEmbeddedRunTerminal(
+      makeTerminalInput({
+        attempt,
+        attemptAssistant: assistant,
+        payloadsWithToolMedia: [{ text: "Chart attached" }],
+      }),
+    );
+
+    expect(resolved.action).toBe("complete");
+    if (resolved.action !== "complete") {
+      return;
+    }
+    expect(resolved.result.payloads).toEqual([{ text: "Chart attached" }]);
+  });
+
+  it("still reports an incomplete turn when the output budget ends with no text", async () => {
+    const assistant = emptyAssistant({ stopReason: "length" });
+    const attempt = makeEmbeddedRunnerAttempt({
+      assistantTexts: [],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    });
+    const resolved = await resolveEmbeddedRunTerminal(
+      makeTerminalInput({ attempt, attemptAssistant: assistant }),
+    );
+
+    expect(resolved.action).toBe("complete");
+    if (resolved.action !== "complete") {
+      return;
+    }
+    expect(resolved.result.payloads?.[0]).toMatchObject({ isError: true });
+    expect(resolved.result.meta.error?.kind).toBe("incomplete_turn");
+    expect(resolved.result.meta.livenessState).toBe("abandoned");
   });
 });

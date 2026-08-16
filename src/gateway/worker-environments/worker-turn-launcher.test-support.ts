@@ -23,6 +23,7 @@ import {
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
 import { createWorkerSessionTurnPlacementProvider as createRawWorkerSessionTurnPlacementProvider } from "./worker-turn-launcher.js";
+import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 export type WorkerTurnLauncherOptions = Parameters<
   typeof createRawWorkerSessionTurnPlacementProvider
@@ -92,12 +93,25 @@ export function setWorkerTurnSessionTarget(target: typeof sessionTarget): typeof
   return target;
 }
 
+type DefaultedWorkerTurnLauncherOption =
+  | "recoverPendingWorkspaceResult"
+  | "redispatchReclaimed"
+  | "resolveWorkspacePath"
+  | "workspaceOperations";
+
 export function createWorkerSessionTurnPlacementProvider(
-  options: Omit<WorkerTurnLauncherOptions, "resolveWorkspacePath"> &
-    Partial<Pick<WorkerTurnLauncherOptions, "resolveWorkspacePath">>,
+  options: Omit<WorkerTurnLauncherOptions, DefaultedWorkerTurnLauncherOption> &
+    Partial<Pick<WorkerTurnLauncherOptions, DefaultedWorkerTurnLauncherOption>>,
 ) {
   return createRawWorkerSessionTurnPlacementProvider({
+    recoverPendingWorkspaceResult: async () => {
+      throw new Error("unexpected pending workspace recovery");
+    },
+    redispatchReclaimed: async () => {
+      throw new Error("unexpected reclaimed placement redispatch");
+    },
     resolveWorkspacePath: async () => root,
+    workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     ...options,
   });
 }

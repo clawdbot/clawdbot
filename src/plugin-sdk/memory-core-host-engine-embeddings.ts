@@ -1,4 +1,18 @@
 // Memory core host embedding exports expose host embedding primitives to the memory plugin.
+
+/**
+ * @deprecated Load-only bridge for published llama.cpp provider releases from before the
+ * managed llama-server cutover. Remove after managed releases have replaced the old npm
+ * latest and extended-stable packages and their upgrade window has closed.
+ */
+export function createLocalEmbeddingProvider(..._args: unknown[]): Promise<never> {
+  return Promise.reject(
+    new Error(
+      "The legacy in-process llama.cpp embedding runtime is retired. Run `openclaw update repair` to install the managed llama-server provider, then restart OpenClaw.",
+    ),
+  );
+}
+
 export {
   applyEmbeddingBatchOutputLine,
   buildBatchHeaders,

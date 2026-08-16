@@ -44,6 +44,7 @@ type ChatPaneHeaderProps = {
   title: string;
   session: GatewaySessionRow | undefined;
   showOwnerChip?: boolean;
+  ownerViewing?: boolean;
   catalog: boolean;
   editing: boolean;
   renameValue: string;
@@ -446,6 +447,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         props.showOwnerChip ? props.session?.createdActor : undefined,
         "header",
         "created",
+        props.ownerViewing,
       )}
       ${renderChatPanePlacement(props)} ${props.presence ?? nothing} ${props.faceControl ?? nothing}
       ${props.sharingControl ?? nothing}
@@ -519,7 +521,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
         : nothing}
       ${renderGatewayPicker(props)}
       <div class="chat-pane__actions">
-        ${compactSessionActions ? nothing : html`${props.panelActions} ${props.discussionAction}`}
+        ${props.panelActions} ${compactSessionActions ? nothing : props.discussionAction}
         ${props.catalog || compactSessionActions
           ? nothing
           : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}

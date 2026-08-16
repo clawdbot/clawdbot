@@ -1,7 +1,8 @@
 import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveNodeRequireFromMeta } from "../../logging/node-require.js";
 import { isRateLimitErrorMessage } from "./message-patterns.js";
-import type { FailoverReason } from "./signal.js";
+import { FAILOVER_REASONS, type FailoverReason } from "./signal.js";
 type ProviderErrorPattern = {
   /** Regex to match against the raw error message. */
   test: RegExp;
@@ -43,6 +44,10 @@ const PROVIDER_CONTEXT_OVERFLOW_SIGNAL_RE =
 const PROVIDER_CONTEXT_OVERFLOW_ACTION_RE =
   /\b(?:too\s+(?:large|long|many)|exceed(?:s|ed|ing)?|overflow|limit|maximum|max)\b/i;
 
+function isFailoverReason(value: unknown): value is FailoverReason {
+  return typeof value === "string" && FAILOVER_REASONS.some((reason) => reason === value);
+}
+
 function resolveProviderRuntimeHooks(): ProviderRuntimeHooks | null {
   if (cachedProviderRuntimeHooks !== undefined) {
     return cachedProviderRuntimeHooks;
@@ -52,9 +57,20 @@ function resolveProviderRuntimeHooks(): ProviderRuntimeHooks | null {
     return cachedProviderRuntimeHooks;
   }
   try {
-    cachedProviderRuntimeHooks = requireProviderRuntime(
-      "../../plugins/provider-runtime.js",
-    ) as unknown as ProviderRuntimeHooks;
+    const runtime: unknown = requireProviderRuntime("../../plugins/provider-runtime.js");
+    const classify = isRecord(runtime) ? runtime.classifyProviderFailoverSignalWithPlugin : null;
+    if (typeof classify !== "function") {
+      cachedProviderRuntimeHooks = null;
+      return cachedProviderRuntimeHooks;
+    }
+    cachedProviderRuntimeHooks = {
+      classifyProviderFailoverSignalWithPlugin: (params) => {
+        const result: unknown = classify(params);
+        return result === null || result === undefined || isFailoverReason(result)
+          ? result
+          : undefined;
+      },
+    };
   } catch {
     cachedProviderRuntimeHooks = null;
   }

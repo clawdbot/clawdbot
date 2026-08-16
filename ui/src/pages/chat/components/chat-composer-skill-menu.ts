@@ -3,6 +3,7 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   getSkillCommandCompletions,
+  getSkillDisplayName,
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
@@ -175,31 +176,7 @@ export function getActiveSkillMenuOptionLabel(state: ChatComposerState): string 
     return "";
   }
   const command = state.skillMenuItems[state.skillMenuIndex];
-  return command ? `$${command.name} ${getSlashCommandDescription(command)}` : "";
-}
-
-export function scrollActiveSkillMenuOptionIntoView(
-  state: ChatComposerState,
-  paneId: string,
-): void {
-  const activeId = getActiveSkillMenuOptionId(state, paneId);
-  if (!activeId) {
-    return;
-  }
-  requestAnimationFrame(() => {
-    const activeOption = document.getElementById(activeId);
-    const scrollRegion = activeOption?.closest<HTMLElement>(".slash-menu__scroll");
-    if (!activeOption || !scrollRegion) {
-      return;
-    }
-    const menuBounds = scrollRegion.getBoundingClientRect();
-    const optionBounds = activeOption.getBoundingClientRect();
-    if (optionBounds.top < menuBounds.top) {
-      scrollRegion.scrollTop -= menuBounds.top - optionBounds.top;
-    } else if (optionBounds.bottom > menuBounds.bottom) {
-      scrollRegion.scrollTop += optionBounds.bottom - menuBounds.bottom;
-    }
-  });
+  return command ? `${getSkillDisplayName(command)} ${getSlashCommandDescription(command)}` : "";
 }
 
 export function selectSkillMention(
@@ -279,7 +256,7 @@ export function renderSkillMenu(
                   >
                     <span class="slash-menu-leading">
                       <span class="slash-menu-icon">${icons.zap}</span>
-                      <span class="slash-menu-name">$${command.name}</span>
+                      <span class="slash-menu-name">${getSkillDisplayName(command)}</span>
                     </span>
                     <span class="slash-menu-trailing">
                       <span class="slash-menu-desc">${getSlashCommandDescription(command)}</span>

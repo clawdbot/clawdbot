@@ -48,7 +48,6 @@ function launchInput(): NodeWorkerLaunchInput {
   return {
     launchId: "turn-1",
     gatewayNamespace: "gateway-1",
-    installKind: "local",
     expectedBundleHash: WORKER_RUNS.bundleHash,
     placementGeneration: 4,
     descriptor: {
@@ -119,7 +118,7 @@ function transportWith(
   invoke: NodeWorkerSupervisorTransport["invoke"],
   listCurrentNodes: NodeWorkerSupervisorTransport["listCurrentNodes"] = async () => [nodeProof()],
 ): NodeWorkerSupervisorTransport {
-  return { invoke, listCurrentNodes };
+  return { invoke, isCurrent: () => true, listCurrentNodes };
 }
 
 function launchRequest(input = launchInput()) {

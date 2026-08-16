@@ -86,11 +86,7 @@ export function registerMaintenanceCommands(program: Command) {
       "With --session-sqlite recover: prepare and optionally create an openclaw/openclaw issue",
       false,
     )
-    .option(
-      "--json",
-      "Run read-only lint checks as JSON (or emit JSON for another machine mode)",
-      false,
-    )
+    .option("--json", "Emit JSON; bare --json runs advisory read-only health checks", false)
     .option(
       "--severity-min <level>",
       "With --lint: drop findings below this severity (info|warning|error)",
@@ -145,7 +141,7 @@ export function registerMaintenanceCommands(program: Command) {
               allowExec: Boolean(opts.allowExec),
               deep: Boolean(opts.deep),
             });
-            defaultRuntime.exit(exitCode);
+            defaultRuntime.exit(jsonImpliesLint ? 0 : exitCode);
           },
           (err) => exitDoctorError(formatError(err), opts.json === true || !process.stdout.isTTY),
         );

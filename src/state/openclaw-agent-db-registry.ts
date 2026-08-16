@@ -695,3 +695,21 @@ export function unregisterOpenClawAgentDatabase(params: {
   );
   invalidateRegisteredAgentDatabasesMemo({ env: params.env });
 }
+
+/** Remove every durable database registration owned by a deleted agent. */
+export function unregisterOpenClawAgentDatabases(params: {
+  agentId: string;
+  env?: NodeJS.ProcessEnv;
+}): void {
+  runOpenClawStateWriteTransaction(
+    (database) => {
+      const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        db.deleteFrom("agent_databases").where("agent_id", "=", params.agentId),
+      );
+    },
+    { env: params.env },
+  );
+  invalidateRegisteredAgentDatabasesMemo({ env: params.env });
+}

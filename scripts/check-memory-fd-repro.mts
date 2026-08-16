@@ -16,8 +16,6 @@ import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { parseStrictNonNegativeDecimal as parseNonNegativeInteger } from "./lib/numeric-options.mjs";
 
-export { parseNonNegativeInteger };
-
 const ISSUE_FILE_COUNTS = [
   ["memory/transcripts", 9394],
   ["memory/transcripts.archived", 1695],
@@ -64,7 +62,7 @@ export const GATEWAY_READY_OUTPUT_MAX_CHARS = 128 * 1024;
 /**
  * Maximum bytes read from the memory_search HTTP response.
  */
-export const MEMORY_SEARCH_RESPONSE_MAX_BYTES = 256 * 1024;
+const MEMORY_SEARCH_RESPONSE_MAX_BYTES = 256 * 1024;
 /**
  * Probe query expected to hit the synthetic top-level memory file.
  */
@@ -130,7 +128,7 @@ function stripPackageManagerSeparatorForKnownFlags(argv: string[]) {
 /**
  * Parses a safe positive integer option.
  */
-export function readPositiveNumber(value: unknown, label: string) {
+function readPositiveNumber(value: unknown, label: string) {
   const parsed = parseNonNegativeInteger(value, label);
   if (parsed <= 0) {
     throw new Error(`${label} must be greater than 0`);
@@ -583,8 +581,6 @@ export async function stopGatewayWithRuntime({
 /**
  * Reads an HTTP response body up to a configured byte limit.
  */
-export { readBoundedResponseText };
-
 function signalChild(child: StoppableGatewayChild, signal: GatewaySignal) {
   try {
     child.kill(signal);

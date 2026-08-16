@@ -14,6 +14,7 @@ import { WORKER_PROTOCOL_FEATURES } from "../../../../packages/gateway-protocol/
 import type { DeviceIdentity } from "../../../../src/infra/device-identity.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
 import {
+  NODE_WORKER_BUNDLE_INSTALL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
@@ -23,12 +24,14 @@ import {
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../../../src/infra/node-runner-inventory.js";
 import { handleInvoke, type NodeInvokeRequestPayload } from "../../../../src/node-host/invoke.js";
-import {
-  resolveNodeWorkerInstallation,
-  type NodeWorkerInstallation,
-} from "../../../../src/node-host/node-worker-build.js";
+import { resolveNodeWorkerInstallation } from "../../../../src/node-host/node-worker-build.js";
+import { NodeWorkerBundleInstaller } from "../../../../src/node-host/node-worker-bundle-installer.js";
 import { createNodeWorkerSupervisor } from "../../../../src/node-host/node-worker-supervisor.js";
 import { NodeWorkerWorkspaceRuntime } from "../../../../src/node-host/node-worker-workspace.js";
+import {
+  WORKER_BUNDLE_ENTRY_PATH,
+  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
+} from "../../../../src/shared/worker-bundle-hash.js";
 import { VERSION } from "../../../../src/version.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
@@ -41,9 +44,10 @@ import {
 
 const execFileAsync = promisify(execFile);
 const SESSION_KEY = "agent:qa:node-worker-launch-wire";
-const NODE_DISPLAY_NAME = "QA local-install worker node";
+const NODE_DISPLAY_NAME = "QA Gateway-bundle worker node";
 const TEST_TIMEOUT_MS = PROOF_TIMEOUT_MS + 60_000;
 
+type NodeWorkerInstallation = Awaited<ReturnType<typeof resolveNodeWorkerInstallation>>;
 type Gateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
 type GatewayEvent = { event: string; payload?: unknown };
 type NodeRead = {
@@ -133,18 +137,12 @@ async function createPublishedWorkspace(root: string) {
 async function createSourceWorkerInstallation(root: string): Promise<NodeWorkerInstallation> {
   const packageRoot = path.join(root, "local-install");
   const repoRoot = process.cwd();
-  await fs.mkdir(packageRoot, { recursive: true });
-  await Promise.all([
-    fs.copyFile(path.join(repoRoot, "openclaw.mjs"), path.join(packageRoot, "openclaw.mjs")),
-    fs.copyFile(path.join(repoRoot, "package.json"), path.join(packageRoot, "package.json")),
-    fs.cp(path.join(repoRoot, "dist"), path.join(packageRoot, "dist"), { recursive: true }),
-  ]);
-  await fs.chmod(path.join(packageRoot, "openclaw.mjs"), 0o700);
-  await fs.symlink(
-    path.join(repoRoot, "node_modules"),
-    path.join(packageRoot, "node_modules"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
+  await fs.mkdir(path.join(packageRoot, "dist", "worker"), { recursive: true });
+  for (const artifactPath of [WORKER_BUNDLE_ENTRY_PATH, WORKER_BUNDLE_RSYNC_RECEIVER_PATH]) {
+    const target = path.join(packageRoot, "dist", "worker", artifactPath);
+    await fs.copyFile(path.join(repoRoot, "dist", "worker", artifactPath), target);
+    await fs.chmod(target, 0o700);
+  }
   return await resolveNodeWorkerInstallation({
     packageRoot,
     openclawVersion: VERSION,
@@ -354,10 +352,8 @@ describe("node worker launch wire", () => {
         OPENCLAW_STATE_DIR: path.join(root, "node-state"),
       };
       await fs.mkdir(nodeEnv.HOME, { recursive: true });
-      const supervisor = createNodeWorkerSupervisor({
-        env: nodeEnv,
-        localInstallation: installation,
-      });
+      const supervisor = createNodeWorkerSupervisor({ env: nodeEnv });
+      const bundleInstaller = new NodeWorkerBundleInstaller({ env: nodeEnv });
       const workspace = new NodeWorkerWorkspaceRuntime({
         root: path.join(root, "node-workspaces"),
         env: nodeEnv,
@@ -405,6 +401,7 @@ describe("node worker launch wire", () => {
             launchId = (JSON.parse(frame.paramsJSON) as { launchId?: string }).launchId;
           }
           const task = handleInvoke(frame, receiver, { current: async () => [] }, undefined, {
+            workerBundleInstaller: bundleInstaller,
             workerSupervisor: supervisor,
             workerWorkspace: workspace,
             gatewayUrl: gateway!.wsUrl,
@@ -502,6 +499,7 @@ describe("node worker launch wire", () => {
         await Promise.all([...invokeTasks]);
         expect(invokeErrors).toEqual([]);
         expect(reconnected).toBe(true);
+        expect(commands).toContain(NODE_WORKER_BUNDLE_INSTALL_COMMAND);
         expect(commands).toContain(NODE_WORKER_WORKSPACE_EXEC_COMMAND);
         expect(commands).toContain(NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND);
         expect(commands).toContain(NODE_WORKER_SUPERVISOR_STATUS_COMMAND);

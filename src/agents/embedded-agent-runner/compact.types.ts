@@ -21,6 +21,8 @@ import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 
 export type CompactEmbeddedAgentSessionParams = {
+  /** Explicit session owner captured before fallback agent resolution. */
+  contextEngineAgentId?: string;
   sessionId: string;
   runId?: string;
   sessionKey?: string;
