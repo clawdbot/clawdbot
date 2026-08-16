@@ -82,6 +82,7 @@ describe("worker placement startup health lifetime", () => {
       const sidecar = await runtime.startRuntime({
         isClosePreludeStarted: () => false,
         registerSidecar: vi.fn(),
+        unregisterSidecar: vi.fn(),
       });
 
       expect(sidecar).not.toBeNull();
@@ -167,11 +168,13 @@ describe("worker placement startup health lifetime", () => {
     });
     let closeStarted = false;
     let sidecar: { stop: () => Promise<void> } | undefined;
+    const unregisterSidecar = vi.fn();
     const starting = runtime.startRuntime({
       isClosePreludeStarted: () => closeStarted,
       registerSidecar: (registered) => {
         sidecar = registered;
       },
+      unregisterSidecar,
     });
     await vi.waitFor(() => expect(runtimeFactoryMocks.resolveSessionEvidence).toHaveBeenCalled());
     closeStarted = true;
@@ -193,6 +196,8 @@ describe("worker placement startup health lifetime", () => {
     await expect(starting).resolves.toBeNull();
     await Promise.all([stopping, repeatedStop]);
     expect(environments.stop).toHaveBeenCalledOnce();
+    expect(unregisterSidecar).toHaveBeenCalledOnce();
+    expect(unregisterSidecar).toHaveBeenCalledWith(sidecar);
   });
 
   it("retries worker environment cleanup after a failed stop attempt", async () => {
@@ -229,6 +234,7 @@ describe("worker placement startup health lifetime", () => {
     const sidecar = await runtime.startRuntime({
       isClosePreludeStarted: () => false,
       registerSidecar: vi.fn(),
+      unregisterSidecar: vi.fn(),
     });
     if (!sidecar) {
       throw new Error("worker placement runtime did not start");

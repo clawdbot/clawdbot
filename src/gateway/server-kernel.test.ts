@@ -152,7 +152,7 @@ describe("createGatewayKernel", () => {
         releaseLateLifetimeStop = resolve;
       });
       const lateLifetimeSidecar = { stop: vi.fn(() => lateLifetimeStop) };
-      expect(kernel.registerGatewayLifetimeSidecars([lateLifetimeSidecar])).toBe(true);
+      kernel.registerGatewayLifetimeSidecars([lateLifetimeSidecar]);
       let closeSettled = false;
       void closing.then(() => {
         closeSettled = true;
@@ -163,7 +163,7 @@ describe("createGatewayKernel", () => {
       });
       expect(closeSettled).toBe(false);
       const duringSealSidecar = { stop: vi.fn(async () => {}) };
-      expect(kernel.registerGatewayLifetimeSidecars([duringSealSidecar])).toBe(true);
+      kernel.registerGatewayLifetimeSidecars([duringSealSidecar]);
       releaseLateLifetimeStop();
       await expect(closing).resolves.toBeUndefined();
       closePreludeReached.mockRestore();
@@ -177,10 +177,11 @@ describe("createGatewayKernel", () => {
       expect(kernel.runtimeState.postReadySidecars).toEqual([]);
 
       const postSealSidecar = { stop: vi.fn(async () => {}) };
-      expect(kernel.registerGatewayLifetimeSidecars([postSealSidecar])).toBe(false);
-      expect(kernel.runtimeState.gatewayLifetimeSidecars).toEqual([postSealSidecar]);
-      await expect(kernel.closeOnStartupFailure()).resolves.toBeUndefined();
-      expect(postSealSidecar.stop).toHaveBeenCalledOnce();
+      expect(() => activeKernel.registerGatewayLifetimeSidecars([postSealSidecar])).toThrow(
+        "cannot publish a Gateway sidecar after shutdown sealed its owner",
+      );
+      expect(kernel.runtimeState.gatewayLifetimeSidecars).toEqual([]);
+      expect(postSealSidecar.stop).not.toHaveBeenCalled();
 
       const persistentError = new Error("persistent sidecar cleanup failed");
       const persistentStop = vi

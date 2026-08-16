@@ -7,16 +7,15 @@ export function createGatewaySidecarStopOwner(params: {
   let activeStop: Promise<void> | null = null;
   let phase: "open" | "closing" | "sealed" = "open";
   const publish = (sidecars: readonly GatewayPostReadySidecarHandle[]) => {
+    if (phase === "sealed") {
+      throw new Error("cannot publish a Gateway sidecar after shutdown sealed its owner");
+    }
     params.setRegistered(
       mergeGatewaySidecarOwners({ registered: params.getRegistered(), published: sidecars }),
     );
-    if (phase === "sealed") {
-      return false;
-    }
     if (phase === "closing") {
       void stop().catch(() => {});
     }
-    return true;
   };
   const beginClose = () => {
     if (phase === "open") {

@@ -31,7 +31,7 @@ import {
 import { queuePluginSessionsChanged, subscribePluginSessionsChanged } from "./gateway-events.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
-import { startPluginServices } from "./services.js";
+import { startPluginServices, type PluginServicesHandle } from "./services.js";
 
 type TrustedExporterInternalDiagnostics = NonNullable<
   OpenClawPluginServiceContext["internalDiagnostics"]
@@ -182,6 +182,43 @@ describe("startPluginServices", () => {
     await handle.stop();
 
     expectServiceLifecycleState({ starts, stops, contexts, config });
+  });
+
+  it("publishes cleanup ownership before service startup can yield", async () => {
+    let releaseStart: (() => void) | undefined;
+    const serviceStarted = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const stopService = vi.fn();
+    const siblingStart = vi.fn();
+    let lifecycleHandle: PluginServicesHandle | undefined;
+
+    const starting = startPluginServices({
+      registry: createRegistry([
+        { id: "blocking", start: () => serviceStarted, stop: stopService },
+        { id: "sibling", start: siblingStart },
+      ]),
+      config: createServiceConfig(),
+      onHandle: (handle) => {
+        lifecycleHandle = handle;
+      },
+    });
+
+    expect(lifecycleHandle).toBeDefined();
+    let stopSettled = false;
+    const stopping = lifecycleHandle!.stop().then(() => {
+      stopSettled = true;
+    });
+    await Promise.resolve();
+    expect(stopSettled).toBe(false);
+    expect(stopService).not.toHaveBeenCalled();
+
+    releaseStart?.();
+    await starting;
+    await stopping;
+
+    expect(stopService).toHaveBeenCalledOnce();
+    expect(siblingStart).not.toHaveBeenCalled();
   });
 
   it("drains producer diagnostics before exporters stop and propagates exporter failures", async () => {

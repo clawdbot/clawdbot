@@ -684,36 +684,66 @@ export async function startGatewaySidecars(params: {
     await params.onChannelsStarted?.();
   }
 
-  let pluginServices =
-    params.shouldStartPluginServices?.() === false
-      ? null
-      : await measureStartup(params.startupTrace, "sidecars.plugin-services", async () => {
-          try {
-            const { startPluginServices } = await import("../plugins/services.js");
-            return await startPluginServices({
-              registry: params.pluginRegistry,
-              config: params.cfg,
-              workspaceDir: params.defaultWorkspaceDir,
-              startupTrace: params.startupTrace,
-              broadcastPluginEvent: params.broadcastPluginEvent,
-            });
-          } catch (err) {
-            params.log.warn(`plugin services failed to start: ${String(err)}`);
+  const shouldStartPluginServices = params.shouldStartPluginServices?.() !== false;
+  let pluginServicesOwner: PluginServicesHandle | null = null;
+  let pluginServicesStopRequested = false;
+  let resolvePluginServicesOwner: ((handle: PluginServicesHandle | null) => void) | undefined;
+  if (shouldStartPluginServices) {
+    const ownedPluginServices = createDeferredCore<PluginServicesHandle | null>();
+    let stopPromise: Promise<void> | undefined;
+    pluginServicesOwner = {
+      stop: () => {
+        pluginServicesStopRequested = true;
+        return (stopPromise ??= ownedPluginServices.promise.then(async (handle) => {
+          await handle?.stop();
+        }));
+      },
+    };
+    resolvePluginServicesOwner = ownedPluginServices.resolve;
+    params.onPluginServices?.(pluginServicesOwner);
+  }
+  let pluginServices = shouldStartPluginServices
+    ? await measureStartup(params.startupTrace, "sidecars.plugin-services", async () => {
+        try {
+          const { startPluginServices } = await import("../plugins/services.js");
+          if (pluginServicesStopRequested || params.shouldStartPluginServices?.() === false) {
+            resolvePluginServicesOwner?.(null);
             return null;
           }
-        });
-  if (pluginServices && params.shouldStartPluginServices?.() === false) {
-    await pluginServices.stop().catch((err: unknown) => {
+          const startedPluginServices = await startPluginServices({
+            registry: params.pluginRegistry,
+            config: params.cfg,
+            workspaceDir: params.defaultWorkspaceDir,
+            startupTrace: params.startupTrace,
+            broadcastPluginEvent: params.broadcastPluginEvent,
+            onHandle: resolvePluginServicesOwner,
+          });
+          resolvePluginServicesOwner?.(startedPluginServices);
+          return startedPluginServices;
+        } catch (err) {
+          resolvePluginServicesOwner?.(null);
+          params.log.warn(`plugin services failed to start: ${String(err)}`);
+          return null;
+        }
+      })
+    : null;
+  if (!shouldStartPluginServices) {
+    params.onPluginServices?.(null);
+  }
+  if (
+    pluginServicesOwner &&
+    (pluginServicesStopRequested || params.shouldStartPluginServices?.() === false)
+  ) {
+    await pluginServicesOwner.stop().catch((err: unknown) => {
       params.log.warn(`plugin services stop after close failed: ${String(err)}`);
     });
     pluginServices = null;
+    params.onPluginServices?.(null);
   }
-  params.onPluginServices?.(pluginServices);
 
   const shouldDispatchGatewayStartupInternalHook =
     internalHooksConfigured || (await hasGatewayStartupInternalHookListeners());
   if (params.shouldCreatePostReadySidecars?.() === false) {
-    params.onPostReadySidecars?.(postReadySidecars);
     return { pluginServices, postReadySidecars };
   }
   if (shouldDispatchGatewayStartupInternalHook) {
@@ -1097,13 +1127,11 @@ export async function startGatewayPostAttachRuntime(
     getCronService?: () => PluginHookGatewayCronService | null | undefined;
     onChannelsStarted?: () => Awaitable<void>;
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
-    onPostReadySidecars?: (postReadySidecars: GatewayPostReadySidecarHandle[]) => boolean | void;
-    onGatewayLifetimeSidecars?: (sidecars: GatewayPostReadySidecarHandle[]) => boolean | void;
+    onPostReadySidecars?: (postReadySidecars: GatewayPostReadySidecarHandle[]) => void;
+    onGatewayLifetimeSidecars?: (sidecars: GatewayPostReadySidecarHandle[]) => void;
     stopRegisteredPostReadySidecars: () => Promise<void>;
     stopRegisteredGatewayLifetimeSidecars: () => Promise<void>;
-    registerGatewayLifetimeSidecar: (
-      sidecar: GatewayPostReadySidecarHandle,
-    ) => Promise<{ release: () => void } | null>;
+    unregisterGatewayLifetimeSidecar: (sidecar: GatewayPostReadySidecarHandle) => void;
     startWorkerEnvironmentRuntime?: () => Awaitable<GatewayPostReadySidecarHandle | null>;
     onSidecarsReady?: () => void;
     isClosing?: () => boolean;
@@ -1332,10 +1360,7 @@ export async function startGatewayPostAttachRuntime(
           const workerEnvironmentSidecar = params.isClosing?.()
             ? null
             : ((await params.startWorkerEnvironmentRuntime?.()) ?? null);
-          const workerEnvironmentOwnership = workerEnvironmentSidecar
-            ? await params.registerGatewayLifetimeSidecar(workerEnvironmentSidecar)
-            : null;
-          if (workerEnvironmentSidecar && !workerEnvironmentOwnership) {
+          if (params.isClosing?.()) {
             return emptySidecarResult();
           }
           params.log.info("starting channels and sidecars...");
@@ -1370,7 +1395,9 @@ export async function startGatewayPostAttachRuntime(
             } catch (error) {
               try {
                 await workerEnvironmentSidecar?.stop();
-                workerEnvironmentOwnership?.release();
+                if (workerEnvironmentSidecar) {
+                  params.unregisterGatewayLifetimeSidecar(workerEnvironmentSidecar);
+                }
               } catch (cleanupError) {
                 params.log.warn(
                   `worker environment cleanup after sidecar startup failure failed: ${String(cleanupError)}`,
@@ -1474,17 +1501,13 @@ export async function startGatewayPostAttachRuntime(
             reportPluginServices(result.pluginServices);
           }
           const postReadySidecars = [...result.postReadySidecars];
-          const gatewayLifetimeSidecars = [
-            ...(controlUiAssetsSidecar ? [controlUiAssetsSidecar] : []),
+          const newGatewayLifetimeSidecars = [
             scheduleContextCachePrewarm(params),
             scheduleGatewayHandlerPrewarm(params),
             ...(mainSessionRecoverySidecar ? [mainSessionRecoverySidecar] : []),
           ];
-          if (workerEnvironmentSidecar) {
-            gatewayLifetimeSidecars.push(workerEnvironmentSidecar);
-          }
           if (params.providerAuthPrewarm && params.providerAuthPrewarm.enabled !== false) {
-            gatewayLifetimeSidecars.push(
+            newGatewayLifetimeSidecars.push(
               scheduleProviderAuthStatePrewarm({
                 getConfig: params.providerAuthPrewarm.getConfig ?? (() => params.cfgAtStart),
                 log: params.log,
@@ -1494,7 +1517,7 @@ export async function startGatewayPostAttachRuntime(
             );
           }
           if (params.gatewayPluginConfigAtStart.transcripts?.autoStart?.length) {
-            gatewayLifetimeSidecars.push(
+            newGatewayLifetimeSidecars.push(
               scheduleTranscriptsAutoStartSidecar({
                 cfg: params.gatewayPluginConfigAtStart,
                 startupTrace: params.startupTrace,
@@ -1503,7 +1526,12 @@ export async function startGatewayPostAttachRuntime(
               }),
             );
           }
-          params.onGatewayLifetimeSidecars?.(gatewayLifetimeSidecars);
+          params.onGatewayLifetimeSidecars?.(newGatewayLifetimeSidecars);
+          const gatewayLifetimeSidecars = [
+            ...(controlUiAssetsSidecar ? [controlUiAssetsSidecar] : []),
+            ...(workerEnvironmentSidecar ? [workerEnvironmentSidecar] : []),
+            ...newGatewayLifetimeSidecars,
+          ];
           params.log.info(formatGatewayStartupOutcomes(startupOutcomes.snapshot()));
           params.onSidecarsReady?.();
           params.startupTrace?.detail("sidecars.ready", [
