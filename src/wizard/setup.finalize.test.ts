@@ -231,6 +231,7 @@ vi.mock("../daemon/service.js", () => ({
     issues.map((issue) => issue.message).join("; "),
   startGatewayService,
   resolveGatewayService: vi.fn(() => ({
+    label: "Mock Platform Service",
     isLoaded: gatewayServiceIsLoaded,
     restart: gatewayServiceRestart,
     uninstall: gatewayServiceUninstall,
@@ -1306,8 +1307,32 @@ describe("finalizeSetupWizard", () => {
     expectNoteContains(prompter, "service install exploded", "Gateway");
     expectNoteContains(prompter, "Gateway: not detected (service install exploded)", "Control UI");
     expect(prompter.outro).toHaveBeenCalledWith(
-      "Gateway not detected yet. Start now: openclaw gateway run",
+      expect.stringContaining("managed Mock Platform Service setup failed"),
     );
+    expectNoteContains(prompter, "openclaw gateway status --deep", "Gateway");
+    expectNoteContains(prompter, "openclaw gateway restart", "Gateway");
+    expectNoteNotContains(prompter, "openclaw gateway run");
+    expectNoteNotContains(prompter, "openclaw gateway install --force");
+  });
+
+  it.each([
+    ["readiness timeout", "gateway readiness timed out"],
+    ["service crash", "gateway closed (1006 abnormal closure)"],
+    ["occupied port", "listen EADDRINUSE: address already in use 127.0.0.1:18789"],
+  ])("keeps managed %s recovery on the canonical service path", async (_name, detail) => {
+    waitForGatewayReachable.mockResolvedValue({ ok: false, detail });
+    probeGatewayReachable.mockResolvedValue({ ok: false, detail });
+    const prompter = createLaterPrompter();
+    const args = createAdvancedFinalizeArgs({ installDaemon: true, prompter });
+
+    await finalizeSetupWizard({ ...args, opts: { ...args.opts, skipHealth: false } });
+
+    expectNoteContains(prompter, "managed Mock Platform Service", "Gateway");
+    expectNoteContains(prompter, "openclaw gateway status --deep", "Gateway");
+    expectNoteContains(prompter, "openclaw gateway restart", "Gateway");
+    expectNoteNotContains(prompter, "openclaw gateway run");
+    expectNoteNotContains(prompter, "openclaw onboard --install-daemon");
+    expectNoteNotContains(prompter, "openclaw gateway install --force");
   });
 
   it("returns an authoritative failed outcome when gateway installation fails", async () => {

@@ -151,13 +151,13 @@ function recoveryHintForGatewayHealthFailure(
     case "module-missing":
       return "Fix: run `openclaw doctor --fix`.";
     case "service-missing":
-      return "Fix: run `openclaw gateway install --force`.";
+      return "Fix: run `openclaw gateway status --deep`, then `openclaw gateway restart`.";
     case "service-stopped":
       return "Fix: run `openclaw gateway restart`.";
     case "startup-blocked":
       return "Fix: run `openclaw gateway status --deep`.";
     case "not-listening":
-      return "Fix: start `openclaw gateway run`, or run `openclaw gateway restart` for a managed gateway.";
+      return "Fix: run `openclaw gateway status --deep`, then `openclaw gateway restart` for a managed gateway.";
     default:
       return undefined;
   }

@@ -163,19 +163,41 @@ export type GatewayServiceSetupOutcome =
   | { status: "skipped"; reason: "explicit" | "systemd-unavailable" | "external" }
   | { status: "failed"; error: string };
 
-function buildGatewayRecoveryProjection(gateway: GatewayServiceSetupOutcome): {
+function buildGatewayRecoveryProjection(params: {
+  gateway: GatewayServiceSetupOutcome;
+  reachable: boolean;
+  serviceLabel?: string;
+}): {
   detail: string;
   summary: string;
 } {
+  const { gateway } = params;
+  const notDetected = t("wizard.finalize.gatewayNotDetected");
+  if (params.reachable) {
+    return { detail: t("wizard.finalize.gatewayReachable"), summary: t("wizard.guided.complete") };
+  }
+  if (gateway.status === "ready" || gateway.status === "failed") {
+    const service = params.serviceLabel ?? t("wizard.finalize.gatewayService");
+    const outcome =
+      gateway.status === "ready"
+        ? `The managed ${service} did not become reachable after it was ${gateway.action}.`
+        : `The managed ${service} setup failed: ${gateway.error}`;
+    const detail = [
+      outcome,
+      `Inspect service state and logs: ${formatCliCommand("openclaw gateway status --deep")}`,
+      `Retry the managed service: ${formatCliCommand("openclaw gateway restart")}`,
+    ].join("\n");
+    return { detail, summary: `${notDetected} ${detail.replaceAll("\n", " ")}` };
+  }
+
   const startGuidance =
-    gateway.status === "skipped" && gateway.reason === "external"
+    gateway.reason === "external"
       ? formatExternalSupervisorActionRequired("start the gateway")
       : t("wizard.finalize.startGatewayNow", {
           command: formatCliCommand("openclaw gateway run"),
         });
-  const notDetected = t("wizard.finalize.gatewayNotDetected");
   const summary = [notDetected, startGuidance].join(" ");
-  if (gateway.status === "skipped" && gateway.reason === "external") {
+  if (gateway.reason === "external") {
     return { detail: [notDetected, startGuidance].join("\n"), summary };
   }
   return {
@@ -492,7 +514,6 @@ export async function finalizeSetupWizard(
     prompter,
     runtime,
   });
-  const gatewayRecovery = buildGatewayRecoveryProjection(gateway);
   if (gateway.status === "failed") {
     gatewayProbe = { ok: false, detail: gateway.error };
   }
@@ -599,8 +620,19 @@ export async function finalizeSetupWizard(
           ].join("\n"),
           t("wizard.finalize.healthCheckHelp"),
         );
+        await prompter.note(
+          buildGatewayRecoveryProjection({
+            gateway,
+            reachable: false,
+            serviceLabel: resolveGatewayService().label,
+          }).detail,
+          "Gateway",
+        );
       } else {
-        await prompter.note(gatewayRecovery.detail, "Gateway");
+        await prompter.note(
+          buildGatewayRecoveryProjection({ gateway, reachable: false }).detail,
+          "Gateway",
+        );
       }
     }
 
@@ -966,7 +998,11 @@ export async function finalizeSetupWizard(
                 }),
               ].join(" ")
             : t("wizard.guided.complete")
-        : gatewayRecovery.summary,
+        : buildGatewayRecoveryProjection({
+            gateway,
+            reachable: false,
+            serviceLabel: gateway.status === "skipped" ? undefined : resolveGatewayService().label,
+          }).summary,
     );
 
     if (shouldLaunchTui) {
