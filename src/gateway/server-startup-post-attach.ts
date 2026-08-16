@@ -1172,7 +1172,9 @@ export async function startGatewayPostAttachRuntime(
         ],
         ["gatewayMethodCount", loaded.gatewayMethods.length],
       ]);
-      await params.onStartupPluginsLoaded?.(loaded);
+      if (params.isClosing?.() !== true) {
+        await params.onStartupPluginsLoaded?.(loaded);
+      }
       return loaded;
     })();
     return await startupPluginsLoadPromise;
@@ -1270,6 +1272,12 @@ export async function startGatewayPostAttachRuntime(
       setImmediate(resolve);
     });
 
+  const emptySidecarResult = () => ({
+    pluginServices: null,
+    pluginRegistry,
+    postReadySidecars: [],
+    gatewayLifetimeSidecars: [],
+  });
   const startSidecars = () =>
     params.minimalTestGateway
       ? startStartupLog().then(() => ({
@@ -1279,8 +1287,17 @@ export async function startGatewayPostAttachRuntime(
           gatewayLifetimeSidecars: [],
         }))
       : waitForSidecarStartTurn().then(async () => {
+          if (params.isClosing?.()) {
+            return emptySidecarResult();
+          }
           await startupPluginsResident.start();
+          if (params.isClosing?.()) {
+            return emptySidecarResult();
+          }
           await startStartupLog();
+          if (params.isClosing?.()) {
+            return emptySidecarResult();
+          }
           const startupOutcomes = createGatewayStartupOutcomeRecorder({
             cfg: params.gatewayPluginConfigAtStart,
             gatewayStartHooks: hasGatewayStartHooks(pluginRegistry),
@@ -1496,6 +1513,7 @@ export async function startGatewayPostAttachRuntime(
       stopGatewayUpdateCheck: updateCheckResident.stop,
       tailscaleCleanup,
       pluginServices: sidecarsResult.pluginServices,
+      startupSettled: Promise.resolve(),
     };
   }
 
@@ -1506,6 +1524,7 @@ export async function startGatewayPostAttachRuntime(
     stopGatewayUpdateCheck: updateCheckResident.stop,
     tailscaleCleanup,
     pluginServices: reportedPluginServices,
+    startupSettled: sidecarsPromise.then(() => undefined),
   };
 }
 

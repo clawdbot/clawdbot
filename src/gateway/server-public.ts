@@ -13,6 +13,8 @@ export type GatewayCloseOptions = {
 
 export type GatewayServer = {
   close: (opts?: GatewayCloseOptions) => Promise<void>;
+  /** Settles when the current gateway generation finishes mandatory sidecar startup. */
+  startupSettled: Promise<void>;
 };
 
 export type GatewayServerOptions = {

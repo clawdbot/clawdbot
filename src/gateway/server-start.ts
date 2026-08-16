@@ -27,11 +27,13 @@ export async function startGatewayServerCore(
     releasePostReadyWork = resolve;
   });
   const gatewayKernel = await createGatewayKernel(port, opts);
+  let startupSettled: Promise<void>;
   const {
     beginClosePrelude,
     clearFallbackGatewayContextForServer,
     closeOnStartupFailure,
     createCloseHandler,
+    markClosePreludeStarted,
     runClosePrelude,
     stopRegisteredGatewayLifetimeSidecars,
     stopRegisteredPostReadySidecars,
@@ -40,7 +42,7 @@ export async function startGatewayServerCore(
   try {
     const transport = await createGatewayHttpTransport(gatewayKernel.createHttpTransportOptions());
     gatewayKernel.transportBridge.attach(transport);
-    await finishGatewayStartup({
+    const startup = await finishGatewayStartup({
       kernelRuntime: { ...gatewayKernel, ...transport },
       port,
       opts,
@@ -55,6 +57,7 @@ export async function startGatewayServerCore(
       loadGatewayStartupPostAttachModule,
       waitForPostReadyWork: () => postReadyWorkBarrier,
     });
+    startupSettled = startup.startupSettled;
   } catch (err) {
     await closeOnStartupFailure();
     throw err;
@@ -67,8 +70,13 @@ export async function startGatewayServerCore(
   const close = createCloseHandler();
 
   return {
+    startupSettled,
     close: async (optsLocal) => {
       try {
+        markClosePreludeStarted();
+        // Close owns the deferred startup task. Joining after the close fence prevents
+        // this generation from publishing runtime state into its replacement.
+        await startupSettled.catch(() => {});
         await beginClosePrelude();
         // Kill any live operator shells before the socket layer tears down.
         terminalSessions.disposeAll();

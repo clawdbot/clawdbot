@@ -679,6 +679,7 @@ export async function prepareGatewayLifecycle(params: {
     lifecycle,
     postReadyState,
     cronReconciliation,
+    markClosePreludeStarted,
     beginClosePrelude,
     runClosePrelude,
     getRuntimeSnapshot,

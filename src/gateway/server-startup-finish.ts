@@ -541,4 +541,5 @@ export async function finishGatewayStartup(params: {
   } else {
     startupTrace.detail("memory.post-ready", collectGatewayProcessMemoryUsageMb());
   }
+  return { startupSettled: postAttachHandles.startupSettled };
 }

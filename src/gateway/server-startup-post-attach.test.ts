@@ -1821,7 +1821,7 @@ describe("startGatewayPostAttachRuntime", () => {
             }),
         );
 
-        await startGatewayPostAttachRuntime({
+        const runtime = await startGatewayPostAttachRuntime({
           ...createPostAttachParams({
             sidecarStartup: "defer",
             onPluginServices,
@@ -1841,9 +1841,8 @@ describe("startGatewayPostAttachRuntime", () => {
         }
         releaseChannels();
 
-        await waitForGatewayTestState(() => {
-          expect(onSidecarsReady).toHaveBeenCalledTimes(1);
-        });
+        await runtime.startupSettled;
+        expect(onSidecarsReady).toHaveBeenCalledTimes(1);
         expect(hoisted.startPluginServices).not.toHaveBeenCalled();
         expect(onPluginServices).toHaveBeenCalledWith(null);
       },
@@ -2755,6 +2754,57 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(workerSidecar.stop).toHaveBeenCalledTimes(1);
   });
 
+  it("publishes deferred sidecar failure to the gateway lifecycle owner", async () => {
+    const startupError = new Error("deferred sidecar startup failed");
+    const runtime = await startGatewayPostAttachRuntime(
+      {
+        ...createPostAttachParams(),
+        sidecarStartup: "defer",
+      },
+      createPostAttachRuntimeDeps({
+        startGatewaySidecars: vi.fn(async () => {
+          throw startupError;
+        }),
+      }),
+    );
+
+    await expect(runtime.startupSettled).rejects.toBe(startupError);
+  });
+
+  it("fences plugin publication when close begins during deferred plugin loading", async () => {
+    let closeStarted = false;
+    let releasePluginLoad: (() => void) | undefined;
+    const pluginLoadReady = new Promise<void>((resolve) => {
+      releasePluginLoad = resolve;
+    });
+    const onStartupPluginsLoaded = vi.fn();
+    const startGatewaySidecarsValue = vi.fn(async () => ({
+      pluginServices: null,
+      postReadySidecars: [],
+    }));
+    const runtime = await startGatewayPostAttachRuntime(
+      {
+        ...createPostAttachParams({
+          sidecarStartup: "defer",
+          isClosing: () => closeStarted,
+          loadStartupPlugins: async () => {
+            await pluginLoadReady;
+            return { pluginRegistry: createPostAttachParams().pluginRegistry, gatewayMethods: [] };
+          },
+          onStartupPluginsLoaded,
+        }),
+      },
+      createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsValue }),
+    );
+
+    closeStarted = true;
+    releasePluginLoad?.();
+    await expect(runtime.startupSettled).resolves.toBeUndefined();
+
+    expect(onStartupPluginsLoaded).not.toHaveBeenCalled();
+    expect(startGatewaySidecarsValue).not.toHaveBeenCalled();
+  });
+
   it("does not start the worker environment sidecar after close begins", async () => {
     const startWorkerEnvironmentRuntime = vi.fn(() => ({ stop: vi.fn() }));
     const startGatewaySidecarsValue = vi.fn(async () => ({
@@ -2762,7 +2812,7 @@ describe("startGatewayPostAttachRuntime", () => {
       postReadySidecars: [],
     }));
 
-    await startGatewayPostAttachRuntime(
+    const runtime = await startGatewayPostAttachRuntime(
       {
         ...createPostAttachParams(),
         sidecarStartup: "defer",
@@ -2772,7 +2822,8 @@ describe("startGatewayPostAttachRuntime", () => {
       createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsValue }),
     );
 
-    await waitForGatewayTestState(() => expect(startGatewaySidecarsValue).toHaveBeenCalledTimes(1));
+    await runtime.startupSettled;
+    expect(startGatewaySidecarsValue).not.toHaveBeenCalled();
     expect(startWorkerEnvironmentRuntime).not.toHaveBeenCalled();
   });
 
