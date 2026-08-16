@@ -305,7 +305,7 @@ messages and normalizes `stats.cached` into `cacheRead`; legacy
 
 <AccordionGroup>
   <Accordion title="OpenRouter">
-    Applies its app-attribution headers and Anthropic `cache_control` markers only on verified `openrouter.ai` routes. DeepSeek, Moonshot, and ZAI refs are cache-TTL eligible for OpenRouter-managed prompt caching but do not receive Anthropic cache markers. As a proxy-style OpenAI-compatible path, it skips native-OpenAI-only shaping (`serviceTier`, Responses `store`, prompt-cache hints, OpenAI reasoning-compat). Gemini-backed refs keep proxy-Gemini thought-signature sanitation only.
+    Applies its app-attribution headers and Anthropic `cache_control` markers on verified OpenRouter routes (the default `openrouter` provider route, or any provider/base URL that resolves to `openrouter.ai`). DeepSeek, Moonshot, and ZAI refs are cache-TTL eligible for OpenRouter-managed prompt caching but do not receive Anthropic cache markers. As a proxy-style OpenAI-compatible path, it skips native-OpenAI-only shaping (`serviceTier`, Responses `store`, prompt-cache hints, OpenAI reasoning-compat). Gemini-backed refs keep proxy-Gemini thought-signature sanitation only.
   </Accordion>
   <Accordion title="Kilo Gateway">
     Gemini-backed refs follow the same proxy-Gemini sanitation path; `kilocode/kilo-auto/balanced` and other proxy-reasoning-unsupported refs skip proxy reasoning injection.
