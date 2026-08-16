@@ -460,11 +460,9 @@ describe("runDoctorLintCli", () => {
       OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
       OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
     };
-    Object.assign(process.env, {
-      HOME: stateDir,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_STATE_DIR: stateDir,
-    });
+    process.env.HOME = stateDir;
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
     mocks.readConfigFileSnapshot.mockImplementation((...args: unknown[]) =>
       mocks.actualReadConfigFileSnapshot(...args),
     );
@@ -503,7 +501,7 @@ describe("runDoctorLintCli", () => {
       expect(snapshotSqliteFamily(databasePath)).toEqual(before);
     } finally {
       stdout.mockRestore();
-      restoreEnv(originalEnv);
+      restoreDoctorLintTestEnv(originalEnv);
       fs.rmSync(rootDir, { recursive: true, force: true });
     }
   });
@@ -579,7 +577,9 @@ describe("runDoctorLintCli", () => {
       OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
       OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
     };
-    Object.assign(process.env, env);
+    process.env.HOME = stateDir;
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
     mocks.shouldIsolatePluginStateForBundledHealthChecks.mockReturnValueOnce(true);
     mocks.prepareSqliteReadOnlyLocationSync.mockImplementationOnce((...args: unknown[]) => {
       const prepared = mocks.actualPrepareSqliteReadOnlyLocationSync(...args);
@@ -616,7 +616,7 @@ describe("runDoctorLintCli", () => {
       });
     } finally {
       stdout.mockRestore();
-      restoreEnv(originalEnv);
+      restoreDoctorLintTestEnv(originalEnv);
       fs.rmSync(rootDir, { recursive: true, force: true });
     }
   });
@@ -689,12 +689,24 @@ function snapshotSqliteFamily(databasePath: string): Array<{
     }));
 }
 
-function restoreEnv(values: Readonly<Record<string, string | undefined>>): void {
-  for (const [key, value] of Object.entries(values)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
+function restoreDoctorLintTestEnv(values: {
+  HOME: string | undefined;
+  OPENCLAW_CONFIG_PATH: string | undefined;
+  OPENCLAW_STATE_DIR: string | undefined;
+}): void {
+  if (values.HOME === undefined) {
+    delete process.env.HOME;
+  } else {
+    process.env.HOME = values.HOME;
+  }
+  if (values.OPENCLAW_CONFIG_PATH === undefined) {
+    delete process.env.OPENCLAW_CONFIG_PATH;
+  } else {
+    process.env.OPENCLAW_CONFIG_PATH = values.OPENCLAW_CONFIG_PATH;
+  }
+  if (values.OPENCLAW_STATE_DIR === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = values.OPENCLAW_STATE_DIR;
   }
 }
