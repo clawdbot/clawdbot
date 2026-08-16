@@ -519,7 +519,7 @@ describe("marketplace plugins", () => {
   });
 
   it("passes install policy acknowledgement through to marketplace path installs", async () => {
-    await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+    await withTestDir("openclaw-marketplace-test-", async (rootDir) => {
       const pluginDir = path.join(rootDir, "plugins", "frontend-design");
       const manifestPath = await writeLocalMarketplaceFixture({
         rootDir,

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { detectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { withTempDir } from "../test-utils/temp-dir.js";
+import { withTestDir } from "../test-utils/temp-dir.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 
 vi.mock("./bash-tools.exec-host-gateway.js", () => ({
@@ -31,7 +31,7 @@ afterEach(() => {
 
 describeNonWin("exec live OpenClaw state SQLite guard", () => {
   it("detects direct and carrier-wrapped SQLite targets under the active state directory", async () => {
-    await withTempDir("openclaw-exec-live-sqlite-", async (root) => {
+    await withTestDir("openclaw-exec-live-sqlite-", async (root) => {
       const stateDir = path.join(root, "state with spaces");
       const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
       await fs.mkdir(path.dirname(databasePath), { recursive: true });
@@ -75,7 +75,7 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
   });
 
   it("detects relative and symlink-aliased live state targets", async () => {
-    await withTempDir("openclaw-exec-live-sqlite-alias-", async (root) => {
+    await withTestDir("openclaw-exec-live-sqlite-alias-", async (root) => {
       const stateDir = path.join(root, "state");
       const databasePath = path.join(stateDir, "agents", "main", "state.sqlite");
       const aliasDir = path.join(root, "state-alias");
@@ -97,7 +97,7 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
   });
 
   it("allows SQLite inspection of a private copy outside the active state directory", async () => {
-    await withTempDir("openclaw-exec-copied-sqlite-", async (root) => {
+    await withTestDir("openclaw-exec-copied-sqlite-", async (root) => {
       const stateDir = path.join(root, "state");
       const copiedDatabasePath = path.join(root, "snapshot", "openclaw.sqlite");
       await fs.mkdir(path.dirname(copiedDatabasePath), { recursive: true });
@@ -131,7 +131,7 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
   });
 
   it("rejects the live target before the external SQLite process starts", async () => {
-    await withTempDir("openclaw-exec-live-sqlite-spawn-", async (root) => {
+    await withTestDir("openclaw-exec-live-sqlite-spawn-", async (root) => {
       const stateDir = path.join(root, "state");
       const databasePath = path.join(stateDir, "agents", "main", "state.sqlite");
       const markerPath = path.join(root, "sqlite-spawned");

@@ -109,7 +109,7 @@ describe("noteDevicePairingHealth", () => {
   });
 
   it("does not create shared state while collecting local pairing findings", async () => {
-    await withTempDir("openclaw-doctor-device-pairing-readonly-", async (stateDir) => {
+    await withTestDir("openclaw-doctor-device-pairing-readonly-", async (stateDir) => {
       await withEnvAsync(
         {
           OPENCLAW_STATE_DIR: stateDir,
