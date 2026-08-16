@@ -368,6 +368,12 @@ function resolveWrappedFetch(fetchImpl: typeof fetch): typeof fetch {
   return resolveFetch(fetchImpl) ?? fetchImpl;
 }
 
+function throwIfTelegramFetchAborted(signal: AbortSignal | null | undefined): void {
+  if (signal?.aborted) {
+    throw signal.reason ?? new Error("Telegram fetch aborted");
+  }
+}
+
 function logResolverNetworkDecisions(params: {
   autoSelectDecision: ReturnType<typeof resolveTelegramAutoSelectFamilyDecision>;
   dnsDecision: ReturnType<typeof resolveTelegramDnsResultOrderDecision>;
@@ -753,6 +759,7 @@ export function resolveTelegramTransport(
     if (callerProvidedDispatcher) {
       try {
         const response = await sourceFetch(input, init);
+        throwIfTelegramFetchAborted(init?.signal);
         captureHttpExchange({
           url: resolveRequestUrl(input),
           method: init?.method ?? "GET",
@@ -764,10 +771,13 @@ export function resolveTelegramTransport(
         });
         return response;
       } catch (caught) {
+        throwIfTelegramFetchAborted(init?.signal);
         if (!shouldUseTelegramTransportFallback(caught)) {
           throw caught;
         }
-        return sourceFetch(input, init ?? {});
+        const response = await sourceFetch(input, init ?? {});
+        throwIfTelegramFetchAborted(init?.signal);
+        return response;
       }
     }
 
@@ -793,6 +803,7 @@ export function resolveTelegramTransport(
           input,
           withDispatcherIfMissing(init, attempt.createDispatcher()),
         );
+        throwIfTelegramFetchAborted(init?.signal);
         captureHttpExchange({
           url: resolveRequestUrl(input),
           method: init?.method ?? "GET",
@@ -808,6 +819,7 @@ export function resolveTelegramTransport(
         recordSuccessfulAttempt(attemptIndex);
         return response;
       } catch (caught) {
+        throwIfTelegramFetchAborted(init?.signal);
         err = caught;
         if (!shouldUseTelegramTransportFallback(err)) {
           throw err;
