@@ -319,8 +319,15 @@ export async function readOpenClawManagedNpmRootOverrides(params?: {
     }
     const hostManifest = manifest as HostPackageManifest;
     const overrides = await readHostWorkspaceOverrides(packageRoot);
+    // pnpm parent-child selectors (parent>child) are invalid npm override keys and
+    // would trigger EINVALIDTAGNAME before any retry can recover; drop them at the
+    // shared producer so every managed npm install/uninstall consumer gets a
+    // npm-compatible manifest up front.
+    const filteredOverrides = filterUnsupportedManagedNpmRootOverrides(overrides, {
+      pnpmParentChildSelectors: true,
+    });
     return Object.fromEntries(
-      Object.entries(overrides).map(([key, value]) => [
+      Object.entries(filteredOverrides).map(([key, value]) => [
         key,
         resolveHostOverrideReferences(value, hostManifest),
       ]),

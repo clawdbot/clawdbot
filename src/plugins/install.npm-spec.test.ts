@@ -3046,38 +3046,13 @@ describe("installPluginFromNpmSpec", () => {
             fs.readFileSync(path.join(npmProjectRoot, "package.json"), "utf8"),
           ) as { overrides?: Record<string, unknown>; openclaw?: { managedOverrides?: string[] } };
           if (installAttempts === 1) {
+            // Producer filters pnpm parent-child selectors up front; the first
+            // manifest must never contain them, so npm rejects only the alias.
+            expect(manifest.overrides).not.toHaveProperty("werift-ice@0.2.2>ip");
             expect(manifest.overrides?.["node-domexception"]).toBe(
               "npm:@nolyfill/domexception@1.0.28",
             );
             expect(manifest.overrides?.["range-target@>1"]).toBe("2.0.0");
-            expect(manifest.overrides?.["werift-ice@0.2.2>ip"]).toBe("npm:neoip@3.1.0");
-            expect(manifest.openclaw?.managedOverrides).toEqual([
-              "axios",
-              "nested",
-              "node-domexception",
-              "range-target@>1",
-              "werift-ice@0.2.2>ip",
-            ]);
-            return {
-              code: 1,
-              stdout: "",
-              stderr:
-                'npm error code EINVALIDTAGNAME\nnpm error Invalid tag name "0.2.2>ip" of package "werift-ice@0.2.2>ip"',
-              signal: null,
-              killed: false,
-              termination: "exit" as const,
-            };
-          }
-          if (installAttempts === 2) {
-            expect(manifest.overrides).toEqual({
-              axios: "1.18.0",
-              nested: {
-                alias: "npm:@scope/alias@1.0.0",
-                semver: "1.2.3",
-              },
-              "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-              "range-target@>1": "2.0.0",
-            });
             expect(manifest.openclaw?.managedOverrides).toEqual([
               "axios",
               "nested",
@@ -3118,9 +3093,8 @@ describe("installPluginFromNpmSpec", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(installAttempts).toBe(3);
+    expect(installAttempts).toBe(2);
     expect(warnings).toEqual([
-      "npm rejected managed npm overrides; retrying plugin install without npm-incompatible overrides for this npm version.",
       "npm rejected managed npm overrides; retrying plugin install without npm-incompatible overrides for this npm version.",
     ]);
   });
