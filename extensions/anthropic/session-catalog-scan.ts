@@ -2,48 +2,14 @@ import type { Dirent, Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { CatalogRecord } from "./session-catalog-discovery.js";
 
-const MAX_CATALOG_DISCOVERY_CACHE_ENTRIES = 20_000;
 const MAX_CATALOG_JSON_CACHE_ENTRIES = 4_000;
-export const MAX_CLAUDE_SESSION_SCAN_CACHE_ENTRIES = 8;
-export const CLAUDE_SESSION_SCAN_HARD_TTL_MS = 5 * 60_000;
-export const CLAUDE_PARTIAL_SCAN_TTL_MS = 15_000;
-export const CLAUDE_DESKTOP_SCAN_TTL_MS = 60_000;
 export const CLAUDE_CATALOG_IO_CONCURRENCY = 32;
-
-type CatalogDiscoveryCacheEntry = {
-  // The module-global cache is keyed by canonical transcript path, so an entry must also record the
-  // discovery context it was built in. `root` is the logical (unresolved) projects root: it scopes
-  // the entry to its homeDir even when the root itself is a symlink, so a different homeDir scan
-  // cannot reuse it and eviction can find it without re-resolving a now-missing root. mtime+size+ino
-  // detect any content change or atomic replacement; sessionId guards against a canonical path being
-  // reached under a different filename-derived id (e.g. an aliased/renamed symlink).
-  root: string;
-  mtimeMs: number;
-  size: number;
-  ino: number;
-  sessionId: string;
-  // Bytes this file charged against the scan budget when first scanned. Cache hits re-charge it so
-  // byte-budget-limited discovery stops at the same frontier whether or not the cache is warm,
-  // keeping pagination deterministic across repeated identical calls.
-  scannedBytes: number;
-  record: CatalogRecord | null;
-  sidechain: boolean;
-};
 
 type CatalogJsonCacheEntry = {
   mtimeMs: number;
   size: number;
   value: unknown;
-};
-
-type ClaudeSessionScanCacheEntry = {
-  treeStamp: string;
-  hardExpiresAt: number;
-  desktopStoreAvailable: boolean;
-  desktopExpiresAt: number;
-  records: Promise<CatalogRecord[]>;
 };
 
 type SafeSessionFile = { filePath: string; stat: Stats } | undefined;
@@ -67,15 +33,9 @@ export type ClaudeSessionScanContext = ClaudeProjectsTreeSnapshot & {
   safeFiles: Map<string, Promise<SafeSessionFile>>;
 };
 
-// Transcript discoveries stay valid only for the same root/id/inode/mtime/size and are LRU-bounded;
-// a false hit would corrupt pagination, so warm scans re-charge the original deterministic byte cost.
-export const catalogDiscoveryCache = new Map<string, CatalogDiscoveryCacheEntry>();
 // Parsed index/Desktop JSON stays valid for one path+mtime+size and is LRU-bounded; read failures are
 // never cached, so transient metadata I/O cannot hide a later successful read.
 const catalogJsonCache = new Map<string, CatalogJsonCacheEntry>();
-// Whole scans are root-scoped and bounded; tree/Desktop/hard expiries below own invalidation, avoiding
-// an unbounded home map while preserving the exact resolved records promise for concurrent callers.
-export const claudeSessionScanCache = new Map<string, ClaudeSessionScanCacheEntry>();
 
 export async function mapConcurrent<T, R>(
   values: T[],
@@ -110,10 +70,6 @@ export function setBoundedCache<K, V>(
     }
     cache.delete(oldest.value);
   }
-}
-
-export function cacheCatalogDiscovery(filePath: string, entry: CatalogDiscoveryCacheEntry): void {
-  setBoundedCache(catalogDiscoveryCache, filePath, entry, MAX_CATALOG_DISCOVERY_CACHE_ENTRIES);
 }
 
 function isWithin(root: string, candidate: string): boolean {

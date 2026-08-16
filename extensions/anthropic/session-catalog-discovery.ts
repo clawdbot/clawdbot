@@ -9,13 +9,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readClaudeDesktopCustomGroups } from "./claude-desktop-groups.js";
 import {
-  cacheCatalogDiscovery,
-  catalogDiscoveryCache,
   CLAUDE_CATALOG_IO_CONCURRENCY,
-  CLAUDE_DESKTOP_SCAN_TTL_MS,
-  CLAUDE_PARTIAL_SCAN_TTL_MS,
-  CLAUDE_SESSION_SCAN_HARD_TTL_MS,
-  claudeSessionScanCache,
   childDirectories,
   currentHomeDir,
   desktopSessionStoreAvailable,
@@ -23,7 +17,6 @@ import {
   type ClaudeProjectsTreeSnapshot,
   type ClaudeSessionScanContext,
   mapConcurrent,
-  MAX_CLAUDE_SESSION_SCAN_CACHE_ENTRIES,
   projectsDir,
   readJsonFile,
   readProjectsTreeSnapshot,
@@ -36,10 +29,54 @@ import type { ClaudeSessionCatalogSession } from "./session-catalog-types.js";
 export const MAX_STRING_LENGTH = 4096;
 const MAX_SESSION_PULL_REQUESTS = 20;
 const MAX_CATALOG_DISCOVERY_FILES = 10_000;
+const MAX_CATALOG_DISCOVERY_CACHE_ENTRIES = 20_000;
+const MAX_CLAUDE_SESSION_SCAN_CACHE_ENTRIES = 8;
+const CLAUDE_SESSION_SCAN_HARD_TTL_MS = 5 * 60_000;
+const CLAUDE_PARTIAL_SCAN_TTL_MS = 15_000;
+const CLAUDE_DESKTOP_SCAN_TTL_MS = 60_000;
 const CLAUDE_METADATA_PREFIX_BYTES = 1024 * 1024;
 const CLAUDE_METADATA_READ_CHUNK_BYTES = 16 * 1024;
 const MAX_CATALOG_METADATA_SCAN_BYTES = 64 * 1024 * 1024;
 const CLI_ENTRYPOINTS = new Set(["cli", "sdk-cli"]);
+
+type CatalogDiscoveryCacheEntry = {
+  // The module-global cache is keyed by canonical transcript path, so an entry must also record the
+  // discovery context it was built in. `root` is the logical (unresolved) projects root: it scopes
+  // the entry to its homeDir even when the root itself is a symlink, so a different homeDir scan
+  // cannot reuse it and eviction can find it without re-resolving a now-missing root. mtime+size+ino
+  // detect any content change or atomic replacement; sessionId guards against a canonical path being
+  // reached under a different filename-derived id (e.g. an aliased/renamed symlink).
+  root: string;
+  mtimeMs: number;
+  size: number;
+  ino: number;
+  sessionId: string;
+  // Bytes this file charged against the scan budget when first scanned. Cache hits re-charge it so
+  // byte-budget-limited discovery stops at the same frontier whether or not the cache is warm,
+  // keeping pagination deterministic across repeated identical calls.
+  scannedBytes: number;
+  record: CatalogRecord | null;
+  sidechain: boolean;
+};
+
+type ClaudeSessionScanCacheEntry = {
+  treeStamp: string;
+  hardExpiresAt: number;
+  desktopStoreAvailable: boolean;
+  desktopExpiresAt: number;
+  records: Promise<CatalogRecord[]>;
+};
+
+// Transcript discoveries stay valid only for the same root/id/inode/mtime/size and are LRU-bounded;
+// a false hit would corrupt pagination, so warm scans re-charge the original deterministic byte cost.
+const catalogDiscoveryCache = new Map<string, CatalogDiscoveryCacheEntry>();
+// Whole scans are root-scoped and bounded; tree/Desktop/hard expiries below own invalidation, avoiding
+// an unbounded home map while preserving the exact resolved records promise for concurrent callers.
+const claudeSessionScanCache = new Map<string, ClaudeSessionScanCacheEntry>();
+
+function cacheCatalogDiscovery(filePath: string, entry: CatalogDiscoveryCacheEntry): void {
+  setBoundedCache(catalogDiscoveryCache, filePath, entry, MAX_CATALOG_DISCOVERY_CACHE_ENTRIES);
+}
 
 type SessionIndexEntry = {
   sessionId?: unknown;
