@@ -508,18 +508,39 @@ describe("runCapability auto audio entries", () => {
         models: [{ provider: "openai", model: "whisper-1" }],
       });
     }
-    await runCase({
-      enabled: true,
-      models: [{ provider: "openai", model: "whisper-1" }],
-    });
 
     expect(seenPrompts).toEqual([
       "Transcribe in Russian.",
       "Transcribe the audio.",
       "Transcribe the audio.",
       "Transcribe the audio.",
-      "Transcribe the audio.",
     ]);
+  });
+
+  it("omits the implicit English audio prompt when no language is configured (autodetect)", async () => {
+    let seenPrompt: string | undefined;
+    let seenLanguage: string | undefined;
+    const result = await runAutoAudioCase({
+      transcribeAudio: async (req) => {
+        seenPrompt = req.prompt;
+        seenLanguage = req.language;
+        return { text: "ok", model: req.model ?? "unknown" };
+      },
+      cfgExtra: {
+        tools: {
+          media: {
+            models: [{ provider: "openai", model: "whisper-1", capabilities: ["audio"] }],
+            audio: {
+              enabled: true,
+            },
+          },
+        },
+      } as Partial<OpenClawConfig>,
+    });
+
+    expect(requireCapabilityOutput(result, 0).text).toBe("ok");
+    expect(seenLanguage).toBeUndefined();
+    expect(seenPrompt).toBeUndefined();
   });
 
   it("uses mistral when only mistral key is configured", async () => {
