@@ -1250,6 +1250,15 @@ async function finalizeCronRun(params: {
       input_tokens: input,
       output_tokens: output,
     };
+    // Cache buckets are counted into total_tokens below, so the record cannot
+    // account for its own total without them. Written only when nonzero to keep
+    // records from providers that report no cache usage byte-identical.
+    if (cacheRead > 0) {
+      telemetryUsage.cache_read_tokens = cacheRead;
+    }
+    if (cacheWrite > 0) {
+      telemetryUsage.cache_write_tokens = cacheWrite;
+    }
     const bucketTotalTokens = input + output + cacheRead + cacheWrite;
     // Embedded runs accumulate billing buckets across calls, while usage.total
     // may be replaced with the final provider-call total for context tracking.
