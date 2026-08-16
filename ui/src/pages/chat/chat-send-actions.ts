@@ -150,14 +150,20 @@ export const retryReconnectableQueuedChatSends = resumeStoredChatOutboxes;
  * storage failure mid-permutation leaves the prior order intact instead of a
  * partially reshuffled queue.
  */
-export function moveQueuedChatMessage(host: ChatHost, id: string, toIndex: number): void {
+export type ChatQueueMoveResult = "moved" | "rejected" | "noop";
+
+export function moveQueuedChatMessage(
+  host: ChatHost,
+  id: string,
+  toIndex: number,
+): ChatQueueMoveResult {
   const item = readQueuedMessageById(host, id);
   if (!item || !isMovableChatQueueItem(item)) {
-    return;
+    return "noop";
   }
   if (isQueuedMessageReorderBlocked(host, id)) {
     setChatError(host, QUEUED_MESSAGE_REORDER_CONFLICT_ERROR);
-    return;
+    return "rejected";
   }
   const sessionKey = item.sessionKey ?? host.sessionKey;
   const scope = readChatQueueForScope(host, sessionKey, item.agentId);
@@ -174,11 +180,11 @@ export function moveQueuedChatMessage(host: ChatHost, id: string, toIndex: numbe
     .some((row) => row.id !== id && isQueuedMessageBeingEdited(host, row.id));
   if (crossesPeerEdit) {
     setChatError(host, QUEUED_MESSAGE_REORDER_CONFLICT_ERROR);
-    return;
+    return "rejected";
   }
   const moves = reorderChatQueueItems(segment ?? [], id, toIndex);
   if (moves.length === 0) {
-    return;
+    return "noop";
   }
   const applied = updateQueuedMessagesForSession(
     host,
@@ -189,7 +195,9 @@ export function moveQueuedChatMessage(host: ChatHost, id: string, toIndex: numbe
   );
   if (!applied) {
     setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+    return "rejected";
   }
+  return "moved";
 }
 
 export async function retryQueuedChatMessage(host: ChatHost, id: string) {
