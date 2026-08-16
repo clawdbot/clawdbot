@@ -55,7 +55,17 @@ export const QUEUED_MESSAGE_STEER_CONFLICT_ERROR =
  */
 export function activeQueuedMessageEdit(host: QueuedMessageEditHost): QueuedMessageEdit | null {
   const edit = host.chatQueuedEdit;
-  return edit && visibleSessionMatches(host, edit.sessionKey, edit.agentId) ? edit : null;
+  if (!edit || !visibleSessionMatches(host, edit.sessionKey, edit.agentId)) {
+    return null;
+  }
+  // Route changes intentionally release the edit hold so another pane can
+  // drain the row. Do not revive a token whose source disappeared while away:
+  // there would be no row to render its submit/cancel controls on return.
+  if (!readQueuedMessageById(host, edit.id)) {
+    host.chatQueuedEdit = null;
+    return null;
+  }
+  return edit;
 }
 
 /**

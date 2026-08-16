@@ -8,11 +8,16 @@ import {
   registerChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { admitQueuedMessageForSession, subscribeChatOutboxProjection } from "./chat-queue.ts";
+import {
+  admitQueuedMessageForSession,
+  removeQueuedMessageWithoutReleasing,
+  subscribeChatOutboxProjection,
+} from "./chat-queue.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import {
   beginQueuedMessageEdit,
+  activeQueuedMessageEdit,
   cancelQueuedMessageEdit,
   isQueuedMessageBeingEdited,
   isQueuedMessageRemovalBlocked,
@@ -509,6 +514,27 @@ describe("queued message edit round-trip", () => {
     // and the stale edit must not lock the composer in the new session either.
     expect(isQueuedMessageBeingEdited(host as never, "queued-1")).toBe(false);
     expect(cancelQueuedMessageEdit(host as never)).toBe(false);
+    unsubscribe();
+  });
+
+  it("clears an edit whose source is removed while the pane is away", () => {
+    const { host, unsubscribe } = queueHost([{}, {}]);
+    const peer = makeChatHost({ sessionKey: SESSION_KEY, connected: false });
+    const peerUnsubscribe = subscribeChatOutboxProjection(peer as never);
+    expect(beginQueuedMessageEdit(host as never, "queued-1")).toBe("started");
+
+    host.sessionKey = "agent:other";
+    expect(activeQueuedMessageEdit(host as never)).toBeNull();
+    expect(
+      removeQueuedMessageWithoutReleasing(peer as never, "queued-1", SESSION_KEY),
+    ).not.toBeNull();
+
+    host.sessionKey = SESSION_KEY;
+    expect(activeQueuedMessageEdit(host as never)).toBeNull();
+    expect(host.chatQueuedEdit).toBeNull();
+    expect(beginQueuedMessageEdit(host as never, "queued-2")).toBe("started");
+
+    peerUnsubscribe();
     unsubscribe();
   });
 });
