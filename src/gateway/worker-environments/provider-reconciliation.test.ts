@@ -217,6 +217,8 @@ describe("worker environment service", () => {
       attachedSessionIds: [],
       lastError: STALE_WORKER_BUILD_REASON,
     });
+  });
+
   it("rechecks the placement teardown fence after stale-bundle preparation", async () => {
     const environmentId = "worker-attached-stale-pending-result";
     support.seedBootstrapping(environmentId);

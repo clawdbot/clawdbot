@@ -350,7 +350,7 @@ describe("placement session retirement", () => {
         placements,
         environments: { get: () => ({ state: "attached" }) as never },
         forceDestroyEnvironment,
-        resolveSessionEvidence: async () => "absent",
+        createSessionEvidenceResolver: async () => async () => "absent",
         warn,
       });
 
