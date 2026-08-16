@@ -133,12 +133,10 @@ function createReceipt(
     ...outcomes[kind],
   });
   const receipt = { tool: counts("tool"), block: counts("block"), final: counts("final") };
-  return {
-    counts: receipt,
-    anyVisibleDelivered: Object.values(receipt).some(
-      (entry) => entry.delivered > 0 || entry.failedAfterSend > 0,
-    ),
-  };
+  const anyVisibleDelivered = Object.values(receipt).some(
+    (entry) => entry.delivered > 0 || entry.failedAfterSend > 0,
+  );
+  return { counts: receipt, anyVisibleDelivered };
 }
 
 function createDispatch(
