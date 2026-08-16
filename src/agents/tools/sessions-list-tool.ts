@@ -159,7 +159,7 @@ export function createSessionsListTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const cfg = opts?.config ?? getRuntimeConfig();
-      const { mainKey, alias, requesterInternalKey, restrictToSpawned } =
+      const { mainKey, alias, requesterInternalKey, mainSessionKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
@@ -202,6 +202,7 @@ export function createSessionsListTool(opts?: {
         action: "list",
         defaultAgentId,
         requesterSessionKey: effectiveRequesterKey,
+        mainSessionKey,
         visibility,
         a2aPolicy,
       });

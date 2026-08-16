@@ -362,7 +362,7 @@ export function createSessionsSearchTool(opts?: {
         }) ?? SESSIONS_SEARCH_DEFAULT_LIMIT;
       const requestedSessionKey = readToolStringParam(params, "sessionKey");
       const cfg = opts?.config ?? getRuntimeConfig();
-      const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
+      const { mainKey, alias, effectiveRequesterKey, mainSessionKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
@@ -446,6 +446,7 @@ export function createSessionsSearchTool(opts?: {
         defaultAgentId,
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
+        mainSessionKey,
         visibility,
         a2aPolicy,
       });
@@ -458,9 +459,9 @@ export function createSessionsSearchTool(opts?: {
         const access = await resolveSessionToolAccess({
           action: "history",
           displayAction: "search",
-          defaultAgentId,
           requesterAgentId,
           requesterSessionKey: effectiveRequesterKey,
+          mainSessionKey,
           authorizationTargetSessionKey,
           targetAgentId: agentId,
           targetSessionKey: key,

@@ -39,7 +39,7 @@ type SessionVisibilityScope = "self" | "tree" | "agent" | "all";
 // prose cannot drift from the session-visibility checker (openclaw#114797).
 const SESSION_VISIBILITY_SCOPE_COPY = {
   self: "current session only",
-  tree: "current session + own spawn subtree; reads also cover any watched same-agent group sessions",
+  tree: "current session + own spawn subtree; the main session sees all sessions of its agent",
   agent: "all sessions of this agent",
   all: "all sessions, cross-agent per tools.agentToAgent",
 } satisfies Record<SessionVisibilityScope, string>;
@@ -48,8 +48,7 @@ export function describeSessionVisibilityScope(
   visibility: SessionVisibilityScope,
   options?: { spawnRestricted?: boolean },
 ): string {
-  // Sandboxed sessions under the "spawned" clamp list/read only spawned rows,
-  // so the tree watched-read clause would promise reads that context denies.
+  // Sandboxed sessions under the "spawned" clamp list/read only spawned rows.
   if (options?.spawnRestricted && visibility === "tree") {
     return "current session + own spawn subtree (sandbox: spawned sessions only)";
   }

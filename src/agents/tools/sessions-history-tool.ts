@@ -389,7 +389,7 @@ export function createSessionsHistoryTool(opts?: {
       }
       const includeTools = Boolean(params.includeTools);
       const cfg = opts?.config ?? getRuntimeConfig();
-      const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
+      const { mainKey, alias, effectiveRequesterKey, mainSessionKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
@@ -441,6 +441,7 @@ export function createSessionsHistoryTool(opts?: {
           resolveSessionAgentId({ config: cfg, sessionKey: resolvedSession.key }),
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
+        mainSessionKey,
         visibility,
         a2aPolicy,
       }).check({ key: resolvedSession.key });
@@ -476,9 +477,9 @@ export function createSessionsHistoryTool(opts?: {
           : resolvedKey;
       const access = await resolveSessionToolAccess({
         action: "history",
-        defaultAgentId: requesterAgentId,
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
+        mainSessionKey,
         authorizationTargetSessionKey: authorizationKey,
         targetAgentId,
         targetSessionKey: resolvedKey,

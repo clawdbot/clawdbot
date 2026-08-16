@@ -156,6 +156,16 @@ describe("resolveOutboundSessionRoute", () => {
       },
     },
     {
+      name: "global groupScope main",
+      cfg: { session: { groupScope: "main" } } as OpenClawConfig,
+      channel: "mobilechat",
+      target: "120363040000000000@g.us",
+      expected: {
+        sessionKey: "agent:main:main",
+        chatType: "group",
+      },
+    },
+    {
       name: "Matrix room target",
       cfg: baseConfig,
       channel: "matrix",

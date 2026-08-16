@@ -8,6 +8,7 @@ import {
 } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
+import type { DmScope, GroupScope } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
@@ -41,7 +42,8 @@ export type ResolveAgentRouteInput = {
   channel: string;
   accountId?: string | null;
   peer?: RoutePeer | null;
-  dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  dmScope?: DmScope;
+  groupScope?: GroupScope;
   /** Parent peer for threads — used for binding inheritance when peer doesn't match directly. */
   parentPeer?: RoutePeer | null;
   guildId?: string | null;
@@ -55,7 +57,8 @@ export type ResolvedAgentRoute = {
   channel: string;
   accountId: string;
   /** Effective direct-message scope after a matching binding override. */
-  dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  dmScope?: DmScope;
+  groupScope?: GroupScope;
   /** Internal session key used for persistence + concurrency. */
   sessionKey: string;
   /** Convenience alias for direct-chat collapse. */
@@ -96,7 +99,8 @@ export function buildAgentSessionKey(params: {
   accountId?: string | null;
   peer?: RoutePeer | null;
   /** DM session scope. */
-  dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+  dmScope?: DmScope;
+  groupScope?: GroupScope;
   identityLinks?: Record<string, string[]>;
 }): string {
   const channel = normalizeLowercaseStringOrEmpty(params.channel) || "unknown";
@@ -109,6 +113,7 @@ export function buildAgentSessionKey(params: {
     peerKind: peer?.kind ?? "direct",
     peerId: peer ? normalizeRouteBindingId(peer.id) || "unknown" : null,
     dmScope: params.dmScope,
+    groupScope: params.groupScope,
     identityLinks: params.identityLinks,
   });
 }
@@ -568,6 +573,7 @@ function buildResolvedRouteCacheKey(params: {
   teamId: string;
   memberRoleIds: string[];
   dmScope: string;
+  groupScope: string;
 }): string {
   return JSON.stringify([
     params.channel,
@@ -578,6 +584,7 @@ function buildResolvedRouteCacheKey(params: {
     params.teamId ?? null,
     params.memberRoleIds.toSorted(),
     params.dmScope,
+    params.groupScope,
   ]);
 }
 
@@ -616,6 +623,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const memberRoleIds = input.memberRoleIds ?? [];
   const memberRoleIdSet = new Set(memberRoleIds);
   const dmScope = input.dmScope ?? input.cfg.session?.dmScope ?? "main";
+  const groupScope = input.groupScope ?? input.cfg.session?.groupScope ?? "per-group";
   const identityLinks = input.cfg.session?.identityLinks;
   const shouldLogDebug = shouldLogVerbose();
   const parentPeer = input.parentPeer
@@ -637,6 +645,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
         teamId,
         memberRoleIds,
         dmScope,
+        groupScope,
       })
     : "";
   if (routeCache && routeCacheKey) {
@@ -652,10 +661,11 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const choose = (
     agentId: string,
     matchedBy: ResolvedAgentRoute["matchedBy"],
-    sessionOverride?: { dmScope?: Parameters<typeof buildAgentSessionKey>[0]["dmScope"] },
+    sessionOverride?: { dmScope?: DmScope; groupScope?: GroupScope },
   ) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
     const effectiveDmScope = sessionOverride?.dmScope ?? dmScope;
+    const effectiveGroupScope = sessionOverride?.groupScope ?? groupScope;
     const sessionKey = buildAgentSessionKey({
       agentId: resolvedAgentId,
       mainKey: input.cfg.session?.mainKey,
@@ -663,6 +673,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       accountId,
       peer,
       dmScope: effectiveDmScope,
+      groupScope: effectiveGroupScope,
       identityLinks,
     });
     const mainSessionKey = normalizeLowercaseStringOrEmpty(
@@ -676,6 +687,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       channel,
       accountId,
       dmScope: effectiveDmScope,
+      groupScope: effectiveGroupScope,
       sessionKey,
       mainSessionKey,
       lastRoutePolicy: deriveLastRoutePolicy({ sessionKey, mainSessionKey }),
@@ -811,7 +823,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
 
 /** @internal Resolves fallback precedence for an unknown direct peer. */
 export function resolveUnknownDirectMessageRoute(
-  input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId" | "dmScope">,
+  input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId" | "dmScope" | "groupScope">,
 ): ResolvedAgentRoute {
   return resolveAgentRoute({ ...input, peer: { kind: "direct", id: "" } });
 }

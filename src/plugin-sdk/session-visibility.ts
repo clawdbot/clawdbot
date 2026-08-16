@@ -12,7 +12,6 @@ import {
   isSubagentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
-import { listAmbientGroupWatchTargets } from "../sessions/session-state-events.js";
 import {
   listSpawnedSessionKeysWithResult,
   logSessionOwnershipLookupFailure,
@@ -298,15 +297,6 @@ function selfVisibilityMessage(action: SessionAccessAction): string {
   return `${actionPrefix(action)} visibility is restricted to the current session (tools.sessions.visibility=self).`;
 }
 
-function treeVisibilityMessage(action: SessionAccessAction): string {
-  // Reads under tree also cover watched same-agent group sessions (isWatchedRead
-  // below); the deny copy must say so or the model concludes group reads never work.
-  if (action === "send") {
-    return `${actionPrefix(action)} visibility is restricted to the current session tree (tools.sessions.visibility=tree).`;
-  }
-  return `${actionPrefix(action)} visibility is restricted to the current session tree and any watched same-agent group sessions (tools.sessions.visibility=tree).`;
-}
-
 function resolveIncognitoSessionAccessDenial(
   targetSessionKey: string,
 ): SessionAccessResult | undefined {
@@ -327,6 +317,7 @@ type SessionVisibilityCheckerParams = {
   defaultAgentId?: string;
   requesterAgentId?: string;
   requesterSessionKey: string;
+  mainSessionKey?: string;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
 };
@@ -338,14 +329,7 @@ function createSessionVisibilityCheckerWithResult(
 ): { check: (targetSessionKey: string) => SessionAccessResult } {
   const spawnedKeys = params.spawnedKeys;
   let lookupFailureLogged = false;
-  const rowChecker = createSessionVisibilityRowChecker({
-    action: params.action,
-    defaultAgentId: params.defaultAgentId,
-    requesterAgentId: params.requesterAgentId,
-    requesterSessionKey: params.requesterSessionKey,
-    visibility: params.visibility,
-    a2aPolicy: params.a2aPolicy,
-  });
+  const rowChecker = createSessionVisibilityRowChecker(params);
 
   const check = (targetSessionKey: string): SessionAccessResult => {
     const incognitoDenial = resolveIncognitoSessionAccessDenial(targetSessionKey);
@@ -427,19 +411,12 @@ function rowOwnedByRequester(row: SessionVisibilityRow, requesterSessionKey: str
 }
 
 /** Create a row-aware visibility checker that can use owner/spawn metadata. */
-export function createSessionVisibilityRowChecker(params: {
-  action: SessionAccessAction;
-  defaultAgentId?: string;
-  requesterAgentId?: string;
-  requesterSessionKey: string;
-  visibility: SessionToolsVisibility;
-  a2aPolicy: AgentToAgentPolicy;
-}): { check: (row: SessionVisibilityRow) => SessionAccessResult } {
+export function createSessionVisibilityRowChecker(params: SessionVisibilityCheckerParams): {
+  check: (row: SessionVisibilityRow) => SessionAccessResult;
+} {
   const requesterAgentId =
     normalizeLowercaseStringOrEmpty(params.requesterAgentId) ||
     resolveAgentIdFromSessionKey(params.requesterSessionKey, params.defaultAgentId);
-  let watchedSessionKeys: Set<string> | undefined;
-
   const check = (row: SessionVisibilityRow): SessionAccessResult => {
     const targetSessionKey = row.key;
     const incognitoDenial = resolveIncognitoSessionAccessDenial(targetSessionKey);
@@ -467,17 +444,11 @@ export function createSessionVisibilityRowChecker(params: {
         };
       }
     }
-    // Only durable ambient-group provenance makes the target ownership-equivalent
-    // for same-agent reads. Explicit A2A watches, send access, and cross-agent
-    // targets remain fail-closed.
-    const isWatchedRead =
-      params.action !== "send" &&
-      params.visibility === "tree" &&
-      targetAgentId === requesterAgentId &&
-      (watchedSessionKeys ??= listAmbientGroupWatchTargets(params.requesterSessionKey)).has(
-        targetSessionKey,
-      );
-    const isRequesterOwned = rowOwnedByRequester(row, params.requesterSessionKey) || isWatchedRead;
+    const isRequesterOwned =
+      rowOwnedByRequester(row, params.requesterSessionKey) ||
+      (params.visibility === "tree" &&
+        targetAgentId === requesterAgentId &&
+        params.requesterSessionKey === params.mainSessionKey);
     const isCrossAgent = targetAgentId !== requesterAgentId;
     // Row ownership is stronger than agent ids: ACP children may use a backend
     // agent id while still belonging to the requester that spawned them. Only
@@ -530,7 +501,7 @@ export function createSessionVisibilityRowChecker(params: {
       return {
         allowed: false,
         status: "forbidden",
-        error: treeVisibilityMessage(params.action),
+        error: `${actionPrefix(params.action)} visibility is restricted to the current session tree (tools.sessions.visibility=tree).`,
       };
     }
 
@@ -546,6 +517,7 @@ export async function createSessionVisibilityGuard(params: {
   defaultAgentId?: string;
   requesterAgentId?: string;
   requesterSessionKey: string;
+  mainSessionKey?: string;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
   callGateway?: GatewayCaller;
@@ -561,13 +533,5 @@ export async function createSessionVisibilityGuard(params: {
           callGateway: params.callGateway,
         })
       : null;
-  return createSessionVisibilityCheckerWithResult({
-    action: params.action,
-    defaultAgentId: params.defaultAgentId,
-    requesterAgentId: params.requesterAgentId,
-    requesterSessionKey: params.requesterSessionKey,
-    visibility: params.visibility,
-    a2aPolicy: params.a2aPolicy,
-    spawnedKeys,
-  });
+  return createSessionVisibilityCheckerWithResult({ ...params, spawnedKeys });
 }
