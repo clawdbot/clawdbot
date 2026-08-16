@@ -14,7 +14,7 @@ const node = {
   clientId: "node-host",
   clientMode: "node",
   protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-  commands: [],
+  commands: [NODE_WORKER_WORKSPACE_RETAIN_COMMAND],
 } as const;
 
 function environment(overrides: Record<string, unknown> = {}) {
@@ -163,6 +163,44 @@ describe("node workspace retain coordinator", () => {
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(invoke.mock.calls[1]?.[0].params).toEqual(invoke.mock.calls[0]?.[0].params);
     await coordinator.stop();
+  });
+
+  it("skips nodes that do not advertise the workspace retain command", async () => {
+    const { coordinator, invoke } = createHarness({
+      results: [{ applied: true, deleted: 0, hasMore: false }],
+    });
+
+    // Replace the transport with a node that omits the retain command.
+    const invokeFiltered = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => ({
+      ok: true,
+      payloadJSON: JSON.stringify({ applied: true, deleted: 0, hasMore: false }),
+    }));
+    const transportFiltered: NodeWorkerSupervisorTransport = {
+      listCurrentNodes: async () => [
+        {
+          ...node,
+          commands: ["system.run", "system.which"],
+        },
+      ],
+      isCurrent: () => true,
+      invoke: invokeFiltered,
+    };
+
+    const coordinatorFiltered = createNodeWorkspaceRetainCoordinator({
+      gatewayNamespace: "gateway-test",
+      environments: {
+        list: () => [environment()] as never,
+      } as Pick<WorkerEnvironmentService, "list">,
+      placements: {
+        list: () => [placement()] as never,
+      } as Pick<WorkerSessionPlacementStore, "list">,
+      warn: vi.fn(),
+    });
+    coordinatorFiltered.bindTransport(transportFiltered);
+
+    await coordinatorFiltered.start();
+    expect(invokeFiltered).not.toHaveBeenCalled();
+    await coordinatorFiltered.stop();
   });
 
   it("republishes an identical full snapshot for reconnect-scoped inventory", async () => {

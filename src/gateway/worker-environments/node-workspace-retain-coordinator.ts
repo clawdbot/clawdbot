@@ -162,15 +162,17 @@ export function createNodeWorkspaceRetainCoordinator(
         ? currentNodes
         : currentNodes.filter((node) => requestedNodes.has(node.nodeId));
       await Promise.all(
-        targets.map(async (node) => {
-          try {
-            await publishSnapshot(currentTransport, node);
-          } catch (error) {
-            options.warn(
-              `Node workspace retain publication failed (${node.nodeId}): ${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-        }),
+        targets
+          .filter((node) => node.commands.includes(NODE_WORKER_WORKSPACE_RETAIN_COMMAND))
+          .map(async (node) => {
+            try {
+              await publishSnapshot(currentTransport, node);
+            } catch (error) {
+              options.warn(
+                `Node workspace retain publication failed (${node.nodeId}): ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          }),
       );
     }
   };
