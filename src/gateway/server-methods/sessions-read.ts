@@ -19,7 +19,6 @@ import {
   runSessionsCleanup,
   serializeSessionCleanupResult,
   type SessionEntry,
-  type SessionStoreTarget,
 } from "../../config/sessions.js";
 import { listSessionEntriesReadOnly } from "../../config/sessions/session-accessor.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
@@ -51,9 +50,9 @@ import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionPreviewItemsFromTranscript,
 } from "../session-transcript-readers.js";
-import type {
-  GatewaySessionStoreCache,
-  GatewaySessionStoreDiscoveryCache,
+import {
+  createGatewaySessionStoreDiscoveryCache,
+  type GatewaySessionStoreCache,
 } from "../session-utils-store-lookup.js";
 import {
   buildGatewaySessionRow,
@@ -294,37 +293,15 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
               // One cache for the whole listing: sharing resolution otherwise
               // materialized every entry of a candidate store once per row.
               const sharingStoreCache: GatewaySessionStoreCache = new Map();
-              const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-              const prepareTarget = (rawAgentId: string, target?: SessionStoreTarget) => {
-                const agentId = normalizeAgentId(rawAgentId);
-                const cached = targetDiscoveryCache.get(agentId);
-                if (cached) {
-                  if (target) {
-                    cached.existing.push(target);
-                  }
-                  return;
-                }
-                const fallback = {
-                  agentId,
-                  storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
-                };
-                const existing = target
-                  ? [target]
-                  : durableTargets.length > 0
-                    ? durableTargets
-                    : [fallback];
-                targetDiscoveryCache.set(agentId, { existing, fallback });
-              };
-              for (const target of durableTargets) {
-                prepareTarget(target.agentId, target);
-              }
-              for (const session of result.sessions) {
-                prepareTarget(
+              const targetDiscoveryCache = createGatewaySessionStoreDiscoveryCache({
+                cfg,
+                targets: durableTargets,
+                agentIds: result.sessions.map((session) =>
                   session.key === "global" && p.agentId
                     ? p.agentId
                     : resolveSessionStoreAgentId(cfg, session.key),
-                );
-              }
+                ),
+              });
               const resolvedSharingTargets = result.sessions.map((session) =>
                 resolveSessionSharingTarget({
                   cfg,

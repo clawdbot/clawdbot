@@ -142,6 +142,37 @@ export type GatewaySessionStoreDiscoveryCache = Map<
   { existing: SessionStoreTarget[]; fallback: SessionStoreTarget }
 >;
 
+export function createGatewaySessionStoreDiscoveryCache(params: {
+  cfg: OpenClawConfig;
+  targets: SessionStoreTarget[];
+  agentIds: Iterable<string>;
+}): GatewaySessionStoreDiscoveryCache {
+  const cache: GatewaySessionStoreDiscoveryCache = new Map();
+  const prepare = (rawAgentId: string, target?: SessionStoreTarget) => {
+    const agentId = normalizeAgentId(rawAgentId);
+    const current = cache.get(agentId);
+    if (current) {
+      if (target) {
+        current.existing.push(target);
+      }
+      return;
+    }
+    const fallback = {
+      agentId,
+      storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+    };
+    const existing = target ? [target] : params.targets.length > 0 ? params.targets : [fallback];
+    cache.set(agentId, { existing, fallback });
+  };
+  for (const target of params.targets) {
+    prepare(target.agentId, target);
+  }
+  for (const agentId of params.agentIds) {
+    prepare(agentId);
+  }
+  return cache;
+}
+
 function loadGatewaySessionLookupStore(
   storePath: string,
   clone: boolean | undefined,
