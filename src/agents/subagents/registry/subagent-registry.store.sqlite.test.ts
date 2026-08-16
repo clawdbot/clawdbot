@@ -121,7 +121,6 @@ describe("subagent registry sqlite store", () => {
 
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
 
-      const { db } = openOpenClawStateDatabase();
       const restored = loadSubagentRegistryFromSqlite();
       expect(restored.get(run.runId)).toMatchObject({
         runId: run.runId,

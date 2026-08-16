@@ -6,8 +6,8 @@ import {
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { finalizeTaskRunByRunId } from "../../../tasks/detached-task-runtime.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
-import { loadRequesterLifecycleRevision } from "../../subagent-requester-lifecycle.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
+import { loadRequesterLifecycleRevision } from "../../subagent-requester-lifecycle.js";
 import {
   clearDeliveryState,
   ensureCompletionState,

@@ -13,7 +13,7 @@ import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getFreeGatewayPort,
+  getGatewayE2ePortBlock,
 } from "../src/gateway/test-helpers.e2e.js";
 import {
   createOpenClawTestInstance,
@@ -50,7 +50,7 @@ function readJsonRequest(req: IncomingMessage): Promise<Record<string, unknown>>
       try {
         resolve(body ? (JSON.parse(body) as Record<string, unknown>) : {});
       } catch (error) {
-        reject(error);
+        reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
     req.on("error", reject);
@@ -177,7 +177,9 @@ async function waitFor<T>(
     if (value !== undefined) {
       return value;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   throw new Error(`timed out waiting for ${label}`);
 }
@@ -284,7 +286,9 @@ async function startMockModelServer(): Promise<MockModelServer> {
         ) {
           return;
         }
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 100);
+        });
       }
       throw new Error("child model request never arrived");
     },
@@ -454,7 +458,7 @@ describe("requester lifecycle fence real-runtime proof", () => {
     await mkdir(workspace, { recursive: true });
     const modelServer = await startMockModelServer();
     modelServers.push(modelServer);
-    const port = await getFreeGatewayPort();
+    const port = await getGatewayE2ePortBlock();
     const config = proofConfig(workspace, modelServer.baseUrl);
     const instance = await createOpenClawTestInstance({
       name: "requester-lifecycle-fence-proof",
@@ -552,14 +556,18 @@ describe("requester lifecycle fence real-runtime proof", () => {
           240_000,
         );
 
-        await new Promise((resolve) => setTimeout(resolve, 20_000));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20_000);
+        });
         console.log(
           `[proof:fenced-before-turn2] ${JSON.stringify(
             await collectOutcome(instance, modelServer, sessionKey),
           )}`,
         );
 
-        await new Promise((resolve) => setTimeout(resolve, 10_000));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 10_000);
+        });
 
         const outcome = await collectOutcome(instance, modelServer, sessionKey);
         await writeFile(
@@ -619,7 +627,9 @@ describe("requester lifecycle fence real-runtime proof", () => {
             { expectFinal: true, timeoutMs: 120_000 },
           )
           .catch(() => undefined);
-        await new Promise((resolve) => setTimeout(resolve, 10_000));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 10_000);
+        });
         const outcome = await collectOutcome(instance, modelServer, sessionKey);
         await writeFile(
           path.join(fixtureDir, "proof-control-outcome.json"),

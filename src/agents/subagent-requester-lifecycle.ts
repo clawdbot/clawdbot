@@ -4,10 +4,10 @@
  */
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveAgentIdFromSessionKey } from "../config/sessions/main-session.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore as resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveDefaultAgentId } from "./agent-scope-config.js";
-import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
+import { resolveRequesterStoreKey } from "./subagents/announce/subagent-requester-store-key.js";
 
 type RequesterLifecycleDeps = {
   getRuntimeConfig: typeof getRuntimeConfig;
@@ -38,16 +38,23 @@ export const testing = {
 };
 
 /** Current lifecycle revision of the requester session, when one is persisted. */
-export function loadRequesterLifecycleRevision(requesterSessionKey: string): string | undefined {
+export function loadRequesterLifecycleRevision(
+  requesterSessionKey: string,
+  explicitAgentId?: string,
+): string | undefined {
   const rawKey = (requesterSessionKey ?? "").trim();
   if (!rawKey) {
     return undefined;
   }
   const cfg = requesterLifecycleDeps.getRuntimeConfig();
-  const canonicalKey = requesterLifecycleDeps.resolveRequesterStoreKey(cfg, rawKey);
+  const canonicalKey = requesterLifecycleDeps.resolveRequesterStoreKey(
+    cfg,
+    rawKey,
+    explicitAgentId,
+  );
   const agentId = requesterLifecycleDeps.resolveAgentIdFromSessionKey(
     canonicalKey,
-    requesterLifecycleDeps.resolveDefaultAgentId(cfg),
+    explicitAgentId ?? requesterLifecycleDeps.resolveDefaultAgentId(cfg),
   );
   const storePath = requesterLifecycleDeps.resolveStorePath(cfg.session?.store, { agentId });
   return requesterLifecycleDeps.loadSessionEntry({

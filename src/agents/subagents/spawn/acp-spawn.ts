@@ -58,6 +58,7 @@ import {
   type PreparedSpawnThreadBinding,
 } from "../../spawn-plan.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../spawned-context.js";
+import { loadRequesterLifecycleRevision as loadRequesterRevision } from "../../subagent-requester-lifecycle.js";
 import { countUntrackedActiveAcpRunsForOwner } from "./acp-spawn-admission.js";
 import {
   resolveAcpSpawnBootstrapDeliveryPlan,
@@ -90,7 +91,6 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "./subagent-capabilities.js";
-import { loadRequesterLifecycleRevision as loadRequesterRevision } from "../subagent-requester-lifecycle.js";
 import { callSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
@@ -655,7 +655,8 @@ export async function spawnAcpDirect(
     hookRunner: getGlobalHookRunner(),
     progressOrigin,
     progressSessionKey: ownership.completionRequesterSessionKey,
-    stampRequesterLifecycle: () => loadRequesterRevision(ownership.completionRequesterSessionKey),
+    stampRequesterLifecycle: () =>
+      loadRequesterRevision(ownership.completionRequesterSessionKey, requesterAgentId),
     buildRegistration: (state, runId, rev) => {
       const inlineDelivery = state.deliveryPlan?.useInlineDelivery === true;
       const expectsCompletionMessage = !inlineDelivery && params.expectsCompletionMessage !== false;

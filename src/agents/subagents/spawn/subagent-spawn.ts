@@ -21,7 +21,7 @@ import {
   type SpawnBackendAdapter,
   summarizeSpawnError,
 } from "../../spawn-pipeline.js";
-import { loadRequesterLifecycleRevision } from "../subagent-requester-lifecycle.js";
+import { loadRequesterLifecycleRevision } from "../../subagent-requester-lifecycle.js";
 import {
   completeCollectorLaunchCleanup,
   settleFailedQueuedSubagentLaunch,
@@ -496,7 +496,7 @@ export async function spawnSubagentDirect(
       progressOrigin,
       progressSessionKey: requesterInternalKey,
       stampRequesterLifecycle: () =>
-        loadRequesterLifecycleRevision(ownership.completionRequesterSessionKey),
+        loadRequesterLifecycleRevision(ownership.completionRequesterSessionKey, requesterAgentId),
       buildRegistration: (_state, runId, expectedRequesterLifecycleRevision) => {
         if (params.collect) {
           const latestAdmission = resolveAdmission();
