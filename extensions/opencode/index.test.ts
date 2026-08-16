@@ -470,6 +470,22 @@ describe("opencode provider plugin", () => {
     expect(resolved?.headers?.["User-Agent"]).toMatch(/^opencode\/\S+$/);
   });
 
+  it("keeps the manifest OpenCode Zen User-Agent in sync with the runtime catalog", async () => {
+    const manifestProvider = requireRecord(
+      manifest.modelCatalog.providers.opencode,
+      "manifest provider",
+    );
+    const manifestUserAgent = requireRecord(manifestProvider.headers, "manifest provider headers")[
+      "User-Agent"
+    ];
+    expect(manifestUserAgent).toMatch(/^opencode\/\S+$/);
+    const runtimeModel = requireRecord(
+      buildStaticOpencodeZenProviderConfig().models[0],
+      "runtime model",
+    );
+    expect(manifestUserAgent).toBe(runtimeModel.headers?.["User-Agent"]);
+  });
+
   it("keeps every OpenCode Zen row within the required cost contract", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const manifestProvider = requireRecord(

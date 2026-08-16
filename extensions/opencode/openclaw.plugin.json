@@ -32,6 +32,9 @@
       "opencode": {
         "baseUrl": "https://opencode.ai/zen/v1",
         "api": "openai-completions",
+        "headers": {
+          "User-Agent": "opencode/2026.8.1"
+        },
         "models": [
           {
             "id": "claude-opus-5",

@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines -- grandfathered oversized test file. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createManifestRecord } from "./model.static-catalog.test-helpers.js";
 
@@ -628,6 +629,26 @@ describe("resolveBundledStaticCatalogModel", () => {
     });
 
     expect(model?.maxTokens).toBe(8192);
+  });
+
+  it("carries manifest provider headers into configured runtime-discovery models", () => {
+    // Configured OpenCode Zen models resolve through bundled manifest rows with
+    // runtime discovery enabled; provider-level headers must reach the model.
+    const plugin = createMistralManifestPlugin({ discovery: "runtime" });
+    plugin.modelCatalog.providers.mistral.headers = { "User-Agent": "opencode/2026.8.1" };
+    setManifestPlugins([plugin]);
+
+    const model = resolveBundledStaticCatalogModel({
+      provider: "mistral",
+      modelId: "mistral-medium-3-5",
+      cfg: {},
+      includeRuntimeDiscovery: true,
+    });
+
+    expect(model).toMatchObject({
+      id: "mistral-medium-3-5",
+      headers: { "User-Agent": "opencode/2026.8.1" },
+    });
   });
 
   it("requires an exact provider and model match", () => {
