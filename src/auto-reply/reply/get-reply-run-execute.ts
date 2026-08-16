@@ -362,7 +362,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     turnAdoptionLifecycle: opts?.turnAdoptionLifecycle,
-    onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
     ...(opts?.onFollowupQueueDisposition
       ? { onQueueDisposition: opts.onFollowupQueueDisposition }
       : {}),

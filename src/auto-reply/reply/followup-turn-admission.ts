@@ -151,7 +151,6 @@ export async function admitFollowupTurn(params: {
     routeThreadId: params.queued.originatingThreadId,
     originatingLeafEntryId: params.queued.turnAdoptionLifecycle?.originatingLeafEntryId,
     upstreamAbortSignal: resolveFollowupAbortSignal(params.queued),
-    onReplyAdmissionWaitChange: params.queued.onReplyAdmissionWaitChange,
   });
   if (admission.status === "skipped") {
     return admission.reason === "active-run"

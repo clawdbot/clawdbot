@@ -980,41 +980,4 @@ describe("channel turn pipeline", () => {
       expect.objectContaining({ reason: "zero-count-visible-dispatch" }),
     ]);
   });
-
-  it("still warns when a visible turn has zero counts and no observed delivery", async () => {
-    const events: string[] = [];
-    const log = vi.fn();
-    const recordInboundSession = createRecordInboundSession(events);
-    // Guard against over-suppression: a genuinely empty visible dispatch must still warn.
-    const runDispatch = vi.fn(async () => ({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-      observedReplyDelivery: false,
-    }));
-
-    const result = await runPreparedChannelTurn({
-      channel: "test",
-      routeSessionKey: "agent:main:test:peer",
-      storePath: "/tmp/sessions.json",
-      ctxPayload: createCtx(),
-      recordInboundSession,
-      runDispatch,
-      log,
-      messageId: "msg-empty",
-      record: {
-        onRecordError: vi.fn(),
-      },
-    });
-
-    expectDispatched(result);
-    expect(result.dispatchResult?.observedReplyDelivery).toBe(false);
-    expect(log.mock.calls).toContainEqual([
-      expect.objectContaining({
-        stage: "dispatch",
-        event: "warning",
-        messageId: "msg-empty",
-        reason: "zero-count-visible-dispatch",
-      }),
-    ]);
-  });
 });

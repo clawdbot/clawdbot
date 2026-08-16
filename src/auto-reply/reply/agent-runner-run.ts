@@ -436,7 +436,6 @@ export async function runReplyAgent(
       routeThreadId: replyRouteThreadId,
       originatingLeafEntryId: turnAdoptionLifecycle?.originatingLeafEntryId,
       upstreamAbortSignal: opts?.abortSignal,
-      onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
     });
     if (replyOperationRunState) {
       replyOperationRunState.admission =

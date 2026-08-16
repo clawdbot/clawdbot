@@ -212,7 +212,6 @@ export function createDispatchReplyOperationCoordinator(params: {
       waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
       retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,
       onLifecycleInterrupt,
-      onReplyAdmissionWaitChange: params.replyOptions?.onReplyAdmissionWaitChange,
     });
     if (
       admission.status === "skipped" &&
@@ -261,7 +260,6 @@ export function createDispatchReplyOperationCoordinator(params: {
           waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
           retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,
           onLifecycleInterrupt,
-          onReplyAdmissionWaitChange: params.replyOptions?.onReplyAdmissionWaitChange,
         });
       }
     }
