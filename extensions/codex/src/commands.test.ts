@@ -10,7 +10,7 @@ import {
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 // Codex tests cover commands plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1398,6 +1398,15 @@ describe("codex command", () => {
 
   it("allows local Codex binding status forms in sandboxed sessions", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    await upsertSessionEntry({
+      storePath: resolveStorePath(undefined, { agentId: "main" }),
+      sessionKey: "sandboxed-session",
+      entry: {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        permissionMode: "full",
+      },
+    });
     await writeTestBinding(
       {
         kind: "session",
@@ -5999,7 +6008,12 @@ describe("codex command", () => {
       handleCodexCommand(createContext("fast on", sessionFile), { deps }),
     ).resolves.toEqual({ text: "Codex fast mode enabled." });
     await expect(
-      handleCodexCommand(createContext("permissions yolo", sessionFile), { deps }),
+      handleCodexCommand(
+        createContext("permissions yolo", sessionFile, {
+          sessionKey: "agent:main:session-1",
+        }),
+        { deps },
+      ),
     ).resolves.toEqual({ text: "Codex permissions set to full access." });
 
     expect(setCodexConversationModel).toHaveBeenCalledWith({
@@ -6016,9 +6030,13 @@ describe("codex command", () => {
       enabled: true,
     });
     expect(setCodexConversationPermissions).toHaveBeenCalledWith({
-      identity: { kind: "session", agentId: "main", sessionId: "session-1" },
-      bindingStore: testCodexAppServerBindingStore,
       mode: "yolo",
+      config: {},
+      session: {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+      },
     });
   });
 
@@ -6325,7 +6343,7 @@ describe("codex command", () => {
         "- Workspace: /repo",
         "- Model: gpt-5.4",
         "- Fast: on",
-        "- Permissions: full access",
+        "- Permissions: default",
         "- Active run: turn-1",
         "- Binding: binding-data-1",
       ].join("\n"),
