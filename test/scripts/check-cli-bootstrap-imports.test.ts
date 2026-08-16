@@ -129,12 +129,17 @@ describe("check-cli-bootstrap-imports", () => {
     ]);
   });
 
-  it("accepts one self-contained worker executable with builtin imports", () => {
+  it("accepts the self-contained worker deploy artifacts with builtin imports", () => {
     const root = makeTempRoot();
     writeFixture(
       root,
       "dist/worker/worker.mjs",
       'import fs from "node:fs";\nexport const worker = Boolean(fs);\n',
+    );
+    writeFixture(
+      root,
+      "dist/worker/workspace-rsync-receiver.mjs",
+      'import path from "node:path";\nexport const receiver = Boolean(path);\n',
     );
 
     expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([]);
@@ -153,6 +158,7 @@ describe("check-cli-bootstrap-imports", () => {
         'moduleNamespace.createRequire(import.meta.url)("@openclaw/fs-safe/temp");',
       ].join("\n"),
     );
+    writeFixture(root, "dist/worker/workspace-rsync-receiver.mjs", "export {};\n");
     writeFixture(root, "dist/worker/lazy.mjs", "export {};\n");
     writeFixture(
       root,

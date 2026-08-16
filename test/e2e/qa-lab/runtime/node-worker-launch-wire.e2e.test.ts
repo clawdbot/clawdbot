@@ -28,6 +28,10 @@ import { resolveNodeWorkerInstallation } from "../../../../src/node-host/node-wo
 import { NodeWorkerBundleInstaller } from "../../../../src/node-host/node-worker-bundle-installer.js";
 import { createNodeWorkerSupervisor } from "../../../../src/node-host/node-worker-supervisor.js";
 import { NodeWorkerWorkspaceRuntime } from "../../../../src/node-host/node-worker-workspace.js";
+import {
+  WORKER_BUNDLE_ENTRY_PATH,
+  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
+} from "../../../../src/shared/worker-bundle-hash.js";
 import { VERSION } from "../../../../src/version.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
@@ -134,11 +138,11 @@ async function createSourceWorkerInstallation(root: string): Promise<NodeWorkerI
   const packageRoot = path.join(root, "local-install");
   const repoRoot = process.cwd();
   await fs.mkdir(path.join(packageRoot, "dist", "worker"), { recursive: true });
-  await fs.copyFile(
-    path.join(repoRoot, "dist", "worker", "worker.mjs"),
-    path.join(packageRoot, "dist", "worker", "worker.mjs"),
-  );
-  await fs.chmod(path.join(packageRoot, "dist", "worker", "worker.mjs"), 0o700);
+  for (const artifactPath of [WORKER_BUNDLE_ENTRY_PATH, WORKER_BUNDLE_RSYNC_RECEIVER_PATH]) {
+    const target = path.join(packageRoot, "dist", "worker", artifactPath);
+    await fs.copyFile(path.join(repoRoot, "dist", "worker", artifactPath), target);
+    await fs.chmod(target, 0o700);
+  }
   return await resolveNodeWorkerInstallation({
     packageRoot,
     openclawVersion: VERSION,

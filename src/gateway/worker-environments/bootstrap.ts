@@ -15,6 +15,10 @@ import {
   type CommandOptions,
   type SpawnResult,
 } from "../../process/exec.js";
+import {
+  WORKER_BUNDLE_ENTRY_PATH,
+  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
+} from "../../shared/worker-bundle-hash.js";
 import { WORKER_BUNDLE_MANIFEST_VERSION, type WorkerInstallationArtifact } from "./bundle.js";
 import {
   prepareWorkerSsh,
@@ -42,6 +46,10 @@ const NPM_MISSING_MARKER = "OPENCLAW_WORKER_NPM_MISSING";
 const BOOTSTRAP_OUTPUT_TAG = "OPENCLAW_WORKER_BOOTSTRAP_V1";
 const BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const NPM_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
+const WORKER_BUNDLE_ARTIFACT_PATHS = [
+  WORKER_BUNDLE_ENTRY_PATH,
+  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
+] as const;
 
 // Scale transfer time for congested uplinks (~243 MB at <4 Mbps exceeds 10 minutes).
 // The base timeout remains the floor; the cap keeps transfer bounded and fail-closed.
@@ -140,6 +148,7 @@ const path = require("node:path");
 const root = process.argv[1];
 const expected = process.argv[2];
 const install = process.argv[3];
+const artifactPaths = ${JSON.stringify(WORKER_BUNDLE_ARTIFACT_PATHS)};
 const entries = [];
 function fail(message) {
   throw new Error(message);
@@ -170,7 +179,7 @@ function addFile(relative) {
     fail("unsafe worker file: " + relative);
   }
   const contents = fs.readFileSync(absolute);
-  const mode = relative === "worker.mjs" || (stats.mode & 0o111) !== 0 ? 0o700 : 0o600;
+  const mode = artifactPaths.includes(relative) || (stats.mode & 0o111) !== 0 ? 0o700 : 0o600;
   fs.chmodSync(absolute, mode);
   entries.push({
     path: relative,
@@ -182,12 +191,13 @@ function addFile(relative) {
 try {
   assertRoot();
   if (install === "npm" || install === "bundle") {
+    const allowedPaths = new Set([...artifactPaths, "bootstrap-receipt.json"]);
     for (const name of fs.readdirSync(root)) {
-      if (name !== "worker.mjs" && name !== "bootstrap-receipt.json") {
+      if (!allowedPaths.has(name)) {
         fail("unexpected worker bundle path: " + name);
       }
     }
-    addFile("worker.mjs");
+    for (const artifactPath of artifactPaths) addFile(artifactPath);
   } else {
     fail("invalid worker install channel");
   }
@@ -448,7 +458,9 @@ case "$install" in
       printf '%s\n' 'worker npm package integrity mismatch' >&2
       exit 2
     fi
-    tar -xzf "$package_archive" -C "$staging" --strip-components=3 package/dist/worker/worker.mjs
+    tar -xzf "$package_archive" -C "$staging" --strip-components=3 \
+      package/dist/worker/${WORKER_BUNDLE_ENTRY_PATH} \
+      package/dist/worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}
     rm -f "$npm_pack_json" "$package_archive"
     ;;
   *)
