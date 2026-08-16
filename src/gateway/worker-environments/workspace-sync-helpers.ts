@@ -40,6 +40,7 @@ const remoteWorkspaceManifestEnvelopeSchema = z
         contentHashCount: z.number().finite().nonnegative(),
         contentHashDurationMs: z.number().finite().nonnegative(),
         memoHitCount: z.number().finite().nonnegative(),
+        memoTruncatedCount: z.number().finite().nonnegative(),
         totalDurationMs: z.number().finite().nonnegative(),
       })
       .strict(),
