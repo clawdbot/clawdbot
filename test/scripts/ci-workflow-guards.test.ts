@@ -7769,12 +7769,16 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(runProfileStep.run).toContain("--concurrency 3");
     expect(runProfileStep.run).toContain("--fast");
+    expect(runProfileStep.run).toContain('qa_output_dir=".artifacts/qa-e2e/');
     expect(runProfileStep.run).toContain(
-      'output_dir="${GITHUB_WORKSPACE}/selected/.artifacts/qa-e2e/',
+      'published_output_dir="${GITHUB_WORKSPACE}/selected/${qa_output_dir}"',
     );
-    expect(runProfileStep.run).toContain('mkdir -p "$output_dir"');
-    expect(runProfileStep.run.indexOf('mkdir -p "$output_dir"')).toBeLessThan(
-      runProfileStep.run.indexOf('echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"'),
+    expect(runProfileStep.run).toContain('mkdir -p "$qa_output_dir"');
+    expect(runProfileStep.run).toContain('echo "output_dir=${published_output_dir}"');
+    expect(runProfileStep.run).toContain('--output-dir "$qa_output_dir"');
+    expect(runProfileStep.run).toContain('OUTPUT_DIR="$published_output_dir"');
+    expect(runProfileStep.run.indexOf('mkdir -p "$qa_output_dir"')).toBeLessThan(
+      runProfileStep.run.indexOf('echo "output_dir=${published_output_dir}"'),
     );
     expect(runProfileStep.run).toContain(
       "LC_ALL=C timeout --verbose --signal=TERM --kill-after=30s 110m",
