@@ -15,6 +15,9 @@ const providerMocks = vi.hoisted(() => ({
   resolveRuntimePluginDiscoveryProviders: vi.fn(),
   runProviderStaticCatalog: vi.fn(),
 }));
+const staticIdMocks = vi.hoisted(() => ({
+  createStaticModelIdMatcher: vi.fn(),
+}));
 
 vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: manifestMocks.getCurrentPluginMetadataSnapshot,
@@ -48,8 +51,20 @@ vi.mock("../../plugins/provider-discovery.js", async (importOriginal) => ({
   runProviderStaticCatalog: providerMocks.runProviderStaticCatalog,
 }));
 
+vi.mock("./model.static-id.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./model.static-id.js")>();
+  return {
+    ...actual,
+    createStaticModelIdMatcher: (...args: Parameters<typeof actual.createStaticModelIdMatcher>) => {
+      staticIdMocks.createStaticModelIdMatcher(...args);
+      return actual.createStaticModelIdMatcher(...args);
+    },
+  };
+});
+
 import {
   bundledStaticCatalogProviderUsesRuntimeAugment,
+  createBundledProviderStaticCatalogContextResolver,
   createBundledStaticCatalogModelResolver,
   loadBundledProviderStaticCatalogContextModels,
   resolveBundledStaticCatalogModel,
@@ -83,6 +98,7 @@ function createMistralManifestPlugin() {
 function setCurrentManifestPlugins(plugins: unknown[]) {
   const snapshot = { plugins, manifestRegistry: { plugins } };
   manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
+  return snapshot as unknown as PluginMetadataSnapshot;
 }
 
 function setManifestPlugins(plugins: unknown[]) {
@@ -114,6 +130,7 @@ beforeEach(() => {
   for (const mock of Object.values(providerMocks)) {
     mock.mockReset();
   }
+  staticIdMocks.createStaticModelIdMatcher.mockReset();
   manifestMocks.listOpenClawPluginManifestMetadata.mockReturnValue([]);
   manifestMocks.loadPluginManifestRegistryCore.mockReturnValue({ plugins: [] });
   providerMocks.resolveActivatableProviderOwnerPluginIds.mockImplementation(
@@ -173,6 +190,41 @@ describe("bundled static model catalog snapshot cache", () => {
     expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-next" })?.name).toBe(
       "Mistral Medium Next",
     );
+    expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
+    expect(manifestMocks.loadPluginManifest).not.toHaveBeenCalled();
+  });
+
+  it("binds current snapshot model-id policies to the matching catalog generation", () => {
+    const cfg = {};
+    const plugin = {
+      id: "snapshot-only",
+      origin: "bundled",
+      providers: ["snapshot-only"],
+      modelCatalog: {
+        providers: {
+          "snapshot-only": {
+            models: [{ id: "snapshot-model-v1", name: "Snapshot Model V1" }],
+          },
+        },
+        discovery: { "snapshot-only": "static" },
+      },
+      modelIdNormalization: {
+        providers: {
+          "snapshot-only": {
+            aliases: { current: "snapshot-model-v1" },
+          },
+        },
+      },
+    };
+    const metadataSnapshot = setCurrentManifestPlugins([plugin]);
+
+    const resolveModel = createBundledStaticCatalogModelResolver({ cfg });
+
+    expect(resolveModel({ provider: "snapshot-only", modelId: "current" })?.id).toBe(
+      "snapshot-model-v1",
+    );
+    const matcherOptions = staticIdMocks.createStaticModelIdMatcher.mock.calls[0]?.[0];
+    expect(matcherOptions?.manifestPlugins).toBe(metadataSnapshot.plugins);
     expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
     expect(manifestMocks.loadPluginManifest).not.toHaveBeenCalled();
   });
@@ -341,5 +393,35 @@ describe("bundled static model catalog snapshot cache", () => {
       expect.objectContaining({ provider: "google", contextWindow: 1_048_576 }),
     ]);
     expect(manifestMocks.loadPluginManifestRegistryCore).not.toHaveBeenCalled();
+  });
+
+  it("pins provider context resolution to the current metadata snapshot", async () => {
+    const cfg = { plugins: { entries: { google: { enabled: true } } } };
+    const provider = { id: "google", pluginId: "google", label: "Google", auth: [] };
+    const metadataSnapshot = setCurrentManifestPlugins([
+      {
+        id: "google",
+        origin: "bundled",
+        providerDiscoverySource: "/fixtures/google/provider-discovery.ts",
+      },
+    ]);
+    providerMocks.resolveOwningPluginIdsForProviderRef.mockReturnValue(["google"]);
+    providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
+    providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
+    providerMocks.normalizePluginDiscoveryResult.mockReturnValue({
+      google: {
+        models: [{ id: "gemini-3.1-pro-preview", contextWindow: 1_048_576 }],
+      },
+    });
+
+    const resolveContext = createBundledProviderStaticCatalogContextResolver({ cfg });
+
+    await expect(
+      resolveContext({ provider: "google", modelId: "gemini-3.1-pro-preview" }),
+    ).resolves.toEqual({ contextWindow: 1_048_576 });
+    const ownerLookup = providerMocks.resolveOwningPluginIdsForProviderRef.mock.calls[0]?.[0];
+    const discoveryLookup = providerMocks.resolveRuntimePluginDiscoveryProviders.mock.calls[0]?.[0];
+    expect(ownerLookup?.metadataSnapshot).toBe(metadataSnapshot);
+    expect(discoveryLookup?.pluginMetadataSnapshot).toBe(metadataSnapshot);
   });
 });

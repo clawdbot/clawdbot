@@ -146,6 +146,7 @@ type BundledStaticCatalogParams = {
 };
 
 type BundledStaticCatalogState = {
+  matchesStaticModelId: StaticModelIdMatcher;
   plugins: StaticCatalogPlugin[];
   plans: Map<string, ReturnType<typeof planEffectiveModelCatalogRows>>;
 };
@@ -223,6 +224,9 @@ function resolveSnapshotBundledStaticCatalogState(
     return cached;
   }
   const state = {
+    matchesStaticModelId: createStaticModelIdMatcher({
+      manifestPlugins: metadataSnapshot.plugins,
+    }),
     plugins: listBundledStaticCatalogPlugins(params, metadataSnapshot),
     plans: new Map<string, ReturnType<typeof planEffectiveModelCatalogRows>>(),
   };
@@ -307,9 +311,6 @@ export function createBundledStaticCatalogModelResolver(params?: {
     ...(params?.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
     workspaceDir: params?.workspaceDir,
   };
-  const matchesStaticModelId = params?.metadataSnapshot
-    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot.plugins })
-    : staticModelIdMatches;
   let standaloneState: BundledStaticCatalogState | undefined;
   return (lookup) => {
     const provider = normalizeProviderId(lookup.provider);
@@ -320,6 +321,7 @@ export function createBundledStaticCatalogModelResolver(params?: {
     const state = metadataSnapshot
       ? resolveSnapshotBundledStaticCatalogState(catalogParams, metadataSnapshot)
       : (standaloneState ??= {
+          matchesStaticModelId: staticModelIdMatches,
           plugins: listBundledStaticCatalogPlugins(catalogParams),
           plans: new Map(),
         });
@@ -350,7 +352,7 @@ export function createBundledStaticCatalogModelResolver(params?: {
           row: candidate,
           provider,
           modelId: lookup.modelId,
-          matchesStaticModelId,
+          matchesStaticModelId: state.matchesStaticModelId,
         }),
       );
       if (row) {
@@ -645,8 +647,25 @@ function createScopedBundledProviderStaticCatalogModelResolver(
 function createBundledProviderStaticCatalogModelResolver(
   params: BundledProviderStaticCatalogResolverParams = {},
 ): (lookup: BundledStaticCatalogLookup) => Promise<ProviderRuntimeModel | undefined> {
-  const resolveModel = createScopedBundledProviderStaticCatalogModelResolver(params);
+  const { resolverParams } = prepareBundledProviderStaticCatalogResolver(params);
+  const resolveModel = createScopedBundledProviderStaticCatalogModelResolver(resolverParams);
   return async (lookup) => await resolveModel(lookup);
+}
+
+function prepareBundledProviderStaticCatalogResolver(
+  params: BundledProviderStaticCatalogResolverParams,
+) {
+  const env = params.env ?? process.env;
+  const metadataSnapshot = resolveBundledStaticCatalogMetadataSnapshot({
+    cfg: params.cfg,
+    env,
+    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
+    workspaceDir: params.workspaceDir,
+  });
+  return {
+    env,
+    resolverParams: metadataSnapshot ? { ...params, metadataSnapshot } : params,
+  };
 }
 
 function resolveOwnedNestedProviderLookup(params: {
@@ -695,13 +714,13 @@ function resolveOwnedNestedProviderLookup(params: {
 export function createBundledProviderStaticCatalogContextResolver(
   params: BundledProviderStaticCatalogResolverParams = {},
 ): (lookup: BundledStaticCatalogLookup) => Promise<BundledStaticCatalogContext | undefined> {
-  const env = params.env ?? process.env;
-  const resolveModel = createScopedBundledProviderStaticCatalogModelResolver(params);
+  const { env, resolverParams } = prepareBundledProviderStaticCatalogResolver(params);
+  const resolveModel = createScopedBundledProviderStaticCatalogModelResolver(resolverParams);
   return async (lookup) => {
     const exactModel = await resolveModel(lookup);
     const nested = exactModel
       ? undefined
-      : resolveOwnedNestedProviderLookup({ lookup, resolverParams: params, env });
+      : resolveOwnedNestedProviderLookup({ lookup, resolverParams, env });
     const model =
       exactModel ?? (nested ? await resolveModel(nested.lookup, nested.pluginIds) : undefined);
     if (!model) {

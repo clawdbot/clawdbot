@@ -1,6 +1,7 @@
 // Status summary tests cover aggregate status text for channels, sessions, tasks, and audit findings.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
@@ -10,6 +11,14 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
+  createManifestModelResolver: vi.fn(
+    (_options?: { cfg?: OpenClawConfig; includeRuntimeDiscovery?: boolean }) =>
+      vi.fn(({ provider, modelId }) =>
+        provider === "openai" && modelId === "gpt-5.5"
+          ? { contextWindow: 1_000_000, contextTokens: 272_000 }
+          : undefined,
+      ),
+  ),
   resolveProviderStaticModel: vi.fn(),
   listSessionEntriesCore: vi.fn<
     (scope?: { agentId?: string; storePath?: string }) => Array<{
@@ -108,13 +117,7 @@ vi.mock("../agents/defaults.js", () => ({
 }));
 
 vi.mock("../agents/embedded-agent-runner/model.static-catalog.js", () => ({
-  createBundledStaticCatalogModelResolver: vi.fn(() =>
-    vi.fn(({ provider, modelId }) =>
-      provider === "openai" && modelId === "gpt-5.5"
-        ? { contextWindow: 1_000_000, contextTokens: 272_000 }
-        : undefined,
-    ),
-  ),
+  createBundledStaticCatalogModelResolver: statusSummaryMocks.createManifestModelResolver,
   createBundledProviderStaticCatalogModelResolver: vi.fn(
     () => statusSummaryMocks.resolveProviderStaticModel,
   ),
@@ -291,6 +294,16 @@ describe("getStatusSummary", () => {
     expect(summary.channelSummary).toEqual(["ok"]);
     expect(summary.tasks.active).toBe(0);
     expect(summary.taskAudit.warnings).toBe(1);
+  });
+
+  it("binds the manifest model resolver to the status request config", async () => {
+    const config = { plugins: { load: { paths: ["/tmp/status-plugin-root"] } } };
+
+    await getStatusSummary({ config, includeChannelSummary: false });
+
+    const resolverOptions = statusSummaryMocks.createManifestModelResolver.mock.calls.at(-1)?.[0];
+    expect(resolverOptions?.cfg).toBe(config);
+    expect(resolverOptions?.includeRuntimeDiscovery).toBe(true);
   });
 
   // waitingForRoute must follow the session the runner actually reads

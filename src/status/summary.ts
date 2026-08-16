@@ -62,10 +62,7 @@ const taskRegistryMaintenanceModuleLoader = createLazyImportLoader(
 const staticModelCatalogResolverLoader = createLazyImportLoader(async () => {
   const modelCatalog = await import("../agents/embedded-agent-runner/model.static-catalog.js");
   return {
-    resolveManifestModel: modelCatalog.createBundledStaticCatalogModelResolver({
-      // Runtime-discovery manifest rows still provide a cold-cache fallback.
-      includeRuntimeDiscovery: true,
-    }),
+    createManifestModelResolver: modelCatalog.createBundledStaticCatalogModelResolver,
     createProviderContextResolver: modelCatalog.createBundledProviderStaticCatalogContextResolver,
   };
 });
@@ -284,8 +281,13 @@ export async function getStatusSummary(
     options.sourceConfig !== undefined
       ? options.sourceConfig
       : projectConfigOntoRuntimeSourceSnapshot(cfg);
-  const { resolveManifestModel, createProviderContextResolver } =
+  const { createManifestModelResolver, createProviderContextResolver } =
     await loadStaticModelCatalogResolvers();
+  const resolveManifestModel = createManifestModelResolver({
+    cfg,
+    // Runtime-discovery manifest rows still provide a cold-cache fallback.
+    includeRuntimeDiscovery: true,
+  });
   const resolveProviderContext = createProviderContextResolver({ cfg });
   const modelContextCache = new Map<
     string,
