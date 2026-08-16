@@ -267,9 +267,11 @@ export function retireSteeredChipsForRequestRun(
   for (const item of landed) {
     // A started active turn can still exist only as an optimistic queue row.
     // Promote that target before its landed steer so stable transcript history
-    // cannot render the newer steer ahead of the original prompt.
+    // cannot render the newer steer ahead of the original prompt. Older persisted
+    // chips used pendingRunId as both identities, so retain it as the migration fallback.
+    const targetRunId = item.steerTargetRunId?.trim() || item.pendingRunId;
     const target = state.chatQueue.find(
-      (candidate) => candidate.id !== item.id && candidate.sendRunId === item.pendingRunId,
+      (candidate) => candidate.id !== item.id && candidate.sendRunId === targetRunId,
     );
     if (target) {
       preserveQueuedUserTurn(state, target);
@@ -426,6 +428,7 @@ export async function sendQueuedChatMessageWithQueueMode(
     sendRunId: claimed.sendRunId,
     sessionKey: claimed.sessionKey,
     agentId: claimed.agentId,
+    ...(claimed.steerTargetRunId ? { steerTargetRunId: claimed.steerTargetRunId } : {}),
   };
   const steeringChip = buildInflightSteerChip(pendingItem, claimed.sendRunId, activeRunId);
   const pendingIndicator = isSteer
