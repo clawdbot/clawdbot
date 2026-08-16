@@ -1087,8 +1087,8 @@ export async function handleOpenAiHttpRequest(
         return true;
       }
 
-      const meta = (result as { meta?: { error?: unknown } } | null)?.meta;
-      if (meta?.error) {
+      const meta = (result as { meta?: { error?: unknown; stopReason?: unknown } } | null)?.meta;
+      if (meta?.error || meta?.stopReason === "error") {
         throw new Error("agent run failed");
       }
       const usage = resolveChatCompletionUsage(result);

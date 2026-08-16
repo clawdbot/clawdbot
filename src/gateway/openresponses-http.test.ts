@@ -1827,6 +1827,17 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(body).not.toContain(privateDetail);
   });
 
+  it("rejects resolved error stop reasons", async () => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "Command may have changed state", isError: true }],
+      meta: { stopReason: "error" },
+    } as never);
+
+    const res = await postResponses(enabledPort, { model: "openclaw", input: "hi" });
+    expect(res.status).toBe(500);
+  });
+
   it.each(
     STREAM_FAILURE_CASES.flatMap((failure) =>
       [false, true].map((emitErrorLifecycle) => ({

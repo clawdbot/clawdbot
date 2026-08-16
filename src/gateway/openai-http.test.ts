@@ -2017,6 +2017,20 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(body).not.toContain(privateDetail);
   });
 
+  it("rejects resolved error stop reasons", async () => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "Command may have changed state", isError: true }],
+      meta: { stopReason: "error" },
+    } as never);
+
+    const res = await postChatCompletions(enabledPort, {
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+    expect(res.status).toBe(500);
+  });
+
   it("forwards response_format into streamParams", async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>) => {
