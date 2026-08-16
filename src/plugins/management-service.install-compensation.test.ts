@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   resolveDefaultPluginNpmDir,
   resolvePluginNpmGenerationProjectDir,
   resolvePluginNpmProjectDir,
 } from "./install-paths.js";
+
+const compensationTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const mocks = vi.hoisted(() => ({
   applyUninstall: vi.fn(),
@@ -114,7 +116,7 @@ describe("managed plugin install compensation", () => {
   ])(
     "removes a planner-validated $name npm project after persistence conflicts",
     async (fixture) => {
-      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-managed-npm-conflict-"));
+      const home = compensationTempDirs.make("openclaw-managed-npm-conflict-");
       const env = { HOME: home };
       const packageName = "@openclaw/demo";
       const npmDir = resolveDefaultPluginNpmDir(env);
@@ -129,44 +131,40 @@ describe("managed plugin install compensation", () => {
       const packArchive = path.join(npmRoot, "_openclaw-pack-archives", "demo.tgz");
       const conflict = new Error("config changed during npm plugin install");
 
-      try {
-        await fs.mkdir(targetDir, { recursive: true });
-        await fs.mkdir(path.dirname(packArchive), { recursive: true });
-        await fs.writeFile(packArchive, "packed plugin");
-        mocks.npmInstall.mockResolvedValue({
-          ok: true,
-          pluginId: "demo",
-          targetDir,
-          extensions: ["index.js"],
-          manifestName: packageName,
-        });
-        mocks.persistInstall.mockRejectedValue(conflict);
-        mocks.planUninstall.mockImplementation((params) =>
-          actualUninstall.planPluginUninstall(
-            params as Parameters<typeof actualUninstall.planPluginUninstall>[0],
-          ),
-        );
-        mocks.applyUninstall.mockImplementation(async (removal: { target: string }) => {
-          await fs.rm(removal.target, { recursive: true, force: true });
-          return { directoryRemoved: true, warnings: [] };
-        });
+      await fs.mkdir(targetDir, { recursive: true });
+      await fs.mkdir(path.dirname(packArchive), { recursive: true });
+      await fs.writeFile(packArchive, "packed plugin");
+      mocks.npmInstall.mockResolvedValue({
+        ok: true,
+        pluginId: "demo",
+        targetDir,
+        extensions: ["index.js"],
+        manifestName: packageName,
+      });
+      mocks.persistInstall.mockRejectedValue(conflict);
+      mocks.planUninstall.mockImplementation((params) =>
+        actualUninstall.planPluginUninstall(
+          params as Parameters<typeof actualUninstall.planPluginUninstall>[0],
+        ),
+      );
+      mocks.applyUninstall.mockImplementation(async (removal: { target: string }) => {
+        await fs.rm(removal.target, { recursive: true, force: true });
+        return { directoryRemoved: true, warnings: [] };
+      });
 
-        await expect(
-          installManagedPluginSource({
-            request: { source: "npm", spec: packageName, mode: "install" },
-            snapshot: installPersistSnapshot(),
-            env,
-          }),
-        ).rejects.toBe(conflict);
+      await expect(
+        installManagedPluginSource({
+          request: { source: "npm", spec: packageName, mode: "install" },
+          snapshot: installPersistSnapshot(),
+          env,
+        }),
+      ).rejects.toBe(conflict);
 
-        expect(mocks.applyUninstall).toHaveBeenCalledWith({
-          target: npmRoot,
-          cleanup: { kind: "npm", npmRoot, packageName },
-        });
-        await expect(fs.access(npmRoot)).rejects.toMatchObject({ code: "ENOENT" });
-      } finally {
-        await fs.rm(home, { recursive: true, force: true });
-      }
+      expect(mocks.applyUninstall).toHaveBeenCalledWith({
+        target: npmRoot,
+        cleanup: { kind: "npm", npmRoot, packageName },
+      });
+      await expect(fs.access(npmRoot)).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
 

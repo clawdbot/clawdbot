@@ -1,5 +1,6 @@
 // Resolves plugin install paths for local and package sources.
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import {
   resolveSafeInstallDir,
@@ -140,8 +141,19 @@ export function isPluginNpmProjectDir(params: {
   projectDir: string;
   npmDir?: string;
 }): boolean {
+  const npmDir = path.resolve(params.npmDir ?? resolveDefaultPluginNpmDir());
   const projectDir = path.resolve(params.projectDir);
-  if (path.dirname(projectDir) !== path.resolve(resolvePluginNpmProjectsDir(params.npmDir))) {
+  if (path.dirname(projectDir) !== path.resolve(resolvePluginNpmProjectsDir(npmDir))) {
+    return false;
+  }
+  try {
+    if (
+      path.relative(npmDir, projectDir) !==
+      path.relative(realpathSync(npmDir), realpathSync(projectDir))
+    ) {
+      return false;
+    }
+  } catch {
     return false;
   }
   if (projectDir === path.resolve(resolvePluginNpmProjectDir(params))) {

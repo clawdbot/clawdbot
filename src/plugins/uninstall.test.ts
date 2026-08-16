@@ -1416,6 +1416,101 @@ describe("uninstallPlugin", () => {
     await expect(fs.readFile(siblingFile, "utf8")).resolves.toBe("preserve me");
   });
 
+  it("does not follow a substituted npm projects directory", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const extensionsDir = path.join(stateDir, "extensions");
+    const npmDir = path.join(stateDir, "npm");
+    const outsideProjectsDir = path.join(tempDir, "outside-projects");
+    await fs.mkdir(npmDir, { recursive: true });
+    await fs.mkdir(outsideProjectsDir, { recursive: true });
+    await fs.symlink(outsideProjectsDir, path.join(npmDir, "projects"), "dir");
+    const projectRoot = resolvePluginNpmProjectDir({
+      npmDir,
+      packageName: "@openclaw/kitchen-sink",
+    });
+    const pluginDir = path.join(projectRoot, "node_modules", "@openclaw", "kitchen-sink");
+    const sentinel = path.join(projectRoot, "must-remain.txt");
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.writeFile(sentinel, "preserve me");
+
+    const result = await uninstallPlugin({
+      config: createPluginConfig({
+        entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
+        installs: {
+          "openclaw-kitchen-sink-fixture": {
+            source: "npm",
+            spec: "@openclaw/kitchen-sink@1.0.0",
+            installPath: pluginDir,
+          },
+        },
+      }),
+      pluginId: "openclaw-kitchen-sink-fixture",
+      deleteFiles: true,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    expect(result.warnings).toEqual([]);
+    expect(result.actions.directory).toBe(false);
+    await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("preserve me");
+  });
+
+  it("revalidates npm project ownership after the removal plan is created", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const extensionsDir = path.join(stateDir, "extensions");
+    const npmDir = path.join(stateDir, "npm");
+    const projectsDir = path.join(npmDir, "projects");
+    const projectRoot = resolvePluginNpmProjectDir({
+      npmDir,
+      packageName: "@openclaw/kitchen-sink",
+    });
+    const pluginDir = path.join(projectRoot, "node_modules", "@openclaw", "kitchen-sink");
+    await fs.mkdir(pluginDir, { recursive: true });
+    const plan = planPluginUninstall(
+      recordPluginPackageUninstallPlan(
+        {
+          config: createPluginConfig({
+            installs: {
+              "openclaw-kitchen-sink-fixture": {
+                source: "npm",
+                spec: "@openclaw/kitchen-sink@1.0.0",
+                installPath: pluginDir,
+              },
+            },
+          }),
+          pluginId: "openclaw-kitchen-sink-fixture",
+          deleteFiles: true,
+          extensionsDir,
+        },
+        { runtimePluginIds: ["openclaw-kitchen-sink-fixture"] },
+      ),
+    );
+    expect(plan.ok).toBe(true);
+    if (!plan.ok || !plan.directoryRemoval) {
+      throw new Error(plan.ok ? "missing removal" : plan.error);
+    }
+    expect(plan.directoryRemoval.target).toBe(projectRoot);
+
+    const outsideProjectsDir = path.join(tempDir, "outside-projects-race");
+    const outsideProjectRoot = path.join(outsideProjectsDir, path.basename(projectRoot));
+    const sentinel = path.join(outsideProjectRoot, "must-remain.txt");
+    await fs.mkdir(outsideProjectRoot, { recursive: true });
+    await fs.writeFile(sentinel, "preserve me");
+    await fs.rename(projectsDir, `${projectsDir}-original`);
+    await fs.symlink(outsideProjectsDir, projectsDir, "dir");
+
+    const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
+
+    expect(applied.directoryRemoved).toBe(false);
+    expect(applied.warnings).toEqual([
+      `Refused to remove npm project without canonical package ownership: ${projectRoot}`,
+    ]);
+    await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("preserve me");
+  });
+
   it("repairs remaining npm plugin openclaw peer links after npm uninstall prunes them", async () => {
     const stateDir = path.join(tempDir, "state");
     const npmRoot = path.join(stateDir, "npm");

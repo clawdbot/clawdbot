@@ -216,6 +216,10 @@ function resolveNpmManagedProjectInstall(params: {
     return null;
   }
   const npmRoot = path.join(params.projectsDir, segments[0] ?? "");
+  const npmDir = path.dirname(params.projectsDir);
+  if (!isUninstallPathInsideOrEqual(npmDir, params.installPath)) {
+    return null;
+  }
   const nodeModulesRoot = path.join(npmRoot, "node_modules");
   const packageName = resolveNpmPackageNameFromInstallPath({
     installPath: params.installPath,
@@ -231,7 +235,7 @@ function resolveNpmManagedProjectInstall(params: {
   const ownsProjectRoot = isPluginNpmProjectDir({
     packageName,
     projectDir: npmRoot,
-    npmDir: path.dirname(params.projectsDir),
+    npmDir,
   });
   return { installPath: ownsProjectRoot ? npmRoot : params.installPath, npmRoot, packageName };
 }
@@ -442,6 +446,22 @@ export function pluginUninstallTargetExists(target: string): boolean {
   }
 }
 
+function isOwnedNpmProjectRemoval(removal: PluginUninstallDirectoryRemoval): boolean {
+  const cleanup = removal.cleanup;
+  if (cleanup?.kind !== "npm" || path.resolve(removal.target) !== path.resolve(cleanup.npmRoot)) {
+    return true;
+  }
+  const projectsDir = path.dirname(cleanup.npmRoot);
+  return (
+    path.basename(projectsDir) === "projects" &&
+    isPluginNpmProjectDir({
+      npmDir: path.dirname(projectsDir),
+      packageName: cleanup.packageName,
+      projectDir: cleanup.npmRoot,
+    })
+  );
+}
+
 export async function applyPluginUninstallDirectoryRemoval(
   removal: PluginUninstallDirectoryRemoval | null,
 ): Promise<{ directoryRemoved: boolean; warnings: string[] }> {
@@ -465,6 +485,11 @@ export async function applyPluginUninstallDirectoryRemoval(
 
   if (!existed && removal.cleanup?.kind === "npm" && !npmCleanupManifestExists) {
     return { directoryRemoved: false, warnings };
+  }
+
+  const ownershipWarning = `Refused to remove npm project without canonical package ownership: ${removal.target}`;
+  if (!isOwnedNpmProjectRemoval(removal)) {
+    return { directoryRemoved: false, warnings: [ownershipWarning] };
   }
 
   if (removal.cleanup?.kind === "npm" && npmCleanupManifestExists) {
@@ -526,6 +551,9 @@ export async function applyPluginUninstallDirectoryRemoval(
         `Failed to repair managed npm peer links after uninstalling ${removal.cleanup.packageName}: ${formatErrorMessage(error)}`,
       );
     }
+  }
+  if (!isOwnedNpmProjectRemoval(removal) && pluginUninstallTargetExists(removal.target)) {
+    return { directoryRemoved: false, warnings: [...warnings, ownershipWarning] };
   }
   try {
     await fs.rm(removal.target, { recursive: true, force: true });
