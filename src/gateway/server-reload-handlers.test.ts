@@ -266,7 +266,13 @@ const hoisted = vi.hoisted(() => ({
     (_gateId: symbol | undefined, _error: unknown) => {},
   ),
   refreshPreparedModelRuntimeSnapshots: vi.fn(
-    async (_cfg: OpenClawConfig, _options?: { catalogMode?: "live" | "static" }) => {},
+    async (
+      _cfg: OpenClawConfig,
+      _options?: {
+        catalogMode?: "live" | "static";
+        catalogModeForAgent?: (agentId: string | undefined) => "live" | "static";
+      },
+    ) => {},
   ),
   refreshContextWindowCache: vi.fn(async (_cfg: OpenClawConfig) => {}),
   clearCurrentProviderAuthState: vi.fn(() => {}),
@@ -378,7 +384,10 @@ vi.mock("../agents/prepared-model-runtime.js", () => ({
     hoisted.rejectPendingPreparedModelRuntimeReplacement(gateId, error),
   refreshPreparedModelRuntimeSnapshots: (
     cfg: OpenClawConfig,
-    options?: { catalogMode?: "live" | "static" },
+    options?: {
+      catalogMode?: "live" | "static";
+      catalogModeForAgent?: (agentId: string | undefined) => "live" | "static";
+    },
   ) => {
     hoisted.reloadEvents.push("refresh-prepared-model-runtime");
     return hoisted.refreshPreparedModelRuntimeSnapshots(cfg, options);
@@ -1203,6 +1212,36 @@ describe("gateway hot reload model state", () => {
     expect(channels.stop).not.toHaveBeenCalled();
     expect(hoisted.disposeAllSessionMcpRuntimes).not.toHaveBeenCalled();
     expect(logReload.info).toHaveBeenCalledWith(`config hot reload applied (${changedPath})`);
+  });
+
+  it("uses per-agent catalog modes after a wildcard config hot reload", async () => {
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const channels = { start: vi.fn(async () => {}), stop: vi.fn(async () => {}) };
+    const { applyHotReload } = createReloadHandlersForTest(logReload, channels);
+    const nextConfig = {
+      agents: {
+        defaults: { models: { "openai/*": {} } },
+        list: [
+          { id: "main", modelPolicy: { allow: ["openai/*"] } },
+          { id: "research", modelPolicy: { allow: ["openai/gpt-5.6"] } },
+          { id: "legacy" },
+        ],
+      },
+    } satisfies OpenClawConfig;
+
+    await applyHotReload(
+      buildGatewayReloadPlan(["agents.defaults.models", "agents.list"]),
+      nextConfig,
+    );
+
+    const options = hoisted.refreshPreparedModelRuntimeSnapshots.mock.calls.at(-1)?.[1];
+    expect(options).toEqual({
+      allowGatewaySubagentBinding: true,
+      catalogModeForAgent: expect.any(Function),
+    });
+    expect(options?.catalogModeForAgent?.("main")).toBe("live");
+    expect(options?.catalogModeForAgent?.("research")).toBe("static");
+    expect(options?.catalogModeForAgent?.("legacy")).toBe("static");
   });
 
   it("stops old cron exit watchers and reconciles rebuilt ones after cron restart", async () => {

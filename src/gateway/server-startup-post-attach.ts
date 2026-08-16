@@ -35,6 +35,7 @@ import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
+import { resolveGatewayModelRuntimeCatalogModeOptions } from "./server-model-catalog-mode.js";
 import type { GatewayResidentRegistry } from "./server-resident-registry.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
@@ -65,10 +66,6 @@ const loadMainSessionRestartRecoveryMarkingModule = createLazyRuntimeModule(
 );
 
 const loadAgentDefaultsModule = createLazyRuntimeModule(() => import("../agents/defaults.js"));
-
-const loadModelSelectionSharedModule = createLazyRuntimeModule(
-  () => import("../agents/model-selection-shared.js"),
-);
 
 const loadAgentModelSelectionModule = createLazyRuntimeModule(
   () => import("../agents/model-selection.js"),
@@ -510,31 +507,11 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
   log: { warn: (msg: string) => void };
   startupTrace?: GatewayStartupTrace;
 }): Promise<void> {
-  const [
-    { refreshPreparedModelRuntimeSnapshots },
-    { modelCatalogBrowseRequiresFullDiscovery },
-    { listAgentIds },
-  ] = await Promise.all([
-    import("../agents/prepared-model-runtime.js"),
-    import("../agents/model-catalog-browse.js"),
-    import("../agents/agent-scope.js"),
-  ]);
-  const catalogModeForAgent = (agentId: string | undefined) =>
-    modelCatalogBrowseRequiresFullDiscovery({
-      cfg: params.cfg,
-      agentId,
-      view: "default",
-    })
-      ? "live"
-      : "static";
-  const catalogModes = new Set(listAgentIds(params.cfg).map(catalogModeForAgent));
-  const catalogModeOptions =
-    catalogModes.size <= 1
-      ? { catalogMode: [...catalogModes][0] ?? "static" }
-      : { catalogModeForAgent };
+  const { refreshPreparedModelRuntimeSnapshots } =
+    await import("../agents/prepared-model-runtime.js");
   await refreshPreparedModelRuntimeSnapshots(params.cfg, {
     gatewayLifecycle: true,
-    ...catalogModeOptions,
+    ...resolveGatewayModelRuntimeCatalogModeOptions(params.cfg),
     allowGatewaySubagentBinding: true,
     ...(params.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
