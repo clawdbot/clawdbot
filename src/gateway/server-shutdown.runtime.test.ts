@@ -5,6 +5,8 @@ const state = vi.hoisted(() => ({
   close: vi.fn(),
   flushSessionChanges: vi.fn(),
   stopPlugins: vi.fn(),
+  clearPluginRegistry: vi.fn(),
+  preparePluginRegistryShutdown: vi.fn(async () => undefined),
 }));
 
 vi.mock("./server-close.runtime.js", () => {
@@ -55,6 +57,13 @@ vi.mock("../agents/provider-transport-dispatcher-pool.js", () => {
   state.loaded.push("provider-transports");
   return { closeProviderTransportDispatcherPool: vi.fn() };
 });
+vi.mock("../plugins/runtime.js", () => {
+  state.loaded.push("plugin-runtime");
+  return {
+    clearActivePluginRegistry: state.clearPluginRegistry,
+    prepareActivePluginRegistryShutdown: state.preparePluginRegistryShutdown,
+  };
+});
 
 const { prepareGatewayShutdownRuntime } = await import("./server-shutdown.runtime.js");
 
@@ -75,10 +84,13 @@ describe("gateway shutdown runtime", () => {
         "gmail-watcher",
         "code-mode",
         "provider-transports",
+        "plugin-runtime",
       ].toSorted(),
     );
     expect(runtime.createGatewayCloseHandler).toBe(state.close);
     expect(runtime.flushPendingSessionsChangedEvents).toBe(state.flushSessionChanges);
     expect(runtime.runGlobalGatewayStopSafely).toBe(state.stopPlugins);
+    expect(runtime.clearActivePluginRegistry).toBe(state.clearPluginRegistry);
+    expect(state.preparePluginRegistryShutdown).toHaveBeenCalledOnce();
   });
 });

@@ -100,6 +100,14 @@ function readServerImplementation(): string {
 }
 
 describe("gateway startup import boundaries", () => {
+  it("keeps ordinary session lifecycle code out of the prepared shutdown graph", () => {
+    const graph = collectStaticValueImportGraph("src/gateway/server-close.runtime.ts");
+
+    expect([...graph.keys()].map((filePath) => path.relative(repoRoot, filePath))).not.toContain(
+      "src/gateway/session-reset-service.ts",
+    );
+  });
+
   it("keeps the kernel static import graph free of HTTP server and WebSocket construction", () => {
     const graph = collectStaticValueImportGraph("src/gateway/server-kernel.ts");
     const violations: string[] = [];
