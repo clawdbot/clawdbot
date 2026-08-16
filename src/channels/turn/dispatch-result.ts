@@ -31,7 +31,7 @@ export const EMPTY_CHANNEL_TURN_DISPATCH_COUNTS: Record<ReplyDispatchKind, numbe
 };
 
 /** Resolves dispatch counts with missing reply kinds filled as zero. */
-export function resolveChannelTurnDispatchCounts(
+export function resolveChannelTurnDispatchCountsFromReceipt(
   result: ChannelTurnDispatchResultLike,
 ): Record<ReplyDispatchKind, number> {
   const receiptCounts = result?.settledReceipt?.counts;
@@ -43,7 +43,7 @@ export function resolveChannelTurnDispatchCounts(
 }
 
 /** Returns whether a turn produced any visible reply delivery signal. */
-export function hasVisibleChannelTurnDispatch(
+export function hasVisibleChannelTurnDispatchFromReceipt(
   result: ChannelTurnDispatchResultLike,
   signals: ChannelTurnVisibleDeliverySignals = {},
 ): boolean {
@@ -57,7 +57,7 @@ export function hasVisibleChannelTurnDispatch(
 }
 
 /** Returns whether a turn produced a final reply, fallback, summary, or queued final payload. */
-export function hasFinalChannelTurnDispatch(
+export function hasFinalChannelTurnDispatchFromReceipt(
   result: ChannelTurnDispatchResultLike,
   signals: Pick<
     ChannelTurnVisibleDeliverySignals,

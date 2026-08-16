@@ -259,10 +259,7 @@ function buildReplyDispatchRuntimeInfo(
   kind: ReplyDispatchKind,
 ): ReplyDispatchRuntimeInfo {
   const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
-  return {
-    kind,
-    ...(assistantMessageIndex !== undefined ? { assistantMessageIndex } : {}),
-  };
+  return { kind, ...(assistantMessageIndex !== undefined ? { assistantMessageIndex } : {}) };
 }
 
 /** Generate a random delay within the configured range. */
@@ -420,18 +417,20 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     final: createReplyDispatchSettledCounts(),
   };
 
-  const buildReceipt = (): ReplyDispatchReceipt => ({
-    counts: {
-      tool: { ...settledCounts.tool },
-      block: { ...settledCounts.block },
-      final: { ...settledCounts.final },
-    },
-    anyVisibleDelivered: Object.values(settledCounts).some(
-      (counts) => counts.delivered > 0 || counts.failedAfterSend > 0,
-    ),
-  });
+  const buildReceipt = (): ReplyDispatchReceipt | undefined =>
+    queuedCounts.tool + queuedCounts.block + queuedCounts.final === 0
+      ? undefined
+      : {
+          counts: {
+            tool: { ...settledCounts.tool },
+            block: { ...settledCounts.block },
+            final: { ...settledCounts.final },
+          },
+          anyVisibleDelivered: Object.values(settledCounts).some(
+            (counts) => counts.delivered > 0 || counts.failedAfterSend > 0,
+          ),
+        };
 
-  // Register this dispatcher globally for gateway restart coordination.
   const { unregister } = registerDispatcher({
     pending: () => pending,
     waitForIdle: () => sendChain,

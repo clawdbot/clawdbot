@@ -58,8 +58,9 @@ describe("createReplyDispatcher", () => {
 
     expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(false);
 
-    await dispatcher.waitForIdle();
+    const receipt = await dispatcher.waitForIdle();
     expect(deliver).not.toHaveBeenCalled();
+    expect(receipt).toBeUndefined();
   });
 
   it("still drops exact NO_REPLY final payloads for group sessions where silence is allowed", async () => {

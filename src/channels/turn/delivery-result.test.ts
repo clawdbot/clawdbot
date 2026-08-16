@@ -6,9 +6,9 @@ import {
   isChannelPartialDeliveryError,
 } from "./delivery-result.js";
 import {
-  hasFinalChannelTurnDispatch,
-  hasVisibleChannelTurnDispatch,
-  resolveChannelTurnDispatchCounts,
+  hasFinalChannelTurnDispatchFromReceipt as hasFinalChannelTurnDispatch,
+  hasVisibleChannelTurnDispatchFromReceipt as hasVisibleChannelTurnDispatch,
+  resolveChannelTurnDispatchCountsFromReceipt as resolveChannelTurnDispatchCounts,
 } from "./dispatch-result.js";
 
 describe("createChannelDeliveryResultFromReceipt", () => {

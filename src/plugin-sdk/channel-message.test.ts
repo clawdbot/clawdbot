@@ -37,6 +37,22 @@ describe("defineChannelMessageAdapter", () => {
     expect(channelOutbound.defineChannelMessageAdapter).toBe(defineCoreChannelMessageAdapter);
   });
 
+  it("preserves legacy count-shaped dispatch projections", () => {
+    const [, channelMessage] = pluginSdkSubpaths;
+    const legacyResult = {
+      queuedFinal: true,
+      counts: { tool: 1, block: 2, final: 1 },
+    };
+
+    expect(channelMessage.resolveChannelTurnDispatchCounts(legacyResult)).toEqual({
+      tool: 1,
+      block: 2,
+      final: 1,
+    });
+    expect(channelMessage.hasVisibleChannelTurnDispatch(legacyResult)).toBe(true);
+    expect(channelMessage.hasFinalChannelTurnDispatch(legacyResult)).toBe(true);
+  });
+
   it("defaults new message adapters to plugin-owned receive acknowledgement", () => {
     const adapter = defineChannelMessageAdapter({
       id: "demo",

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { RecordInboundSession } from "../session.types.js";
-import { hasFinalChannelTurnDispatch } from "./dispatch-result.js";
+import { hasFinalChannelTurnDispatchFromReceipt as hasFinalChannelTurnDispatch } from "./dispatch-result.js";
 import { runChannelTurn } from "./run-channel-turn.js";
 import type { ChannelTurnResolved } from "./types.js";
 

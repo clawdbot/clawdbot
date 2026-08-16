@@ -16,9 +16,9 @@ import {
 } from "../channels/inbound-event/context.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import {
-  hasFinalChannelTurnDispatch,
-  hasVisibleChannelTurnDispatch,
-  resolveChannelTurnDispatchCounts,
+  hasFinalChannelTurnDispatchFromReceipt as hasFinalChannelTurnDispatch,
+  hasVisibleChannelTurnDispatchFromReceipt as hasVisibleChannelTurnDispatch,
+  resolveChannelTurnDispatchCountsFromReceipt as resolveChannelTurnDispatchCounts,
 } from "../channels/turn/dispatch-result.js";
 import { runPreparedChannelTurn } from "../channels/turn/execution.js";
 import {
