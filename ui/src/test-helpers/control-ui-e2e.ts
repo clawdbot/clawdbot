@@ -206,6 +206,7 @@ const defaultControlUiFeatureMethods = [
   "config.set",
   "device.scopes.requestUpgrade",
   "device.scopes.waitUpgrade",
+  "models.list",
   "session.members.add",
   "session.members.list",
   "session.members.remove",

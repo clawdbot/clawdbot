@@ -234,7 +234,7 @@ describe("new-session model runtime", () => {
     pending.resolve({ models: [] });
   });
 
-  it("waits for selected-agent defaults after chat metadata resolves", async () => {
+  it("waits for selected-agent defaults after the model catalog resolves", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", reasoning: true },
       { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
@@ -336,7 +336,7 @@ describe("new-session model runtime", () => {
 
   it.each([
     ["generic transport error", new Error("metadata unavailable")],
-    ["request timeout", new Error("gateway request timeout for chat.metadata")],
+    ["request timeout", new Error("gateway request timeout for models.list")],
   ])("renders %s as unavailable instead of a default-only catalog", async (_label, error) => {
     const { context, request } = contextWith([]);
     request.mockRejectedValueOnce(error);
@@ -765,8 +765,8 @@ describe("new-session model runtime", () => {
     control.load(context, "main", true);
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith(
-        "chat.metadata",
-        { agentId: "main" },
+        "models.list",
+        { agentId: "main", view: "configured" },
         expect.objectContaining({
           signal: expect.any(AbortSignal),
         }),
@@ -779,6 +779,36 @@ describe("new-session model runtime", () => {
         cloudPlacementSupported: true,
         source: "model",
       });
+    });
+  });
+
+  it("requests the configured catalog so dynamically discovered providers reach the picker", async () => {
+    const models: ModelCatalogEntry[] = [
+      { id: "zai-fast", name: "ZAI Fast", provider: "zai" },
+      { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google" },
+      { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
+    ];
+    const { context, request } = contextWith(models);
+    const control = new NewSessionModelControl(() => undefined);
+
+    control.load(context, "main", true);
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "models.list",
+        { agentId: "main", view: "configured" },
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ),
+    );
+    await vi.waitFor(() => {
+      const container = renderControl(control, context);
+      expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(3);
+      expect(
+        container.querySelector('[data-chat-model-option="google/gemini-3-pro"]'),
+      ).not.toBeNull();
+      expect(
+        container.querySelector('[data-chat-model-option="openai/gpt-5.6-sol"]'),
+      ).not.toBeNull();
     });
   });
 
@@ -938,16 +968,16 @@ describe("new-session model runtime", () => {
     expect(attemptTimes.at(-1)).toBe(startedAt + 58_000);
     expect(request).toHaveBeenNthCalledWith(
       1,
-      "chat.metadata",
-      { agentId: "main" },
+      "models.list",
+      { agentId: "main", view: "configured" },
       {
         signal: expect.any(AbortSignal),
         timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
       },
     );
     expect(request).toHaveBeenLastCalledWith(
-      "chat.metadata",
-      { agentId: "main" },
+      "models.list",
+      { agentId: "main", view: "configured" },
       {
         signal: expect.any(AbortSignal),
         timeoutMs: 2_000,

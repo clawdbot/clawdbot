@@ -87,7 +87,7 @@ function waitForMetadataRetry(delayMs: number, signal: AbortSignal): Promise<voi
   });
 }
 
-async function requestNewSessionMetadata(
+async function requestNewSessionModelCatalog(
   client: NewSessionMetadataClient,
   agentId: string,
   signal: AbortSignal,
@@ -105,13 +105,17 @@ async function requestNewSessionMetadata(
       if (latestStartupError !== undefined) {
         throw latestStartupError;
       }
-      throw new Error("New-session metadata retry deadline elapsed");
+      throw new Error("New-session model catalog retry deadline elapsed");
     }
 
     try {
+      // The picker needs the same configured inventory as the explicit control-plane
+      // read. chat.metadata stays prepared-only so a slow provider cannot delay chat
+      // startup; models.list view=configured performs discovery when the prepared
+      // catalog lacks dynamically discovered providers.
       return await client.request<{ models?: ModelCatalogEntry[] }>(
-        "chat.metadata",
-        { agentId },
+        "models.list",
+        { agentId, view: "configured" },
         {
           signal,
           timeoutMs: Math.min(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS, remainingMs),
@@ -335,7 +339,7 @@ export class NewSessionModelControl {
       status: this.metadataState.hasSnapshot ? "refreshing" : "loading",
     });
 
-    void requestNewSessionMetadata(client, agentId, controller.signal).then(
+    void requestNewSessionModelCatalog(client, agentId, controller.signal).then(
       (result) => {
         // Aborted transports may still resolve. Only the request that still
         // owns the control may publish catalog data or restore preferences.
@@ -620,7 +624,7 @@ export class NewSessionModelControl {
       loading: false,
       modelCatalog: this.catalog,
       modelCatalogState: {
-        // chat.metadata and agents.list hydrate independently. Do not expose a
+        // The model catalog and agents.list hydrate independently. Do not expose a
         // ready catalog until the selected agent can supply its concrete defaults.
         hasSnapshot: agentDefaultsAvailable && this.metadataState.hasSnapshot,
         ...(this.metadataState.status === "error" ? { onRetry: this.retryMetadata } : {}),
