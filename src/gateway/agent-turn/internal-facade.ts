@@ -88,9 +88,7 @@ export function createInternalAgentTurnFacade(options: InternalAgentTurnFacadeOp
       new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
         resolveFinal = resolve;
         rejectFinal = reject;
-        if (postAcceptanceError) {
-          reject(new Error(postAcceptanceError.message, { cause: postAcceptanceError }));
-        } else if (final) {
+        if (final) {
           resolve(final);
         }
       });
