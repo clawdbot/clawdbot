@@ -448,6 +448,12 @@ function createArtifactVerificationHarness() {
       "#!/usr/bin/env bash",
       "set -euo pipefail",
       'target="${!#}"',
+      'if [[ "$*" == *"--verify"* && -d "$target" && ! -e "$target/Contents/MacOS/OpenClaw" ]]; then',
+      "  exit 1",
+      "fi",
+      'if [[ "$*" == *"--verify"* && "${TEST_FINAL_SIGNATURE_INVALID:-0}" == "1" && "$target" == "${TEST_INSTALLED_APP_PATH:-}" && -f "${TEST_LAUNCH_STATE_FILE:-}" && "$(tr -d \'\\n\' <"$TEST_LAUNCH_STATE_FILE")" == "elevation-loaded" ]]; then',
+      "  exit 1",
+      "fi",
       'if [[ "$*" == *"--verify"* && -e "$target/Contents/invalid-signature" ]]; then',
       "  exit 1",
       "fi",
@@ -531,10 +537,12 @@ function createInstallRollbackHarness(
     failCurrentReceiptRestoreCopy?: boolean;
     failAfterReceiptCommitMove?: boolean;
     finalCDHashMismatch?: boolean;
+    finalSignatureInvalid?: boolean;
     failLsofInspection?: boolean;
     hupDuringCustody?: boolean;
     launchdBootstrapFails?: boolean;
     migrationRestoreBootstrapFails?: boolean;
+    removeInstalledExecutableAfterReadiness?: boolean;
     recreateSourceDuringBootout?: boolean;
     recreateSourceOnFailure?: boolean;
     restartAppDuringBootout?: boolean;
@@ -753,6 +761,9 @@ function createInstallRollbackHarness(
       "#!/usr/bin/env bash",
       "set -euo pipefail",
       'if [[ "${1:-}" == "bridge" ]]; then',
+      '  if [[ "${TEST_REMOVE_INSTALLED_EXECUTABLE_AFTER_READINESS:-0}" == "1" ]]; then',
+      '    rm -f "$TEST_INSTALLED_APP_PATH/Contents/MacOS/OpenClaw"',
+      "  fi",
       '  printf \'%s\\n\' \'{"success":true,"data":{"selected":{"handshake":{"hostIdentity":{"processIdentifier":555555}}}}}\'',
       "  exit 0",
       "fi",
@@ -780,6 +791,7 @@ function createInstallRollbackHarness(
       TEST_FAIL_AFTER_RECEIPT_COMMIT_MOVE: options.failAfterReceiptCommitMove ? "1" : "0",
       TEST_FAIL_LSOF_INSPECTION: options.failLsofInspection ? "1" : "0",
       TEST_FINAL_CDHASH_MISMATCH: options.finalCDHashMismatch ? "1" : "0",
+      TEST_FINAL_SIGNATURE_INVALID: options.finalSignatureInvalid ? "1" : "0",
       TEST_INSTALLED_APP_PATH: appPath,
       TEST_CUSTODY_SIGNAL: options.hupDuringCustody ? "HUP" : "TERM",
       TEST_LAUNCHD_BOOTSTRAP_FAILS: options.launchdBootstrapFails === false ? "0" : "1",
@@ -789,6 +801,8 @@ function createInstallRollbackHarness(
       TEST_MIGRATION_RESTORE_BOOTSTRAP_FAILS: options.migrationRestoreBootstrapFails ? "1" : "0",
       TEST_RECREATE_SOURCE_DURING_BOOTOUT: options.recreateSourceDuringBootout ? "1" : "0",
       TEST_RECREATE_SOURCE_ON_FAILURE: options.recreateSourceOnFailure ? "1" : "0",
+      TEST_REMOVE_INSTALLED_EXECUTABLE_AFTER_READINESS:
+        options.removeInstalledExecutableAfterReadiness ? "1" : "0",
       TEST_RESTART_APP_DURING_BOOTOUT: options.restartAppDuringBootout ? "1" : "0",
       TEST_SIGNAL_DURING_CUSTODY:
         options.signalDuringCustody || options.hupDuringCustody ? "1" : "0",
@@ -1700,6 +1714,81 @@ describe("mac elevation host command contract", () => {
   );
 
   it.skipIf(process.platform !== "darwin")(
+    "rolls back when the final installed signature becomes invalid before receipt commit",
+    () => {
+      const harness = createInstallRollbackHarness({
+        finalSignatureInvalid: true,
+        launchdBootstrapFails: false,
+      });
+      const oldBinary = readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"));
+      const result = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--migrate-launch-agent",
+          harness.sourcePlist,
+        ],
+        harness.env,
+      );
+
+      expect(result.status).toBe(1);
+      expect(readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"))).toEqual(
+        oldBinary,
+      );
+      expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
+      expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
+      expect(existsSync(path.join(harness.stateDir, "elevation-host-install.json"))).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "uses the authenticated extracted helper when the installed executable disappears",
+    () => {
+      const harness = createInstallRollbackHarness({
+        launchdBootstrapFails: false,
+        removeInstalledExecutableAfterReadiness: true,
+      });
+      const oldBinary = readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"));
+      const result = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--migrate-launch-agent",
+          harness.sourcePlist,
+        ],
+        harness.env,
+      );
+
+      expect(result.status).toBe(1);
+      expect(readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"))).toEqual(
+        oldBinary,
+      );
+      expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
+      expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
+      expect(existsSync(path.join(harness.stateDir, "elevation-host-install.json"))).toBe(false);
+      expect(
+        readdirSync(harness.env.HOME).some((name) =>
+          name.startsWith("InstalledOpenClaw.app.failed-elevation-host-"),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
     "commits the receipt and cutover marker before replaying termination",
     () => {
       const harness = createInstallRollbackHarness({
@@ -1880,6 +1969,51 @@ describe("mac elevation host command contract", () => {
           name.startsWith("elevation-host.recovered-receipt."),
         ),
       ).toBe(true);
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "refuses recovery before mutation when process inspection tools are unavailable",
+    () => {
+      const harness = createInstallRollbackHarness({ launchdBootstrapFails: false });
+      const installed = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--migrate-launch-agent",
+          harness.sourcePlist,
+        ],
+        harness.env,
+      );
+      expect(installed.status, installed.stderr).toBe(0);
+      const binDir = path.join(harness.env.HOME, "bin");
+      rmSync(path.join(binDir, "lsof"));
+      const jqPath = spawnSync("bash", ["-lc", "command -v jq"], {
+        encoding: "utf8",
+      }).stdout.trim();
+      symlinkSync(jqPath, path.join(binDir, "jq"));
+      const installReceiptPath = path.join(harness.stateDir, "elevation-host-install.json");
+
+      const recovered = runInstaller(
+        harness.installerPath,
+        ["recover", "--app", harness.appPath, "--state-dir", harness.stateDir],
+        {
+          ...harness.env,
+          PATH: `${binDir}:/usr/bin:/bin:/sbin`,
+        },
+      );
+      expect(recovered.status).toBe(1);
+      expect(recovered.stderr).toContain("required tool not found: lsof");
+      expect(existsSync(installReceiptPath)).toBe(true);
+      expect(existsSync(harness.sourcePlist)).toBe(false);
+      expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("elevation-loaded");
     },
   );
 

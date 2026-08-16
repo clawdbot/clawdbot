@@ -32,6 +32,8 @@ ADOPTION_ATTACH_ONLY=0
 EXPECTED_PEEKABOO_SOURCE_COMMIT=""
 OUTPUT_DIR="$ROOT_DIR/dist/elevation-host"
 WORK_ROOT=""
+AUTHENTICATED_RENAME_HELPER=""
+AUTHENTICATED_RENAME_HELPER_SHA=""
 ARTIFACT_SNAPSHOT_ROOT=""
 AUTHENTICATED_ARCHIVE_PATH=""
 AUTHENTICATED_ARCHIVE_NAME=""
@@ -189,6 +191,8 @@ cleanup_work_root() {
     rm -rf "$WORK_ROOT"
     WORK_ROOT=""
   fi
+  AUTHENTICATED_RENAME_HELPER=""
+  AUTHENTICATED_RENAME_HELPER_SHA=""
 }
 
 cleanup_artifact_snapshot() {
@@ -256,7 +260,7 @@ case "$COMMAND" in
     required_tools=(codesign file jq launchctl lipo plutil spctl xcrun)
     ;;
   recover)
-    required_tools=(codesign file jq launchctl lipo open plutil shasum spctl xcrun)
+    required_tools=(codesign file jq launchctl lipo lsof open pgrep plutil shasum spctl xcrun)
     ;;
   uninstall)
     required_tools=(launchctl)
@@ -536,6 +540,7 @@ verify_artifact_receipt() {
   local receipt="$1" archive="$2" app="$3" installer="$4"
   [[ -f "$receipt" && ! -L "$receipt" ]] || fail "artifact receipt not found or symlinked: $receipt"
   [[ -f "$installer" && ! -L "$installer" ]] || fail "elevation installer not found or symlinked: $installer"
+  verify_elevation_app "$app"
   local receipt_sha
   receipt_sha="$(shasum -a 256 "$receipt" | awk '{print $1}')"
   [[ -n "$EXPECTED_ARTIFACT_RECEIPT_SHA256" &&
@@ -617,6 +622,10 @@ extract_archive() {
   [[ "$entries" == "$WORK_ROOT/OpenClaw.app" ]] ||
     fail 'elevation archive root must contain exactly OpenClaw.app'
   verify_elevation_app "$WORK_ROOT/OpenClaw.app"
+  AUTHENTICATED_RENAME_HELPER="$WORK_ROOT/OpenClaw.app/Contents/MacOS/OpenClaw"
+  [[ -f "$AUTHENTICATED_RENAME_HELPER" && ! -L "$AUTHENTICATED_RENAME_HELPER" &&
+    -x "$AUTHENTICATED_RENAME_HELPER" ]] || fail 'authenticated elevation rename helper is unavailable'
+  AUTHENTICATED_RENAME_HELPER_SHA="$(shasum -a 256 "$AUTHENTICATED_RENAME_HELPER" | awk '{print $1}')"
   printf -v "$output_variable" '%s' "$WORK_ROOT/OpenClaw.app"
 }
 
@@ -642,14 +651,21 @@ rename_app_exclusively() {
   local source="$1" destination="$2" helper=""
   local candidate
   # A rollback bundle may predate this private subcommand. Before commit the verified
-  # staged candidate is retained; committed recovery starts at APP and then preserves
-  # that candidate under RECOVERED_FAILED_APP_PATH before restoring an older bundle.
+  # extracted helper remains independent of the installed app; committed recovery starts
+  # at APP and then preserves that candidate before restoring an older bundle.
   for candidate in \
+    "$AUTHENTICATED_RENAME_HELPER" \
     "$STAGED_INSTALL_APP_PATH/Contents/MacOS/OpenClaw" \
     "$RECOVERED_FAILED_APP_PATH/Contents/MacOS/OpenClaw" \
     "$APP_PATH/Contents/MacOS/OpenClaw"
   do
-    if [[ -x "$candidate" ]]; then
+    if [[ -n "$candidate" && -f "$candidate" && ! -L "$candidate" && -x "$candidate" ]]; then
+      if [[ "$candidate" == "$AUTHENTICATED_RENAME_HELPER" &&
+        ( ! "$AUTHENTICATED_RENAME_HELPER_SHA" =~ ^[0-9a-f]{64}$ ||
+          "$(shasum -a 256 "$candidate" | awk '{print $1}')" != "$AUTHENTICATED_RENAME_HELPER_SHA" ) ]]
+      then
+        continue
+      fi
       helper="$candidate"
       break
     fi
@@ -1669,7 +1685,6 @@ install_host() {
 
 recover_install() {
   local recovery_failed=0 elevation_state failed_container failed_path restored_state
-  local failed_cdhash_arm64="" failed_cdhash_x86_64=""
   if [[ "$CUTOVER_APP_MUTATED" == "1" && -n "$ROLLBACK_APP_PATH" ]]; then
     verify_recorded_rollback_app "$APP_PATH" ||
       verify_recorded_rollback_app "$ROLLBACK_APP_PATH" || return 1
@@ -1699,11 +1714,8 @@ recover_install() {
     failed_container="$(mktemp -d "${APP_PATH}.failed-elevation-host-${ROLLBACK_FAILED_SOURCE}.XXXXXX")" ||
       return 1
     failed_path="$failed_container/OpenClaw.app"
-    failed_cdhash_arm64="$(codesign_value_for_arch "$APP_PATH" CDHash arm64)"
-    failed_cdhash_x86_64="$(codesign_value_for_arch "$APP_PATH" CDHash x86_64)"
     rename_app_exclusively "$APP_PATH" "$failed_path" || true
-    if ! verify_rollback_app "$failed_path" "$failed_cdhash_arm64" "$failed_cdhash_x86_64" ||
-      [[ -e "$APP_PATH" || -L "$APP_PATH" ]]
+    if [[ ! -d "$failed_path" || -L "$failed_path" || -e "$APP_PATH" || -L "$APP_PATH" ]]
     then
       rmdir "$failed_container" 2>/dev/null || true
       return 1
