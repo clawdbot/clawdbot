@@ -577,8 +577,12 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       defaultModel,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
       toolProgressDetail:
-        normalizeToolProgressDetail(agentCfg?.toolProgressDetail) ??
-        normalizeToolProgressDetail(cfg.agents?.defaults?.toolProgressDetail),
+        // Plain verbose is a presentation mode: force plain tool detail so
+        // progress drafts and tool summaries stay non-technical.
+        (resolvedVerboseLevel ?? "off") === "plain"
+          ? "plain"
+          : (normalizeToolProgressDetail(agentCfg?.toolProgressDetail) ??
+            normalizeToolProgressDetail(cfg.agents?.defaults?.toolProgressDetail)),
       isNewSession: params.isNewSession,
       blockStreamingEnabled,
       blockReplyChunking,

@@ -49,7 +49,7 @@ export type FollowupRunnerParams = {
   sessionKey?: string;
   storePath?: string;
   defaultModel: string;
-  toolProgressDetail?: "explain" | "raw";
+  toolProgressDetail?: "explain" | "raw" | "plain";
 };
 
 export async function settleQueuedFollowupPresentation(

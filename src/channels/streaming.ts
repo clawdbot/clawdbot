@@ -163,7 +163,7 @@ export type ChannelProgressLineOptions = {
   /** Whether generated tool details should use Markdown formatting. */
   markdown?: boolean;
   /** Detail shape for tool arguments shown in progress drafts. */
-  detailMode?: "explain" | "raw";
+  detailMode?: "explain" | "raw" | "plain";
   /** Whether command progress should show raw command text or status-only copy. */
   commandText?: ChannelStreamingCommandTextMode;
 };
@@ -301,7 +301,7 @@ function compactStrings(values: readonly (string | undefined | null)[]): string[
 function inferToolMeta(
   name: string | undefined,
   args: Record<string, unknown> | undefined,
-  detailMode: "explain" | "raw" = "explain",
+  detailMode: "explain" | "raw" | "plain" = "explain",
 ) {
   if (!name || !args) {
     return undefined;
@@ -327,7 +327,7 @@ function buildNamedProgressLine(
   const { text, detail } = formatToolAggregateParts(
     normalizedName,
     compactMetas.length ? compactMetas : undefined,
-    { markdown: options?.markdown },
+    { markdown: options?.markdown, detailMode: options?.detailMode },
   );
   const display = resolveToolDisplay({ name: normalizedName });
   const line = {

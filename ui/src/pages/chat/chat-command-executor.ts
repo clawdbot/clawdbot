@@ -117,7 +117,7 @@ async function patchSession(
   return await patchChatCommandSessionSettings(context, sessionKey, patch, options);
 }
 
-function normalizeVerboseLevel(raw?: string | null): "off" | "on" | "full" | undefined {
+function normalizeVerboseLevel(raw?: string | null): "off" | "on" | "full" | "plain" | undefined {
   if (!raw) {
     return undefined;
   }
@@ -127,6 +127,9 @@ function normalizeVerboseLevel(raw?: string | null): "off" | "on" | "full" | und
   }
   if (["full", "all", "everything"].includes(key)) {
     return "full";
+  }
+  if (["plain", "plainlanguage", "plain-language", "plain_language"].includes(key)) {
+    return "plain";
   }
   if (["on", "minimal", "true", "yes", "1"].includes(key)) {
     return "on";

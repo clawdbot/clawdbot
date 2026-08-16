@@ -57,7 +57,7 @@ describe("getSlashCommands", () => {
   });
 
   it.each([
-    { commandName: "verbose", level: "full", description: "Set verbose on/off/full" },
+    { commandName: "verbose", level: "full", description: "Set verbose on/off/full/plain" },
     { commandName: "reasoning", level: "stream", description: "Set reasoning on/off/stream" },
   ])(
     "exposes and submits the canonical /$commandName $level completion",
@@ -185,7 +185,7 @@ describe("helpText", () => {
     expect(output).toContain("Shift+Enter or Ctrl+J: insert a newline");
   });
 
-  it.each(["/verbose <on|off|full>", "/reasoning <on|off|stream>"])(
+  it.each(["/verbose <on|off|full|plain>", "/reasoning <on|off|stream>"])(
     "includes the full canonical directive levels for %s",
     (usage) => {
       expect(helpText()).toContain(usage);

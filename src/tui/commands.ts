@@ -15,7 +15,7 @@ import {
 } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.js";
 
-const VERBOSE_LEVELS = ["on", "off", "full"] satisfies VerboseLevel[];
+const VERBOSE_LEVELS = ["on", "off", "full", "plain"] satisfies VerboseLevel[];
 const TRACE_LEVELS = ["on", "off"];
 const FAST_LEVELS = ["status", "auto", "on", "off"];
 const REASONING_LEVELS = ["on", "off", "stream"] satisfies ReasoningLevel[];

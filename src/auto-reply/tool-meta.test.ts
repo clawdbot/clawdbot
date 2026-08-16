@@ -2,7 +2,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { formatToolAggregate } from "./tool-meta.js";
+import { formatToolAggregate, formatToolAggregateParts } from "./tool-meta.js";
 
 // Use path.resolve so inputs match the resolved HOME on every platform.
 const home = path.resolve("/Users/test");
@@ -55,5 +55,18 @@ describe("tool meta formatting", () => {
       });
       expect(out).toBe("🛠️ elevated · `cd ~/dir && gemini 2>&1`");
     });
+  });
+});
+
+describe("formatToolAggregateParts plain mode", () => {
+  it("emits plain sentences without tool chrome", () => {
+    const result = formatToolAggregateParts(
+      "exec",
+      ["I'm checking the current state of the project."],
+      { detailMode: "plain" },
+    );
+    expect(result.text).toBe("I'm checking the current state of the project.");
+    expect(result.text).not.toContain("🛠️");
+    expect(result.text).not.toContain("Bash");
   });
 });

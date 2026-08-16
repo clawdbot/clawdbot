@@ -735,6 +735,13 @@ function resolveToolVerbAndDetail(params: {
   detailMaxEntries?: number;
   detailFormatKey?: (raw: string) => string;
 }): { verb?: string; detail?: string } {
+  if (params.toolDetailMode === "plain") {
+    return {
+      verb: undefined,
+      detail: resolvePlainToolDetail(params.toolKey, params.args, params.meta),
+    };
+  }
+
   const actionSpec = resolveActionSpec(params.spec, params.action);
   const fallbackVerb =
     params.toolKey === "web_search"
@@ -781,6 +788,49 @@ function resolveToolVerbAndDetail(params: {
     detail = params.meta;
   }
   return { verb, detail };
+}
+
+/** Non-technical present-tense lines for plain progress presentation. */
+function resolvePlainToolDetail(toolKey: string, args: unknown, meta?: string): string {
+  if (toolKey === "exec" || toolKey === "bash" || toolKey === "shell") {
+    return (
+      resolveExecDetail(args, { detailMode: "plain" }) ??
+      "I'm running a command to continue the work."
+    );
+  }
+  if (toolKey === "read") {
+    return "I'm reading a document for context.";
+  }
+  if (toolKey === "write" || toolKey === "edit") {
+    return "I'm updating a file.";
+  }
+  if (toolKey === "attach") {
+    return "I'm attaching a file for the task.";
+  }
+  if (toolKey === "web_search") {
+    return "I'm looking up information about that online.";
+  }
+  if (toolKey === "web_fetch") {
+    return "I'm opening a webpage to read the details.";
+  }
+  if (toolKey === "browser" || toolKey === "browser_open") {
+    return "I'm using the browser to continue the work.";
+  }
+  if (toolKey === "process" || toolKey === "terminal") {
+    return "I'm checking a running process.";
+  }
+  if (toolKey.includes("search")) {
+    return "I'm searching for relevant information.";
+  }
+  if (meta && !looksTechnicalMeta(meta)) {
+    return meta;
+  }
+  return "I'm using an internal tool to continue the work.";
+}
+
+function looksTechnicalMeta(meta: string): boolean {
+  // Paths, shell tokens, and schema-ish keys should not leak into plain mode.
+  return /[/\\]|--|`|\.ts\b|\.js\b|\.json\b|node_modules|https?:\/\//i.test(meta);
 }
 
 /** Normalize final detail text before attaching it to a tool display line. */

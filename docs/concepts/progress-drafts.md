@@ -218,21 +218,25 @@ OpenClaw uses the same formatter for progress drafts and `/verbose`:
 {
   agents: {
     defaults: {
-      toolProgressDetail: "explain", // explain | raw
+      toolProgressDetail: "explain", // explain | raw | plain
     },
   },
 }
 ```
 
 `"explain"` is the default and keeps drafts stable with concise labels.
-`"raw"` appends underlying tool detail when available. Command text also
-requires the explicit `streaming.progress.commandText: "raw"` opt-in below.
-With that opt-in, a `node --check /tmp/app.js` call renders differently by mode:
+`"raw"` appends underlying tool detail when available. `"plain"` uses
+non-technical plain-language sentences (no tool emoji chrome, no paths, no
+command text). Session `/verbose plain` forces plain detail for that turn.
+Command text also requires the explicit `streaming.progress.commandText: "raw"`
+opt-in below (plain mode never opts into command text). With that opt-in, a
+`node --check /tmp/app.js` call renders differently by mode:
 
 | Mode      | Progress line                                                   |
 | --------- | --------------------------------------------------------------- |
 | `explain` | `🛠️ check js syntax for /tmp/app.js`                            |
 | `raw`     | `🛠️ check js syntax for /tmp/app.js · node --check /tmp/app.js` |
+| `plain`   | `I'm running a command to continue the work.`                   |
 
 ### Command/exec text
 

@@ -6,6 +6,8 @@ import { shortenHomeInString } from "../utils.js";
 
 type ToolAggregateOptions = {
   markdown?: boolean;
+  /** When plain, emit the sentence only — no tool emoji/label chrome. */
+  detailMode?: "explain" | "raw" | "plain";
 };
 
 /**
@@ -20,6 +22,12 @@ export function formatToolAggregateParts(
   options?: ToolAggregateOptions,
 ): { text: string; detail?: string } {
   const filtered = (metas ?? []).filter(Boolean).map(shortenHomeInString);
+  if (options?.detailMode === "plain") {
+    const plain =
+      filtered.find((entry) => entry.trim().length > 0)?.trim() ||
+      "I'm using an internal tool to continue the work.";
+    return { text: plain, detail: plain };
+  }
   const display = resolveToolDisplay({ name: toolName });
   const compactCommandSummary = filtered.length > 0 && isShellToolDisplayName(toolName);
   const prefix = compactCommandSummary ? display.emoji : `${display.emoji} ${display.label}`;

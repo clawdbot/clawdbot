@@ -305,7 +305,7 @@ function createToolEventBridge(params: {
  * verbose. Keeps CLI runs at tool-summary parity with embedded runs.
  */
 export function createCliToolSummaryTracker(params: {
-  detailMode?: "explain" | "raw";
+  detailMode?: "explain" | "raw" | "plain";
   commandDetailsVisible: boolean;
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;

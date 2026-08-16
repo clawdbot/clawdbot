@@ -15,6 +15,7 @@ const {
   listThinkingLevels,
   normalizeReasoningLevel,
   normalizeThinkLevel,
+  normalizeVerboseLevel,
   isThinkingLevelSupported,
   formatThinkingLevels,
   resolveSupportedThinkingLevel,
@@ -963,5 +964,25 @@ describe("resolveEffectiveResponseUsage", () => {
     const cfg = "tokens" as const;
     expect(resolveEffectiveResponseUsage(undefined, cfg)).toBe("tokens"); // inherits
     expect(resolveEffectiveResponseUsage("off", cfg)).toBe("off"); // explicit off persists
+  });
+});
+
+describe("normalizeVerboseLevel", () => {
+  it("accepts off, on, and full", () => {
+    expect(normalizeVerboseLevel("off")).toBe("off");
+    expect(normalizeVerboseLevel("on")).toBe("on");
+    expect(normalizeVerboseLevel("full")).toBe("full");
+  });
+
+  it("accepts plain and plain-language aliases", () => {
+    expect(normalizeVerboseLevel("plain")).toBe("plain");
+    expect(normalizeVerboseLevel("PLAIN")).toBe("plain");
+    expect(normalizeVerboseLevel("plain-language")).toBe("plain");
+    expect(normalizeVerboseLevel("plain_language")).toBe("plain");
+  });
+
+  it("rejects unknown values", () => {
+    expect(normalizeVerboseLevel("loud")).toBeUndefined();
+    expect(normalizeVerboseLevel("")).toBeUndefined();
   });
 });

@@ -84,7 +84,7 @@ title: "Thinking levels"
 
 ## Verbose directives (/verbose or /v)
 
-- Levels: `on` (minimal) | `full` | `off` (default).
+- Levels: `on` (minimal) | `full` | `plain` | `off` (default).
 - Directive-only message toggles session verbose and replies `Verbose logging enabled.` / `Verbose logging disabled.`; invalid levels return a hint without changing state.
 - `/verbose off` stores an explicit session override; clear it via the Sessions UI by choosing `inherit`.
 - Authorized external channel senders may persist the session verbose override. Internal gateway/webchat clients need `operator.admin` to persist it.
@@ -93,10 +93,12 @@ title: "Thinking levels"
 - When verbose is on, agents that emit structured tool results send each tool call back as its own safe metadata-only message. Shell tools show their label without command text. These tool summaries are sent as soon as each tool starts (separate bubbles), not as streaming deltas.
 - Tool failure summaries remain visible in normal mode, but raw error detail suffixes are hidden unless verbose is `full`.
 - When verbose is `full`, tool outputs are also forwarded after completion (separate bubble, truncated to a safe length). If you toggle `/verbose on|full|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
-- `agents.defaults.toolProgressDetail` controls the shape of `/verbose` tool summaries and progress-draft tool lines. Use `"explain"` (default) for compact human labels and `"raw"` for unabridged non-shell detail. Standalone shell summaries require `/verbose full` for command text; progress drafts require the channel's explicit `streaming.*.commandText: "raw"` opt-in. Per-agent `agents.entries.*.toolProgressDetail` overrides the default.
+- When verbose is `plain`, tool activity stays visible but uses non-technical plain-language sentences instead of compact tool labels or raw command text. Tool outputs are not forwarded (same as `on`). This is presentation-only: it does not change model thinking effort (`/think`) or reasoning visibility (`/reasoning`).
+- `agents.defaults.toolProgressDetail` controls the shape of `/verbose` tool summaries and progress-draft tool lines. Use `"explain"` (default) for compact human labels, `"raw"` for unabridged non-shell detail, and `"plain"` for non-technical plain-language sentences. `/verbose plain` forces plain detail for that session regardless of the configured default. Standalone shell summaries require `/verbose full` for command text; progress drafts require the channel's explicit `streaming.*.commandText: "raw"` opt-in. Per-agent `agents.entries.*.toolProgressDetail` overrides the default.
   - `/verbose on`: `🛠️ Exec`
   - `/verbose full` + `explain`: `🛠️ Exec: check JS syntax for /tmp/app.js`
   - `/verbose full` + `raw`: `🛠️ Exec: check JS syntax for /tmp/app.js, node --check /tmp/app.js`
+  - `/verbose plain`: `I'm running a command to continue the work.` (or a more specific plain sentence for known tools)
 
 ## Plugin trace directives (/trace)
 

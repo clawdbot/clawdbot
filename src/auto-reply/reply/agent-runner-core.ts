@@ -465,7 +465,7 @@ export type RunReplyAgentParams = {
   storePath?: string;
   defaultModel: string;
   resolvedVerboseLevel: VerboseLevel;
-  toolProgressDetail?: "explain" | "raw";
+  toolProgressDetail?: "explain" | "raw" | "plain";
   isNewSession: boolean;
   blockStreamingEnabled: boolean;
   blockReplyChunking?: {

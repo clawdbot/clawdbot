@@ -20,7 +20,7 @@ export type ThinkLevel =
   | "adaptive"
   | "max"
   | "ultra";
-export type VerboseLevel = "off" | "on" | "full";
+export type VerboseLevel = "off" | "on" | "full" | "plain";
 export type TraceLevel = "off" | "on" | "raw";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
 export type ReasoningLevel = "off" | "on" | "stream";
@@ -150,6 +150,14 @@ function normalizeOnOffFullLevel(raw?: string | null): OnOffFullLevel | undefine
 
 /** Normalizes /verbose values. */
 export function normalizeVerboseLevel(raw?: string | null): VerboseLevel | undefined {
+  const key = normalizeOptionalLowercaseString(raw);
+  if (!key) {
+    return undefined;
+  }
+  // Plain-language tool progress presentation (not model thinking effort).
+  if (["plain", "plainlanguage", "plain-language", "plain_language"].includes(key)) {
+    return "plain";
+  }
   return normalizeOnOffFullLevel(raw);
 }
 

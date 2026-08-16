@@ -179,8 +179,12 @@ export const AgentDefaultsSchema = z
     embeddedAgent: EmbeddedAgentConfigSchema.optional(),
     thinkingDefault: AgentThinkingLevelSchema.optional(),
     fastModeDefault: z.union([z.boolean(), z.literal("auto")]).optional(),
-    verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
-    toolProgressDetail: z.union([z.literal("explain"), z.literal("raw")]).optional(),
+    verboseDefault: z
+      .union([z.literal("off"), z.literal("on"), z.literal("full"), z.literal("plain")])
+      .optional(),
+    toolProgressDetail: z
+      .union([z.literal("explain"), z.literal("raw"), z.literal("plain")])
+      .optional(),
     reasoningDefault: z.union([z.literal("off"), z.literal("on"), z.literal("stream")]).optional(),
     elevatedDefault: z
       .union([z.literal("off"), z.literal("on"), z.literal("ask"), z.literal("full")])

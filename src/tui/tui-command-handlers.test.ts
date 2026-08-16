@@ -2013,7 +2013,7 @@ describe("tui command handlers", () => {
   });
 
   it.each([
-    { command: "verbose", usage: "usage: /verbose <on|off|full>" },
+    { command: "verbose", usage: "usage: /verbose <on|off|full|plain>" },
     { command: "reasoning", usage: "usage: /reasoning <on|off|stream>" },
   ])("shows the complete canonical no-argument /$command usage", async ({ command, usage }) => {
     const { handleCommand, addSystem, patchSession } = createHarness();

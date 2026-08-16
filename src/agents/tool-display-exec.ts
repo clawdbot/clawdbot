@@ -591,12 +591,82 @@ function compactRawCommand(raw: string, maxLength = 120): string {
   return `${sliceUtf16Safe(oneLine, 0, half)}…${sliceUtf16Safe(oneLine, -(maxLength - 1 - half))}`;
 }
 
-export type ToolDetailMode = "explain" | "raw";
+export type ToolDetailMode = "explain" | "raw" | "plain";
+
+/** Maps known shell activity into non-technical present-tense sentences. */
+export function resolvePlainExecDetail(args: unknown): string {
+  const record = asRecord(args);
+  const raw = typeof record?.command === "string" ? record.command.trim() : undefined;
+  if (!raw) {
+    return "I'm running a command to continue the work.";
+  }
+
+  const unwrapped = unwrapShellWrapper(raw);
+  const result = summarizeExecCommand(unwrapped) ?? summarizeExecCommand(raw);
+  const summary = result?.text || "run command";
+  return plainSentenceFromExecSummary(summary);
+}
+
+function plainSentenceFromExecSummary(summary: string): string {
+  const key = summary.trim().toLowerCase();
+  const map: Record<string, string> = {
+    "check git status": "I'm checking the current state of the project.",
+    "check git diff": "I'm reviewing the recent code changes.",
+    "view git history": "I'm looking through the project history.",
+    "show git object": "I'm inspecting a project history entry.",
+    "list git branches": "I'm listing the available project branches.",
+    "switch git branch": "I'm switching to another project branch.",
+    "create git commit": "I'm saving a project checkpoint.",
+    "pull git changes": "I'm pulling the latest project updates.",
+    "push git changes": "I'm publishing project updates.",
+    "fetch git changes": "I'm fetching the latest project updates.",
+    "merge git changes": "I'm combining project changes together.",
+    "rebase git branch": "I'm reorganizing recent project changes.",
+    "stage git changes": "I'm preparing project changes to save.",
+    "restore git files": "I'm restoring earlier project files.",
+    "reset git state": "I'm resetting part of the project state.",
+    "stash git changes": "I'm temporarily setting aside project changes.",
+    "install dependencies": "I'm installing the project dependencies.",
+    "run tests": "I'm running the project tests.",
+    "run command": "I'm running a command to continue the work.",
+  };
+
+  for (const [needle, sentence] of Object.entries(map)) {
+    if (key === needle || key.startsWith(`${needle} `) || key.startsWith(`${needle} (`)) {
+      return sentence;
+    }
+  }
+
+  if (key.includes("git status")) {
+    return "I'm checking the current state of the project.";
+  }
+  if (key.includes("git ")) {
+    return "I'm working with the project history.";
+  }
+  if (key.includes("npm ") || key.includes("pnpm ") || key.includes("yarn ")) {
+    return "I'm running a package-management command.";
+  }
+  if (key.includes("test") || key.includes("vitest") || key.includes("jest")) {
+    return "I'm running the project tests.";
+  }
+  if (key.includes("search") || key.includes("grep") || key.includes("rg ")) {
+    return "I'm searching the project for relevant information.";
+  }
+  if (key.includes("print lines") || key.includes("read ") || key.startsWith("cat ")) {
+    return "I'm reading a file for context.";
+  }
+
+  return "I'm running a command to continue the work.";
+}
 
 export function resolveExecDetail(
   args: unknown,
   options?: { detailMode?: ToolDetailMode },
 ): string | undefined {
+  if (options?.detailMode === "plain") {
+    return resolvePlainExecDetail(args);
+  }
+
   const record = asRecord(args);
   if (!record) {
     return undefined;
