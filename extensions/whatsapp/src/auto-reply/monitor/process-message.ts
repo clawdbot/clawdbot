@@ -260,6 +260,8 @@ export async function processMessage(params: {
   ) {
     try {
       const { transcribeFirstAudio } = await import("./audio-preflight.runtime.js");
+      const inboundMessageId =
+        typeof params.msg.event.id === "string" ? params.msg.event.id.trim() : "";
       audioTranscript = await transcribeFirstAudio({
         ctx: {
           media: [
@@ -276,6 +278,13 @@ export async function processMessage(params: {
           OriginatingChannel: "whatsapp",
           OriginatingTo: conversationId,
           AccountId: params.route.accountId,
+          ...(inboundMessageId
+            ? {
+                MessageSid: inboundMessageId,
+                MessageSidFirst: inboundMessageId,
+                MessageSidFull: `whatsapp:${inboundMessageId}`,
+              }
+            : {}),
         },
         cfg: params.cfg,
       });

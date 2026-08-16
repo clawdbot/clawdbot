@@ -224,6 +224,7 @@ export function createWebOnMessageHandler(params: {
         const { transcribeFirstAudio } = await import("./audio-preflight.runtime.js");
         // transcribeFirstAudio returns undefined on failure/disabled; store null so
         // processMessage knows the attempt was already made and does not retry.
+        const inboundMessageId = typeof msg.event.id === "string" ? msg.event.id.trim() : "";
         preflightAudioTranscript =
           (await transcribeFirstAudio({
             ctx: {
@@ -241,6 +242,13 @@ export function createWebOnMessageHandler(params: {
               OriginatingChannel: "whatsapp",
               OriginatingTo: conversationId,
               AccountId: route.accountId,
+              ...(inboundMessageId
+                ? {
+                    MessageSid: inboundMessageId,
+                    MessageSidFirst: inboundMessageId,
+                    MessageSidFull: `whatsapp:${inboundMessageId}`,
+                  }
+                : {}),
             },
             cfg,
           })) ?? null;

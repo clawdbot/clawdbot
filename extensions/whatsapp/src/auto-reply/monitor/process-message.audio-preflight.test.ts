@@ -263,6 +263,23 @@ describe("processMessage audio preflight transcription", () => {
     vi.mocked(createWhatsAppReplyPlan).mockClear();
   });
 
+  it("forwards inbound event id as MessageSid for echo-reply targeting", async () => {
+    transcribeFirstAudioMock.mockResolvedValueOnce("voice transcript");
+
+    await processMessage(
+      makeParams({
+        event: { id: "wa-inbound-42" },
+      }),
+    );
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    expectContextFields(firstTranscriptionContext(), {
+      MessageSid: "wa-inbound-42",
+      MessageSidFirst: "wa-inbound-42",
+      MessageSidFull: "whatsapp:wa-inbound-42",
+    });
+  });
+
   it("replaces an empty audio caption with the transcript when transcription succeeds", async () => {
     transcribeFirstAudioMock.mockResolvedValueOnce("okay let's test this voice message");
 
