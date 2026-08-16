@@ -3222,7 +3222,6 @@ src/infra/delivery-queue-sqlite-namespace.ts	3
 src/infra/delivery-queue-sqlite.ts	4
 src/infra/delivery-queue-sqlite.types.ts	1
 src/infra/delivery-recovery.shared.ts	4
-src/infra/device-identity-store.ts	1
 src/infra/device-identity.ts	1
 src/infra/device-pairing-store.ts	6
 src/infra/diagnostic-event-listener-presence.ts	3
