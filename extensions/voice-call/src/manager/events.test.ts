@@ -752,15 +752,31 @@ describe("processEvent (functional)", () => {
     expect(call.direction).toBe("inbound");
   });
 
-  it("assigns per-call session keys to inbound calls when configured", () => {
+  it.each([
+    {
+      sessionScope: "per-call",
+      coreSession: undefined,
+      expectedSessionKey: (call: CallRecord) => `agent:main:voice:call:${call.callId}`,
+    },
+    {
+      sessionScope: "main",
+      coreSession: { mainKey: "work" },
+      expectedSessionKey: () => "agent:main:work",
+    },
+  ])("assigns $sessionScope session keys to inbound calls", ({
+    sessionScope,
+    coreSession,
+    expectedSessionKey,
+  }) => {
     const ctx = createContext({
       config: VoiceCallConfigSchema.parse({
         enabled: true,
         provider: "plivo",
         fromNumber: "+15550000000",
         inboundPolicy: "open",
-        sessionScope: "per-call",
+        sessionScope,
       }),
+      coreSession,
     });
     const event: NormalizedEvent = {
       id: "evt-inbound-session-scope",
@@ -776,7 +792,7 @@ describe("processEvent (functional)", () => {
     processEvent(ctx, event);
 
     const call = requireFirstActiveCall(ctx);
-    expect(call.sessionKey).toBe(`agent:main:voice:call:${call.callId}`);
+    expect(call.sessionKey).toBe(expectedSessionKey(call));
   });
 
   it("applies per-number inbound greeting and stores the matched route key", () => {

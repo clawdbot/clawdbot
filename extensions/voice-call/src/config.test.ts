@@ -469,11 +469,54 @@ describe("resolveVoiceCallConfig session routing", () => {
     ).toBe("agent:main:voice:call:call-123");
   });
 
-  it("scopes explicit voice session keys by configured agent", () => {
+  it.each([
+    {
+      name: "the default core session",
+      agentId: undefined,
+      coreSession: undefined,
+      expected: "agent:main:main",
+    },
+    {
+      name: "a custom core main key",
+      agentId: undefined,
+      coreSession: { mainKey: "work" },
+      expected: "agent:main:work",
+    },
+    {
+      name: "global core scope",
+      agentId: undefined,
+      coreSession: { scope: "global" as const },
+      expected: "global",
+    },
+    {
+      name: "a configured agent",
+      agentId: "ops",
+      coreSession: undefined,
+      expected: "agent:ops:main",
+    },
+  ])("routes main-scoped calls to $name", ({ agentId, coreSession, expected }) => {
     const config = resolveVoiceCallConfig({
       enabled: true,
       provider: "mock",
-      sessionScope: "per-call",
+      sessionScope: "main",
+      agentId,
+    });
+
+    expect(
+      resolveVoiceCallSessionKey({
+        config,
+        callId: "call-123",
+        phone: "+1 (555) 000-1111",
+        coreSession,
+      }),
+    ).toBe(expected);
+  });
+
+  it("lets an explicit session key override main scope", () => {
+    const config = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      sessionScope: "main",
     });
 
     expect(
