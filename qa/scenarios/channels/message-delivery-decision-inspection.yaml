@@ -91,11 +91,18 @@ flow:
         - assert:
             expr: "deliveryPrivacySentinels.every((value) => typeof value === 'string' && value.length > 0)"
             message: delivery QA messages did not expose complete real privacy sentinels
-        - call: sleep
-          args: [1000]
-        - set: deliveryActivity
-          value:
-            expr: "await runQaCli(env, ['audit', '--kind', 'message', '--direction', 'outbound', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })"
+        - call: waitForCondition
+          saveAs: deliveryActivity
+          args:
+            - lambda:
+                async: true
+                expr: >-
+                  runQaCli(env, ['audit', '--kind', 'message', '--direction', 'outbound', '--limit', '500', '--json'], { timeoutMs: 60000, json: true }).then((value) => {
+                    const terminal = value.events.find((event) => !deliveryEventsBefore.includes(event.eventId) && event.outcome === 'sent' && typeof event.runId === 'string');
+                    return terminal ? value : undefined;
+                  }).catch(() => undefined)
+            - 60000
+            - 250
         - set: deliveryRunId
           value:
             expr: "deliveryActivity.events.find((event) => !deliveryEventsBefore.includes(event.eventId) && event.outcome === 'sent' && typeof event.runId === 'string')?.runId"
