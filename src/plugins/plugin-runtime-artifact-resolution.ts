@@ -117,10 +117,13 @@ function resolvePreferredBuiltRuntimeArtifact(params: {
     }
     return { source, rootDir };
   }
-  if (params.packageManifest?.build?.bundledDist === false) {
-    return { source, rootDir };
-  }
-  const packageLocalArtifactSource = resolvePackageLocalDistRuntimeArtifact({ source, rootDir });
+  // Source-external plugins can leave package-local npm build output behind.
+  // Keep source authoritative over that output, but allow the lifecycle-owned root
+  // build to provide the fresh JavaScript artifact used by source checkouts.
+  const packageLocalArtifactSource =
+    params.packageManifest?.build?.bundledDist === false
+      ? null
+      : resolvePackageLocalDistRuntimeArtifact({ source, rootDir });
   if (packageLocalArtifactSource) {
     return { source: packageLocalArtifactSource, rootDir };
   }

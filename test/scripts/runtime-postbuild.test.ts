@@ -199,6 +199,8 @@ describe("runtime postbuild static assets", () => {
       }),
       "utf8",
     );
+    await fs.mkdir(path.join(packageDir, "assets"), { recursive: true });
+    await fs.writeFile(path.join(packageDir, "assets", "runtime.js"), "external asset\n", "utf8");
 
     expect(discoverStaticExtensionAssets({ rootDir, includeExternalPlugins: true })).toEqual([
       {
@@ -207,6 +209,13 @@ describe("runtime postbuild static assets", () => {
         dest: "dist/extensions/external-demo/assets/runtime.js",
       },
     ]);
+    copyStaticExtensionAssets({ rootDir, includeExternalPlugins: true });
+    expect(
+      await fs.readFile(
+        path.join(rootDir, "dist", "extensions", "external-demo", "assets", "runtime.js"),
+        "utf8",
+      ),
+    ).toBe("external asset\n");
   });
 
   it("copies declared static assets into dist", async () => {

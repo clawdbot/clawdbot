@@ -196,7 +196,12 @@ function discoverStaticExtensionRuntimeOverlayAssets(params: StaticExtensionAsse
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
   const assetsByDest = new Map<string, StaticExtensionAsset>();
-  for (const asset of params.assets ?? discoverStaticExtensionAssets({ rootDir, fs: fsImpl })) {
+  for (const asset of params.assets ??
+    discoverStaticExtensionAssets({
+      rootDir,
+      fs: fsImpl,
+      includeExternalPlugins: params.includeExternalPlugins,
+    })) {
     assetsByDest.set(asset.dest, asset);
   }
   for (const { dirName, packageDir } of listDistExtensionPackageDirs(rootDir, fsImpl)) {
@@ -278,7 +283,13 @@ export function listGeneratedExtensionAssetSources(params: StaticExtensionAssetP
 export function copyStaticExtensionAssets(params: StaticExtensionAssetParams = {}) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
-  const assets = params.assets ?? discoverStaticExtensionAssets({ rootDir, fs: fsImpl });
+  const assets =
+    params.assets ??
+    discoverStaticExtensionAssets({
+      rootDir,
+      fs: fsImpl,
+      includeExternalPlugins: params.includeExternalPlugins,
+    });
   const warn = params.warn ?? console.warn;
   for (const { src, dest } of assets) {
     const srcPath = path.join(rootDir, src);

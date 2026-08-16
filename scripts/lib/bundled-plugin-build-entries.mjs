@@ -78,10 +78,6 @@ function isManifestlessBundledRuntimeSupportPackage(params) {
   return params.topLevelPublicSurfaceEntries.length > 0;
 }
 
-function shouldBuildBundledDistEntry(packageJson) {
-  return packageJson?.openclaw?.build?.bundledDist !== false;
-}
-
 function isExcludedTopLevelPublicSurfaceFile(fileName) {
   const normalizedName = fileName.toLowerCase();
   return (
@@ -246,7 +242,14 @@ export function collectBundledPluginBuildEntries(params = {}) {
     if (!shouldBuildBundledCluster(dirName, env, { packageJson })) {
       continue;
     }
-    if (!shouldBuildBundledDistEntry(packageJson) && !dockerSelectedBuildIds?.has(dirName)) {
+    // Source checkouts compile every first-party plugin so runtime loading can
+    // stay on native JavaScript. Docker keeps its selected-plugin boundary to
+    // avoid carrying unrelated external plugin output into tailored images.
+    if (
+      packageJson?.openclaw?.build?.bundledDist === false &&
+      dockerSelectedBuildIds !== null &&
+      !dockerSelectedBuildIds.has(dirName)
+    ) {
       continue;
     }
     if (EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS.has(dirName)) {

@@ -595,7 +595,11 @@ const listRequiredStaticExtensionAssetOutputs = (deps: RunNodeRequirementDeps) =
   const runtimeRoot = path.join(deps.cwd, "dist-runtime");
   const runtimeExtensionsRoot = path.join(runtimeRoot, "extensions");
   const hasRuntimeOverlay = deps.fs.existsSync(runtimeExtensionsRoot);
-  return discoverStaticExtensionAssets({ rootDir: deps.cwd, fs: deps.fs })
+  return discoverStaticExtensionAssets({
+    rootDir: deps.cwd,
+    fs: deps.fs,
+    includeExternalPlugins: true,
+  })
     .filter((asset) => deps.fs.existsSync(path.join(deps.cwd, asset.src)))
     .flatMap((asset) => {
       const relativeOutput = normalizePath(asset.dest).replace(/^dist\//u, "");
