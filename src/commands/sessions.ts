@@ -156,20 +156,24 @@ const colorByPct = (label: string, pct: number | null, rich: boolean) => {
   return theme.muted(label);
 };
 
+// Matches `openclaw status` semantics: show the recorded total whenever one
+// exists, and withhold only the percentage when freshness provenance is missing.
 const formatTokensCell = (
   total: number | undefined,
+  freshTotal: number | undefined,
   contextTokens: number | null,
   rich: boolean,
 ) => {
+  const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
   if (total === undefined) {
-    const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
     const label = `unknown/${ctxLabel} (?%)`;
     return rich ? theme.muted(label.padEnd(TOKENS_PAD)) : label.padEnd(TOKENS_PAD);
   }
-  const totalLabel = formatKTokens(total);
-  const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
-  const pct = contextTokens ? Math.min(999, Math.round((total / contextTokens) * 100)) : null;
-  const label = `${totalLabel}/${ctxLabel} (${pct ?? "?"}%)`;
+  const pct =
+    contextTokens && freshTotal !== undefined
+      ? Math.min(999, Math.round((freshTotal / contextTokens) * 100))
+      : null;
+  const label = `${formatKTokens(total)}/${ctxLabel} (${pct ?? "?"}%)`;
   const padded = label.padEnd(TOKENS_PAD);
   return colorByPct(padded, pct, rich);
 };
@@ -513,7 +517,8 @@ export async function sessionsCommand(
       configuredContextTokens ??
       (await lookupContextTokensForDisplay(model)) ??
       configContextTokens;
-    const total = resolveFreshSessionTotalTokens(row);
+    const total = resolveSessionTotalTokens(row);
+    const freshTotal = resolveFreshSessionTotalTokens(row);
 
     const line = [
       ...(showAgentColumn
@@ -524,7 +529,7 @@ export async function sessionsCommand(
       formatSessionAgeCell(row.updatedAt, rich),
       formatSessionModelCell(model, rich),
       formatRuntimeCell(row.runtimeLabel, rich),
-      formatTokensCell(total, contextTokens ?? null, rich),
+      formatTokensCell(total, freshTotal, contextTokens ?? null, rich),
       formatSessionFlagsCell(row, rich),
     ].join(" ");
 

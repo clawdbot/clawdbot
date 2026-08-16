@@ -56,6 +56,28 @@ describe("sessionsCommand", () => {
     );
   });
 
+  it("shows recorded totals without a percentage when freshness provenance is missing", async () => {
+    // Regression: sessions rendered `unknown/... (?%)` for totals `status`
+    // still displayed, because the table dropped non-fresh recorded totals.
+    const store = await writeStore({
+      "agent:main:+15555550123": {
+        sessionId: "abc123",
+        updatedAt: Date.now() - 45 * 60_000,
+        totalTokens: 2000,
+        totalTokensFresh: true,
+        model: "test:opus",
+      },
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+
+    cleanupStore(store);
+
+    const row = logs.find((line) => line.includes("agent:main:+15555550123")) ?? "";
+    expect(row).toContain("2.0k/32k (?%)");
+  });
+
   it("renders the agent runtime in the tabular view", async () => {
     setMockSessionsConfig(() => ({
       agents: {
