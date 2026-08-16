@@ -123,7 +123,7 @@ const PROMPT_SNAPSHOT_ENTRY = "test/helpers/agents/happy-path-prompt-snapshots.t
 // The fallback planner and chunk-policy owner are part of the gate surface; changes to the
 // gate must not be able to skip the gated lane (#124412).
 const CORE_EXTENSION_IMPACT_SURFACE_RE =
-  /^scripts\/lib\/(?:ci-changed-node-test-plan|extension-test-plan)\.mts$/u;
+  /^scripts\/lib\/(?:changed-extensions|ci-changed-node-test-plan|extension-test-plan)\.mts$/u;
 
 /**
  * True when a changed path can influence generated prompt snapshots: it

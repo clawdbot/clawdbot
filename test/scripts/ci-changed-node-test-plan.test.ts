@@ -333,8 +333,15 @@ describe("CI changed Node test plan", () => {
     );
   });
 
+  it("covers every extension config when the extension inventory changes", () => {
+    expectAllExtensionConfigs(
+      createChangedExtensionFallbackShards(["scripts/lib/changed-extensions.mts"]),
+    );
+  });
+
   it("classifies core and fallback-gate extension impact", () => {
     expect(hasCoreExtensionImpact(["src/agents/openclaw-tools.ts"])).toBe(true);
+    expect(hasCoreExtensionImpact(["scripts/lib/changed-extensions.mts"])).toBe(true);
     expect(hasCoreExtensionImpact(["scripts/lib/ci-changed-node-test-plan.mts"])).toBe(true);
     expect(hasCoreExtensionImpact(["scripts/lib/extension-test-plan.mts"])).toBe(true);
     expect(hasCoreExtensionImpact(["extensions/discord/src/channel.ts"])).toBe(false);
