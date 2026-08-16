@@ -565,17 +565,11 @@ async function processDiscordMessageInner(
       ),
     );
   };
-  let dispatchResult: {
-    queuedFinal: boolean;
-    counts: Record<ReplyDispatchKind, number>;
-    settledReceipt?: {
-      anyVisibleDelivered: boolean;
-      counts: Record<
-        ReplyDispatchKind,
-        { delivered: number; failedBeforeSend: number; failedAfterSend: number }
-      >;
-    };
-  } | null = null;
+  type DispatchResult = Extract<
+    Awaited<ReturnType<typeof dispatchChannelInboundTurn>>,
+    { dispatched: true }
+  >["dispatchResult"];
+  let dispatchResult: DispatchResult | null = null;
   let dispatchError = false;
   let dispatchAborted = false;
   const deliverPendingToolWarningFinalIfNeeded = async () => {
