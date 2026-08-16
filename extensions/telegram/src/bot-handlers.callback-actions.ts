@@ -88,19 +88,24 @@ export function createTelegramCallbackMessageActions(params: {
   // place without leaving stale content behind: Telegram's "no text in the
   // message" edit rejection, or a rich-edit failure on a message that was
   // itself sent as rich (legacy-editing that leaves the prior rich body's
-  // markup visible underneath the new text — the #123886 symptom). Deleting
-  // then replying guarantees the visible result is exactly `text`, never a
-  // legacy edit overlapping the message's prior body. Delete failures (e.g.
-  // insufficient rights, message already gone) are swallowed so the reply
-  // still goes out instead of leaving the user with nothing.
+  // markup visible underneath the new text — the #123886 symptom). The
+  // replacement is sent *before* the original is deleted: by the time this
+  // runs, the underlying model selection is already applied, so if delete-
+  // then-send deleted first and the send then failed, the user would be left
+  // with neither the picker nor a confirmation despite the change having
+  // taken effect — a silent-failure outcome (ClawSweeper follow-up finding on
+  // #124222). Deleting only after a successful send keeps that failure mode
+  // impossible; delete failures (e.g. insufficient rights, message already
+  // gone) are swallowed since the new message already stands on its own.
   const deleteAndReplyCallbackMessage = async (
     text: string,
     replyParams?: TelegramCallbackReplyParams,
   ) => {
+    const sent = await replyToCallbackChat(text, replyParams);
     try {
       await deleteCallbackMessage();
     } catch {}
-    return await replyToCallbackChat(text, replyParams);
+    return sent;
   };
 
   const editCallbackMessage = async (

@@ -111,6 +111,50 @@ describe("createTelegramCallbackMessageActions editCallbackMessage", () => {
     expect(editMessageText).not.toHaveBeenCalled();
   });
 
+  it("sends the replacement before deleting the picker, so a send failure never destroys it", async () => {
+    // Regression for ClawSweeper's follow-up P2 finding on #124222: deleteAndReplyCallbackMessage
+    // used to delete the rich picker first and only then await the reply. By this point the
+    // model selection is already applied, so a send failure after that delete would leave the
+    // user with neither the picker nor a confirmation despite the change having taken effect --
+    // a silent-failure outcome. The order must be reversed, and a send failure must propagate
+    // without ever touching deleteMessage.
+    const rawEditMessageText = vi.fn(async () => {
+      throw new Error("400: Bad Request: some other failure");
+    });
+    const { bot, deleteMessage, sendMessage } = buildBot({ rawEditMessageText });
+    const actions = createTelegramCallbackMessageActions({
+      bot,
+      callbackMessage,
+      isForum: false,
+      richMessages: true,
+    });
+
+    await actions.editCallbackMessage("hello", undefined, helloBlocksOverride);
+
+    expect(sendMessage.mock.invocationCallOrder[0]).toBeLessThan(
+      requireValue(deleteMessage.mock.invocationCallOrder[0], "deleteMessage invocation order"),
+    );
+  });
+
+  it("propagates a replacement send failure without deleting the picker", async () => {
+    const rawEditMessageText = vi.fn(async () => {
+      throw new Error("400: Bad Request: some other failure");
+    });
+    const { bot, deleteMessage, sendMessage } = buildBot({ rawEditMessageText });
+    sendMessage.mockRejectedValueOnce(new Error("network error"));
+    const actions = createTelegramCallbackMessageActions({
+      bot,
+      callbackMessage,
+      isForum: false,
+      richMessages: true,
+    });
+
+    await expect(
+      actions.editCallbackMessage("hello", undefined, helloBlocksOverride),
+    ).rejects.toThrow("network error");
+    expect(deleteMessage).not.toHaveBeenCalled();
+  });
+
   it("re-raises 'message is not modified' from a rich edit without a legacy retry", async () => {
     const rawEditMessageText = vi.fn(async () => {
       throw new Error("400: Bad Request: message is not modified");
