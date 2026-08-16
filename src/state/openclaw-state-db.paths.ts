@@ -4,6 +4,7 @@ import path from "node:path";
 import { isMainThread, threadId } from "node:worker_threads";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { resolveStateDir } from "../config/paths.js";
+import type { AgentDatabasePathMigrationSummary } from "./openclaw-state-db-schema-repair.js";
 
 /**
  * Path helpers for the shared OpenClaw SQLite state database.
@@ -73,12 +74,6 @@ export function resolveOpenClawRegisteredAgentDatabasePath(
     : `${resolveOpenClawStateDirForDatabasePath(registryDatabasePath)}${path.sep}${storedPath}`;
 }
 
-type AgentPathMigrationObservation = {
-  relativized: number;
-  reanchored: string[];
-  deleted: string[];
-};
-
 type AgentPathMigrationLogger = {
   warn: (
     message: string,
@@ -86,7 +81,7 @@ type AgentPathMigrationLogger = {
   ) => void;
 };
 
-export function describeAgentPathMigration(summary: AgentPathMigrationObservation): string[] {
+export function describeAgentPathMigration(summary: AgentDatabasePathMigrationSummary): string[] {
   const { relativized, reanchored, deleted } = summary;
   if (relativized === 0 && reanchored.length === 0 && deleted.length === 0) {
     return [];
@@ -111,7 +106,7 @@ export function describeAgentPathMigration(summary: AgentPathMigrationObservatio
 
 export function warnAgentPathMigration(
   log: AgentPathMigrationLogger,
-  summary: AgentPathMigrationObservation,
+  summary: AgentDatabasePathMigrationSummary,
   databasePath: string,
 ): void {
   if (summary.reanchored.length === 0 && summary.deleted.length === 0) {
