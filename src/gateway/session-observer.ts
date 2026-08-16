@@ -221,6 +221,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   };
 
   const suspendStatesWithoutAudience = () => {
+    // Map iteration tolerates suspendState deleting the current entry.
     for (const state of states.values()) {
       if (!audience.has(state.sessionKey, state.agentId)) {
         suspendState(state);
@@ -724,8 +725,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     getCompanionSnapshot,
     dispose() {
       disposed = true;
-      pendingTerminalErrors.forEach(clearTimeoutFn);
-      pendingTerminalErrors.clear();
+      pendingTerminalErrors.forEach((_timer, runId) => clearPendingTerminalError(runId));
       preamblePublisher.dispose();
       unsubscribeChanges();
       for (const state of states.values()) {
