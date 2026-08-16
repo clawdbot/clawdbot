@@ -104,7 +104,11 @@ export const CHAINED_ASSERTION_EXCLUDED_ROOTS = [
   "extensions/whatsapp/src/session.ts", // Baileys WebSocket and emitter cleanup use undeclared runtime capabilities
   "extensions/workboard/src/store-core.ts", // legacy keyed store multiplexes cards, boards, subscriptions, and attachments
   "extensions/zalouser/src/zca-client.ts", // optional zca-js runtime is loaded through a local lazy module facade
-  "packages/ai",
+  "packages/ai/src/providers/anthropic.ts", // Anthropic compaction blocks are absent from the SDK content union
+  "packages/ai/src/providers/openai-chatgpt-responses.ts", // raw Codex events and runtime WebSockets outpace SDK and DOM types
+  "packages/ai/src/transports/openai-completions-transport.ts", // compatible-provider payloads are a superset of the OpenAI SDK request
+  "packages/ai/src/transports/openai-responses-params-internal.ts", // response formats bridge legacy caller and current SDK shapes
+  "packages/ai/src/transports/openai-responses-websocket.ts", // dual SDK ESM declarations split one client across nominal private fields
   "src/acp/client.ts", // Node and Web ReadableStream types live in separate namespaces.
   "src/acp/server.ts", // Node and Web ReadableStream types live in separate namespaces.
   "src/agents/agent-hooks/compaction-safeguard.ts", // AgentMessage custom roles exceed the Copilot header message contract.
@@ -148,7 +152,10 @@ export const CHAINED_ASSERTION_EXCLUDED_ROOTS = [
   "src/process/exec-spawn.ts", // Rebuilt Execa options cross its result generic.
   "src/proxy-capture/store.sqlite.ts", // Implementation preserves overloaded shipped constructor contracts.
   "src/trajectory/export.ts", // Legacy migration mutates pre-canonical transcript entries.
-  "ui/src",
+  "ui/src/app/native-bridge.ts", // WebView2 hosts augment Window outside the DOM type namespace
+  "ui/src/app/native-link-routing.ts", // WebKit hosts augment Window with native message handlers
+  "ui/src/app/native-window-drag.ts", // WebKit hosts augment Window with a native drag handler
+  "ui/src/pages/chat/chat-state-page.ts", // two-phase page construction assigns required host actions after state creation
 ];
 
 export function pathMatchesTypeAssertionRoot(repoPath, root) {

@@ -194,7 +194,7 @@ export function prepareClaudeNoPrefillRequestContext(model: Model, context: Cont
 }
 
 export function applyClaudeRequestContract(
-  params: Record<string, unknown>,
+  params: object,
   model: {
     id?: string;
     params?: Record<string, unknown>;
@@ -209,11 +209,11 @@ export function applyClaudeRequestContract(
   if (!requiresClaudeDefaultSampling(model) && !opus5 && !sonnet5) {
     return;
   }
-  delete params.temperature;
-  delete params.top_p;
-  delete params.top_k;
+  Reflect.deleteProperty(params, "temperature");
+  Reflect.deleteProperty(params, "top_p");
+  Reflect.deleteProperty(params, "top_k");
   if (opus5 || sonnet5) {
-    delete params.service_tier;
+    Reflect.deleteProperty(params, "service_tier");
   }
 }
 

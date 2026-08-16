@@ -64,7 +64,7 @@ import {
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
 } from "./performance.ts";
-import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
+import { reconcileChatRunLifecycle, type LocalTerminalReconcile } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import {
   cacheChatSessionSnapshot,
@@ -294,7 +294,7 @@ export type ChatState = {
   lastError: string | null;
   chatError?: string | null;
   chatRunError?: { summary: string } | null;
-  lastLocalTerminalReconcile?: { runId: string | null } | null;
+  lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
   chatReplyTarget?: unknown;
   agentsError?: string | null;
   onAgentsList?: (agentsList: AgentsListResult, client: GatewayBrowserClient) => boolean;

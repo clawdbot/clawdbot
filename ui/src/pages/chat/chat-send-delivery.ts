@@ -7,7 +7,7 @@ import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessio
 import { generateUUID } from "../../lib/uuid.ts";
 import { discardChatAttachmentDataUrls } from "./attachment-payload-store.ts";
 import { readChatResetTargetAccess } from "./chat-commands.ts";
-import { loadChatBranches, loadChatHistory, type ChatState } from "./chat-history.ts";
+import { loadChatBranches, loadChatHistory } from "./chat-history.ts";
 import {
   flushStoredChatOutbox,
   retryableGatewayDelayMs,
@@ -282,17 +282,17 @@ async function sendQueuedChatMessage(
   if (isVisible()) {
     host.chatSendingScopeKey = storedChatOutboxScopeKey(scope);
     host.chatSending = true;
-    resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
-    resetChatScroll(host as unknown as Parameters<typeof resetChatScroll>[0]);
+    resetToolStream(host);
+    resetChatScroll(host);
     setChatError(host, null);
-    reconcileChatRunLifecycle(host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
+    reconcileChatRunLifecycle(host, {
       clearRunStatus: true,
     });
   }
 
   try {
     const ack = prepared.skillWorkshopRevision
-      ? await requestSkillWorkshopRevisionChatSend(host as unknown as ChatState, {
+      ? await requestSkillWorkshopRevisionChatSend(host, {
           proposalId: prepared.skillWorkshopRevision.proposalId,
           ...(prepared.skillWorkshopRevision.agentId
             ? { agentId: prepared.skillWorkshopRevision.agentId }
@@ -302,7 +302,7 @@ async function sendQueuedChatMessage(
           runId,
           sessionKey,
         })
-      : await requestChatSend(host as unknown as ChatState, {
+      : await requestChatSend(host, {
           message,
           attachments: attachments.length ? attachments : undefined,
           runId,
@@ -338,20 +338,17 @@ async function sendQueuedChatMessage(
           { type: "sendFailed", runId },
           { scope: projectionScope },
         );
-        reconcileChatRunLifecycle(
-          host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
-          {
-            outcome: "interrupted",
-            sessionStatus: ack.status === "error" ? "failed" : "killed",
-            runId: ack.runId,
-            sessionKey,
-            clearLocalRun: true,
-            clearChatStream: true,
-            clearToolStream: true,
-            publishRunStatus: false,
-            armLocalTerminalReconcile: ack.runId === runId,
-          },
-        );
+        reconcileChatRunLifecycle(host, {
+          outcome: "interrupted",
+          sessionStatus: ack.status === "error" ? "failed" : "killed",
+          runId: ack.runId,
+          sessionKey,
+          clearLocalRun: true,
+          clearChatStream: true,
+          clearToolStream: true,
+          publishRunStatus: false,
+          armLocalTerminalReconcile: ack.runId === runId,
+        });
         setChatError(host, error);
         restoreComposer(host, options ?? {});
       }
@@ -399,21 +396,18 @@ async function sendQueuedChatMessage(
         }
       }
       if (ack.status === "ok") {
-        reconcileChatRunLifecycle(
-          host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
-          {
-            outcome: "done",
-            sessionStatus: "done",
-            runId: ack.runId,
-            sessionKey,
-            clearLocalRun: true,
-            clearChatStream: true,
-            clearToolStream: true,
-            publishRunStatus: false,
-            armLocalTerminalReconcile: true,
-          },
-        );
-        void loadChatHistory(host as unknown as ChatState);
+        reconcileChatRunLifecycle(host, {
+          outcome: "done",
+          sessionStatus: "done",
+          runId: ack.runId,
+          sessionKey,
+          clearLocalRun: true,
+          clearChatStream: true,
+          clearToolStream: true,
+          publishRunStatus: false,
+          armLocalTerminalReconcile: true,
+        });
+        void loadChatHistory(host);
       } else if (isNonTerminalAgentRunStatus(ack.status)) {
         const adopted = host.chatRunId === ack.runId;
         const adoptedStream = adopted && typeof host.chatStream === "string";
@@ -423,8 +417,7 @@ async function sendQueuedChatMessage(
         }
         if (!adoptedStream) {
           host.chatStream = "";
-          (host as ChatHost & { chatStreamStartedAt?: number | null }).chatStreamStartedAt =
-            startedAt;
+          host.chatStreamStartedAt = startedAt;
         }
       }
     }
@@ -544,10 +537,7 @@ async function sendQueuedChatMessage(
       setChatError(host, error);
       restoreComposer(host, options ?? {});
       if (activeLeafChanged) {
-        void Promise.all([
-          loadChatHistory(host as unknown as ChatState),
-          loadChatBranches(host as unknown as ChatState),
-        ]);
+        void Promise.all([loadChatHistory(host), loadChatBranches(host)]);
       }
     }
     recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, { error });
@@ -657,10 +647,7 @@ export async function deliverChatQueueItem(
     result = drainResult ?? "pending";
   }
   if (result === "sent" && host.sessionKey === sessionKey) {
-    setLastActiveSessionKey(
-      host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
-      sessionKey,
-    );
+    setLastActiveSessionKey(host, sessionKey);
     resetChatInputHistoryNavigation(host);
     if (options.restoreDraft && options.previousDraft?.trim()) {
       host.chatMessage = options.previousDraft;
@@ -674,7 +661,7 @@ export async function deliverChatQueueItem(
     host.sessionKey === routingSessionKey &&
     visibleSessionMatches(host, routingSessionKey, deliveryAgentId)
   ) {
-    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true);
+    scheduleChatScroll(host, true);
   }
   if (result === "sent" && host.sessionKey === sessionKey && !host.chatRunId) {
     void flushStoredChatOutbox(host, chatOutboxDrainDependencies);

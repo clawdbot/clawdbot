@@ -11,6 +11,7 @@ import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
+import type { ChatState } from "./chat-history.ts";
 import {
   clearPendingQueueItemsForRun,
   clearTransientQueuedMessageProjection,
@@ -29,32 +30,25 @@ import {
 } from "./chat-send-ack.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
-import { scheduleChatScroll } from "./scroll.ts";
-import {
-  appendChatMessageToCache,
-  readChatMessagesFromCache,
-  type ChatMessageCache,
-} from "./session-message-cache.ts";
+import { scheduleChatScroll, type ChatScrollHost } from "./scroll.ts";
+import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
 import { ackSteeredChip, buildInflightSteerChip, isAckedSteeredChip } from "./steered-chip.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
-type SteerLifecycleHost = ChatQueueScopedSessionHost & {
-  connected: boolean;
-  chatRunId: string | null;
-  chatMessages: unknown[];
-  currentSessionId?: string | null;
-  chatDisplayedLeafEntryId?: string | null;
-  chatMessagesBySession?: ChatMessageCache;
-  sessionsResult?: SessionsListResult | null;
-  lastError?: string | null;
-  chatError?: string | null;
-};
+type SteerLifecycleHost = ChatState &
+  ChatQueueScopedSessionHost & {
+    sessionsResult?: SessionsListResult | null;
+  };
+
+type SteerSendHost = SteerLifecycleHost &
+  ChatScrollHost &
+  Parameters<typeof setLastActiveSessionKey>[0];
 
 export type SteerSendDependencies = {
-  loadChatHistory: (host: SteerLifecycleHost) => void;
-  resumeRestoredOutbox: (host: SteerLifecycleHost, itemId: string) => void;
+  loadChatHistory: (host: SteerSendHost) => void;
+  resumeRestoredOutbox: (host: SteerSendHost, itemId: string) => void;
   sendChatMessage: (
-    host: SteerLifecycleHost,
+    host: SteerSendHost,
     message: string,
     attachments: ChatAttachment[] | undefined,
     options: {
@@ -320,7 +314,7 @@ function setChatError(host: SteerLifecycleHost, error: string | null): void {
 }
 
 export async function sendQueuedChatMessageWithQueueMode(
-  host: SteerLifecycleHost,
+  host: SteerSendHost,
   id: string,
   queueMode: QueueMode | undefined,
   dependencies: SteerSendDependencies,
@@ -507,16 +501,13 @@ export async function sendQueuedChatMessageWithQueueMode(
     releaseChatAttachmentPayloads(attachments);
   }
   if (itemStillVisible) {
-    setLastActiveSessionKey(
-      host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
-      itemSessionKey,
-    );
-    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+    setLastActiveSessionKey(host, itemSessionKey);
+    scheduleChatScroll(host);
   }
 }
 
 export function steerQueuedChatMessage(
-  host: SteerLifecycleHost,
+  host: SteerSendHost,
   id: string,
   dependencies: SteerSendDependencies,
 ): Promise<void> {

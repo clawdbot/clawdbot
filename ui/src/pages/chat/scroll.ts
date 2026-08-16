@@ -86,7 +86,7 @@ export function captureChatSessionScrollPosition(target: {
   };
 }
 
-type ChatScrollHost = {
+export type ChatScrollHost = {
   renderLifecycle: RenderLifecycle;
   querySelector: (selectors: string) => Element | null;
   chatScrollCommitCleanup: (() => void) | null;
