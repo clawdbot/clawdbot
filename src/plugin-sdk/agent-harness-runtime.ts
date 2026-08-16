@@ -121,8 +121,12 @@ type EmbeddedRunAttemptParamsBase = Omit<
   | "admittedRunContext"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
+  | "pluginHarnessToolPolicySafeDeniedTools"
   | "trajectoryRecorder"
->;
+> & {
+  /** Audited exact denies that the plugin harness must enforce against native equivalents. */
+  pluginHarnessToolPolicySafeDeniedTools?: readonly string[];
+};
 /**
  * @deprecated Use EmbeddedRunAttemptParamsV2. The optional capability keeps
  * existing harness source compatible through 2026-10-12.

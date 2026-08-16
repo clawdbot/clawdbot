@@ -17,8 +17,8 @@ import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-ty
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
 const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
 // Audited against @openai/codex 0.147.0 (rust-v0.147.0). These exact denies
-// target OpenClaw-owned capabilities with no Codex-native equivalent. Keep the
-// list positive and conservative: an omitted tool isolates the native surface.
+// either have no Codex-native equivalent or are enforced by the harness. Keep
+// the list positive and conservative: an omitted tool isolates the native surface.
 const CODEX_TOOL_POLICY_SAFE_DENY_NAMES = [
   "web_fetch",
   "x_search",
@@ -32,6 +32,7 @@ const CODEX_TOOL_POLICY_SAFE_DENY_NAMES = [
   "automations",
   "gateway",
   "skill_workshop",
+  "image_generate",
   "music_generate",
   "video_generate",
   "tts",

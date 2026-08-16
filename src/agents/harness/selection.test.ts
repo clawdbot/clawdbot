@@ -1303,9 +1303,15 @@ describe("runAgentHarnessAttempt", () => {
   });
 
   it("isolates native tools unless every exact deny is explicitly safe", async () => {
-    const received: boolean[] = [];
+    const received: Array<{
+      restricted: boolean;
+      safeDeniedTools?: readonly string[];
+    }> = [];
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
-      received.push(attempt.pluginHarnessToolPolicyRestricted === true);
+      received.push({
+        restricted: attempt.pluginHarnessToolPolicyRestricted === true,
+        safeDeniedTools: attempt.pluginHarnessToolPolicySafeDeniedTools,
+      });
       return createAttemptResult("codex");
     });
     const harness: AgentHarness = {
@@ -1315,6 +1321,7 @@ describe("runAgentHarnessAttempt", () => {
       conversationToolPolicySafeDenyTools: [
         "tts",
         "music_generate",
+        "image_generate",
         "browser",
         "unknown_native_tool",
       ],
@@ -1325,6 +1332,7 @@ describe("runAgentHarnessAttempt", () => {
     registerAgentHarness(harness, { ownerPluginId: "codex" });
 
     const policies = [
+      { deny: ["image_generate"] },
       { deny: ["tts", "music_generate"] },
       { deny: ["browser"] },
       { deny: ["exec"] },
@@ -1341,7 +1349,18 @@ describe("runAgentHarnessAttempt", () => {
       });
     }
 
-    expect(received).toEqual([false, false, true, true, true, true, true, true]);
+    expect(received.map((attempt) => attempt.restricted)).toEqual([
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
+    expect(received[0]?.safeDeniedTools).toEqual(["image_generate"]);
   });
 
   it("marks only explicit restrictive policy layers for plugin harness isolation", async () => {
