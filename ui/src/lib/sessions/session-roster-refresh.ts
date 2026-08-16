@@ -47,6 +47,8 @@ type FilteredSessionList = {
   queued: SessionRefreshOptions | null;
 };
 
+const CONTROL_MODEL_MAX_SESSION_PAGE_SIZE = 1_000;
+
 export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   let inFlight: Promise<void> | null = null;
   let queuedExplicitRefresh: SessionRefreshOptions | null = null;
@@ -360,9 +362,11 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   };
 
   const load = async (options: SessionRefreshOptions) => {
+    const requestedLimit = options.limit ?? DEFAULT_SESSION_LIST_QUERY.limit;
     if (
       (controlModel || host.controlModelLoader) &&
-      (!options.archivedFilter || options.archivedFilter === "active")
+      (!options.archivedFilter || options.archivedFilter === "active") &&
+      requestedLimit <= CONTROL_MODEL_MAX_SESSION_PAGE_SIZE
     ) {
       try {
         if (await ensureControlModel()) {

@@ -54,25 +54,13 @@ export function controlModelQuestionPromptCommand(
 
 type QuestionPromptState = Parameters<typeof submitQuestionPrompt>[0];
 
-export function controlModelRouteAgentId(
-  state: ChatControlModelConversationState,
-  sessionKey: string,
-): string | undefined {
-  return state.controlModelConversationSessionKey === sessionKey
-    ? (state.controlModelConversationAgentId ?? undefined)
-    : undefined;
-}
-
 export function controlModelChatInteractionProps(
   state: ChatControlModelConversationState,
   questionState: QuestionPromptState,
   sessionKey: string,
+  agentId?: string,
 ) {
-  const conversation = selectedControlModelConversationForRoute(
-    state,
-    sessionKey,
-    controlModelRouteAgentId(state, sessionKey),
-  );
+  const conversation = selectedControlModelConversationForRoute(state, sessionKey, agentId);
   return {
     controlModelArtifacts: conversation?.getSnapshot().artifacts,
     onGatewayQuestionSubmit: (id: string, answers: Record<string, string[]>) =>

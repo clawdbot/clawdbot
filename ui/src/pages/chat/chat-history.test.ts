@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   loadChatHistory,
+  loadOlderChatHistoryPage,
   rewindChatHistory,
   syncSelectedSessionMessageSubscription,
   switchChatHistoryBranch,
@@ -640,6 +641,37 @@ describe("canonical history snapshot projection", () => {
       expect.objectContaining({ content: "second authoritative" }),
     ]);
     expect(state.currentSessionId).toBe("session-one");
+  });
+
+  it("filters hidden transcript rows from older Control Model history", async () => {
+    const hidden = message("assistant", "NO_REPLY", { id: "hidden-reply", seq: 1 });
+    const visible = message("assistant", "older visible", { id: "visible-reply", seq: 2 });
+    const state = createState({ messages: [] });
+    const snapshot = {
+      metadata: null,
+      activeRun: null,
+      messages: [{ raw: hidden }, { raw: visible }],
+      history: {
+        window: "older",
+        nextOffset: null,
+        hasMore: false,
+        totalMessages: 2,
+        completeSnapshot: true,
+      },
+    } as unknown as ControlModelConversationSnapshot;
+    const conversation = {
+      getSnapshot: () => snapshot,
+      refreshHistory: vi.fn(),
+      loadMoreHistory: vi.fn(async () => undefined),
+    };
+    state.controlModel = {
+      conversation: vi.fn(() => conversation),
+      releaseConversation: vi.fn(async () => undefined),
+    } as unknown as ControlModel;
+
+    await expect(loadOlderChatHistoryPage(state, 1)).resolves.toMatchObject({
+      messages: [visible],
+    });
   });
 
   function message(role: "assistant" | "user", text: string, metadata?: Record<string, unknown>) {

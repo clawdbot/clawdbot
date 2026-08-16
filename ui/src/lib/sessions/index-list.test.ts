@@ -145,6 +145,96 @@ describe("session list requests", () => {
     sessions.dispose();
   });
 
+  it("uses the Gateway to refresh a visible roster larger than the model page bound", async () => {
+    let catalog: ControlModelSessionCatalogSnapshot = {
+      status: "idle",
+      query: {},
+      ts: null,
+      path: null,
+      count: 0,
+      sessions: [],
+      totalCount: 0,
+      limitApplied: null,
+      offset: null,
+      nextOffset: null,
+      hasMore: false,
+      creators: [],
+      defaults: null,
+      refreshedAt: null,
+      error: null,
+    };
+    const refreshSessions = vi.fn(async (_options: unknown, query?: Record<string, unknown>) => {
+      const offset = typeof query?.offset === "number" ? query.offset : 0;
+      const sessions = Array.from({ length: 1_000 }, (_, index) => ({
+        key: `agent:main:model-${offset + index}`,
+        kind: "direct" as const,
+      }));
+      catalog = {
+        ...catalog,
+        status: "ready",
+        query: query ?? {},
+        count: sessions.length,
+        sessions,
+        totalCount: 2_000,
+        offset,
+        nextOffset: offset === 0 ? 1_000 : null,
+        hasMore: offset === 0,
+        refreshedAt: offset + 1,
+      };
+    });
+    const model = {
+      getSnapshot: () => ({
+        revision: 1,
+        lifecycle: "running",
+        connection: { status: "connected", epoch: 1 },
+        sessionCatalog: catalog,
+      }),
+      subscribe: () => () => undefined,
+      start: vi.fn(),
+      refreshSessions,
+      conversation: vi.fn(),
+      releaseConversation: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+    } as unknown as ControlModel;
+    const request = vi.fn(async (_method: string, params?: ListParams) => {
+      const limit = params?.limit ?? 50;
+      return listResult(Array.from({ length: limit }, (_, index) => `agent:main:gateway-${index}`));
+    });
+    const sessions = createSessionCapability({
+      snapshot: {
+        client: { request } as unknown as GatewayBrowserClient,
+        phase: "connected",
+        sessionKey: "agent:main:main",
+        assistantAgentId: "main",
+        hello: null,
+      },
+      controlModel: model,
+      loadControlModelCatalog: async () => model,
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    });
+
+    await sessions.refresh({ agentId: "main", limit: 1_000, force: true });
+    await sessions.refresh({
+      agentId: "main",
+      limit: 1_000,
+      offset: 1_000,
+      append: true,
+      force: true,
+    });
+    expect(sessions.state.result?.sessions).toHaveLength(2_000);
+
+    await sessions.refresh({ agentId: "main", limit: 2_000, force: true });
+
+    expect(request).toHaveBeenCalledWith(
+      "sessions.list",
+      expect.objectContaining({ agentId: "main", limit: 2_000 }),
+    );
+    expect(refreshSessions).toHaveBeenCalledTimes(2);
+    expect(sessions.state.result?.sessions).toHaveLength(2_000);
+    sessions.dispose();
+  });
+
   it("falls back to sessions.list when the Control Model chunk fails to load", async () => {
     let eventListener: ((event: { event: string; payload: unknown }) => void) | undefined;
     let modelLoadAttempts = 0;

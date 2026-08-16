@@ -314,7 +314,12 @@ export class ChatPane extends ChatPaneBrowserAnnotationRender {
       // forced false), and a hide/show from any surface must reach the gateway.
       onObserverVisibilityChange: this.setSessionObserverVisibility,
       gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
-      ...controlModelChatInteractionProps(state, this.questionPromptState, state.sessionKey),
+      ...controlModelChatInteractionProps(
+        state,
+        this.questionPromptState,
+        state.sessionKey,
+        currentAgentId,
+      ),
       onGatewayQuestionChange: () => {
         this.questionPrompts = [...this.questionPrompts];
         this.requestUpdate();

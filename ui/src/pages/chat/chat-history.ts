@@ -1824,7 +1824,11 @@ export async function loadOlderChatHistoryPage(
       return undefined;
     }
     await conversation.loadMoreHistory();
-    return controlModelHistoryResult(state, conversation.getSnapshot());
+    const result = controlModelHistoryResult(state, conversation.getSnapshot());
+    return {
+      ...result,
+      messages: visibleChatHistoryMessages(result.messages),
+    };
   }
   const ownership = beginChatHistoryRequest(
     state,
