@@ -116,16 +116,14 @@ async function tryCancelGatewayOwnedTaskViaGateway(
       timeoutMs: 5_000,
     });
   } catch (error) {
-    if (task.runtime === "acp") {
-      const detail = error instanceof Error ? error.message : String(error);
-      return {
-        found: true,
-        cancelled: false,
-        reason: `ACP task cancellation requires the live Gateway tasks.cancel path: ${detail}`,
-        task,
-      };
-    }
-    return null;
+    const detail = error instanceof Error ? error.message : String(error);
+    const runtimeLabel = task.runtime === "acp" ? "ACP" : "Cron";
+    return {
+      found: true,
+      cancelled: false,
+      reason: `${runtimeLabel} task cancellation requires the live Gateway tasks.cancel path: ${detail}`,
+      task,
+    };
   }
 }
 
