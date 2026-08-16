@@ -354,6 +354,7 @@ describe("session menu", () => {
     const input = submenu.querySelector<HTMLInputElement>(".session-menu__icon-custom-input");
     const set = submenu.querySelector<HTMLButtonElement>(".session-menu__icon-set");
     expect(input).not.toBeNull();
+    expect(input?.getAttribute("aria-label")).toBe("Custom emoji");
     expect(document.activeElement).toBe(input);
     expect(set?.disabled).toBe(true);
 

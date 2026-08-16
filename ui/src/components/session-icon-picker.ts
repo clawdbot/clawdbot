@@ -66,6 +66,7 @@ function renderCustomSessionIconEntry(props: SessionIconPickerProps) {
           type="text"
           autocomplete="off"
           autofocus
+          aria-label=${t("sessionsView.customEmojiTitle")}
           .value=${props.customIconValue}
           @input=${props.onInput}
         />
