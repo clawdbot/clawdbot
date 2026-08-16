@@ -1,14 +1,22 @@
-import type { AgentMessage } from "../../agents/runtime/index.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 
+type AssistantDirectiveMessage = {
+  content?: unknown;
+  openclawDelivery?: unknown;
+  role?: unknown;
+};
+
 /** Strips final-answer directives in place so live state and persisted bytes stay identical. */
-export function applyAssistantDeliveryDirectives(message: AgentMessage): AgentMessage {
-  if (message.role !== "assistant") {
+export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMessage>(
+  message: T,
+): T {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) {
     return message;
   }
-  let facts: NonNullable<typeof message.openclawDelivery> | undefined;
+  let facts: { audioAsVoice?: true; replyToCurrent?: true; replyToId?: string } | undefined;
   for (const block of message.content) {
-    if (block.type !== "text") {
+    if (!isRecord(block) || block.type !== "text" || typeof block.text !== "string") {
       continue;
     }
     const parsed = parseInlineDirectives(block.text);
@@ -24,7 +32,7 @@ export function applyAssistantDeliveryDirectives(message: AgentMessage): AgentMe
     });
   }
   if (facts) {
-    message.openclawDelivery = facts;
+    Object.assign(message, { openclawDelivery: facts });
   }
   return message;
 }

@@ -47,7 +47,7 @@ function createBlockSentinel(text: string): string {
   return sentinel;
 }
 
-function replaceOutsideCode(
+export function replaceOutsideCodeRegions(
   text: string,
   regex: RegExp,
   replacement: (match: string, captures: unknown[], offset: number, source: string) => string,
@@ -117,8 +117,8 @@ export function stripInlineDirectiveTagsForDisplay(text: string): StripInlineDir
   if (!text) {
     return { text, changed: false };
   }
-  const withoutAudio = replaceOutsideCode(text, AUDIO_TAG_RE, () => "");
-  const stripped = replaceOutsideCode(withoutAudio, REPLY_TAG_RE, () => "");
+  const withoutAudio = replaceOutsideCodeRegions(text, AUDIO_TAG_RE, () => "");
+  const stripped = replaceOutsideCodeRegions(withoutAudio, REPLY_TAG_RE, () => "");
   return {
     text: stripped,
     changed: stripped !== text,
@@ -163,7 +163,7 @@ export function stripInlineDirectiveTagsForDelivery(text: string): StripInlineDi
   if (!text) {
     return { text, changed: false };
   }
-  const stripped = replaceOutsideCode(text, INLINE_DIRECTIVE_TAG_WITH_PADDING_RE, () => " ");
+  const stripped = replaceOutsideCodeRegions(text, INLINE_DIRECTIVE_TAG_WITH_PADDING_RE, () => " ");
   const changed = stripped !== text;
   return {
     text: changed ? stripped.trim() : text,
@@ -236,13 +236,13 @@ export function parseInlineDirectives(
   let sawCurrent = false;
   let lastExplicitId: string | undefined;
 
-  cleaned = replaceOutsideCode(cleaned, AUDIO_TAG_RE, (match, _captures, offset, source) => {
+  cleaned = replaceOutsideCodeRegions(cleaned, AUDIO_TAG_RE, (match, _captures, offset, source) => {
     audioAsVoice = true;
     hasAudioTag = true;
     return stripAudioTag ? replacementPreservesWordBoundary(source, offset, match.length) : match;
   });
 
-  cleaned = replaceOutsideCode(cleaned, REPLY_TAG_RE, (match, captures, offset, source) => {
+  cleaned = replaceOutsideCodeRegions(cleaned, REPLY_TAG_RE, (match, captures, offset, source) => {
     const idRaw = typeof captures[0] === "string" ? captures[0] : undefined;
     hasReplyTag = true;
     if (idRaw === undefined) {
