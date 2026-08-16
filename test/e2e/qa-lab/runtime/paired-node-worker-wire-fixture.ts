@@ -31,7 +31,7 @@ const execFileAsync = promisify(execFile);
 const NODE_DISPLAY_NAME = "QA Gateway-bundle worker node";
 
 export type WireGateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
-export type WireGatewayEvent = { event: string; payload?: unknown };
+type WireGatewayEvent = { event: string; payload?: unknown };
 export type WireNodeRead = {
   nodeId: string;
   approvalState?: string;
@@ -231,7 +231,7 @@ async function ensureNodeApproved(operator: GatewayClient, nodeId: string): Prom
   return false;
 }
 
-export async function waitForApprovedWireNode(
+async function waitForApprovedWireNode(
   operator: GatewayClient,
   nodeId: string,
 ): Promise<WireNodeRead> {
