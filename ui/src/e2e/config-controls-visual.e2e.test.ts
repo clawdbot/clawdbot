@@ -327,17 +327,6 @@ suite.define(() => {
           }
 
           await page.goto(`${suite.server.baseUrl}chat`);
-          await expect
-            .poll(() =>
-              page.evaluate(async () => {
-                await customElements.whenDefined("openclaw-browser-panel");
-                const panel = document.querySelector<HTMLElement & { available?: boolean }>(
-                  "openclaw-browser-panel",
-                );
-                return { available: panel?.available === true };
-              }),
-            )
-            .toEqual({ available: true });
           await page.evaluate(() => {
             const link = document.createElement("a");
             link.href = "https://example.com/application-handled";
@@ -390,7 +379,13 @@ suite.define(() => {
             method: "POST",
             path: "/tabs/open",
           });
-          const browserPanel = page.locator("openclaw-browser-panel");
+          const browserPanel = page.locator("openclaw-browser-panel[embedded]");
+          await browserPanel.waitFor();
+          expect(
+            await browserPanel.evaluate(
+              (panel) => (panel as HTMLElement & { available?: boolean }).available,
+            ),
+          ).toBe(true);
           await browserPanel.getByText("Example", { exact: true }).first().waitFor();
           await expect
             .poll(

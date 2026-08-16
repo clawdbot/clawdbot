@@ -265,6 +265,14 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+function readCompletePidFile(pidPath: string): number | undefined {
+  if (!existsSync(pidPath)) {
+    return undefined;
+  }
+  const pid = Number.parseInt(readFileSync(pidPath, "utf8"), 10);
+  return Number.isInteger(pid) ? pid : undefined;
+}
+
 async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
@@ -1275,9 +1283,10 @@ setInterval(() => {}, 1000);
         timeoutMs: 250,
       });
 
-      await waitFor(() => existsSync(grandchildPidPath));
-      grandchildPid = Number.parseInt(readFileSync(grandchildPidPath, "utf8"), 10);
-      expect(Number.isInteger(grandchildPid)).toBe(true);
+      await waitFor(() => {
+        grandchildPid = readCompletePidFile(grandchildPidPath) ?? 0;
+        return grandchildPid > 0;
+      });
       expect(isProcessAlive(grandchildPid)).toBe(true);
 
       await expect(runPromise).resolves.toMatchObject({ timedOut: true });
@@ -1494,9 +1503,10 @@ await runShellCommand({
         cwd: process.cwd(),
         stdio: ["ignore", "ignore", "pipe"],
       });
-      await waitFor(() => existsSync(readyPath) && existsSync(grandchildPidPath));
-      grandchildPid = Number.parseInt(readFileSync(grandchildPidPath, "utf8"), 10);
-      expect(Number.isInteger(grandchildPid)).toBe(true);
+      await waitFor(() => {
+        grandchildPid = readCompletePidFile(grandchildPidPath) ?? 0;
+        return existsSync(readyPath) && grandchildPid > 0;
+      });
       expect(isProcessAlive(grandchildPid)).toBe(true);
 
       runner.kill("SIGTERM");

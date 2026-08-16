@@ -511,16 +511,22 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       } catch (error) {
         const pendingWorkspaceResult = options.placements
           .listPendingWorkspaceResults()
-          .some(
+          .find(
             (pending) =>
               pending.sessionId === turnClaim.sessionId &&
               pending.claimId === turnClaim.claimId &&
               pending.runId === turnClaim.runId,
           );
         if (pendingWorkspaceResult) {
-          // A recovery sweep owns the still-live worker claim. Teardown here
-          // could discard the terminal event's durably fenced file results.
-          options.placements.handoffWorkspaceResultRecovery(turnClaim);
+          if (turnClaim.owner.kind === "local") {
+            // The Gateway-owned run is already terminal. Atomically record the
+            // reconciliation failure before teardown so reclaim cannot see live work.
+            options.placements.failWorkspaceResultAndReleaseTurn(pendingWorkspaceResult, error);
+          } else {
+            // A recovery sweep owns the still-live worker claim. Teardown here
+            // could discard the terminal event's durably fenced file results.
+            options.placements.handoffWorkspaceResultRecovery(turnClaim);
+          }
           await options.recoverPendingWorkspaceResult(placement.environmentId);
           throw error;
         }

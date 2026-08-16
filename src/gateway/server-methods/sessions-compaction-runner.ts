@@ -100,6 +100,7 @@ export async function runGatewaySessionCompaction(
     cfg: params.cfg,
   });
   return await compactEmbeddedAgentSession({
+    contextEngineAgentId: params.agentId,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
