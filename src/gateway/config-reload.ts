@@ -12,6 +12,7 @@ import {
   readLatestConfigSnapshotAuditRecord,
   upsertConfigSnapshotAuditRecord,
 } from "../config/config-journal-snapshot.js";
+import { getConfigValueAtPath } from "../config/config-paths.js";
 import {
   appendConfigAuditRecordSync,
   capConfigAuditIssues,
@@ -87,6 +88,21 @@ function matchesSkillsInvalidationPrefix(path: string): boolean {
 
 function firstSkillsChangedPath(changedPaths: string[]): string | undefined {
   return changedPaths.find(matchesSkillsInvalidationPrefix);
+}
+
+/**
+ * Restart-owned paths of an admitted restart plan, mirroring the restart
+ * coordinator's `restartOwnedPaths` contract: explicit restart reasons that
+ * map to changed paths win, otherwise the full changed-path set owns the
+ * restart. The revert-cancel check compares only these fields so a partial
+ * revert can retire planner-derived deferred restart debt even when an
+ * intervening hot-applied change stays different.
+ */
+function restartOwnedPathsFor(plan: GatewayReloadPlan): string[] {
+  const explicitRestartPaths = plan.restartReasons.filter((path) =>
+    plan.changedPaths.includes(path),
+  );
+  return explicitRestartPaths.length > 0 ? explicitRestartPaths : [...plan.changedPaths];
 }
 
 type GatewayConfigReloader = {
@@ -296,6 +312,13 @@ export function startGatewayConfigReloader(opts: {
   // applies. Reset when the pending restart is cancelled (and implicitly on
   // process restart, which reinitializes the reloader).
   let pendingRestartBaseCompareConfig: unknown = null;
+  // Restart-owned paths of the pending deferred restart (mirroring the restart
+  // coordinator's restartOwnedPaths contract). The revert-cancel check compares
+  // only these fields between the deferral base and the settling candidate, so
+  // an intervening hot-applied change that stays different does not prevent a
+  // partial revert of a restart-owned field from cancelling the deferred
+  // restart. Reset together with the deferral base.
+  let pendingRestartOwnedPaths: string[] | null = null;
   const resolveSettings = (config: OpenClawConfig) => {
     const resolved = resolveGatewayReloadSettings(config);
     return opts.testDebounceMs === undefined
@@ -774,9 +797,22 @@ export function startGatewayConfigReloader(opts: {
       plan.restartGateway &&
       !followUp.requiresRestart &&
       !pendingRestartWasExplicit &&
-      isDeepStrictEqual(
-        nextCompareConfig,
-        pendingRestartBaseCompareConfig ?? runtimeAppliedCompareConfig,
+      pendingRestartOwnedPaths !== null &&
+      pendingRestartOwnedPaths.length > 0 &&
+      pendingRestartOwnedPaths.every((path) =>
+        isDeepStrictEqual(
+          getConfigValueAtPath(
+            nextCompareConfig as unknown as Record<string, unknown>,
+            path.split("."),
+          ),
+          getConfigValueAtPath(
+            (pendingRestartBaseCompareConfig ?? runtimeAppliedCompareConfig) as unknown as Record<
+              string,
+              unknown
+            >,
+            path.split("."),
+          ),
+        ),
       );
     if (nextSettings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
@@ -825,6 +861,7 @@ export function startGatewayConfigReloader(opts: {
       runtimeAppliedCompareConfig = nextCompareConfig;
       pendingRestartWasExplicit = false;
       pendingRestartBaseCompareConfig = null;
+      pendingRestartOwnedPaths = null;
       return;
     }
     if (followUp.requiresRestart) {
@@ -841,6 +878,7 @@ export function startGatewayConfigReloader(opts: {
       // planner-derived deferral debt armed before the rejected write.
       pendingRestartWasExplicit = true;
       pendingRestartBaseCompareConfig ??= runtimeAppliedCompareConfig;
+      pendingRestartOwnedPaths ??= restartOwnedPathsFor(plan);
       await commitReloadBaseline();
       return;
     }
@@ -854,6 +892,7 @@ export function startGatewayConfigReloader(opts: {
       // Capture the revert baseline only after admission succeeds so a
       // rejected planner-derived restart cannot stale the cancellation base.
       pendingRestartBaseCompareConfig ??= runtimeAppliedCompareConfig;
+      pendingRestartOwnedPaths ??= restartOwnedPathsFor(plan);
       await commitReloadBaseline();
       return;
     }
