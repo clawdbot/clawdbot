@@ -810,6 +810,12 @@ export const en: TranslationMap = {
     cloudSetupInterrupted:
       "This cloud session's setup was interrupted. Check recent sessions before starting this task again.",
     catalogUnavailable: "This session target is unavailable.",
+    restoringPreferences: "Restoring your last session setup…",
+    checkingPlace: "Checking the selected place…",
+    cloudNotReady: "The cloud worker isn't ready yet. Try again in a moment.",
+    agentsUnavailable: "No agents are available on this Gateway yet.",
+    nodeUnavailable: "The selected device is unavailable. Pick another place.",
+    terminalNeedsFolder: "Pick a folder before starting in a terminal.",
     what: "What",
     detail: "Detail",
     local: "Local",

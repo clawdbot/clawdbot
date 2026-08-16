@@ -539,6 +539,13 @@ wa-dropdown.new-session-page__start-menu {
   opacity: 0.5;
 }
 
+/* Reason shown after Enter/Start is pressed while a submit gate blocks it. */
+.new-session-page__blocked-submit {
+  padding: 4px var(--chat-box-inset) 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .new-session-page__start-submit[aria-busy="true"] svg {
     animation: none;
