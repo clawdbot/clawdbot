@@ -209,14 +209,6 @@ export async function handleSendChat(
   );
   const hasAttachments = attachmentsToSend.length > 0;
   const skillWorkshopRevision = opts?.skillWorkshopRevision;
-  // Materialize hidden annotation context before command classification and queue admission.
-  // Delivery and retry consume this snapshot; they must not re-read or recompose attachments.
-  const message = composeBrowserAnnotationContext(userMessage, attachmentsToSend);
-
-  if (!message && !hasAttachments) {
-    return;
-  }
-
   const requestedEditId = opts?.resumeQueuedMessageEditId;
   const inlineEdit = requestedEditId ? activeQueuedMessageEdit(host) : null;
   if (requestedEditId != null && !inlineEdit) {
@@ -224,14 +216,27 @@ export async function handleSendChat(
   }
   const isInlineEditSubmission = requestedEditId != null && inlineEdit?.id === requestedEditId;
   const submittedInlineEditRevision = isInlineEditSubmission ? inlineEdit.revision : null;
-  const parsedCommand = !skillWorkshopRevision ? parseSlashCommand(message) : null;
-  if (isInlineEditSubmission && (parsedCommand || isChatStopCommand(message))) {
+  // Classify the operator's raw row draft before browser annotation context is
+  // prepended. Otherwise annotation text can hide /stop, /compact, or a stop
+  // alias from the inline-edit command fence.
+  const rawParsedCommand = !skillWorkshopRevision ? parseSlashCommand(userMessage) : null;
+  if (isInlineEditSubmission && (rawParsedCommand || isChatStopCommand(userMessage))) {
     setChatError(
       host,
       "Queued-row edits cannot run commands or stop aliases. Cancel this edit and send the command from the composer.",
     );
     return;
   }
+
+  // Materialize hidden annotation context once after inline-edit classification.
+  // Delivery and retry consume this snapshot; they must not re-read or recompose attachments.
+  const message = composeBrowserAnnotationContext(userMessage, attachmentsToSend);
+
+  if (!message && !hasAttachments) {
+    return;
+  }
+
+  const parsedCommand = !skillWorkshopRevision ? parseSlashCommand(message) : null;
 
   if (!skillWorkshopRevision) {
     // Natural stop aliases require a run; explicit /stop is always available.

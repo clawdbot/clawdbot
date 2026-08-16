@@ -9,8 +9,10 @@ import {
   replaceSlashCommands,
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import { applyRemoteSlashCommandsResult } from "./chat-commands.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { admitQueuedMessageForSession, subscribeChatOutboxProjection } from "./chat-queue.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -22,6 +24,10 @@ import {
 } from "./chat-state-refresh.ts";
 import { resolveChatAvatarUrl, selectedChatSessionRow } from "./chat-state-route.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
+import {
+  beginQueuedMessageEdit,
+  QUEUED_MESSAGE_EDIT_CONFLICT_ERROR,
+} from "./queued-message-edit.ts";
 
 beforeEach(() => {
   vi.spyOn(assistantIdentity, "loadLocalAssistantIdentity").mockReturnValue({
@@ -1388,6 +1394,68 @@ describe("session pull request refresh", () => {
       expect(refreshSessionPullRequests).toHaveBeenCalledWith({ refresh: true });
     } else {
       expect(refreshSessionPullRequests).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe("queued message edit page actions", () => {
+  it("surfaces a peer edit conflict and invalidates the render", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const invalidate = vi.fn();
+    const context = {
+      agents: {
+        state: { agentsList: null },
+        adoptList: vi.fn(),
+      },
+      agentSelection: { state: { selectedId: "main" } },
+      basePath: "",
+      config: {
+        current: {
+          allowExternalEmbedUrls: false,
+          assistantIdentity: { name: "Assistant" },
+          embedSandboxMode: "scripts",
+          localMediaPreviewRoots: [],
+        },
+      },
+      initialUserMessage: createInitialUserMessageHandoff(),
+      sessions: {},
+    } as unknown as ApplicationContext;
+    const state = createPageState(
+      context,
+      { invalidate, afterCommit: () => () => {} },
+      { querySelector: () => null },
+    );
+    state.sessionKey = "main";
+    const peer = makeChatHost({
+      connected: false,
+      sessionKey: "main",
+      settings: { gatewayUrl: state.settings.gatewayUrl },
+    });
+    const unsubscribeState = subscribeChatOutboxProjection(state as never);
+    const unsubscribePeer = subscribeChatOutboxProjection(peer as never);
+
+    try {
+      expect(
+        admitQueuedMessageForSession(peer as never, "main", {
+          id: "queued-1",
+          text: "message 1",
+          createdAt: 1_000,
+          sendState: "waiting-reconnect",
+          sessionKey: "main",
+        }),
+      ).toBe(true);
+      expect(beginQueuedMessageEdit(peer as never, "queued-1")).toBe("started");
+
+      invalidate.mockClear();
+      state.editQueuedChatMessage("queued-1");
+
+      expect(state.chatError).toBe(QUEUED_MESSAGE_EDIT_CONFLICT_ERROR);
+      expect(state.lastError).toBe(QUEUED_MESSAGE_EDIT_CONFLICT_ERROR);
+      expect(state.chatQueuedEdit).toBeUndefined();
+      expect(invalidate).toHaveBeenCalledOnce();
+    } finally {
+      unsubscribeState();
+      unsubscribePeer();
     }
   });
 });

@@ -346,7 +346,9 @@ export function createPageState(
     renderLifecycle.invalidate();
   };
   state.editQueuedChatMessage = (id) => {
-    beginQueuedMessageEdit(state, id);
+    if (beginQueuedMessageEdit(state, id) === "unavailable") {
+      setChatError(state, QUEUED_MESSAGE_EDIT_CONFLICT_ERROR);
+    }
     renderLifecycle.invalidate();
   };
   state.updateQueuedChatMessageEdit = (draftText) => {

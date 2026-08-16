@@ -170,6 +170,38 @@ describe("queued message edit round-trip", () => {
     },
   );
 
+  it("fences a raw inline command even when annotation context is attached", async () => {
+    const annotation = {
+      id: "queued-annotation",
+      dataUrl: "data:image/png;base64,aQ==",
+      mimeType: "image/png",
+      browserAnnotation: {
+        modelContext: "Inspect the marked region.",
+        title: "Annotated page",
+        displayUrl: "https://example.com/annotated",
+        markedRegionCount: 1,
+        inspectedElement: false,
+      },
+    } satisfies ChatAttachment;
+    const { host, unsubscribe } = queueHost([{ attachments: [annotation] }], {
+      chatRunId: "run-active",
+    });
+    expect(beginQueuedMessageEdit(host as never, "queued-1")).toBe("started");
+
+    await handleSendChat(host as never, "/stop", {
+      attachmentsOverride: [annotation],
+      resumeQueuedMessageEditId: "queued-1",
+    });
+
+    expect(storedOrder(host)).toEqual(["message 1"]);
+    expect(isQueuedMessageBeingEdited(host as never, "queued-1")).toBe(true);
+    expect(host.request?.mock.calls.some(([method]) => method === "chat.send") ?? false).toBe(
+      false,
+    );
+    expect(host.chatError).toContain("Queued-row edits cannot run commands or stop aliases");
+    unsubscribe();
+  });
+
   it("rejects a stale second-pane replacement after the source is retired", async () => {
     const paneA = makeChatHost({ sessionKey: SESSION_KEY, connected: false });
     const paneB = makeChatHost({ sessionKey: SESSION_KEY, connected: false });
