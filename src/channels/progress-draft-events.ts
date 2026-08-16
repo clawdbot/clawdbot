@@ -11,10 +11,17 @@ type ProgressPayload<TEvent extends ChannelProgressDraftLineInput["event"]> = Om
   "event"
 >;
 
+type DetailMode = "explain" | "raw" | "plain";
 type ToolProgressPayload = ProgressPayload<"tool"> & {
-  detailMode?: "explain" | "raw" | "plain";
+  detailMode?: DetailMode;
 };
-type ItemProgressPayload = Omit<ProgressPayload<"item">, "itemKind"> & { kind?: string };
+type ItemProgressPayload = Omit<ProgressPayload<"item">, "itemKind"> & {
+  kind?: string;
+  detailMode?: DetailMode;
+};
+type CommandOutputProgressPayload = ProgressPayload<"command-output"> & {
+  detailMode?: DetailMode;
+};
 type ChannelProgressDraftEventLine = string | ChannelProgressDraftLine;
 export type ChannelProgressDraftEventLineBuilder = (
   input: ChannelProgressDraftLineInput,
@@ -33,7 +40,7 @@ export function createChannelProgressDraftEventHandlers(params: {
 }) {
   const pushEvent = (
     input: Exclude<ChannelProgressDraftLineInput, { event: "plan" }>,
-    detailMode?: "explain" | "raw" | "plain",
+    detailMode?: DetailMode,
   ) => {
     const lineOptions = detailMode ? { detailMode } : undefined;
     const line = params.buildLine
@@ -49,18 +56,19 @@ export function createChannelProgressDraftEventHandlers(params: {
       return pushEvent({ event: "tool", ...input }, detailMode);
     },
     pushItemEvent: (payload: ItemProgressPayload) => {
-      const { kind: itemKind, ...input } = payload;
+      const { kind: itemKind, detailMode, ...input } = payload;
       params.onItem?.(payload);
-      return pushEvent({ event: "item", ...input, itemKind });
+      return pushEvent({ event: "item", ...input, itemKind }, detailMode);
     },
     pushApprovalEvent: (payload: ProgressPayload<"approval">) => {
       return payload.phase === "requested"
         ? pushEvent({ event: "approval", ...payload })
         : Promise.resolve(false);
     },
-    pushCommandOutputEvent: (payload: ProgressPayload<"command-output">) => {
+    pushCommandOutputEvent: (payload: CommandOutputProgressPayload) => {
+      const { detailMode, ...input } = payload;
       return payload.phase === "end"
-        ? pushEvent({ event: "command-output", ...payload })
+        ? pushEvent({ event: "command-output", ...input }, detailMode)
         : Promise.resolve(false);
     },
     pushPatchEvent: (payload: ProgressPayload<"patch">) => {

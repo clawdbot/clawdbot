@@ -44,6 +44,28 @@ describe("buildCommandOutputFromToolResultEvent", () => {
     expect(built?.title).toContain("nope-not-a-command");
   });
 
+  it("uses plain titles and propagates detailMode under plain verbose", () => {
+    const built = buildCommandOutputFromToolResultEvent(
+      {
+        stream: "tool",
+        data: {
+          phase: "result",
+          name: "Bash",
+          toolCallId: "call-1",
+          args: { command: "git status", workdir: "/workspace/project" },
+          isError: false,
+          result: "ok",
+        },
+      },
+      { detailMode: "plain" },
+    );
+
+    expect(built?.detailMode).toBe("plain");
+    expect(built?.title).toBe("I'm checking the current state of the project.");
+    expect(built?.title).not.toContain("git");
+    expect(built?.title).not.toContain("/workspace");
+  });
+
   it("marks a successful CLI command completed", () => {
     expect(buildFromCliResult({ isError: false, result: "alpha" })?.status).toBe("completed");
   });

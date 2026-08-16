@@ -1089,7 +1089,7 @@ Existing apps that already use `features.assistant_view` can keep their current 
     {
       "command": "/verbose",
       "description": "Toggle verbose output",
-      "usage_hint": "on|off|full"
+      "usage_hint": "on|off|full|plain"
     },
     {
       "command": "/fast",

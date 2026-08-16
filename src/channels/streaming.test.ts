@@ -179,6 +179,50 @@ describe("buildChannelProgressDraftLine", () => {
     expect(line?.text).not.toContain("/workspace");
     expect(line?.text).not.toContain("🛠️");
   });
+
+  it("keeps plain sentences when command start is replaced by command-output", () => {
+    const start = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        toolCallId: "call-1",
+        name: "exec",
+        phase: "start",
+        args: { command: "git status", workdir: "/workspace/project" },
+      },
+      { detailMode: "plain", commandText: "status" },
+    );
+    const plainTitle = "I'm checking the current state of the project.";
+    const done = buildChannelProgressDraftLine(
+      {
+        event: "command-output",
+        toolCallId: "call-1",
+        name: "exec",
+        phase: "end",
+        exitCode: 0,
+        title: plainTitle,
+      },
+      { detailMode: "plain", commandText: "status" },
+    );
+    const failed = buildChannelProgressDraftLine(
+      {
+        event: "command-output",
+        toolCallId: "call-1",
+        name: "exec",
+        phase: "end",
+        exitCode: 1,
+        title: plainTitle,
+      },
+      { detailMode: "plain", commandText: "status" },
+    );
+
+    expect(start?.text).toBe(plainTitle);
+    expect(done?.text).toBe(plainTitle);
+    expect(done?.text).not.toContain("🛠️");
+    expect(done?.text).not.toContain("git");
+    expect(failed?.text).not.toContain("🛠️");
+    expect(failed?.text).not.toContain("git status");
+    expect(failed?.text).not.toContain("/workspace");
+  });
 });
 
 // Claude CLI tool names arrive capitalized. Each tool call is described twice —

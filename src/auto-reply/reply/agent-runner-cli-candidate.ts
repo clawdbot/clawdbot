@@ -166,10 +166,13 @@ export async function runCliFallbackCandidate(params: {
     if (!onCommandOutput) {
       return;
     }
-    const commandOutput = buildCommandOutputFromToolResultEvent({
-      stream: "tool",
-      data: { ...payload, commandBearing },
-    });
+    const commandOutput = buildCommandOutputFromToolResultEvent(
+      {
+        stream: "tool",
+        data: { ...payload, commandBearing },
+      },
+      { detailMode: turn.toolProgressDetail },
+    );
     if (commandOutput) {
       await onCommandOutput(commandOutput);
     }
