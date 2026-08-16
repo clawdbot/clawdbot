@@ -1339,7 +1339,7 @@ jobs:
         if: needs.resolve_target.outputs.trusted_qa_tooling_eligible == 'true'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.workflow_sha }}
           path: .release-qa-tooling-trusted
           fetch-depth: 1
           fetch-tags: false

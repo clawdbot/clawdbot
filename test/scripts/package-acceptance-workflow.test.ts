@@ -4325,7 +4325,7 @@ describe("package artifact reuse", () => {
       uses: "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
       with: {
         "persist-credentials": false,
-        ref: "${{ github.sha }}",
+        ref: "${{ github.workflow_sha }}",
         path: ".release-qa-tooling-trusted",
         "sparse-checkout": "extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts",
         "sparse-checkout-cone-mode": false,
