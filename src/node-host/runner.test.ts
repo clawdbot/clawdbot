@@ -635,7 +635,10 @@ describe("runNodeHost", () => {
       "event loop readiness timeout",
     );
 
-    expect(lastCapturedOptions()?.workerRuns).toEqual(mocks.nodeWorkerBuild);
+    expect(lastCapturedOptions()?.workerRuns).toEqual({
+      ...mocks.nodeWorkerBuild,
+      bundlePrewarm: 1,
+    });
   });
 
   it("advertises Claude agent runs only after node-local opt-in and binary resolution", async () => {
@@ -706,7 +709,7 @@ describe("runNodeHost", () => {
 
     expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
       protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-      workerRuns: mocks.nodeWorkerBuild,
+      workerRuns: { ...mocks.nodeWorkerBuild, bundlePrewarm: 1 },
     });
   });
 
