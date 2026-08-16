@@ -5,6 +5,7 @@
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ImageContent } from "../../../llm/types.js";
+import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import { readPersistedMediaFacts } from "../../../media/media-facts.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
@@ -315,6 +316,8 @@ function emptyPromptImages(): PromptImageResult {
 
 export async function prepareEmbeddedAttemptPromptExecution(input: {
   attempt: PromptExecutionAttempt;
+  /** Resolved run owner; scopes media roots to this agent's workspace. */
+  agentId?: string;
   effectiveFsWorkspaceOnly: boolean;
   effectiveWorkspace: string;
   prompt: string;
@@ -350,6 +353,10 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
     maxBytes: MAX_IMAGE_BYTES,
     maxDimensionPx: resolveImageSanitizationLimits(attempt.config).maxDimensionPx,
     workspaceOnly: input.effectiveFsWorkspaceOnly,
+    localRoots:
+      input.effectiveFsWorkspaceOnly || !input.agentId
+        ? undefined
+        : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.agentId),
     sandbox:
       input.sandbox?.enabled && input.sandbox.fsBridge
         ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }

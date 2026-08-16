@@ -10,6 +10,7 @@ import { prepareEmbeddedAttemptPromptExecution } from "./attempt-prompt-submit.j
 async function preparePluginHarnessPromptImages(params: {
   runParams: Parameters<typeof prepareEmbeddedAttemptPromptExecution>[0]["attempt"];
   runtime: {
+    agentId?: string;
     workspaceDir: string;
     model: Parameters<typeof prepareEmbeddedAttemptPromptExecution>[0]["attempt"]["model"];
   };
@@ -24,6 +25,7 @@ async function preparePluginHarnessPromptImages(params: {
   }
   const result = await prepareEmbeddedAttemptPromptExecution({
     attempt: { ...params.runParams, model: params.runtime.model },
+    agentId: params.runtime.agentId,
     effectiveWorkspace: params.runtime.workspaceDir,
     effectiveFsWorkspaceOnly: false,
     prompt: "",
@@ -189,6 +191,116 @@ describe("plugin harness prompt media", () => {
       expect(result.media).toBeUndefined();
       expect(JSON.stringify(result)).not.toContain(imagePath);
       expect(structuredClone(result).images).toEqual(result.images);
+    } finally {
+      envSnapshot.restore();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("hydrates named-agent workspace images without opening sibling workspaces", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-harness-agent-media-"));
+    const workspaceDir = path.join(stateDir, "workspace-arthur");
+    const siblingWorkspaceDir = path.join(stateDir, "workspace-merlin");
+    const imagePath = path.join(workspaceDir, "media", "inbound", "photo.png");
+    const siblingImagePath = path.join(siblingWorkspaceDir, "media", "inbound", "photo.png");
+    const image = Buffer.from(TINY_PNG_BASE64, "base64");
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+    await fs.mkdir(path.dirname(siblingImagePath), { recursive: true });
+    await fs.writeFile(imagePath, image);
+    await fs.writeFile(siblingImagePath, image);
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const config = {
+      agents: {
+        entries: {
+          arthur: { workspace: workspaceDir },
+          merlin: { workspace: siblingWorkspaceDir },
+        },
+      },
+    };
+
+    try {
+      const hydrate = (mediaPath: string, sessionId: string) =>
+        preparePluginHarnessPromptImages({
+          runParams: {
+            config,
+            media: [{ path: mediaPath, contentType: "image/png" }],
+            sessionId,
+            sessionKey: `agent:arthur:telegram:direct:${sessionId}`,
+          },
+          runtime: {
+            agentId: "arthur",
+            model: { input: ["text", "image"] },
+            sessionId,
+            workspaceDir,
+          },
+          pluginHarnessOwnsTransport: true,
+        } as unknown as Parameters<typeof preparePluginHarnessPromptImages>[0]);
+
+      const result = await hydrate(imagePath, "session-agent-media");
+
+      expect(result.images).toEqual([
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ]);
+      await expect(hydrate(siblingImagePath, "session-agent-sibling-media")).rejects.toThrow(
+        "failed to hydrate 1 structured image attachment",
+      );
+    } finally {
+      envSnapshot.restore();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("hydrates named-agent workspace images on the embedded prompt path", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-embedded-agent-media-"));
+    const workspaceDir = path.join(stateDir, "workspace-arthur");
+    const siblingWorkspaceDir = path.join(stateDir, "workspace-merlin");
+    const imagePath = path.join(workspaceDir, "media", "inbound", "photo.png");
+    const siblingImagePath = path.join(siblingWorkspaceDir, "media", "inbound", "photo.png");
+    const image = Buffer.from(TINY_PNG_BASE64, "base64");
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+    await fs.mkdir(path.dirname(siblingImagePath), { recursive: true });
+    await fs.writeFile(imagePath, image);
+    await fs.writeFile(siblingImagePath, image);
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+
+    try {
+      const hydrate = (mediaPath: string, sessionId: string) =>
+        prepareEmbeddedAttemptPromptExecution({
+          attempt: {
+            config: {
+              agents: {
+                entries: {
+                  arthur: { workspace: workspaceDir },
+                  merlin: { workspace: siblingWorkspaceDir },
+                },
+              },
+            },
+            media: [{ path: mediaPath, contentType: "image/png" }],
+            model: { input: ["text", "image"] },
+            sessionId,
+          },
+          agentId: "arthur",
+          effectiveWorkspace: workspaceDir,
+          effectiveFsWorkspaceOnly: false,
+          prompt: "",
+          skipPromptSubmission: false,
+        } as unknown as Parameters<typeof prepareEmbeddedAttemptPromptExecution>[0]);
+
+      const owned = await hydrate(imagePath, "session-embedded-media");
+
+      expect(owned.images).toEqual([
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ]);
+      expect(owned.failedMediaCount).toBe(0);
+
+      // The embedded path returns before the plugin-harness throw, so a refused
+      // sibling read shows up as a failure count rather than a rejection.
+      const sibling = await hydrate(siblingImagePath, "session-embedded-sibling-media");
+
+      expect(sibling.images).toEqual([]);
+      expect(sibling.failedMediaCount).toBe(1);
     } finally {
       envSnapshot.restore();
       await fs.rm(stateDir, { recursive: true, force: true });

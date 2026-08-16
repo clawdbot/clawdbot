@@ -204,6 +204,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
         });
         return await prepareEmbeddedAttemptPromptExecution({
           attempt: { ...params, model: runtime.model },
+          agentId: runtime.agentId,
           effectiveFsWorkspaceOnly: workspace.effectiveFsWorkspaceOnly,
           effectiveWorkspace: workspace.effectiveWorkspace,
           prompt: "",
