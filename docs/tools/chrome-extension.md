@@ -166,7 +166,8 @@ Chromium caches the first missing-native-host result for the running browser
 process. If an existing extension already attempted automatic setup before the
 native host was installed, restart Chrome once (a full browser-process reload).
 Retrying from the popup or Settings cannot clear that process-level miss.
-Normal setup avoids it by pre-registering the host before **Load unpacked**.
+Normal setup avoids it by pre-registering the host before adding or reopening
+the Store extension. For development, pre-register before **Load unpacked**.
 
 ## Status and removal
 
