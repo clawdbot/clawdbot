@@ -684,6 +684,25 @@ background_app_records() {
   done < <(pgrep -x OpenClaw 2>/dev/null || true)
 }
 
+app_binary_pids() {
+  local app_binary="$APP_PATH/Contents/MacOS/OpenClaw" pid executable
+  while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    executable="$(lsof -a -p "$pid" -d txt -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1)"
+    [[ "$executable" == "$app_binary" ]] && printf '%s\n' "$pid"
+  done < <(pgrep -x OpenClaw 2>/dev/null || true)
+}
+
+wait_for_app_binary_exit() {
+  local remaining=""
+  for _ in $(seq 1 80); do
+    remaining="$(app_binary_pids)"
+    [[ -z "$remaining" ]] && return 0
+    sleep 0.25
+  done
+  return 1
+}
+
 resolve_adoption_inputs() {
   [[ "$ADOPT_RUNNING_APP" == "1" ]] || return 0
   MIGRATION_KIND="running-app"
@@ -1292,6 +1311,17 @@ install_host() {
     done
     kill -0 "$ADOPTION_PID" 2>/dev/null && fail "adopted OpenClaw process did not exit: $ADOPTION_PID"
   fi
+  if [[ -n "$MIGRATION_LABEL" ]]; then
+    current_migration_state="$(job_loaded_state "$launch_domain/$MIGRATION_LABEL")"
+    [[ "$current_migration_state" == "absent" ]] ||
+      fail 'migration LaunchAgent remained loaded after bootout'
+  fi
+  wait_for_app_binary_exit || fail 'an OpenClaw app process survived owner shutdown'
+  if [[ -n "$MIGRATION_LABEL" ]]; then
+    current_migration_state="$(job_loaded_state "$launch_domain/$MIGRATION_LABEL")"
+    [[ "$current_migration_state" == "absent" ]] ||
+      fail 'migration LaunchAgent reloaded during owner shutdown'
+  fi
   if [[ -n "$ROLLBACK_APP_PATH" ]]; then
     mv "$APP_PATH" "$ROLLBACK_APP_PATH"
     CUTOVER_APP_MUTATED=1
@@ -1478,20 +1508,17 @@ restore_current_generation_after_recovery_failure() {
     if [[ -e "$ROLLBACK_APP_PATH" || -L "$ROLLBACK_APP_PATH" ]]; then
       app_restore_failed=1
     elif [[ -d "$APP_PATH" && ! -L "$APP_PATH" ]]; then
-      if ! mv "$APP_PATH" "$ROLLBACK_APP_PATH" &&
-        ! verify_rollback_app "$ROLLBACK_APP_PATH" "$ROLLBACK_APP_CDHASH"
-      then
-        app_restore_failed=1
-      fi
+      mv "$APP_PATH" "$ROLLBACK_APP_PATH" || true
+      verify_rollback_app "$ROLLBACK_APP_PATH" "$ROLLBACK_APP_CDHASH" || app_restore_failed=1
+      [[ ! -e "$APP_PATH" && ! -L "$APP_PATH" ]] || app_restore_failed=1
     fi
     if [[ "$app_restore_failed" == "0" && -d "$RECOVERED_FAILED_APP_PATH" &&
       ! -L "$RECOVERED_FAILED_APP_PATH" ]]
     then
-      if ! mv "$RECOVERED_FAILED_APP_PATH" "$APP_PATH" &&
-        ! verify_rollback_app "$APP_PATH" "$RECOVERY_CURRENT_APP_CDHASH"
-      then
+      mv "$RECOVERED_FAILED_APP_PATH" "$APP_PATH" || true
+      verify_rollback_app "$APP_PATH" "$RECOVERY_CURRENT_APP_CDHASH" || app_restore_failed=1
+      [[ ! -e "$RECOVERED_FAILED_APP_PATH" && ! -L "$RECOVERED_FAILED_APP_PATH" ]] ||
         app_restore_failed=1
-      fi
       rmdir "$(dirname "$RECOVERED_FAILED_APP_PATH")" 2>/dev/null || true
     else
       app_restore_failed=1

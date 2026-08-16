@@ -487,9 +487,11 @@ function createInstallRollbackHarness(
     migrationRestoreBootstrapFails?: boolean;
     recreateSourceDuringBootout?: boolean;
     recreateSourceOnFailure?: boolean;
+    restartAppDuringBootout?: boolean;
     signalDuringCustody?: boolean;
     signalDuringRecoveryAppMove?: boolean;
     signalDuringReceiptCommit?: boolean;
+    transientAppRestartReloadsJob?: boolean;
   } = {},
 ) {
   const artifact = createArtifactVerificationHarness();
@@ -530,7 +532,35 @@ function createInstallRollbackHarness(
   writeFileSync(nodeGenerationFile, "0\n", "utf8");
   writeExecutable(path.join(binDir, "defaults"), "#!/bin/sh\nprintf '%s\\n' primary\n");
   writeExecutable(path.join(binDir, "sqlite3"), "#!/bin/sh\nprintf '%s\\n' fixture-node\n");
-  writeExecutable(path.join(binDir, "pgrep"), "#!/bin/sh\nexit 1\n");
+  writeExecutable(
+    path.join(binDir, "pgrep"),
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'state="$(tr -d \'\\n\' <"$TEST_LAUNCH_STATE_FILE")"',
+      'if [[ "$TEST_TRANSIENT_APP_RESTART_RELOADS_JOB" == "1" && "$state" == "source-absent" ]]; then',
+      "  printf '%s\\n' source-loaded >\"$TEST_LAUNCH_STATE_FILE\"",
+      "  printf '%s\\n' 777777",
+      "  exit 0",
+      "fi",
+      'if [[ "$TEST_RESTART_APP_DURING_BOOTOUT" == "1" && "$state" == "source-absent" ]]; then',
+      "  printf '%s\\n' 777777",
+      "  exit 0",
+      "fi",
+      "exit 1",
+      "",
+    ].join("\n"),
+  );
+  writeExecutable(
+    path.join(binDir, "lsof"),
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      `printf '%s\\n' p777777 n${JSON.stringify(path.join(appPath, "Contents", "MacOS", "OpenClaw"))}`,
+      "",
+    ].join("\n"),
+  );
+  writeExecutable(path.join(binDir, "sleep"), "#!/bin/sh\nexit 0\n");
   writeExecutable(
     path.join(binDir, "mv"),
     [
@@ -685,9 +715,11 @@ function createInstallRollbackHarness(
       TEST_MIGRATION_RESTORE_BOOTSTRAP_FAILS: options.migrationRestoreBootstrapFails ? "1" : "0",
       TEST_RECREATE_SOURCE_DURING_BOOTOUT: options.recreateSourceDuringBootout ? "1" : "0",
       TEST_RECREATE_SOURCE_ON_FAILURE: options.recreateSourceOnFailure ? "1" : "0",
+      TEST_RESTART_APP_DURING_BOOTOUT: options.restartAppDuringBootout ? "1" : "0",
       TEST_SIGNAL_DURING_CUSTODY: options.signalDuringCustody ? "1" : "0",
       TEST_SIGNAL_DURING_RECOVERY_APP_MOVE: options.signalDuringRecoveryAppMove ? "1" : "0",
       TEST_SIGNAL_DURING_RECEIPT_COMMIT: options.signalDuringReceiptCommit ? "1" : "0",
+      TEST_TRANSIENT_APP_RESTART_RELOADS_JOB: options.transientAppRestartReloadsJob ? "1" : "0",
       TEST_SOURCE_PLIST: sourcePlist,
     },
   };
@@ -1109,6 +1141,72 @@ describe("mac elevation host command contract", () => {
       expect(readdirSync(path.dirname(harness.sourcePlist))).not.toContainEqual(
         expect.stringContaining(".custody."),
       );
+      expect(existsSync(path.join(harness.stateDir, "elevation-host-install.json"))).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "refuses cutover when an app-backed owner restarts before bootout completes",
+    () => {
+      const harness = createInstallRollbackHarness({ restartAppDuringBootout: true });
+      const oldBinary = readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"));
+      const result = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--migrate-launch-agent",
+          harness.sourcePlist,
+        ],
+        harness.env,
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("an OpenClaw app process survived owner shutdown");
+      expect(readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"))).toEqual(
+        oldBinary,
+      );
+      expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
+      expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
+      expect(existsSync(path.join(harness.stateDir, "elevation-host-install.json"))).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "rechecks launchd after a transient replacement app process exits",
+    () => {
+      const harness = createInstallRollbackHarness({ transientAppRestartReloadsJob: true });
+      const oldBinary = readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"));
+      const result = runInstaller(
+        harness.installerPath,
+        [
+          "install",
+          "--archive",
+          harness.archivePath,
+          "--receipt",
+          harness.receiptPath,
+          ...receiptDigestArgs(harness.receiptPath),
+          "--app",
+          harness.appPath,
+          "--migrate-launch-agent",
+          harness.sourcePlist,
+        ],
+        harness.env,
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("migration LaunchAgent reloaded during owner shutdown");
+      expect(readFileSync(path.join(harness.appPath, "Contents", "MacOS", "OpenClaw"))).toEqual(
+        oldBinary,
+      );
+      expect(readFileSync(harness.sourcePlist, "utf8")).toBe(harness.sourceContents);
+      expect(readFileSync(harness.launchStateFile, "utf8").trim()).toBe("source-loaded");
       expect(existsSync(path.join(harness.stateDir, "elevation-host-install.json"))).toBe(false);
     },
   );
