@@ -4,6 +4,7 @@ export {
   createManagedTaskFlow,
   deleteTaskFlowRecordById,
   ensureTaskFlowRegistryReady,
+  ensureTaskFlowRegistryReadyForInspection,
   failFlow,
   finishFlow,
   getTaskFlowById,

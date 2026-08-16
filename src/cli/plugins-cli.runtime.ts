@@ -9,6 +9,7 @@ import {
 import {
   assertConfigWriteAllowedInCurrentMode,
   getRuntimeConfig,
+  getRuntimeConfigForInspection,
   readConfigFileSnapshot,
   replaceConfigFile,
 } from "../config/config.js";
@@ -331,7 +332,9 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
     });
   }
 
-  const inspection = await inspectPluginRegistry({ config: getRuntimeConfig() });
+  const inspection = await inspectPluginRegistry({
+    config: getRuntimeConfigForInspection({ skipPluginValidation: true }),
+  });
   if (opts.json) {
     defaultRuntime.writeJson({
       state: inspection.state,

@@ -21,9 +21,10 @@ const log = createSubsystemLogger("tasks/task-flow-registry");
 let flows = new Map<string, TaskFlowRecord>();
 type TaskFlowRegistryRestoreState =
   | { status: "uninitialized" }
-  | { status: "restoring" }
+  | { status: "restoring"; access: TaskFlowRegistryRestoreAccess }
   | { status: "ready" }
-  | { status: "failed"; error: Error; message: string };
+  | { status: "failed"; access: TaskFlowRegistryRestoreAccess; error: Error; message: string };
+type TaskFlowRegistryRestoreAccess = "read-only" | "read-write";
 let taskFlowRegistryRestoreState: TaskFlowRegistryRestoreState = { status: "uninitialized" };
 
 type FlowRecordPatch = Omit<
@@ -248,20 +249,27 @@ function resolveTaskMirroredFlowTiming(
   return { updatedAt: endedAt, endedAt };
 }
 
-function restoreTaskFlowRegistryOnce(): void {
+function restoreTaskFlowRegistryOnce(access: TaskFlowRegistryRestoreAccess = "read-write"): void {
   switch (taskFlowRegistryRestoreState.status) {
     case "ready":
       return;
     case "failed":
-      throw taskFlowRegistryRestoreState.error;
+      if (taskFlowRegistryRestoreState.access === "read-write" || access === "read-only") {
+        throw taskFlowRegistryRestoreState.error;
+      }
+      break;
     case "restoring":
       throw new Error("Task-flow registry restore is already in progress.");
     case "uninitialized":
       break;
   }
-  taskFlowRegistryRestoreState = { status: "restoring" };
+  taskFlowRegistryRestoreState = { status: "restoring", access };
   try {
-    const restored = getTaskFlowRegistryStore().loadSnapshot();
+    const store = getTaskFlowRegistryStore();
+    const restored =
+      access === "read-only" && store.loadSnapshotReadOnly
+        ? store.loadSnapshotReadOnly()
+        : store.loadSnapshot();
     const restoredFlows = new Map<string, TaskFlowRecord>();
     for (const [flowId, flow] of restored.flows) {
       restoredFlows.set(flowId, normalizeRestoredFlowRecord(flow));
@@ -276,6 +284,7 @@ function restoreTaskFlowRegistryOnce(): void {
     });
     taskFlowRegistryRestoreState = {
       status: "failed",
+      access,
       error: restoreError,
       message,
     };
@@ -293,6 +302,10 @@ function restoreTaskFlowRegistryOnce(): void {
 
 export function ensureTaskFlowRegistryReady(): void {
   restoreTaskFlowRegistryOnce();
+}
+
+export function ensureTaskFlowRegistryReadyForInspection(): void {
+  restoreTaskFlowRegistryOnce("read-only");
 }
 
 export function getTaskFlowRegistryRestoreFailure(): string | null {

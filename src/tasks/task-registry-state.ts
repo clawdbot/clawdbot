@@ -32,9 +32,10 @@ export const tasksWithPendingDelivery = taskRegistryProcessState.tasksWithPendin
 export const taskActivityByTaskId = taskRegistryProcessState.taskActivityByTaskId;
 type TaskRegistryRestoreState =
   | { status: "uninitialized" }
-  | { status: "restoring" }
+  | { status: "restoring"; access: TaskRegistryRestoreAccess }
   | { status: "ready" }
-  | { status: "failed"; error: Error };
+  | { status: "failed"; access: TaskRegistryRestoreAccess; error: Error };
+type TaskRegistryRestoreAccess = "read-only" | "read-write";
 let taskRegistryRestoreState: TaskRegistryRestoreState = { status: "uninitialized" };
 export const taskFlowSyncRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 export type TaskRegistryDeliveryRuntime = Pick<
@@ -494,20 +495,27 @@ export function compareTasksNewestFirst(
   return (right.insertionIndex ?? 0) - (left.insertionIndex ?? 0);
 }
 
-export function restoreTaskRegistryOnce() {
+export function restoreTaskRegistryOnce(access: TaskRegistryRestoreAccess = "read-write") {
   switch (taskRegistryRestoreState.status) {
     case "ready":
       return;
     case "failed":
-      throw taskRegistryRestoreState.error;
+      if (taskRegistryRestoreState.access === "read-write" || access === "read-only") {
+        throw taskRegistryRestoreState.error;
+      }
+      break;
     case "restoring":
       throw new Error("Task registry restore is already in progress.");
     case "uninitialized":
       break;
   }
-  taskRegistryRestoreState = { status: "restoring" };
+  taskRegistryRestoreState = { status: "restoring", access };
   try {
-    const restored = getTaskRegistryStore().loadSnapshot();
+    const store = getTaskRegistryStore();
+    const restored =
+      access === "read-only" && store.loadSnapshotReadOnly
+        ? store.loadSnapshotReadOnly()
+        : store.loadSnapshot();
     const restoredTasks = new Map<string, TaskRecord>();
     for (const [taskId, task] of restored.tasks.entries()) {
       restoredTasks.set(taskId, normalizeTaskTimestamps(task));
@@ -536,7 +544,7 @@ export function restoreTaskRegistryOnce() {
     clearTaskRegistryMemory();
     const message = formatErrorMessage(error);
     const restoreError = new Error(`Task registry restore failed: ${message}`, { cause: error });
-    taskRegistryRestoreState = { status: "failed", error: restoreError };
+    taskRegistryRestoreState = { status: "failed", access, error: restoreError };
     // Compact console logs omit structured metadata, so keep the rejected value visible there too.
     taskRegistryLog.warn("Failed to restore task registry", {
       error: message,
@@ -549,6 +557,10 @@ export function restoreTaskRegistryOnce() {
 export function ensureTaskRegistryReady(): void {
   restoreTaskRegistryOnce();
   listenerStarter();
+}
+
+export function ensureTaskRegistryReadyForInspection(): void {
+  restoreTaskRegistryOnce("read-only");
 }
 
 export function reloadTaskRegistryFromStore(): void {

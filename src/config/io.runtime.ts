@@ -82,17 +82,29 @@ export function registerConfigWriteListener(
   };
 }
 
+type InternalRuntimeConfigLoadOptions = {
+  observe?: boolean;
+  skipPluginValidation?: boolean;
+  pin?: boolean;
+  skipShellEnvFallback?: boolean;
+};
+
+function loadConfigInternal(options?: InternalRuntimeConfigLoadOptions): OpenClawConfig {
+  const loadFresh = () =>
+    createConfigIO({
+      ...(options?.observe === false ? { observe: false } : {}),
+      ...(options?.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
+      ...(options?.skipShellEnvFallback ? { shellEnvFallback: "defer" as const } : {}),
+    }).loadConfig();
+  return options?.pin === false ? loadFresh() : loadPinnedRuntimeConfig(loadFresh);
+}
+
 export function loadConfig(options?: {
   skipPluginValidation?: boolean;
   pin?: boolean;
   skipShellEnvFallback?: boolean;
 }): OpenClawConfig {
-  const loadFresh = () =>
-    createConfigIO({
-      ...(options?.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
-      ...(options?.skipShellEnvFallback ? { shellEnvFallback: "defer" as const } : {}),
-    }).loadConfig();
-  return options?.pin === false ? loadFresh() : loadPinnedRuntimeConfig(loadFresh);
+  return loadConfigInternal(options);
 }
 
 export function getRuntimeConfig(options?: {
@@ -101,6 +113,15 @@ export function getRuntimeConfig(options?: {
   skipShellEnvFallback?: boolean;
 }): OpenClawConfig {
   return loadConfig(options);
+}
+
+/** Reads runtime config without recording CLI observation side effects. Core-only inspection seam. */
+export function getRuntimeConfigForInspection(options?: {
+  skipPluginValidation?: boolean;
+  pin?: boolean;
+  skipShellEnvFallback?: boolean;
+}): OpenClawConfig {
+  return loadConfigInternal({ ...options, observe: false });
 }
 
 export async function readBestEffortConfig(options?: {

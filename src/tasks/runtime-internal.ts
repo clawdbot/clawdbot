@@ -1,16 +1,23 @@
 // Internal task registry facade used by runtime modules without exposing public SDK surface.
 import {
   ensureTaskFlowRegistryReady,
+  ensureTaskFlowRegistryReadyForInspection,
   reloadTaskFlowRegistryFromStore,
 } from "./task-flow-runtime-internal.js";
 import {
   ensureTaskRegistryReady as ensureTaskRegistryReadyInternal,
+  ensureTaskRegistryReadyForInspection,
   reloadTaskRegistryFromStore as reloadTaskRegistryFromStoreInternal,
-} from "./task-registry.js";
+} from "./task-registry-state.js";
 
 export function ensureTaskRuntimeStateReady(): void {
   ensureTaskFlowRegistryReady();
   ensureTaskRegistryReadyInternal();
+}
+
+export function ensureTaskRuntimeStateReadyForInspection(): void {
+  ensureTaskFlowRegistryReadyForInspection();
+  ensureTaskRegistryReadyForInspection();
 }
 
 export function reloadTaskRuntimeStateFromStore(): void {
