@@ -99,6 +99,10 @@ const SESSION_SUBSCRIPTION_EVENTS = new Set([
   "chat",
   "chat.side_result",
   "session.observer",
+  // Mirrors the raw agent tool event (full args/result snapshots) onto
+  // session subscribers; omitting it here would hand scoped clients the
+  // exact payload the registry gate suppresses on the `agent` event.
+  "session.tool",
 ]);
 
 function serializeFrameField(name: "payload" | "stateVersion", value: unknown): string {
