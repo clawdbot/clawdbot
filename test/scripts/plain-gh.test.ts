@@ -39,6 +39,7 @@ printf 'CLICOLOR=%s\\n' "\${CLICOLOR-}"
 printf 'CLICOLOR_FORCE=%s\\n' "\${CLICOLOR_FORCE-}"
 printf 'COLORTERM_SET=%s\\n' "\${COLORTERM+x}"
 printf 'OPENCLAW_GH_BIN_SET=%s\\n' "\${OPENCLAW_GH_BIN+x}"
+printf 'GH_TOKEN_SET=%s\\n' "\${GH_TOKEN:+1}"
 `,
   );
   chmodSync(ghPath, 0o755);
@@ -188,6 +189,7 @@ describe("plain gh helpers", () => {
         CLICOLOR_FORCE: "1",
         COLORTERM: "truecolor",
         FORCE_COLOR: "3",
+        GH_TOKEN: "existing-test-token",
       },
     });
 
@@ -199,6 +201,46 @@ describe("plain gh helpers", () => {
     expect(readFileSync(outputPath, "utf8")).toContain("CLICOLOR=0");
     expect(readFileSync(outputPath, "utf8")).toContain("CLICOLOR_FORCE=0");
     expect(readFileSync(outputPath, "utf8")).toContain("COLORTERM_SET=");
+  });
+
+  it("bridges PATH-shim credentials to the selected plain gh", () => {
+    const ghPath = makeFakeGh();
+    const shimDir = mkdtempSync(path.join(tmpdir(), "plain-gh-auth-shim-"));
+    tempDirs.push(shimDir);
+    const shimPath = path.join(shimDir, "gh");
+    writeFileSync(
+      shimPath,
+      `#!/usr/bin/env bash
+if [ "$*" = "auth token" ]; then
+  printf 'bridged-test-token\\n'
+  exit 0
+fi
+exit 2
+`,
+    );
+    chmodSync(shimPath, 0o755);
+    const script = [
+      "set -euo pipefail",
+      "source scripts/lib/plain-gh.sh",
+      `OPENCLAW_GH_BIN=${JSON.stringify(ghPath)}`,
+      "export OPENCLAW_GH_BIN",
+      "gh_plain api rate_limit",
+    ].join("\n");
+
+    const result = spawnSync("bash", ["-c", script], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GH_TOKEN: "",
+        GITHUB_TOKEN: "",
+        PATH: `${shimDir}${path.delimiter}/usr/bin:/bin`,
+      },
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("argv=api rate_limit");
+    expect(result.stdout).toContain("GH_TOKEN_SET=1");
+    expect(result.stdout).not.toContain("bridged-test-token");
   });
 
   it("captures large gh payloads by default", () => {
