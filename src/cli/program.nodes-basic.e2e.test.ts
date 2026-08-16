@@ -1,7 +1,10 @@
 // Program nodes basic e2e tests cover node command registration through the full CLI program.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createIosNodeListResponse } from "./program.nodes-test-helpers.js";
+import {
+  createIosNodeListResponse,
+  formatRuntimeLogCallArg,
+} from "./program.nodes-test-helpers.js";
 import { programGatewayCallMock, runtime } from "./program.test-mocks.js";
 
 let registerNodesCli: typeof import("./nodes-cli.js").registerNodesCli;
@@ -16,23 +19,6 @@ type GatewayCallRequest = {
   requiredStoredDeviceAuthScopes?: unknown;
   requireLocalBackendSharedAuth?: boolean;
 };
-
-function formatRuntimeLogCallArg(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return String(value);
-  }
-  if (value == null) {
-    return "";
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return "[unserializable]";
-  }
-}
 
 describe("cli program (nodes basics)", () => {
   let program: Command;

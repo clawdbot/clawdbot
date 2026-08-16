@@ -1,6 +1,7 @@
 // Program nodes diagnostics-auth e2e tests cover how node reads authenticate through the CLI program.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { formatRuntimeLogCallArg } from "./program.nodes-test-helpers.js";
 import { programGatewayCallMock, runtime } from "./program.test-mocks.js";
 
 let registerNodesCli: typeof import("./nodes-cli.js").registerNodesCli;
@@ -24,7 +25,7 @@ describe("cli program (nodes diagnostics auth)", () => {
   }
 
   function getRuntimeOutput() {
-    return runtime.log.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+    return runtime.log.mock.calls.map((call) => formatRuntimeLogCallArg(call[0])).join("\n");
   }
 
   function gatewayRequests(): GatewayCallRequest[] {
