@@ -19,6 +19,28 @@ describe("node worker-runs connect manifest", () => {
         },
       }),
     ).toBe(true);
+    expect(
+      validateConnectParams({
+        ...connect,
+        workerRuns: {
+          bundleHash: "a".repeat(64),
+          openclawVersion: "2026.8.12",
+          protocolFeatures: ["worker-heartbeat-v1"],
+          bundlePrewarm: 2,
+        },
+      }),
+    ).toBe(true);
     expect(validateConnectParams({ ...connect, workerRuns: { enabled: true } })).toBe(false);
+    expect(
+      validateConnectParams({
+        ...connect,
+        workerRuns: {
+          bundleHash: "a".repeat(64),
+          openclawVersion: "2026.8.12",
+          protocolFeatures: ["worker-heartbeat-v1"],
+          bundlePrewarm: 0,
+        },
+      }),
+    ).toBe(false);
   });
 });

@@ -198,20 +198,28 @@ export class NodeWorkerBundleInstaller {
     this.#workerEnv = snapshotNodeWorkerEnv(env);
   }
 
-  async #prewarmBundle(bundleDir: string): Promise<void> {
+  async #prewarmBundle(bundleDir: string, signal?: AbortSignal): Promise<void> {
     if (this.#prewarmedBundles.has(bundleDir)) {
       return;
     }
-    await execFileAsync(
-      process.execPath,
-      [path.join(bundleDir, WORKER_BUNDLE_ENTRY_PATH), "--internal-worker-prewarm"],
-      {
-        cwd: bundleDir,
-        env: this.#workerEnv,
-        timeout: WORKER_PREWARM_TIMEOUT_MS,
-        windowsHide: true,
-      },
-    );
+    try {
+      await execFileAsync(
+        process.execPath,
+        [path.join(bundleDir, WORKER_BUNDLE_ENTRY_PATH), "--internal-worker-prewarm"],
+        {
+          cwd: bundleDir,
+          env: this.#workerEnv,
+          timeout: WORKER_PREWARM_TIMEOUT_MS,
+          windowsHide: true,
+          ...(signal ? { signal } : {}),
+        },
+      );
+    } catch (error) {
+      if (signal?.aborted) {
+        throw signal.reason ?? error;
+      }
+      throw error;
+    }
     this.#prewarmedBundles.add(bundleDir);
   }
 
@@ -230,7 +238,9 @@ export class NodeWorkerBundleInstaller {
         const bundlesRoot = path.join(this.#root, input.gatewayNamespace, "bundles");
         const destination = path.join(bundlesRoot, input.build.bundleHash);
         if (await validateInstalledBundle(destination, input.build)) {
-          await this.#prewarmBundle(destination);
+          if (input.bundlePrewarm) {
+            await this.#prewarmBundle(destination, params.signal);
+          }
           return structuredClone(input.build);
         }
         await fsp.mkdir(bundlesRoot, { recursive: true, mode: 0o700 });
@@ -265,7 +275,9 @@ export class NodeWorkerBundleInstaller {
           if (!(await validateInstalledBundle(destination, input.build))) {
             throw new Error("published worker bundle failed validation");
           }
-          await this.#prewarmBundle(destination);
+          if (input.bundlePrewarm) {
+            await this.#prewarmBundle(destination, params.signal);
+          }
           return structuredClone(input.build);
         } finally {
           await fsp.rm(operationRoot, { recursive: true, force: true });

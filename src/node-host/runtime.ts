@@ -1,6 +1,9 @@
 /** Transport-independent CLI node-host runtime shared by Gateway and app workers. */
 import fs from "node:fs";
-import type { WorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_BUNDLE_PREWARM_VERSION,
+  type WorkerAdmissionHandshake,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
@@ -286,7 +289,9 @@ export async function prepareNodeHostRuntime(params?: {
   const workerRunsEnabled =
     params?.enableWorkerRuns === true && config.nodeHost?.workerRuns?.enabled === true;
   const workerInstallation = workerRunsEnabled ? await resolveNodeWorkerInstallation() : undefined;
-  const workerRuns = workerInstallation?.build;
+  const workerRuns = workerInstallation
+    ? { ...workerInstallation.build, bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION }
+    : undefined;
   const skills = config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
   const buildManifest = (pluginManifest: typeof pluginNodeHost): NodeHostManifest => ({
     caps: [

@@ -272,14 +272,19 @@ async function connectPairedNode(params: {
   operator: GatewayClient;
   identity: DeviceIdentity;
   installation: NodeWorkerInstallation;
+  bundlePrewarm?: number;
   onEvent: (event: GatewayEvent) => void;
 }): Promise<GatewayClient> {
+  const workerRuns = {
+    ...params.installation.build,
+    ...(params.bundlePrewarm === undefined ? {} : { bundlePrewarm: params.bundlePrewarm }),
+  };
   const connect = () =>
     connectClient({
       gateway: params.gateway,
       role: "node",
       identity: params.identity,
-      workerRuns: params.installation.build,
+      workerRuns,
       onEvent: params.onEvent,
     });
   let client: GatewayClient;
@@ -298,7 +303,7 @@ async function connectPairedNode(params: {
   }
   await client.request(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
     protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-    workerRuns: params.installation.build,
+    workerRuns,
   });
   return client;
 }
@@ -366,14 +371,33 @@ describe("node worker launch wire", () => {
         root: path.join(root, "node-workspaces"),
         env: nodeEnv,
       });
+      const legacyNodeEnv = {
+        ...process.env,
+        HOME: path.join(root, "legacy-node-home"),
+        NODE_DISABLE_COMPILE_CACHE: undefined,
+        OPENCLAW_STATE_DIR: path.join(root, "legacy-node-state"),
+      };
+      await fs.mkdir(legacyNodeEnv.HOME, { recursive: true });
+      const legacySupervisor = createNodeWorkerSupervisor({ env: legacyNodeEnv });
+      const legacyBundleInstaller = new NodeWorkerBundleInstaller({ env: legacyNodeEnv });
+      const legacyWorkspace = new NodeWorkerWorkspaceRuntime({
+        root: path.join(root, "legacy-node-workspaces"),
+        env: legacyNodeEnv,
+      });
       let gateway: Gateway | undefined;
       let operator: GatewayClient | undefined;
       let node: GatewayClient | undefined;
+      let legacyNode: GatewayClient | undefined;
       let closing = false;
       let reconnected = false;
       const invokeTasks = new Set<Promise<void>>();
       const invokeErrors: unknown[] = [];
+      const legacyInvokeTasks = new Set<Promise<void>>();
+      const legacyInvokeErrors: unknown[] = [];
       const commands: string[] = [];
+      const legacyCommands: string[] = [];
+      let bundlePrewarm: unknown;
+      let legacyBundlePrewarm: unknown;
       let launchId: string | undefined;
       let observeFinalizationLoad = false;
       let finalizationStartedAt: number | undefined;
@@ -427,6 +451,10 @@ describe("node worker launch wire", () => {
           if (frame.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND && frame.paramsJSON) {
             launchId = (JSON.parse(frame.paramsJSON) as { launchId?: string }).launchId;
           }
+          if (frame.command === NODE_WORKER_BUNDLE_INSTALL_COMMAND && frame.paramsJSON) {
+            bundlePrewarm = (JSON.parse(frame.paramsJSON) as { bundlePrewarm?: unknown })
+              .bundlePrewarm;
+          }
           const task = handleInvoke(frame, receiver, { current: async () => [] }, undefined, {
             workerBundleInstaller: bundleInstaller,
             workerSupervisor: supervisor,
@@ -447,6 +475,7 @@ describe("node worker launch wire", () => {
                     operator: operator!,
                     identity,
                     installation,
+                    bundlePrewarm: 1,
                     onEvent: onNodeEvent,
                   });
                 }
@@ -463,6 +492,7 @@ describe("node worker launch wire", () => {
           operator,
           identity,
           installation,
+          bundlePrewarm: 1,
           onEvent: onNodeEvent,
         });
         const listed = await waitForApprovedNode(operator, identity.deviceId);
@@ -531,6 +561,7 @@ describe("node worker launch wire", () => {
         expect(commands).toContain(NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND);
         expect(commands).toContain(NODE_WORKER_SUPERVISOR_STATUS_COMMAND);
         expect(launchId).toBeTruthy();
+        expect(bundlePrewarm).toBe(1);
         await expect(supervisor.status(launchId!)).resolves.toMatchObject({ state: "completed" });
 
         const history = await operator.request<{ messages?: unknown[] }>("chat.history", {
@@ -561,6 +592,73 @@ describe("node worker launch wire", () => {
         expect(await fs.readFile(path.join(remoteWorkspaceDir, "node-result.txt"), "utf8")).toBe(
           "device result\n",
         );
+
+        const legacyIdentity = loadOrCreateDeviceIdentity({
+          path: path.join(root, "legacy-node-identity.sqlite"),
+        });
+        const onLegacyNodeEvent = (event: GatewayEvent) => {
+          if (event.event !== "node.invoke.request" || !legacyNode) {
+            return;
+          }
+          const receiver = legacyNode;
+          const frame = event.payload as NodeInvokeRequestPayload;
+          legacyCommands.push(frame.command);
+          if (frame.command === NODE_WORKER_BUNDLE_INSTALL_COMMAND && frame.paramsJSON) {
+            legacyBundlePrewarm = (JSON.parse(frame.paramsJSON) as { bundlePrewarm?: unknown })
+              .bundlePrewarm;
+          }
+          const task = handleInvoke(frame, receiver, { current: async () => [] }, undefined, {
+            workerBundleInstaller: legacyBundleInstaller,
+            workerSupervisor: legacySupervisor,
+            workerWorkspace: legacyWorkspace,
+            gatewayUrl: gateway!.wsUrl,
+          })
+            .catch((error: unknown) => {
+              legacyInvokeErrors.push(error);
+            })
+            .finally(() => legacyInvokeTasks.delete(task));
+          legacyInvokeTasks.add(task);
+        };
+        legacyNode = await connectPairedNode({
+          gateway,
+          operator,
+          identity: legacyIdentity,
+          installation,
+          onEvent: onLegacyNodeEvent,
+        });
+        await waitForApprovedNode(operator, legacyIdentity.deviceId);
+        const legacySessionKey = `${SESSION_KEY}-legacy-node`;
+        await operator.request("sessions.create", {
+          key: legacySessionKey,
+          agentId: "qa",
+          worktree: true,
+          worktreeName: "node-worker-launch-legacy-node",
+          worktreeBaseRef: "main",
+          cwd: published.source,
+        });
+        await gateway.call(
+          "sessions.dispatch",
+          { key: legacySessionKey, deviceId: legacyIdentity.deviceId },
+          { timeoutMs: PROOF_TIMEOUT_MS },
+        );
+        const legacyRunId = `node-worker-launch-wire-legacy-${Date.now()}`;
+        await operator.request("chat.send", {
+          sessionKey: legacySessionKey,
+          message: BASELINE_PROMPT,
+          deliver: false,
+          idempotencyKey: legacyRunId,
+        });
+        await expect(
+          operator.request<{ status?: string }>(
+            "agent.wait",
+            { runId: legacyRunId, timeoutMs: PROOF_TIMEOUT_MS },
+            { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
+          ),
+        ).resolves.toMatchObject({ status: "ok" });
+        await Promise.all([...legacyInvokeTasks]);
+        expect(legacyInvokeErrors).toEqual([]);
+        expect(legacyCommands).toContain(NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND);
+        expect(legacyBundlePrewarm).toBeUndefined();
 
         const loadSessions: string[] = [];
         for (let index = 0; index < FINALIZATION_LOAD_CONCURRENCY; index += 1) {
@@ -659,9 +757,12 @@ describe("node worker launch wire", () => {
         closing = true;
         const cleanup = await Promise.allSettled([
           node?.stopAndWait({ timeoutMs: 2_000 }) ?? Promise.resolve(),
+          legacyNode?.stopAndWait({ timeoutMs: 2_000 }) ?? Promise.resolve(),
           operator?.stopAndWait({ timeoutMs: 2_000 }) ?? Promise.resolve(),
           Promise.allSettled([...invokeTasks]),
+          Promise.allSettled([...legacyInvokeTasks]),
           supervisor.close(),
+          legacySupervisor.close(),
           gateway?.stop() ?? Promise.resolve(),
           provider.stop(),
           closeServer(published.server),
