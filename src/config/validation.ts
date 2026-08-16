@@ -258,7 +258,11 @@ function validateConfigObjectWithPluginsBase(
         issuePath = "plugins.load.paths";
       }
       const pluginLabel = diag.pluginId ? `plugin ${diag.pluginId}` : "plugin";
-      const issue = { path: issuePath, message: `${pluginLabel}: ${diag.message}` };
+      const sourceHint =
+        diag.source && diag.message.includes("duplicate plugin id")
+          ? ` — overridden copy at ${diag.source}`
+          : "";
+      const issue = { path: issuePath, message: `${pluginLabel}: ${diag.message}${sourceHint}` };
       if (diag.level === "error" && (explicitPath || !diag.pluginId)) {
         issues.push(issue);
       } else {
