@@ -229,9 +229,22 @@ export const terminalPanelStyles = css`
     animation: tp-spin 0.8s linear infinite;
   }
   .tp-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
     padding: 10px 12px;
     font-size: 12px;
     color: var(--danger, #ff6b6b);
+  }
+  .tp-error .btn {
+    flex: 0 0 auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+    color: var(--text);
+    padding: 6px 10px;
+    font: inherit;
   }
   @keyframes tp-spin {
     to {
