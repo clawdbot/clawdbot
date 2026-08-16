@@ -112,6 +112,18 @@ describe("minimax video generation provider", () => {
     expect(provider.capabilities.imageToVideo?.resolutions).toEqual(["768P", "1080P"]);
   });
 
+  it("advertises the dedicated text-to-video models for both provider ids", () => {
+    // video_generate can only route to models the provider advertises, so dropping the
+    // text-to-video entries silently removes T2V model selection from the shared tool.
+    for (const provider of [
+      buildMinimaxVideoGenerationProvider(),
+      buildMinimaxPortalVideoGenerationProvider(),
+    ]) {
+      expect(provider.models).toContain("T2V-01-Director");
+      expect(provider.models).toContain("T2V-01");
+    }
+  });
+
   it("creates a task, polls status, and downloads the generated video", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: jsonResponse({
