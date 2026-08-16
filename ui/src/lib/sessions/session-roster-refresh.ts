@@ -1,3 +1,4 @@
+/* oxlint-disable max-lines -- TODO: split this session roster orchestration boundary. */
 import type {
   ControlModelCatalog,
   ControlModelSessionCatalogSnapshot,
@@ -78,6 +79,12 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     controlModelUnavailable = false;
     stopControlModel = loaded.subscribe(() => {
       if (!controlModelAdapter || controlModelSyncing) {
+        return;
+      }
+      if (
+        (lastListOptions.limit ?? DEFAULT_SESSION_LIST_QUERY.limit) >
+        CONTROL_MODEL_MAX_SESSION_PAGE_SIZE
+      ) {
         return;
       }
       const catalog = loaded.getSnapshot().sessionCatalog;
@@ -387,7 +394,6 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     // enrichment must inherit the UI default instead of publishing fallback ids.
     requestOptions.includeDerivedTitles ??= true;
     const durableListOptions: SessionListOptions = { ...requestOptions };
-    // Pagination is request-local; replacements retain filters but restart at page one.
     delete durableListOptions.offset;
     if (!backgroundHydrate) {
       lastListOptions = durableListOptions;
@@ -414,7 +420,6 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
           ? appendSessionResults(currentState.result, result)
           : reconcileRosterPresentationMetadata(result, currentState.result);
       if (append && nextResult && !backgroundHydrate) {
-        // Canonical event refreshes must retain all previously appended visible pages.
         lastListOptions = {
           ...durableListOptions,
           limit: Math.max(
@@ -669,6 +674,8 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       const modelAvailable = controlModel || (host.controlModelLoader && !controlModelUnavailable);
       const primaryUsesControlModel =
         modelAvailable &&
+        (lastListOptions.limit ?? DEFAULT_SESSION_LIST_QUERY.limit) <=
+          CONTROL_MODEL_MAX_SESSION_PAGE_SIZE &&
         (!lastListOptions.archivedFilter || lastListOptions.archivedFilter === "active");
       if (primaryUsesControlModel) {
         if (options.filtered === false) {

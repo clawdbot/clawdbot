@@ -82,6 +82,33 @@ function activeHistory(
 }
 
 describe("syncSelectedSessionMessageSubscription", () => {
+  it("releases the legacy observer when Control Model loading recovers", async () => {
+    const previous = { key: "agent:main:previous", agentId: null };
+    const unsubscribeMessages = vi.fn(async () => undefined);
+    const subscribeMessages = vi.fn();
+    const model = {} as ControlModel;
+    const state = createState({ messages: [] }) as TestState & {
+      chatSessionMessageSubscriptionRequestedKey: string | null;
+      chatSessionMessageSubscription: typeof previous | null;
+    };
+    state.chatSessionMessageSubscriptionRequestedKey = previous.key;
+    state.chatSessionMessageSubscription = previous;
+    state.loadControlModel = vi.fn(async () => model);
+    state.sessions = {
+      setModelOverride: vi.fn(),
+      subscribeMessages,
+      unsubscribeMessages,
+    };
+
+    await syncSelectedSessionMessageSubscription(state as never);
+
+    expect(state.controlModel).toBe(model);
+    expect(unsubscribeMessages).toHaveBeenCalledWith(previous);
+    expect(subscribeMessages).not.toHaveBeenCalled();
+    expect(state.chatSessionMessageSubscriptionRequestedKey).toBeNull();
+    expect(state.chatSessionMessageSubscription).toBeNull();
+  });
+
   it("starts the new subscription before the previous unsubscribe settles", async () => {
     let resolveUnsubscribe: () => void = () => undefined;
     const unsubscribeMessages = vi.fn(

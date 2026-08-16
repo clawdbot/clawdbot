@@ -771,6 +771,19 @@ async function retryPendingSessionMessageSubscriptionReleases(
   );
 }
 
+async function retireLegacySessionMessageSubscription(
+  state: ChatSessionMessageSubscriptionState,
+): Promise<void> {
+  const requests = getChatHistoryPaneRequests(state);
+  requests.subscriptionGeneration += 1;
+  if (state.chatSessionMessageSubscription) {
+    requests.pendingSubscriptionReleases.add(state.chatSessionMessageSubscription);
+  }
+  state.chatSessionMessageSubscriptionRequestedKey = null;
+  state.chatSessionMessageSubscription = null;
+  await retryPendingSessionMessageSubscriptionReleases(state);
+}
+
 async function ensureControlModel(state: ChatState): Promise<ControlModel | undefined> {
   if (state.controlModel) {
     return state.controlModel;
@@ -850,6 +863,7 @@ export async function syncSelectedSessionMessageSubscription(
     await ensureControlModel(state);
   }
   if (state.controlModel) {
+    await retireLegacySessionMessageSubscription(state);
     return;
   }
   const client = state.client;

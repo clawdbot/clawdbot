@@ -146,6 +146,10 @@ describe("session list requests", () => {
   });
 
   it("uses the Gateway to refresh a visible roster larger than the model page bound", async () => {
+    let modelListener: (() => void) | undefined;
+    let eventListener:
+      | ((event: { type: "event"; event: string; payload?: unknown }) => void)
+      | undefined;
     let catalog: ControlModelSessionCatalogSnapshot = {
       status: "idle",
       query: {},
@@ -189,7 +193,10 @@ describe("session list requests", () => {
         connection: { status: "connected", epoch: 1 },
         sessionCatalog: catalog,
       }),
-      subscribe: () => () => undefined,
+      subscribe(listener: () => void) {
+        modelListener = listener;
+        return () => undefined;
+      },
       start: vi.fn(),
       refreshSessions,
       conversation: vi.fn(),
@@ -211,7 +218,10 @@ describe("session list requests", () => {
       controlModel: model,
       loadControlModelCatalog: async () => model,
       subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
+      subscribeEvents(listener) {
+        eventListener = listener;
+        return () => undefined;
+      },
     });
 
     await sessions.refresh({ agentId: "main", limit: 1_000, force: true });
@@ -224,7 +234,24 @@ describe("session list requests", () => {
     });
     expect(sessions.state.result?.sessions).toHaveLength(2_000);
 
-    await sessions.refresh({ agentId: "main", limit: 2_000, force: true });
+    catalog = {
+      ...catalog,
+      query: { agentId: "main", limit: 1_000 },
+      sessions: catalog.sessions.slice(0, 1_000),
+      count: 1_000,
+      offset: 0,
+      nextOffset: 1_000,
+      hasMore: true,
+    };
+    modelListener?.();
+    expect(sessions.state.result?.sessions).toHaveLength(2_000);
+
+    eventListener?.({
+      type: "event",
+      event: "sessions.changed",
+      payload: { agentId: "main", reason: "update", sessionKey: "agent:main:model-1" },
+    });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
 
     expect(request).toHaveBeenCalledWith(
       "sessions.list",
