@@ -2,7 +2,7 @@
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   assertOkOrThrowProviderError,
-  readProviderJsonResponse,
+  readProviderJsonObjectResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   fetchWithSsrFGuard,
@@ -113,11 +113,7 @@ export async function minimaxTTS(params: {
     try {
       await assertOkOrThrowProviderError(response, "MiniMax TTS API error");
 
-      const body = await readProviderJsonResponse<unknown>(response, "minimax.tts");
-
-      if (!isRecord(body)) {
-        throw new Error("MiniMax TTS API returned a malformed response");
-      }
+      const body = await readProviderJsonObjectResponse(response, "minimax.tts");
 
       assertMinimaxBaseResp(
         isRecord(body.base_resp) ? (body.base_resp as MinimaxBaseResp) : undefined,
