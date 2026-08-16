@@ -5,6 +5,7 @@ import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
+import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manager.runtime-resume-state.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import {
   readAcpSessionMeta,
@@ -678,25 +679,22 @@ async function ensureFreshAcpResetState(params: {
     return undefined;
   }
 
-  const backendId = (latestMeta.backend || params.cfg.acp?.backend || "").trim() || undefined;
   if (params.shouldApply && !params.shouldApply()) {
     return undefined;
   }
-  try {
-    params.assertCurrent?.();
-    await getAcpRuntimeBackend(backendId)?.runtime.prepareFreshSession?.({
-      sessionKey: params.sessionKey,
-    });
-    if (params.shouldApply && !params.shouldApply()) {
-      return undefined;
-    }
-    params.assertCurrent?.();
-  } catch (error) {
-    params.assertCurrent?.();
-    logVerbose(
-      `sessions.${params.reason}: ACP prepareFreshSession failed for ${params.sessionKey}: ${String(error)}`,
-    );
+  params.assertCurrent?.();
+  // The helper records skipped/failed preparation; only lifecycle staleness aborts here.
+  await tryPrepareFreshManagerRuntimeSession({
+    deps: { getRuntimeBackend: getAcpRuntimeBackend },
+    cfg: params.cfg,
+    meta: latestMeta,
+    sessionKey: params.sessionKey,
+    logPrefix: `sessions.${params.reason}`,
+  });
+  if (params.shouldApply && !params.shouldApply()) {
+    return undefined;
   }
+  params.assertCurrent?.();
 
   const now = Date.now();
   let resetMeta: SessionAcpMeta | undefined;
@@ -1644,17 +1642,16 @@ export async function performGatewaySessionReset(params: {
             sessionId: mutation.nextEntry.sessionId,
           });
           if (committedAcpResetState && isResetLifecycleCurrent()) {
-            try {
-              await getAcpRuntimeBackend(
-                (committedAcpResetState.meta.backend || cfg.acp?.backend || "").trim() || undefined,
-              )?.runtime.prepareFreshSession?.({
-                sessionKey: committedAcpResetState.sessionKey,
-              });
-            } catch (error) {
-              logVerbose(
-                `sessions.session-reset: ACP prepareFreshSession failed for ${committedAcpResetState.sessionKey}: ${String(error)}`,
-              );
-            }
+            // The helper records skipped/failed preparation instead of silently
+            // resuming the old backend conversation after an apparently
+            // successful reset.
+            await tryPrepareFreshManagerRuntimeSession({
+              deps: { getRuntimeBackend: getAcpRuntimeBackend },
+              cfg,
+              meta: committedAcpResetState.meta,
+              sessionKey: committedAcpResetState.sessionKey,
+              logPrefix: "sessions.session-reset",
+            });
           }
           await emitGatewayBeforeResetPluginHook({
             cfg,
