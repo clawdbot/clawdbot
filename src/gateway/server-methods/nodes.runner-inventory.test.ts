@@ -338,6 +338,13 @@ describe("nodeHandlers node.runnerInventory.update", () => {
         workerHost: { enabled: true, capacity: "available", bundlePrewarm: 2 },
       },
     },
+    {
+      name: "unsupported bundle retention version",
+      params: {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: "available", bundleRetention: 2 },
+      },
+    },
   ])("rejects $name without changing private eligibility", async ({ params }) => {
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
     const client = createWorkerSupervisorNodeClient();

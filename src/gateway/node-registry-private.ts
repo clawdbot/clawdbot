@@ -203,7 +203,8 @@ function sameWorkerHostDeclaration(
     (left?.enabled !== true ||
       (right?.enabled === true &&
         left.capacity === right.capacity &&
-        left.bundlePrewarm === right.bundlePrewarm))
+        left.bundlePrewarm === right.bundlePrewarm &&
+        left.bundleRetention === right.bundleRetention))
   );
 }
 

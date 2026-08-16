@@ -122,8 +122,10 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
   if (
     (params.command === NODE_WORKER_BUNDLE_INSTALL_COMMAND && !params.bundleInstaller) ||
     (params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND && !params.workspace) ||
+    (params.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND && !params.supervisor) ||
     (params.command !== NODE_WORKER_BUNDLE_INSTALL_COMMAND &&
       params.command !== NODE_WORKER_WORKSPACE_EXEC_COMMAND &&
+      params.command !== NODE_WORKER_WORKSPACE_RETAIN_COMMAND &&
       !params.supervisor)
   ) {
     return {
@@ -170,13 +172,32 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
       };
     }
     if (params.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND) {
+      const input = parseNodeWorkerWorkspaceRetainInput(params.paramsJSON);
+      const workspace = await params.supervisor!.retainWorkspaces(input, params.signal);
+      let bundles: { deleted: number; hasMore: boolean; generation: number } | undefined;
+      if (workspace.applied && input.bundleHashes) {
+        if (!params.bundleInstaller?.retain) {
+          throw new Error("node worker bundle retention unavailable");
+        }
+        bundles = await params.bundleInstaller.retain({
+          gatewayNamespace: input.gatewayNamespace,
+          bundleHashes: input.bundleHashes,
+          ...(input.acknowledgedBundleGeneration !== undefined
+            ? { acknowledgedGeneration: input.acknowledgedBundleGeneration }
+            : {}),
+        });
+      }
       return {
         handled: true,
         ok: true,
-        payload: await params.supervisor!.retainWorkspaces(
-          parseNodeWorkerWorkspaceRetainInput(params.paramsJSON),
-          params.signal,
-        ),
+        payload: bundles
+          ? {
+              ...workspace,
+              bundleDeleted: bundles.deleted,
+              bundleGeneration: bundles.generation,
+              hasMore: workspace.hasMore || bundles.hasMore,
+            }
+          : workspace,
       };
     }
     const receipt =

@@ -1,6 +1,7 @@
 /** Tests node-host runner command parsing, timeout, and plugin dispatch behavior. */
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
@@ -692,7 +693,11 @@ describe("runNodeHost", () => {
 
     expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
       protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-      workerHost: { enabled: true, capacity: "available", bundlePrewarm: 1 },
+      workerHost: {
+        enabled: true,
+        capacity: "available",
+        bundlePrewarm: 1,
+      },
     });
   });
 
@@ -709,12 +714,21 @@ describe("runNodeHost", () => {
     mocks.runnerAvailabilityChanged?.(true);
     options?.onHelloOk?.({
       protocol: 4,
-      features: { methods: [], events: [] },
+      features: {
+        methods: [],
+        events: [],
+        capabilities: [GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION],
+      },
     } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
     await vi.waitFor(() => {
       expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: "available", bundlePrewarm: 1 },
+        workerHost: {
+          enabled: true,
+          capacity: "available",
+          bundlePrewarm: 1,
+          bundleRetention: 1,
+        },
       });
     });
 
@@ -722,7 +736,12 @@ describe("runNodeHost", () => {
     await vi.waitFor(() => {
       expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: "full", bundlePrewarm: 1 },
+        workerHost: {
+          enabled: true,
+          capacity: "full",
+          bundlePrewarm: 1,
+          bundleRetention: 1,
+        },
       });
     });
 
@@ -730,7 +749,12 @@ describe("runNodeHost", () => {
     await vi.waitFor(() => {
       expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: { enabled: true, capacity: "available", bundlePrewarm: 1 },
+        workerHost: {
+          enabled: true,
+          capacity: "available",
+          bundlePrewarm: 1,
+          bundleRetention: 1,
+        },
       });
     });
     expect(client?.updateNodeManifest).not.toHaveBeenCalled();

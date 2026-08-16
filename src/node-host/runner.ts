@@ -5,6 +5,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
@@ -14,6 +15,7 @@ import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+  NODE_WORKER_BUNDLE_RETENTION_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../infra/node-runner-inventory.js";
 import { VERSION } from "../version.js";
@@ -257,6 +259,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   let gatewayHelloReceived = false;
   let gatewayConnectionGeneration = 0;
   let connectedGatewayProtocol = 0;
+  let gatewaySupportsBundleRetention = false;
   let optionalPublicationStates = new Map<
     NodeOptionalPublicationMethod,
     NodeOptionalPublicationState
@@ -273,6 +276,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     gatewayConnectionGeneration += 1;
     gatewayHelloReceived = false;
     connectedGatewayProtocol = 0;
+    gatewaySupportsBundleRetention = false;
     retireOptionalPublications();
   };
 
@@ -470,6 +474,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
               enabled: true,
               capacity: workerRunsAvailable ? "available" : "full",
               bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION,
+              ...(gatewaySupportsBundleRetention
+                ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION }
+                : {}),
             }
           : { enabled: false },
       },
@@ -543,6 +550,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       gatewayConnectionGeneration += 1;
       gatewayHelloReceived = true;
       connectedGatewayProtocol = hello.protocol;
+      gatewaySupportsBundleRetention =
+        hello.features?.capabilities?.includes(GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION) ===
+        true;
       retireOptionalPublications();
       optionalPublicationStates = new Map();
       if (opts.stopAfterFirstConnect) {
