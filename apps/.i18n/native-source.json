@@ -7952,6 +7952,17 @@
       ]
     },
     {
+      "id": "native.android.dd92bd45c788a5ff",
+      "source": "Install",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt"
+        }
+      ]
+    },
+    {
       "id": "native.android.65bbf88e7601c000",
       "source": "Install Options",
       "surface": "android",
@@ -10442,6 +10453,17 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CronJobManagementPanel.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.241a4d3e017a094d",
+      "source": "Not scanned by ClawHub",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SkillsSettingsScreen.kt"
         }
       ]
     },
@@ -26335,6 +26357,17 @@
       ]
     },
     {
+      "id": "native.apple.d52e4a1639df3cbd",
+      "source": "Could not install skill",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.72a0fd50a7a6f408",
       "source": "Could not load automation",
       "surface": "apple",
@@ -31564,6 +31597,10 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift"
+        },
+        {
+          "kind": "conditional-branch",
+          "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift"
         }
       ]
     },
@@ -31704,10 +31741,6 @@
         {
           "kind": "ui-named-argument",
           "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift"
-        },
-        {
-          "kind": "conditional-branch",
-          "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift"
         },
         {
           "kind": "conditional-branch",
@@ -35844,6 +35877,25 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/macos/Sources/OpenClaw/ComputerControlReadinessView.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.76fcfd4a6613a4ee",
+      "source": "Not scanned by ClawHub",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift"
+        },
+        {
+          "kind": "ui-call",
+          "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift"
+        },
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/ClawHubSkillsBrowser.swift"
         }
       ]
     },
@@ -41578,6 +41630,10 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Design/SettingsProTabActions.swift"
+        },
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/ios/Sources/Design/SettingsSkillsDestination.swift"
         },
         {
           "kind": "ui-localized-call",

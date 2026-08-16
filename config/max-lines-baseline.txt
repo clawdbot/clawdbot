@@ -64,7 +64,6 @@ extensions/codex/src/conversation-binding.test.ts
 extensions/codex/src/conversation-binding.ts
 extensions/codex/src/migration/provider.test.ts
 extensions/codex/src/migration/session-binding-sidecars.ts
-extensions/codex/src/session-catalog.test.ts
 extensions/codex/src/supervision-tools.ts
 extensions/comfy/image-generation-provider.test.ts
 extensions/comfy/workflow-runtime.ts
