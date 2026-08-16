@@ -1,11 +1,14 @@
 // Verifies lifecycle snapshot loading, ownership facts, and immutable boundaries.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
-import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   completePluginMetadataSnapshot,
   loadPluginMetadataSnapshot,
@@ -96,7 +99,7 @@ describe("plugin metadata snapshot", () => {
   });
 
   afterEach(() => {
-    clearCurrentPluginMetadataSnapshot();
+    clearPluginMetadataLifecycleCaches();
   });
 
   it("keeps explicit control-plane loads fresh", () => {
@@ -187,7 +190,6 @@ describe("plugin metadata snapshot", () => {
       config,
       env: {},
       workspaceDir: targetWorkspace,
-      workspacePluginRootPresent: false,
     });
 
     expect(resolved).not.toBe(source);
@@ -204,6 +206,15 @@ describe("plugin metadata snapshot", () => {
       workspacePluginRootPresent: true,
     });
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
+
+    const pluginWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-workspace-"));
+    try {
+      fs.mkdirSync(path.join(pluginWorkspace, ".openclaw", "extensions"), { recursive: true });
+      resolvePluginMetadataSnapshot({ config, env: {}, workspaceDir: pluginWorkspace });
+      expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+    } finally {
+      fs.rmSync(pluginWorkspace, { force: true, recursive: true });
+    }
   });
 
   it("rewalks collection-bearing manifest graphs after prototype mutation", () => {

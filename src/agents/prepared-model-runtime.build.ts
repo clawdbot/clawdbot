@@ -4,6 +4,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import pLimit from "p-limit";
 import { runAbortableTimeout } from "../node-host/with-timeout.js";
+import { projectPluginMetadataSnapshotWorkspace } from "../plugins/plugin-metadata-snapshot.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
@@ -232,6 +233,14 @@ function createSnapshot(
   const { credentials, input } = agentFacts;
   const { mediaCapabilityProviders, messageToolCatalog, pluginMetadataSnapshot, pluginRegistry } =
     pluginGeneration;
+  const metadataSnapshot = input.workspaceDir
+    ? projectPluginMetadataSnapshotWorkspace({
+        snapshot: pluginMetadataSnapshot,
+        config: input.config,
+        env: input.env,
+        workspaceDir: input.workspaceDir,
+      })
+    : pluginMetadataSnapshot;
   const { configuredRuntimeModels, inlineProviderModels, modelCatalog, templateModelRegistry } =
     catalogFacts;
   const createStores = (): PreparedModelRuntimeStores => {
@@ -248,7 +257,7 @@ function createSnapshot(
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     config: input.config,
     authModes: resolveUsableAgentCredentialModes(credentials),
-    metadataSnapshot: pluginMetadataSnapshot,
+    metadataSnapshot,
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
     ...(pluginRegistry ? { pluginRegistry } : {}),
     ...(messageToolCatalog ? { messageToolCatalog } : {}),
