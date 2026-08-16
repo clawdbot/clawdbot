@@ -397,7 +397,7 @@ Related:
 
 Use when a client on another machine gets connection errors, timeouts, or connects and then immediately closes, while local use works. Verified on 2026.7.1-2.
 
-One command sorts every case. From the machine that cannot connect:
+One command sorts every case. From the machine that cannot connect (with `gateway.tls.enabled` the gateway serves HTTPS, so probe `https://` instead; add `-k` when the certificate is self-signed or came from `gateway.tls.autoGenerate`):
 
 ```bash
 curl -sS --connect-timeout 5 -m 10 http://<gateway-host>:18789/
@@ -405,6 +405,7 @@ curl -sS --connect-timeout 5 -m 10 http://<gateway-host>:18789/
 
 - Any HTTP response comes back (HTML, `404`, even `503`): you reached a listener at that host and port, so the network path is fine. Skip to [curl works, the client still fails](#curl-works-the-client-still-fails). HTML is the Control UI when it is enabled; a healthy gateway can still answer 404 or 503 with the UI disabled or the route explicit. No HTTP response proves auth.
 - `connection refused`: nothing is listening at that host:port.
+- TCP connects, then `Empty reply from server` or an immediate reset: scheme mismatch, not a path problem. A plaintext probe against a TLS-enabled gateway dies at the TLS handshake (and an `https://` probe against a plaintext gateway fails with a TLS `wrong version number` error). Re-probe with the other scheme before concluding anything; a healthy TLS listener fails the `http://` probe by design.
 - No TCP connection (hangs, then a connect timeout): path or firewall, see [timeout, not refused](#timeout-not-refused). If it connects but the transfer then stalls, the listener itself is unresponsive: check the gateway process before the network.
 
 ### Connection refused
