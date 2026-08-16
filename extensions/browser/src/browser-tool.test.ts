@@ -792,6 +792,20 @@ describe("browser tool snapshot maxChars", () => {
     expect(opts.timeoutMs).toBeUndefined();
   });
 
+  it("preserves cancellation while listing host system profiles", async () => {
+    const controller = new AbortController();
+    const abortError = new Error("agent turn cancelled");
+    browserClientMocks.browserSystemProfiles.mockImplementationOnce(async () => {
+      controller.abort(abortError);
+      throw abortError;
+    });
+
+    await expect(
+      createBrowserTool().execute?.("call-1", { action: "profiles" }, controller.signal),
+    ).rejects.toBe(abortError);
+    expect(browserClientMocks.browserProfiles).not.toHaveBeenCalled();
+  });
+
   it("uses a longer default timeout for existing-session profile status through node proxy", async () => {
     mockSingleBrowserProxyNode();
     setResolvedBrowserProfiles({
@@ -1251,6 +1265,7 @@ describe("browser tool snapshot maxChars", () => {
 
   it("compensates durable tracking failure on the automatic host fallback", async () => {
     const trackingError = new Error("sqlite unavailable");
+    const controller = new AbortController();
     mockSingleBrowserProxyNode();
     gatewayMocks.callGatewayTool.mockRejectedValueOnce(
       new Error("Browser control host is not reachable on 127.0.0.1:18791."),
@@ -1267,25 +1282,36 @@ describe("browser tool snapshot maxChars", () => {
       },
     });
     sessionTabRegistryMocks.trackSessionBrowserTab.mockImplementationOnce(() => {
+      controller.abort(new Error("agent turn cancelled"));
       throw trackingError;
     });
     const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
 
     await expect(
-      tool.execute?.("call-1", {
-        action: "open",
-        profile: "work",
-        url: "https://example.com",
-      }),
+      tool.execute?.(
+        "call-1",
+        {
+          action: "open",
+          profile: "work",
+          url: "https://example.com",
+        },
+        controller.signal,
+      ),
     ).rejects.toBe(trackingError);
-    expect(toolCommonMocks.fetchBrowserJson).toHaveBeenLastCalledWith(
-      "/tabs/host-tab-compensate?profile=work-actual",
+    expect(browserClientMocks.browserCloseTab).toHaveBeenCalledWith(
+      undefined,
+      "host-tab-compensate",
       {
-        method: "DELETE",
-        body: undefined,
+        profile: "work-actual",
         timeoutMs: undefined,
       },
     );
+    expect(toolCommonMocks.fetchBrowserJson).toHaveBeenLastCalledWith("/tabs/open?profile=work", {
+      method: "POST",
+      body: JSON.stringify({ url: "https://example.com" }),
+      timeoutMs: undefined,
+      signal: controller.signal,
+    });
   });
 
   it("touches tabs used after automatic host fallback", async () => {
@@ -1520,6 +1546,92 @@ describe("browser tool snapshot maxChars", () => {
     expect(opts.targetId).toBe("tab-1");
     expect(opts.timeoutMs).toBe(12_345);
   });
+
+  it.each([
+    ["doctor", { action: "doctor", target: "host" }, browserClientMocks.browserDoctor, 1],
+    ["status", { action: "status", target: "host" }, browserClientMocks.browserStatus, 1],
+    ["start", { action: "start", target: "host" }, browserClientMocks.browserStart, 1],
+    ["stop", { action: "stop", target: "host" }, browserClientMocks.browserStop, 1],
+    ["profiles", { action: "profiles", target: "host" }, browserClientMocks.browserProfiles, 1],
+    [
+      "importprofile",
+      { action: "importprofile", target: "host" },
+      browserClientMocks.browserImportProfile,
+      1,
+    ],
+    ["tabs", { action: "tabs", target: "host" }, browserClientMocks.browserTabs, 1],
+    [
+      "open",
+      { action: "open", target: "host", url: "about:blank" },
+      browserClientMocks.browserOpenTab,
+      2,
+    ],
+    [
+      "focus",
+      { action: "focus", target: "host", targetId: "tab-1" },
+      browserClientMocks.browserFocusTab,
+      2,
+    ],
+    [
+      "close",
+      { action: "close", target: "host", targetId: "tab-1" },
+      browserClientMocks.browserCloseTab,
+      2,
+    ],
+    ["snapshot", { action: "snapshot", target: "host" }, browserClientMocks.browserSnapshot, 1],
+    [
+      "screenshot",
+      { action: "screenshot", target: "host" },
+      browserActionsMocks.browserScreenshotAction,
+      1,
+    ],
+    [
+      "navigate",
+      { action: "navigate", target: "host", url: "about:blank" },
+      browserActionsMocks.browserNavigate,
+      1,
+    ],
+    ["pdf", { action: "pdf", target: "host" }, browserActionsMocks.browserPdfSave, 1],
+    [
+      "upload",
+      { action: "upload", target: "host", paths: ["/tmp/report.pdf"] },
+      browserActionsMocks.browserArmFileChooser,
+      1,
+    ],
+    [
+      "dialog",
+      { action: "dialog", target: "host", accept: true },
+      browserActionsMocks.browserArmDialog,
+      1,
+    ],
+    [
+      "console",
+      { action: "console", target: "host" },
+      browserActionsMocks.browserConsoleMessages,
+      1,
+    ],
+    [
+      "act",
+      { action: "act", target: "host", request: { kind: "click", ref: "e1" } },
+      browserActionsMocks.browserAct,
+      2,
+    ],
+  ] as const)(
+    "forwards the agent signal to local %s actions",
+    async (_name, args, mock, optionsIndex) => {
+      const controller = new AbortController();
+      pathValidationMocks.resolveExistingUploadPaths.mockResolvedValue({
+        ok: true,
+        paths: ["/tmp/report.pdf"],
+      });
+
+      await createBrowserTool().execute?.("call-1", args, controller.signal);
+
+      expect(lastMockCallArg<{ signal?: AbortSignal }>(mock, optionsIndex).signal).toBe(
+        controller.signal,
+      );
+    },
+  );
 
   it("parses string screenshot timeoutMs values", async () => {
     const tool = createBrowserTool();
@@ -2679,14 +2791,21 @@ describe("browser tool url alias support", () => {
       targetId: "nav-tab",
       url: "https://example.com/next",
     });
-    const abortError = new Error("This operation was aborted");
-    abortError.name = "AbortError";
-    browserClientMocks.browserSnapshot.mockRejectedValueOnce(abortError);
+    const controller = new AbortController();
+    const abortError = new Error("agent turn cancelled");
+    browserClientMocks.browserSnapshot.mockImplementationOnce(async () => {
+      controller.abort(abortError);
+      throw abortError;
+    });
     const tool = createBrowserTool();
 
     await expect(
-      tool.execute?.("call-1", { action: "navigate", url: "https://example.com/next" }),
-    ).rejects.toMatchObject({ name: "AbortError" });
+      tool.execute?.(
+        "call-1",
+        { action: "navigate", url: "https://example.com/next" },
+        controller.signal,
+      ),
+    ).rejects.toBe(abortError);
   });
 
   it("degrades inline page state when the node proxy falls back to the host mid-call", async () => {
@@ -3734,6 +3853,29 @@ describe("browser tool act stale target recovery", () => {
     ).rejects.toThrow(/wait condition failed/);
 
     expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves cancellation while refreshing a stale target", async () => {
+    const controller = new AbortController();
+    const abortError = new Error("agent turn cancelled");
+    browserActionsMocks.browserAct.mockRejectedValueOnce(new Error("404: tab not found"));
+    browserClientMocks.browserTabs.mockImplementationOnce(async () => {
+      controller.abort(abortError);
+      throw abortError;
+    });
+    const tool = createBrowserTool();
+
+    await expect(
+      tool.execute?.(
+        "call-1",
+        {
+          action: "act",
+          profile: "user",
+          request: { kind: "wait", targetId: "stale-tab", timeMs: 1 },
+        },
+        controller.signal,
+      ),
+    ).rejects.toBe(abortError);
   });
 
   it("retries stale targetIds returned through the node browser proxy", async () => {
