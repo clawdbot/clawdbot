@@ -128,6 +128,7 @@ clearPluginCommands();
 const smsStatsBefore = getPluginModuleLoaderStats();
 const smsRegistry = loadOpenClawPlugins({
   cache: false,
+  preferBuiltPluginArtifacts: true,
   workspaceDir: tempRoot,
   env: {
     ...process.env,
