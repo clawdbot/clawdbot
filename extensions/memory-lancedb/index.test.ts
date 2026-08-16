@@ -13,6 +13,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
+import { isToolResultError } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  buildContractReplyPayloads,
+  createContractToolTerminalObserver,
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import {
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
@@ -3620,19 +3625,82 @@ describe("memory plugin e2e", () => {
         expectToolExecute(forgetTool, "memory_forget");
 
         const directAbsent = await forgetTool.execute("forget-direct-absent", { memoryId });
-        expect(directAbsent.details).toEqual({ action: "not_found", id: memoryId });
+        const notDeletedError = `Memory ${memoryId} was not deleted because it was not found.`;
+        expect(directAbsent.details).toEqual({
+          action: "not_found",
+          error: notDeletedError,
+          id: memoryId,
+          status: "error",
+        });
+        expect(directAbsent.content?.[0]?.text).toBe(notDeletedError);
 
         const queryAbsent = await forgetTool.execute("forget-query-absent", {
           query: "concise replies",
         });
-        expect(queryAbsent.details).toEqual({ action: "not_found", id: memoryId });
+        expect(queryAbsent.details).toEqual({
+          action: "not_found",
+          error: notDeletedError,
+          id: memoryId,
+          status: "error",
+        });
+        expect(queryAbsent.content?.[0]?.text).toBe(notDeletedError);
         expect(queryAbsent.content?.[0]?.text).not.toContain("Forgotten");
+
+        for (const [label, args, result] of [
+          ["direct", { memoryId }, directAbsent],
+          ["query", { query: "concise replies" }, queryAbsent],
+        ] as const) {
+          expect(isToolResultError(result), `${label} zero-row receipt`).toBe(true);
+          const terminal = createContractToolTerminalObserver(`forget-${label}-zero`)({
+            toolName: "memory_forget",
+            arguments: args,
+            outcome: "failure",
+            failure: { error: result.content?.[0]?.text },
+            ownerMutation: { ownerKey: '["memory-lancedb","memory_forget"]' },
+          });
+          const payloads = buildContractReplyPayloads({
+            assistantText: "Done — I forgot that memory.",
+            lastToolError: terminal.lastToolError,
+          });
+          expect(payloads).toEqual([
+            expect.objectContaining({ text: "Done — I forgot that memory." }),
+            expect.objectContaining({ isError: true }),
+          ]);
+          expect(JSON.stringify(payloads)).not.toContain("memory-lancedb");
+        }
 
         const queryDeleted = await forgetTool.execute("forget-query-deleted", {
           query: "concise replies",
         });
         expect(queryDeleted.details).toEqual({ action: "deleted", id: memoryId });
         expect(queryDeleted.content?.[0]?.text).toContain("Forgotten");
+        expect(isToolResultError(queryDeleted)).toBe(false);
+        const successTerminal = createContractToolTerminalObserver("forget-query-positive")({
+          toolName: "memory_forget",
+          arguments: { query: "concise replies" },
+          outcome: "success",
+          ownerMutation: { ownerKey: '["memory-lancedb","memory_forget"]' },
+        });
+        expect(
+          buildContractReplyPayloads({
+            assistantText: "Done — I forgot that memory.",
+            lastToolError: successTerminal.lastToolError,
+          }),
+        ).toEqual([expect.objectContaining({ text: "Done — I forgot that memory." })]);
+
+        const unrelatedNotFound = { details: { action: "not_found" } };
+        expect(isToolResultError(unrelatedNotFound)).toBe(false);
+        const recallTerminal = createContractToolTerminalObserver("recall-not-found")({
+          toolName: "memory_recall",
+          arguments: { query: "concise replies" },
+          outcome: "success",
+        });
+        expect(
+          buildContractReplyPayloads({
+            assistantText: "No matching memory was found.",
+            lastToolError: recallTerminal.lastToolError,
+          }),
+        ).toEqual([expect.objectContaining({ text: "No matching memory was found." })]);
         expect(deleteRows).toHaveBeenCalledTimes(3);
       },
     });
