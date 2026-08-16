@@ -89,7 +89,7 @@ describe("queued message reorder", () => {
       moveQueuedChatMessage(peer as never, "queued-1", 2);
 
       expect(storedOrder(host)).toEqual(["queued-1", "queued-2", "queued-3"]);
-      expect(peer.lastError).toBeNull();
+      expect(peer.lastError).toContain("before reordering it");
     } finally {
       stopPeer();
       unsubscribe();
