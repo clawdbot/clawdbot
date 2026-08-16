@@ -9,7 +9,6 @@ import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
 import { runGatewayShutdownSteps } from "./server-shutdown.js";
 import { finishGatewayStartup } from "./server-startup-finish.js";
-import { getGatewayStartupTestHooks } from "./server-test-hooks.js";
 
 const loadGatewayStartupPostAttachModule = createLazyRuntimeModule(
   () => import("./server-startup-post-attach.js"),
@@ -57,8 +56,6 @@ export async function startGatewayServerCore(
       logReload,
       logTailscale,
       loadGatewayStartupPostAttachModule,
-      beforeWorkerEnvironmentRuntimeStart:
-        getGatewayStartupTestHooks().beforeWorkerEnvironmentRuntimeStart,
       waitForPostReadyWork: () => postReadyWorkBarrier,
     });
   } catch (err) {

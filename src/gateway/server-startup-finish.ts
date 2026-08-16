@@ -38,7 +38,6 @@ export async function finishGatewayStartup(params: {
   loadGatewayStartupPostAttachModule: () => Promise<
     typeof import("./server-startup-post-attach.js")
   >;
-  beforeWorkerEnvironmentRuntimeStart?: () => void;
   waitForPostReadyWork: () => Promise<void>;
 }) {
   const {
@@ -54,7 +53,6 @@ export async function finishGatewayStartup(params: {
     logReload,
     logTailscale,
     loadGatewayStartupPostAttachModule,
-    beforeWorkerEnvironmentRuntimeStart,
   } = params;
   const {
     minimalTestGateway,
@@ -329,7 +327,6 @@ export async function finishGatewayStartup(params: {
                   if (lifecycle.closePreludeStarted) {
                     return null;
                   }
-                  beforeWorkerEnvironmentRuntimeStart?.();
                   return await workerPlacementRuntime.startRuntime({
                     isClosePreludeStarted: () => lifecycle.closePreludeStarted,
                     // Close must see the drain handle before reconciliation can yield.
