@@ -2141,7 +2141,7 @@ describe("Codex app-server approval bridge", () => {
     });
 
     expect(gatewayRequestPayload().description).toBe(
-      "Command: pnpm test --watch extensions/codex/src/app-server\nSession: agent:main:session-1",
+      "Command: pnpm test --watch extensions/codex/src/app-server",
     );
     findApprovalEvent(params, {
       status: "pending",
@@ -2196,9 +2196,7 @@ describe("Codex app-server approval bridge", () => {
       ...codexTestTurnIds(),
     });
 
-    expect(gatewayRequestPayload().description).toBe(
-      "Command: prefix VISIBLE suffix\nSession: agent:main:session-1",
-    );
+    expect(gatewayRequestPayload().description).toBe("Command: prefix VISIBLE suffix");
     findApprovalEvent(params, { command: "prefix VISIBLE suffix" });
   });
 
@@ -2219,9 +2217,7 @@ describe("Codex app-server approval bridge", () => {
       ...codexTestTurnIds(),
     });
 
-    expect(gatewayRequestPayload().description).toBe(
-      "Command: echo safe cod.exe hidden done\nSession: agent:main:session-1",
-    );
+    expect(gatewayRequestPayload().description).toBe("Command: echo safe cod.exe hidden done");
     findApprovalEvent(params, { command: "echo safe cod.exe hidden done" });
   });
 
@@ -2245,7 +2241,7 @@ describe("Codex app-server approval bridge", () => {
     });
 
     expect(gatewayRequestPayload().description).toBe(
-      "Command: [preview truncated or unsafe content omitted]\nSession: agent:main:session-1",
+      "Command: [preview truncated or unsafe content omitted]",
     );
     const omittedEvent = findApprovalEvent(params, {});
     expect(omittedEvent.commandPreviewOmitted).toBe(true);
@@ -2536,9 +2532,7 @@ describe("Codex app-server approval bridge", () => {
       ...codexTestTurnIds(),
     });
 
-    expect(gatewayRequestPayload().description).toBe(
-      "Reason: needs write access for /tmp please\nSession: agent:main:session-1",
-    );
+    expect(gatewayRequestPayload().description).toBe("Reason: needs write access for /tmp please");
     findApprovalEvent(params, {
       status: "unavailable",
       reason: "needs write access for /tmp please",

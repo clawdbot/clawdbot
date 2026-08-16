@@ -1,8 +1,7 @@
-// Control UI modal queues approvals that are not currently inline in chat.
+// Control UI modal presents approvals after an explicit operator action.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
-import { modalApprovalQueue } from "../app/approval-presentation.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import { t } from "../i18n/index.ts";
 import { formatCountdown } from "../lib/format.ts";
@@ -22,7 +21,6 @@ type ExecApprovalProps = {
   busy: boolean;
   errors: ReadonlyMap<string, string>;
   nowMs: number;
-  inlineApprovalId?: string | null;
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
 };
 
@@ -94,25 +92,14 @@ class ExecApproval extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: ExecApprovalProps;
   @query("openclaw-modal-dialog") private dialog?: OpenClawModalDialog;
   @state() private selectedApprovalId: string | null = null;
-  @state() private forceShowAll = false;
+  @state() private explicitlyOpen = false;
 
   show(): void {
-    this.forceShowAll = true;
-    void this.updateComplete.then(() => this.dialog?.show());
-  }
-
-  private displayedQueue(): readonly ExecApprovalRequest[] {
-    const props = this.props;
-    if (!props) {
-      return [];
+    if (!this.props?.queue.length) {
+      return;
     }
-    return this.forceShowAll
-      ? props.queue
-      : modalApprovalQueue(props.queue, props.inlineApprovalId);
-  }
-
-  private activeApproval(queue: readonly ExecApprovalRequest[]): ExecApprovalRequest | null {
-    return queue.find((entry) => entry.id === this.selectedApprovalId) ?? queue.at(0) ?? null;
+    this.explicitlyOpen = true;
+    void this.updateComplete.then(() => this.dialog?.show());
   }
 
   private handleKeydown(event: KeyboardEvent, active: ExecApprovalRequest): void {
@@ -132,34 +119,36 @@ class ExecApproval extends OpenClawLightDomContentsElement {
   protected override willUpdate(changedProperties: PropertyValues<this>): void {
     const previousProps = changedProperties.get("props") as ExecApprovalProps | undefined;
     if (previousProps?.queue.length && !this.props?.queue.length) {
-      this.forceShowAll = false;
+      this.explicitlyOpen = false;
       this.selectedApprovalId = null;
       return;
     }
     // Pin the presented request: late-arriving older approvals re-sort the
     // queue, and swapping the card mid-read (or mid-decision) could attach the
     // user's answer or a failure message to a request they never saw.
-    const displayedQueue = this.displayedQueue();
-    if (!displayedQueue.some((entry) => entry.id === this.selectedApprovalId)) {
-      this.selectedApprovalId = displayedQueue.at(0)?.id ?? null;
+    const queue = this.props?.queue ?? [];
+    if (!queue.some((entry) => entry.id === this.selectedApprovalId)) {
+      this.selectedApprovalId = queue.at(0)?.id ?? null;
     }
   }
 
   override render() {
     const props = this.props;
-    const queue = this.displayedQueue();
-    const active = this.activeApproval(queue);
-    if (!props || !active) {
+    const queue = props?.queue ?? [];
+    const active = queue.find((entry) => entry.id === this.selectedApprovalId) ?? queue.at(0);
+    if (!props || !this.explicitlyOpen || !active) {
       return nothing;
     }
-    const decisions = resolveApprovalDecisions(active);
     const handleCancel = (event: Event) => {
-      if (props.busy || !decisions.includes("deny")) {
-        // Dismissal must never hide an approval that cannot yet be resolved.
+      if (props.busy) {
+        // A decision is in flight; closing now would hide its error surface.
         event.preventDefault();
         return;
       }
-      void props.onDecision(active.id, "deny");
+      // Explicitly opened means dismissal is just closing the view: the queue
+      // stays pending and visible via the attention chip and session badges.
+      // Denying here would turn Esc into a silent destructive decision.
+      this.explicitlyOpen = false;
     };
     return html`
       <openclaw-modal-dialog

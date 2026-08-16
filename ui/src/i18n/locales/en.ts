@@ -1761,6 +1761,7 @@ export const en: TranslationMap = {
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable: "Allow Always is unavailable for this command.",
     deny: "Deny",
+    details: "Details",
     labels: {
       host: "Host",
       agent: "Agent",
