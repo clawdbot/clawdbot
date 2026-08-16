@@ -1214,6 +1214,13 @@ CREATE TABLE IF NOT EXISTS agent_deletion_journal (
   delete_files INTEGER NOT NULL DEFAULT 1
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS agent_provenance (
+  agent_id TEXT PRIMARY KEY,
+  created_via TEXT NOT NULL CHECK (created_via IN ('operator', 'agent', 'claw')),
+  creator_agent_id TEXT,
+  created_at_ms INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS agent_database_leases (
   lease_id TEXT PRIMARY KEY,
   agent_id TEXT NOT NULL,

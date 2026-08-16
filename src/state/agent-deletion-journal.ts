@@ -9,6 +9,7 @@ import {
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { deleteAgentProvenanceForAgent, ensureAgentProvenanceSchema } from "./agent-provenance.js";
 import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
@@ -366,6 +367,7 @@ export function beginAgentDeletionJournal(
     cleanupPaths: entry.cleanupPaths ?? [],
   };
   let persisted: AgentDeletionJournalEntry | undefined;
+  ensureAgentProvenanceSchema(options);
   runOpenClawStateWriteTransaction((database) => {
     ensureAgentDeletionJournalSchema(database.db);
     const db = getNodeSqliteKysely<AgentDeletionDatabase>(database.db);
@@ -412,6 +414,7 @@ export function beginAgentDeletionJournal(
         cleanupCompleted: false,
         deleteFiles: normalized.deleteFiles,
       };
+      deleteAgentProvenanceForAgent(database.db, normalized.agentId);
       return;
     }
     const createdAt = Date.now();
@@ -431,6 +434,7 @@ export function beginAgentDeletionJournal(
       }),
     );
     persisted = { ...normalized, databasePaths, cleanupPaths, createdAt, cleanupCompleted: false };
+    deleteAgentProvenanceForAgent(database.db, normalized.agentId);
   }, options);
   if (!persisted) {
     throw new Error(`Failed to record deletion journal for agent ${normalized.agentId}.`);
