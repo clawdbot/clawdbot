@@ -77,7 +77,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         : {}
       : undefined;
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
-  const requirementsToml = readCodexRequirementsToml();
+  const requirementsToml = readCodexRequirementsToml({});
   const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
