@@ -305,7 +305,12 @@ class ComposerDictationSession {
       return;
     }
     if (payload.type === "error") {
-      this.reportFailure(formatUiExternalText(payload.message, t("chat.composer.dictationFailed")));
+      this.reportFailure(
+        formatUiExternalText(
+          typeof payload.message === "string" ? payload.message : undefined,
+          t("chat.composer.dictationFailed"),
+        ),
+      );
       return;
     }
     if (payload.type === "close" && payload.reason === "error") {

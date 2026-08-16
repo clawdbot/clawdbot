@@ -564,11 +564,9 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       return;
     }
     this.state = "disconnected";
-    this.disconnectedReason = reason
-      ? formatUiExternalText(reason)
-      : code
-        ? t("desktop.closeCode", { code: String(code) })
-        : null;
+    this.disconnectedReason =
+      formatUiExternalText(reason, code ? t("desktop.closeCode", { code: String(code) }) : "") ||
+      null;
   }
 
   private async launchApp(app: DesktopAppId): Promise<void> {
