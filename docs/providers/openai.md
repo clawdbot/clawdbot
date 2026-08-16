@@ -479,7 +479,7 @@ for the full example.
     OpenClaw treats native model capacity and the active runtime budget as
     separate values:
 
-    - `contextWindow` declares the provider's total model window.
+    - `contextWindow` declares the model's native window.
     - `contextTokens` caps how much of that window OpenClaw uses for active input.
 
     ChatGPT/Codex OAuth follows the live Codex account catalog. The current

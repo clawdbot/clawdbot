@@ -964,9 +964,9 @@ For full setup and behavior, see [Ollama Web Search](/tools/ollama-search).
     `/api/chat` requests leave `options.num_ctx` unset unless you set
     `params.num_ctx` explicitly, so Ollama applies its own model,
     `OLLAMA_CONTEXT_LENGTH`, or VRAM-based default; invalid, zero, negative,
-    or non-finite `params.num_ctx` values are ignored. If an older config used
-    provider-level `contextWindow`/`maxTokens` to force native request context,
-    run `openclaw doctor --fix`, then set `params.num_ctx` explicitly. The
+    or non-finite `params.num_ctx` values are ignored. After upgrading an older
+    configuration, run `openclaw doctor --fix`, then set `params.num_ctx`
+    explicitly when you need to force native request context. The
     OpenAI-compatible adapter still injects `options.num_ctx` by default from
     `params.num_ctx` or the matching model entry's `contextWindow`; disable with
     `injectNumCtxForOpenAICompat: false` if the upstream rejects `options`.
