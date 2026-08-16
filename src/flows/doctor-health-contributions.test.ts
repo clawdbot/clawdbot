@@ -1175,6 +1175,55 @@ describe("doctor health contributions", () => {
     expect(mocks.note).not.toHaveBeenCalled();
   });
 
+  it("describes only the failed later write after an earlier pass committed", async () => {
+    // First write pass commits; a later health repair then produces a candidate the
+    // writer refuses. The warning must not claim the whole run wrote nothing.
+    const cfg = { gateway: { mode: "local" } } as OpenClawConfig;
+    const ctx = {
+      cfg,
+      cfgForPersistence: structuredClone(cfg),
+      configResult: { cfg, shouldWriteConfig: true },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+    } as DoctorContributionRunContext;
+
+    await requireDoctorContribution("doctor:write-config-migrations").run(ctx);
+    expect(ctx.configResultWriteCommitted).toBe(true);
+
+    // A later repair mutates the candidate; the final write pass is refused.
+    ctx.cfg = {
+      ...ctx.cfg,
+      agents: { defaults: { heartbeat: { every: 5 } } },
+    } as unknown as OpenClawConfig;
+    mocks.note.mockClear();
+    mocks.replaceConfigFile.mockRejectedValueOnce(
+      Object.assign(new Error("Config validation failed: agents.defaults.heartbeat.every"), {
+        code: "CONFIG_VALIDATION_FAILED",
+        issues: [
+          {
+            path: "agents.defaults.heartbeat.every",
+            message: "Invalid input: expected string, received number",
+          },
+        ],
+      }),
+    );
+    await requireDoctorContribution("doctor:write-config").run(ctx);
+
+    expect(ctx.configWriteBlockedByValidation).toBe(true);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Earlier config fixes were already saved"),
+      "Doctor warnings",
+    );
+    expect(mocks.note).not.toHaveBeenCalledWith(
+      expect.stringContaining("No config changes were written"),
+      "Doctor warnings",
+    );
+  });
+
   it("prints held change panels as Doctor changes only after the write commits", async () => {
     const cfg = { gateway: { mode: "local" } } as OpenClawConfig;
     const ctx = {

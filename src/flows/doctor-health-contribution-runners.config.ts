@@ -82,19 +82,24 @@ export async function runWriteConfigHealth(
     } catch (error) {
       const { isConfigValidationFailedError } = await import("../config/io.write-errors.js");
       if (isConfigValidationFailedError(error)) {
-        // The repaired candidate still fails validation, so nothing was persisted.
-        // Queued "Doctor changes" panels stay unprinted: reporting them would claim
-        // repairs that never reached disk. Tell the operator what remains manual.
+        // This refused write persisted nothing. Queued "Doctor changes" panels stay
+        // unprinted: reporting them would claim repairs that never reached disk.
+        // An earlier pass through this shared runner may have already committed, so
+        // describe only the pending write as unpersisted, never the whole run.
         const { note } = await import("../../packages/terminal-core/src/note.js");
         const { formatConfigIssueLines } = await import("../config/issue-format.js");
         const issueLines = Array.isArray(error.issues)
           ? formatConfigIssueLines(error.issues, "-", { normalizeRoot: true })
           : [error.message];
+        const unpersistedLine =
+          ctx.configResultWriteCommitted === true
+            ? "Earlier config fixes were already saved; the remaining changes were not written."
+            : "No config changes were written.";
         note(
           [
             "Doctor could not apply config fixes: the repaired config still fails validation.",
             ...issueLines,
-            `No config changes were written. Fix the value(s) above in ${shortenHomePath(ctx.configPath)} by hand, then rerun "openclaw doctor --fix".`,
+            `${unpersistedLine} Fix the value(s) above in ${shortenHomePath(ctx.configPath)} by hand, then rerun "openclaw doctor --fix".`,
           ].join("\n"),
           "Doctor warnings",
         );
