@@ -227,8 +227,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 49022,
-    "roughTokens": 12256
+    "chars": 49484,
+    "roughTokens": 12371
   },
   "openClawDeveloperInstructions": {
     "chars": 3370,
@@ -239,8 +239,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6846
   },
   "totalWithDynamicToolsJson": {
-    "chars": 76406,
-    "roughTokens": 19102
+    "chars": 76868,
+    "roughTokens": 19217
   },
   "userInputText": {
     "chars": 929,
@@ -570,6 +570,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "boolean"
         },
         "asVoice": {
+          "description": "Send audio as a voice note; combines with voiceText.",
           "type": "boolean"
         },
         "attachments": {
@@ -672,6 +673,18 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         "timeoutMs": {
           "minimum": 1,
           "type": "integer"
+        },
+        "voiceId": {
+          "description": "Per-send speech voice override.",
+          "type": "string"
+        },
+        "voiceProvider": {
+          "description": "Per-send speech provider override.",
+          "type": "string"
+        },
+        "voiceText": {
+          "description": "Text to synthesize; message remains visible.",
+          "type": "string"
         }
       },
       "required": ["action"],

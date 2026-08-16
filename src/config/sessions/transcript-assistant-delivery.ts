@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AssistantDeliveryTtsFacts } from "../../llm/types.js";
-import { extractTtsDirectiveFacts } from "../../tts/directives.js";
+import { extractTtsDirectiveFacts } from "../../tts/directive-facts.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 
 type AssistantDirectiveMessage = {
