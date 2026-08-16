@@ -2989,7 +2989,6 @@ src/gateway/server-lifecycle.ts	1
 src/gateway/server-maintenance.ts	4
 src/gateway/server-methods-list.ts	1
 src/gateway/server-methods.ts	4
-src/gateway/server-methods/__mocks__/tools-effective.runtime.ts	1
 src/gateway/server-methods/agent-run-handler.ts	1
 src/gateway/server-methods/agent-session-patch.ts	1
 src/gateway/server-methods/agent-session-reset.ts	2
