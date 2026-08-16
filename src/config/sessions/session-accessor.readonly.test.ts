@@ -224,6 +224,50 @@ describe("session accessor readonly listing", () => {
     ]);
   });
 
+  it("rejects stale valid projections for unreadable session identity evidence", async () => {
+    const stateDir = autoTempDirs.make("openclaw-session-readonly-stale-valid-evidence-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const agentId = "worker-1";
+    const sessionId = "session-1";
+    const sessionKey = "agent:worker-1:main";
+    await upsertSessionEntryCore({ agentId, env, sessionKey }, { sessionId, updatedAt: 1 });
+    const readableSessionId = "session-2";
+    const readableSessionKey = "agent:worker-1:readable";
+    await upsertSessionEntryCore(
+      { agentId, env, sessionKey: readableSessionKey },
+      { sessionId: readableSessionId, updatedAt: 1 },
+    );
+    const database = openOpenClawAgentDatabase({ agentId, env });
+    database.db
+      .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+      .run(JSON.stringify({ sessionId: "mismatched-session", updatedAt: 1 }), sessionKey);
+    database.db
+      .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+      .run(sessionKey);
+
+    expect(
+      readSessionIdentityEvidenceBatch([
+        { agentId, sessionId, sessionKey, storePath: database.path },
+        {
+          agentId,
+          sessionId,
+          sessionKey: "agent:worker-1:old-key",
+          storePath: database.path,
+        },
+        {
+          agentId,
+          sessionId: readableSessionId,
+          sessionKey: readableSessionKey,
+          storePath: database.path,
+        },
+      ]),
+    ).toEqual([
+      { status: "unknown", reason: "row-invalid" },
+      { status: "unknown", reason: "row-invalid" },
+      { status: "current", sessionKey: readableSessionKey },
+    ]);
+  });
+
   it("uses the current-session-id index for fallback identity probes", async () => {
     const stateDir = autoTempDirs.make("openclaw-session-readonly-evidence-index-");
     const env = { OPENCLAW_STATE_DIR: stateDir };

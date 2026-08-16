@@ -8,7 +8,10 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import type { ExactSessionEntry, SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-store.js";
+import {
+  parseReadableSqliteSessionEntryRow,
+  readExactSessionEntryRowValidated,
+} from "./session-accessor.sqlite-entry-store.js";
 import {
   cloneSessionEntry,
   getSessionKysely,
@@ -106,8 +109,10 @@ type SessionIdentityEvidenceItem = {
 
 type SessionIdentityEvidenceRow = {
   current_session_id: string;
+  entry_json: string;
   entry_valid: number;
   session_key: string;
+  updated_at: number;
 };
 
 function readSessionIdentityEvidenceRows(
@@ -128,7 +133,7 @@ function readSessionIdentityEvidenceRows(
         database.db,
         db
           .selectFrom("session_nodes")
-          .select(["current_session_id", "entry_valid", "session_key"])
+          .select(["current_session_id", "entry_json", "entry_valid", "session_key", "updated_at"])
           .where(column, "in", chunk),
       ).rows;
       for (const row of rows) {
@@ -140,17 +145,31 @@ function readSessionIdentityEvidenceRows(
   readChunks([...new Set(items.map((item) => item.sessionId))], "current_session_id");
 
   const rowsBySessionId = new Map<string, SessionIdentityEvidenceRow[]>();
+  const readableKeys = new Set<string>();
   for (const row of rowsByKey.values()) {
     const rows = rowsBySessionId.get(row.current_session_id) ?? [];
     rows.push(row);
     rowsBySessionId.set(row.current_session_id, rows);
+    if (row.entry_valid === 1) {
+      try {
+        if (parseReadableSqliteSessionEntryRow(database, row)) {
+          readableKeys.add(row.session_key);
+        }
+      } catch {
+        // A corrupt row must not make unrelated placements in this store indeterminate.
+      }
+    }
   }
   return items.map((item): SessionIdentityEvidenceResult => {
     const exactRow = rowsByKey.get(item.sessionKey);
-    if (exactRow && exactRow.entry_valid !== 1 && exactRow.entry_valid !== -1) {
+    if (exactRow && exactRow.entry_valid !== -1 && !readableKeys.has(exactRow.session_key)) {
       return { status: "unknown", reason: "row-invalid" };
     }
-    if (exactRow?.entry_valid === 1 && exactRow.current_session_id === item.sessionId) {
+    if (
+      exactRow &&
+      readableKeys.has(exactRow.session_key) &&
+      exactRow.current_session_id === item.sessionId
+    ) {
       return { status: "current", sessionKey: item.sessionKey };
     }
     const fallbackRows = rowsBySessionId.get(item.sessionId) ?? [];
@@ -160,7 +179,7 @@ function readSessionIdentityEvidenceRows(
         : { status: "unknown", reason: "ambiguous" };
     }
     const fallbackRow = fallbackRows[0];
-    if (fallbackRow?.entry_valid === 1) {
+    if (fallbackRow?.entry_valid === 1 && readableKeys.has(fallbackRow.session_key)) {
       return { status: "current", sessionKey: fallbackRow.session_key };
     }
     return fallbackRow?.entry_valid === -1
