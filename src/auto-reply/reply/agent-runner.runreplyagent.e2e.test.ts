@@ -4688,84 +4688,106 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("announces fallback-cleared once when runtime returns to selected model", async () => {
-    const sessionEntry = makeSessionEntry();
-    const sessionStore = { main: sessionEntry };
-    let callCount = 0;
+  it.each([
+    { label: "direct chats", chatType: "direct" as const, noticeVisible: true },
+    { label: "group chats", chatType: "group" as const, noticeVisible: false },
+    { label: "channels", chatType: "channel" as const, noticeVisible: false },
+  ])(
+    "controls fallback notices for $label without changing state or lifecycle",
+    async ({ chatType, noticeVisible }) => {
+      const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
+      let callCount = 0;
 
-    state.runEmbeddedAgentMock.mockResolvedValue({
-      payloads: [{ text: "final" }],
-      meta: {},
-    });
-    const fallbackSpy = vi
-      .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementation(
-        async ({
-          provider,
-          model,
-          run,
-        }: {
-          provider: string;
-          model: string;
-          run: (provider: string, model: string) => Promise<unknown>;
-        }) => {
-          callCount += 1;
-          if (callCount === 1) {
-            return {
-              outcome: "completed" as const,
-              result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
-              provider: "deepinfra",
-              model: "moonshotai/Kimi-K2.5",
-              attempts: [
-                {
-                  provider: "fireworks",
-                  model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-                  error: "Provider fireworks is in cooldown (all profiles unavailable)",
-                  reason: "rate_limit",
-                },
-              ],
-            };
-          }
-          return {
-            outcome: "completed" as const,
-            result: await run(provider, model),
+      state.runEmbeddedAgentMock.mockResolvedValue({
+        payloads: [{ text: "final" }],
+        meta: {},
+      });
+      const fallbackSpy = vi
+        .spyOn(modelFallbackModule, "runWithModelFallback")
+        .mockImplementation(
+          async ({
             provider,
             model,
-            attempts: [],
-          };
-        },
-      );
-    try {
-      const { run } = createMinimalRun({
-        resolvedVerboseLevel: "on",
-        sessionEntry,
-        sessionStore,
-        sessionKey: "main",
-      });
-      const phases: string[] = [];
-      const off = onAgentEvent((evt) => {
-        const phase = typeof evt.data?.phase === "string" ? evt.data.phase : null;
-        if (evt.stream === "lifecycle" && phase) {
-          phases.push(phase);
-        }
-      });
-      const first = await run();
-      const second = await run();
-      const third = await run();
-      off();
+            run,
+          }: {
+            provider: string;
+            model: string;
+            run: (provider: string, model: string) => Promise<unknown>;
+          }) => {
+            callCount += 1;
+            if (callCount === 1) {
+              return {
+                outcome: "completed" as const,
+                result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
+                provider: "deepinfra",
+                model: "moonshotai/Kimi-K2.5",
+                attempts: [
+                  {
+                    provider: "fireworks",
+                    model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+                    error: "Provider fireworks is in cooldown (all profiles unavailable)",
+                    reason: "rate_limit",
+                  },
+                ],
+              };
+            }
+            return {
+              outcome: "completed" as const,
+              result: await run(provider, model),
+              provider,
+              model,
+              attempts: [],
+            };
+          },
+        );
+      try {
+        const { run } = createMinimalRun({
+          resolvedVerboseLevel: "on",
+          sessionEntry,
+          sessionStore,
+          sessionKey: "main",
+          storePath,
+          sessionCtx: { ChatType: chatType },
+        });
+        const phases: string[] = [];
+        const off = onAgentEvent((evt) => {
+          const phase = typeof evt.data?.phase === "string" ? evt.data.phase : null;
+          if (evt.stream === "lifecycle" && phase) {
+            phases.push(phase);
+          }
+        });
+        const first = await run();
+        const activeFallback = {
+          kind: "active" as const,
+          selectedModel: "anthropic/claude",
+          activeModel: "deepinfra/moonshotai/Kimi-K2.5",
+          reason: "rate limit",
+        };
+        expect(sessionEntry.fallbackNotice).toEqual(activeFallback);
+        expect(requireStoredSessionEntry(storePath).fallbackNotice).toEqual(activeFallback);
+        const second = await run();
+        const third = await run();
+        off();
 
-      const firstText = Array.isArray(first) ? first[0]?.text : first?.text;
-      const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
-      const thirdText = Array.isArray(third) ? third[0]?.text : third?.text;
-      expect(firstText).toContain("Model Fallback:");
-      expect(secondText).toContain("Model Fallback cleared:");
-      expect(thirdText).not.toContain("Model Fallback cleared:");
-      expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
-      expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
-    } finally {
-      fallbackSpy.mockRestore();
-    }
-  });
+        const firstText = Array.isArray(first) ? first[0]?.text : first?.text;
+        const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
+        const thirdText = Array.isArray(third) ? third[0]?.text : third?.text;
+        expect(firstText?.includes("Model Fallback:")).toBe(noticeVisible);
+        expect(secondText?.includes("Model Fallback cleared:")).toBe(noticeVisible);
+        expect(thirdText).not.toContain("Model Fallback cleared:");
+        if (!noticeVisible) {
+          expect(firstText).toBe("final");
+          expect(secondText).toBe("final");
+        }
+        expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
+        expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
+        expect(sessionEntry.fallbackNotice).toBeUndefined();
+        expect(requireStoredSessionEntry(storePath).fallbackNotice).toBeUndefined();
+      } finally {
+        fallbackSpy.mockRestore();
+      }
+    },
+  );
 
   it("announces fallback transitions and emits lifecycle events while verbose is off", async () => {
     const sessionEntry = makeSessionEntry();
