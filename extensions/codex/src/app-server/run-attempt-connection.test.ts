@@ -142,7 +142,7 @@ describe("prepareCodexAttemptConnection", () => {
     expect(connection.effectiveCwd).toBe(workspaceDir);
   });
 
-  it("promotes a full session mode when a before_tool_call hook is present", async () => {
+  it("keeps a full session mode on never when a before_tool_call hook is present", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
     );
@@ -159,8 +159,8 @@ describe("prepareCodexAttemptConnection", () => {
       options: { bindingStore: testCodexAppServerBindingStore },
     });
 
-    expect(connection.appServer.approvalPolicy).toBe("untrusted");
-    expect(connection.approvalPolicyPromotedForOpenClawToolPolicy).toBe(true);
+    // Upstream 28f10c00b4e keeps YOLO approvals disabled despite generic tool hooks.
+    expect(connection.appServer.approvalPolicy).toBe("never");
   });
 
   it.each([
