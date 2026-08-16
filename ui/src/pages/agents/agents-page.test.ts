@@ -12,6 +12,7 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { AgentsPanel } from "../../lib/agents/panels.ts";
+import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-store.ts";
 import { loadCronJobsPage, type CronState } from "../../lib/cron/index.ts";
 import type { AgentsRouteData } from "./route.ts";
 import "./agents-page.ts";
@@ -461,6 +462,7 @@ describe("AgentsPage gateway lifecycle", () => {
 
     page.loadActivePanelData();
     page.gateway.invalidate();
+    invalidateChatMetadataStore(page.client as GatewayBrowserClient);
     page.loadActivePanelData();
 
     await vi.waitFor(() => expect(page.chatModelCatalog).toEqual(nextModels));
@@ -491,6 +493,7 @@ describe("AgentsPage gateway lifecycle", () => {
 
     setPageGateway(page, client, false);
     expect(page.chatModelCatalog).toEqual([]);
+    invalidateChatMetadataStore(client);
     setPageGateway(page, client);
     page.loadActivePanelData();
 

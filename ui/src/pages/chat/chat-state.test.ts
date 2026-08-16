@@ -16,9 +16,9 @@ import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import {
-  invalidateChatMetadataCache,
   refreshChatMetadata,
   refreshChatModelAuthStatus,
+  retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
 import { resolveChatAvatarUrl, selectedChatSessionRow } from "./chat-state-route.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
@@ -1670,51 +1670,30 @@ describe("refreshChatMetadata", () => {
     ]);
   });
 
-  it("does not let an older same-agent response overwrite the newest catalog", async () => {
-    let resolveFirst: (value: {
+  it("does not publish metadata after the pane retires its request owner", async () => {
+    let resolveMetadata: (value: {
       commands: never[];
       models: Array<{ id: string; name: string; provider: string }>;
     }) => void = () => {};
-    let resolveSecond: (value: {
-      commands: never[];
-      models: Array<{ id: string; name: string; provider: string }>;
-    }) => void = () => {};
-    const firstMetadata = new Promise<{
+    const pending = new Promise<{
       commands: never[];
       models: Array<{ id: string; name: string; provider: string }>;
     }>((resolve) => {
-      resolveFirst = resolve;
+      resolveMetadata = resolve;
     });
-    const secondMetadata = new Promise<{
-      commands: never[];
-      models: Array<{ id: string; name: string; provider: string }>;
-    }>((resolve) => {
-      resolveSecond = resolve;
-    });
-    let requestCount = 0;
-    const request = vi.fn(async () => {
-      requestCount += 1;
-      return await (requestCount === 1 ? firstMetadata : secondMetadata);
-    });
-    const state = createMetadataState(request);
+    const request = vi.fn().mockReturnValue(pending);
+    const existingCatalog = [{ id: "existing-model", name: "Existing Model", provider: "openai" }];
+    const state = createMetadataState(request, { chatModelCatalog: existingCatalog });
 
-    const firstRefresh = refreshChatMetadata(state);
-    invalidateChatMetadataCache(state);
-    const secondRefresh = refreshChatMetadata(state);
-    resolveSecond({
+    const refresh = refreshChatMetadata(state);
+    retireChatMetadataRequests(state);
+    resolveMetadata({
       commands: [],
-      models: [{ id: "new-model", name: "New Model", provider: "openai" }],
+      models: [{ id: "late-model", name: "Late Model", provider: "openai" }],
     });
-    await secondRefresh;
-    resolveFirst({
-      commands: [],
-      models: [{ id: "old-model", name: "Old Model", provider: "openai" }],
-    });
-    await firstRefresh;
+    await refresh;
 
-    expect(state.chatModelCatalog).toEqual([
-      { id: "new-model", name: "New Model", provider: "openai" },
-    ]);
+    expect(state.chatModelCatalog).toBe(existingCatalog);
   });
 
   it("loads compatibility models when the gateway does not advertise chat metadata", async () => {
