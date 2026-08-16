@@ -764,7 +764,9 @@ async function produceProof(options: ProducerOptions): Promise<ProofResult> {
           ? await runMcpGatewayStartupRetryProof(options)
           : options.scenarioId === "mcp-plugin-tools-call"
             ? await runMcpPluginToolsProof(options)
-            : await runMcpPluginToolsProof(options);
+            : (() => {
+                throw new Error(`Unsupported Gateway/MCP proof scenario: ${options.scenarioId}`);
+              })();
     return { details, durationMs: Math.max(1, Date.now() - startedAt), status: "pass" };
   } catch (error) {
     return {
