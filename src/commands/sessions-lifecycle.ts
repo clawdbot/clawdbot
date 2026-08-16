@@ -18,13 +18,16 @@ type SessionsLifecycleCliOptions = {
   json?: boolean;
 };
 
-type SessionsLifecycleOperation = "archive" | "delete";
+type SessionsLifecycleOperation = "archive" | "restore" | "delete";
 
 type SessionsLifecycleStatus =
   | "archived"
   | "already_archived"
+  | "restored"
+  | "already_active"
   | "deleted"
   | "would_archive"
+  | "would_restore"
   | "would_delete"
   | "not_found"
   | "failed";
@@ -148,6 +151,12 @@ function outputLifecycleResults(
         case "already_archived":
           runtime.log(`Session ${result.key} is already archived.`);
           break;
+        case "restored":
+          runtime.log(`Restored session ${result.key}.`);
+          break;
+        case "already_active":
+          runtime.log(`Session ${result.key} is already active.`);
+          break;
         case "deleted":
           runtime.log(`Deleted session ${result.key}.`);
           for (const archived of result.archived ?? []) {
@@ -161,6 +170,9 @@ function outputLifecycleResults(
           break;
         case "would_archive":
           runtime.log(`[dry-run] archive session ${result.key}`);
+          break;
+        case "would_restore":
+          runtime.log(`[dry-run] restore session ${result.key}`);
           break;
         case "would_delete":
           runtime.log(`[dry-run] delete session ${result.key} and its live transcript state`);
@@ -213,7 +225,10 @@ async function runSessionsLifecycleCommand(
     return session ? [{ index, session }] : [];
   });
   const validTargets = listedTargets.filter(({ index, session }) => {
-    const needsMutation = !opts.dryRun && !(operation === "archive" && session.archived === true);
+    const alreadyTerminal =
+      (operation === "archive" && session.archived === true) ||
+      (operation === "restore" && session.archived !== true);
+    const needsMutation = !opts.dryRun && !alreadyTerminal;
     if (!needsMutation || session.sessionId) {
       return true;
     }
@@ -261,7 +276,11 @@ async function runSessionsLifecycleCommand(
             ? session.archived === true
               ? "already_archived"
               : "would_archive"
-            : "would_delete",
+            : operation === "restore"
+              ? session.archived === true
+                ? "would_restore"
+                : "already_active"
+              : "would_delete",
       };
       continue;
     }
@@ -269,8 +288,13 @@ async function runSessionsLifecycleCommand(
       results[index] = { key: session.key, ok: true, status: "already_archived" };
       continue;
     }
+    if (operation === "restore" && session.archived !== true) {
+      results[index] = { key: session.key, ok: true, status: "already_active" };
+      continue;
+    }
     try {
-      if (operation === "archive") {
+      if (operation === "archive" || operation === "restore") {
+        const archived = operation === "archive";
         const response = (await callGatewayFromCliWithTransport(
           "sessions.patch",
           rpcOptions,
@@ -278,14 +302,25 @@ async function runSessionsLifecycleCommand(
             key: session.key,
             ...(opts.agent ? { agentId: opts.agent } : {}),
             ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
-            archived: true,
+            archived,
           },
           { defaultTimeoutMs: SESSION_ARCHIVE_REQUEST_TIMEOUT_MS },
         )) as SessionsPatchResult;
-        if (response?.ok !== true || response.entry?.archivedAt === undefined) {
-          throw new Error("Gateway did not confirm that the session was archived.");
+        if (
+          response?.ok !== true ||
+          (archived
+            ? response.entry?.archivedAt === undefined
+            : response.entry?.archivedAt !== undefined)
+        ) {
+          throw new Error(
+            `Gateway did not confirm that the session was ${archived ? "archived" : "restored"}.`,
+          );
         }
-        results[index] = { key: response.key ?? session.key, ok: true, status: "archived" };
+        results[index] = {
+          key: response.key ?? session.key,
+          ok: true,
+          status: archived ? "archived" : "restored",
+        };
       } else {
         const response = (await callGatewayFromCliWithTransport(
           "sessions.delete",
@@ -336,6 +371,14 @@ export async function sessionsArchiveCommand(
   runtime: RuntimeEnv,
 ): Promise<void> {
   await runSessionsLifecycleCommand("archive", opts, runtime);
+}
+
+/** Restore one or more archived sessions through the same Gateway patch used by Control UI. */
+export async function sessionsRestoreCommand(
+  opts: SessionsLifecycleCliOptions,
+  runtime: RuntimeEnv,
+): Promise<void> {
+  await runSessionsLifecycleCommand("restore", opts, runtime);
 }
 
 /** Delete one or more stored sessions through the same Gateway lifecycle owner used by Control UI. */

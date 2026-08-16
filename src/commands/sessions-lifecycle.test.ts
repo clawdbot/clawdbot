@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { sessionsArchiveCommand, sessionsDeleteCommand } from "./sessions-lifecycle.js";
+import {
+  sessionsArchiveCommand,
+  sessionsDeleteCommand,
+  sessionsRestoreCommand,
+} from "./sessions-lifecycle.js";
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
@@ -137,6 +141,42 @@ describe("sessions lifecycle commands", () => {
     );
   });
 
+  it("restores through sessions.patch and confirms the archived marker is cleared", async () => {
+    mocks.callGateway
+      .mockResolvedValueOnce(
+        listResult([{ key: "agent:work:scratch-1", sessionId: "session-1", archived: true }]),
+      )
+      .mockResolvedValueOnce({ ok: true, key: "agent:work:scratch-1", entry: {} });
+    const runtime = createRuntime();
+
+    await sessionsRestoreCommand(
+      { keys: ["agent:work:scratch-1"], agent: "work", json: true },
+      runtime,
+    );
+
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(
+      2,
+      "sessions.patch",
+      expect.any(Object),
+      {
+        key: "agent:work:scratch-1",
+        agentId: "work",
+        expectedSessionId: "session-1",
+        archived: false,
+      },
+      { defaultTimeoutMs: 10 * 60_000 },
+    );
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      {
+        ok: true,
+        operation: "restore",
+        dryRun: false,
+        results: [{ key: "agent:work:scratch-1", ok: true, status: "restored" }],
+      },
+      2,
+    );
+  });
+
   it.each([
     ["archive", sessionsArchiveCommand, {}],
     ["delete", sessionsDeleteCommand, { yes: true }],
@@ -169,6 +209,33 @@ describe("sessions lifecycle commands", () => {
       expect(runtime.exit).toHaveBeenCalledWith(1);
     },
   );
+
+  it("rejects an archived key-only session before restore mutation", async () => {
+    mocks.callGateway.mockResolvedValueOnce(
+      listResult([{ key: "agent:main:key-only", archived: true }]),
+    );
+    const runtime = createRuntime();
+
+    await sessionsRestoreCommand({ keys: ["agent:main:key-only"], json: true }, runtime);
+
+    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      {
+        ok: false,
+        operation: "restore",
+        dryRun: false,
+        results: [
+          {
+            key: "agent:main:key-only",
+            ok: false,
+            status: "failed",
+            error: "Session has no durable identity; lifecycle mutation was not attempted.",
+          },
+        ],
+      },
+      2,
+    );
+  });
 
   it("deletes archived sessions with the same gated artifact contract as Control UI", async () => {
     mocks.callGateway
