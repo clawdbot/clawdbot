@@ -36,6 +36,10 @@ import {
 } from "./chat-send-request.ts";
 import { listStoredChatOutboxes, storedChatOutboxScopeKey } from "./composer-persistence.ts";
 import { formatConnectError } from "./connect-error.ts";
+import {
+  isQueuedMessageReorderBlocked,
+  QUEUED_MESSAGE_REORDER_CONFLICT_ERROR,
+} from "./queued-message-edit.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import {
   OFFLINE_QUEUE_STORAGE_ERROR,
@@ -147,6 +151,10 @@ export const retryReconnectableQueuedChatSends = resumeStoredChatOutboxes;
 export function moveQueuedChatMessage(host: ChatHost, id: string, toIndex: number): void {
   const item = readQueuedMessageById(host, id);
   if (!item || !isMovableChatQueueItem(item)) {
+    return;
+  }
+  if (isQueuedMessageReorderBlocked(host, id)) {
+    setChatError(host, QUEUED_MESSAGE_REORDER_CONFLICT_ERROR);
     return;
   }
   const sessionKey = item.sessionKey ?? host.sessionKey;

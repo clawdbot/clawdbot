@@ -38,6 +38,8 @@ type QueuedMessageEditResult = "started" | "unavailable";
 
 export const QUEUED_MESSAGE_EDIT_CONFLICT_ERROR =
   "A queued message is being edited in another pane. Finish or cancel that edit before removing it.";
+export const QUEUED_MESSAGE_REORDER_CONFLICT_ERROR =
+  "A queued message is being edited in another pane. Finish or cancel that edit before reordering it.";
 
 /**
  * The edit belongs to the scope it started in — session and agent, the pair every
@@ -63,6 +65,11 @@ export function isQueuedMessageBeingEdited(host: QueuedMessageEditHost, id: stri
 
 /** Removal is a conflicting shared-outbox action while any pane owns the row draft. */
 export function isQueuedMessageRemovalBlocked(host: QueuedMessageEditHost, id: string): boolean {
+  return isQueuedMessageBeingEdited(host, id);
+}
+
+/** Reordering is also conflicting: submit must not restore a stale position. */
+export function isQueuedMessageReorderBlocked(host: QueuedMessageEditHost, id: string): boolean {
   return isQueuedMessageBeingEdited(host, id);
 }
 
