@@ -7,6 +7,10 @@ title: "Image and media support"
 
 The WhatsApp channel runs on Baileys Web. This page covers media handling rules for send, gateway, and agent replies.
 
+For inline audio and video in the Control UI and native apps, including
+portable formats, byte limits, and lazy transcoding, see
+[Media playback](/nodes/media-playback).
+
 ## Goals
 
 - Send media with an optional caption via `openclaw message send --media`.
@@ -19,7 +23,7 @@ The WhatsApp channel runs on Baileys Web. This page covers media handling rules 
 
 - `--media <path-or-url>` — attach media (image/audio/video/document); accepts local paths or URLs. Optional; caption can be empty for media-only sends.
 - `--gif-playback` — treat video media as GIF playback (WhatsApp only).
-- `--force-document` — send media as a document to avoid channel compression (Telegram, WhatsApp); applies to images, GIFs, and videos.
+- `--force-document` — preserve original image bytes on Slack, or send images, GIFs, and videos as documents on Telegram and WhatsApp, to avoid channel compression.
 - `--reply-to <id>`, `--thread-id <id>`, `--pin`, `--silent` — delivery/threading options shared with text-only sends.
 - `--dry-run` — print the resolved payload and skip sending.
 - `--json` — print the result as JSON: `{ action, channel, dryRun, handledBy, messageId?, payload }` (`payload` carries the channel-specific send result, including any media reference).
@@ -50,14 +54,18 @@ The 16MB audio/video and 100MB document figures above are the shared per-kind me
 ## Inbound Media To Commands
 
 - When inbound web messages include media, OpenClaw downloads it to a temp file and exposes templating variables:
-  - `{{MediaUrl}}` — pseudo-URL for the inbound media.
-  - `{{MediaPath}}` — local temp path written before running the command.
-- When a per-session Docker sandbox is enabled, inbound media is copied into the sandbox workspace and `MediaPath`/`MediaUrl` are rewritten to a sandbox-relative path like `media/inbound/<filename>`.
+  - `{{AttachmentUrl}}` — original URL or provider reference for the current attachment.
+  - `{{AttachmentPath}}` — local temp path written before running the command.
+  - `{{AttachmentContentType}}` — MIME content type.
+  - `{{AttachmentDir}}` — directory containing the local path.
+  - `{{AttachmentIndex}}` — zero-based source fact index.
+- When a per-session Docker sandbox is enabled, inbound media is copied into the sandbox workspace and the attachment path/reference is rewritten to a sandbox-relative path like `media/inbound/<filename>`.
+- `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` remain deprecated compatibility aliases during the plugin SDK migration window.
 - Media understanding (configured via `tools.media.*` or shared `tools.media.models`) runs before templating and can insert `[Image]`, `[Audio]`, and `[Video]` blocks into `Body`.
   - Audio sets `{{Transcript}}` and uses the transcript for command parsing so slash commands still work.
   - Video and image descriptions preserve any caption text for command parsing.
   - If the active primary model already supports vision natively, OpenClaw skips the `[Image]` summary block and passes the original image to the model instead.
-- By default only the first matching image/audio/video attachment is processed; set `tools.media.<capability>.attachments` to process multiple attachments.
+- By default only the first matching image/audio/video attachment is processed; use `tools.media.<capability>.attachments` to select multiple attachments.
 
 ## Limits and errors
 
@@ -70,9 +78,10 @@ The 16MB audio/video and 100MB document figures above are the shared per-kind me
 
 **Media understanding caps (transcription/description)**
 
-- Image default: 10MB (`tools.media.image.maxBytes`).
-- Audio default: 20MB (`tools.media.audio.maxBytes`).
-- Video default: 50MB (`tools.media.video.maxBytes`).
+- Image default: 10MB (override with `tools.media.image.maxBytes`, or per
+  `tools.media.models[]` entry with `maxBytes`).
+- Audio default: 20MB (override with `tools.media.audio.maxBytes`, or per entry).
+- Video default: 50MB (override with `tools.media.video.maxBytes`, or per entry).
 - Oversize media skips understanding, but the reply still goes through with the original body.
 
 ## Notes for Tests
@@ -85,4 +94,5 @@ The 16MB audio/video and 100MB document figures above are the shared per-kind me
 
 - [Camera capture](/nodes/camera)
 - [Media understanding](/nodes/media-understanding)
+- [Media playback](/nodes/media-playback)
 - [Audio and voice notes](/nodes/audio)

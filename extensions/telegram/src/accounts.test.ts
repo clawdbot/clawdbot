@@ -1,6 +1,6 @@
 // Telegram tests cover accounts plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import * as runtimeEnvModule from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -18,6 +18,8 @@ import {
 const { warnMock } = vi.hoisted(() => ({
   warnMock: vi.fn(),
 }));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", { spy: true });
 
 function warningLines(): string[] {
   return warnMock.mock.calls.map(([line]) => String(line));
@@ -37,12 +39,12 @@ function resolveAccountWithEnv(
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  vi.spyOn(runtimeEnvModule, "createSubsystemLogger").mockImplementation(() => {
+  vi.mocked(createSubsystemLogger).mockImplementation(() => {
     const logger = {
       warn: warnMock,
       child: () => logger,
     };
-    return logger as unknown as ReturnType<typeof runtimeEnvModule.createSubsystemLogger>;
+    return logger as unknown as ReturnType<typeof createSubsystemLogger>;
   });
 });
 
@@ -145,6 +147,28 @@ describe("resolveTelegramAccount", () => {
 
     expect(accounts.map((account) => account.accountId)).toEqual(["work"]);
     expect(accounts[0]?.token).toBe("tok-work");
+  });
+
+  it("preserves normalized agent-bound accounts and default-agent selection", () => {
+    const cfg = {
+      agents: { list: [{ id: "primary", default: true }] },
+      channels: {
+        telegram: {
+          botToken: "tok-default",
+          accounts: { Alerts: { botToken: "tok-alerts" } },
+        },
+      },
+      bindings: [
+        { agentId: "primary", match: { channel: "telegram", accountId: " Ops Team " } },
+        { agentId: "another", match: { channel: "telegram", accountId: "ops-team" } },
+        { agentId: "ignored", match: { channel: "telegram", accountId: "*" } },
+        { agentId: "ignored", match: { channel: "slack", accountId: "slack-only" } },
+      ],
+    } as unknown as OpenClawConfig;
+
+    expect(listTelegramAccountIds(cfg)).toEqual(["alerts", "default", "ops-team"]);
+    expect(resolveDefaultTelegramAccountId(cfg)).toBe("ops-team");
+    expectNoMissingDefaultWarning();
   });
 
   it("keeps the implicit default account when named accounts are added to top-level credentials (#82780)", () => {
@@ -642,22 +666,34 @@ describe("resolveTelegramAccount groups inheritance (#30673)", () => {
     expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
   });
 
-  it("does NOT inherit channel-level groups to secondary account in multi-account setup", () => {
+  it("inherits channel-level groups to secondary account when no account map is configured", () => {
     const resolved = resolveTelegramAccount({
       cfg: createMultiAccountGroupsConfig(),
       accountId: "dev",
     });
 
-    expect(resolved.config.groups).toBeUndefined();
+    expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
   });
 
-  it("does NOT inherit channel-level groups to default account in multi-account setup", () => {
+  it("inherits channel-level groups to default account when no account map is configured", () => {
     const resolved = resolveTelegramAccount({
       cfg: createMultiAccountGroupsConfig(),
       accountId: "default",
     });
 
-    expect(resolved.config.groups).toBeUndefined();
+    expect(resolved.config.groups).toEqual({ "-100123": { requireMention: false } });
+  });
+
+  it("keeps an explicit empty account groups map isolated in multi-account setup", () => {
+    const cfg = createMultiAccountGroupsConfig();
+    if (!cfg.channels?.telegram?.accounts?.dev) {
+      throw new Error("expected dev Telegram account");
+    }
+    cfg.channels.telegram.accounts.dev.groups = {};
+
+    const resolved = resolveTelegramAccount({ cfg, accountId: "dev" });
+
+    expect(resolved.config.groups).toEqual({});
   });
 
   it("uses account-level groups even in multi-account setup", () => {

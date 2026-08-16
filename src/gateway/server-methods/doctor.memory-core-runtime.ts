@@ -8,7 +8,6 @@ export {
   dedupeDreamDiaryEntries,
   loadShortTermPromotionDreamingStats,
   previewGroundedRemMarkdown,
-  previewRemHarness,
   removeBackfillDiaryEntries,
   removeGroundedShortTermCandidates,
   repairDreamingArtifacts,

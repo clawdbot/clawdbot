@@ -1,9 +1,12 @@
 // Codex plugin module implements conversation binding behavior.
 import {
+  embeddedAgentLog,
   formatErrorMessage,
+  resolveActiveEmbeddedRunSessionId,
   resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type {
@@ -12,10 +15,34 @@ import type {
   PluginHookInboundClaimEvent,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import {
+  getSessionEntry,
+  resolveStorePath,
+  resolveTranscriptSessionKeyBySessionId,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server/app-server-policy.js";
+import {
+  CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+  closeCodexStartupClientBestEffort,
+  interruptCodexTurnAndWaitBestEffort,
+  retireUnsafeCodexTurnClientBestEffort,
+  unsubscribeCodexThreadBestEffort,
+} from "./app-server/attempt-client-cleanup.js";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import {
+  consumeCodexAppServerLiveThread,
+  isCodexAppServerClientRuntimeLive,
+  isCodexAppServerLiveThreadClaimed,
+  releaseCodexAppServerLiveThread,
+  type CodexAppServerLiveThreadOwnership,
+} from "./app-server/client-runtime.js";
+import {
+  isCodexAppServerIndeterminateRequestCancellationError,
+  type CodexAppServerClient,
+} from "./app-server/client.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexSandboxPolicyForTurn,
@@ -25,6 +52,10 @@ import {
   type CodexAppServerSandboxMode,
   type OpenClawExecPolicyForCodexAppServer,
 } from "./app-server/config.js";
+import {
+  buildDisabledAppsConfigPatch,
+  mergeCodexThreadConfigs,
+} from "./app-server/plugin-thread-config.js";
 import { assertCodexThreadStartResponse } from "./app-server/protocol-validators.js";
 import type {
   CodexServiceTier,
@@ -32,7 +63,6 @@ import type {
   CodexThreadStartResponse,
   CodexTurnStartResponse,
   JsonObject,
-  JsonValue,
 } from "./app-server/protocol.js";
 import {
   resolveCodexNativeExecutionBlock,
@@ -49,6 +79,7 @@ import {
 } from "./app-server/session-binding.js";
 import {
   getLeasedSharedCodexAppServerClient,
+  retainSharedCodexAppServerClientByInstanceId,
   releaseCodexAppServerClientLease,
   withLeasedCodexAppServerClientStartSelectionRetry,
   type CodexAppServerClientLease,
@@ -58,7 +89,21 @@ import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerRequestModelSelection,
 } from "./app-server/thread-lifecycle.js";
+import {
+  isSameCodexAppServerThreadOwner,
+  releaseCodexAppServerBindingSubscription,
+  retainCodexAppServerBindingSubscription,
+  retireCodexConversationThreadBinding,
+  rollbackCodexAppServerBindingSubscription,
+  withCodexConversationThreadActivity,
+  withExclusiveCodexAppServerThread,
+} from "./app-server/thread-ownership.js";
 import { resumeCodexAppServerThread } from "./app-server/thread-resume.js";
+import { projectBoundedCodexVisibleSessionHistory } from "./app-server/transcript-history-projection.js";
+import {
+  getCodexAppServerTurnRouter,
+  type CodexThreadRouteReservation,
+} from "./app-server/turn-router.js";
 import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import {
@@ -69,16 +114,15 @@ import {
   type CodexAppServerConversationBindingData,
 } from "./conversation-binding-data.js";
 import { trackCodexConversationActiveTurn } from "./conversation-control.js";
-import { createCodexConversationTurnCollector } from "./conversation-turn-collector.js";
+import {
+  CodexConversationTurnTimeoutError,
+  createCodexConversationTurnCollector,
+} from "./conversation-turn-collector.js";
 import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
+import { isIncognitoSessionKey } from "./incognito-session.js";
 import { resumeCodexCliSessionOnNode } from "./node-cli-sessions.js";
 
 const DEFAULT_BOUND_TURN_TIMEOUT_MS = 20 * 60_000;
-const DEFAULT_AGENT_ID = "main";
-const VALID_AGENT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
-const INVALID_AGENT_ID_CHARS_PATTERN = /[^a-z0-9_-]+/g;
-const LEADING_DASH_PATTERN = /^-+/;
-const TRAILING_DASH_PATTERN = /-+$/;
 const NATIVE_CONVERSATION_INTERACTIVE_APPROVALS_UNAVAILABLE =
   "OpenClaw native Codex conversation binding cannot route interactive approvals yet; use the Codex harness or explicit /acp spawn codex for that workflow.";
 
@@ -194,6 +238,7 @@ async function startCodexConversationThread(
     authProfileId: params.authProfileId ?? existingBinding?.authProfileId,
     ...agentLookup,
   });
+  const incognito = isIncognitoSessionKey(params.sessionKey);
   if (params.threadId?.trim()) {
     await attachExistingThread({
       pluginConfig: params.pluginConfig,
@@ -210,6 +255,7 @@ async function startCodexConversationThread(
       serviceTier: params.serviceTier,
       config: params.config,
       sessionKey: params.sessionKey,
+      incognito,
       agentId: params.agentId,
     });
   } else {
@@ -227,6 +273,7 @@ async function startCodexConversationThread(
       serviceTier: params.serviceTier,
       config: params.config,
       sessionKey: params.sessionKey,
+      incognito,
       agentId: params.agentId,
     });
   }
@@ -252,8 +299,9 @@ async function handleCodexConversationInboundClaim(
   ctx: PluginHookInboundClaimContext,
   options: CodexConversationRunOptions,
 ): Promise<{ handled: boolean; reply?: ReplyPayload } | undefined> {
-  const data = readCodexConversationBindingData(ctx.pluginBinding);
-  if (!data) {
+  const publicBinding = ctx.pluginBinding;
+  const data = readCodexConversationBindingData(publicBinding);
+  if (!data || !publicBinding) {
     return undefined;
   }
   if (event.commandAuthorized !== true) {
@@ -314,18 +362,55 @@ async function handleCodexConversationInboundClaim(
     }
   }
   try {
-    const result = await enqueueBoundTurn(data.bindingId, () =>
-      runBoundTurnWithMissingThreadRecovery({
+    const identity = conversationBindingIdentity(data);
+    const sessionKey = event.sessionKey ?? ctx.sessionKey;
+    // Native ephemeral ownership follows the persisted source, not the
+    // destination channel. Shipped v1 bindings have no source to consult.
+    const incognito = isIncognitoSessionKey(
+      data.source?.sessionKey ?? (data.legacyBinding ? sessionKey : undefined),
+    );
+    // Start the snapshot before enqueueing, but do not await: yielding here
+    // would let detach overtake an already-arrived bound message.
+    const queuedOwner = options.bindingStore.read(identity);
+    const result = await withCodexConversationThreadActivity(data.bindingId, async () => {
+      const currentPublicBinding = getSessionBindingService().resolveByConversation({
+        channel: publicBinding.channel,
+        accountId: publicBinding.accountId,
+        conversationId: publicBinding.conversationId,
+        ...(publicBinding.parentConversationId
+          ? { parentConversationId: publicBinding.parentConversationId }
+          : {}),
+      });
+      const expected = await queuedOwner;
+      const current = await options.bindingStore.read(identity);
+      if (
+        currentPublicBinding?.bindingId !== publicBinding.bindingId ||
+        (expected &&
+          (!current ||
+            current.threadId !== expected.threadId ||
+            current.conversationStartId !== expected.conversationStartId)) ||
+        (!expected && current && data.start?.id && current.conversationStartId !== data.start.id)
+      ) {
+        // Public hooks capture binding data before entering this owner lane;
+        // a later detach must never let that stale message recreate its thread.
+        return {
+          reply: {
+            text: "This Codex conversation was detached or changed before its message could run.",
+          },
+        };
+      }
+      return await runBoundTurnWithMissingThreadRecovery({
         bindingStore: options.bindingStore,
         data,
         prompt,
         event,
         config: options.config,
-        sessionKey: event.sessionKey ?? ctx.sessionKey,
+        sessionKey,
+        incognito,
         pluginConfig: options.pluginConfig,
         timeoutMs: options.timeoutMs,
-      }),
-    );
+      });
+    });
     return { handled: true, reply: result.reply };
   } catch (error) {
     return {
@@ -351,8 +436,16 @@ async function handleCodexConversationBindingResolved(
   const identity = conversationBindingIdentity(data);
   const binding = await options.bindingStore.read(identity);
   assertCodexBindingMayBeReplaced(binding, "clearing a denied conversation binding");
-  if (!data.start?.id || binding?.conversationStartId === data.start.id) {
-    await options.bindingStore.mutate(identity, { kind: "clear" });
+  if (binding && (!data.start?.id || binding.conversationStartId === data.start.id)) {
+    await withCodexConversationThreadActivity(identity.bindingId, () =>
+      retireCodexConversationThreadBinding({
+        bindingStore: options.bindingStore,
+        identity,
+        expectedThreadId: binding.threadId,
+        ...(data.start?.id ? { expectedStartId: data.start.id } : {}),
+        ...(isIncognitoSessionKey(data.source?.sessionKey) ? { allowUntracked: true } : {}),
+      }),
+    );
   }
 }
 
@@ -371,6 +464,7 @@ type CodexThreadBindingParams = {
   config?: CodexAppServerAuthProfileLookup["config"];
   agentId?: string;
   sessionKey?: string;
+  incognito: boolean;
 };
 
 type ConversationAppServerRuntime = Awaited<ReturnType<typeof resolveConversationAppServerRuntime>>;
@@ -487,12 +581,19 @@ function codexConversationSandboxOrPermissions(
   config?: JsonObject;
 } {
   const networkProxy = runtime.networkProxy;
+  // Bound conversations have no native app approval/tool bridge. Disable
+  // globally configured Codex apps even when a network profile adds config.
+  // Per-app user config overrides apps._default, so the feature kill switch
+  // is the only authoritative boundary for this handlerless runtime.
+  const disabledApps = mergeCodexThreadConfigs(buildDisabledAppsConfigPatch(), {
+    "features.apps": false,
+  })!;
   if (networkProxy) {
     return {
-      config: networkProxy.configPatch,
+      config: mergeCodexThreadConfigs(networkProxy.configPatch, disabledApps),
     };
   }
-  return { sandbox };
+  return { sandbox, config: disabledApps };
 }
 
 async function requestNewConversationBindingThread(
@@ -513,6 +614,7 @@ async function requestNewConversationBindingThread(
           ...buildThreadRequestRuntimeOptions(params, resolved),
           developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
           experimentalRawEvents: true,
+          ...(params.incognito ? { ephemeral: true } : {}),
         },
         requestOptions,
       ),
@@ -533,32 +635,62 @@ async function writeThreadBindingFromResponse(
     typeof resolved.runtime.approvalPolicy === "string"
       ? resolved.runtime.approvalPolicy
       : undefined;
-  const committed = await params.bindingStore.mutate(params.identity, {
-    kind: "set",
-    binding: {
-      threadId: response.thread.id,
-      clientId: resolved.client.getInstanceId(),
-      cwd: response.thread.cwd ?? params.workspaceDir,
-      authProfileId: params.authProfileId,
-      model: response.model ?? resolved.model ?? params.model,
-      modelProvider: normalizeCodexAppServerBindingModelProvider({
-        authProfileId: params.authProfileId,
-        modelProvider: response.modelProvider ?? resolved.modelProvider ?? params.modelProvider,
-        ...resolved.agentLookup,
-      }),
-      approvalPolicy: resolved.execPolicy?.touched
-        ? runtimeApprovalPolicy
-        : (params.approvalPolicy ?? runtimeApprovalPolicy),
-      sandbox: resolved.execPolicy?.touched
-        ? resolved.runtime.sandbox
-        : (params.sandbox ?? resolved.runtime.sandbox),
-      serviceTier: params.serviceTier ?? resolved.runtime.serviceTier ?? undefined,
-      networkProxyProfileName: resolved.runtime.networkProxy?.profileName,
-      networkProxyConfigFingerprint: resolved.runtime.networkProxy?.configFingerprint,
-    },
+  const trackSubscription = !params.incognito && isCodexAppServerClientRuntimeLive(resolved.client);
+  const sameOwner = isSameCodexAppServerThreadOwner(current, {
+    threadId: response.thread.id,
+    clientId: resolved.client.getInstanceId(),
   });
-  if (!committed) {
-    throw new Error("Codex conversation binding changed while storing its thread.");
+  let retained = false;
+  try {
+    if (trackSubscription) {
+      retained = await retainCodexAppServerBindingSubscription(resolved.client, response.thread.id);
+      if (!retained) {
+        throw new Error("Codex conversation thread lost its native subscription owner.");
+      }
+    }
+    if (current && !sameOwner) {
+      // Keep the old identity visible until its sole native subscription is
+      // released; a concurrent owner must not adopt it between clear and cleanup.
+      await releaseCodexAppServerBindingSubscription(current);
+    }
+    const committed = await params.bindingStore.mutate(params.identity, {
+      kind: "set",
+      binding: {
+        threadId: response.thread.id,
+        clientId: resolved.client.getInstanceId(),
+        cwd: params.workspaceDir,
+        authProfileId: params.authProfileId,
+        model: response.model ?? resolved.model ?? params.model,
+        modelProvider: normalizeCodexAppServerBindingModelProvider({
+          authProfileId: params.authProfileId,
+          modelProvider: response.modelProvider ?? resolved.modelProvider ?? params.modelProvider,
+          ...resolved.agentLookup,
+        }),
+        approvalPolicy: resolved.execPolicy?.touched
+          ? runtimeApprovalPolicy
+          : (params.approvalPolicy ?? runtimeApprovalPolicy),
+        sandbox: resolved.execPolicy?.touched
+          ? resolved.runtime.sandbox
+          : (params.sandbox ?? resolved.runtime.sandbox),
+        serviceTier: params.serviceTier ?? resolved.runtime.serviceTier ?? undefined,
+        networkProxyProfileName: resolved.runtime.networkProxy?.profileName,
+        networkProxyConfigFingerprint: resolved.runtime.networkProxy?.configFingerprint,
+      },
+    });
+    if (!committed) {
+      throw new Error("Codex conversation binding changed while storing its thread.");
+    }
+  } catch (error) {
+    // A newly started/resumed Codex thread is already subscribed before its
+    // response arrives; failed ownership commits must release that exact thread.
+    if (trackSubscription && !sameOwner) {
+      await rollbackCodexAppServerBindingSubscription(
+        resolved.client,
+        response.thread.id,
+        retained,
+      );
+    }
+    throw error;
   }
 }
 
@@ -567,38 +699,64 @@ async function attachExistingThread(
     threadId: string;
   },
 ): Promise<void> {
-  const current = await params.bindingStore.read(params.identity);
-  assertCodexBindingMayBeReplaced(current, "attaching a conversation-bound Codex thread");
-  const resolved = await resolveThreadBindingRuntime(params);
-  try {
-    // Codex applies network-proxy permission profiles at thread/start. Resuming
-    // an arbitrary existing thread cannot prove that profile is active.
-    const response: CodexThreadResumeResponse | CodexThreadStartResponse = resolved.runtime
-      .networkProxy
-      ? await requestNewConversationBindingThread(params, resolved)
-      : await withLeasedCodexAppServerClientStartSelectionRetry({
-          lease: resolved.clientLease,
-          options: resolved.clientOptions,
-          run: async (client, requestOptions) =>
-            await client.request(
-              CODEX_CONTROL_METHODS.resumeThread,
-              {
-                threadId: params.threadId,
-                ...(resolved.model ? { model: resolved.model } : {}),
-                ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
-                personality: CODEX_NATIVE_PERSONALITY_NONE,
-                ...buildThreadRequestRuntimeOptions(params, resolved),
+  await withExclusiveCodexAppServerThread({
+    bindingStore: params.bindingStore,
+    identity: params.identity,
+    threadId: params.threadId,
+    run: async () => {
+      const current = await params.bindingStore.read(params.identity);
+      assertCodexBindingMayBeReplaced(current, "attaching a conversation-bound Codex thread");
+      const resolved = await resolveThreadBindingRuntime(params);
+      try {
+        // Codex applies network-proxy permission profiles at thread/start. Resuming
+        // an arbitrary existing thread cannot prove that profile is active.
+        const response: CodexThreadResumeResponse | CodexThreadStartResponse = resolved.runtime
+          .networkProxy
+          ? await requestNewConversationBindingThread(params, resolved)
+          : await withLeasedCodexAppServerClientStartSelectionRetry({
+              lease: resolved.clientLease,
+              options: resolved.clientOptions,
+              run: async (client, requestOptions) => {
+                if (isCodexAppServerLiveThreadClaimed(client, params.threadId)) {
+                  throw new Error(
+                    `Codex thread ${params.threadId} has an active run; stop it before binding its conversation.`,
+                  );
+                }
+                // Codex ignores resume config while any connection is still
+                // subscribed; completed native children otherwise inherit app permissions.
+                await releaseCodexAppServerLiveThread(client, params.threadId);
+                if (isCodexAppServerLiveThreadClaimed(client, params.threadId)) {
+                  throw new Error(
+                    `Codex thread ${params.threadId} has an active run; stop it before binding its conversation.`,
+                  );
+                }
+                return await client.request(
+                  CODEX_CONTROL_METHODS.resumeThread,
+                  {
+                    threadId: params.threadId,
+                    ...(resolved.model ? { model: resolved.model } : {}),
+                    ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
+                    personality: CODEX_NATIVE_PERSONALITY_NONE,
+                    ...buildThreadRequestRuntimeOptions(params, resolved),
+                  },
+                  requestOptions,
+                );
               },
-              requestOptions,
-            ),
-          onClientChange: (client) => {
-            resolved.client = client;
-          },
-        });
-    await writeThreadBindingFromResponse(params, resolved, response);
-  } finally {
-    releaseCodexAppServerClientLease(resolved.clientLease);
-  }
+              onClientChange: (client) => {
+                resolved.client = client;
+              },
+            });
+        if (!resolved.runtime.networkProxy && response.thread.id !== params.threadId) {
+          throw new Error(
+            `Codex conversation resume returned ${response.thread.id} for ${params.threadId}.`,
+          );
+        }
+        await writeThreadBindingFromResponse(params, resolved, response);
+      } finally {
+        releaseCodexAppServerClientLease(resolved.clientLease);
+      }
+    },
+  });
 }
 
 async function createThread(params: CodexThreadBindingParams): Promise<void> {
@@ -621,6 +779,7 @@ async function runBoundTurn(params: {
   pluginConfig?: unknown;
   config?: CodexConversationConfig;
   sessionKey?: string;
+  incognito: boolean;
   timeoutMs?: number;
 }): Promise<BoundTurnResult> {
   const agentLookup = buildAgentLookup({ agentDir: params.data.agentDir, config: params.config });
@@ -703,9 +862,27 @@ async function runBoundTurn(params: {
   } satisfies CodexAppServerClientOptions;
   let client = await getLeasedSharedCodexAppServerClient(clientOptions);
   const clientLease: CodexAppServerClientLease = { client };
-  let notificationCleanup: () => void = () => undefined;
-  let requestCleanup: () => void = () => undefined;
+  let activeTurnId: string | undefined;
+  let activeTurnCleanup: () => void = () => undefined;
+  let retiredUnsafeClient: CodexAppServerClient | undefined;
+  let turnRoute: CodexThreadRouteReservation | undefined;
+  let liveThreadOwnership:
+    | {
+        client: CodexAppServerClient;
+        threadId: string;
+        ownership: CodexAppServerLiveThreadOwnership;
+      }
+    | undefined;
+  let ownsNativeSubscription = false;
+  let turnSucceeded = false;
   try {
+    if (!params.incognito && isCodexAppServerClientRuntimeLive(client)) {
+      const ownership = await consumeCodexAppServerLiveThread(client, threadId);
+      if (ownership) {
+        liveThreadOwnership = { client, threadId, ownership };
+        ownsNativeSubscription = true;
+      }
+    }
     if (networkProxyBindingChanged) {
       const response = assertCodexThreadStartResponse(
         await withLeasedCodexAppServerClientStartSelectionRetry({
@@ -723,12 +900,11 @@ async function runBoundTurn(params: {
                 personality: CODEX_NATIVE_PERSONALITY_NONE,
                 approvalPolicy,
                 approvalsReviewer: modelScopedRuntime.approvalsReviewer,
-                ...(modelScopedRuntime.networkProxy
-                  ? { config: modelScopedRuntime.networkProxy.configPatch }
-                  : { sandbox }),
+                ...codexConversationSandboxOrPermissions(modelScopedRuntime, sandbox),
                 ...(serviceTier ? { serviceTier } : {}),
                 developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
                 experimentalRawEvents: true,
+                ...(params.incognito ? { ephemeral: true } : {}),
               },
               requestOptions,
             ),
@@ -738,6 +914,34 @@ async function runBoundTurn(params: {
         }),
       );
       threadId = response.thread.id;
+      ownsNativeSubscription = true;
+      if (
+        liveThreadOwnership &&
+        (liveThreadOwnership.threadId !== threadId || liveThreadOwnership.client !== client)
+      ) {
+        const previousOwnership = liveThreadOwnership;
+        try {
+          await previousOwnership.ownership.release(previousOwnership.threadId);
+        } catch (error) {
+          // A failed unsubscribe leaves the old subscription alive. Restore
+          // its exact branded owner before rolling back the new native thread.
+          const restored =
+            isCodexAppServerClientRuntimeLive(previousOwnership.client) &&
+            (await retainCodexAppServerBindingSubscription(
+              previousOwnership.client,
+              previousOwnership.threadId,
+              previousOwnership.ownership,
+            ).catch(() => false));
+          if (!restored) {
+            await closeCodexStartupClientBestEffort(previousOwnership.client);
+          }
+          liveThreadOwnership = undefined;
+          throw error;
+        }
+        liveThreadOwnership = undefined;
+      } else if (binding.threadId !== threadId) {
+        await releaseCodexAppServerBindingSubscription(binding);
+      }
       const committed = await params.bindingStore.mutate(identity, {
         kind: "set",
         binding: {
@@ -766,7 +970,10 @@ async function runBoundTurn(params: {
         throw new Error("Codex conversation binding changed while rotating its thread.");
       }
       useStickyNetworkProfile = modelScopedRuntime.networkProxy !== undefined;
-    } else if (binding.clientId !== client.getInstanceId()) {
+    } else if (
+      binding.clientId !== client.getInstanceId() ||
+      (isCodexAppServerClientRuntimeLive(client) && !params.incognito && !liveThreadOwnership)
+    ) {
       const response = await withLeasedCodexAppServerClientStartSelectionRetry({
         lease: clientLease,
         options: clientOptions,
@@ -774,7 +981,10 @@ async function runBoundTurn(params: {
           await resumeCodexAppServerThread({
             client: requestClient,
             abandonClient: async () => {
-              await requestClient.closeAndWait();
+              // A retired connection may still serve sibling leases; remember
+              // its identity so incognito cleanup never retires it a second time.
+              retiredUnsafeClient = requestClient;
+              await closeCodexStartupClientBestEffort(requestClient);
             },
             request: {
               threadId,
@@ -795,6 +1005,17 @@ async function runBoundTurn(params: {
         },
       });
       threadId = response.thread.id;
+      ownsNativeSubscription = true;
+      if (
+        !isSameCodexAppServerThreadOwner(binding, {
+          threadId,
+          clientId: client.getInstanceId(),
+        })
+      ) {
+        // Keep the old physical owner authoritative until unsubscribe succeeds;
+        // failed migration then rolls back only the newly resumed connection.
+        await releaseCodexAppServerBindingSubscription(binding);
+      }
       const committed = await params.bindingStore.mutate(identity, {
         kind: "patch",
         threadId: binding.threadId,
@@ -814,44 +1035,14 @@ async function runBoundTurn(params: {
         throw new Error("Codex conversation binding changed while resuming on a new client.");
       }
     }
-    const collector = createCodexConversationTurnCollector(threadId);
-    notificationCleanup = client.addNotificationHandler((notification) =>
-      collector.handleNotification(notification),
-    );
-    requestCleanup = client.addRequestHandler(async (request): Promise<JsonValue | undefined> => {
-      if (request.method === "item/tool/call") {
-        return {
-          contentItems: [
-            {
-              type: "inputText",
-              text: "OpenClaw native Codex conversation binding does not expose dynamic OpenClaw tools yet.",
-            },
-          ],
-          success: false,
-        };
-      }
-      if (
-        request.method === "item/commandExecution/requestApproval" ||
-        request.method === "item/fileChange/requestApproval"
-      ) {
-        return {
-          decision: "decline",
-          reason:
-            "OpenClaw native Codex conversation binding cannot route interactive approvals yet; use the Codex harness or explicit /acp spawn codex for that workflow.",
-        };
-      }
-      if (request.method === "item/permissions/requestApproval") {
-        return { permissions: {}, scope: "turn" };
-      }
-      if (request.method.includes("requestApproval")) {
-        return {
-          decision: "decline",
-          reason:
-            "OpenClaw native Codex conversation binding cannot route interactive approvals yet; use the Codex harness or explicit /acp spawn codex for that workflow.",
-        };
-      }
-      return undefined;
+    const turnCollector = createCodexConversationTurnCollector(threadId);
+    turnRoute = getCodexAppServerTurnRouter(client).reserveThread({
+      threadId,
+      onNotification: turnCollector.handleNotification,
     });
+    // The client denies unclaimed approvals and dynamic tools. Its keyed router owns
+    // pre-bind buffering so this conversation cannot claim sibling turn requests.
+    turnRoute.armTurn();
     const response: CodexTurnStartResponse = await client.request(
       "turn/start",
       {
@@ -872,29 +1063,112 @@ async function runBoundTurn(params: {
       },
       { timeoutMs: runtime.requestTimeoutMs },
     );
-    const turnId = response.turn.id;
-    const activeCleanup = trackCodexConversationActiveTurn({
+    activeTurnId = response.turn.id;
+    activeTurnCleanup = trackCodexConversationActiveTurn({
       identity,
       client,
       threadId,
-      turnId,
+      turnId: activeTurnId,
     });
-    collector.setTurnId(turnId);
-    const completion = await collector
-      .wait({
-        timeoutMs: params.timeoutMs ?? DEFAULT_BOUND_TURN_TIMEOUT_MS,
-      })
-      .finally(activeCleanup);
+    turnCollector.setTurnId(activeTurnId);
+    await turnRoute.bindTurn(activeTurnId);
+    const completion = await turnCollector.wait({
+      timeoutMs: params.timeoutMs ?? DEFAULT_BOUND_TURN_TIMEOUT_MS,
+    });
     const replyText = completion.replyText.trim();
+    turnSucceeded = true;
     return {
       reply: {
         text: replyText || "Codex completed without a text reply.",
       },
     };
+  } catch (error) {
+    if (
+      (error instanceof CodexConversationTurnTimeoutError && activeTurnId) ||
+      (turnRoute && isCodexAppServerIndeterminateRequestCancellationError(error))
+    ) {
+      // Per-thread serialization makes an empty startup interrupt follow an
+      // accepted turn whose id was lost to local request cancellation.
+      const completed = await interruptCodexTurnAndWaitBestEffort(client, {
+        threadId,
+        turnId: activeTurnId ?? "",
+      });
+      if (!completed) {
+        // Retirement detaches the physical client while sibling leases finish;
+        // never send another cleanup request or retire that detached client twice.
+        retiredUnsafeClient = client;
+        await retireUnsafeCodexTurnClientBestEffort(client, "turn interrupt");
+      }
+    }
+    if (params.incognito) {
+      const bindingReleased = await params.bindingStore.mutate(identity, {
+        kind: "clear",
+        threadId,
+      });
+      if (bindingReleased && retiredUnsafeClient !== client) {
+        const unsubscribed = await unsubscribeCodexThreadBestEffort(client, {
+          threadId,
+          timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+        });
+        if (!unsubscribed) {
+          await retireUnsafeCodexTurnClientBestEffort(client, "thread unsubscribe");
+        }
+      }
+    }
+    throw error;
   } finally {
-    notificationCleanup();
-    requestCleanup();
-    releaseCodexAppServerClientLease(clientLease);
+    activeTurnCleanup();
+    turnRoute?.release();
+    try {
+      if (
+        ownsNativeSubscription &&
+        retiredUnsafeClient !== client &&
+        !params.incognito &&
+        isCodexAppServerClientRuntimeLive(client)
+      ) {
+        // Ownership callbacks are branded to one physical client and native
+        // thread; an old generation must never clean up its replacement.
+        const currentLiveThreadOwnership =
+          liveThreadOwnership?.client === client && liveThreadOwnership.threadId === threadId
+            ? liveThreadOwnership.ownership
+            : undefined;
+        let retained = false;
+        if (turnSucceeded) {
+          retained = await params.bindingStore.withLease(identity, async () => {
+            const current = await params.bindingStore.read(identity);
+            if (current?.threadId !== threadId || current.clientId !== client.getInstanceId()) {
+              return false;
+            }
+            // Claim before turn/start and republish only its unchanged owner;
+            // TTL/LRU eviction must never detach an active conversation turn.
+            return await retainCodexAppServerBindingSubscription(
+              client,
+              threadId,
+              currentLiveThreadOwnership,
+            );
+          });
+        }
+        if (!retained) {
+          const released = currentLiveThreadOwnership
+            ? await currentLiveThreadOwnership.release(threadId).then(() => true)
+            : await unsubscribeCodexThreadBestEffort(client, {
+                threadId,
+                timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+              });
+          if (!released) {
+            await closeCodexStartupClientBestEffort(client);
+          }
+        }
+      }
+    } catch (error) {
+      embeddedAgentLog.warn("codex conversation subscription cleanup failed", {
+        threadId,
+        reason: formatErrorMessage(error),
+      });
+      await closeCodexStartupClientBestEffort(client);
+    } finally {
+      releaseCodexAppServerClientLease(clientLease);
+    }
   }
 }
 
@@ -921,6 +1195,7 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
   pluginConfig?: unknown;
   config?: CodexConversationConfig;
   sessionKey?: string;
+  incognito: boolean;
   timeoutMs?: number;
 }): Promise<BoundTurnResult> {
   await prepareConversationBinding(params);
@@ -942,6 +1217,7 @@ async function prepareConversationBinding(
     pluginConfig?: unknown;
     config?: CodexConversationConfig;
     sessionKey?: string;
+    incognito: boolean;
   },
   options: { forceNew?: boolean } = {},
 ): Promise<void> {
@@ -994,9 +1270,12 @@ async function prepareConversationBinding(
       serviceTier: inherited?.serviceTier,
       config: params.config,
       sessionKey: params.sessionKey,
+      incognito: params.incognito,
       agentId: params.data.agentId,
     };
-    const threadId = requested?.threadId ?? (!current ? params.data.source?.threadId : undefined);
+    // Harness threads retain immutable tools, developer instructions, and app
+    // policy. Transfer bounded visible history into a fresh bound-only thread.
+    const threadId = requested?.threadId;
     if (threadId && !options.forceNew) {
       await attachExistingThread({ ...bindingParams, threadId });
     } else {
@@ -1010,6 +1289,27 @@ async function prepareConversationBinding(
       await params.bindingStore.withLease(sourceIdentity, async () => {
         const source = await params.bindingStore.read(sourceIdentity);
         if (source && source.threadId === params.data.source?.threadId) {
+          const sourceSessionKey =
+            sourceIdentity.sessionKey ??
+            resolveTranscriptSessionKeyBySessionId({
+              agentId: sourceIdentity.agentId,
+              sessionId: sourceIdentity.sessionId,
+              storePath: resolveStorePath(params.config?.session?.store, {
+                agentId: sourceIdentity.agentId,
+              }),
+            });
+          if (
+            sourceSessionKey &&
+            resolveActiveEmbeddedRunSessionId(sourceSessionKey) === sourceIdentity.sessionId
+          ) {
+            throw new Error(
+              "Codex source session has an active run; stop it before binding this conversation.",
+            );
+          }
+          if (source.threadId !== stored.threadId) {
+            await releaseCodexAppServerBindingSubscription(source);
+            await projectConversationSourceHistory(params.data.source, stored, params.config);
+          }
           await params.bindingStore.mutate(sourceIdentity, {
             kind: "clear",
             threadId: source.threadId,
@@ -1029,6 +1329,48 @@ async function prepareConversationBinding(
       throw new Error("Codex conversation binding changed while initializing its thread.");
     }
   });
+}
+
+async function projectConversationSourceHistory(
+  source: { agentId: string; sessionId: string; sessionKey?: string; threadId: string },
+  target: { threadId: string; clientId?: string },
+  config?: CodexConversationConfig,
+): Promise<void> {
+  const storePath = resolveStorePath(config?.session?.store, { agentId: source.agentId });
+  const sessionKey =
+    source.sessionKey ??
+    resolveTranscriptSessionKeyBySessionId({
+      agentId: source.agentId,
+      sessionId: source.sessionId,
+      storePath,
+    });
+  if (!sessionKey) {
+    return;
+  }
+  // Local visible transcripts remain readable for ephemeral and paginated
+  // Codex threads, both of which reject native includeTurns history reads.
+  const entries = await readVisibleSessionTranscriptMessageEntries({
+    agentId: source.agentId,
+    sessionId: source.sessionId,
+    sessionKey,
+    storePath,
+  });
+  const history = projectBoundedCodexVisibleSessionHistory(entries);
+  if (history.length === 0) {
+    return;
+  }
+  const clientLease = retainSharedCodexAppServerClientByInstanceId(target.clientId);
+  if (!clientLease) {
+    throw new Error("Codex conversation source history lost its bound client owner.");
+  }
+  try {
+    await clientLease.client.request("thread/inject_items", {
+      threadId: target.threadId,
+      items: history,
+    });
+  } finally {
+    clientLease.release();
+  }
 }
 
 function resolveConversationExecPolicy(params: {
@@ -1138,25 +1480,7 @@ function resolveDefaultPolicyAgentId(config: ResolvedCodexConversationConfig): s
 
 function normalizeAgentIdOrDefault(value?: string | null): string | undefined {
   const normalized = normalizeAgentId(value);
-  return normalized === DEFAULT_AGENT_ID && !(value ?? "").trim() ? undefined : normalized;
-}
-
-function normalizeAgentId(value?: string | null): string {
-  const trimmed = (value ?? "").trim();
-  if (!trimmed) {
-    return DEFAULT_AGENT_ID;
-  }
-  const normalized = trimmed.toLowerCase();
-  if (VALID_AGENT_ID_PATTERN.test(trimmed)) {
-    return normalized;
-  }
-  return (
-    normalized
-      .replace(INVALID_AGENT_ID_CHARS_PATTERN, "-")
-      .replace(LEADING_DASH_PATTERN, "")
-      .replace(TRAILING_DASH_PATTERN, "")
-      .slice(0, 64) || DEFAULT_AGENT_ID
-  );
+  return normalized === "main" && !(value ?? "").trim() ? undefined : normalized;
 }
 
 function isCodexThreadNotFoundError(error: unknown): boolean {
@@ -1232,7 +1556,7 @@ function buildAgentLookup(params: {
 
 function conversationBindingIdentity(
   data: Pick<CodexAppServerConversationBindingData, "bindingId">,
-): CodexAppServerBindingIdentity {
+): Extract<CodexAppServerBindingIdentity, { kind: "conversation" }> {
   return { kind: "conversation", bindingId: data.bindingId };
 }
 

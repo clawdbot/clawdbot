@@ -29,6 +29,12 @@ export type GatewayServiceRuntime = {
   missingUnit?: boolean;
   missingSupervision?: boolean;
   missingGuiSession?: boolean;
+  /** Same-label system-domain owner or an ownership probe that failed closed. */
+  systemLaunchDaemon?: {
+    status: "loaded" | "installed" | "unverifiable";
+    serviceTarget: string;
+    plistPath?: string;
+  };
   systemd?: GatewayServiceSystemdRuntime;
 };
 

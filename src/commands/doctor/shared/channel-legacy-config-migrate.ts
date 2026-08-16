@@ -1,4 +1,6 @@
 // Legacy config migration bridge for channel doctor compatibility contracts.
+
+import { isChannelConfigMetadataKey } from "../../../channels/config-metadata.js";
 import { getBootstrapChannelPlugin } from "../../../channels/plugins/bootstrap-registry.js";
 import { loadBundledChannelDoctorContractApi } from "../../../channels/plugins/doctor-contract-api.js";
 import type { OpenClawConfig } from "../../../config/types.js";
@@ -6,6 +8,7 @@ import {
   applyPluginDoctorCompatibilityMigrations,
   collectRelevantDoctorPluginIds,
 } from "../../../plugins/doctor-contract-registry.js";
+import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 
 type ChannelDoctorCompatibilityMutation = {
@@ -17,14 +20,57 @@ type ChannelDoctorCompatibilityNormalizer = (params: {
   cfg: OpenClawConfig;
 }) => ChannelDoctorCompatibilityMutation;
 
-function collectRelevantDoctorChannelIds(raw: unknown): string[] {
-  const channels = isRecord(raw) && isRecord(raw.channels) ? raw.channels : null;
+function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: string[]): void {
+  const channels = isRecord(raw.channels) ? raw.channels : null;
   if (!channels) {
-    return [];
+    return;
   }
-  return Object.keys(channels)
-    .filter((channelId) => channelId !== "defaults")
-    .toSorted();
+  const migrateEntry = (
+    entry: Record<string, unknown>,
+    path: string,
+    preserveEmptyPluginBlock = false,
+  ) => {
+    const heartbeat = isRecord(entry.heartbeat) ? entry.heartbeat : null;
+    const keys = heartbeat ? Object.keys(heartbeat) : [];
+    if (
+      !heartbeat ||
+      (preserveEmptyPluginBlock && keys.length === 0) ||
+      keys.some((key) => key !== "showOk" && key !== "showAlerts" && key !== "useIndicator")
+    ) {
+      return;
+    }
+    if (entry.heartbeatVisibility === undefined) {
+      entry.heartbeatVisibility = entry.heartbeat;
+      changes.push(`Moved ${path}.heartbeat → ${path}.heartbeatVisibility.`);
+    } else {
+      changes.push(`Removed ${path}.heartbeat (${path}.heartbeatVisibility already set).`);
+    }
+    delete entry.heartbeat;
+  };
+  const defaults = isRecord(channels.defaults) ? channels.defaults : null;
+  if (defaults) {
+    migrateEntry(defaults, "channels.defaults");
+  }
+  for (const [channelId, value] of Object.entries(channels)) {
+    if (!channelId.trim() || isChannelConfigMetadataKey(channelId) || !isRecord(value)) {
+      continue;
+    }
+    const preserveEmptyPluginBlock = channelId === "feishu";
+    migrateEntry(value, `channels.${channelId}`, preserveEmptyPluginBlock);
+    const accounts = isRecord(value.accounts) ? value.accounts : null;
+    if (!accounts) {
+      continue;
+    }
+    for (const [accountId, account] of Object.entries(accounts)) {
+      if (isRecord(account)) {
+        migrateEntry(
+          account,
+          `channels.${channelId}.accounts.${accountId}`,
+          preserveEmptyPluginBlock,
+        );
+      }
+    }
+  }
 }
 
 function resolveBundledChannelCompatibilityNormalizer(
@@ -60,9 +106,13 @@ export function applyChannelDoctorCompatibilityMigrations(cfg: Record<string, un
 } {
   let nextCfg = cfg as OpenClawConfig;
   const changes: string[] = [];
+  migrateHeartbeatVisibility(cfg, changes);
   const unresolvedChannelIds: string[] = [];
 
-  for (const channelId of collectRelevantDoctorChannelIds(cfg)) {
+  for (const channelId of listDoctorConfiguredChannelIds(cfg, {
+    configEntryPolicy: "raw",
+    sort: "codepoint",
+  })) {
     const normalizeCompatibilityConfig = resolveBundledChannelCompatibilityNormalizer(channelId);
     if (!normalizeCompatibilityConfig) {
       unresolvedChannelIds.push(channelId);

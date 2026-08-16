@@ -16,7 +16,7 @@ OpenClaw Amazon Bedrock provider plugin with model discovery, embeddings, and gu
 
 ## Surface
 
-providers: amazon-bedrock; contracts: memoryEmbeddingProviders
+providers: `amazon-bedrock`; contracts: `memoryEmbeddingProviders`
 
 ## Related docs
 

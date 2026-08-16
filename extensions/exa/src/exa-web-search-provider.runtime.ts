@@ -85,7 +85,7 @@ async function readExaSearchResults(
       new Error(`Exa API response exceeds ${maxBytesLocal} bytes`),
   });
   try {
-    return normalizeExaResults(JSON.parse(new TextDecoder().decode(bytes)));
+    return normalizeExaResults(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
   } catch (cause) {
     throw new Error("Exa API returned malformed JSON", { cause });
   }
@@ -112,7 +112,7 @@ function resolveExaConfig(searchConfig?: SearchConfigRecord): ExaConfig {
 
 function resolveExaApiKey(exa?: ExaConfig): string | undefined {
   return (
-    readConfiguredSecretString(exa?.apiKey, "tools.web.search.exa.apiKey") ??
+    readConfiguredSecretString(exa?.apiKey, "plugins.entries.exa.config.webSearch.apiKey") ??
     readProviderEnvValue(["EXA_API_KEY"])
   );
 }
@@ -392,6 +392,7 @@ async function runExaSearch(params: {
   type: ExaSearchType;
   contents?: ExaContentsArgs;
   timeoutSeconds: number;
+  signal?: AbortSignal;
 }): Promise<ExaSearchResult[]> {
   const body: Record<string, unknown> = {
     query: params.query,
@@ -413,6 +414,7 @@ async function runExaSearch(params: {
     {
       url: params.endpoint,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "POST",
         headers: {
@@ -438,7 +440,7 @@ function missingExaKeyPayload() {
   return {
     error: "missing_exa_api_key",
     message:
-      "web_search (exa) needs an Exa API key. Set EXA_API_KEY in the Gateway environment, or configure tools.web.search.exa.apiKey.",
+      "web_search (exa) needs an Exa API key. Set EXA_API_KEY in the Gateway environment, or configure plugins.entries.exa.config.webSearch.apiKey.",
     docs: "https://docs.openclaw.ai/tools/web",
   };
 }
@@ -471,6 +473,7 @@ function buildExaCacheKey(params: {
 export async function executeExaWebSearchProviderTool(
   ctx: { config?: Record<string, unknown>; searchConfig?: SearchConfigRecord },
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const searchConfig = mergeScopedSearchConfig(
     ctx.searchConfig,
@@ -570,8 +573,10 @@ export async function executeExaWebSearchProviderTool(
     type,
     contents,
     timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
+    signal,
   });
 
+  signal?.throwIfAborted();
   const payload = {
     query,
     provider: "exa",
@@ -616,12 +621,9 @@ export async function executeExaWebSearchProviderTool(
 }
 
 export const testing = {
-  normalizeExaResults,
-  normalizeExaFreshness,
   parseExaContents,
   buildExaCacheKey,
   resolveExaApiKey,
-  resolveExaConfig,
   resolveExaDescription,
   resolveExaSearchCount,
   resolveExaSearchEndpoint,
@@ -629,4 +631,3 @@ export const testing = {
   readExaErrorDetail,
   readExaSearchResults,
 } as const;
-export { testing as __testing };

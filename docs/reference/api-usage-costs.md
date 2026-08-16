@@ -34,7 +34,7 @@ Map of OpenClaw features that can call paid provider APIs, where each reads its 
 **CLI usage windows** (provider quotas, not per-message cost)
 
 - `openclaw status --usage` and `openclaw channels list` show provider **usage windows** as `X% left`.
-- Current usage-window providers: Anthropic, ClawRouter, DeepSeek, GitHub Copilot, Gemini CLI, MiniMax, OpenAI (covers ChatGPT/Codex OAuth/token auth), Xiaomi, and z.ai. See [Models CLI](/cli/models) and [Channels CLI](/cli/channels) for the full provider/flag list.
+- Current usage-window providers: Anthropic, ClawRouter, DeepSeek, GitHub Copilot, MiniMax, OpenAI (covers ChatGPT/Codex OAuth/token auth), Xiaomi, and z.ai. See [Models CLI](/cli/models) and [Channels CLI](/cli/channels) for the full provider/flag list.
 - MiniMax's raw `usage_percent` / `usagePercent` fields report remaining quota, so OpenClaw inverts them; count-based fields win when present. If the response includes a `model_remains` array, OpenClaw picks the chat-model entry, derives the window label from timestamps when needed, and includes the model name in the plan label.
 - Usage auth comes from provider-specific hooks when available, otherwise OpenClaw falls back to matching OAuth/API-key credentials from auth profiles, env, or config.
 
@@ -48,7 +48,7 @@ Anthropic has confirmed that Claude CLI reuse (including `claude -p`) is a sanct
 
 - **Auth profiles**: per-agent, stored in `auth-profiles.json`.
 - **Environment variables**: for example `OPENAI_API_KEY`, `BRAVE_API_KEY`, `FIRECRAWL_API_KEY`.
-- **Config**: `models.providers.*.apiKey`, `plugins.entries.*.config.webSearch.apiKey`, `plugins.entries.firecrawl.config.webFetch.apiKey`, `agents.defaults.memorySearch.*`, `talk.providers.*.apiKey`.
+- **Config**: `models.providers.*.apiKey`, `plugins.entries.*.config.webSearch.apiKey`, `plugins.entries.firecrawl.config.webFetch.apiKey`, `memory.search.*`, `talk.providers.*.apiKey`.
 - **Skills**: `skills.entries.<name>.apiKey`, which may export the key to the skill process env.
 
 ## Features that can spend keys
@@ -65,13 +65,13 @@ Inbound media can be summarized or transcribed via a provider API before the rep
 
 ### Image and video generation
 
-`image_generate` and `video_generate` route to whichever configured provider is available. Image generation can infer an auth-backed provider default when `agents.defaults.imageGenerationModel` is unset; video generation requires an explicit `agents.defaults.videoGenerationModel` (for example `qwen/wan2.6-t2v`).
+`image_generate` and `video_generate` route to whichever authenticated provider is available. Both can infer an auth-backed provider default when their `agents.defaults.mediaModels` entry is unset.
 
 See [Image generation](/tools/image-generation) and [Video generation](/tools/video-generation) for the current provider list.
 
 ### Memory embeddings and semantic search
 
-Semantic memory search uses embedding APIs when `agents.defaults.memorySearch.provider` names a remote adapter (for example `openai`, `gemini`, `voyage`, `mistral`, `deepinfra`, `github-copilot`, `amazon-bedrock`). `memorySearch.provider = "lmstudio"` or `"ollama"` runs against a local/self-hosted server and typically has no hosted billing. `memorySearch.provider = "local"` keeps everything on-device with no API usage. An optional `memorySearch.fallback` provider can cover local-embedding failures.
+Semantic memory search uses embedding APIs when `memory.search.provider` names a remote adapter (for example `openai`, `gemini`, `voyage`, `mistral`, `deepinfra`, `github-copilot`, `amazon-bedrock`). `memory.search.provider = "lmstudio"` or `"ollama"` runs against a local/self-hosted server and typically has no hosted billing. `memory.search.provider = "local"` keeps everything on-device with no API usage. An optional `memory.search.fallback` provider can cover local-embedding failures.
 
 See [Memory](/concepts/memory).
 

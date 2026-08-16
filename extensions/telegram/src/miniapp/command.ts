@@ -1,4 +1,3 @@
-// Telegram Mini App /dashboard command.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -6,15 +5,20 @@ import type {
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import type { TelegramMiniAppLaunchTickets } from "./launch-ticket.js";
 import { isTelegramMiniAppOwner } from "./owner.js";
 import { resolveTelegramMiniAppUrls, TELEGRAM_MINIAPP_URL_ERROR } from "./url.js";
 
-export function registerTelegramMiniAppCommand(api: OpenClawPluginApi): void {
-  api.registerCommand(createTelegramMiniAppDashboardCommand(api));
+export function registerTelegramMiniAppCommand(
+  api: OpenClawPluginApi,
+  launchTickets: TelegramMiniAppLaunchTickets,
+): void {
+  api.registerCommand(createTelegramMiniAppDashboardCommand(api, launchTickets));
 }
 
-export function createTelegramMiniAppDashboardCommand(
+function createTelegramMiniAppDashboardCommand(
   api: OpenClawPluginApi,
+  launchTickets: TelegramMiniAppLaunchTickets,
 ): OpenClawPluginCommandDefinition {
   return {
     name: "dashboard",
@@ -39,6 +43,9 @@ export function createTelegramMiniAppDashboardCommand(
         return { text: TELEGRAM_MINIAPP_URL_ERROR };
       }
       pageUrl.searchParams.set("accountId", accountId);
+      pageUrl.hash = new URLSearchParams({
+        launchTicket: launchTickets.issue({ accountId, userId }),
+      }).toString();
       return {
         text: "Open OpenClaw dashboard.",
         presentation: {
@@ -59,7 +66,6 @@ function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
 }
 
 function isTelegramDirectCommand(ctx: PluginCommandContext): boolean {
-  // Parses OpenClaw's canonical telegram:<id> / telegram:group:<id> from/sessionKey encoding.
   // DM-only because Telegram permits web_app inline buttons only in private chats.
   const from = ctx.from?.trim() ?? "";
   const sessionKey = ctx.sessionKey?.trim() ?? "";

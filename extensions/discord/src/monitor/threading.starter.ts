@@ -10,6 +10,7 @@ import {
   resolveDiscordChannelParentIdSafe,
   resolveDiscordChannelParentSafe,
 } from "./channel-access.js";
+import { formatDiscordMediaText } from "./message-media.js";
 import {
   resolveDiscordChannelInfo,
   resolveDiscordEmbedText,
@@ -188,7 +189,12 @@ function resolveDiscordThreadStarterText(starter: DiscordThreadStarterRestMessag
   const content = normalizeOptionalString(starter.content) ?? "";
   const embedText = resolveDiscordEmbedText(starter.embeds?.[0]);
   const forwardedText = resolveDiscordForwardedMessagesTextFromSnapshots(starter.message_snapshots);
-  return content || embedText || forwardedText;
+  const text = content || embedText || forwardedText;
+  const mediaText = formatDiscordMediaText({
+    attachments: starter.attachments ?? undefined,
+    stickers: starter.sticker_items ?? undefined,
+  });
+  return [text, mediaText].filter(Boolean).join("\n");
 }
 
 function resolveDiscordThreadStarterIdentity(

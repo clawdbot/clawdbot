@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "agent": {
+    "id": "workspace-agent",
+    "name": "Workspace Agent",
+    "identity": {
+      "name": "Workspace"
+    }
+  },
+  "workspace": {
+    "bootstrapFiles": {
+      "SOUL.md": {
+        "source": "workspace/SOUL.md"
+      },
+      "HEARTBEAT.md": {
+        "source": "workspace/HEARTBEAT.md"
+      }
+    },
+    "files": [
+      {
+        "source": "workspace/reference/policy.md",
+        "path": "reference/policy.md"
+      }
+    ]
+  }
+}

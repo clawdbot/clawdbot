@@ -290,6 +290,29 @@ describe("assertHttpUrlTargetsPrivateNetwork", () => {
       }),
     ).rejects.toThrow("HTTP URL must target a trusted private/internal host");
   });
+
+  it("rejects malformed URLs without retaining credential-bearing input", async () => {
+    const secretUser = "matrix-user";
+    const secretPass = "matrix-fixture";
+    const malformed = `http://${secretUser}:${secretPass}@${["invalid", "host"].join(" ")}`;
+
+    const error = await assertHttpUrlTargetsPrivateNetwork(malformed, {
+      dangerouslyAllowPrivateNetwork: true,
+    }).then(
+      () => {
+        throw new Error("expected rejection");
+      },
+      (err: unknown) => err,
+    );
+
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error).toMatchObject({ code: "ERR_INVALID_URL", message: "Invalid URL" });
+    expect((error as Error & { cause?: unknown }).cause).toBeUndefined();
+
+    const serialized = JSON.stringify(error, Object.getOwnPropertyNames(error));
+    expect(serialized).not.toContain(secretUser);
+    expect(serialized).not.toContain(secretPass);
+  });
 });
 
 describe("normalizeHostnameSuffixAllowlist", () => {

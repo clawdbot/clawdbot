@@ -153,7 +153,7 @@ final class InstancesStore {
             platform: platform,
             deviceFamily: "Mac",
             modelIdentifier: InstanceIdentity.modelIdentifier,
-            lastInputSeconds: SystemPresenceInfo.lastInputSeconds(),
+            lastInputSeconds: nil,
             mode: "local",
             reason: reason,
             text: text,

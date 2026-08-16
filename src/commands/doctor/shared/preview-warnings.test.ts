@@ -70,6 +70,7 @@ const staleAuthOrderState = vi.hoisted(() => ({
 
 const activeToolSchemaState = vi.hoisted(() => ({
   warnings: [] as string[],
+  params: undefined as { runWithPluginMetadataSnapshot?: unknown } | undefined,
 }));
 
 const commandSecretState = vi.hoisted(() => ({
@@ -235,14 +236,18 @@ vi.mock("./stale-plugin-config.js", () => ({
     channels?: Record<string, unknown>;
   }) => {
     const knownIds = new Set(manifestState.plugins.map((plugin) => plugin.id));
-    const hits = [...(cfg.plugins?.allow ?? []), ...Object.keys(cfg.plugins?.entries ?? {})]
-      .filter((id) => !knownIds.has(id))
-      .map((id) => ({ id, surface: "plugin" }));
+    const hits = [
+      ...(cfg.plugins?.allow ?? []).map((id) => ({ id, surface: "allow" })),
+      ...Object.keys(cfg.plugins?.entries ?? {}).map((id) => ({ id, surface: "entries" })),
+    ].filter((hit) => !knownIds.has(hit.id));
     if (cfg.channels?.["openclaw-weixin"]) {
       hits.push({ id: "openclaw-weixin", surface: "channel" });
     }
     return hits.filter(
-      (hit, index) => hits.findIndex((candidate) => candidate.id === hit.id) === index,
+      (hit, index) =>
+        hits.findIndex(
+          (candidate) => candidate.id === hit.id && candidate.surface === hit.surface,
+        ) === index,
     );
   },
   isStalePluginAutoRepairBlocked: () =>
@@ -251,12 +256,20 @@ vi.mock("./stale-plugin-config.js", () => ({
     autoRepairBlocked,
     doctorFixCommand,
     hits,
+    surfacePreservePluginIds,
   }: {
     autoRepairBlocked: boolean;
     doctorFixCommand: string;
     hits: Array<{ id: string; surface: string }>;
+    surfacePreservePluginIds?: Record<string, ReadonlySet<string>>;
   }) => {
-    const pluginIds = hits
+    const actionableHits = hits.filter(
+      (hit) => !surfacePreservePluginIds?.[hit.surface]?.has(hit.id),
+    );
+    if (actionableHits.length === 0) {
+      return [];
+    }
+    const pluginIds = actionableHits
       .filter((hit) => hit.surface !== "channel")
       .map((hit) => hit.id)
       .toSorted();
@@ -264,7 +277,7 @@ vi.mock("./stale-plugin-config.js", () => ({
       pluginIds.length > 0
         ? `Stale plugin references (plugins.allow/deny/entries): ${pluginIds.join(", ")}.`
         : null,
-      ...hits
+      ...actionableHits
         .filter((hit) => hit.surface === "channel")
         .map((hit) => `channels.${hit.id}: dangling channel config.`),
       autoRepairBlocked
@@ -303,7 +316,30 @@ vi.mock("./stale-auth-order.js", () => ({
 }));
 
 vi.mock("./active-tool-schema-warnings.js", () => ({
-  collectActiveToolSchemaProjectionWarnings: () => activeToolSchemaState.warnings,
+  collectActiveToolSchemaProjectionWarnings: async (params: {
+    runWithPluginMetadataSnapshot?: unknown;
+  }) => {
+    activeToolSchemaState.params = params;
+    return activeToolSchemaState.warnings;
+  },
+}));
+
+vi.mock("./codex-route-warnings.js", () => ({
+  collectCodexRouteWarnings: vi.fn(() => []),
+}));
+
+async function useRealCodexRouteWarningsOnce(): Promise<void> {
+  const mocked = await import("./codex-route-warnings.js");
+  const actual = await vi.importActual<typeof import("./codex-route-warnings.js")>(
+    "./codex-route-warnings.js",
+  );
+  vi.mocked(mocked.collectCodexRouteWarnings).mockImplementationOnce(
+    actual.collectCodexRouteWarnings,
+  );
+}
+
+vi.mock("./context-engine-host-compat.js", () => ({
+  collectContextEngineHostCompatibilityWarnings: vi.fn(async () => []),
 }));
 
 function manifest(id: string): TestManifestRecord {
@@ -359,6 +395,7 @@ describe("doctor preview warnings", () => {
     staleOAuthShadowState.warnings = [];
     staleAuthOrderState.warnings = [];
     activeToolSchemaState.warnings = [];
+    activeToolSchemaState.params = undefined;
     commandSecretState.targetIds = new Set<string>();
     commandSecretState.resolvedConfig = undefined;
     commandSecretState.diagnostics = [];
@@ -505,6 +542,7 @@ describe("doctor preview warnings", () => {
   });
 
   it("warns when a normalized legacy Codex provider cannot be auto-merged", async () => {
+    await useRealCodexRouteWarningsOnce();
     const warnings = await collectDoctorPreviewWarnings({
       cfg: {
         models: {
@@ -531,7 +569,7 @@ describe("doctor preview warnings", () => {
       "models.providers.openai-codex cannot be merged automatically",
     );
     expect(warning).toContain("models.providers.openai.params");
-    expect(warning).toContain("Move the affected model/provider defaults manually");
+    expect(warning).toContain("remove the legacy provider entry");
   });
 
   it("sanitizes empty-allowlist warning paths before returning preview output", async () => {
@@ -570,6 +608,19 @@ describe("doctor preview warnings", () => {
     );
     expect(warning).toContain('Run "openclaw doctor --fix"');
     expect(warning).not.toContain("Auto-removal is paused");
+  });
+
+  it("omits stale cleanup warnings for version-bound Codex policy", async () => {
+    const warnings = await collectDoctorPreviewWarnings({
+      cfg: {
+        plugins: {
+          allow: ["codex"],
+        },
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings.join("\n")).not.toContain("Stale plugin references");
   });
 
   it("includes stale channel config warnings without plugin config", async () => {
@@ -652,6 +703,23 @@ describe("doctor preview warnings", () => {
     expect(
       warnings.some((warning) => warning.includes('active tool "fuzzplugin_move_angles"')),
     ).toBe(true);
+  });
+
+  it("scopes active tool schema preview checks to the Doctor metadata lifecycle", async () => {
+    const runWithPluginMetadataSnapshot = <T>(
+      _scope: { config: OpenClawConfig; workspaceDir?: string },
+      run: () => T,
+    ): T => run();
+
+    await collectDoctorPreviewWarnings({
+      cfg: {},
+      doctorFixCommand: "openclaw doctor --fix",
+      runWithPluginMetadataSnapshot,
+    });
+
+    expect(activeToolSchemaState.params?.runWithPluginMetadataSnapshot).toBe(
+      runWithPluginMetadataSnapshot,
+    );
   });
 
   it("warns but skips auto-removal when plugin discovery has errors", async () => {
@@ -873,7 +941,7 @@ describe("doctor preview warnings", () => {
         tools: {
           profile: "messaging",
           exec: {
-            security: "allowlist",
+            mode: "allowlist",
           },
         },
       },
@@ -898,7 +966,7 @@ describe("doctor preview warnings", () => {
             tools: {
               allow: ["message"],
               exec: {
-                security: "allowlist",
+                mode: "allowlist",
               },
             },
           },
@@ -927,7 +995,7 @@ describe("doctor preview warnings", () => {
             id: "sage",
             tools: {
               exec: {
-                security: "allowlist",
+                mode: "allowlist",
               },
             },
           },
@@ -960,7 +1028,7 @@ describe("doctor preview warnings", () => {
             id: "sage",
             tools: {
               exec: {
-                security: "allowlist",
+                mode: "allowlist",
               },
               byProvider: {
                 "openai/gpt-5": {
@@ -994,7 +1062,7 @@ describe("doctor preview warnings", () => {
             },
             tools: {
               exec: {
-                security: "allowlist",
+                mode: "allowlist",
               },
               byProvider: {
                 "openai/gpt-5": {
@@ -1026,7 +1094,7 @@ describe("doctor preview warnings", () => {
             id: "sage",
             tools: {
               exec: {
-                security: "allowlist",
+                mode: "allowlist",
               },
               byProvider: {
                 openai: {
@@ -1054,7 +1122,7 @@ describe("doctor preview warnings", () => {
         profile: "messaging",
         alsoAllow: ["exec", "process"],
         exec: {
-          security: "allowlist",
+          mode: "allowlist",
         },
       },
     });
@@ -1067,7 +1135,7 @@ describe("doctor preview warnings", () => {
       tools: {
         profile: "custom-profile",
         exec: {
-          security: "allowlist",
+          mode: "allowlist",
         },
         byProvider: {
           openai: {
@@ -1081,7 +1149,7 @@ describe("doctor preview warnings", () => {
             id: "sage",
             tools: {
               exec: {
-                security: "allowlist",
+                mode: "allowlist",
               },
               byProvider: {
                 openai: {

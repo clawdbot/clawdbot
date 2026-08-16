@@ -20,7 +20,6 @@ final class WorkActivityStore {
 
     private(set) var current: Activity?
     private(set) var iconState: IconState = .idle
-    private(set) var lastToolLabel: String?
     private(set) var lastToolUpdatedAt: Date?
 
     private var jobs: [String: Activity] = [:]
@@ -63,7 +62,6 @@ final class WorkActivityStore {
         let toolKind = Self.mapToolKind(name)
         let label = Self.buildLabel(name: name, meta: meta, args: args)
         if phase.lowercased() == "start" {
-            self.lastToolLabel = label
             self.lastToolUpdatedAt = Date()
             self.toolSeqBySession[sessionKey, default: 0] += 1
             let activity = Activity(

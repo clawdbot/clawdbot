@@ -9,6 +9,12 @@ title: "Secrets apply plan contract"
 
 This page defines the strict contract enforced by `openclaw secrets apply`. If a target does not match these rules, apply fails before mutating any file.
 
+## Plan file requirements
+
+`openclaw secrets apply --from <plan.json>` accepts regular files up to 16 MiB (16,777,216 bytes). The limit applies to the complete serialized file, including whitespace. Directories, FIFOs, device files, and files larger than the limit are rejected before JSON parsing or target validation.
+
+`openclaw secrets configure --plan-out <plan.json>` enforces the same limit on the UTF-8 serialized output before creating the file. Hand-written plans and external plan generators must also keep the serialized file within this boundary.
+
 ## Plan file shape
 
 `openclaw secrets apply --from <plan.json>` expects a `targets` array of plan targets:
@@ -121,7 +127,7 @@ No writes are committed for an invalid plan: target resolution and path validati
 ## Runtime and audit scope notes
 
 - Ref-only `auth-profiles.json` entries (`keyRef`/`tokenRef`) are included in runtime credential resolution and audit coverage.
-- `secrets apply` writes supported `openclaw.json` targets, supported `auth-profiles.json` targets, and three optional scrub passes, each on by default: `scrubEnv` (removes migrated plaintext values from `.env`), `scrubAuthProfilesForProviderTargets` (clears plaintext/unused-ref residue in `auth-profiles.json` for providers a plan just migrated), and `scrubLegacyAuthJson` (drops migrated `api_key` entries from legacy `auth.json` stores). Set any of `options.scrubEnv`, `options.scrubAuthProfilesForProviderTargets`, `options.scrubLegacyAuthJson` to `false` in the plan to skip that pass.
+- `secrets apply` writes supported `openclaw.json` targets, supported `auth-profiles.json` targets, and three optional scrub passes, each on by default: `scrubEnv` (removes migrated plaintext values from `.env` files in the effective state and active-config directories), `scrubAuthProfilesForProviderTargets` (clears plaintext/unused-ref residue in `auth-profiles.json` for providers a plan just migrated), and `scrubLegacyAuthJson` (drops migrated `api_key` entries from legacy `auth.json` stores). Set any of `options.scrubEnv`, `options.scrubAuthProfilesForProviderTargets`, `options.scrubLegacyAuthJson` to `false` in the plan to skip that pass.
 
 ## Operator checks
 

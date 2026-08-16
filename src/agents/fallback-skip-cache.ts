@@ -5,18 +5,17 @@
  * credential error (`auth` / `auth_permanent`), the chain can avoid retrying
  * the same candidate on every subsequent turn until the user fixes their auth.
  *
- * This module records skip markers per `(sessionId, provider, model)` with a
- * short TTL. The cache is intentionally in-memory only: a process restart
- * clears it so a freshly-restarted gateway always tries every candidate at
- * least once before deciding to skip again.
+ * This module records skip markers per `(sessionId, provider, model, authScope)`
+ * with a short TTL. The cache is intentionally in-memory only: a process
+ * restart clears it so a freshly-restarted gateway always tries every
+ * candidate at least once before deciding to skip again.
  *
  * The cache is global, not per-config, so any caller running fallbacks for the
- * same `sessionId` shares the same skip set. Tests can reset state via
- * `resetFallbackSkipCacheForTest()`.
+ * same `sessionId` shares the same skip set.
  */
 
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
-import { modelKey } from "./model-selection-normalize.js";
+import { modelKey } from "./model-ref-shared.js";
 
 /**
  * Default time-to-live for a skip marker. Disabled by default so existing
@@ -99,8 +98,8 @@ function sessionBucket(sessionId: string, create: boolean): Map<string, SkipEntr
   return bucket;
 }
 
-function candidateKey(provider: string, model: string): string {
-  return modelKey(provider, model);
+function candidateKey(provider: string, model: string, authScope?: string): string {
+  return JSON.stringify([modelKey(provider, model), authScope?.trim() || null]);
 }
 
 function pruneExpired(bucket: Map<string, SkipEntry>, now: number): void {
@@ -141,6 +140,7 @@ export function markFallbackCandidateSkipped(params: {
   sessionId: string | undefined;
   provider: string;
   model: string;
+  authScope?: string;
   reason: string;
   now?: number;
   ttlMs?: number;
@@ -158,7 +158,7 @@ export function markFallbackCandidateSkipped(params: {
   if (!bucket) {
     return;
   }
-  bucket.set(candidateKey(params.provider, params.model), {
+  bucket.set(candidateKey(params.provider, params.model, params.authScope), {
     expiresAtMs: now + ttlMs,
     reason: params.reason,
   });
@@ -173,6 +173,7 @@ export function isFallbackCandidateSkipped(params: {
   sessionId: string | undefined;
   provider: string;
   model: string;
+  authScope?: string;
   now?: number;
 }): boolean {
   if (!params.sessionId || !params.provider || !params.model) {
@@ -189,7 +190,7 @@ export function isFallbackCandidateSkipped(params: {
     getBuckets().delete(params.sessionId);
     return false;
   }
-  const entry = bucket.get(candidateKey(params.provider, params.model));
+  const entry = bucket.get(candidateKey(params.provider, params.model, params.authScope));
   return Boolean(entry && entry.expiresAtMs > now);
 }
 
@@ -202,6 +203,7 @@ export function getFallbackCandidateSkipReason(params: {
   sessionId: string | undefined;
   provider: string;
   model: string;
+  authScope?: string;
   now?: number;
 }): string | undefined {
   if (!params.sessionId || !params.provider || !params.model) {
@@ -212,28 +214,9 @@ export function getFallbackCandidateSkipReason(params: {
     return undefined;
   }
   const now = params.now ?? Date.now();
-  const entry = bucket.get(candidateKey(params.provider, params.model));
+  const entry = bucket.get(candidateKey(params.provider, params.model, params.authScope));
   if (!entry || entry.expiresAtMs <= now) {
     return undefined;
   }
   return entry.reason;
-}
-
-/**
- * Test-only escape hatch. Production code must not call this; the global
- * cache is meant to outlive individual fallback runs.
- */
-export function resetFallbackSkipCacheForTest(): void {
-  const state = getState();
-  state.buckets.clear();
-  state.lastGlobalPruneAtMs = 0;
-}
-
-/**
- * Test-only inspection hook for the global session-bucket map. Production
- * code must not read this; the buckets are an implementation detail of the
- * cache and may change shape.
- */
-export function peekFallbackSkipBucketsForTest(): SkipBySession {
-  return getBuckets();
 }

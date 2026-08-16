@@ -1,20 +1,25 @@
 // Shared labeled select rendering for compact Control UI preference rows.
-import { html } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { renderSettingsRow } from "../../components/settings-ui.ts";
 
 export function renderSettingsSelectRow<T extends string>(params: {
   title: string;
   value: T;
-  setting: "send-shortcut" | "catalog-open-target";
+  setting: "send-shortcut" | "follow-up-mode" | "catalog-open-target";
   options: ReadonlyArray<{ value: T; label: string }>;
   onChange: (value: string) => void;
+  description?: unknown;
+  actions?: TemplateResult | typeof nothing;
 }) {
   return renderSettingsRow({
     title: params.title,
+    description: params.description,
     control: html`
+      ${params.actions ?? nothing}
       <select
         class="settings-select"
         ?data-settings-send-shortcut=${params.setting === "send-shortcut"}
+        ?data-settings-follow-up-mode=${params.setting === "follow-up-mode"}
         ?data-settings-catalog-open-target=${params.setting === "catalog-open-target"}
         aria-label=${params.title}
         .value=${params.value}

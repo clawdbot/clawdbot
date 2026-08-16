@@ -1,234 +1,364 @@
-import fs from "node:fs";
-import path from "node:path";
-import { isNamedProfile } from "../config/paths.js";
-import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
-import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
-import { fileExists } from "./state-migrations.fs.js";
-import type { LegacyExecApprovalsMigrationDetection } from "./state-migrations.types.js";
+// Doctor-only import for the retired exec approvals JSON store.
+import { isDeepStrictEqual } from "node:util";
+import { root, type Root } from "@openclaw/fs-safe";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import {
+  resolveExecApprovalsPath,
+  tryParsePersistedExecApprovals,
+} from "./exec-approvals-config.js";
+import {
+  readExecApprovalsConfigRow,
+  serializeExecApprovals,
+  writeExecApprovalsConfigRow,
+} from "./exec-approvals-sqlite.js";
+import type { LegacyExecApprovalsDetection } from "./state-migrations.exec-approvals.types.js";
+import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
+import {
+  markLegacyMigrationSourceRemoved,
+  readLegacyMigrationReceiptFromDatabase,
+  recordLegacyMigrationReceipt,
+  resolveLegacyMigrationSourceKey,
+} from "./state-migrations.receipts.js";
+import {
+  LegacyMigrationSourceClaim,
+  legacyMigrationSourceOrClaimMayExist,
+  legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
+  readLegacyMigrationSourceSnapshot,
+  type LegacyMigrationSourceSnapshot,
+} from "./state-migrations.source-snapshot.js";
+import type { MigrationMessages } from "./state-migrations.types.js";
 
-const EXEC_APPROVALS_FILENAME = "exec-approvals.json";
-const EXEC_APPROVALS_SOCKET_FILENAME = "exec-approvals.sock";
+const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
+const MAX_LEGACY_EXEC_APPROVALS_BYTES = 4 * 1024 * 1024;
+const MIGRATION_KIND = "legacy-exec-approvals-json";
+const TARGET_TABLE = "exec_approvals_config";
+const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
-function resolveDefaultExecApprovalsStateDir(
-  env: NodeJS.ProcessEnv,
-  homedir: () => string,
-): string {
-  return path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
-}
+type LegacySourceSnapshot = Omit<LegacyMigrationSourceSnapshot, "raw"> & { raw: string | null };
 
-function resolveDefaultExecApprovalsPath(env: NodeJS.ProcessEnv, homedir: () => string): string {
-  return path.join(resolveDefaultExecApprovalsStateDir(env, homedir), EXEC_APPROVALS_FILENAME);
-}
+type MigrationDecision =
+  | "canonical-preserved"
+  | "invalid-canonical-repaired"
+  | "legacy-imported"
+  | "malformed-legacy-preserved"
+  | "receipt-authoritative";
 
-function resolveExecApprovalsPathForStateDir(stateDir: string): string {
-  return path.join(stateDir, EXEC_APPROVALS_FILENAME);
-}
-
-function resolveExecApprovalsSocketPathForStateDir(stateDir: string): string {
-  return path.join(stateDir, EXEC_APPROVALS_SOCKET_FILENAME);
-}
-
-export function detectLegacyExecApprovalsMigration(params: {
-  env: NodeJS.ProcessEnv;
-  homedir: () => string;
+/** Detect retired approvals only when an explicit Doctor flow opts in. */
+export function detectLegacyExecApprovals(params: {
   stateDir: string;
-}): LegacyExecApprovalsMigrationDetection {
-  const sourcePath = resolveDefaultExecApprovalsPath(params.env, params.homedir);
-  const targetPath = resolveExecApprovalsPathForStateDir(params.stateDir);
+  doctorOnlyStateMigrations?: boolean;
+}): LegacyExecApprovalsDetection {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
+  const sourcePath = resolveExecApprovalsPath(env);
+  const sourcePresent = legacyMigrationSourceOrClaimMayExist(sourcePath, DOCTOR_CLAIM_SUFFIX);
   return {
     sourcePath,
-    targetPath,
-    hasLegacy:
-      Boolean(params.env.OPENCLAW_STATE_DIR?.trim()) &&
-      !isNamedProfile(params.env) &&
-      path.resolve(sourcePath) !== path.resolve(targetPath) &&
-      fileExists(sourcePath) &&
-      !fileExists(targetPath),
+    hasLegacy: params.doctorOnlyStateMigrations === true && sourcePresent,
   };
 }
 
-function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+async function readLegacySourceSnapshot(
+  stateRoot: Root,
+  stateDir: string,
+  sourcePath: string,
+): Promise<LegacySourceSnapshot> {
+  const snapshot = await readLegacyMigrationSourceSnapshot({
+    stateRoot,
+    stateDir,
+    sourcePath,
+    maxBytes: MAX_LEGACY_EXEC_APPROVALS_BYTES,
+    label: "exec approvals",
+  });
+  let raw: string | null = null;
+  try {
+    raw = utf8Decoder.decode(snapshot.buffer);
+  } catch {
+    // Invalid UTF-8 is malformed input that must stay available for recovery.
+  }
+  return { ...snapshot, raw };
 }
 
-function isDefaultLegacyExecApprovalsSocketPath(params: {
-  socketPath: string;
+function decideAndRecordMigration(params: {
+  env: NodeJS.ProcessEnv;
   sourcePath: string;
-}): boolean {
-  const expanded = expandHomePrefix(params.socketPath);
-  return (
-    path.resolve(expanded) ===
-    path.join(path.dirname(params.sourcePath), EXEC_APPROVALS_SOCKET_FILENAME)
+  snapshot: LegacySourceSnapshot;
+}): { decision: MigrationDecision; removeSource: boolean; sourceKey: string } {
+  const sourceKey = resolveLegacyMigrationSourceKey("exec-approvals-json", params.sourcePath);
+  const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
+  const now = Date.now();
+  const legacyFile =
+    params.snapshot.raw === null ? null : tryParsePersistedExecApprovals(params.snapshot.raw);
+
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const canonical = readExecApprovalsConfigRow(db);
+      const canonicalFile = canonical ? tryParsePersistedExecApprovals(canonical.raw_json) : null;
+      const importedRaw = legacyFile ? serializeExecApprovals(legacyFile) : null;
+      const receipt = readLegacyMigrationReceiptFromDatabase(db, sourceKey);
+      let receiptImportedSameSource = false;
+      if (receipt?.sourceSha256 === params.snapshot.sha256) {
+        try {
+          const report = JSON.parse(receipt.reportJson) as { decision?: unknown };
+          receiptImportedSameSource =
+            report.decision === "legacy-imported" ||
+            report.decision === "invalid-canonical-repaired" ||
+            report.decision === "receipt-authoritative";
+        } catch {
+          // A malformed receipt is not authority to discard security state.
+        }
+      }
+      let decision: MigrationDecision;
+      let removeSource = false;
+      if (!legacyFile || params.snapshot.raw === null) {
+        decision = "malformed-legacy-preserved";
+      } else if (receiptImportedSameSource && canonicalFile) {
+        decision = "receipt-authoritative";
+        removeSource = true;
+      } else if (!canonical) {
+        writeExecApprovalsConfigRow({
+          db,
+          file: legacyFile,
+          raw: importedRaw ?? undefined,
+          now,
+        });
+        decision = "legacy-imported";
+        removeSource = true;
+      } else if (!canonicalFile) {
+        writeExecApprovalsConfigRow({
+          db,
+          file: legacyFile,
+          raw: importedRaw ?? undefined,
+          now,
+        });
+        decision = "invalid-canonical-repaired";
+        removeSource = true;
+      } else {
+        decision = "canonical-preserved";
+        removeSource = canonical.raw_json === params.snapshot.raw;
+      }
+
+      if (decision === "legacy-imported" || decision === "invalid-canonical-repaired") {
+        if (!legacyFile) {
+          throw new Error("exec approvals import decisions require a parsed legacy file");
+        }
+        const verified = readExecApprovalsConfigRow(db);
+        const verifiedFile = verified ? tryParsePersistedExecApprovals(verified.raw_json) : null;
+        const rawMatches = verified?.raw_json === importedRaw;
+        const fileMatches =
+          verifiedFile &&
+          isDeepStrictEqual(
+            JSON.parse(serializeExecApprovals(verifiedFile)),
+            JSON.parse(serializeExecApprovals(legacyFile)),
+          );
+        if (!rawMatches || !fileMatches) {
+          throw new Error(
+            `SQLite verification failed for the exec approvals migration (raw=${rawMatches}, parsed=${Boolean(fileMatches)})`,
+          );
+        }
+      }
+
+      const reportJson = JSON.stringify({
+        source: MIGRATION_KIND,
+        target: TARGET_TABLE,
+        decision,
+        sourceSha256: params.snapshot.sha256,
+        sourceValid: legacyFile !== null,
+        importedRecordCount:
+          decision === "legacy-imported" || decision === "invalid-canonical-repaired" ? 1 : 0,
+        preservedSqliteRecordCount:
+          decision === "canonical-preserved" || decision === "receipt-authoritative" ? 1 : 0,
+        removesSource: removeSource,
+      });
+      recordLegacyMigrationReceipt(db, {
+        sourceKey,
+        migrationKind: MIGRATION_KIND,
+        sourcePath: params.sourcePath,
+        targetTable: TARGET_TABLE,
+        sourceSha256: params.snapshot.sha256,
+        sourceSizeBytes: params.snapshot.size,
+        sourceRecordCount: legacyFile ? 1 : 0,
+        runId,
+        now,
+        reportJson,
+        upsert: true,
+      });
+      return { decision, removeSource, sourceKey };
+    },
+    { env: params.env },
+    { operationLabel: "state-migration.exec-approvals" },
   );
 }
 
-function prepareMigratedExecApprovalsFile(params: {
-  raw: string;
-  sourcePath: string;
-  targetPath: string;
-}): { raw: string; warning?: string } {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(params.raw) as unknown;
-  } catch {
-    return {
-      raw: "",
-      warning: `Legacy exec approvals file unreadable; left in place at ${params.sourcePath}`,
-    };
+function decisionMessage(decision: MigrationDecision, removeSource: boolean): string {
+  switch (decision) {
+    case "legacy-imported":
+      return "Imported legacy exec approvals into shared SQLite state.";
+    case "invalid-canonical-repaired":
+      return "Replaced an invalid SQLite exec approvals row with validated legacy state.";
+    case "canonical-preserved":
+      return removeSource
+        ? "Preserved byte-identical canonical SQLite exec approvals."
+        : "Preserved canonical SQLite exec approvals and retained conflicting legacy JSON.";
+    case "malformed-legacy-preserved":
+      return "Preserved malformed legacy exec approvals for operator recovery.";
+    case "receipt-authoritative":
+      return "Completed cleanup for previously imported legacy exec approvals.";
   }
-  if (!isPlainJsonObject(parsed) || parsed.version !== 1) {
-    return {
-      raw: "",
-      warning: `Legacy exec approvals file has unsupported shape; left in place at ${params.sourcePath}`,
-    };
-  }
-
-  const next: Record<string, unknown> = { ...parsed };
-  const socket = isPlainJsonObject(next.socket) ? { ...next.socket } : {};
-  const rawSocketPath = typeof socket.path === "string" ? socket.path.trim() : "";
-  if (
-    !rawSocketPath ||
-    isDefaultLegacyExecApprovalsSocketPath({
-      socketPath: rawSocketPath,
-      sourcePath: params.sourcePath,
-    })
-  ) {
-    socket.path = resolveExecApprovalsSocketPathForStateDir(path.dirname(params.targetPath));
-  }
-  next.socket = socket;
-  return { raw: `${JSON.stringify(next, null, 2)}\n` };
+  const unreachable: never = decision;
+  return unreachable;
 }
 
-function assertSafeExecApprovalsMigrationTarget(targetPath: string): void {
-  const targetDir = path.dirname(targetPath);
-  assertNoSymlinkParentsSync({
-    rootDir: resolveRequiredHomeDir(),
-    targetPath: targetDir,
-    allowOutsideRoot: true,
-    messagePrefix: "Refusing to traverse symlink in exec approvals migration path",
+async function migrateWithExclusiveStateOwnership(params: {
+  detected: LegacyExecApprovalsDetection;
+  stateRoot: Root;
+  stateDir: string;
+  env: NodeJS.ProcessEnv;
+  beforeClaim?: () => void;
+  beforeVerify?: () => void;
+  removeSource?: (sourcePath: string) => Promise<void> | void;
+}): Promise<MigrationMessages> {
+  const sourcePath = params.detected.sourcePath;
+  const source = new LegacyMigrationSourceClaim<LegacySourceSnapshot>({
+    stateRoot: params.stateRoot,
+    stateDir: params.stateDir,
+    sourcePath,
+    label: "exec approvals",
+    includeFilePath: false,
+    claimSuffix: DOCTOR_CLAIM_SUFFIX,
+    readSnapshot: (snapshotPath) =>
+      readLegacySourceSnapshot(params.stateRoot, params.stateDir, snapshotPath),
   });
   try {
-    const targetStat = fs.lstatSync(targetPath);
-    if (targetStat.isSymbolicLink()) {
-      throw new Error(`Refusing to migrate exec approvals via symlink: ${targetPath}`);
-    }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw err;
-    }
+    await source.recover("legacy exec approvals source and interrupted claim both exist");
+  } catch (error) {
+    return {
+      changes: [],
+      warnings: [`Failed recovering a legacy exec approvals Doctor claim: ${String(error)}`],
+    };
   }
-}
+  if (!(await source.exists())) {
+    return { changes: [], warnings: [] };
+  }
 
-function writeMigratedExecApprovalsFile(targetPath: string, raw: string): boolean {
-  const targetDir = path.dirname(targetPath);
-  assertSafeExecApprovalsMigrationTarget(targetPath);
-  fs.mkdirSync(targetDir, { recursive: true, mode: 0o700 });
-  assertSafeExecApprovalsMigrationTarget(targetPath);
-  const dirStat = fs.lstatSync(targetDir);
-  if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
-    throw new Error(`Refusing to migrate exec approvals into unsafe directory: ${targetDir}`);
-  }
+  let snapshot: LegacySourceSnapshot;
   try {
-    fs.chmodSync(targetDir, 0o700);
-  } catch {
-    // best-effort on platforms without chmod
+    snapshot = await source.read();
+  } catch (error) {
+    return { changes: [], warnings: [`Failed reading legacy exec approvals: ${String(error)}`] };
   }
-  const tempPath = path.join(targetDir, `.exec-approvals.migration.${process.pid}.tmp`);
-  fs.writeFileSync(tempPath, raw, { encoding: "utf8", mode: 0o600, flag: "wx" });
-  try {
-    try {
-      fs.copyFileSync(tempPath, targetPath, fs.constants.COPYFILE_EXCL);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-        return false;
-      }
-      try {
-        fs.rmSync(targetPath, { force: true });
-      } catch {
-        // best-effort cleanup for an incomplete exclusive copy target
-      }
-      throw err;
-    }
-    try {
-      fs.chmodSync(targetPath, 0o600);
-    } catch {
-      // best-effort on platforms without chmod
-    }
-    return true;
-  } finally {
-    fs.rmSync(tempPath, { force: true });
-  }
-}
 
-function archiveMigratedExecApprovalsSource(sourcePath: string): string {
-  let archivePath = `${sourcePath}.migrated`;
-  if (fileExists(archivePath)) {
-    archivePath = `${archivePath}-${Date.now()}`;
-  }
-  fs.renameSync(sourcePath, archivePath);
-  return archivePath;
-}
-
-export function migrateLegacyExecApprovals(detected: LegacyExecApprovalsMigrationDetection): {
-  changes: string[];
-  warnings: string[];
-} {
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  if (!detected.hasLegacy) {
-    return { changes, warnings };
-  }
-  if (fileExists(detected.targetPath)) {
-    return { changes, warnings };
-  }
   try {
-    const sourceStat = fs.lstatSync(detected.sourcePath);
-    if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
-      warnings.push(
-        `Legacy exec approvals file is not a regular file; left in place at ${detected.sourcePath}`,
-      );
-      return { changes, warnings };
+    params.beforeVerify?.();
+    const current = await source.read();
+    if (!snapshotsMatch(current, snapshot)) {
+      throw new Error("legacy exec approvals changed after migration loaded them");
     }
-    try {
-      const targetStat = fs.lstatSync(detected.targetPath);
-      if (targetStat.isSymbolicLink()) {
-        warnings.push(
-          `Target exec approvals path is a symlink; skipped migration at ${detected.targetPath}`,
-        );
-        return { changes, warnings };
-      }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw err;
-      }
-    }
-    const prepared = prepareMigratedExecApprovalsFile({
-      raw: fs.readFileSync(detected.sourcePath, "utf8"),
-      sourcePath: detected.sourcePath,
-      targetPath: detected.targetPath,
+    await source.claim({
+      snapshot,
+      mismatchMessage: "legacy exec approvals changed before migration could claim them",
+      beforeClaim: params.beforeClaim,
     });
-    if (prepared.warning) {
-      warnings.push(prepared.warning);
-      return { changes, warnings };
-    }
-    if (!writeMigratedExecApprovalsFile(detected.targetPath, prepared.raw)) {
-      return { changes, warnings };
-    }
-    changes.push(`Migrated exec approvals → ${detected.targetPath}`);
-    try {
-      const archivePath = archiveMigratedExecApprovalsSource(detected.sourcePath);
-      changes.push(`Archived legacy exec approvals → ${archivePath}`);
-    } catch (err) {
-      warnings.push(
-        `Failed archiving legacy exec approvals at ${detected.sourcePath}: ${String(err)}`,
-      );
-    }
-  } catch (err) {
+  } catch (error) {
+    const restoreError = await source.restore();
+    return {
+      changes: [],
+      warnings: [
+        `Failed claiming legacy exec approvals: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
+      ],
+    };
+  }
+
+  let result: ReturnType<typeof decideAndRecordMigration>;
+  try {
+    result = decideAndRecordMigration({
+      env: params.env,
+      sourcePath,
+      snapshot,
+    });
+  } catch (error) {
+    const restoreError = await source.restore();
+    return {
+      changes: [],
+      warnings: [
+        `Failed migrating legacy exec approvals: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
+      ],
+    };
+  }
+
+  if (!result.removeSource) {
+    const restoreError = await source.restore();
+    return {
+      changes: [],
+      warnings: [
+        `${decisionMessage(result.decision, result.removeSource)}${restoreError ? ` Claim restore failed: ${restoreError}` : ""}`,
+      ],
+    };
+  }
+
+  try {
+    await source.remove({
+      removeSource: params.removeSource,
+      sourceReappearedMessage: "legacy exec approvals reappeared during migration cleanup",
+      remainingMessage: "legacy exec approvals remain after migration cleanup",
+    });
+  } catch (error) {
+    return {
+      changes: [],
+      warnings: [`Legacy exec approvals cleanup failed: ${String(error)}`],
+    };
+  }
+
+  const warnings: string[] = [];
+  try {
+    markLegacyMigrationSourceRemoved(
+      result.sourceKey,
+      params.env,
+      "state-migration.exec-approvals.receipt",
+    );
+  } catch (error) {
     warnings.push(
-      `Failed migrating exec approvals (${detected.sourcePath} → ${detected.targetPath}): ${String(
-        err,
-      )}`,
+      `Legacy exec approvals were removed, but their receipt could not be finalized: ${String(error)}`,
     );
   }
-  return { changes, warnings };
+  return {
+    changes: [decisionMessage(result.decision, result.removeSource)],
+    warnings,
+    notices: ["Removed retired exec approvals JSON after recording its migration decision."],
+  };
+}
+
+/** Import or retire the old file under exclusive state ownership. */
+export async function migrateLegacyExecApprovals(params: {
+  detected?: LegacyExecApprovalsDetection;
+  stateDir: string;
+  env?: NodeJS.ProcessEnv;
+  beforeClaim?: () => void;
+  beforeVerify?: () => void;
+  removeSource?: (sourcePath: string) => Promise<void> | void;
+}): Promise<MigrationMessages> {
+  const detected = params.detected;
+  if (!detected?.hasLegacy) {
+    return { changes: [], warnings: [] };
+  }
+  return await withLegacyMigrationStateLock({
+    stateDir: params.stateDir,
+    env: params.env,
+    label: "legacy exec approvals",
+    releaseLabel: "Exec approvals",
+    errorLabel: "Failed reading legacy exec approvals",
+    retryGuidance: "Stop the Gateway, then run `openclaw doctor --fix` again.",
+    run: async (env) => {
+      const stateRoot = await root(params.stateDir, {
+        hardlinks: "reject",
+        maxBytes: MAX_LEGACY_EXEC_APPROVALS_BYTES,
+        symlinks: "reject",
+      });
+      return await migrateWithExclusiveStateOwnership({
+        ...params,
+        detected,
+        env,
+        stateRoot,
+      });
+    },
+  });
 }

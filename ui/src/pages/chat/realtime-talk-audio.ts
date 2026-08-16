@@ -9,7 +9,7 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-export function base64ToBytes(value: string): Uint8Array {
+function base64ToBytes(value: string): Uint8Array {
   const binary = atob(value);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) {
@@ -24,6 +24,31 @@ export function floatToPcm16(samples: Float32Array): Uint8Array {
   for (let i = 0; i < samples.length; i += 1) {
     const clamped = Math.max(-1, Math.min(1, samples[i] ?? 0));
     view.setInt16(i * 2, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+  }
+  return bytes;
+}
+
+export function floatToG711Ulaw(samples: Float32Array): Uint8Array {
+  const bytes = new Uint8Array(samples.length);
+  for (let i = 0; i < samples.length; i += 1) {
+    const clamped = Math.max(-1, Math.min(1, samples[i] ?? 0));
+    const pcm16 = Math.round(clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff);
+    let sign = 0;
+    let magnitude = pcm16;
+    if (magnitude < 0) {
+      sign = 0x80;
+      magnitude = -magnitude;
+    }
+    magnitude = Math.min(magnitude, 32635) + 0x84;
+
+    let exponent = 7;
+    let mask = 0x4000;
+    while ((magnitude & mask) === 0 && exponent > 0) {
+      exponent -= 1;
+      mask >>= 1;
+    }
+    const mantissa = (magnitude >> (exponent + 3)) & 0x0f;
+    bytes[i] = ~(sign | (exponent << 4) | mantissa) & 0xff;
   }
   return bytes;
 }
@@ -135,8 +160,10 @@ export class RealtimeTalkMediaStreamMeter {
       analyser.fftSize = this.samples.length;
       analyser.smoothingTimeConstant = 0;
       source.connect(analyser);
-      this.publishCurrentLevel();
       this.timer = globalThis.setInterval(() => this.publishCurrentLevel(), 100);
+      // The initial level callback can synchronously stop its owning transport.
+      // Own the interval first so that reentrant cleanup cannot leave it behind.
+      this.publishCurrentLevel();
     } catch {
       // Metering is feedback only; capture must still work if Web Audio analysis
       // is unavailable in an otherwise functional WebRTC browser.
@@ -189,6 +216,16 @@ function pcm16ToFloat(bytes: Uint8Array): Float32Array {
   return samples;
 }
 
+export function estimateBase64DecodedByteLength(value: string): number {
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((value.length * 3) / 4) - padding);
+}
+
+const REALTIME_TALK_PCM_OUTPUT_MAX_QUEUED_SECONDS = 10;
+const REALTIME_TALK_PCM_OUTPUT_MAX_SOURCES = 320;
+
+type RealtimeTalkPcmOutputQueuePlayResult = "queued" | "ignored" | "overflow";
+
 export class RealtimeTalkPcmOutputQueue {
   private playhead = 0;
   private readonly sources = new Set<AudioBufferSourceNode>();
@@ -201,13 +238,34 @@ export class RealtimeTalkPcmOutputQueue {
     return this.sources.size > 0;
   }
 
-  play(base64: string, outputContext: AudioContext | null, outputSampleRateHz: number): void {
+  play(
+    base64: string,
+    outputContext: AudioContext | null,
+    outputSampleRateHz: number,
+  ): RealtimeTalkPcmOutputQueuePlayResult {
     if (!outputContext) {
-      return;
+      return "ignored";
+    }
+    const startAt = Math.max(outputContext.currentTime, this.playhead);
+    const queuedSeconds = Math.max(0, startAt - outputContext.currentTime);
+    const remainingSeconds = REALTIME_TALK_PCM_OUTPUT_MAX_QUEUED_SECONDS - queuedSeconds;
+    const decodedByteLength = estimateBase64DecodedByteLength(base64);
+    const sampleCount = Math.floor(decodedByteLength / 2);
+    if (
+      this.sources.size >= REALTIME_TALK_PCM_OUTPUT_MAX_SOURCES ||
+      remainingSeconds <= 0 ||
+      sampleCount / outputSampleRateHz > remainingSeconds
+    ) {
+      return "overflow";
     }
     const samples = pcm16ToFloat(base64ToBytes(base64));
     if (samples.length === 0) {
-      return;
+      return "ignored";
+    }
+    const duration = samples.length / outputSampleRateHz;
+    const nextPlayhead = startAt + duration;
+    if (nextPlayhead - outputContext.currentTime > REALTIME_TALK_PCM_OUTPUT_MAX_QUEUED_SECONDS) {
+      return "overflow";
     }
     const buffer = outputContext.createBuffer(1, samples.length, outputSampleRateHz);
     buffer.getChannelData(0).set(samples);
@@ -216,18 +274,21 @@ export class RealtimeTalkPcmOutputQueue {
     source.addEventListener("ended", () => this.sources.delete(source));
     source.buffer = buffer;
     source.connect(outputContext.destination);
-    const startAt = Math.max(outputContext.currentTime, this.playhead);
     source.start(startAt);
-    this.playhead = startAt + buffer.duration;
+    this.playhead = nextPlayhead;
+    return "queued";
   }
 
   stop(outputContext: AudioContext | null): void {
-    for (const source of this.sources) {
+    // Release ownership first so synchronous or late `ended` events from stopped
+    // sources cannot affect audio queued by a replacement playback turn.
+    const sources = [...this.sources];
+    this.sources.clear();
+    this.playhead = outputContext?.currentTime ?? 0;
+    for (const source of sources) {
       try {
         source.stop();
       } catch {}
     }
-    this.sources.clear();
-    this.playhead = outputContext?.currentTime ?? 0;
   }
 }

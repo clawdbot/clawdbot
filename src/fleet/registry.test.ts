@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -44,6 +45,17 @@ describe("fleet cell registry", () => {
       ...(requestedPort === undefined ? {} : { requestedPort }),
     };
   }
+
+  it("returns empty reads without creating state on a fresh install", () => {
+    if (!root) {
+      throw new Error("test root not initialized");
+    }
+    const databasePath = path.join(root, "state", "openclaw.sqlite");
+
+    expect(listFleetCells(env)).toEqual([]);
+    expect(getFleetCell(env, "missing")).toBeUndefined();
+    expect(fs.existsSync(databasePath)).toBe(false);
+  });
 
   it("persists, orders, updates, and deletes cells", () => {
     const zulu = reserveFleetCell(env, {

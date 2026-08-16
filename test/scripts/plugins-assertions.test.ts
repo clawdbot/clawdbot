@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -12,12 +13,14 @@ import {
 import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/plugins/assertions.mjs";
+const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
@@ -132,7 +135,7 @@ function waitForDead(pid: number, timeoutMs = 2_000): void {
     if (Date.now() - startedAt > timeoutMs) {
       throw new Error(`pid ${pid} is still alive`);
     }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
   }
 }
 
@@ -145,14 +148,16 @@ function runPluginsSweepShell(script: string, env: NodeJS.ProcessEnv = {}) {
 }
 
 async function waitForPortFile(portFile: string): Promise<number> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
     if (existsSync(portFile)) {
       const port = Number(readFileSync(portFile, "utf8"));
       if (Number.isInteger(port) && port > 0) {
         return port;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 5);
+    });
   }
   throw new Error(`timed out waiting for ${portFile}`);
 }
@@ -215,15 +220,6 @@ describe("plugins Docker assertions", () => {
     expect(bodyLimitResult.stderr).toContain(
       "invalid OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_BODY_MAX_BYTES: 1000bytes",
     );
-  });
-
-  it("passes ClawHub preflight body timeouts into the bounded reader", () => {
-    const script = readFileSync(ASSERTIONS_SCRIPT, "utf8");
-
-    expect(script).toContain("run(controller.signal, timeoutPromise)");
-    expect(
-      script.match(/readBoundedResponseText\([\s\S]*?limits\.bodyMaxBytes,\n\s+timeoutPromise,/gu),
-    ).toHaveLength(2);
   });
 
   it("keeps sweep artifact paths aligned with the assertion scratch root", () => {
@@ -299,6 +295,135 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
       rmSync(root, { force: true, recursive: true });
     }
   });
+
+  it.each(
+    (["capture", "logged"] as const).flatMap((mode) =>
+      [0, 23, 124].flatMap((status) =>
+        [false, true].map((traceEnabled) => ({ mode, status, traceEnabled })),
+      ),
+    ),
+  )(
+    "bounds $mode diagnostics with exit $status and lifecycle tracing $traceEnabled",
+    (testCase) => {
+      const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-sweep-diagnostics-"));
+      const outputFile = path.join(root, "plugins-git-inspect.json");
+      const capturedOutput = `DO_NOT_DUMP_CAPTURED_PLUGIN_OUTPUT\n${"x".repeat(32 * 1024)}\nCAPTURED_PLUGIN_OUTPUT_TAIL`;
+      const fixtureApiKey = ["sk", "proj", "plugin", "fixture", "secret"].join("-");
+      const punctuationApiKey = ["sess", "plugin", "punctuation", "secret"].join("-");
+      const startOfLineApiKey = ["rk", "plugin", "start", "secret"].join("-");
+      const boundarySecretSuffix = "PLUGIN_BOUNDARY_SECRET_SUFFIX_MUST_NOT_LEAK";
+      const boundaryApiKey = ["sk", "proj", "z".repeat(256), boundarySecretSuffix].join("-");
+      const capturedError = `DO_NOT_DUMP_PLUGIN_STDERR_PREFIX\n${"y".repeat(32 * 1024)}\n${startOfLineApiKey}\nPLUGIN_STDERR_TAIL_MARKER task-runner risk-score disk-space Authorization: Bearer plugin-fixture-bearer OPENAI_API_KEY=${fixtureApiKey} [${punctuationApiKey}]\n${boundaryApiKey}`;
+      const command =
+        testCase.mode === "capture"
+          ? 'run_plugins_openclaw_capture "$OUTPUT_FILE" plugins inspect demo-plugin --runtime --json'
+          : 'run_plugins_openclaw_logged install-git plugins install "git:file:///tmp/fixture@revision" --force';
+
+      try {
+        const unredactedTail = Buffer.from(`${capturedError}\n`, "utf8")
+          .subarray(-192)
+          .toString("utf8");
+        expect(unredactedTail).toContain(boundarySecretSuffix);
+        expect(unredactedTail).not.toContain(["sk", "proj"].join("-"));
+
+        const result = runPluginsSweepShell(
+          `
+set -euo pipefail
+export OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY=1
+export OPENCLAW_PLUGINS_TMP_DIR="$SCRATCH_ROOT"
+export OPENCLAW_PLUGINS_CLI_TIMEOUT=1s
+export OPENCLAW_ENTRY=fixture-entry
+source scripts/e2e/lib/plugins/sweep.sh
+umask 000
+openclaw_e2e_maybe_timeout() {
+  local raw_stderr_file
+  local raw_stderr_mode
+  for raw_stderr_file in "$SCRATCH_ROOT"/openclaw-plugin-stderr.*; do
+    [[ -f "$raw_stderr_file" ]] || return 86
+    if raw_stderr_mode="$(stat -f '%Lp' "$raw_stderr_file" 2>/dev/null)"; then
+      :
+    elif raw_stderr_mode="$(stat -c '%a' "$raw_stderr_file" 2>/dev/null)"; then
+      :
+    else
+      return 87
+    fi
+    [[ "$raw_stderr_mode" == "600" ]] || return 88
+  done
+  printf '%s\\n' "$CAPTURED_OUTPUT"
+  printf '%s\\n' "$CAPTURED_STDERR" >&2
+  if [[ "\${OPENCLAW_PLUGIN_LIFECYCLE_TRACE:-}" == "1" ]]; then
+    printf '%s\\n' '[plugins:lifecycle] shim' >&2
+  fi
+  return "$CAPTURE_STATUS"
+}
+${command}
+`,
+          {
+            CAPTURED_OUTPUT: capturedOutput,
+            CAPTURED_STDERR: capturedError,
+            CAPTURE_STATUS: String(testCase.status),
+            OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "192",
+            OPENCLAW_PLUGIN_LIFECYCLE_TRACE: testCase.traceEnabled ? "1" : "0",
+            OUTPUT_FILE: outputFile,
+            SCRATCH_ROOT: root,
+          },
+        );
+
+        expect(result.status).toBe(testCase.status);
+        expect(result.stdout).toBe("");
+        if (testCase.mode === "capture") {
+          expect(readFileSync(outputFile, "utf8")).toBe(`${capturedOutput}\n`);
+        }
+        expect(result.stderr.length).toBeLessThan(1_024);
+        expect(result.stderr).not.toContain("DO_NOT_DUMP_CAPTURED_PLUGIN_OUTPUT");
+        expect(result.stderr).not.toContain("CAPTURED_PLUGIN_OUTPUT_TAIL");
+        expect(result.stderr).not.toContain("DO_NOT_DUMP_PLUGIN_STDERR_PREFIX");
+        expect(result.stderr).not.toContain("plugin-fixture-bearer");
+        expect(result.stderr).not.toContain(fixtureApiKey);
+        expect(result.stderr).not.toContain(punctuationApiKey);
+        expect(result.stderr).not.toContain(startOfLineApiKey);
+        expect(result.stderr).not.toContain(boundarySecretSuffix);
+        expect(result.stderr).not.toContain(boundaryApiKey);
+        expect(
+          readdirSync(root).filter(
+            (name) => name.startsWith("openclaw-plugin-") || name.endsWith(".stderr.log"),
+          ),
+        ).toEqual([]);
+
+        const printsDiagnostics =
+          testCase.mode === "capture" || testCase.status !== 0 || testCase.traceEnabled;
+        if (printsDiagnostics) {
+          expect(result.stderr).toContain("truncated: showing last 192");
+          expect(result.stderr).toContain("PLUGIN_STDERR_TAIL_MARKER");
+          expect(result.stderr).toContain("task-runner");
+          expect(result.stderr).toContain("risk-score");
+          expect(result.stderr).toContain("disk-space");
+          expect(result.stderr).toContain("Authorization: Bearer [REDACTED]");
+          expect(result.stderr).toContain("OPENAI_API_KEY=[REDACTED]");
+          expect(result.stderr).toContain("[[REDACTED]]");
+          expect(result.stderr).toContain("[REDACTED]");
+        } else {
+          expect(result.stderr).toBe("");
+        }
+        if (testCase.traceEnabled) {
+          expect(result.stderr).toContain("[plugins:lifecycle]");
+        } else {
+          expect(result.stderr).not.toContain("[plugins:lifecycle]");
+        }
+        if (testCase.status !== 0) {
+          const label = testCase.mode === "capture" ? "plugins-git-inspect.json" : "install-git";
+          const noun = testCase.mode === "capture" ? "capture" : "command";
+          const detail =
+            testCase.status === 124
+              ? `timed out after 1s: ${label}`
+              : `failed with status ${testCase.status}: ${label}`;
+          expect(result.stderr).toContain(`Plugin sweep ${noun} ${detail}`);
+        }
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("scans plugin assertion logs without echoing whole files on failure", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-log-"));
@@ -556,8 +681,7 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
   });
 
   it("keeps npm fixture registry alive after malformed package paths", async () => {
-    const tempDirs: string[] = [];
-    const root = makeTempDir(tempDirs, "openclaw-plugin-npm-fixture-request-");
+    const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-request-");
     const portFile = path.join(root, "port");
     const tarballPath = path.join(root, "demo-plugin.tgz");
     writeFileSync(tarballPath, "fixture package archive", "utf8");
@@ -604,13 +728,11 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
           child.once("close", resolve);
         });
       }
-      cleanupTempDirs(tempDirs);
     }
   });
 
   it("serves tarball dependencies using the request-visible registry origin", async () => {
-    const tempDirs: string[] = [];
-    const root = makeTempDir(tempDirs, "openclaw-plugin-npm-fixture-package-");
+    const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-package-");
     const packageDir = path.join(root, "package");
     const portFile = path.join(root, "port");
     const tarballPath = path.join(root, "openclaw.tgz");
@@ -642,6 +764,10 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
       ],
       {
         cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OPENCLAW_NPM_REGISTRY_DIST_TAGS: "latest=0.0.0,beta=2026.7.1-beta.3",
+        },
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
@@ -654,6 +780,10 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
       const metadata = JSON.parse(response.body);
 
       expect(response.statusCode).toBe(200);
+      expect(metadata["dist-tags"]).toEqual({
+        latest: "0.0.0",
+        beta: "2026.7.1-beta.3",
+      });
       expect(metadata.versions["2026.7.1-beta.3"].dependencies).toEqual({
         "@openclaw/ai": "2026.7.1-beta.3",
         zod: "4.3.6",
@@ -671,13 +801,11 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
           child.once("close", resolve);
         });
       }
-      cleanupTempDirs(tempDirs);
     }
   });
 
   it("recomputes proxied content length after fetch decodes the response", async () => {
-    const tempDirs: string[] = [];
-    const root = makeTempDir(tempDirs, "openclaw-plugin-npm-fixture-proxy-");
+    const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-proxy-");
     const portFile = path.join(root, "port");
     const tarballPath = path.join(root, "demo-plugin.tgz");
     const upstreamBody = JSON.stringify({ payload: "x".repeat(1_000) });
@@ -736,13 +864,254 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
       await new Promise<void>((resolve) => {
         upstream.close(() => resolve());
       });
-      cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it("streams proxied npm tarballs without buffering a content length", async () => {
+    const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-tarball-proxy-");
+    const portFile = path.join(root, "port");
+    const tarballPath = path.join(root, "demo-plugin.tgz");
+    const upstreamBody = "x".repeat(1024 * 1024);
+    writeFileSync(tarballPath, "fixture package archive", "utf8");
+
+    const upstream = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/octet-stream" });
+      response.write(upstreamBody.slice(0, upstreamBody.length / 2));
+      response.end(upstreamBody.slice(upstreamBody.length / 2));
+    });
+    await new Promise<void>((resolve) => {
+      upstream.listen(0, "127.0.0.1", resolve);
+    });
+    const upstreamAddress = upstream.address();
+    if (!upstreamAddress || typeof upstreamAddress === "string") {
+      throw new Error("expected upstream registry address");
+    }
+
+    const child = spawn(
+      process.execPath,
+      [
+        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+        portFile,
+        "@openclaw/demo-plugin-npm",
+        "1.0.0",
+        tarballPath,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    try {
+      const port = await waitForPortFile(portFile);
+      const response = await requestFixtureRegistry(
+        port,
+        "/@openai/codex/-/codex-0.145.0-linux-arm64.tgz",
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.contentLength).toBeUndefined();
+      expect(response.body).toBe(upstreamBody);
+    } finally {
+      if (child.exitCode === null) {
+        child.kill();
+        await new Promise((resolve) => {
+          child.once("close", resolve);
+        });
+      }
+      await new Promise<void>((resolve) => {
+        upstream.close(() => resolve());
+      });
+    }
+  });
+
+  it("rejects oversized upstream bodies without stopping the fixture registry", async () => {
+    const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-proxy-limit-");
+    const portFile = path.join(root, "port");
+    const tarballPath = path.join(root, "demo-plugin.tgz");
+    writeFileSync(tarballPath, "fixture package archive", "utf8");
+
+    const upstream = createServer((_request, response) => {
+      response.writeHead(200, {
+        "content-length": String(64 * 1024 * 1024 + 1),
+        "content-type": "application/octet-stream",
+      });
+      response.end("oversized");
+    });
+    await new Promise<void>((resolve) => {
+      upstream.listen(0, "127.0.0.1", resolve);
+    });
+    const upstreamAddress = upstream.address();
+    if (!upstreamAddress || typeof upstreamAddress === "string") {
+      throw new Error("expected upstream registry address");
+    }
+
+    const child = spawn(
+      process.execPath,
+      [
+        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+        portFile,
+        "@openclaw/demo-plugin-npm",
+        "1.0.0",
+        tarballPath,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    const stderr = createBoundedChildOutput();
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr.append(chunk);
+    });
+
+    try {
+      const port = await waitForPortFile(portFile);
+      const oversized = await requestFixtureRegistry(port, "/oversized-package");
+
+      expect(oversized.statusCode, stderr.text()).toBe(502);
+      expect(oversized.body).toContain(
+        "npm registry upstream response body exceeded 67108864 bytes",
+      );
+
+      const local = await requestFixtureRegistry(port, "/@openclaw%2Fdemo-plugin-npm");
+
+      expect(local.statusCode, stderr.text()).toBe(200);
+      expect(child.exitCode, stderr.text()).toBeNull();
+    } finally {
+      if (child.exitCode === null) {
+        child.kill();
+        await new Promise((resolve) => {
+          child.once("close", resolve);
+        });
+      }
+      upstream.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        upstream.close(() => resolve());
+      });
+    }
+  });
+
+  it("times out stalled upstream response bodies without stopping the fixture registry", async () => {
+    const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-proxy-timeout-");
+    const portFile = path.join(root, "port");
+    const preloadPath = path.join(root, "shorten-abort-timeout.mjs");
+    const tarballPath = path.join(root, "demo-plugin.tgz");
+    let upstreamHits = 0;
+    writeFileSync(
+      preloadPath,
+      [
+        "const nativeFetch = globalThis.fetch;",
+        "let timeoutController;",
+        "let timeoutWatchdog;",
+        "AbortSignal.timeout = () => {",
+        "  timeoutController = new AbortController();",
+        "  timeoutWatchdog = setTimeout(() => process.exit(86), 5_000);",
+        "  timeoutWatchdog.unref();",
+        "  return timeoutController.signal;",
+        "};",
+        "globalThis.fetch = async (...args) => {",
+        "  const response = await nativeFetch(...args);",
+        "  let firstChunk = true;",
+        "  const body = response.body.pipeThrough(",
+        "    new TransformStream({",
+        "      transform(chunk, controller) {",
+        "        controller.enqueue(chunk);",
+        "        if (firstChunk) {",
+        "          firstChunk = false;",
+        "          clearTimeout(timeoutWatchdog);",
+        '          queueMicrotask(() => timeoutController.abort(new DOMException("timeout", "TimeoutError")));',
+        "        }",
+        "      },",
+        "    }),",
+        "  );",
+        "  return new Response(body, response);",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    writeFileSync(tarballPath, "fixture package archive", "utf8");
+
+    const upstream = createServer((_request, response) => {
+      upstreamHits += 1;
+      response.writeHead(200, {
+        "content-length": "1024",
+        "content-type": "application/json",
+      });
+      response.write('{"partial":');
+    });
+    await new Promise<void>((resolve) => {
+      upstream.listen(0, "127.0.0.1", resolve);
+    });
+    const upstreamAddress = upstream.address();
+    if (!upstreamAddress || typeof upstreamAddress === "string") {
+      throw new Error("expected upstream registry address");
+    }
+
+    const child = spawn(
+      process.execPath,
+      [
+        "--import",
+        pathToFileURL(preloadPath).href,
+        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+        portFile,
+        "@openclaw/demo-plugin-npm",
+        "1.0.0",
+        tarballPath,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    const stderr = createBoundedChildOutput();
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      stderr.append(chunk);
+    });
+
+    try {
+      const port = await waitForPortFile(portFile);
+      const stalled = await requestFixtureRegistry(port, "/stalled-package");
+
+      expect(stalled.statusCode, stderr.text()).toBe(502);
+      expect(stalled.body).toContain("upstream registry request failed");
+      expect(upstreamHits).toBe(1);
+
+      const local = await requestFixtureRegistry(port, "/@openclaw%2Fdemo-plugin-npm");
+
+      expect(local.statusCode, stderr.text()).toBe(200);
+      expect(child.exitCode, stderr.text()).toBeNull();
+    } finally {
+      if (child.exitCode === null) {
+        child.kill();
+        await new Promise((resolve) => {
+          child.once("close", resolve);
+        });
+      }
+      upstream.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        upstream.close(() => resolve());
+      });
     }
   });
 
   it("does not let absolute-form request targets escape the configured upstream", async () => {
-    const tempDirs: string[] = [];
-    const root = makeTempDir(tempDirs, "openclaw-plugin-npm-fixture-proxy-origin-");
+    const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-proxy-origin-");
     const portFile = path.join(root, "port");
     const tarballPath = path.join(root, "demo-plugin.tgz");
     let configuredUpstreamHits = 0;
@@ -833,7 +1202,6 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
           escapeServer.close(() => resolve());
         }),
       ]);
-      cleanupTempDirs(tempDirs);
     }
   });
 
@@ -1173,8 +1541,7 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
   });
 
   it("rejects ClawHub install paths that resolve outside the managed extensions root", () => {
-    const tempDirs: string[] = [];
-    const root = makeTempDir(tempDirs, "openclaw-plugins-clawhub-path-");
+    const root = autoCleanupTempDirs.make("openclaw-plugins-clawhub-path-");
     const home = path.join(root, "home");
     const scratchRoot = path.join(root, "scratch");
     const extensionsRoot = path.join(home, ".openclaw", "extensions");
@@ -1182,43 +1549,39 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
     mkdirSync(extensionsRoot, { recursive: true });
     mkdirSync(escapedInstallPath, { recursive: true });
 
-    try {
-      writeJson(path.join(scratchRoot, "plugins-clawhub-installed.json"), {
-        plugins: [{ id: "openclaw-kitchen-sink-fixture", status: "loaded" }],
-      });
-      writeJson(path.join(scratchRoot, "plugins-clawhub-inspect.json"), {
-        plugin: { id: "openclaw-kitchen-sink-fixture" },
-      });
-      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
-        installRecords: {
-          "openclaw-kitchen-sink-fixture": {
-            artifactFormat: "zip",
-            artifactKind: "legacy-zip",
-            clawhubFamily: "code-plugin",
-            clawhubPackage: "@openclaw/kitchen-sink",
-            installPath: escapedInstallPath,
-            source: "clawhub",
-            spec: "clawhub:@openclaw/kitchen-sink",
-          },
+    writeJson(path.join(scratchRoot, "plugins-clawhub-installed.json"), {
+      plugins: [{ id: "openclaw-kitchen-sink-fixture", status: "loaded" }],
+    });
+    writeJson(path.join(scratchRoot, "plugins-clawhub-inspect.json"), {
+      plugin: { id: "openclaw-kitchen-sink-fixture" },
+    });
+    writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
+      installRecords: {
+        "openclaw-kitchen-sink-fixture": {
+          artifactFormat: "zip",
+          artifactKind: "legacy-zip",
+          clawhubFamily: "code-plugin",
+          clawhubPackage: "@openclaw/kitchen-sink",
+          installPath: escapedInstallPath,
+          source: "clawhub",
+          spec: "clawhub:@openclaw/kitchen-sink",
         },
-      });
+      },
+    });
 
-      const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "clawhub-installed"], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
-          CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
-          HOME: home,
-          OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
-        },
-      });
+    const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "clawhub-installed"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
+        CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
+        HOME: home,
+        OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
+      },
+    });
 
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("ClawHub install path resolved outside");
-    } finally {
-      cleanupTempDirs(tempDirs);
-    }
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("ClawHub install path resolved outside");
   });
 
   it("times out stalled ClawHub package metadata requests", async () => {

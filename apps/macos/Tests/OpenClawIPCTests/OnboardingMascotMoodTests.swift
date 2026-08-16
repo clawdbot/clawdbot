@@ -8,22 +8,27 @@ struct OnboardingMascotMoodTests {
         OnboardingView.mascotMood(for: snapshot)
     }
 
+    private func accessory(_ page: OnboardingView.MascotPage) -> OpenClawMascotAccessory {
+        OnboardingView.mascotAccessory(for: page)
+    }
+
     @Test func `welcome page idles`() {
         #expect(self.mood(.init(page: .welcome)) == .idle)
     }
 
     @Test func `connection page follows probe`() {
+        let input = RemoteGatewayProbeInput(transport: .direct, target: "wss://gateway.test", token: "")
         #expect(self.mood(.init(page: .connection)) == .curious)
-        #expect(self.mood(.init(page: .connection, remoteProbeState: .checking)) == .thinking)
-        #expect(self.mood(.init(page: .connection, remoteProbeState: .failed("no route"))) == .sad)
+        #expect(self.mood(.init(page: .connection, remoteProbeState: .checking(input))) == .thinking)
+        #expect(self.mood(.init(page: .connection, remoteProbeState: .failed(input, "no route"))) == .sad)
         #expect(self.mood(.init(
             page: .connection,
-            remoteProbeState: .ok(RemoteGatewayProbeSuccess(authSource: nil)))) == .happy)
+            remoteProbeState: .ok(input, RemoteGatewayProbeSuccess(authSource: nil)))) == .happy)
     }
 
     @Test func `cli page tracks install lifecycle`() {
-        #expect(self.mood(.init(page: .cli, installingCLI: true)) == .thinking)
-        #expect(self.mood(.init(page: .cli)) == .thinking, "status probe still deciding")
+        #expect(self.mood(.init(page: .cli, installingCLI: true)) == .working)
+        #expect(self.mood(.init(page: .cli)) == .working, "status probe still deciding")
         #expect(self.mood(.init(page: .cli, cliStatusKnown: true)) == .sad, "install failed")
         #expect(self.mood(.init(page: .cli, cliInstalled: true, cliStatusKnown: true)) == .happy)
     }
@@ -38,17 +43,19 @@ struct OnboardingMascotMoodTests {
             "a live connection outranks stale failures")
     }
 
-    @Test func `permissions page warms up when everything is granted`() {
-        #expect(self.mood(.init(page: .permissions)) == .curious)
-        #expect(self.mood(.init(page: .permissions, allPermissionsGranted: true)) == .happy)
-    }
-
-    @Test func `chat and ready pages`() {
-        #expect(self.mood(.init(page: .chat)) == .attentive)
+    @Test func `ready page celebrates`() {
         #expect(self.mood(.init(page: .ready)) == .celebrating)
     }
 
     @Test func `fresh AI setup model does not look failed`() {
         #expect(!OnboardingView.aiSetupLooksFailed(OnboardingAISetupModel()))
+    }
+
+    @Test func `only the ready page wears a graduation cap`() {
+        #expect(self.accessory(.ready) == .gradCap)
+        #expect(self.accessory(.welcome) == .none)
+        #expect(self.accessory(.connection) == .none)
+        #expect(self.accessory(.cli) == .none)
+        #expect(self.accessory(.ai) == .none)
     }
 }

@@ -7,7 +7,7 @@ export type ExecutableResolver = (
   extraCandidates?: readonly string[],
 ) => string | null;
 
-export function createCachedExecutableResolver(
+function createCachedExecutableResolver(
   isExecutable: (candidate: string) => boolean = (candidate) => {
     try {
       fs.accessSync(candidate, fs.constants.X_OK);

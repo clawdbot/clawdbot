@@ -80,17 +80,85 @@ private func withPickerStore(_ body: (ChatModelPickerStore, UserDefaults) throws
         let sections = ChatModelPickerStore.sections(
             choices: choices,
             favorites: ["c/three", "missing/model", "a/one"],
-            recents: ["a/one", "d/four", "missing/recent"])
+            recents: ["a/one", "d/four", "missing/recent"],
+            defaultProvider: "b")
 
         #expect(sections.pinned.map(\.selectionID) == ["c/three", "a/one"])
         #expect(sections.recent.map(\.selectionID) == ["d/four"])
-        #expect(sections.remaining.map(\.selectionID) == ["b/two"])
+        #expect(sections.providers.flatMap(\.models).map(\.selectionID) == ["b/two"])
+        #expect(sections.providers.map(\.id) == ["b"])
+        #expect(sections.providers.first?.isDefaultProvider == true)
     }
 
     @Test func `ordering handles empty inputs`() {
         let sections = ChatModelPickerStore.sections(choices: [], favorites: [], recents: [])
         #expect(sections.pinned.isEmpty)
         #expect(sections.recent.isEmpty)
-        #expect(sections.remaining.isEmpty)
+        #expect(sections.providers.flatMap(\.models).isEmpty)
+    }
+
+    @Test func `missing default provider does not mark other as default`() {
+        let unqualified = OpenClawChatModelChoice(
+            modelID: "local-model",
+            name: "Local",
+            provider: "",
+            contextWindow: nil)
+        let sections = ChatModelPickerStore.sections(choices: [unqualified], favorites: [], recents: [])
+
+        #expect(sections.providers.map(\.id) == ["other"])
+        #expect(sections.providers.first?.isDefaultProvider == false)
+    }
+
+    @Test func `remaining models group by provider with default provider first`() {
+        let choices = [
+            pickerModel("xai/grok"),
+            pickerModel("openai/gpt"),
+            pickerModel("anthropic/opus"),
+            pickerModel("openai/o3"),
+        ]
+        let sections = ChatModelPickerStore.sections(
+            choices: choices,
+            favorites: [],
+            recents: [],
+            defaultProvider: "openai")
+
+        #expect(sections.providers.map(\.id) == ["openai", "anthropic", "xai"])
+        #expect(sections.providers[0].models.map(\.selectionID) == ["openai/gpt", "openai/o3"])
+        #expect(sections.providers.map(\.displayName) == ["OpenAI", "Anthropic", "xAI"])
+    }
+
+    @Test func `qualified global default matches provider model pair`() {
+        let model = pickerModel("openai/gpt")
+        let qualifiedModelID = OpenClawChatModelChoice(
+            modelID: "openai/gpt",
+            name: "GPT",
+            provider: "openai",
+            contextWindow: nil)
+
+        #expect(ChatModelPickerStore.isDefaultModel(
+            model,
+            defaultProvider: nil,
+            defaultModel: "openai/gpt"))
+        #expect(ChatModelPickerStore.isDefaultModel(
+            model,
+            defaultProvider: "openai",
+            defaultModel: "gpt"))
+        #expect(!ChatModelPickerStore.isDefaultModel(
+            model,
+            defaultProvider: "anthropic",
+            defaultModel: "gpt"))
+        #expect(ChatModelPickerStore.isDefaultModel(
+            qualifiedModelID,
+            defaultProvider: "openai",
+            defaultModel: "gpt"))
+    }
+
+    @Test func `qualified default model supplies missing default provider`() {
+        #expect(ChatModelPickerStore.resolvedDefaultProvider(
+            provider: nil,
+            model: "openai/gpt") == "openai")
+        #expect(ChatModelPickerStore.resolvedDefaultProvider(
+            provider: "anthropic",
+            model: "openai/gpt") == "anthropic")
     }
 }

@@ -53,7 +53,9 @@ function decodeHtmlEntities(text: string): string {
 }
 
 function stripHtml(html: string): string {
-  return html
+  // DuckDuckGo match highlights can occur inside words, so remove them without adding whitespace.
+  const withoutMatchHighlights = html.replace(/<\/?b\b[^>]*>/gi, "");
+  return withoutMatchHighlights
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -124,6 +126,7 @@ export async function runDuckDuckGoSearch(params: {
   safeSearch?: DdgSafeSearch;
   timeoutSeconds?: number;
   cacheTtlMinutes?: number;
+  signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
   const count = resolveSearchCount(params.count, DEFAULT_SEARCH_COUNT);
   const region = params.region ?? resolveDdgRegion(params.config);
@@ -161,6 +164,7 @@ export async function runDuckDuckGoSearch(params: {
     {
       url: url.toString(),
       timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "GET",
         headers: {
@@ -185,6 +189,7 @@ export async function runDuckDuckGoSearch(params: {
     },
   );
 
+  params.signal?.throwIfAborted();
   const payload = {
     query: params.query,
     provider: "duckduckgo",
@@ -207,12 +212,3 @@ export async function runDuckDuckGoSearch(params: {
   writeCache(DDG_SEARCH_CACHE, cacheKey, payload, cacheTtlMs);
   return payload;
 }
-
-export const testing = {
-  decodeDuckDuckGoUrl,
-  decodeHtmlEntities,
-  isBotChallenge,
-  parseDuckDuckGoHtml,
-  readDuckDuckGoHtmlResponse,
-};
-export { testing as __testing };

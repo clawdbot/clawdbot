@@ -1,22 +1,34 @@
 // Anthropic OAuth tests cover token exchange and refresh behavior.
-import { get } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { anthropicOAuthProvider, refreshAnthropicToken, testing } from "./anthropic.js";
+
+const startOAuthLoopbackCallbackServer = vi.hoisted(() =>
+  vi.fn<
+    typeof import("../../../infra/oauth-loopback-callback.js").startOAuthLoopbackCallbackServer
+  >(),
+);
+
+vi.mock("../../../infra/oauth-loopback-callback.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../infra/oauth-loopback-callback.js")>();
+  startOAuthLoopbackCallbackServer.mockImplementation(actual.startOAuthLoopbackCallbackServer);
+  return { ...actual, startOAuthLoopbackCallbackServer };
+});
+
+import { anthropicOAuthProvider } from "./anthropic.js";
+
+const ANTHROPIC_REDIRECT_URI = "http://localhost:53692/callback";
+
+async function refreshThroughAnthropicProvider(refreshToken: string) {
+  return await anthropicOAuthProvider.refreshToken({
+    access: "expired-access-token",
+    refresh: refreshToken,
+    expires: 0,
+  });
+}
 
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
-
-async function getLocalCallback(url: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const request = get(url, (response) => {
-      response.resume();
-      response.once("end", resolve);
-    });
-    request.once("error", reject);
-  });
-}
 
 describe("Anthropic OAuth token responses", () => {
   it("cancels provider login before opening the OAuth flow", async () => {
@@ -35,6 +47,11 @@ describe("Anthropic OAuth token responses", () => {
   it("does not open the OAuth flow after cancellation during setup", async () => {
     const controller = new AbortController();
     const onAuth = vi.fn();
+    const close = vi.fn(async () => undefined);
+    startOAuthLoopbackCallbackServer.mockResolvedValueOnce({
+      waitForCallback: vi.fn(),
+      close,
+    });
     const loginPromise = anthropicOAuthProvider.login({
       onAuth,
       onPrompt: vi.fn(async () => "unused-code"),
@@ -45,6 +62,7 @@ describe("Anthropic OAuth token responses", () => {
 
     await expect(loginPromise).rejects.toThrow("Login cancelled");
     expect(onAuth).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it("does not echo token payload values when refresh JSON parsing fails", async () => {
@@ -58,12 +76,12 @@ describe("Anthropic OAuth token responses", () => {
       ),
     );
 
-    await expect(refreshAnthropicToken("old-refresh-token")).rejects.toThrow(
+    await expect(refreshThroughAnthropicProvider("old-refresh-token")).rejects.toThrow(
       "Anthropic token refresh returned invalid JSON.",
     );
 
     try {
-      await refreshAnthropicToken("old-refresh-token");
+      await refreshThroughAnthropicProvider("old-refresh-token");
       throw new Error("Expected refresh to fail");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -87,7 +105,7 @@ describe("Anthropic OAuth token responses", () => {
       ),
     );
 
-    await expect(refreshAnthropicToken("old-refresh-token")).rejects.toThrow(
+    await expect(refreshThroughAnthropicProvider("old-refresh-token")).rejects.toThrow(
       "Anthropic token refresh returned invalid token fields.",
     );
   });
@@ -108,7 +126,7 @@ describe("Anthropic OAuth token responses", () => {
       vi.fn(async () => new Response(oversizedStream, { status: 200 })),
     );
 
-    await expect(refreshAnthropicToken("old-refresh-token")).rejects.toThrow("too large");
+    await expect(refreshThroughAnthropicProvider("old-refresh-token")).rejects.toThrow("too large");
 
     expect(pullCount).toBeLessThanOrEqual(2);
     expect(cancel).toHaveBeenCalledOnce();
@@ -116,38 +134,33 @@ describe("Anthropic OAuth token responses", () => {
 });
 
 describe("Anthropic OAuth callback host", () => {
-  it("rejects non-loopback callback bind hosts", () => {
-    expect(() => testing.resolveCallbackHost({ OPENCLAW_OAUTH_CALLBACK_HOST: "0.0.0.0" })).toThrow(
-      "Anthropic OAuth callback host must be localhost, 127.0.0.1, or ::1",
-    );
-  });
-
-  it("defaults the bind host to IPv4 loopback", () => {
-    expect(testing.resolveCallbackHost({})).toBe("127.0.0.1");
-  });
-
-  it.each(["localhost", "127.0.0.1", "::1"])("accepts loopback bind host %s", (host) => {
-    expect(testing.resolveCallbackHost({ OPENCLAW_OAUTH_CALLBACK_HOST: host })).toBe(host);
-    expect(testing.redirectUri).toBe("http://localhost:53692/callback");
-  });
-
-  it("defers callback-host validation until login resolves the bind host", () => {
+  it("rejects non-loopback callback bind hosts", async () => {
     vi.stubEnv("OPENCLAW_OAUTH_CALLBACK_HOST", "0.0.0.0");
-    expect(() => testing.resolveCallbackHost()).toThrow(
-      "Anthropic OAuth callback host must be localhost, 127.0.0.1, or ::1",
-    );
-    vi.unstubAllEnvs();
-    expect(() => testing.resolveCallbackHost()).not.toThrow();
+
+    await expect(
+      anthropicOAuthProvider.login({
+        onAuth: vi.fn(),
+        onPrompt: vi.fn(async () => "unused-code"),
+      }),
+    ).rejects.toThrow("Anthropic OAuth callback host must be localhost, 127.0.0.1, or ::1");
   });
 
   it("binds IPv4 loopback while keeping Anthropic's registered localhost redirect", async () => {
     vi.stubEnv("OPENCLAW_OAUTH_CALLBACK_HOST", "127.0.0.1");
+    startOAuthLoopbackCallbackServer.mockImplementationOnce(async (params) => ({
+      waitForCallback: async () => ({
+        type: "authorization_code" as const,
+        code: "authorization-code",
+        state: params.expectedState,
+      }),
+      close: async () => undefined,
+    }));
     const tokenExchange = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       if (typeof init?.body !== "string") {
         throw new Error("token exchange did not send a JSON string body");
       }
       const body = JSON.parse(init.body) as { redirect_uri?: string };
-      expect(body.redirect_uri).toBe(testing.redirectUri);
+      expect(body.redirect_uri).toBe(ANTHROPIC_REDIRECT_URI);
       return new Response(
         JSON.stringify({
           access_token: "access-token",
@@ -157,30 +170,40 @@ describe("Anthropic OAuth callback host", () => {
       );
     });
     vi.stubGlobal("fetch", tokenExchange);
-    let callback: Promise<void> | undefined;
 
     const credentials = await anthropicOAuthProvider.login({
       onAuth: ({ url }) => {
         const authorizationUrl = new URL(url);
-        expect(authorizationUrl.searchParams.get("redirect_uri")).toBe(testing.redirectUri);
-        const state = authorizationUrl.searchParams.get("state");
-        if (!state) {
-          throw new Error("authorization URL did not include OAuth state");
-        }
-        callback = getLocalCallback(
-          `http://127.0.0.1:53692/callback?code=authorization-code&state=${state}`,
-        );
+        expect(authorizationUrl.searchParams.get("redirect_uri")).toBe(ANTHROPIC_REDIRECT_URI);
+        expect(authorizationUrl.searchParams.get("state")).toBeTruthy();
       },
       onPrompt: async () => {
         throw new Error("callback server did not receive the authorization code");
       },
     });
 
-    if (!callback) {
-      throw new Error("authorization callback request was not started");
-    }
-    await callback;
+    expect(startOAuthLoopbackCallbackServer).toHaveBeenCalledWith(
+      expect.objectContaining({ redirectUrl: ANTHROPIC_REDIRECT_URI, bindHostname: "127.0.0.1" }),
+    );
     expect(credentials).toMatchObject({ access: "access-token", refresh: "refresh-token" });
     expect(tokenExchange).toHaveBeenCalledOnce();
+  });
+
+  it("settles an OAuth error callback immediately", async () => {
+    vi.stubEnv("OPENCLAW_OAUTH_CALLBACK_HOST", "127.0.0.1");
+    startOAuthLoopbackCallbackServer.mockResolvedValueOnce({
+      waitForCallback: async () => ({ type: "oauth_error", error: "access_denied" }),
+      close: async () => undefined,
+    });
+    const login = anthropicOAuthProvider.login({
+      onAuth: ({ url }) => {
+        expect(new URL(url).searchParams.get("state")).toBeTruthy();
+      },
+      onPrompt: async () => {
+        throw new Error("error callback did not settle the listener");
+      },
+    });
+
+    await expect(login).rejects.toThrow("Anthropic OAuth error: access_denied");
   });
 });

@@ -545,10 +545,10 @@ describe("buildAuthChoiceOptions", () => {
 
     expect(groups.map((group) => group.label)).toEqual([
       "OpenAI",
-      "Anthropic",
+      "OpenRouter",
       "xAI (Grok)",
       "Google",
-      "OpenRouter",
+      "Anthropic",
       "BytePlus",
       "Custom Provider",
       "LiteLLM",
@@ -556,10 +556,10 @@ describe("buildAuthChoiceOptions", () => {
     ]);
     expect(groups.filter(isFeaturedAuthChoiceGroup).map((group) => group.label)).toEqual([
       "OpenAI",
-      "Anthropic",
+      "OpenRouter",
       "xAI (Grok)",
       "Google",
-      "OpenRouter",
+      "Anthropic",
     ]);
   });
 

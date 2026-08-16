@@ -1,5 +1,5 @@
 {"seq":1,"at":0,"dir":"in","kind":"reply-start"}
-{"seq":2,"at":0,"dir":"out","kind":"assistant.threads.setStatus","data":{"payload":{"channel_id":"C0TRACE","loading_messages":["Reading the thread...","Checking context...","Working through the request...","Putting it all together..."],"status":"is typing...","thread_ts":"ts#1"},"result":{"ok":true},"target":"C0TRACE/ts#1"}}
+{"seq":2,"at":0,"dir":"out","kind":"assistant.threads.setStatus","data":{"payload":{"channel_id":"C0TRACE","status":"is typing...","thread_ts":"ts#1"},"result":{"ok":true},"target":"C0TRACE/ts#1"}}
 {"seq":3,"at":0,"dir":"in","kind":"partial","data":{"text":"Compiling the changelog"}}
 {"seq":4,"at":0,"dir":"out","kind":"chat.postMessage","data":{"payload":{"channel":"C0TRACE","text":"Compiling the changelog","thread_ts":"ts#1","unfurl_links":false},"result":{"ts":"ts#2"},"target":"C0TRACE"}}
 {"seq":5,"at":300,"dir":"in","kind":"partial","data":{"text":"Compiling the changelog for 2026.1.0."}}

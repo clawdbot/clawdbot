@@ -12,10 +12,12 @@ const loadModelCatalog = vi.hoisted(() => vi.fn());
 const modelCatalogMocks = vi.hoisted(() => ({
   routeVariants: undefined as unknown[] | undefined,
 }));
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalogSnapshot: async (...args: unknown[]) => {
+vi.mock("../agents/prepared-model-runtime.js", () => ({
+  publishPreparedModelRuntimeSnapshot: async (...args: unknown[]) => {
     const entries = await loadModelCatalog(...args);
-    return { entries, routeVariants: modelCatalogMocks.routeVariants ?? entries };
+    return {
+      modelCatalog: { entries, routeVariants: modelCatalogMocks.routeVariants ?? entries },
+    };
   },
 }));
 
@@ -41,8 +43,7 @@ vi.mock("../agents/openai-model-routes.js", async (importOriginal) => {
 });
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ version: 1, profiles: {} })));
-vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/auth-profiles.js")>()),
+vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore,
 }));
 
@@ -66,7 +67,7 @@ describe("warnIfModelConfigLooksOff", () => {
       },
     } as OpenClawConfig;
 
-    await warnIfModelConfigLooksOff(config, prompter, { validateCatalog: false });
+    await warnIfModelConfigLooksOff(config, prompter, { env: {}, validateCatalog: false });
 
     expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(ensureAuthProfileStore).toHaveBeenCalledOnce();
@@ -94,6 +95,62 @@ describe("warnIfModelConfigLooksOff", () => {
       status: "missing",
       hasAuth: false,
     });
+  });
+
+  it("accepts pending auth profiles collected by the current setup transaction", async () => {
+    const config = {
+      agents: { defaults: { model: "anthropic/claude-sonnet-4-6" } },
+    } as OpenClawConfig;
+    const pendingAuthProfiles = [
+      {
+        profileId: "anthropic:default",
+        credential: {
+          type: "api_key" as const,
+          provider: "anthropic",
+          key: "test-anthropic-key",
+        },
+      },
+    ];
+    const note = vi.fn(async () => {});
+
+    expect(resolveDefaultModelAuthStatus(config, { env: {}, pendingAuthProfiles })).toMatchObject({
+      status: "ready",
+      hasAuth: true,
+    });
+    await warnIfModelConfigLooksOff(config, makePrompter({ note }), {
+      env: {},
+      pendingAuthProfiles,
+      validateCatalog: false,
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("does not use pending auth profiles from a different provider", async () => {
+    const config = {
+      agents: { defaults: { model: "anthropic/claude-sonnet-4-6" } },
+    } as OpenClawConfig;
+    const note = vi.fn(async () => {});
+
+    await warnIfModelConfigLooksOff(config, makePrompter({ note }), {
+      env: {},
+      pendingAuthProfiles: [
+        {
+          profileId: "openai:default",
+          credential: {
+            type: "api_key",
+            provider: "openai",
+            key: "test-openai-key",
+          },
+        },
+      ],
+      validateCatalog: false,
+    });
+
+    expect(note).toHaveBeenCalledWith(
+      'No auth configured for provider "anthropic". The agent may fail until credentials are added. Run `openclaw models auth login --provider anthropic`, `openclaw configure`, or set an API key env var.',
+      "Model check",
+    );
   });
 
   it("accepts Codex OAuth profiles for canonical OpenAI models using the Codex runtime", async () => {
@@ -182,10 +239,41 @@ describe("warnIfModelConfigLooksOff", () => {
 
     await warnIfModelConfigLooksOff(config, prompter);
 
-    expect(loadModelCatalog).toHaveBeenCalledWith({
-      config,
-      useCache: false,
+    expect(loadModelCatalog).toHaveBeenCalledWith(expect.objectContaining({ config }), {
+      force: true,
+      provenance: "explicit",
     });
+  });
+
+  it("publishes validation catalogs for the selected agent", async () => {
+    const prompter = makePrompter({ note: vi.fn(async () => {}) });
+    const config = {
+      agents: {
+        defaults: { model: "openai/gpt-5.5" },
+        list: [
+          {
+            id: "worker",
+            workspace: "/tmp/openclaw-worker-workspace",
+            model: "openai/gpt-5.5",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    await warnIfModelConfigLooksOff(config, prompter, {
+      agentId: "worker",
+      agentDir: "/tmp/openclaw-worker-agent",
+    });
+
+    expect(loadModelCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        agentId: "worker",
+        agentDir: "/tmp/openclaw-worker-agent",
+        workspaceDir: "/tmp/openclaw-worker-workspace",
+      }),
+      { force: true, provenance: "explicit" },
+    );
   });
 
   it("accepts subscription auth but not key sources for gpt-5.3-codex-spark", async () => {

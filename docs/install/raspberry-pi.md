@@ -66,9 +66,9 @@ Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi. Since the Pi is 
 
   </Step>
 
-  <Step title="Install Node.js 24">
+  <Step title="Install Node.js 26">
     ```bash
-    curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+    curl -fsSL https://deb.nodesource.com/setup_26.x | sudo -E bash -
     sudo apt install -y nodejs
     node --version
     ```
@@ -203,7 +203,12 @@ These survive reboots and benefit from SSD over SD card for both performance and
 
 ```bash
 openclaw backup create
+openclaw backup restore <archive.tar.gz> --target <fresh-directory>
 ```
+
+Restore verifies and extracts into a fresh staging directory; activation is a
+separate offline step. See [Restore a full archive](/install/backups#restore-a-full-archive)
+for the rollback warnings and activation sequence.
 
 ## Troubleshooting
 

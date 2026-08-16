@@ -35,7 +35,7 @@ openclaw gateway restart
     openclaw onboard --auth-choice deepseek-api-key
     ```
 
-    Prompts for your API key and sets `deepseek/deepseek-v4-flash` as the default model.
+    Prompts for your API key and sets `deepseek/deepseek-v4-pro` as the default model.
 
   </Step>
   <Step title="Verify models are available">
@@ -76,18 +76,15 @@ available to that process (for example, in `~/.openclaw/.env` or via
 
 ## Built-in catalog
 
-| Model ref                    | Name              | Input | Context   | Max output | Notes                                               |
-| ---------------------------- | ----------------- | ----- | --------- | ---------- | --------------------------------------------------- |
-| `deepseek/deepseek-v4-flash` | DeepSeek V4 Flash | text  | 1,000,000 | 384,000    | Default model; V4 thinking-capable surface          |
-| `deepseek/deepseek-v4-pro`   | DeepSeek V4 Pro   | text  | 1,000,000 | 384,000    | V4 thinking-capable surface                         |
-| `deepseek/deepseek-chat`     | DeepSeek Chat     | text  | 1,000,000 | 384,000    | Deprecated V4 Flash non-thinking compatibility name |
-| `deepseek/deepseek-reasoner` | DeepSeek Reasoner | text  | 1,000,000 | 384,000    | Deprecated V4 Flash thinking compatibility name     |
+| Model ref                    | Name              | Input | Context   | Max output | Notes                            |
+| ---------------------------- | ----------------- | ----- | --------- | ---------- | -------------------------------- |
+| `deepseek/deepseek-v4-flash` | DeepSeek V4 Flash | text  | 1,000,000 | 384,000    | Fast V4 thinking-capable surface |
+| `deepseek/deepseek-v4-pro`   | DeepSeek V4 Pro   | text  | 1,000,000 | 384,000    | Default; strongest V4 model      |
 
 <Warning>
-DeepSeek will retire `deepseek-chat` and `deepseek-reasoner` on July 24, 2026
-at 15:59 UTC. They currently route to DeepSeek V4 Flash in non-thinking and
-thinking mode, respectively. Move configured model refs to
-`deepseek/deepseek-v4-flash` or `deepseek/deepseek-v4-pro` before the cutoff.
+DeepSeek retired `deepseek-chat` and `deepseek-reasoner` on July 24, 2026 at
+15:59 UTC. Those model IDs are no longer accessible. Move configured model refs
+to `deepseek/deepseek-v4-flash` or `deepseek/deepseek-v4-pro`.
 </Warning>
 
 OpenClaw's local cost estimates follow DeepSeek's published cache-hit,
@@ -117,9 +114,9 @@ When thinking is disabled (including the UI **None** selection), OpenClaw
 sends `thinking: { type: "disabled" }` and strips replayed `reasoning_content`
 from outgoing history, keeping the session on the non-thinking DeepSeek path.
 
-Use `deepseek/deepseek-v4-flash` for the default fast path. Use
-`deepseek/deepseek-v4-pro` for the stronger model when you can accept higher
-cost or latency.
+Fresh onboarding selects the stronger `deepseek/deepseek-v4-pro` model. Use
+`deepseek/deepseek-v4-flash` when lower cost or latency matters more than
+maximum capability.
 
 ## Live testing
 
@@ -138,10 +135,10 @@ preserve the replay payload DeepSeek requires.
 
 ```json5
 {
-  env: { DEEPSEEK_API_KEY: "sk-..." },
+  env: { vars: { DEEPSEEK_API_KEY: "sk-..." } },
   agents: {
     defaults: {
-      model: { primary: "deepseek/deepseek-v4-flash" },
+      model: { primary: "deepseek/deepseek-v4-pro" },
     },
   },
 }

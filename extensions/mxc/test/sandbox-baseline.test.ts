@@ -68,11 +68,53 @@ describe("effective filesystem policy", () => {
     ]);
   });
 
+  test("ignores blank Windows env paths when deriving readonly directories", () => {
+    expect(
+      resolveBaselineReadonlyPaths({
+        SystemRoot: " ",
+        WINDIR: "D:\\Windows",
+        ProgramFiles: "",
+        ProgramW6432: "D:\\Program Files",
+        "ProgramFiles(x86)": "   ",
+      }),
+    ).toEqual([
+      "D:\\Program Files",
+      "C:\\Program Files (x86)",
+      "D:\\Windows\\System32",
+      "D:\\Windows\\SysWOW64",
+    ]);
+  });
+
+  test("uses deterministic readonly fallbacks when Windows env paths are blank", () => {
+    expect(
+      resolveBaselineReadonlyPaths({
+        SystemRoot: "",
+        WINDIR: "  ",
+        ProgramFiles: " ",
+        ProgramW6432: "",
+        "ProgramFiles(x86)": "\t",
+      }),
+    ).toEqual([
+      "C:\\Program Files",
+      "C:\\Program Files (x86)",
+      "C:\\Windows\\System32",
+      "C:\\Windows\\SysWOW64",
+    ]);
+  });
+
   test("prefers the configured Windows temp directory", () => {
     expect(resolveSandboxTempDir({ TEMP: "C:\\Temp" })).toBe("C:\\Temp");
   });
 
   test("uses Windows temp when TEMP and TMP are absent", () => {
     expect(resolveSandboxTempDir({})).toBe("C:\\Windows\\Temp");
+  });
+
+  test("ignores a blank TEMP value when TMP is available", () => {
+    expect(resolveSandboxTempDir({ TEMP: "  ", TMP: "D:\\Temp" })).toBe("D:\\Temp");
+  });
+
+  test("uses Windows temp when TEMP and TMP are blank", () => {
+    expect(resolveSandboxTempDir({ TEMP: "", TMP: "\t" })).toBe("C:\\Windows\\Temp");
   });
 });

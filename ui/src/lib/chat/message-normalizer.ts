@@ -3,8 +3,12 @@
  */
 
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
+import { asRecord as asMessageRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
-import { extractCanvasShortcodes } from "../../../../src/chat/canvas-render.js";
+import {
+  extractCanvasShortcodes,
+  isCanvasBoardWidgetName,
+} from "../../../../src/chat/canvas-render.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -14,6 +18,28 @@ import { splitMediaFromOutput } from "../../../../src/media/parse.js";
 import { parseInlineDirectives } from "../../../../src/utils/directive-tags.js";
 import { getMediaFileExtension } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
+import { formatSenderLabel, normalizeSenderIdentity } from "./sender-label.ts";
+
+// Older gateways baked sender labels as "name (<profile uuid>)" into transcript
+// text. The UUID is machine noise in a human label but it is also the row's
+// only author key, so split it into display + identity instead of discarding.
+const OPAQUE_ID_LABEL_SUFFIX_RE =
+  /\s+\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)$/iu;
+const OPAQUE_ID_LABEL_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+function splitOpaqueIdLabel(label: string): { display: string; id: string } | null {
+  // A nameless legacy sender labels as the bare UUID; keep it as the
+  // last-resort display while still attributing the row to that profile.
+  if (OPAQUE_ID_LABEL_RE.test(label)) {
+    return { display: label, id: label };
+  }
+  const match = OPAQUE_ID_LABEL_SUFFIX_RE.exec(label);
+  if (!match?.[1]) {
+    return null;
+  }
+  const display = label.slice(0, match.index).trim();
+  return display ? { display, id: match[1] } : null;
+}
 
 export function normalizeRoleForGrouping(role: string): string {
   const lower = role.toLowerCase();
@@ -38,13 +64,15 @@ export function normalizeRoleForGrouping(role: string): string {
 }
 
 export function isToolResultMessage(message: unknown): boolean {
-  const m = message as Record<string, unknown>;
+  // Malformed transcript entries coerce to an empty record so property reads
+  // degrade to role "unknown" instead of crashing the event handler.
+  const m = asMessageRecord(message);
   const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
   return role === "toolresult" || role === "tool_result";
 }
 
 export function isStandaloneToolMessageForDisplay(message: unknown): boolean {
-  const m = message as Record<string, unknown>;
+  const m = asMessageRecord(message);
   const role = typeof m.role === "string" ? normalizeRoleForGrouping(m.role) : "unknown";
   return (
     role === "tool" ||
@@ -74,10 +102,10 @@ function coerceCanvasPreview(
 ):
   | Extract<NonNullable<NormalizedMessage["content"][number]>, { type: "canvas" }>["preview"]
   | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return null;
   }
-  const preview = value as Record<string, unknown>;
+  const preview = value;
   if (preview.kind !== "canvas" || preview.surface === "tool_card") {
     return null;
   }
@@ -85,10 +113,10 @@ function coerceCanvasPreview(
   if (!render) {
     return null;
   }
-  const mcpApp =
-    preview.mcpApp && typeof preview.mcpApp === "object" && !Array.isArray(preview.mcpApp)
-      ? (preview.mcpApp as Record<string, unknown>)
-      : undefined;
+  const mcpApp = isRecord(preview.mcpApp) ? preview.mcpApp : undefined;
+  const boardWidgetName = isCanvasBoardWidgetName(preview.boardWidgetName)
+    ? preview.boardWidgetName
+    : undefined;
   return {
     kind: "canvas",
     surface: "assistant_message",
@@ -104,6 +132,7 @@ function coerceCanvasPreview(
     ...(preview.sandbox === "strict" || preview.sandbox === "scripts"
       ? { sandbox: preview.sandbox }
       : {}),
+    ...(boardWidgetName ? { boardWidgetName } : {}),
     ...(typeof mcpApp?.viewId === "string" && mcpApp.viewId.trim()
       ? {
           mcpApp: {
@@ -114,6 +143,9 @@ function coerceCanvasPreview(
               ? { uiResourceUri: mcpApp.uiResourceUri }
               : {}),
             ...(typeof mcpApp.toolCallId === "string" ? { toolCallId: mcpApp.toolCallId } : {}),
+            ...(typeof mcpApp.originSessionKey === "string"
+              ? { originSessionKey: mcpApp.originSessionKey }
+              : {}),
           },
         }
       : {}),
@@ -182,12 +214,16 @@ function mimeTypeFromUrl(url: string): string | undefined {
 }
 
 function inferAttachmentKind(url: string): {
-  kind: "image" | "audio" | "video" | "document";
+  kind: Extract<MessageContentItem, { type: "attachment" }>["attachment"]["kind"];
   mimeType?: string;
   label: string;
 } {
   const mimeType = mimeTypeFromUrl(url);
-  const kind = mediaKindFromMime(mimeType) ?? "document";
+  const inferredKind = mediaKindFromMime(mimeType);
+  const kind =
+    !inferredKind || inferredKind === "sticker" || inferredKind === "unknown"
+      ? "document"
+      : inferredKind;
   const label = (() => {
     try {
       if (/^https?:\/\//i.test(url)) {
@@ -209,10 +245,10 @@ function coerceAudioContentBlock(
     return null;
   }
   const source = item.source;
-  if (!source || typeof source !== "object" || Array.isArray(source)) {
+  if (!isRecord(source)) {
     return null;
   }
-  const sourceRecord = source as Record<string, unknown>;
+  const sourceRecord = source;
   const mediaType =
     typeof sourceRecord.media_type === "string" &&
     sourceRecord.media_type.trim().toLowerCase().startsWith("audio/")
@@ -252,6 +288,52 @@ function coerceAudioContentBlock(
     };
   }
   return null;
+}
+
+function coerceManagedMediaContentBlock(
+  item: Record<string, unknown>,
+): Extract<MessageContentItem, { type: "attachment" }> | null {
+  if ((item.type !== "audio" && item.type !== "video") || typeof item.url !== "string") {
+    return null;
+  }
+  const url = item.url.trim();
+  if (!url) {
+    return null;
+  }
+  const kind = item.type;
+  const fallbackLabel = kind === "audio" ? "Audio" : "Video";
+  const label =
+    typeof item.fileName === "string" && item.fileName.trim()
+      ? item.fileName.trim()
+      : typeof item.label === "string" && item.label.trim()
+        ? item.label.trim()
+        : fallbackLabel;
+  return {
+    type: "attachment",
+    attachment: {
+      url,
+      kind,
+      label,
+      ...(typeof item.mimeType === "string" ? { mimeType: item.mimeType } : {}),
+      ...(typeof item.artifactId === "string" ? { artifactId: item.artifactId } : {}),
+      ...(kind === "audio" && item.isVoiceNote === true ? { isVoiceNote: true } : {}),
+      ...(item.playback === "native" || item.playback === "transcode"
+        ? { playback: item.playback }
+        : {}),
+      ...(typeof item.sizeBytes === "number" && item.sizeBytes >= 0
+        ? { sizeBytes: item.sizeBytes }
+        : {}),
+      ...(typeof item.durationMs === "number" && item.durationMs >= 0
+        ? { durationMs: item.durationMs }
+        : {}),
+      ...(kind === "video" && typeof item.width === "number" && item.width > 0
+        ? { width: item.width }
+        : {}),
+      ...(kind === "video" && typeof item.height === "number" && item.height > 0
+        ? { height: item.height }
+        : {}),
+    },
+  };
 }
 
 function mergeAdjacentTextItems(items: MessageContentItem[]): MessageContentItem[] {
@@ -326,7 +408,8 @@ function expandTextContent(text: string): {
       replyTarget = { kind: "current" };
     }
     if (directives.text) {
-      parts.push({ type: "text", text: directives.text });
+      const normalizedText = directives.text + (segment.text.endsWith("\n") ? "\n" : "");
+      parts.push({ type: "text", text: normalizedText });
     }
   }
   for (const preview of extracted.previews) {
@@ -362,7 +445,7 @@ function expandTextContent(text: string): {
  * Normalize a raw message object into a consistent structure.
  */
 export function normalizeMessage(message: unknown): NormalizedMessage {
-  const m = message as Record<string, unknown>;
+  const m = asMessageRecord(message);
   let role = typeof m.role === "string" ? m.role : "unknown";
 
   // Detect tool messages by common gateway shapes.
@@ -374,13 +457,11 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     typeof m.tool_use_id === "string";
 
   const contentRaw = m.content;
-  const contentItems = Array.isArray(contentRaw) ? contentRaw : null;
+  const contentItems = Array.isArray(contentRaw) ? contentRaw.filter(isRecord) : null;
   const hasToolContent =
-    Array.isArray(contentItems) &&
-    contentItems.some((item) => {
-      const x = item as Record<string, unknown>;
-      return isToolResultContentType(x.type) || isToolCallContentType(x.type);
-    });
+    contentItems?.some(
+      (item) => isToolResultContentType(item.type) || isToolCallContentType(item.type),
+    ) ?? false;
 
   const hasToolName = typeof m.toolName === "string" || typeof m.tool_name === "string";
 
@@ -403,9 +484,13 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     } else {
       content = [{ type: "text", text: m.content }];
     }
-  } else if (Array.isArray(m.content)) {
-    content = m.content.flatMap((item: Record<string, unknown>) => {
+  } else if (contentItems) {
+    content = contentItems.flatMap((item) => {
       if (isAssistantMessage) {
+        const managedMediaAttachment = coerceManagedMediaContentBlock(item);
+        if (managedMediaAttachment) {
+          return [managedMediaAttachment];
+        }
         const audioAttachment = coerceAudioContentBlock(item);
         if (audioAttachment) {
           return [audioAttachment];
@@ -413,18 +498,19 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       } else if (item.type === "audio") {
         return [];
       }
-      if (
-        item.type === "attachment" &&
-        item.attachment &&
-        typeof item.attachment === "object" &&
-        !Array.isArray(item.attachment)
-      ) {
+      if (item.type === "attachment" && isRecord(item.attachment)) {
         const attachment = item.attachment as {
           url?: unknown;
           kind?: unknown;
           label?: unknown;
           mimeType?: unknown;
           isVoiceNote?: unknown;
+          artifactId?: unknown;
+          playback?: unknown;
+          sizeBytes?: unknown;
+          durationMs?: unknown;
+          width?: unknown;
+          height?: unknown;
         };
         if (
           typeof attachment.url !== "string" ||
@@ -445,16 +531,29 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
               label: attachment.label,
               ...(typeof attachment.mimeType === "string" ? { mimeType: attachment.mimeType } : {}),
               ...(attachment.isVoiceNote === true ? { isVoiceNote: true } : {}),
+              ...(typeof attachment.artifactId === "string"
+                ? { artifactId: attachment.artifactId }
+                : {}),
+              ...(attachment.playback === "native" || attachment.playback === "transcode"
+                ? { playback: attachment.playback }
+                : {}),
+              ...(typeof attachment.sizeBytes === "number" && attachment.sizeBytes >= 0
+                ? { sizeBytes: attachment.sizeBytes }
+                : {}),
+              ...(typeof attachment.durationMs === "number" && attachment.durationMs >= 0
+                ? { durationMs: attachment.durationMs }
+                : {}),
+              ...(typeof attachment.width === "number" && attachment.width > 0
+                ? { width: attachment.width }
+                : {}),
+              ...(typeof attachment.height === "number" && attachment.height > 0
+                ? { height: attachment.height }
+                : {}),
             },
           },
         ];
       }
-      if (
-        item.type === "canvas" &&
-        item.preview &&
-        typeof item.preview === "object" &&
-        !Array.isArray(item.preview)
-      ) {
+      if (item.type === "canvas" && isRecord(item.preview)) {
         const preview = coerceCanvasPreview(item.preview);
         if (!preview) {
           return [];
@@ -513,8 +612,45 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 
   const timestamp = typeof m.timestamp === "number" ? m.timestamp : Date.now();
   const id = typeof m.id === "string" ? m.id : undefined;
-  const senderLabel =
-    typeof m.senderLabel === "string" && m.senderLabel.trim() ? m.senderLabel.trim() : null;
+  const rawOpenClawMeta = m["__openclaw"];
+  const openClawMeta = isRecord(rawOpenClawMeta) ? rawOpenClawMeta : undefined;
+  const structuredReplyToId =
+    typeof openClawMeta?.replyToId === "string" ? openClawMeta.replyToId.trim() : "";
+  if (structuredReplyToId) {
+    replyTarget = { kind: "id", id: structuredReplyToId };
+  }
+  const rawReplyPreview = openClawMeta?.replyToPreview;
+  const replyPreviewRecord = isRecord(rawReplyPreview) ? rawReplyPreview : undefined;
+  const replyPreviewText =
+    typeof replyPreviewRecord?.text === "string" ? replyPreviewRecord.text.trim() : "";
+  const replyPreviewSender =
+    typeof replyPreviewRecord?.senderLabel === "string"
+      ? replyPreviewRecord.senderLabel.trim()
+      : "";
+  const metaSender = normalizeSenderIdentity({
+    id: openClawMeta?.senderId,
+    name: openClawMeta?.senderName,
+    username: openClawMeta?.senderUsername,
+    profileAvatarUrl: openClawMeta?.senderProfileAvatarUrl,
+  });
+  const rawLabel = typeof m.senderLabel === "string" ? m.senderLabel.trim() : "";
+  const legacyLabelIdentity = rawLabel ? splitOpaqueIdLabel(rawLabel) : null;
+  const senderLabel = rawLabel
+    ? (legacyLabelIdentity?.display ?? rawLabel)
+    : formatSenderLabel(metaSender);
+  // Legacy transcripts baked the author's profile UUID only into the label.
+  // Keep it as structured (non-display) identity so the avatar gutter resolves
+  // the actual author instead of falling back to the local viewer.
+  const sender =
+    metaSender ??
+    (legacyLabelIdentity
+      ? normalizeSenderIdentity({
+          id: legacyLabelIdentity.id,
+          ...(legacyLabelIdentity.display !== legacyLabelIdentity.id
+            ? { name: legacyLabelIdentity.display }
+            : {}),
+        })
+      : null);
 
   content = stripMessageDisplayMetadata(content);
 
@@ -524,7 +660,16 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     timestamp,
     id,
     senderLabel,
+    ...(sender ? { sender } : {}),
     ...(audioAsVoice ? { audioAsVoice: true } : {}),
+    ...(replyPreviewText
+      ? {
+          replyPreview: {
+            text: replyPreviewText,
+            ...(replyPreviewSender ? { senderLabel: replyPreviewSender } : {}),
+          },
+        }
+      : {}),
     ...(replyTarget ? { replyTarget } : {}),
   };
 }

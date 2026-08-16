@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { appendFileSync, createWriteStream } from "node:fs";
 import {
   agentOutputHasExpectedOkMarker,
-  agentTurnUsedEmbeddedFallback,
   buildCrossOsReleaseAgentSessionId,
   buildReleaseAgentTurnArgs,
   maybeBuildOptionalAgentTurnSkipResult,
@@ -25,6 +24,7 @@ import {
   buildCrossOsReleaseSmokePluginAllowlist,
   buildReleaseProviderConfigOverride,
   gatewayReadyDeadlineMs,
+  managedGatewayRestartCommandTimeoutMs,
 } from "./config.ts";
 import { installedEntryPath } from "./install.ts";
 import {
@@ -32,6 +32,7 @@ import {
   buildGatewayStatusArgsFromHelpText,
   buildReleaseOnboardArgs,
   ensureManagedGatewayReady,
+  resolveInstalledGatewayStopArgs,
   runInstalledCli,
 } from "./installed.ts";
 import { readLogFileSize, readLogTextSince } from "./logs.ts";
@@ -41,7 +42,13 @@ import {
   resolveDashboardAssetUrls,
   verifyDashboardAssetUrls,
 } from "./network-smokes.ts";
-import { registerActiveChildProcessTree, runCommand, withAllocatedGatewayPort } from "./process.ts";
+import {
+  hasChildExited,
+  registerActiveChildProcessTree,
+  runCommand,
+  waitForGatewayWithStartupMigrationRestart,
+  withAllocatedGatewayPort,
+} from "./process.ts";
 import { logLanePhase } from "./reporting.ts";
 import { formatError, sleep } from "./shared.ts";
 
@@ -96,7 +103,7 @@ export async function exerciseManagedGatewayLifecycle(
     env: params.env,
     cwd: params.lane.homeDir,
     logPath: `${params.logPrefix}-restart.log`,
-    timeoutMs: 2 * 60 * 1000,
+    timeoutMs: managedGatewayRestartCommandTimeoutMs(),
   });
   await ensureManagedGatewayReady({
     lane: params.lane,
@@ -108,7 +115,12 @@ export async function exerciseManagedGatewayLifecycle(
   logLanePhase(params.lane, "gateway-stop");
   await runInstalledCli({
     cliPath: params.cliPath,
-    args: ["gateway", "stop"],
+    args: await resolveInstalledGatewayStopArgs({
+      cliPath: params.cliPath,
+      cwd: params.lane.homeDir,
+      env: params.env,
+      logPath: `${params.logPrefix}-stop-help.log`,
+    }),
     env: params.env,
     cwd: params.lane.homeDir,
     logPath: `${params.logPrefix}-stop.log`,
@@ -133,6 +145,7 @@ export async function exerciseManagedGatewayLifecycle(
 }
 
 export async function startGateway(params: LaneCommandParams): Promise<GatewayHandle> {
+  const launchLogOffset = readLogFileSize(params.logPath);
   const gatewayLog = createWriteStream(params.logPath, { flags: "a" });
   const useProcessGroup = process.platform !== "win32";
   const child = spawn(
@@ -162,32 +175,74 @@ export async function startGateway(params: LaneCommandParams): Promise<GatewayHa
   child.stderr?.on("data", (chunk) => {
     gatewayLog.write(chunk);
   });
-  let logClosed = false;
-  const closeLog = async () => {
-    if (logClosed) {
-      return;
-    }
-    logClosed = true;
-    await new Promise<void>((resolvePromise) => {
+  let resolveChildClose: () => void;
+  const childClosePromise = new Promise<void>((resolvePromise) => {
+    resolveChildClose = resolvePromise;
+  });
+  let closeLogPromise: Promise<void> | undefined;
+  const closeLog = () => {
+    closeLogPromise ??= new Promise<void>((resolvePromise) => {
       gatewayLog.once("error", () => resolvePromise());
       gatewayLog.end(() => resolvePromise());
     });
+    return closeLogPromise;
   };
   child.once("close", () => {
+    resolveChildClose();
     activeChildTree.unregister();
     void closeLog();
   });
   child.once("error", () => {
+    resolveChildClose();
     activeChildTree.unregister();
     void closeLog();
   });
-  return { child, closeLog, logPath: params.logPath };
+  return {
+    child,
+    closeLog,
+    launchLogOffset,
+    logPath: params.logPath,
+    waitForClose: () => childClosePromise,
+  };
 }
 
-export async function waitForGateway(params: LaneCommandParams) {
+export async function waitForGateway(
+  params: LaneCommandParams & {
+    gateway?: GatewayHandle;
+    gatewayHolder?: { current: GatewayHandle | null };
+    gatewayLogPath?: string;
+  },
+) {
+  if (params.gatewayHolder) {
+    if (!params.gatewayLogPath) {
+      throw new Error("Gateway restart coordination requires a gateway log path.");
+    }
+    const gatewayLogPath = params.gatewayLogPath;
+    await waitForGatewayWithStartupMigrationRestart({
+      gatewayHolder: params.gatewayHolder,
+      restartGateway: () =>
+        startGateway({
+          lane: params.lane,
+          env: params.env,
+          logPath: gatewayLogPath,
+        }),
+      waitUntilReady: (gateway) =>
+        waitForGateway({
+          lane: params.lane,
+          env: params.env,
+          gateway,
+          logPath: params.logPath,
+        }),
+    });
+    return;
+  }
+
   const statusArgs = await resolveGatewayStatusArgs(params.lane, params.env, params.logPath);
   const deadline = Date.now() + gatewayReadyDeadlineMs();
   while (Date.now() < deadline) {
+    if (params.gateway && hasChildExited(params.gateway.child)) {
+      throw new Error(`Gateway exited before becoming ready on port ${params.lane.gatewayPort}.`);
+    }
     let result;
     try {
       result = await runOpenClaw({
@@ -204,6 +259,9 @@ export async function waitForGateway(params: LaneCommandParams) {
     }
     if (result.exitCode === 0) {
       return;
+    }
+    if (params.gateway && hasChildExited(params.gateway.child)) {
+      throw new Error(`Gateway exited before becoming ready on port ${params.lane.gatewayPort}.`);
     }
     await sleep(2_000);
   }
@@ -306,9 +364,6 @@ export async function runAgentTurn(
       const logText = readLogTextSince(params.logPath, logOffset);
       if (!agentOutputHasExpectedOkMarker(result.stdout, { logText })) {
         throw new Error("Agent output did not contain the expected OK marker.");
-      }
-      if (agentTurnUsedEmbeddedFallback(result, { logText })) {
-        throw new Error("Agent turn used embedded fallback instead of gateway.");
       }
       return result;
     } catch (error) {

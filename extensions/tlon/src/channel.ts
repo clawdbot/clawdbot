@@ -11,11 +11,14 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import {
+  chunkTextForOutbound,
+  sanitizeAssistantVisibleText,
+} from "openclaw/plugin-sdk/text-chunking";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { tlonDoctor } from "./doctor.js";
 import { resolveTlonOutboundSessionRoute } from "./session-route.js";
-import { createTlonSetupWizardBase, tlonSetupAdapter } from "./setup-core.js";
+import { createTlonSetupWizardBase, tlonSetupContract } from "./setup-core.js";
 import {
   formatTargetHint,
   normalizeShip,
@@ -64,6 +67,8 @@ const tlonConfigAdapter = createHybridChannelConfigAdapter({
 
 const tlonChannelOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
+  chunker: chunkTextForOutbound,
+  chunkerMode: "markdown",
   textChunkLimit: 10000,
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   resolveTarget: ({ to }) => resolveTlonOutboundTarget(to),
@@ -107,7 +112,7 @@ export const tlonPlugin = createChatChannelPlugin({
       reply: true,
       threads: true,
     },
-    setup: tlonSetupAdapter,
+    setupContract: tlonSetupContract,
     setupWizard: tlonSetupWizardProxy,
     reload: { configPrefixes: ["channels.tlon"] },
     configSchema: tlonChannelConfigSchema,
@@ -136,6 +141,10 @@ export const tlonPlugin = createChatChannelPlugin({
           return parsed.ship;
         }
         return parsed.nest;
+      },
+      inferTargetChatType: ({ to }) => {
+        const target = parseTlonTarget(to);
+        return target ? (target.kind === "dm" ? "direct" : "group") : undefined;
       },
       targetResolver: {
         looksLikeId: (target) => Boolean(parseTlonTarget(target)),
@@ -169,11 +178,11 @@ export const tlonPlugin = createChatChannelPlugin({
           url: s.url ?? null,
         };
       },
-      probeAccount: async ({ account }) => {
+      probeAccount: async ({ account, timeoutMs }) => {
         if (!account.configured || !account.ship || !account.url || !account.code) {
           return { ok: false, error: "Not configured" };
         }
-        return await (await loadTlonChannelRuntime()).probeTlonAccount(account as never);
+        return await (await loadTlonChannelRuntime()).probeTlonAccount(account as never, timeoutMs);
       },
       resolveAccountSnapshot: ({ account }) => ({
         accountId: account.accountId,

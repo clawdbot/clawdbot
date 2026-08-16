@@ -10,16 +10,17 @@ import {
 import { buildTelegramRichMarkdown, type TelegramInputRichMessage } from "./rich-message.js";
 
 type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0];
+type MockSentMessage = { message_id: number; message_thread_id?: number };
 type MockSendMessage = (
   chatId: string | number,
   text: string,
   params?: Record<string, unknown>,
-) => Promise<{ message_id: number }>;
+) => Promise<MockSentMessage>;
 type MockSendRichMessage = (params: {
   rich_message?: TelegramInputRichMessage;
-}) => Promise<{ message_id: number }>;
+}) => Promise<MockSentMessage>;
 
-function createMockDraftApi(sendMessageImpl?: () => Promise<{ message_id: number }>) {
+function createMockDraftApi(sendMessageImpl?: () => Promise<MockSentMessage>) {
   const resolveSend = sendMessageImpl ?? (async () => ({ message_id: 17 }));
   const sendRichMessage = vi.fn<MockSendRichMessage>(async () => await resolveSend());
   const editRichMessageText = vi.fn().mockResolvedValue(true);
@@ -40,7 +41,7 @@ function createForumDraftStream(api: ReturnType<typeof createMockDraftApi>) {
 
 function createThreadedDraftStream(
   api: ReturnType<typeof createMockDraftApi>,
-  thread: { id: number; scope: "forum" | "dm" },
+  thread: { id: number; scope: "direct-messages" | "dm" | "forum" },
 ) {
   return createDraftStream(api, { thread });
 }
@@ -121,6 +122,110 @@ function createForceNewMessageHarness(params: { throttleMs?: number } = {}) {
 }
 
 describe("createTelegramDraftStream", () => {
+  it("materializes only the newest lazy partial in a throttle window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const api = createMockDraftApi();
+      const stream = createDraftStream(api, { throttleMs: 250 });
+      let materializeCount = 0;
+
+      for (let index = 1; index <= 24; index += 1) {
+        stream.updateLazy(() => {
+          materializeCount += 1;
+          return `partial ${index}`;
+        });
+      }
+
+      expect(materializeCount).toBe(0);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(materializeCount).toBe(1);
+      expectPreviewSend(api, "partial 24");
+
+      vi.setSystemTime(500);
+      stream.updateLazy(() => {
+        materializeCount += 1;
+        return undefined;
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(materializeCount).toBe(2);
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+      expect(api.editMessageText).not.toHaveBeenCalled();
+
+      stream.updateLazy(() => {
+        materializeCount += 1;
+        return "visible after empty";
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(materializeCount).toBe(3);
+      expectPreviewEdit(api, "visible after empty");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports the provider response after the first preview becomes durable", async () => {
+    const api = createMockDraftApi(async () => ({ message_id: 101, message_thread_id: 99 }));
+    const onProviderMessage = vi.fn();
+    const observedStream = createDraftStream(api, {
+      thread: { id: 99, scope: "forum" },
+      onProviderMessage,
+    });
+
+    observedStream.update("A provider-observed preview response");
+    await observedStream.flush();
+
+    expect(onProviderMessage).not.toHaveBeenCalled();
+    await observedStream.stop();
+
+    expect(onProviderMessage).toHaveBeenCalledTimes(1);
+    expect(onProviderMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ message_id: 101, message_thread_id: 99 }),
+    );
+  });
+
+  it("stops before another preview when accepted-message validation fails", async () => {
+    const api = createMockDraftApi(async () => ({ message_id: 101, message_thread_id: 7 }));
+    const validationError = new Error("provider topic mismatch");
+    const validateProviderMessage = vi.fn(async () => {
+      throw validationError;
+    });
+    const stream = createDraftStream(api, { validateProviderMessage });
+
+    stream.update("First preview");
+    await expect(stream.waitForInFlight()).rejects.toBe(validationError);
+    stream.update("Second preview");
+    await expect(stream.flush()).rejects.toBe(validationError);
+
+    expect(validateProviderMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("stops accepting updates before awaiting durable provider observation", async () => {
+    let resolveObservation: (() => void) | undefined;
+    const observation = new Promise<void>((resolve) => {
+      resolveObservation = resolve;
+    });
+    const api = createMockDraftApi();
+    const onProviderMessage = vi.fn(() => observation);
+    const stream = createDraftStream(api, { onProviderMessage });
+
+    stream.update("Durable preview");
+    await stream.flush();
+    const stopPromise = stream.stop();
+    await vi.waitFor(() => expect(onProviderMessage).toHaveBeenCalledTimes(1));
+
+    stream.update("Late update");
+    resolveObservation?.();
+    await stopPromise;
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
   it("sends stream preview message with message_thread_id when provided", async () => {
     const api = createMockDraftApi();
     const stream = createForumDraftStream(api);
@@ -172,7 +277,7 @@ describe("createTelegramDraftStream", () => {
     await vi.waitFor(() => expectPreviewSend(api, "Hello"));
   });
 
-  it("uses text send/edit for dm thread previews", async () => {
+  it("uses message_thread_id for bot-private topic previews", async () => {
     const api = createMockDraftApi();
     const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
 
@@ -186,9 +291,28 @@ describe("createTelegramDraftStream", () => {
     expectPreviewEdit(api, "Hello again");
   });
 
-  it.each(["forum", "dm"] as const)(
-    "does not retry %s message preview sends without the topic id",
-    async (scope) => {
+  it("uses direct_messages_topic_id only for channel Direct Messages previews", async () => {
+    const api = createMockDraftApi();
+    const stream = createThreadedDraftStream(api, { id: 77, scope: "direct-messages" });
+
+    stream.update("Hello");
+    await vi.waitFor(() => expectPreviewSend(api, "Hello", { direct_messages_topic_id: 77 }));
+    expect(api.editMessageText).not.toHaveBeenCalled();
+
+    stream.update("Hello again");
+    await stream.flush();
+
+    expectPreviewEdit(api, "Hello again");
+    expect(api.editMessageText.mock.calls[0]?.[3]).toBeUndefined();
+  });
+
+  it.each([
+    { scope: "forum" as const, expected: { message_thread_id: 42 } },
+    { scope: "dm" as const, expected: { message_thread_id: 42 } },
+    { scope: "direct-messages" as const, expected: { direct_messages_topic_id: 42 } },
+  ])(
+    "does not retry $scope message preview sends without the topic id",
+    async ({ scope, expected }) => {
       const api = createMockDraftApi();
       api.sendMessage.mockRejectedValueOnce(
         new Error("400: Bad Request: message thread not found"),
@@ -203,7 +327,7 @@ describe("createTelegramDraftStream", () => {
       await stream.flush();
 
       expect(api.sendMessage).toHaveBeenCalledTimes(1);
-      expectPreviewSend(api, "Hello", { message_thread_id: 42 });
+      expectPreviewSend(api, "Hello", expected);
       expect(warn).toHaveBeenCalledWith(
         "telegram stream preview failed: 400: Bad Request: message thread not found",
       );
@@ -265,6 +389,75 @@ describe("createTelegramDraftStream", () => {
     expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>Shelling</b>\n🧠 <i>Thinking</i>", {
       parse_mode: "HTML",
     });
+  });
+
+  it("disables link previews on the streamed send and on every edit", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      linkPreview: false,
+      thread: { id: 42, scope: "dm" },
+      replyToMessageId: 411,
+      replyToMode: "all",
+    });
+
+    stream.update("see https://example.com");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "see https://example.com", {
+      message_thread_id: 42,
+      reply_parameters: {
+        message_id: 411,
+        allow_sending_without_reply: true,
+      },
+      link_preview_options: { is_disabled: true },
+    });
+
+    // The edit matters as much as the send: Telegram re-enables the preview on
+    // any edit that omits the field, and finalization skips the edit when the
+    // streamed draft already equals the final text.
+    stream.update("see https://example.com now");
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "see https://example.com now", {
+      link_preview_options: { is_disabled: true },
+    });
+  });
+
+  it("keeps parse_mode alongside disabled link previews on the HTML transport", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      linkPreview: false,
+      renderText: (text) => ({ text: `<i>${text}</i>`, parseMode: "HTML" }),
+    });
+
+    stream.update("https://example.com");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<i>https://example.com</i>", {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+
+    stream.update("https://example.com/two");
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "<i>https://example.com/two</i>", {
+      parse_mode: "HTML",
+      link_preview_options: { is_disabled: true },
+    });
+  });
+
+  it("omits link_preview_options entirely when linkPreview is not disabled", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api);
+
+    stream.update("see https://example.com");
+    await stream.flush();
+    stream.update("see https://example.com now");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "see https://example.com", {});
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "see https://example.com now");
   });
 
   it("finalizeToPreview edits the live window message in place without deleting", async () => {
@@ -564,8 +757,10 @@ describe("createTelegramDraftStream", () => {
         const api = createMockDraftApi();
         api.sendMessage.mockReturnValueOnce(firstSend).mockResolvedValueOnce({ message_id: 42 });
         const onSupersededPreview = vi.fn();
+        const onProviderMessage = vi.fn();
         const stream = createDraftStream(api, {
           onRetainedPage: onSupersededPreview,
+          onProviderMessage,
           replyToMessageId: 411,
           replyToMode,
           thread: { id: 42, scope: "dm" },
@@ -592,6 +787,10 @@ describe("createTelegramDraftStream", () => {
 
         // The raced first send is NOT retained as a durable chunk...
         expect(onSupersededPreview).not.toHaveBeenCalled();
+        expect(onProviderMessage).not.toHaveBeenCalled();
+        await stream.stop();
+        expect(onProviderMessage).toHaveBeenCalledTimes(1);
+        expect(onProviderMessage).toHaveBeenCalledWith(expect.objectContaining({ message_id: 42 }));
         expect(api.deleteMessage).not.toHaveBeenCalled();
         // ...it is deleted deferred, so no orphaned stale bubble is left behind.
         await vi.advanceTimersByTimeAsync(4_000);
@@ -606,6 +805,35 @@ describe("createTelegramDraftStream", () => {
       }
     },
   );
+
+  it("does not report a first preview cleared while its send is in flight", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveSend: ((value: { message_id: number }) => void) | undefined;
+      const send = new Promise<{ message_id: number }>((resolve) => {
+        resolveSend = resolve;
+      });
+      const api = createMockDraftApi();
+      api.sendMessage.mockReturnValueOnce(send);
+      const onProviderMessage = vi.fn();
+      const stream = createDraftStream(api, { onProviderMessage });
+
+      stream.update("Temporary preview");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+
+      const clearPromise = stream.clear();
+      resolveSend?.({ message_id: 17 });
+      await vi.advanceTimersByTimeAsync(0);
+      await clearPromise;
+
+      expect(onProviderMessage).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it.each(["first", "batched"] as const)(
     "keeps an in-flight %s reply target owned when reposition cleanup fails",
@@ -986,16 +1214,13 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
-  it("sends caller-provided rich previews through standard text transport", async () => {
+  it("sends caller-provided HTML previews through standard text transport", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api);
 
     stream.updatePreview({
-      text: "Shelling\n\n`🛠️ Exec`",
-      richMessage: {
-        html: "<b>Shelling</b>\n<b>🛠️ Exec</b>",
-        skip_entity_detection: true,
-      },
+      text: "<b>Shelling</b>\n<b>🛠️ Exec</b>",
+      parseMode: "HTML",
     });
     await stream.flush();
 
@@ -1005,11 +1230,8 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
 
     stream.updatePreview({
-      text: "Shelling\n\n`🛠️ Exec`\n• _Checking files_",
-      richMessage: {
-        html: "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<i>Checking files</i>",
-        skip_entity_detection: true,
-      },
+      text: "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<i>Checking files</i>",
+      parseMode: "HTML",
     });
     await stream.flush();
 
@@ -1022,16 +1244,13 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.editMessageText).not.toHaveBeenCalled();
   });
 
-  it("sends marked progress rich previews through HTML text transport", async () => {
+  it("sends marked progress HTML previews through HTML text transport", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api);
 
     stream.updatePreview({
-      text: "Shelling\n\n🛠️ Exec",
-      richMessage: {
-        html: "<b>Shelling</b><br><b>🛠️ Exec</b>",
-        skip_entity_detection: true,
-      },
+      text: "<b>Shelling</b>\n<b>🛠️ Exec</b>",
+      parseMode: "HTML",
     });
     await stream.flush();
 
@@ -1041,11 +1260,8 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
 
     stream.updatePreview({
-      text: "Shelling\n\n🛠️ Exec\n• Checking files",
-      richMessage: {
-        html: "<b>Shelling</b><br><b>🛠️ Exec</b><br><b>Update</b> <code>Checking files</code>",
-        skip_entity_detection: true,
-      },
+      text: "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<b>Update</b> <code>Checking files</code>",
+      parseMode: "HTML",
     });
     await stream.flush();
 
@@ -1058,7 +1274,7 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.editMessageText).not.toHaveBeenCalled();
   });
 
-  it("falls back to plain preview text when rich preview HTML parsing fails", async () => {
+  it("falls back to plain preview text when HTML parsing fails", async () => {
     const api = createMockDraftApi();
     api.sendMessage
       .mockRejectedValueOnce(new Error("can't parse entities: unsupported tag"))
@@ -1066,11 +1282,8 @@ describe("createTelegramDraftStream", () => {
     const stream = createDraftStream(api);
 
     stream.updatePreview({
-      text: "Shelling <&>\n\n🛠️ Exec",
-      richMessage: {
-        html: "<b>Shelling &lt;&amp;&gt;</b>\n<b>🛠️ Exec</b>",
-        skip_entity_detection: true,
-      },
+      text: "<b>Shelling &lt;&amp;&gt;</b>\n<b>🛠️ Exec</b>",
+      parseMode: "HTML",
     });
     await stream.flush();
 
@@ -1080,10 +1293,10 @@ describe("createTelegramDraftStream", () => {
       "<b>Shelling &lt;&amp;&gt;</b>\n<b>🛠️ Exec</b>",
       { parse_mode: "HTML" },
     );
-    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Shelling <&>\n\n🛠️ Exec", {});
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Shelling <&>\n🛠️ Exec", {});
     expect(stream.currentMessageSnapshot?.()).toEqual({
-      text: "Shelling <&>\n\n🛠️ Exec",
-      sourceText: "Shelling &lt;&amp;&gt;\n\n🛠️ Exec",
+      text: "Shelling <&>\n🛠️ Exec",
+      sourceText: "Shelling &lt;&amp;&gt;\n🛠️ Exec",
       sourceTextMode: "html",
     });
 
@@ -1091,8 +1304,8 @@ describe("createTelegramDraftStream", () => {
       .mockRejectedValueOnce(new Error("can't parse entities: unsupported tag"))
       .mockResolvedValueOnce(true);
     stream.updatePreview({
-      text: "Done <&>",
-      richMessage: { html: "<b>Done &lt;&amp;&gt;</b>" },
+      text: "<b>Done &lt;&amp;&gt;</b>",
+      parseMode: "HTML",
     });
     await stream.flush();
 
@@ -1107,41 +1320,61 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
+  it("falls back to plain preview text when an HTML edit renders empty", async () => {
+    const api = createMockDraftApi();
+    const warn = vi.fn();
+    const stream = createDraftStream(api, { warn });
+
+    stream.updatePreview({ text: "<b>Working</b>", parseMode: "HTML" });
+    await stream.flush();
+
+    api.editMessageText
+      .mockRejectedValueOnce(new Error("400: Bad Request: message text is empty"))
+      .mockResolvedValueOnce(true);
+    stream.updatePreview({ text: "<b>Done &lt;&amp;&gt;</b>", parseMode: "HTML" });
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenNthCalledWith(1, 123, 17, "<b>Done &lt;&amp;&gt;</b>", {
+      parse_mode: "HTML",
+    });
+    expect(api.editMessageText).toHaveBeenNthCalledWith(2, 123, 17, "Done <&>");
+    expect(stream.currentMessageSnapshot?.()).toEqual({
+      text: "Done <&>",
+      sourceText: "Done &lt;&amp;&gt;",
+      sourceTextMode: "html",
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview edit degrade=plain-fallback:empty-content: 400: Bad Request: message text is empty",
+    );
+  });
+
   it("uses rich send and edit for previews when explicitly enabled", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, { richMessages: true });
 
-    stream.updatePreview({
-      text: "Plan",
-      richMessage: { html: "<h2>Plan</h2><table><tr><td>A</td></tr></table>" },
-    });
+    stream.update("## Plan\n\n| A |\n| --- |\n| x |");
     await stream.flush();
 
-    expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
-      chat_id: 123,
-      rich_message: {
-        html: "<h2>Plan</h2><table bordered striped><thead><tr><th>A</th></tr></thead></table>",
-      },
-    });
+    expect(api.raw.sendRichMessage).toHaveBeenCalledTimes(1);
+    const first = api.raw.sendRichMessage.mock.calls[0]?.[0] as {
+      rich_message?: TelegramInputRichMessage;
+    };
+    expect(first?.rich_message?.blocks?.some((block) => block.type === "heading")).toBe(true);
+    expect(first?.rich_message?.blocks?.some((block) => block.type === "table")).toBe(true);
     expect(api.sendMessage).not.toHaveBeenCalled();
 
-    stream.updatePreview({
-      text: "Plan updated",
-      richMessage: { html: "<h2>Plan updated</h2><table><tr><td>B</td></tr></table>" },
-    });
+    stream.update("## Plan updated\n\n| B |\n| --- |\n| y |");
     await stream.flush();
 
-    expect(api.raw.editMessageText).toHaveBeenCalledWith({
-      chat_id: 123,
-      message_id: 17,
-      rich_message: {
-        html: "<h2>Plan updated</h2><table bordered striped><thead><tr><th>B</th></tr></thead></table>",
-      },
-    });
+    expect(api.raw.editMessageText).toHaveBeenCalledTimes(1);
+    const edit = api.raw.editMessageText.mock.calls[0]?.[0] as {
+      rich_message?: TelegramInputRichMessage;
+    };
+    expect(edit?.rich_message?.blocks?.some((block) => block.type === "heading")).toBe(true);
     expect(api.editMessageText).not.toHaveBeenCalled();
   });
 
-  it("uses table-aware plain text when rich preview fallback sends", async () => {
+  it("uses plain text when rich preview fallback sends", async () => {
     const api = createMockDraftApi();
     api.raw.sendRichMessage.mockRejectedValueOnce(
       new Error("400: Bad Request: RICH_MESSAGE_URL_INVALID"),
@@ -1149,27 +1382,16 @@ describe("createTelegramDraftStream", () => {
     const warn = vi.fn();
     const stream = createDraftStream(api, { richMessages: true, warn });
 
-    stream.updatePreview({
-      text: "Plan",
-      richMessage: {
-        html: "<table><tr><td>Rank</td><td>Model</td><td>Score</td></tr><tr><td>4</td><td>Claude Opus</td><td>78.16%</td></tr></table>",
-      },
-    });
+    stream.update("| Rank | Model |\n| --- | --- |\n| 4 | Claude Opus |");
     await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledWith(
-      123,
-      "Rank | Model | Score\n4 | Claude Opus | 78.16%",
-      {},
-    );
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    const plain = api.sendMessage.mock.calls[0]?.[1] ?? "";
+    expect(plain).toContain("Rank");
+    expect(plain).toContain("Claude Opus");
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("rich-degrade=plain-fallback:rich-entity-invalid"),
+      "telegram stream preview degrade=plain-fallback:rich-entity-invalid: 400: Bad Request: RICH_MESSAGE_URL_INVALID",
     );
-    expect(stream.currentMessageSnapshot?.()).toEqual({
-      text: "Rank | Model | Score\n4 | Claude Opus | 78.16%",
-      sourceText: "Rank | Model | Score\n4 | Claude Opus | 78.16%",
-      sourceTextMode: "html",
-    });
   });
 
   it("skips rich entity detection for draft text with provider-prefixed email addresses", async () => {
@@ -1184,19 +1406,19 @@ describe("createTelegramDraftStream", () => {
     expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
       chat_id: 123,
       rich_message: {
-        html: oauthProfileText,
+        blocks: [{ type: "paragraph", text: oauthProfileText }],
         skip_entity_detection: true,
       },
     });
   });
 
-  it("keeps rich preview html out of plain preview gating", async () => {
+  it("keeps short rich previews out of plain preview gating", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, { richMessages: true, minInitialChars: 10 });
 
     stream.updatePreview({
       text: "Plan",
-      richMessage: { html: "<h2>Plan</h2><table><tr><td>A</td></tr></table>" },
+      richMessage: { blocks: [{ type: "heading", text: "Plan", size: 2 }] },
     });
     await stream.flush();
 
@@ -1215,8 +1437,13 @@ describe("createTelegramDraftStream", () => {
     const calls = api.raw.sendRichMessage.mock.calls as unknown[][];
     const params = calls[0]?.[0] as { rich_message?: TelegramInputRichMessage } | undefined;
     const richMessage = params?.rich_message;
-    expect(richMessage?.html).toContain("paragraph 499");
-    expect(richMessage?.html).not.toContain("paragraph 500");
+    const plain = (richMessage?.blocks ?? [])
+      .map((block) =>
+        block.type === "paragraph" && typeof block.text === "string" ? block.text : "",
+      )
+      .join("\n");
+    expect(plain).toContain("paragraph 499");
+    expect(plain).not.toContain("paragraph 500");
   });
 
   it("clamps rendered previews to the text-message limit", async () => {
@@ -1348,7 +1575,7 @@ describe("createTelegramDraftStream", () => {
       // Plain-fallback parity: each page must carry the durable funnel's plainText
       // projection so an HTML-parse 400 degrades both funnels to identical text.
       expect([...retainedPageTexts, stream.currentMessageSnapshot?.()?.text]).toEqual(
-        expectedChunks.map((chunk) => chunk.text),
+        expectedChunks.map((chunk) => telegramHtmlToPlainTextFallback(chunk.html)),
       );
     },
   );
@@ -1364,7 +1591,9 @@ describe("createTelegramDraftStream", () => {
       "```",
     ].join("\n");
     const stream = createDraftStream(api, {
-      maxChars: 55,
+      // Plain code body is shorter than HTML-wrapped rich text; keep the limit
+      // under the pre body so pagination still splits across messages.
+      maxChars: 30,
       richMessages: true,
       onRetainedPage: onSupersededPreview,
     });
@@ -1374,18 +1603,22 @@ describe("createTelegramDraftStream", () => {
 
     const pages = api.raw.sendRichMessage.mock.calls.map((call) => {
       const params = call[0] as { rich_message?: TelegramInputRichMessage };
-      return params.rich_message?.html ?? "";
+      return params.rich_message?.blocks ?? [];
     });
     expect(pages.length).toBeGreaterThan(1);
+    expect(pages.every((blocks) => blocks.every((block) => block.type === "pre"))).toBe(true);
     expect(
-      pages.every((page) => /^<pre><code class="language-ts">[\s\S]*<\/code><\/pre>$/u.test(page)),
+      pages.every((blocks) =>
+        blocks.some((block) => block.type === "pre" && block.language === "ts"),
+      ),
     ).toBe(true);
     const fullRichMessage = buildTelegramRichMarkdown(text);
-    if (!fullRichMessage.html) {
-      throw new Error("expected rendered Telegram rich HTML");
-    }
-    expect(pages.map(telegramHtmlToPlainTextFallback).join("")).toBe(
-      telegramHtmlToPlainTextFallback(fullRichMessage.html),
+    expect(
+      pages
+        .flatMap((blocks) => blocks.map((block) => (block.type === "pre" ? block.text : "")))
+        .join(""),
+    ).toBe(
+      fullRichMessage.blocks.map((block) => (block.type === "pre" ? block.text : "")).join(""),
     );
     expect(onSupersededPreview).toHaveBeenCalledTimes(pages.length - 1);
   });
@@ -1400,13 +1633,16 @@ describe("createTelegramDraftStream", () => {
 
     const pages = api.raw.sendRichMessage.mock.calls.map((call) => {
       const params = call[0] as { rich_message?: TelegramInputRichMessage };
-      return params.rich_message?.html ?? "";
+      return params.rich_message?.blocks ?? [];
     });
     expect(pages.length).toBeGreaterThan(1);
-    expect(pages.every((page) => /^<pre><code>[\s\S]*<\/code><\/pre>$/u.test(page))).toBe(true);
-    expect(pages.map(telegramHtmlToPlainTextFallback).join("").replace(/\n$/u, "")).toBe(
-      " ".repeat(80),
-    );
+    expect(pages.every((blocks) => blocks.every((block) => block.type === "pre"))).toBe(true);
+    expect(
+      pages
+        .flatMap((blocks) => blocks.map((block) => (block.type === "pre" ? block.text : "")))
+        .join("")
+        .replace(/\n$/u, ""),
+    ).toBe(" ".repeat(80));
   });
 
   it("keeps non-final overflow in one editable preview", async () => {

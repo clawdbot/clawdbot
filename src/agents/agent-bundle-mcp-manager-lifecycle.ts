@@ -31,6 +31,8 @@ type SessionMcpRuntimeManagerStore = {
   sessionIdBySessionKey: Map<string, string>;
   idleTtlMsBySessionId: Map<string, number>;
   deferredRetirementSessionIds: Set<string>;
+  // Reset/delete retirement survives late creation or reuse by the stopping run.
+  requiredRetirementSessionIds: Set<string>;
   connectionMetaByRuntimeKey: Map<string, { connectionHash: string; resolvedAt: number }>;
   advertisedScopedCatalogBySessionId: Map<string, AdvertisedScopedCatalogEntry>;
   requesterWorkChains: Map<string, Promise<unknown>>;
@@ -74,6 +76,7 @@ export function createSessionMcpRuntimeManagerStore(
     sessionIdBySessionKey: new Map<string, string>(),
     idleTtlMsBySessionId: new Map<string, number>(),
     deferredRetirementSessionIds: new Set<string>(),
+    requiredRetirementSessionIds: new Set<string>(),
     // Manager-side only: connection hash + resolve time. Never stores raw url/headers.
     connectionMetaByRuntimeKey: new Map(),
     /**
@@ -112,7 +115,10 @@ export type SessionMcpRuntimeManagerLifecycle = {
   ensureIdleSweepTimer: () => void;
   clearIdleSweepTimer: () => void;
   disposeRuntimeKeyNow: (runtimeKey: string) => Promise<void>;
-  disposeManagedSession: (sessionId: string) => Promise<void>;
+  disposeManagedSession: (
+    sessionId: string,
+    opts?: { preserveRequiredRetirement?: boolean },
+  ) => Promise<void>;
   rememberAdvertisedScopedCatalog: (sessionId: string, catalog: McpToolCatalog) => void;
   getAdvertisedScopedCatalog: (sessionId: string) => McpToolCatalog | null;
 };
@@ -297,8 +303,14 @@ export function createSessionMcpRuntimeManagerLifecycle(
     }
   };
 
-  const disposeManagedSession = async (sessionId: string): Promise<void> => {
+  const disposeManagedSession = async (
+    sessionId: string,
+    opts?: { preserveRequiredRetirement?: boolean },
+  ): Promise<void> => {
     store.deferredRetirementSessionIds.delete(sessionId);
+    if (opts?.preserveRequiredRetirement !== true) {
+      store.requiredRetirementSessionIds.delete(sessionId);
+    }
     store.advertisedScopedCatalogBySessionId.delete(sessionId);
     const runtimeKeys = new Set(runtimeKeysForSessionId(sessionId));
     for (const runtimeKey of store.createInFlight.keys()) {

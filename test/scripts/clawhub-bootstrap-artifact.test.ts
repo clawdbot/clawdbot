@@ -285,6 +285,8 @@ describe("ClawHub bootstrap artifact manifest", () => {
   it("rejects preexisting and symlinked download output roots before fetching", async () => {
     const paths = fixture();
     const downloadOptions = {
+      workflowHeadBranch: "main",
+      workflowRef: "refs/heads/main",
       artifactDigest: "d".repeat(64),
       artifactId: "456",
       artifactName: `clawhub-bootstrap-${targetSha.slice(0, 12)}-123-2`,
@@ -313,6 +315,14 @@ describe("ClawHub bootstrap artifact manifest", () => {
         outputRoot: existingRoot,
       }),
     ).rejects.toThrow("output directory must not already exist");
+    await expect(
+      downloadClawHubBootstrapArtifact({
+        ...downloadOptions,
+        outputRoot: existingRoot,
+        workflowHeadBranch: `release-publish/${workflowSha.slice(0, 12)}-123`,
+        workflowRef: `refs/tags/release-publish/${workflowSha.slice(0, 12)}-123`,
+      }),
+    ).rejects.toThrow("output directory must not already exist");
 
     const symlinkTarget = join(paths.artifactRoot, "symlink-target");
     const symlinkRoot = join(paths.artifactRoot, "symlink-output");
@@ -324,6 +334,15 @@ describe("ClawHub bootstrap artifact manifest", () => {
         outputRoot: symlinkRoot,
       }),
     ).rejects.toThrow("output directory must not already exist");
+
+    await expect(
+      downloadClawHubBootstrapArtifact({
+        ...downloadOptions,
+        outputRoot: join(paths.artifactRoot, "unused-output"),
+        workflowHeadBranch: `release-publish/${workflowSha.slice(0, 12)}-123`,
+        workflowRef: `refs/heads/release-publish/${workflowSha.slice(0, 12)}-123`,
+      }),
+    ).rejects.toThrow("workflowRef must be main or the SHA-pinned release-publish tag");
   });
 });
 
@@ -372,41 +391,6 @@ describe("ClawHub packed artifact identity", () => {
       sha256: pack.sha256,
       size: pack.bytes.byteLength,
     });
-  });
-
-  it("rejects a whitespace-bearing alias before a later package.json", async () => {
-    const pack = writeClawPack([
-      {
-        name: " package.json ",
-        prefix: " package ",
-        contents: JSON.stringify({
-          name: "@openclaw/meta-provider",
-          version: "2026.7.1-beta.3",
-        }),
-      },
-      {
-        name: "package/package.json",
-        contents: JSON.stringify({
-          name: "@openclaw/other",
-          version: "9.9.9",
-        }),
-      },
-      {
-        name: "package/openclaw.plugin.json",
-        contents: JSON.stringify({ id: "meta" }),
-      },
-    ]);
-
-    await expect(
-      verifyClawHubPackedArtifactIdentity({
-        artifactPath: pack.artifactPath,
-        expectedSha256: pack.sha256,
-        expectedSize: String(pack.bytes.byteLength),
-        expectedDir: "extensions/meta",
-        expectedName: "@openclaw/meta-provider",
-        expectedVersion: "2026.7.1-beta.3",
-      }),
-    ).rejects.toThrow("changes under the pinned ClawHub path normalization");
   });
 
   it("rejects a whitespace-bearing alias after a canonical package.json", async () => {

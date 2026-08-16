@@ -16,7 +16,7 @@ Adds Vercel AI Gateway model provider support to OpenClaw.
 
 ## Surface
 
-providers: vercel-ai-gateway
+providers: `vercel-ai-gateway`
 
 ## Related docs
 

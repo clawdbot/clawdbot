@@ -36,9 +36,8 @@ describe("legacy config detection", () => {
         },
       },
       agents: {
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             workspace: "~/openclaw-work",
             tools: {
               elevated: {
@@ -47,12 +46,12 @@ describe("legacy config detection", () => {
               },
             },
           },
-        ],
+        },
       },
     });
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.config?.agents?.list?.[0]?.tools?.elevated).toEqual({
+      expect(res.config?.agents?.entries?.work?.tools?.elevated).toEqual({
         enabled: false,
         allowFrom: { whatsapp: ["+15555550123"] },
       });

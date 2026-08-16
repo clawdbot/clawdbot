@@ -2,10 +2,12 @@
 import { describe, expect, it } from "vitest";
 import {
   getAccountConfig,
-  listAccountIds,
   resolveDefaultTwitchAccountId,
   resolveTwitchAccountContext,
+  twitchConfigAdapter,
 } from "./config.js";
+
+const { listAccountIds } = twitchConfigAdapter;
 
 describe("getAccountConfig", () => {
   const mockMultiAccountConfig = {
@@ -117,6 +119,10 @@ describe("getAccountConfig", () => {
 });
 
 describe("listAccountIds", () => {
+  it("does not invent a default account when Twitch is unconfigured", () => {
+    expect(listAccountIds({})).toEqual([]);
+  });
+
   it("includes the implicit default account from simplified config", () => {
     expect(
       listAccountIds({
@@ -159,6 +165,18 @@ describe("listAccountIds", () => {
         },
       } as Parameters<typeof listAccountIds>[0]),
     ).toEqual(["alerts-31m", "secondary"]);
+  });
+
+  it("preserves an explicitly present empty root credential as an implicit account", () => {
+    expect(
+      listAccountIds({
+        channels: {
+          twitch: {
+            username: "",
+          },
+        },
+      } as Parameters<typeof listAccountIds>[0]),
+    ).toEqual(["default"]);
   });
 });
 

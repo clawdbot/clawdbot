@@ -13,4 +13,3 @@ export {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
-export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";

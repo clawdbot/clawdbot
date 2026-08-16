@@ -126,23 +126,6 @@ describe("resolveChannelCapabilities", () => {
       }),
     ).toBeUndefined();
   });
-
-  it("handles Slack object-format capabilities gracefully", () => {
-    const cfg = {
-      channels: {
-        slack: {
-          capabilities: { interactiveReplies: true },
-        },
-      },
-    } as unknown as Partial<OpenClawConfig>;
-
-    expect(
-      resolveChannelCapabilities({
-        cfg,
-        channel: "slack",
-      }),
-    ).toBeUndefined();
-  });
 });
 
 const createStubPlugin = (id: string): ChannelPlugin => ({

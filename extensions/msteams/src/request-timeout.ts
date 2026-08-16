@@ -8,8 +8,8 @@ import {
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export const MSTEAMS_REQUEST_TIMEOUT_MS = 30_000;
-// File-consent PUTs are data-plane transfers: keep a base stall bound, then
-// add slow-transfer budget so valid large uploads do not hit a fixed cutoff.
+// SharePoint PUTs are data-plane transfers: keep a base stall bound, then add
+// slow-transfer budget so valid large uploads do not hit a fixed cutoff.
 const MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS = 5 * 60_000;
 const MSTEAMS_SHAREPOINT_UPLOAD_MIN_BYTES_PER_SECOND = 256 * 1024;
 
@@ -55,4 +55,29 @@ export function resolveMSTeamsSharePointUploadTimeoutMs(sizeInBytes: number): nu
     MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS,
     1,
   );
+}
+function createMSTeamsRequestTimeoutError(label: string, timeoutMs: number): Error {
+  const error = new Error(`${label} timed out after ${timeoutMs}ms`);
+  error.name = "TimeoutError";
+  return error;
+}
+
+export async function withMSTeamsAbortableRequestTimeout<T>(params: {
+  label: string;
+  timeoutMs?: number;
+  work: (signal: AbortSignal) => Promise<T>;
+}): Promise<T> {
+  const controller = new AbortController();
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, MSTEAMS_REQUEST_TIMEOUT_MS, 1);
+  // Defer callback setup so withTimeout arms first; synchronous token-provider
+  // work must count against the request deadline.
+  const work = Promise.resolve().then(() => params.work(controller.signal));
+  try {
+    return await withTimeout(work, timeoutMs, {
+      createError: () => createMSTeamsRequestTimeoutError(params.label, timeoutMs),
+    });
+  } catch (error) {
+    controller.abort(error);
+    throw error;
+  }
 }

@@ -12,7 +12,6 @@ import {
   buildBackupArchivePath,
   buildBackupArchiveRoot,
   type BackupAsset,
-  resolveBackupPlanFromPaths,
   resolveBackupPlanFromDisk,
 } from "./backup-shared.js";
 import {
@@ -21,6 +20,7 @@ import {
   createBackupTestRuntime,
   mockStateOnlyBackupPlan,
   resetBackupTempHome,
+  resolveBackupPlanFromPaths,
   tarCreateMock,
 } from "./backup.test-support.js";
 

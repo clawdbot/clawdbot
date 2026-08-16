@@ -7,10 +7,20 @@ type ExecPolicyLayer = {
   ask?: ExecAsk;
 };
 
+type RequiredExecPolicy = Required<Pick<ExecPolicyLayer, "security" | "ask">>;
+
+export function applyExecPolicyLayer<TBase extends ExecPolicyLayer & RequiredExecPolicy>(
+  base: TBase,
+  layer?: ExecPolicyLayer,
+): Omit<TBase, keyof ExecPolicyLayer> & ExecPolicyLayer & RequiredExecPolicy;
 export function applyExecPolicyLayer<TBase extends ExecPolicyLayer>(
   base: TBase,
   layer?: ExecPolicyLayer,
-): TBase & ExecPolicyLayer {
+): Omit<TBase, keyof ExecPolicyLayer> & ExecPolicyLayer;
+export function applyExecPolicyLayer(
+  base: ExecPolicyLayer,
+  layer?: ExecPolicyLayer,
+): ExecPolicyLayer {
   if (!layer) {
     return base;
   }
@@ -19,7 +29,7 @@ export function applyExecPolicyLayer<TBase extends ExecPolicyLayer>(
       ...base,
       mode: layer.mode,
       ...resolveExecPolicyForMode(layer.mode),
-    } as unknown as TBase & ExecPolicyLayer;
+    };
   }
   if (layer.security !== undefined || layer.ask !== undefined) {
     const { mode: _mode, ...baseWithoutMode } = base;
@@ -27,7 +37,7 @@ export function applyExecPolicyLayer<TBase extends ExecPolicyLayer>(
       ...baseWithoutMode,
       security: layer.security ?? base.security,
       ask: layer.ask ?? base.ask,
-    } as unknown as TBase & ExecPolicyLayer;
+    };
   }
   return base;
 }

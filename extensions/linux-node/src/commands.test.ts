@@ -1,12 +1,12 @@
+import fs from "node:fs/promises";
 import type { CommandOptions, SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import { describe, expect, it, vi } from "vitest";
-import {
-  createLinuxNodeCommands,
-  listLinuxVideoDevices,
-  MAX_MEDIA_RAW_BYTES,
-  type LinuxNodeCommandDeps,
-} from "./commands.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createLinuxNodeCommands } from "./commands.js";
 import type { ResolvedLinuxNodePluginConfig } from "./config.js";
+
+type LinuxNodeCommandDeps = Parameters<typeof createLinuxNodeCommands>[0];
+
+const maxMediaRawBytes = Math.floor((25 * 1024 * 1024 - 64 * 1024) / 4) * 3;
 
 const enabledConfig: ResolvedLinuxNodePluginConfig = {
   notify: { enabled: true },
@@ -77,7 +77,13 @@ function createHarness(overrides: Partial<LinuxNodeCommandDeps> = {}) {
 }
 
 describe("linux-node commands", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("lists only V4L2 nodes that expose capture formats through FFmpeg", async () => {
+    vi.spyOn(fs, "readdir").mockResolvedValue(["video1", "media0", "video0"] as never);
+    vi.spyOn(fs, "readFile").mockResolvedValue("Integrated Camera\n" as never);
     const runCommand = vi.fn(async (argv: string[]) =>
       success(
         argv.at(-1) === "/dev/video0"
@@ -85,21 +91,19 @@ describe("linux-node commands", () => {
           : "Not a video capture device",
       ),
     );
-    await expect(
-      listLinuxVideoDevices({
-        ffmpeg: "/usr/bin/ffmpeg",
-        runCommand,
-        listEntries: async () => ["video1", "media0", "video0"],
-        readDeviceName: async () => "Integrated Camera\n",
+    const { command } = createHarness({ listVideoDevices: undefined, runCommand });
+    await expect(command("camera.list").handle()).resolves.toBe(
+      JSON.stringify({
+        devices: [
+          {
+            id: "/dev/video0",
+            name: "Integrated Camera",
+            position: "unknown",
+            deviceType: "v4l2",
+          },
+        ],
       }),
-    ).resolves.toEqual([
-      {
-        id: "/dev/video0",
-        name: "Integrated Camera",
-        position: "unknown",
-        deviceType: "v4l2",
-      },
-    ]);
+    );
     expect(runCommand).toHaveBeenCalledTimes(2);
   });
 
@@ -344,10 +348,10 @@ describe("linux-node commands", () => {
   });
 
   it("rejects media beyond the 25 MB base64 budget", async () => {
-    const readFile = vi.fn(async () => Buffer.alloc(MAX_MEDIA_RAW_BYTES + 1));
+    const readFile = vi.fn(async () => Buffer.alloc(maxMediaRawBytes + 1));
     const { command } = createHarness({
       readFile,
-      statFile: async () => ({ size: MAX_MEDIA_RAW_BYTES + 1 }),
+      statFile: async () => ({ size: maxMediaRawBytes + 1 }),
     });
     await expect(command("camera.clip").handle()).rejects.toThrow("PAYLOAD_TOO_LARGE");
     expect(readFile).not.toHaveBeenCalled();

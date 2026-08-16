@@ -3,27 +3,27 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  resolveAgentDir,
-  resolveDefaultAgentDir,
-  listAgentEntries,
-} from "../../../agents/agent-scope.js";
+import { resolveAgentDir, listAgentEntries } from "../../../agents/agent-scope.js";
+import { hasUsableOAuthCredential } from "../../../agents/auth-profiles/credential-state.js";
 import {
   isLegacyOAuthRef,
   LEGACY_OAUTH_REF_PROVIDER,
 } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 import {
   areOAuthCredentialsEquivalent,
-  hasUsableOAuthCredential,
   isSafeToAdoptMainStoreOAuthIdentity,
 } from "../../../agents/auth-profiles/oauth-shared.js";
-import { resolveAuthStorePath } from "../../../agents/auth-profiles/paths.js";
-import { loadPersistedAuthProfileStore } from "../../../agents/auth-profiles/persisted.js";
+import {
+  loadPersistedAuthProfileStore,
+  loadPersistedSharedAuthProfileStore,
+} from "../../../agents/auth-profiles/persisted.js";
+import { resolveSharedMainAuthAgentDir } from "../../../agents/auth-profiles/shared-main-dir.js";
 import { updateAuthProfileStoreWithLock } from "../../../agents/auth-profiles/store.js";
 import type { AuthProfileStore, OAuthCredential } from "../../../agents/auth-profiles/types.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { shortenHomePath } from "../../../utils.js";
+import { resolveLegacyAuthProfilesPath as resolveAuthStorePath } from "../../doctor-auth-legacy-paths.js";
 
 type StaleOAuthProfileShadow = {
   agentDir: string;
@@ -97,10 +97,10 @@ function shouldRemoveLocalOAuthShadow(params: {
   if (areOAuthCredentialsEquivalent(local, main)) {
     return true;
   }
-  if (!hasUsableOAuthCredential(main, now)) {
+  if (!hasUsableOAuthCredential(main, { now })) {
     return false;
   }
-  if (!hasUsableOAuthCredential(local, now)) {
+  if (!hasUsableOAuthCredential(local, { now })) {
     return true;
   }
   const localExpires = Number.isFinite(local.expires) ? local.expires : 0;
@@ -116,9 +116,8 @@ export async function scanStaleOAuthProfileShadows(params: {
 }): Promise<StaleOAuthProfileShadow[]> {
   const env = params.env ?? process.env;
   const now = params.now ?? Date.now();
-  const mainAgentDir = resolveDefaultAgentDir({}, env);
-  const mainAuthPath = path.resolve(resolveAuthStorePath(mainAgentDir));
-  const mainStore = loadPersistedAuthProfileStore(mainAgentDir);
+  const mainAuthPath = path.resolve(resolveAuthStorePath(resolveSharedMainAuthAgentDir(env)));
+  const mainStore = loadPersistedSharedAuthProfileStore(env);
   if (!mainStore) {
     return [];
   }
@@ -297,7 +296,7 @@ export async function repairStaleOAuthProfileShadows(params: {
     byAgentDir.set(hit.agentDir, existing);
   }
   for (const [agentDir, agentHits] of byAgentDir) {
-    const mainStore = loadPersistedAuthProfileStore(resolveDefaultAgentDir({}, env));
+    const mainStore = loadPersistedSharedAuthProfileStore(env);
     if (!mainStore) {
       continue;
     }
@@ -327,7 +326,13 @@ export async function repairStaleOAuthProfileShadows(params: {
   return { changes, warnings };
 }
 
-export const testing = {
+const testing = {
   removeStaleProfilesFromStore,
   repairStaleOAuthProfilesForAgent,
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.staleOAuthProfileShadowsTestApi")
+  ] = testing;
+}

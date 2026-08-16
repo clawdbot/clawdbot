@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { subscribeStoredChatOutboxChanges } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   admitStoredChatComposerQueueItem,
@@ -62,6 +63,69 @@ afterEach(() => {
 });
 
 describe("chat composer persistence", () => {
+  it("round-trips only the immutable steer run identity", () => {
+    const state = createState();
+    const steer: ChatQueueItem = {
+      id: "steer-reload",
+      text: "keep the target",
+      createdAt: 1,
+      kind: "steered",
+      sendRunId: "steer-request",
+      sendState: "unconfirmed",
+      steerTargetRunId: "active-run",
+    };
+
+    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, steer)).toBe(true);
+
+    expect(loadChatComposerSnapshot(state, state.sessionKey)?.queue[0]).toMatchObject({
+      steerTargetRunId: "active-run",
+    });
+  });
+
+  it("notifies stored outbox subscribers on draft presence transitions and queue writes", () => {
+    const state = createState();
+    const original = reconnectItem("notify", 1);
+    const updated = { ...original, text: "updated message" };
+    const listener = vi.fn();
+    const unsubscribe = subscribeStoredChatOutboxChanges(listener);
+
+    try {
+      expect(persistChatComposerState({ ...state, chatMessage: "draft only" })).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(1);
+      // Content-only re-persists stay silent so projection subscribers cannot
+      // react by re-persisting a stale pane over the newer draft.
+      expect(persistChatComposerState({ ...state, chatMessage: "draft only, edited" })).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(persistChatComposerState({ ...state, chatMessage: "" })).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(2);
+      expect(admitStoredChatComposerQueueItem(state, state.sessionKey, original)).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(3);
+      expect(
+        updateStoredChatComposerQueueItem(
+          state,
+          state.sessionKey,
+          original,
+          updated,
+          original.agentId,
+        ),
+      ).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(4);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(
+      removeStoredChatComposerQueueItem(
+        state,
+        state.sessionKey,
+        updated.id,
+        updated,
+        updated.agentId,
+      ),
+    ).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(4);
+  });
+
   it("flushes a debounced draft before its owner releases state", () => {
     vi.useFakeTimers();
     const state = createState();
@@ -1088,7 +1152,7 @@ describe("chat composer persistence", () => {
     ]);
   });
 
-  it("restores attachments and Skill Workshop revision metadata", () => {
+  it("does not persist Skill Workshop revision requests for reconnect replay", () => {
     const item: ChatQueueItem = {
       ...reconnectItem("rich", 1),
       attachments: [
@@ -1102,13 +1166,11 @@ describe("chat composer persistence", () => {
       skillWorkshopRevision: { proposalId: "proposal-1", agentId: "owner" },
     };
     const state = createState();
-    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, item)).toBe(true);
+    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, item)).toBe(false);
 
     const restored = createState();
-    expect(restoreChatComposerState(restored)).toBe(true);
-    expect(restored.chatQueue).toEqual([
-      { ...item, sessionKey: "agent:lily:main", agentId: "lily" },
-    ]);
+    expect(restoreChatComposerState(restored)).toBe(false);
+    expect(restored.chatQueue).toEqual([]);
   });
 
   it("normalizes interrupted and in-flight states before durable replay", () => {

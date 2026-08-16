@@ -1,4 +1,5 @@
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { APIVoiceState, Client } from "../internal/discord.js";
 import type { GatewayPlugin } from "../internal/gateway.js";
 import { type DiscordVoiceIngressContext, resolveDiscordVoiceIngressContext } from "./ingress.js";
@@ -23,7 +24,7 @@ function normalizeLabel(value: unknown): string | undefined {
     return undefined;
   }
   const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized ? normalized.slice(0, 100) : undefined;
+  return normalized ? truncateUtf16Safe(normalized, 100) : undefined;
 }
 
 function memberLabel(state: APIVoiceState): string | undefined {
@@ -126,6 +127,36 @@ export function collectDiscordVoiceParticipants(params: {
     retainParticipantId(selectedUserIds, additionalUserId);
   }
   return buildParticipantRoster({ selectedUserIds, totalCount, states: params.states });
+}
+
+export function countDiscordVoiceHumanParticipants(params: {
+  states: APIVoiceState[];
+  botUserId?: string;
+  additionalUserIds?: Iterable<string>;
+}): number {
+  const knownUserIds = new Set<string>();
+  let count = 0;
+  for (const state of params.states) {
+    const userId = state.user_id?.trim();
+    if (!userId || userId === params.botUserId || knownUserIds.has(userId)) {
+      continue;
+    }
+    knownUserIds.add(userId);
+    if (state.member?.user?.bot !== true) {
+      count += 1;
+    }
+  }
+  for (const rawUserId of params.additionalUserIds ?? []) {
+    const userId = rawUserId.trim();
+    if (!userId || userId === params.botUserId || knownUserIds.has(userId)) {
+      continue;
+    }
+    // A speaking event proves presence. Missing member metadata is treated as
+    // human so an uncertain group room cannot accidentally become always-on.
+    knownUserIds.add(userId);
+    count += 1;
+  }
+  return count;
 }
 
 async function resolveDiscordVoiceParticipantLine(params: {
@@ -239,8 +270,7 @@ export async function resolveDiscordVoiceIngressContextWithParticipants(params: 
   client: Client;
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
-  ownerAllowFrom?: string[];
-  ownerAllowAll?: boolean;
+  admissionAllowFrom?: string[];
   botUserId?: string;
   speakerContext: DiscordVoiceSpeakerContextResolver;
 }): Promise<DiscordVoiceIngressContext | null> {
@@ -249,8 +279,7 @@ export async function resolveDiscordVoiceIngressContextWithParticipants(params: 
     userId: params.userId,
     cfg: params.cfg,
     discordConfig: params.discordConfig,
-    ownerAllowFrom: params.ownerAllowFrom,
-    ownerAllowAll: params.ownerAllowAll,
+    admissionAllowFrom: params.admissionAllowFrom,
     fetchGuildName: async (guildId) => {
       const guild = await params.client.fetchGuild(guildId).catch(() => null);
       return guild && typeof guild.name === "string" && guild.name.trim() ? guild.name : undefined;

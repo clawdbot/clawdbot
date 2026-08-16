@@ -13,68 +13,28 @@ import {
 
 describe("resolveWhatsAppSocketTiming", () => {
   it("uses OpenClaw's explicit WhatsApp Web socket defaults", () => {
-    expect(resolveWhatsAppSocketTiming({})).toEqual(DEFAULT_WHATSAPP_SOCKET_TIMING);
+    expect(resolveWhatsAppSocketTiming()).toEqual(DEFAULT_WHATSAPP_SOCKET_TIMING);
   });
 
-  it("reads Baileys timing values from web.whatsapp config", () => {
+  it("lets call-site overrides take precedence over defaults", () => {
     expect(
       resolveWhatsAppSocketTiming({
-        web: {
-          whatsapp: {
-            keepAliveIntervalMs: 10_000,
-            connectTimeoutMs: 90_000,
-            defaultQueryTimeoutMs: 120_000,
-          },
-        },
+        keepAliveIntervalMs: 20_000,
       }),
     ).toEqual({
-      keepAliveIntervalMs: 10_000,
-      connectTimeoutMs: 90_000,
-      defaultQueryTimeoutMs: 120_000,
-    });
-  });
-
-  it("lets call-site overrides take precedence over config", () => {
-    expect(
-      resolveWhatsAppSocketTiming(
-        {
-          web: {
-            whatsapp: {
-              keepAliveIntervalMs: 10_000,
-              connectTimeoutMs: 90_000,
-              defaultQueryTimeoutMs: 120_000,
-            },
-          },
-        },
-        {
-          keepAliveIntervalMs: 20_000,
-        },
-      ),
-    ).toEqual({
       keepAliveIntervalMs: 20_000,
-      connectTimeoutMs: 90_000,
-      defaultQueryTimeoutMs: 120_000,
+      connectTimeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.connectTimeoutMs,
+      defaultQueryTimeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
     });
   });
 
   it("rejects invalid numeric timing values", () => {
     expect(
-      resolveWhatsAppSocketTiming(
-        {
-          web: {
-            whatsapp: {
-              keepAliveIntervalMs: 0,
-              connectTimeoutMs: Number.NaN,
-              defaultQueryTimeoutMs: 1.5,
-            },
-          },
-        },
-        {
-          keepAliveIntervalMs: -1,
-          connectTimeoutMs: Number.POSITIVE_INFINITY,
-          defaultQueryTimeoutMs: Number.MAX_SAFE_INTEGER + 1,
-        },
-      ),
+      resolveWhatsAppSocketTiming({
+        keepAliveIntervalMs: -1,
+        connectTimeoutMs: Number.POSITIVE_INFINITY,
+        defaultQueryTimeoutMs: Number.MAX_SAFE_INTEGER + 1,
+      }),
     ).toEqual(DEFAULT_WHATSAPP_SOCKET_TIMING);
   });
 

@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import CoreGraphics
 import Foundation
 import OpenClawKit
@@ -315,6 +316,93 @@ final class ComputerActionExecutionQueue {
     }
 }
 
+struct ComputerControlPermissionSnapshot: Equatable, Sendable {
+    enum Access: Equatable, Sendable {
+        case granted
+        case missing
+    }
+
+    enum Bucket: Equatable, Sendable {
+        case accessibility
+        case postEvent
+        case screenCapture
+
+        var displayName: String {
+            switch self {
+            case .accessibility: "Accessibility"
+            case .postEvent: "Event Posting"
+            case .screenCapture: "Screen Recording"
+            }
+        }
+    }
+
+    enum Diagnostic: Equatable, Sendable {
+        case granted
+        case missing([Bucket])
+        case accessibilityGrantMayBeStale
+
+        var detailText: String {
+            switch self {
+            case .granted:
+                "Accessibility, Event Posting, and Screen Recording are granted."
+            case let .missing(buckets):
+                "Missing: \(buckets.map(\.displayName).joined(separator: ", ")). "
+                    + "Grant access in System Settings → Privacy & Security, then reopen OpenClaw."
+            case .accessibilityGrantMayBeStale:
+                Self.staleAccessibilityRemediation
+            }
+        }
+
+        static let staleAccessibilityRemediation = """
+        OpenClaw may already appear enabled under System Settings → Privacy & Security → Accessibility. \
+        If so, the grant is pinned to an older build: select OpenClaw, remove it with −, then re-add \
+        /Applications/OpenClaw.app.
+        """
+    }
+
+    enum InputAccess: Equatable, Sendable {
+        case granted
+        case accessibilityMissing
+        case accessibilityGrantMayBeStale
+        case postEventMissing
+    }
+
+    let accessibility: Access
+    let postEvent: Access
+    let screenCapture: Access
+
+    static func probe() -> Self {
+        Self(
+            accessibility: AXIsProcessTrusted() ? .granted : .missing,
+            postEvent: CGPreflightPostEventAccess() ? .granted : .missing,
+            screenCapture: CGPreflightScreenCaptureAccess() ? .granted : .missing)
+    }
+
+    var diagnostic: Diagnostic {
+        // Capture granted + AX denied is the observed stale cdhash signature after an app rebuild.
+        if self.accessibility == .missing, self.screenCapture == .granted {
+            return .accessibilityGrantMayBeStale
+        }
+        let missing = [
+            (Bucket.accessibility, self.accessibility),
+            (.postEvent, self.postEvent),
+            (.screenCapture, self.screenCapture),
+        ].compactMap { bucket, access in
+            access == .missing ? bucket : nil
+        }
+        return missing.isEmpty ? .granted : .missing(missing)
+    }
+
+    var inputAccess: InputAccess {
+        if self.accessibility == .missing {
+            return self.screenCapture == .granted
+                ? .accessibilityGrantMayBeStale
+                : .accessibilityMissing
+        }
+        return self.postEvent == .granted ? .granted : .postEventMissing
+    }
+}
+
 /// Fulfills `computer.act` on this Mac by driving the embedded Peekaboo
 /// automation engine in-process. Peekaboo covers single/right/double click,
 /// move, drag, scroll, and key/hold. A narrow CoreGraphics path handles
@@ -339,6 +427,8 @@ final class ComputerActionService {
 
     enum ComputerActionError: LocalizedError {
         case accessibilityNotTrusted
+        case accessibilityGrantMayBeStale
+        case postEventAccessDenied
         case noDisplays
         case invalidScreenIndex(Int)
         case missingDisplayFrameId
@@ -354,11 +444,19 @@ final class ComputerActionService {
         case buttonNotHeld
         case eventCreationFailed
         case lifecycleChanged
+        case invalidV2Request(String)
+        case staleObservation
+        case unsupportedAction(OpenClawComputerAction)
+        case refused(String)
 
         var errorDescription: String? {
             switch self {
             case .accessibilityNotTrusted:
                 "Accessibility permission is required for computer control"
+            case .accessibilityGrantMayBeStale:
+                ComputerControlPermissionSnapshot.Diagnostic.staleAccessibilityRemediation
+            case .postEventAccessDenied:
+                "Event Posting permission is required for computer control"
             case .noDisplays:
                 "No displays available for computer control"
             case let .invalidScreenIndex(idx):
@@ -389,16 +487,24 @@ final class ComputerActionService {
                 "Failed to synthesize input event"
             case .lifecycleChanged:
                 "Computer control lifecycle changed while the action was pending"
+            case let .invalidV2Request(message):
+                "COMPUTER_INVALID_REQUEST: \(message)"
+            case .staleObservation:
+                "COMPUTER_STALE_OBSERVATION: take a fresh observation and retry"
+            case let .unsupportedAction(action):
+                "COMPUTER_UNSUPPORTED_ACTION: \(action.rawValue)"
+            case let .refused(message):
+                "COMPUTER_REFUSED_action_refused: \(message)"
             }
         }
     }
 
     private let automation: UIAutomationService
-    private let permissions: PermissionsService
     private let mouseButtonEventPoster: MouseButtonEventPoster
     private let mouseEventFactory: MouseEventFactory
     private let mouseEventPoster: MouseEventPoster
     private let textGraphemePoster: TextGraphemePoster
+    private lazy var v2 = ComputerActionServiceV2()
     /// Tracks whether a left_mouse_down is outstanding so mouse_move emits
     /// drag events (state persists across invokes on the shared instance).
     private var leftButtonDown = false
@@ -436,7 +542,6 @@ final class ComputerActionService {
 
     init() {
         self.automation = UIAutomationService()
-        self.permissions = PermissionsService()
         self.mouseButtonEventPoster = Self.postMouseButtonEvent
         self.mouseEventFactory = Self.makeMouseEvent
         self.mouseEventPoster = Self.postMouseEvent
@@ -446,7 +551,6 @@ final class ComputerActionService {
     #if DEBUG
     init(mouseButtonEventPoster: @escaping MouseButtonEventPoster) {
         self.automation = UIAutomationService()
-        self.permissions = PermissionsService()
         self.mouseButtonEventPoster = mouseButtonEventPoster
         self.mouseEventFactory = Self.makeMouseEvent
         self.mouseEventPoster = Self.postMouseEvent
@@ -458,7 +562,6 @@ final class ComputerActionService {
         mouseEventPoster: @escaping MouseEventPoster)
     {
         self.automation = UIAutomationService()
-        self.permissions = PermissionsService()
         self.mouseButtonEventPoster = Self.postMouseButtonEvent
         self.mouseEventFactory = mouseEventFactory
         self.mouseEventPoster = mouseEventPoster
@@ -467,7 +570,6 @@ final class ComputerActionService {
 
     init(textGraphemePoster: @escaping TextGraphemePoster) {
         self.automation = UIAutomationService()
-        self.permissions = PermissionsService()
         self.mouseButtonEventPoster = Self.postMouseButtonEvent
         self.mouseEventFactory = Self.makeMouseEvent
         self.mouseEventPoster = Self.postMouseEvent
@@ -495,9 +597,28 @@ final class ComputerActionService {
         lifecycleGeneration: UInt64) async throws -> OpenClawComputerActResult
     {
         try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
-        guard self.permissions.checkAccessibilityPermission() else {
-            throw ComputerActionError.accessibilityNotTrusted
+        if params.deliveryMode == .background,
+           params.windowRef == nil,
+           !params.action.isComputerActV2Only
+        {
+            return OpenClawComputerActResult(
+                ok: false,
+                effect: .suspectedNoop,
+                escalation: OpenClawComputerEscalation(
+                    recommended: "window-pixel",
+                    reasonCode: "no_window_target"))
         }
+        if params.isV2Request {
+            return try await self.v2.perform(
+                params,
+                lifecycleGeneration: lifecycleGeneration,
+                checkExecutionAllowed: { [weak self] in
+                    guard let self else { throw CancellationError() }
+                    try self.executionQueue.checkExecutionAllowed(
+                        lifecycleGeneration: lifecycleGeneration)
+                })
+        }
+        try Self.validateInputPermissions(ComputerControlPermissionSnapshot.probe())
         let display = try await resolveDisplay(params: params)
         try executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
         try await self.dispatch(
@@ -507,6 +628,19 @@ final class ComputerActionService {
         try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
         let cursor = self.automation.currentMouseLocation() ?? CGPoint.zero
         return OpenClawComputerActResult(ok: true, cursorX: cursor.x, cursorY: cursor.y)
+    }
+
+    static func validateInputPermissions(_ permissions: ComputerControlPermissionSnapshot) throws {
+        switch permissions.inputAccess {
+        case .granted:
+            return
+        case .accessibilityMissing:
+            throw ComputerActionError.accessibilityNotTrusted
+        case .accessibilityGrantMayBeStale:
+            throw ComputerActionError.accessibilityGrantMayBeStale
+        case .postEventMissing:
+            throw ComputerActionError.postEventAccessDenied
+        }
     }
 
     // MARK: - Dispatch
@@ -596,6 +730,8 @@ final class ComputerActionService {
             let keys = try requireKeys(params.keys)
             let holdMs = min(Self.maxHoldMs, max(0, params.durationMs ?? 1000))
             try await self.automation.hotkey(keys: keys, holdDuration: holdMs)
+        default:
+            throw ComputerActionError.unsupportedAction(params.action)
         }
     }
 

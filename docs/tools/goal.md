@@ -20,6 +20,10 @@ Goals are session state: they move with the session key, survive process
 restarts, and appear in `/goal`, the model-facing goal tools, and the TUI
 footer.
 
+Detached command completions return to the originating user-facing thread, so
+the next turn continues to see the same goal even when command execution used
+a separate sandbox policy session.
+
 ## Quick start
 
 ```text
@@ -143,14 +147,15 @@ target.
 `update_goal` should mark a goal `complete` only when the objective is
 actually achieved. It should mark a goal `blocked` only after the same
 blocking condition recurs for at least three consecutive goal turns, not for
-ordinary difficulty or missing polish.
+ordinary difficulty or missing polish. Updating goal status does not send a
+chat reply; the agent must still provide the user's requested final response.
 
 ## Goal context on every turn
 
 Every user/chat turn with an active goal includes this user-role context line:
 
 ```text
-Active goal: <objective> — advance it or update its status (get_goal/update_goal).
+Active goal: <objective> — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.
 ```
 
 OpenClaw keeps the line compact by truncating long objectives. Paused,

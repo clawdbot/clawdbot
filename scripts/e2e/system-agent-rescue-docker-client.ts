@@ -24,6 +24,7 @@ function makeParams(commandBody: string, cfg: OpenClawConfig, isGroup = false) {
       surface: "whatsapp",
       channel: "whatsapp",
       channelId: "whatsapp",
+      accountId: "default",
       ownerList: ["user:owner"],
       senderIsOwner: true,
       isAuthorizedSender: true,
@@ -48,6 +49,23 @@ async function invoke(commandBody: string, cfg: OpenClawConfig, isGroup = false)
   const text = result.reply?.text;
   assert(typeof text === "string", `Command did not return text: ${commandBody}`);
   return text;
+}
+
+async function invokeWithDeps(
+  commandBody: string,
+  cfg: OpenClawConfig,
+  deps: NonNullable<Parameters<typeof runSystemAgentRescueMessage>[0]["deps"]>,
+): Promise<string> {
+  const result = await runSystemAgentRescueMessage({
+    cfg,
+    command: makeParams(commandBody, cfg).command,
+    commandBody,
+    agentId: "default",
+    isGroup: false,
+    deps,
+  });
+  assert(typeof result === "string", `Direct rescue command did not return text: ${commandBody}`);
+  return result;
 }
 
 async function main() {
@@ -78,18 +96,30 @@ async function main() {
   assert(denied.includes("sandboxing is active"), "sandboxed rescue was not denied");
 
   const cfg: OpenClawConfig = {};
+  const deterministicInference = {
+    verifyInferenceConfig: async () => ({
+      ok: true as const,
+      modelRef: "openai/gpt-5.2",
+      latencyMs: 1,
+    }),
+  };
   const refusedTui = await invoke("/openclaw talk to agent", cfg);
   assert(
     refusedTui.includes("cannot open the local TUI"),
     "remote rescue TUI handoff was not refused",
   );
 
-  const plan = await invoke("/openclaw set default model openai/gpt-5.2", cfg);
+  // This packaged smoke verifies rescue persistence, not live provider credentials.
+  const plan = await invokeWithDeps(
+    "/openclaw set default model openai/gpt-5.2",
+    cfg,
+    deterministicInference,
+  );
   assert(
     plan.includes("Reply /openclaw yes to apply"),
     "persistent change did not require approval",
   );
-  const applied = await invoke("/openclaw yes", cfg);
+  const applied = await invokeWithDeps("/openclaw yes", cfg, deterministicInference);
   assert(applied.includes("Default model: openai/gpt-5.2"), "approved change did not apply");
 
   const configValid = await invoke("/openclaw validate config", cfg);
@@ -122,12 +152,13 @@ async function main() {
   const agentApplied = await invoke("/openclaw yes", cfg);
   assert(agentApplied.includes("[openclaw] done: agents.create"), "agent creation did not apply");
 
-  const setupPlan = await invoke(
+  const setupPlan = await invokeWithDeps(
     "/openclaw setup workspace /tmp/openclaw-setup model openai/gpt-5.2",
     cfg,
+    deterministicInference,
   );
   assert(setupPlan.includes("Reply /openclaw yes to apply"), "setup did not require approval");
-  const setupApplied = await invoke("/openclaw yes", cfg);
+  const setupApplied = await invokeWithDeps("/openclaw yes", cfg, deterministicInference);
   assert(setupApplied.includes("[openclaw] done: openclaw.setup"), "setup did not apply");
 
   const gatewayRestarts: string[] = [];
@@ -148,6 +179,41 @@ async function main() {
     gatewayPlan?.includes("Reply /openclaw yes to apply"),
     "gateway restart did not require approval",
   );
+  const pluginList = await runSystemAgentRescueMessage({
+    cfg,
+    command: gatewayCommand,
+    commandBody: "/openclaw plugins list",
+    agentId: "default",
+    isGroup: false,
+    deps: {
+      runPluginsList: async (runtime) => runtime.log("plugin rows"),
+    },
+  });
+  assert(pluginList === "plugin rows", "read-only rescue command did not run");
+  const revokedApproval = await runSystemAgentRescueMessage({
+    cfg,
+    command: gatewayCommand,
+    commandBody: "/openclaw yes",
+    agentId: "default",
+    isGroup: false,
+    deps: {
+      runGatewayRestart: async () => {
+        gatewayRestarts.push("restart");
+      },
+    },
+  });
+  assert(
+    revokedApproval === "No pending OpenClaw rescue change is waiting for approval.",
+    "fresh rescue command did not revoke the older pending change",
+  );
+  assert(gatewayRestarts.length === 0, "revoked gateway restart was invoked");
+  await runSystemAgentRescueMessage({
+    cfg,
+    command: gatewayCommand,
+    commandBody: "/openclaw restart gateway",
+    agentId: "default",
+    isGroup: false,
+  });
   const gatewayApplied = await runSystemAgentRescueMessage({
     cfg,
     command: gatewayCommand,
@@ -168,7 +234,7 @@ async function main() {
 
   const doctorRuns: string[] = [];
   const doctorCommand = makeParams("/openclaw doctor fix", cfg).command;
-  const doctorPlan = await runSystemAgentRescueMessage({
+  const doctorReply = await runSystemAgentRescueMessage({
     cfg,
     command: doctorCommand,
     commandBody: "/openclaw doctor fix",
@@ -181,30 +247,15 @@ async function main() {
     },
   });
   assert(
-    doctorPlan?.includes("Reply /openclaw yes to apply"),
-    "doctor fix did not require approval",
+    doctorReply?.includes("openclaw doctor --fix"),
+    "remote doctor fix did not point to the local repair command",
   );
-  const doctorApplied = await runSystemAgentRescueMessage({
-    cfg,
-    command: doctorCommand,
-    commandBody: "/openclaw yes",
-    agentId: "default",
-    isGroup: false,
-    deps: {
-      runDoctor: async (_runtime, options) => {
-        doctorRuns.push(options.repair ? "repair" : "check");
-      },
-    },
-  });
-  assert(doctorApplied?.includes("[openclaw] done: doctor.fix"), "doctor fix did not apply");
-  assert(doctorRuns.join(",") === "repair", "doctor repair dependency was not invoked once");
+  assert(doctorRuns.length === 0, "remote rescue must not invoke doctor repair");
 
   const updatedConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+  const updatedModel = updatedConfig.agents?.defaults?.model;
   assert(
-    updatedConfig.agents?.defaults?.model &&
-      typeof updatedConfig.agents.defaults.model === "object" &&
-      "primary" in updatedConfig.agents.defaults.model &&
-      updatedConfig.agents.defaults.model.primary === "openai/gpt-5.2",
+    (typeof updatedModel === "string" ? updatedModel : updatedModel?.primary) === "openai/gpt-5.2",
     "config default model was not updated",
   );
   assert(updatedConfig.gateway?.port === 19001, "generic config set did not update gateway.port");
@@ -220,9 +271,7 @@ async function main() {
     "setup did not update default workspace",
   );
   assert(
-    updatedConfig.agents?.list?.some(
-      (agent) => agent.id === "work" && agent.workspace === "/tmp/openclaw-work",
-    ),
+    updatedConfig.agents?.entries?.work?.workspace === "/tmp/openclaw-work",
     "agent config was not updated",
   );
 
@@ -255,10 +304,6 @@ async function main() {
   assert(
     audits.some((audit) => audit.operation === "gateway.restart"),
     "gateway restart audit operation missing",
-  );
-  assert(
-    audits.some((audit) => audit.operation === "doctor.fix"),
-    "doctor fix audit missing",
   );
 
   console.log("OpenClaw rescue Docker E2E passed");

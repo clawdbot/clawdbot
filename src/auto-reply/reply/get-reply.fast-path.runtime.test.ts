@@ -70,8 +70,10 @@ describe("getReplyFromConfig fast-path runtime", () => {
           CommandBody: "hello",
           From: "+1001",
           To: "+2000",
-          MediaPaths: ["/tmp/a.png", "/tmp/b.png"],
-          MediaUrls: ["/tmp/a.png", "/tmp/b.png"],
+          media: [
+            { path: "/tmp/a.png", url: "/tmp/a.png" },
+            { path: "/tmp/b.png", url: "/tmp/b.png" },
+          ],
           SessionKey: "agent:main:whatsapp:+2000",
           Provider: "whatsapp",
           Surface: "whatsapp",

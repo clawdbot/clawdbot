@@ -2,13 +2,22 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import { decodeTextPrefix } from "@openclaw/normalization-core";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  parseStrictNonNegativeInteger,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "./errors.js";
 import { readChunkWithIdleTimeout, withResponseBodyTimeout } from "./http-response-body-timeout.js";
-import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
 
 export { readChunkWithIdleTimeout } from "./http-response-body-timeout.js";
+
+/** Cancels a response body only when no consumer has started reading it. */
+export async function cancelUnreadResponseBody(response: Response | undefined): Promise<void> {
+  if (response && !response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
 
 export const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 export const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
@@ -140,7 +149,8 @@ type ReadResponsePrefixResult = {
 export type ReadResponseTextPrefixOptions = {
   chunkTimeoutMs?: number;
   onIdleTimeout?: (params: { chunkTimeoutMs: number }) => Error;
-  timeoutMs?: number;
+  /** Static timeout or lazy resolver evaluated immediately before body consumption. */
+  timeoutMs?: number | (() => number);
   onTimeout?: (params: { timeoutMs: number }) => Error;
 };
 
@@ -215,10 +225,17 @@ async function readResponsePrefix(
   options?: ReadResponsePrefixOptions,
 ): Promise<ReadResponsePrefixResult> {
   validateMaxBytes(maxBytes);
+  let timeoutMs: number | undefined;
+  try {
+    timeoutMs = typeof options?.timeoutMs === "function" ? options.timeoutMs() : options?.timeoutMs;
+  } catch (error) {
+    await response.body?.cancel(error).catch(() => undefined);
+    throw error;
+  }
   const body = response.body;
   if (!body || typeof body.getReader !== "function") {
     return await withResponseBodyTimeout({
-      timeoutMs: options?.timeoutMs,
+      timeoutMs,
       onTimeout: options?.onTimeout,
       cancel: async (error) => await body?.cancel(error),
       read: async () => {
@@ -237,7 +254,7 @@ async function readResponsePrefix(
 
   const reader = body.getReader();
   return await withResponseBodyTimeout({
-    timeoutMs: options?.timeoutMs,
+    timeoutMs,
     onTimeout: options?.onTimeout,
     cancel: async (error) => await reader.cancel(error),
     read: async () => await readResponsePrefixFromReader(reader, maxBytes, options),

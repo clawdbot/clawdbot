@@ -4,6 +4,7 @@ import {
   resolveChannelGroupRequireMention,
   resolveScopeRequireMention,
   resolveScopeToolsPolicy,
+  scopeKey,
   type GroupToolPolicyConfig,
   type ScopeTree,
 } from "openclaw/plugin-sdk/channel-policy";
@@ -47,10 +48,9 @@ function parseTelegramGroupId(value?: string | null) {
   return { chatId: raw, topicId: undefined };
 }
 
-const encodeScopeSegment = (value: string) => `${value.length}:${value}`;
-const groupScopeKey = (groupKey: string) => `group:${encodeScopeSegment(groupKey)}`;
+const groupScopeKey = (groupKey: string) => scopeKey(["group", groupKey]);
 const topicScopeKey = (groupKey: string, topicKey: string) =>
-  `${groupScopeKey(groupKey)}/topic:${encodeScopeSegment(topicKey)}`;
+  scopeKey(["group", groupKey], ["topic", topicKey]);
 
 function resolveTelegramRequireMention(params: {
   cfg: ChannelGroupContext["cfg"];
@@ -118,6 +118,7 @@ export function resolveTelegramGroupToolPolicy(
   return resolveScopeToolsPolicy({
     tree: buildChannelGroupsScopeTree(params.cfg, "telegram", params.accountId),
     path: groupId ? [groupId] : [],
+    senderPolicyMode: params.senderPolicyMode,
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,

@@ -17,11 +17,14 @@ type ObsidianCliResult = {
   stderr: string;
 };
 
+// User-triggered CLI helpers must not pin the gateway when Obsidian stops responding.
+const OBSIDIAN_CLI_TIMEOUT_MS = 10_000;
+
 type ObsidianCliDeps = {
   exec?: (
     command: string,
     args: string[],
-    options: { encoding: "utf8" },
+    options: { logOutput: false; timeoutMs: number },
   ) => Promise<{ stdout: string; stderr: string }>;
   resolveCommand?: (command: string) => Promise<string | null>;
 };
@@ -86,9 +89,11 @@ async function runObsidianCli(params: {
     throw new Error("Obsidian CLI is not available on PATH.");
   }
   const argv = [...buildVaultPrefix(params.config), params.subcommand, ...(params.args ?? [])];
-  const { stdout, stderr } = params.deps?.exec
-    ? await params.deps.exec(probe.command, argv, { encoding: "utf8" })
-    : await runExec(probe.command, argv, { logOutput: false });
+  const exec = params.deps?.exec ?? runExec;
+  const { stdout, stderr } = await exec(probe.command, argv, {
+    logOutput: false,
+    timeoutMs: OBSIDIAN_CLI_TIMEOUT_MS,
+  });
   return {
     command: probe.command,
     argv,

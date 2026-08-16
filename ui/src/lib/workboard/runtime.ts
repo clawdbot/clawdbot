@@ -1,5 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { normalizeString, workboardCardSessionKey } from "./card-state.ts";
+import { isActiveWorkboardCard, normalizeString, workboardCardSessionKey } from "./card-state.ts";
 import { WORKBOARD_STATUSES, type WorkboardTaskLinkState, type WorkboardUiState } from "./types.ts";
 
 export type WorkboardHost = object;
@@ -96,6 +96,25 @@ export function invalidateWorkboardLoads(host: WorkboardHost) {
   delete runtime.loadPromise;
   delete runtime.loadToken;
   nextWorkboardLifecycleReconciliationEpoch(host);
+}
+
+export function stopWorkboardLiveRefresh(host: WorkboardHost): void {
+  const runtime = getWorkboardRuntime(host);
+  const loadInFlight = Boolean(runtime.loadPromise);
+  runtime.liveRefreshGeneration = (runtime.liveRefreshGeneration ?? 0) + 1;
+  if (runtime.liveRefreshRetryTimer) {
+    clearTimeout(runtime.liveRefreshRetryTimer);
+    delete runtime.liveRefreshRetryTimer;
+  }
+  delete runtime.liveRefreshEntry;
+  delete runtime.liveRefreshPromise;
+  delete runtime.liveChangeEpoch;
+  delete runtime.liveHighestSeenRevision;
+  delete runtime.liveAppliedRevision;
+  delete runtime.liveRefreshPending;
+  if (loadInFlight) {
+    invalidateWorkboardLoads(host);
+  }
 }
 
 function clearWorkboardLifecycleTaskPreparedTimer(host: WorkboardHost) {
@@ -405,8 +424,11 @@ export function workboardLifecycleSyncBlocked(
 
 export function workboardLifecycleRequiresTaskRefresh(state: WorkboardTaskLinkState): boolean {
   return (
-    state.tasksByCardId.size > 0 ||
+    state.cards.some((card) => isActiveWorkboardCard(card) && state.tasksByCardId.has(card.id)) ||
     state.cards.some((card) => {
+      if (!isActiveWorkboardCard(card)) {
+        return false;
+      }
       const taskId = normalizeString(card.taskId);
       return Boolean(taskId && !state.missingTaskIds.has(taskId));
     })
@@ -416,7 +438,12 @@ export function workboardLifecycleRequiresTaskRefresh(state: WorkboardTaskLinkSt
 export function shouldRefreshWorkboardTasksForLifecycle(state: WorkboardTaskLinkState): boolean {
   return (
     workboardLifecycleRequiresTaskRefresh(state) ||
-    state.cards.some((card) => card.status === "running" && Boolean(workboardCardSessionKey(card)))
+    state.cards.some(
+      (card) =>
+        isActiveWorkboardCard(card) &&
+        card.status === "running" &&
+        Boolean(workboardCardSessionKey(card)),
+    )
   );
 }
 
@@ -425,6 +452,9 @@ export function workboardTaskLinksReadyForLifecycle(
   options: { requireRunningTaskDiscovery?: boolean } = {},
 ): boolean {
   return state.cards.every((card) => {
+    if (!isActiveWorkboardCard(card)) {
+      return true;
+    }
     const taskId = normalizeString(card.taskId);
     if (taskId) {
       return state.missingTaskIds.has(taskId) || state.tasksByCardId.has(card.id);

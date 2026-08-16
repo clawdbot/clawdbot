@@ -8,8 +8,12 @@ import {
   resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
 } from "../../infra/gateway-suspend-coordinator.js";
-import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import {
+  resetGatewayWorkAdmission,
+  waitForActiveGatewayRootWork,
+} from "../../process/gateway-work-admission.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { registerSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
 import {
   getAgentTestMocks,
   makeContext,
@@ -47,16 +51,16 @@ const mocks = getAgentTestMocks();
 describe("gateway agent handler", () => {
   afterEach(describe0AfterEach0);
 
-  it("recovers a failed session when its default transcript exists", async () => {
+  it("recovers a failed session when its SQLite transcript exists", async () => {
     const now = Date.parse("2026-05-18T09:49:00.000Z");
     vi.useFakeTimers({ toFake: ["Date"] });
     setDateOnlyFakeClockActive(true);
     vi.setSystemTime(now);
 
-    await withTempDir({ prefix: "openclaw-gateway-failed-default-session-file-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-failed-default-session-file-" }, async (root) => {
       const sessionsDir = `${root}/sessions`;
       await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(`${sessionsDir}/failed-present-default-session-id.jsonl`, "", "utf8");
+      mocks.readTranscriptStatsSync.mockReturnValue({ eventCount: 1, maxSeq: 1, sizeBytes: 32 });
       const failedEntryWithDefaultTranscript = {
         sessionId: "failed-present-default-session-id",
         status: "failed",
@@ -93,14 +97,14 @@ describe("gateway agent handler", () => {
 
   it.each([
     {
-      name: "default transcript",
+      name: "SQLite transcript",
       sessionKey: "agent:main:telegram:group:stale-failed",
       sessionId: "stale-failed-session-id",
-      configureTranscript: async (params: { sessionId: string; sessionsDir: string }) => {
-        await fs.writeFile(`${params.sessionsDir}/${params.sessionId}.jsonl`, "", "utf8");
+      configureTranscript: async () => {
+        mocks.readTranscriptStatsSync.mockReturnValue({ eventCount: 1, maxSeq: 1, sizeBytes: 32 });
         return {};
       },
-      expectsSqliteStats: false,
+      expectsSqliteStats: true,
     },
     {
       name: "SQLite transcript marker",
@@ -122,13 +126,12 @@ describe("gateway agent handler", () => {
     setDateOnlyFakeClockActive(true);
     vi.setSystemTime(now);
 
-    await withTempDir({ prefix: "openclaw-gateway-stale-failed-session-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-stale-failed-session-" }, async (root) => {
       const sessionsDir = `${root}/sessions`;
       const storePath = `${sessionsDir}/sessions.json`;
       await fs.mkdir(sessionsDir, { recursive: true });
       const transcriptFields = await scenario.configureTranscript({
         sessionId: scenario.sessionId,
-        sessionsDir,
         storePath,
       });
       const failedEntryWithStaleActivity = {
@@ -193,19 +196,18 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("recovers a failed session when its relative transcript resolves and exists", async () => {
+  it("recovers a failed session when its SQLite transcript rows exist", async () => {
     const now = Date.parse("2026-05-18T09:50:00.000Z");
     vi.useFakeTimers({ toFake: ["Date"] });
     setDateOnlyFakeClockActive(true);
     vi.setSystemTime(now);
 
-    await withTempDir({ prefix: "openclaw-gateway-failed-session-file-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-failed-session-file-" }, async (root) => {
       const sessionsDir = `${root}/sessions`;
       await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(`${sessionsDir}/relative-present.jsonl`, "", "utf8");
+      mocks.readTranscriptStatsSync.mockReturnValue({ eventCount: 1, maxSeq: 1, sizeBytes: 32 });
       const failedEntryWithResolvedTranscript = {
         sessionId: "failed-present-session-id",
-        sessionFile: "relative-present.jsonl",
         status: "failed",
         startedAt: now - 1_000,
         endedAt: now,
@@ -418,6 +420,85 @@ describe("gateway agent handler", () => {
     expect(call.runtimePluginToolGrant).toEqual({
       pluginId: "workboard",
       toolNames: ["workboard_heartbeat", "workboard_complete"],
+    });
+  });
+
+  it("forwards trusted delegated policy handoffs only from internal client metadata", async () => {
+    primeMainAgentRun();
+    const handoffId = registerSubagentCompletionToolHandoff({
+      sourceSessionKey: "agent:main:subagent:child",
+      sourceSessionId: "child-session-id",
+      targetSessionKey: "agent:main:main",
+      targetSessionId: "existing-session-id",
+      idempotencyKey: "delegated-policy-handoff",
+    });
+
+    await invokeAgent(
+      {
+        message: "child completed",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "delegated-policy-handoff",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:subagent:child",
+          sourceTool: "subagent_announce",
+        },
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "subagent",
+            childSessionKey: "agent:main:subagent:child",
+            childSessionId: "child-session-id",
+            announceType: "subagent task",
+            taskLabel: "work",
+            status: "ok",
+            statusLabel: "completed",
+            result: "child completed",
+            replyInstruction: "Continue from this result.",
+          },
+        ],
+      },
+      {
+        client: {
+          internal: {
+            delegatedToolPolicyHandoffId: handoffId,
+          },
+        } as never,
+      },
+    );
+
+    const call = await waitForAgentCommandCall<{
+      onActiveModelSelected?: (selection: { provider: string; model: string }) => Promise<void>;
+      trustedInternalHandoff?: {
+        kind: string;
+        sourceSessionKey: string;
+        sourceSessionId?: string;
+        targetSessionKey: string;
+        targetSessionId: string;
+        provider: string;
+        model: string;
+      };
+    }>();
+    const trustedInternalHandoff = expectDefined(
+      call.trustedInternalHandoff,
+      "trusted completion handoff test invariant",
+    );
+    await expectDefined(
+      call.onActiveModelSelected,
+      "model-selection callback test invariant",
+    )({
+      provider: "anthropic",
+      model: "sonnet-4.6",
+    });
+    expect(call.trustedInternalHandoff).toBe(trustedInternalHandoff);
+    expect(call.trustedInternalHandoff).toMatchObject({
+      kind: "subagent-completion",
+      sourceSessionKey: "agent:main:subagent:child",
+      sourceSessionId: "child-session-id",
+      targetSessionKey: "agent:main:main",
+      targetSessionId: "existing-session-id",
+      provider: "anthropic",
+      model: "sonnet-4.6",
     });
   });
 
@@ -843,12 +924,12 @@ describe("gateway agent handler", () => {
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
-  it("recovers terminal failed agent API sessions without rotating the session id", async () => {
+  it("recovers terminal failed agent API sessions with SQLite transcript rows", async () => {
     const sessionId = "failed-agent-session";
-    await withTempDir({ prefix: "openclaw-gateway-terminal-recovery-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-gateway-terminal-recovery-" }, async (root) => {
       const sessionsDir = `${root}/sessions`;
       await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(`${sessionsDir}/${sessionId}.jsonl`, "", "utf8");
+      mocks.readTranscriptStatsSync.mockReturnValue({ eventCount: 1, maxSeq: 1, sizeBytes: 32 });
       mocks.loadSessionEntry.mockReturnValue({
         cfg: {},
         storePath: `${sessionsDir}/sessions.json`,
@@ -1050,9 +1131,12 @@ describe("gateway agent handler", () => {
       task: "initial task",
       cleanup: "keep" as const,
       createdAt: 1,
-      startedAt: 2,
-      endedAt: 3,
-      outcome: { status: "ok" as const },
+      execution: {
+        status: "terminal" as const,
+        startedAt: 2,
+        endedAt: 3,
+        outcome: { status: "ok" as const },
+      },
     };
 
     mocks.loadSessionEntry.mockReturnValue({
@@ -1212,7 +1296,10 @@ describe("gateway agent handler", () => {
       status: "running",
     });
     expect(mockCallArg(broadcastToConnIds, 0, 2)).toEqual(new Set(["conn-1"]));
-    expect(mockCallArg(broadcastToConnIds, 0, 3)).toEqual({ dropIfSlow: true });
+    expect(mockCallArg(broadcastToConnIds, 0, 3)).toEqual({
+      agentId: "main",
+      dropIfSlow: true,
+    });
   });
 
   it("passes the raw user message to agentCommand for LLM-boundary timestamping", async () => {
@@ -1894,6 +1981,7 @@ describe("gateway agent handler", () => {
         phase: "ready",
         basePersisted: true,
       });
+      await expect(waitForActiveGatewayRootWork()).resolves.toEqual({ drained: true, active: 0 });
       const readyPrepare = await invokeGatewaySuspendPrepare(
         context,
         "cron-media-release-recovered",
@@ -1982,6 +2070,7 @@ describe("gateway agent handler", () => {
       expect(context.logGateway.warn).toHaveBeenCalledWith(
         "cron continuation release recovery exhausted for cron-media-release-exhausts",
       );
+      await expect(waitForActiveGatewayRootWork()).resolves.toEqual({ drained: true, active: 0 });
       const readyPrepare = await invokeGatewaySuspendPrepare(
         context,
         "cron-media-release-exhausted",

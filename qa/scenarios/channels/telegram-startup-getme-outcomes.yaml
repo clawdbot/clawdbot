@@ -1,0 +1,26 @@
+title: Telegram product-startup getMe outcomes
+
+scenario:
+  id: telegram-startup-getme-outcomes
+  surface: channels
+  category: channels.channel-setup
+  coverage:
+    primary:
+      - telegram.startup-getme
+  objective: Verify the Telegram gateway owner handles startup getMe success, authentication failure, cache fallback, and probe throttling before monitor startup.
+  successCriteria:
+    - A successful product-startup probe passes botInfo into the polling monitor and refreshes the cache.
+    - A 401 rejects startup before the monitor, while a non-authentication failure may reuse matching cached botInfo.
+    - Concurrent account probes respect the shared startup limit and an aborted queued account never probes.
+  docsRefs:
+    - docs/channels/telegram.md
+    - docs/gateway/config-channels.md
+  codeRefs:
+    - extensions/telegram/src/channel.ts
+    - extensions/telegram/src/channel.gateway.test.ts
+    - extensions/telegram/src/bot-info-cache.ts
+    - extensions/telegram/src/startup-probe-limiter.ts
+  execution:
+    kind: vitest
+    path: extensions/telegram/src/channel.gateway.test.ts
+    summary: Run the Telegram gateway startAccount outcome, cache, and cross-account probe-limiter assertions.

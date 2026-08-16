@@ -1,8 +1,10 @@
 # @openclaw/llama-cpp-provider
 
-Official llama.cpp embedding provider for OpenClaw.
+Official managed llama.cpp provider for OpenClaw GGUF chat and embeddings.
 
-This plugin runs local GGUF embedding models through `node-llama-cpp`.
+The plugin installs a pinned, integrity-verified `llama-server` and configures
+OpenClaw's existing `localService` supervisor. Model traffic uses the normal
+OpenAI-compatible chat and embedding transports.
 
 ## Install
 
@@ -10,15 +12,28 @@ This plugin runs local GGUF embedding models through `node-llama-cpp`.
 openclaw plugins install @openclaw/llama-cpp-provider
 ```
 
-Restart the Gateway after installing or updating the plugin. Use Node 24 for
-native installs and updates.
+Restart the Gateway after installing or updating the plugin, then choose
+**llama.cpp** once during interactive onboarding or configuration.
 
-## Configure
+## Configure text inference
 
-Set `agents.defaults.memorySearch.provider` to `local`. By default, the plugin
-downloads and uses the EmbeddingGemma GGUF model. Configure
-`agents.defaults.memorySearch.local.modelPath` to use another local path, Hugging
-Face model URI, or HTTPS model URL.
+After explicit consent, OpenClaw installs the matching server build and
+downloads Gemma 4 E4B IT Q4_K_M (approximately 5.0 GB) plus EmbeddingGemma
+(approximately 0.3 GB). The default chat download is offered only on machines
+with at least 16 GiB of RAM.
+
+Custom GGUF models remain supported through `params.modelPath`. Rerun llama.cpp
+setup after changing the model so OpenClaw can verify the file and regenerate
+the managed router preset.
+
+See the [llama.cpp provider guide](https://docs.openclaw.ai/plugins/llama-cpp)
+for platform requirements, custom GGUF configuration, diagnostics, and repair.
+
+## Configure embeddings
+
+Set `memory.search.provider` to `local`. The plugin preserves the historical
+`local` embedding provider and index identity while serving requests through
+the managed server's `/v1/embeddings` endpoint.
 
 ## Package
 

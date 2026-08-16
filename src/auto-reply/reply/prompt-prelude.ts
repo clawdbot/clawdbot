@@ -2,20 +2,22 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
+import { normalizeMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
-import { buildInboundMediaNote } from "../media-note.js";
+import { buildInboundMediaNoteProjection } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import { appendUntrustedContext } from "./untrusted-context.js";
+import { appendChannelPromptContext } from "./channel-prompt-context.js";
 
 const REPLY_MEDIA_HINT =
   "To send an image back, use the message tool with structured media fields such as media, mediaUrl, path, or filePath. Keep caption in the text body.";
 const ROOM_EVENT_PROMPT = "[OpenClaw room event]";
 const RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES = [
-  "Conversation context (untrusted, chronological, selected for current message):",
-  "Chat history since last reply (untrusted, for context):",
+  "Conversation context (chronological, selected for current message):",
+  "Chat history since last reply:",
 ];
 
 /** Builds command/transcript/queued prompt bodies from inbound context. */
@@ -28,9 +30,12 @@ function buildReplyPromptBodies(params: {
   threadContextNote?: string;
   systemEventBlocks?: string[];
   inboundEventKind?: InboundEventKind;
+  /** Facts whose text projection is already present in a body variant. */
+  media?: readonly MediaFact[];
 }): {
   mediaNote?: string;
   mediaReplyHint?: string;
+  media?: MediaFact[];
   prefixedCommandBody: string;
   queuedBody: string;
   transcriptCommandBody: string;
@@ -40,15 +45,17 @@ function buildReplyPromptBodies(params: {
     combinedEventsBlock ? `${combinedEventsBlock}\n\n${body}` : body;
   const rawPrefixedBody = params.prefixedBody ?? params.effectiveBaseBody;
   const bodyWithEvents = prependEvents(params.effectiveBaseBody);
-  const prefixedBodyWithEvents = appendUntrustedContext(
+  const prefixedBodyWithEvents = appendChannelPromptContext(
     prependEvents(rawPrefixedBody),
-    params.sessionCtx.UntrustedContext,
+    params.sessionCtx.ChannelPromptContext,
   );
   const prefixedBody = [params.threadContextNote, prefixedBodyWithEvents]
     .filter(Boolean)
     .join("\n\n");
   const queueBodyBase = [params.threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
-  const mediaNote = buildInboundMediaNote(params.ctx);
+  const generatedMedia = buildInboundMediaNoteProjection(params.ctx);
+  const mediaNote = generatedMedia.text;
+  const media = [...generatedMedia.media, ...normalizeMediaFacts(params.media)];
   const mediaReplyHint = mediaNote ? REPLY_MEDIA_HINT : undefined;
   const queuedBodyRaw = mediaNote
     ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
@@ -68,6 +75,7 @@ function buildReplyPromptBodies(params: {
   return {
     mediaNote,
     mediaReplyHint,
+    ...(media.length > 0 ? { media } : {}),
     prefixedCommandBody: annotateInterSessionPromptText(
       prefixedCommandBodyRaw,
       params.sessionCtx.InputProvenance,
@@ -130,14 +138,10 @@ function formatRoomEventLine(ctx: TemplateContext, body: string): string {
 
 function resolveRoomEventBody(params: ReplyPromptEnvelopeBaseParams): string {
   return (
-    normalizeOptionalString(params.ctx.BodyForCommands) ??
-    normalizeOptionalString(params.ctx.CommandBody) ??
-    normalizeOptionalString(params.ctx.RawBody) ??
-    normalizeOptionalString(params.sessionCtx.BodyForCommands) ??
-    normalizeOptionalString(params.sessionCtx.CommandBody) ??
-    normalizeOptionalString(params.sessionCtx.RawBody) ??
+    normalizeOptionalString(params.ctx.commandText) ??
+    normalizeOptionalString(params.sessionCtx.commandText) ??
     (params.hasUserBody ? params.baseBody.trim() : undefined) ??
-    "[User sent media without caption]"
+    MEDIA_ONLY_USER_TEXT
   );
 }
 
@@ -155,8 +159,8 @@ function resolvePerTurnDeliveryDirective(params: {
 }): string | undefined {
   if (params.inboundEventKind === "room_event") {
     return params.sourceReplyDeliveryMode === "message_tool_only"
-      ? "Treat this as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way."
-      : "Treat this as observed room activity. Default: no reply; most room events need no response from you. Reply only when you are directly addressed or have concrete value to add.";
+      ? "Treat the current message as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way."
+      : "Treat the current message as observed room activity. Default: no reply; most room events need no response from you. Reply only when you are directly addressed or have concrete value to add.";
   }
   if (
     params.inboundEventKind === "user_request" &&
@@ -167,19 +171,13 @@ function resolvePerTurnDeliveryDirective(params: {
   return undefined;
 }
 
+// The current event itself is the user turn body; the context block carries
+// only the marker, the room backlog, and the reply-policy directive so no
+// fact is stated twice in one request.
 function buildRoomEventContext(params: ReplyPromptEnvelopeBaseParams, roomContext: string): string {
-  const roomEventBody = resolveRoomEventTranscriptBody(params);
   const roomContextBlock = roomContext.trim() ? `Room context:\n${roomContext.trim()}` : "";
   const deliveryDirective = resolvePerTurnDeliveryDirective(params);
-  return [
-    "[OpenClaw room event]",
-    "inbound_event_kind: room_event",
-    roomContextBlock,
-    `Current event:\n${roomEventBody}`,
-    deliveryDirective,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  return [ROOM_EVENT_PROMPT, roomContextBlock, deliveryDirective].filter(Boolean).join("\n\n");
 }
 
 function buildResumableRoomContext(roomContext: string): string {
@@ -199,17 +197,12 @@ export function buildReplyPromptEnvelopeBase(
   const softResetTail = params.softResetTail?.trim() ?? "";
   const isRoomEvent = params.inboundEventKind === "room_event";
   const inboundUserContext = params.inboundUserContext.trim();
-  const roomEventContext = buildRoomEventContext(params, inboundUserContext);
   const resumableRoomEventContext = isRoomEvent
     ? buildRoomEventContext(params, buildResumableRoomContext(inboundUserContext))
     : undefined;
-  const userRequestDeliveryDirective = resolvePerTurnDeliveryDirective({
-    inboundEventKind: params.inboundEventKind,
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-  });
   const currentInboundContextText = isRoomEvent
-    ? roomEventContext
-    : [inboundUserContext, userRequestDeliveryDirective].filter(Boolean).join("\n\n");
+    ? buildRoomEventContext(params, inboundUserContext)
+    : [inboundUserContext, resolvePerTurnDeliveryDirective(params)].filter(Boolean).join("\n\n");
   const resetModelBody = params.isBareSessionReset
     ? [
         params.inboundUserContext,
@@ -222,22 +215,17 @@ export function buildReplyPromptEnvelopeBase(
         .filter(Boolean)
         .join("\n\n")
     : params.baseBody;
-  const effectiveBaseBody = isRoomEvent
-    ? ROOM_EVENT_PROMPT
-    : params.hasUserBody
-      ? resetModelBody
-      : "[User sent media without caption]";
-  // Room-event transcript rows are plain chat lines; replay treats them as
-  // conversation, while the OpenClaw marker remains current-turn context only.
+  // Room-event turns and their transcript rows share one attributed chat line
+  // so the active turn replays byte-identically as history; the room-event
+  // marker and directive stay current-turn context only.
+  const roomEventBody = isRoomEvent ? resolveRoomEventTranscriptBody(params) : undefined;
+  const effectiveBaseBody =
+    roomEventBody ?? (params.hasUserBody ? resetModelBody : MEDIA_ONLY_USER_TEXT);
   const transcriptBody = params.isHeartbeat
     ? HEARTBEAT_TRANSCRIPT_PROMPT
     : params.isBareSessionReset
       ? softResetTail || `[OpenClaw session ${params.startupAction}]`
-      : isRoomEvent
-        ? resolveRoomEventTranscriptBody(params)
-        : params.hasUserBody
-          ? params.baseBody
-          : "[User sent media without caption]";
+      : (roomEventBody ?? (params.hasUserBody ? params.baseBody : MEDIA_ONLY_USER_TEXT));
   const currentInboundContext: CurrentInboundPromptContext | undefined =
     !params.isBareSessionReset && currentInboundContextText
       ? {
@@ -261,6 +249,8 @@ export function buildReplyPromptEnvelope(
     prefixedBody?: string;
     threadContextNote?: string;
     systemEventBlocks?: string[];
+    /** Facts whose model-facing projection is already present in the supplied body. */
+    media?: readonly MediaFact[];
   },
 ): ReplyPromptEnvelope {
   const base = buildReplyPromptEnvelopeBase(params);
@@ -274,6 +264,7 @@ export function buildReplyPromptEnvelope(
     threadContextNote: params.threadContextNote,
     systemEventBlocks: params.systemEventBlocks,
     inboundEventKind: params.inboundEventKind,
+    media: params.media,
   });
 
   return {

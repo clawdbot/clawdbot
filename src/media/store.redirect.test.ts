@@ -1,304 +1,195 @@
-// Media store redirect tests cover redirected media paths and lookup behavior.
+// Media store remote-source tests cover canonical guarded-fetch delegation.
 import fs from "node:fs/promises";
-import path from "node:path";
-import { PassThrough } from "node:stream";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { saveMediaSource, setMediaStoreNetworkDepsForTest } from "./store.js";
+import { saveMediaSource } from "./store.js";
+import { setMediaStoreNetworkDepsForTest } from "./store.test-support.js";
 
-const mockRequest = vi.fn();
+const saveRemoteMediaMock = vi.hoisted(() => vi.fn());
+const runtimeFetchMock = vi.hoisted(() => vi.fn());
 
-function createMockHttpExchange() {
-  const res = Object.assign(new PassThrough(), {
-    statusCode: 0,
-    headers: {} as Record<string, string>,
-  });
-  const originalResume = res.resume.bind(res);
-  const resume = vi.fn(() => originalResume());
-  res.resume = resume as typeof res.resume;
-  const req = {
-    on: (event: string, handler: (...args: unknown[]) => void) => {
-      if (event === "error") {
-        res.on("error", handler);
-      }
-      return req;
-    },
-    end: () => undefined,
-    destroy: () => res.destroy(),
-  } as const;
-  return { req, res, resume };
+vi.mock("./fetch.js", () => ({
+  saveRemoteMedia: saveRemoteMediaMock,
+}));
+vi.mock("../infra/net/runtime-fetch.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/net/runtime-fetch.js")>()),
+  fetchWithRuntimeDispatcherOrMockedGlobal: runtimeFetchMock,
+}));
+
+async function useActualSaveRemoteMedia(): Promise<void> {
+  const actual = await vi.importActual<typeof import("./fetch.js")>("./fetch.js");
+  saveRemoteMediaMock.mockImplementationOnce(actual.saveRemoteMedia);
 }
 
-function mockRedirectExchange(params: { body?: string; location?: string }) {
-  const { req, res, resume } = createMockHttpExchange();
-  res.statusCode = 302;
-  res.headers = params.location ? { location: params.location } : {};
-  return {
-    req,
-    resume,
-    send(cb: (value: unknown) => void) {
-      setImmediate(() => {
-        cb(res as unknown);
-        if (params.body) {
-          res.write(params.body);
-        }
-        res.end();
-      });
-    },
-  };
-}
-
-function mockHttpStatusExchange(params: { body?: string; statusCode: number }) {
-  const { req, res, resume } = createMockHttpExchange();
-  res.statusCode = params.statusCode;
-  return {
-    req,
-    resume,
-    send(cb: (value: unknown) => void) {
-      setImmediate(() => {
-        cb(res as unknown);
-        if (params.body) {
-          res.write(params.body);
-        }
-        res.end();
-      });
-    },
-  };
-}
-
-function mockSuccessfulTextExchange(params: { text: string; contentType: string }) {
-  const { req, res } = createMockHttpExchange();
-  res.statusCode = 200;
-  res.headers = { "content-type": params.contentType };
-  return {
-    req,
-    send(cb: (value: unknown) => void) {
-      setImmediate(() => {
-        cb(res as unknown);
-        res.write(params.text);
-        res.end();
-      });
-    },
-  };
-}
-
-function getRequestHeaders(callIndex: number): Headers {
-  const [, options] = mockRequest.mock.calls[callIndex] as [
-    URL,
-    { headers?: HeadersInit | Record<string, string> } | undefined,
-  ];
-  return new Headers(options?.headers);
-}
-
-async function expectRedirectSaveResult(params: {
-  expectedText: string;
-  expectedContentType: string;
-  expectedExtension: string;
-  headers?: Record<string, string>;
-  assertRequests?: () => void;
-}) {
-  const saved = await saveMediaSource("https://example.com/start", params.headers);
-  expect(mockRequest).toHaveBeenCalledTimes(2);
-  params.assertRequests?.();
-  expect(saved.contentType).toBe(params.expectedContentType);
-  expect(path.extname(saved.path)).toBe(params.expectedExtension);
-  expect(await fs.readFile(saved.path, "utf8")).toBe(params.expectedText);
-  const stat = await fs.stat(saved.path);
-  const expectedMode = process.platform === "win32" ? 0o666 : 0o644 & ~process.umask();
-  expect(stat.mode & 0o777).toBe(expectedMode);
-}
-
-async function expectRedirectSaveFailure(expectedMessage: string) {
-  await expect(saveMediaSource("https://example.com/start")).rejects.toThrow(expectedMessage);
-  expect(mockRequest).toHaveBeenCalledTimes(1);
-}
-
-describe("media store redirects", () => {
+describe("media store remote sources", () => {
   let testState: OpenClawTestState;
 
   beforeAll(async () => {
     testState = await createOpenClawTestState({
       layout: "state-only",
-      prefix: "openclaw-media-store-redirect-",
+      prefix: "openclaw-media-store-remote-",
     });
   });
 
   beforeEach(() => {
-    mockRequest.mockClear();
+    saveRemoteMediaMock.mockReset();
+    runtimeFetchMock.mockReset();
     setMediaStoreNetworkDepsForTest({
-      httpRequest: (...args) => mockRequest(...args),
-      httpsRequest: (...args) => mockRequest(...args),
-      resolvePinnedHostname: async (hostname) => ({
-        hostname,
-        addresses: ["93.184.216.34"],
-        lookup: createPinnedLookup({ hostname, addresses: ["93.184.216.34"] }),
-      }),
+      resolvePinnedHostname: async (hostname) => {
+        const addresses = ["93.184.216.34"];
+        return {
+          hostname,
+          addresses,
+          lookup: createPinnedLookup({ hostname, addresses }),
+        };
+      },
     });
   });
 
   afterAll(async () => {
-    await testState.cleanup();
-    setMediaStoreNetworkDepsForTest();
-    vi.clearAllMocks();
+    try {
+      setMediaStoreNetworkDepsForTest();
+    } finally {
+      await testState.cleanup();
+    }
   });
 
-  it("follows redirects and keeps detected mime/extension", async () => {
-    let call = 0;
-    mockRequest.mockImplementation((_url, _opts, cb) => {
-      call += 1;
-      if (call === 1) {
-        const exchange = mockRedirectExchange({ location: "https://example.com/final" });
-        exchange.send(cb);
-        return exchange.req;
-      }
-
-      const exchange = mockSuccessfulTextExchange({
-        text: "redirected",
-        contentType: "text/plain",
-      });
-      exchange.send(cb);
-      return exchange.req;
+  it("forwards the source contract to guarded fetch and keeps the SavedMedia shape", async () => {
+    const source = "https://example.com/files/report.txt";
+    const headers = { Authorization: "Bearer secret", Accept: "text/plain" };
+    saveRemoteMediaMock.mockResolvedValueOnce({
+      id: "stored.txt",
+      path: "/tmp/stored.txt",
+      size: 6,
+      contentType: "text/plain",
+      fileName: "report.txt",
     });
 
-    await expectRedirectSaveResult({
-      expectedText: "redirected",
-      expectedContentType: "text/plain",
-      expectedExtension: ".txt",
+    const saved = await saveMediaSource(source, headers, "remote", 1234);
+
+    expect(saveRemoteMediaMock).toHaveBeenCalledWith({
+      url: source,
+      requestInit: { headers },
+      filePathHint: source,
+      maxBytes: 1234,
+      maxRedirects: 5,
+      fetchImpl: expect.any(Function),
+      responseHeaderTimeoutMs: 30_000,
+      readIdleTimeoutMs: 30_000,
+      originalFilename: "_.txt",
+      subdir: "remote",
+      lookupFn: expect.any(Function),
+      ssrfPolicy: { allowedHostnames: ["example.com"] },
+    });
+    expect(saved).toStrictEqual({
+      id: "stored.txt",
+      path: "/tmp/stored.txt",
+      size: 6,
+      contentType: "text/plain",
     });
   });
 
-  it("strips sensitive headers when a redirect crosses origins", async () => {
-    let call = 0;
-    mockRequest.mockImplementation((_url, _opts, cb) => {
-      call += 1;
-      if (call === 1) {
-        const exchange = mockRedirectExchange({ location: "https://cdn.example.com/final" });
-        exchange.send(cb);
-        return exchange.req;
-      }
+  it("rejects unsafe subdirectories before starting a remote fetch", async () => {
+    await expect(
+      saveMediaSource("https://example.com/file.bin", undefined, "../outside"),
+    ).rejects.toThrow("unsafe media subdir");
+    expect(saveRemoteMediaMock).not.toHaveBeenCalled();
+  });
 
-      const exchange = mockSuccessfulTextExchange({
-        text: "redirected",
-        contentType: "text/plain",
-      });
-      exchange.send(cb);
-      return exchange.req;
+  it("preserves an unmapped URL suffix through the canonical public flow", async () => {
+    await useActualSaveRemoteMedia();
+    runtimeFetchMock.mockResolvedValueOnce(
+      new Response("custom", {
+        status: 200,
+        headers: { "content-type": "application/x-custom" },
+      }),
+    );
+
+    const saved = await saveMediaSource(
+      "https://example.com/files/report.custom?token=secret",
+      undefined,
+      "remote",
+      1024,
+    );
+
+    expect(saved.id).toMatch(/^[a-f0-9-]{36}\.custom$/);
+    expect(saved.id).not.toContain("report");
+    await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("custom");
+  });
+
+  it("cancels a never-ending error body before canonical status handling", async () => {
+    await useActualSaveRemoteMedia();
+    const cancel = vi.fn(() => new Promise<void>(() => {}));
+    runtimeFetchMock.mockResolvedValueOnce(
+      new Response(new ReadableStream<Uint8Array>({ cancel }), {
+        status: 500,
+        statusText: "Internal Server Error",
+      }),
+    );
+
+    await expect(saveMediaSource("https://example.com/stalled-error.bin")).rejects.toMatchObject({
+      name: "MediaFetchError",
+      code: "http_error",
+      status: 500,
     });
+    expect(cancel).toHaveBeenCalledOnce();
+  });
 
-    await saveMediaSource("https://example.com/start", {
+  it("keeps redirect cancellation and cross-origin header stripping in the guard", async () => {
+    await useActualSaveRemoteMedia();
+    const cancel = vi.fn();
+    runtimeFetchMock
+      .mockResolvedValueOnce(
+        new Response(new ReadableStream<Uint8Array>({ cancel }), {
+          status: 302,
+          headers: { location: "https://cdn.example.com/asset.txt" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response("redirected", {
+          status: 200,
+          headers: { "content-type": "text/plain" },
+        }),
+      );
+
+    const saved = await saveMediaSource("https://example.com/start", {
       Authorization: "Bearer secret",
-      Cookie: "session=abc",
-      "X-Api-Key": "custom-secret",
       Accept: "text/plain",
-      "User-Agent": "OpenClaw-Test/1.0",
     });
 
-    expect(mockRequest).toHaveBeenCalledTimes(2);
-    const secondHeaders = getRequestHeaders(1);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
+    const secondInit = runtimeFetchMock.mock.calls[1]?.[1] as RequestInit;
+    const secondHeaders = new Headers(secondInit.headers);
     expect(secondHeaders.get("authorization")).toBeNull();
-    expect(secondHeaders.get("cookie")).toBeNull();
-    expect(secondHeaders.get("x-api-key")).toBeNull();
     expect(secondHeaders.get("accept")).toBe("text/plain");
-    expect(secondHeaders.get("user-agent")).toBe("OpenClaw-Test/1.0");
+    await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("redirected");
+    const expectedMode = process.platform === "win32" ? 0o666 : 0o644 & ~process.umask();
+    expect((await fs.stat(saved.path)).mode & 0o777).toBe(expectedMode);
   });
 
-  it("keeps headers when a redirect stays on the same origin", async () => {
-    let call = 0;
-    mockRequest.mockImplementation((_url, _opts, cb) => {
-      call += 1;
-      if (call === 1) {
-        const exchange = mockRedirectExchange({ location: "/final" });
-        exchange.send(cb);
-        return exchange.req;
-      }
+  it.each([
+    { name: "missing", location: undefined, expected: /missing location header/i },
+    { name: "malformed", location: "http://[", expected: /invalid url/i },
+  ])(
+    "rejects a $name redirect location after cancelling its body",
+    async ({ location, expected }) => {
+      await useActualSaveRemoteMedia();
+      const cancel = vi.fn();
+      runtimeFetchMock.mockResolvedValueOnce(
+        new Response(new ReadableStream<Uint8Array>({ cancel }), {
+          status: 302,
+          headers: location ? { location } : undefined,
+        }),
+      );
 
-      const exchange = mockSuccessfulTextExchange({
-        text: "redirected",
-        contentType: "text/plain",
-      });
-      exchange.send(cb);
-      return exchange.req;
-    });
-
-    await saveMediaSource("https://example.com/start", {
-      Authorization: "Bearer secret",
-    });
-
-    expect(getRequestHeaders(1).get("authorization")).toBe("Bearer secret");
-  });
-
-  it("drains ignored redirect response bodies before following redirects", async () => {
-    let redirectResume: ReturnType<typeof vi.fn> | undefined;
-    let call = 0;
-    mockRequest.mockImplementation((_url, _opts, cb) => {
-      call += 1;
-      if (call === 1) {
-        const exchange = mockRedirectExchange({
-          body: "ignored redirect response body",
-          location: "https://example.com/final",
-        });
-        redirectResume = exchange.resume;
-        exchange.send(cb);
-        return exchange.req;
-      }
-
-      const exchange = mockSuccessfulTextExchange({
-        text: "redirected",
-        contentType: "text/plain",
-      });
-      exchange.send(cb);
-      return exchange.req;
-    });
-
-    await saveMediaSource("https://example.com/start");
-
-    expect(redirectResume).toHaveBeenCalledOnce();
-  });
-
-  it("fails when redirect response omits location header", async () => {
-    let redirectResume: ReturnType<typeof vi.fn> | undefined;
-    mockRequest.mockImplementationOnce((_url, _opts, cb) => {
-      const exchange = mockRedirectExchange({ body: "ignored redirect response body" });
-      redirectResume = exchange.resume;
-      exchange.send(cb);
-      return exchange.req;
-    });
-    await expectRedirectSaveFailure("Redirect loop or missing Location header");
-    expect(redirectResume).toHaveBeenCalledOnce();
-  });
-
-  it("fails when redirect location is malformed", async () => {
-    let redirectResume: ReturnType<typeof vi.fn> | undefined;
-    mockRequest.mockImplementationOnce((_url, _opts, cb) => {
-      const exchange = mockRedirectExchange({
-        body: "ignored redirect response body",
-        location: "http://[",
-      });
-      redirectResume = exchange.resume;
-      exchange.send(cb);
-      return exchange.req;
-    });
-    await expectRedirectSaveFailure("Invalid redirect Location header");
-    expect(redirectResume).toHaveBeenCalledOnce();
-  });
-
-  it("drains ignored HTTP error response bodies before failing", async () => {
-    let errorResume: ReturnType<typeof vi.fn> | undefined;
-    mockRequest.mockImplementationOnce((_url, _opts, cb) => {
-      const exchange = mockHttpStatusExchange({
-        body: "ignored error response body",
-        statusCode: 500,
-      });
-      errorResume = exchange.resume;
-      exchange.send(cb);
-      return exchange.req;
-    });
-
-    await expectRedirectSaveFailure("HTTP 500 downloading media");
-    expect(errorResume).toHaveBeenCalledOnce();
-  });
+      await expect(saveMediaSource("https://example.com/start")).rejects.toThrow(expected);
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(runtimeFetchMock).toHaveBeenCalledOnce();
+    },
+  );
 });

@@ -4,12 +4,25 @@
  * Resolves extension, skill, prompt, and theme sources from npm, git, local paths, and project manifests.
  */
 import { createHash } from "node:crypto";
-import { existsSync, globSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import {
+  chmodSync,
+  existsSync,
+  globSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import ignore from "ignore";
 import { minimatch } from "minimatch";
-import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
+import { isDefaultStateDir } from "../../config/paths.js";
+import {
+  addIgnoreRules,
+  normalizeNativePathSeparators,
+  type IgnoreMatcher,
+} from "../../shared/ignore-rules.js";
 import { CONFIG_DIR_NAME } from "../config.js";
 import { type GitSource, parseGitUrl } from "../utils/git.js";
 import { canonicalizePath, isLocalPath } from "../utils/paths.js";
@@ -124,6 +137,14 @@ function getHomeDir(): string {
   return process.env.HOME || homedir();
 }
 
+function getAgentResourceTempDir(agentDir: string): string {
+  const tempDir = join(agentDir, "tmp", "resources");
+  // Temporary packages can contain executable code, so other local users must not modify them.
+  mkdirSync(tempDir, { recursive: true, mode: 0o700 });
+  chmodSync(tempDir, 0o700);
+  return tempDir;
+}
+
 function isPattern(s: string): boolean {
   return (
     s.startsWith("!") ||
@@ -168,8 +189,9 @@ function collectFiles(
   }
 
   const root = rootDir ?? dir;
-  const ig = ignoreMatcher ?? ignore();
-  addIgnoreRules(ig, dir, root);
+  const ig = ignoreMatcher
+    ? addIgnoreRules(dir, root, ignoreMatcher, { ignoreCase: true })
+    : addIgnoreRules(dir, root);
 
   try {
     const entries = readdirSync(dir, { withFileTypes: true });
@@ -195,7 +217,7 @@ function collectFiles(
         }
       }
 
-      const relPath = toPosixPath(relative(root, fullPath));
+      const relPath = normalizeNativePathSeparators(relative(root, fullPath));
       const ignorePath = isDir ? `${relPath}/` : relPath;
       if (ig.ignores(ignorePath)) {
         continue;
@@ -228,8 +250,9 @@ function collectSkillEntries(
   }
 
   const root = rootDir ?? dir;
-  const ig = ignoreMatcher ?? ignore();
-  addIgnoreRules(ig, dir, root);
+  const ig = ignoreMatcher
+    ? addIgnoreRules(dir, root, ignoreMatcher, { ignoreCase: true })
+    : addIgnoreRules(dir, root);
 
   try {
     const dirEntries = readdirSync(dir, { withFileTypes: true });
@@ -252,7 +275,7 @@ function collectSkillEntries(
         }
       }
 
-      const relPath = toPosixPath(relative(root, fullPath));
+      const relPath = normalizeNativePathSeparators(relative(root, fullPath));
       if (isFile && !ig.ignores(relPath)) {
         entries.push(fullPath);
         return entries;
@@ -284,7 +307,7 @@ function collectSkillEntries(
         }
       }
 
-      const relPath = toPosixPath(relative(root, fullPath));
+      const relPath = normalizeNativePathSeparators(relative(root, fullPath));
       if (
         mode === "openclaw" &&
         dir === root &&
@@ -360,8 +383,7 @@ function collectTopLevelAutoResourceEntries(
     return entries;
   }
 
-  const ig = ignore();
-  addIgnoreRules(ig, dir, dir);
+  const ig = addIgnoreRules(dir, dir);
 
   try {
     const dirEntries = readdirSync(dir, { withFileTypes: true });
@@ -386,7 +408,7 @@ function collectTopLevelAutoResourceEntries(
         }
       }
 
-      const relPath = toPosixPath(relative(dir, fullPath));
+      const relPath = normalizeNativePathSeparators(relative(dir, fullPath));
       if (ig.ignores(relPath)) {
         continue;
       }
@@ -455,8 +477,7 @@ function collectAutoExtensionEntries(dir: string): string[] {
   }
 
   // Otherwise, discover extensions from directory contents
-  const ig = ignore();
-  addIgnoreRules(ig, dir, dir);
+  const ig = addIgnoreRules(dir, dir);
 
   try {
     const dirEntries = readdirSync(dir, { withFileTypes: true });
@@ -485,7 +506,7 @@ function collectAutoExtensionEntries(dir: string): string[] {
         }
       }
 
-      const relPath = toPosixPath(relative(dir, fullPath));
+      const relPath = normalizeNativePathSeparators(relative(dir, fullPath));
       const ignorePath = isDir ? `${relPath}/` : relPath;
       if (ig.ignores(ignorePath)) {
         continue;
@@ -543,13 +564,19 @@ function isRealPathWithinRoot(root: string, candidate: string): boolean {
 
 function getMatchCandidates(filePath: string, baseDir: string, includeNames: boolean): string[] {
   const name = basename(filePath);
-  const candidates = [toPosixPath(relative(baseDir, filePath)), toPosixPath(filePath)];
+  const candidates = [
+    normalizeNativePathSeparators(relative(baseDir, filePath)),
+    normalizeNativePathSeparators(filePath),
+  ];
   if (includeNames) {
     candidates.push(name);
   }
   if (name === "SKILL.md") {
     const parentDir = dirname(filePath);
-    candidates.push(toPosixPath(relative(baseDir, parentDir)), toPosixPath(parentDir));
+    candidates.push(
+      normalizeNativePathSeparators(relative(baseDir, parentDir)),
+      normalizeNativePathSeparators(parentDir),
+    );
     if (includeNames) {
       candidates.push(basename(parentDir));
     }
@@ -559,13 +586,15 @@ function getMatchCandidates(filePath: string, baseDir: string, includeNames: boo
 
 function matchesAnyPattern(filePath: string, patterns: string[], baseDir: string): boolean {
   const candidates = getMatchCandidates(filePath, baseDir, true);
-  return patterns.some((pattern) => minimatch.match(candidates, toPosixPath(pattern)).length > 0);
+  return patterns.some(
+    (pattern) => minimatch.match(candidates, normalizeNativePathSeparators(pattern)).length > 0,
+  );
 }
 
 function normalizeExactPattern(pattern: string): string {
   const normalized =
     pattern.startsWith("./") || pattern.startsWith(".\\") ? pattern.slice(2) : pattern;
-  return toPosixPath(normalized);
+  return normalizeNativePathSeparators(normalized);
 }
 
 function matchesAnyExactPattern(filePath: string, patterns: string[], baseDir: string): boolean {
@@ -940,7 +969,7 @@ export class DefaultPackageManager implements PackageManager {
       .update(`${prefix}-${suffix ?? ""}`)
       .digest("hex")
       .slice(0, 8);
-    return join(tmpdir(), "openclaw-resources", prefix, hash, suffix ?? "");
+    return join(getAgentResourceTempDir(this.agentDir), prefix, hash, suffix ?? "");
   }
 
   private getBaseDirForScope(scope: SourceScope): string {
@@ -1343,19 +1372,21 @@ export class DefaultPackageManager implements PackageManager {
       globalBaseDir,
     );
 
-    // User skills from ~/.agents/ (with its own baseDir)
-    const userAgentsBaseDir = dirname(userAgentsSkillsDir);
-    const userAgentsMetadata: PathMetadata = {
-      ...userMetadata,
-      baseDir: userAgentsBaseDir,
-    };
-    addResources(
-      "skills",
-      collectAutoSkillEntries(userAgentsSkillsDir, "agents"),
-      userAgentsMetadata,
-      userOverrides.skills,
-      userAgentsBaseDir,
-    );
+    if (isDefaultStateDir()) {
+      // Home-scoped personal skills belong to the default install, not isolated state roots.
+      const userAgentsBaseDir = dirname(userAgentsSkillsDir);
+      const userAgentsMetadata: PathMetadata = {
+        ...userMetadata,
+        baseDir: userAgentsBaseDir,
+      };
+      addResources(
+        "skills",
+        collectAutoSkillEntries(userAgentsSkillsDir, "agents"),
+        userAgentsMetadata,
+        userOverrides.skills,
+        userAgentsBaseDir,
+      );
+    }
 
     addResources(
       "prompts",

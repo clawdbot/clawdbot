@@ -133,9 +133,10 @@ export function parseOcPath(input: string): OcPath {
     fail("oc:// path must be a string", String(input), "OC_PATH_NOT_STRING");
   }
 
-  if (input.length > MAX_PATH_LENGTH) {
+  const inputBytes = Buffer.byteLength(input, "utf8");
+  if (inputBytes > MAX_PATH_LENGTH) {
     fail(
-      `oc:// path exceeds ${MAX_PATH_LENGTH} bytes (length: ${input.length})`,
+      `oc:// path exceeds ${MAX_PATH_LENGTH} bytes (length: ${inputBytes})`,
       truncateUtf16Safe(input, 80) + "…",
       "OC_PATH_TOO_LONG",
     );
@@ -146,9 +147,10 @@ export function parseOcPath(input: string): OcPath {
   let normalized = input.startsWith(BOM) ? input.slice(BOM.length) : input;
   normalized = normalized.normalize("NFC");
 
-  if (normalized.length > MAX_PATH_LENGTH) {
+  const normalizedBytes = Buffer.byteLength(normalized, "utf8");
+  if (normalizedBytes > MAX_PATH_LENGTH) {
     fail(
-      `oc:// path exceeds ${MAX_PATH_LENGTH} bytes after NFC (length: ${normalized.length})`,
+      `oc:// path exceeds ${MAX_PATH_LENGTH} bytes after NFC (length: ${normalizedBytes})`,
       truncateUtf16Safe(input, 80) + "…",
       "OC_PATH_TOO_LONG",
     );
@@ -315,9 +317,10 @@ export function formatOcPath(path: OcPath): string {
     out += "?session=" + path.session;
   }
 
-  if (out.length > MAX_PATH_LENGTH) {
+  const outputBytes = Buffer.byteLength(out, "utf8");
+  if (outputBytes > MAX_PATH_LENGTH) {
     fail(
-      `Formatted oc:// exceeds ${MAX_PATH_LENGTH} bytes (length: ${out.length})`,
+      `Formatted oc:// exceeds ${MAX_PATH_LENGTH} bytes (length: ${outputBytes})`,
       truncateUtf16Safe(out, 80) + "…",
       "OC_PATH_TOO_LONG",
     );
@@ -394,7 +397,7 @@ export function resolvePositionalSeg(seg: string, container: PositionalContainer
 /**
  * Wildcard tokens permitted in `findOcPaths` patterns.
  * `*` matches one sub-segment; `**` matches zero or more (recursive).
- * Reject in resolve/set via `hasWildcard`.
+ * Reject in resolve/set via `isPattern`.
  */
 export const WILDCARD_SINGLE = "*";
 export const WILDCARD_RECURSIVE = "**";
@@ -404,7 +407,7 @@ export const WILDCARD_RECURSIVE = "**";
  * union `{a,b,c}`, or predicate `[k=v]`). Single-match verbs reject
  * these; only `findOcPaths` consumes them.
  */
-function isPattern(path: OcPath): boolean {
+export function isPattern(path: OcPath): boolean {
   for (const slot of [path.section, path.item, path.field]) {
     if (slot === undefined) {
       continue;
@@ -425,9 +428,6 @@ function isPattern(path: OcPath): boolean {
   }
   return false;
 }
-
-/** @deprecated v1 — use {@link isPattern}. Behaviorally identical. */
-export const hasWildcard = isPattern;
 
 /** Union segment `{a,b,c}` matches each comma-separated alternative. */
 export function isUnionSeg(seg: string): boolean {

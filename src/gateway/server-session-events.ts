@@ -1,42 +1,51 @@
 // Gateway session event broadcaster.
 // Projects transcript and lifecycle updates to websocket subscribers.
+import path from "node:path";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
-  loadSessionEntry as loadAccessorSessionEntry,
+  listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
+  loadSessionEntryReadOnly as loadAccessorSessionEntryReadOnly,
   resolveTranscriptSessionKeyBySessionId,
 } from "../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
+import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
+import { hasSessionChangeReceivers } from "./session-change-receivers.js";
 import {
   buildGatewaySessionEventFields,
   buildGatewaySessionEventRow,
 } from "./session-event-payload.js";
-import { resolveSessionKeyForTranscriptFile } from "./session-transcript-key.js";
+import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
 import {
   attachOpenClawTranscriptMeta,
   readSessionMessageCountAsync,
 } from "./session-transcript-readers.js";
 import {
   loadGatewaySessionRow,
-  loadSessionEntry,
+  loadGatewaySessionEntryReadOnly,
   type GatewaySessionRow,
 } from "./session-utils.js";
 
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
+
+function tryResolveCompatibilityDefaultAgentId(): string | undefined {
+  return tryResolveLegacyCompatibilityAgentId(getRuntimeConfig());
+}
 
 function readMessageIdempotencyKey(message: unknown): string | undefined {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
@@ -58,21 +67,34 @@ function readMessageSenderIsOwner(message: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
-function resolveSessionMessageBroadcastKeys(sessionKey: string, agentId?: string): string[] {
-  // Global sessions can be subscribed through either the raw global key or the
-  // default-agent scoped key; non-default agent global sessions stay scoped.
-  const normalizedAgentId = normalizeOptionalString(agentId);
-  if (sessionKey === "global") {
-    const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig()));
-    if (normalizedAgentId) {
-      const scopedKey = `agent:${normalizeAgentId(normalizedAgentId)}:global`;
-      return normalizeAgentId(normalizedAgentId) === defaultAgentId
-        ? [scopedKey, sessionKey]
-        : [scopedKey];
-    }
-    return [`agent:${defaultAgentId}:global`, sessionKey];
+function readTranscriptUpdateLifecycleOwner(
+  update: InternalSessionTranscriptUpdate,
+): { lifecycleRevision?: string } | undefined {
+  const marker = parseSqliteSessionFileMarker(update.sessionFile);
+  const sessionKey =
+    normalizeOptionalString(update.target?.sessionKey) ??
+    normalizeOptionalString(update.sessionKey) ??
+    (marker ? resolveTranscriptSessionKeyBySessionId(marker) : undefined);
+  if (!sessionKey) {
+    return undefined;
   }
-  return [sessionKey];
+  const agentId =
+    normalizeOptionalString(update.target?.agentId) ??
+    normalizeOptionalString(update.agentId) ??
+    marker?.agentId;
+  const sessionId =
+    normalizeOptionalString(update.target?.sessionId) ??
+    normalizeOptionalString(update.sessionId) ??
+    marker?.sessionId;
+  const storePath = normalizeOptionalString(update.target?.storePath) ?? marker?.storePath;
+  const entry = storePath
+    ? loadAccessorSessionEntryReadOnly({ agentId, sessionKey, storePath })
+    : loadGatewaySessionEntryReadOnly(sessionKey, agentId ? { agentId } : undefined)?.entry;
+  if (!entry || (sessionId && entry.sessionId !== sessionId)) {
+    return undefined;
+  }
+  const lifecycleRevision = normalizeOptionalString(entry.lifecycleRevision);
+  return lifecycleRevision ? { lifecycleRevision } : {};
 }
 
 function buildGatewaySessionSnapshot(params: {
@@ -93,6 +115,7 @@ function buildGatewaySessionSnapshot(params: {
   const session = params.includeSession
     ? {
         ...buildGatewaySessionEventRow(sessionRow),
+        createdActor: sessionRow.createdActor ?? null,
         thinkingLevel: sessionRow.thinkingLevel ?? null,
       }
     : undefined;
@@ -130,13 +153,40 @@ export function createTranscriptUpdateBroadcastHandler(params: {
   sessionMessageSubscribers: SessionMessageSubscribers;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
 }) {
-  let broadcastQueue = Promise.resolve();
-  return (update: InternalSessionTranscriptUpdate): void => {
-    // Preserve transcript update order even when counting messages requires an
-    // async read from the session file.
-    broadcastQueue = broadcastQueue
-      .then(() => handleTranscriptUpdateBroadcast(params, update))
-      .catch(() => undefined);
+  // Ordering is a per-transcript contract: subscribers merge each session's
+  // updates independently, so lanes keyed by transcript identity keep message
+  // order without one session's async seq reads stalling every other session.
+  const broadcastQueues = new Map<string, Promise<void>>();
+  return (update: InternalSessionTranscriptUpdate): Promise<void> => {
+    // Capture legacy ownership before the async queue can cross a same-id reset;
+    // committed producer ownership always wins over a later session-store read.
+    const lifecycleRevision =
+      normalizeOptionalString(update.lifecycleRevision) ??
+      (update.message !== undefined
+        ? readTranscriptUpdateLifecycleOwner(update)?.lifecycleRevision
+        : undefined);
+    const queuedUpdate = lifecycleRevision ? { ...update, lifecycleRevision } : update;
+    const laneKey =
+      normalizeOptionalString(update.target?.sessionKey) ??
+      normalizeOptionalString(update.sessionKey) ??
+      normalizeOptionalString(update.sessionFile) ??
+      "";
+    // Preserve transcript update order within the lane even when counting
+    // messages requires an async read from the session file.
+    const tail = broadcastQueues.get(laneKey) ?? Promise.resolve();
+    const task = tail.then(() => handleTranscriptUpdateBroadcast(params, queuedUpdate));
+    const settled = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    broadcastQueues.set(laneKey, settled);
+    void settled.then(() => {
+      // Drop drained lanes so idle sessions do not accumulate map entries.
+      if (broadcastQueues.get(laneKey) === settled) {
+        broadcastQueues.delete(laneKey);
+      }
+    });
+    return task;
   };
 }
 
@@ -149,91 +199,186 @@ async function handleTranscriptUpdateBroadcast(
   },
   update: InternalSessionTranscriptUpdate,
 ): Promise<void> {
-  const sqliteMarker = parseSqliteSessionFileMarker(update.sessionFile);
-  const storageAgentId = update.target?.agentId ?? update.agentId ?? sqliteMarker?.agentId;
-  const sessionKey =
-    update.target?.sessionKey ??
-    update.sessionKey ??
-    (sqliteMarker
-      ? resolveTranscriptSessionKeyBySessionId({
-          agentId: storageAgentId,
-          sessionId: sqliteMarker.sessionId,
-          storePath: sqliteMarker.storePath,
+  const legacyMarker = parseSqliteSessionFileMarker(update.sessionFile);
+  const targetAgentId = normalizeOptionalString(update.target?.agentId);
+  const targetSessionId = normalizeOptionalString(update.target?.sessionId);
+  const targetSessionKey = normalizeOptionalString(update.target?.sessionKey);
+  const suppliedSessionKey = normalizeOptionalString(update.sessionKey);
+  const candidateSessionKey = targetSessionKey ?? suppliedSessionKey;
+  const targetKeyAgentId = parseAgentSessionKey(candidateSessionKey)?.agentId;
+  const targetStorePath = normalizeOptionalString(update.target?.storePath);
+  const completeTarget = Boolean(
+    targetAgentId && targetSessionId && targetSessionKey && targetStorePath,
+  );
+  const markerSessionKey =
+    legacyMarker && !completeTarget
+      ? resolveTranscriptSessionKeyBySessionId(legacyMarker)
+      : undefined;
+  const markerMatches =
+    legacyMarker && !completeTarget
+      ? listAccessorSessionEntriesReadOnly({
+          agentId: legacyMarker.agentId,
+          storePath: legacyMarker.storePath,
+        }).filter(({ entry }) => entry.sessionId === legacyMarker.sessionId)
+      : [];
+  const candidateKeyEntry =
+    candidateSessionKey && legacyMarker && !completeTarget
+      ? loadAccessorSessionEntryReadOnly({
+          agentId: legacyMarker.agentId,
+          sessionKey: candidateSessionKey,
+          storePath: legacyMarker.storePath,
         })
-      : undefined) ??
-    (update.sessionFile ? resolveSessionKeyForTranscriptFile(update.sessionFile) : undefined);
-  if (!sessionKey || update.message === undefined) {
+      : undefined;
+  if (targetKeyAgentId && targetAgentId && targetKeyAgentId !== targetAgentId) {
     return;
   }
-  const effectiveAgentId = update.target?.agentId ?? update.agentId;
-  const defaultGlobalAgentId =
-    sessionKey === "global"
-      ? normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig()))
-      : undefined;
-  const visibleAgentId =
-    effectiveAgentId ??
-    (effectiveAgentId && effectiveAgentId !== defaultGlobalAgentId ? effectiveAgentId : undefined);
+  if (
+    legacyMarker &&
+    !completeTarget &&
+    ((targetAgentId && targetAgentId !== legacyMarker.agentId) ||
+      (targetSessionId &&
+        targetSessionId !== legacyMarker.sessionId &&
+        candidateKeyEntry?.sessionId !== legacyMarker.sessionId) ||
+      (targetKeyAgentId && targetKeyAgentId !== legacyMarker.agentId) ||
+      (candidateSessionKey &&
+        ((candidateKeyEntry && candidateKeyEntry.sessionId !== legacyMarker.sessionId) ||
+          (!candidateKeyEntry && markerMatches.length > 0))) ||
+      (targetStorePath && path.resolve(targetStorePath) !== path.resolve(legacyMarker.storePath)))
+  ) {
+    return;
+  }
+  const compatibleLegacyMarker = completeTarget ? undefined : legacyMarker;
+  const sessionKey = compatibleLegacyMarker
+    ? candidateKeyEntry?.sessionId === compatibleLegacyMarker.sessionId ||
+      (!candidateKeyEntry && markerMatches.length === 0)
+      ? candidateSessionKey
+      : markerSessionKey
+    : candidateSessionKey;
+  if (!sessionKey) {
+    return;
+  }
+  const effectiveAgentId = compatibleLegacyMarker?.agentId ?? targetAgentId ?? update.agentId;
+  const compatibilityDefaultAgentId = tryResolveCompatibilityDefaultAgentId();
+  const persistedOwner = resolvePersistedSessionStoreOwnerForKey(getRuntimeConfig(), sessionKey);
+  const stableCompatibilityAgentId =
+    persistedOwner.kind === "configured" ? persistedOwner.agentId : compatibilityDefaultAgentId;
+  const stableUnscopedOwner =
+    !parseAgentSessionKey(sessionKey) && !effectiveAgentId ? stableCompatibilityAgentId : undefined;
+  const storageAgentId = effectiveAgentId ?? stableUnscopedOwner;
+  const visibleAgentId = effectiveAgentId;
+  const routingAgentId = effectiveAgentId ?? stableUnscopedOwner;
   const connIds = new Set<string>();
   for (const connId of params.sessionEventSubscribers.getAll()) {
     connIds.add(connId);
   }
-  for (const broadcastKey of resolveSessionMessageBroadcastKeys(sessionKey, effectiveAgentId)) {
+  let broadcastKeys = [sessionKey];
+  if (sessionKey === "global" && routingAgentId) {
+    broadcastKeys = resolveSessionSubscriptionKeys(
+      sessionKey,
+      routingAgentId,
+      stableCompatibilityAgentId,
+    );
+  }
+  for (const broadcastKey of broadcastKeys) {
     for (const connId of params.sessionMessageSubscribers.get(broadcastKey)) {
       connIds.add(connId);
     }
   }
   if (connIds.size === 0) {
-    return;
+    if (
+      !hasSessionChangeReceivers(connIds) ||
+      (update.message !== undefined && projectChatDisplayMessage(update.message))
+    ) {
+      return;
+    }
   }
   let messageSeq = asPositiveSafeInteger(update.messageSeq);
-  if (messageSeq === undefined) {
+  if (update.message !== undefined && messageSeq === undefined) {
     // Updates from raw transcript events may not carry seq; fall back to the
     // current transcript line count for cursor-compatible live history.
-    const markerEntry = sqliteMarker
-      ? loadAccessorSessionEntry({
-          agentId: storageAgentId,
-          sessionKey,
-          storePath: sqliteMarker.storePath,
-        })
-      : undefined;
-    const fallbackTarget = markerEntry
-      ? undefined
-      : loadSessionEntry(sessionKey, { agentId: visibleAgentId });
-    const entry = markerEntry ?? fallbackTarget?.entry;
-    const storePath = sqliteMarker?.storePath ?? fallbackTarget?.storePath;
-    messageSeq = entry?.sessionId
+    const updateStorePath = targetStorePath ?? compatibleLegacyMarker?.storePath;
+    const fallbackTarget = updateStorePath
+      ? {
+          entry: loadAccessorSessionEntryReadOnly({
+            agentId: storageAgentId ?? routingAgentId,
+            sessionKey,
+            storePath: updateStorePath,
+          }),
+          storePath: updateStorePath,
+        }
+      : loadGatewaySessionEntryReadOnly(sessionKey, { agentId: routingAgentId });
+    const entry = fallbackTarget?.entry;
+    const messageSessionId =
+      compatibleLegacyMarker?.sessionId ??
+      normalizeOptionalString(update.target?.sessionId) ??
+      entry?.sessionId;
+    const storePath = updateStorePath ?? fallbackTarget?.storePath;
+    messageSeq = messageSessionId
       ? asPositiveSafeInteger(
           await readSessionMessageCountAsync({
-            agentId: storageAgentId ?? visibleAgentId,
+            agentId: update.target?.agentId ?? storageAgentId ?? routingAgentId,
             sessionEntry: entry,
-            sessionId: entry.sessionId,
+            sessionId: messageSessionId,
             sessionKey,
             storePath,
           }),
         )
       : undefined;
   }
+  const lifecycleRevision = normalizeOptionalString(update.lifecycleRevision);
+  if (lifecycleRevision) {
+    // A reset can retain sessionId, so validate the captured owner after every
+    // awaited transcript read before projecting the current session snapshot.
+    const currentLifecycleOwner = readTranscriptUpdateLifecycleOwner(update);
+    if (
+      !currentLifecycleOwner ||
+      (currentLifecycleOwner.lifecycleRevision &&
+        currentLifecycleOwner.lifecycleRevision !== lifecycleRevision)
+    ) {
+      return;
+    }
+  }
+  // Message frames must keep transcript-derived live usage (dashboard API
+  // contract from #50101); the 64KB cap bounds the per-message tail read.
   const sessionRow = loadGatewaySessionRow(sessionKey, {
-    agentId: visibleAgentId,
+    agentId: routingAgentId,
     transcriptUsageMaxBytes: 64 * 1024,
   });
-  const activeRunState = sessionRow
-    ? resolveVisibleActiveSessionRunState({
-        context: params,
-        requestedKey: sessionKey,
-        canonicalKey: sessionRow.key,
-        sessionId: sessionRow.sessionId,
-        ...(sessionRow.key === "global" && visibleAgentId ? { agentId: visibleAgentId } : {}),
-        defaultAgentId: normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig())),
-      })
-    : null;
+  const activeRunState =
+    sessionRow &&
+    (sessionRow.key !== "global" || routingAgentId !== undefined || compatibilityDefaultAgentId)
+      ? resolveVisibleActiveSessionRunState({
+          context: params,
+          requestedKey: sessionKey,
+          canonicalKey: sessionRow.key,
+          sessionId: sessionRow.sessionId,
+          ...(routingAgentId ? { agentId: routingAgentId } : {}),
+          defaultAgentId: stableUnscopedOwner,
+        })
+      : null;
   const sessionSnapshot = buildGatewaySessionSnapshot({
     sessionRow,
-    agentId: visibleAgentId,
+    agentId: routingAgentId,
     includeSession: true,
     hasActiveRun: activeRunState?.active,
     activeRunIds: activeRunState?.runIds,
   });
+  if (update.message === undefined) {
+    // A committed batch without individually proven cursors must invalidate
+    // both session-list and targeted transcript subscribers exactly once.
+    params.broadcastToConnIds(
+      "sessions.changed",
+      {
+        sessionKey,
+        ...(visibleAgentId ? { agentId: visibleAgentId } : {}),
+        phase: "message",
+        ts: Date.now(),
+        ...sessionSnapshot,
+      },
+      connIds,
+    );
+    return;
+  }
   const idempotencyKey = readMessageIdempotencyKey(update.message);
   const senderIsOwner = readMessageSenderIsOwner(update.message);
   const rawMessage = attachOpenClawTranscriptMeta(update.message, {
@@ -241,7 +386,7 @@ async function handleTranscriptUpdateBroadcast(
     ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(messageSeq !== undefined ? { seq: messageSeq } : {}),
   });
-  const message = projectChatDisplayMessage(rawMessage);
+  const message = projectChatDisplayMessage(rawMessage, { resolveCurrentUserProfileDisplay });
   if (message) {
     params.broadcastToConnIds(
       "session.message",
@@ -255,7 +400,6 @@ async function handleTranscriptUpdateBroadcast(
         ...sessionSnapshot,
       },
       connIds,
-      { dropIfSlow: true },
     );
     return;
   }
@@ -263,7 +407,7 @@ async function handleTranscriptUpdateBroadcast(
   // Messages suppressed from display can still change transcript state, so
   // notify broad session listeners even when no session.message is emitted.
   const sessionEventConnIds = params.sessionEventSubscribers.getAll();
-  if (sessionEventConnIds.size === 0) {
+  if (!hasSessionChangeReceivers(sessionEventConnIds)) {
     return;
   }
   params.broadcastToConnIds(
@@ -289,24 +433,45 @@ export function createLifecycleEventBroadcastHandler(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
 }) {
   return (event: SessionLifecycleEvent): void => {
+    const swarmEvent = event as SessionLifecycleEvent & {
+      swarmGroupId?: string;
+      kind?: "phase" | "log";
+      text?: string;
+    };
     const connIds = params.sessionEventSubscribers.getAll();
-    if (connIds.size === 0) {
+    if (!hasSessionChangeReceivers(connIds)) {
       return;
     }
-    const sessionRow = loadGatewaySessionRow(event.sessionKey);
-    const activeRunState = sessionRow
-      ? resolveVisibleActiveSessionRunState({
-          context: params,
-          requestedKey: event.sessionKey,
-          canonicalKey: sessionRow.key,
-          sessionId: sessionRow.sessionId,
-          defaultAgentId: normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig())),
-        })
-      : null;
+    const compatibilityDefaultAgentId = tryResolveCompatibilityDefaultAgentId();
+    const eventAgentId =
+      normalizeOptionalString(event.agentId) ?? parseAgentSessionKey(event.sessionKey)?.agentId;
+    const persistedOwner = resolvePersistedSessionStoreOwnerForKey(
+      getRuntimeConfig(),
+      event.sessionKey,
+    );
+    const stableOwnerAgentId =
+      (persistedOwner.kind === "configured" ? persistedOwner.agentId : undefined) ??
+      compatibilityDefaultAgentId;
+    const rowAgentId = eventAgentId ?? stableOwnerAgentId;
+    const sessionRow = rowAgentId
+      ? loadGatewaySessionRow(event.sessionKey, { agentId: rowAgentId })
+      : undefined;
+    const activeRunState =
+      sessionRow && (sessionRow.key !== "global" || rowAgentId)
+        ? resolveVisibleActiveSessionRunState({
+            context: params,
+            requestedKey: event.sessionKey,
+            canonicalKey: sessionRow.key,
+            sessionId: sessionRow.sessionId,
+            ...(rowAgentId ? { agentId: rowAgentId } : {}),
+            defaultAgentId: stableOwnerAgentId,
+          })
+        : null;
     params.broadcastToConnIds(
       "sessions.changed",
       {
         sessionKey: event.sessionKey,
+        ...(eventAgentId ? { agentId: eventAgentId } : {}),
         reason: event.reason,
         parentSessionKey: event.parentSessionKey,
         label: event.label,
@@ -320,6 +485,13 @@ export function createLifecycleEventBroadcastHandler(params: {
           hasActiveRun: activeRunState?.active,
           activeRunIds: activeRunState?.runIds,
         }),
+        ...(swarmEvent.swarmGroupId
+          ? {
+              swarmGroupId: swarmEvent.swarmGroupId,
+              kind: swarmEvent.kind,
+              text: swarmEvent.text,
+            }
+          : {}),
       },
       connIds,
       { dropIfSlow: true },

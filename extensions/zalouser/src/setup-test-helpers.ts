@@ -6,7 +6,7 @@ import {
   resolveDefaultZalouserAccountId,
   resolveZalouserAccountSync,
 } from "./accounts.js";
-import { zalouserSetupAdapter } from "./setup-core.js";
+import { zalouserSetupContract } from "./setup-core.js";
 import { zalouserSetupWizard } from "./setup-surface.js";
 
 export const zalouserSetupPlugin = {
@@ -38,6 +38,6 @@ export const zalouserSetupPlugin = {
       normalizeEntry: (raw: string) => raw.trim().replace(/^(zalouser|zlu):/i, ""),
     }),
   },
-  setup: zalouserSetupAdapter,
+  setupContract: zalouserSetupContract,
   setupWizard: zalouserSetupWizard,
 } as const;

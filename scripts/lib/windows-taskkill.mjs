@@ -6,6 +6,10 @@ import {
 
 export { resolveWindowsPowerShellPath, resolveWindowsSystem32Path };
 
+/**
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {string}
+ */
 export function resolveWindowsTaskkillPath(env = process.env) {
   return resolveWindowsSystem32Path("taskkill.exe", env);
 }

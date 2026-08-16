@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Control UI view renders usage metrics screen content.
 import { html } from "lit";
 import {
@@ -8,7 +9,6 @@ import {
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { UsageSessionEntry, UsageTotals, UsageAggregates } from "./types.ts";
 
 const CHARS_PER_TOKEN = 4;
@@ -25,8 +25,14 @@ function charsToTokens(chars: number): number {
   return Math.round(chars / CHARS_PER_TOKEN);
 }
 
-function formatTokens(n: number): string {
+function formatUsageTokens(n: number): string {
   return formatCompactTokenCount(n, { thousandsSuffix: "K", trimTrailingZero: false });
+}
+
+// Usage charts choose fixed precision from the surrounding scale; the shared
+// adaptive cost formatter would change labels as values cross its thresholds.
+function formatUsageCost(n: number, decimals = 2): string {
+  return `$${n.toFixed(decimals)}`;
 }
 
 function formatHourLabel(hour: number): string {
@@ -58,9 +64,19 @@ function forEachSessionHourSlice(
 
   const startMs = Math.min(start, end);
   const endMs = Math.max(start, end);
-  const durationMs = Math.max(endMs - startMs, 1);
-  const totalMinutes = durationMs / 60000;
 
+  if (startMs === endMs) {
+    const date = new Date(startMs);
+    visitor({
+      usage,
+      hour: getZonedHour(date, timeZone),
+      weekday: getZonedWeekday(date, timeZone),
+      share: 1,
+    });
+    return true;
+  }
+
+  const totalMinutes = (endMs - startMs) / 60000;
   let cursor = startMs;
   while (cursor < endMs) {
     const date = new Date(cursor);
@@ -342,7 +358,7 @@ function renderUsageMosaic(
         description: t("usage.mosaic.subtitleEmpty"),
         actions: html`
           <div class="usage-mosaic-total">
-            ${formatTokens(0)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
+            ${formatUsageTokens(0)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
           </div>
         `,
       },
@@ -368,7 +384,7 @@ function renderUsageMosaic(
       }),
       actions: html`
         <div class="usage-mosaic-total">
-          ${formatTokens(stats.totalTokens)}
+          ${formatUsageTokens(stats.totalTokens)}
           ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
         </div>
       `,
@@ -388,7 +404,7 @@ function renderUsageMosaic(
                 return html`
                   <div class="usage-daypart-cell" style="background: ${bg};">
                     <div class="usage-daypart-label">${part.label}</div>
-                    <div class="usage-daypart-value">${formatTokens(part.tokens)}</div>
+                    <div class="usage-daypart-value">${formatUsageTokens(part.tokens)}</div>
                   </div>
                 `;
               })}
@@ -406,7 +422,7 @@ function renderUsageMosaic(
                   value > 0
                     ? `color-mix(in srgb, var(--accent) ${(8 + intensity * 70).toFixed(1)}%, transparent)`
                     : "transparent";
-                const title = `${hour}:00 · ${formatTokens(value)} ${normalizeLowercaseStringOrEmpty(
+                const title = `${hour}:00 · ${formatUsageTokens(value)} ${normalizeLowercaseStringOrEmpty(
                   t("usage.metrics.tokens"),
                 )}`;
                 const border =
@@ -415,12 +431,15 @@ function renderUsageMosaic(
                     : "color-mix(in srgb, var(--accent) 24%, transparent)";
                 const selected = selectedHours.includes(hour);
                 return html`
-                  <div
+                  <button
+                    type="button"
                     class="usage-hour-cell ${selected ? "selected" : ""}"
                     style="background: ${bg}; border-color: ${border};"
                     title="${title}"
+                    aria-label=${title}
+                    aria-pressed=${selected ? "true" : "false"}
                     @click=${(e: MouseEvent) => onSelectHour(hour, e.shiftKey)}
-                  ></div>
+                  ></button>
                 `;
               })}
             </div>
@@ -441,10 +460,6 @@ function renderUsageMosaic(
       </div>
     `,
   );
-}
-
-function formatCost(n: number, decimals = 2): string {
-  return `$${n.toFixed(decimals)}`;
 }
 
 function formatIsoDate(date: Date): string {
@@ -848,11 +863,11 @@ export {
   buildPeakErrorHours,
   buildUsageInsightStats,
   charsToTokens,
-  formatCost,
+  formatUsageCost,
   formatDayLabel,
   formatFullDate,
   formatIsoDate,
-  formatTokens,
+  formatUsageTokens,
   renderUsageMosaic,
   sessionTouchesSelectedHours,
 };

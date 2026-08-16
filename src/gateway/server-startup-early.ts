@@ -3,27 +3,13 @@
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-
-type Awaitable<T> = T | Promise<T>;
-
-type GatewayStartupTrace = {
-  measure: <T>(name: string, run: () => Awaitable<T>) => Promise<T>;
-};
+import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
 type StartGatewayMaintenanceTimers =
   typeof import("./server-maintenance.js").startGatewayMaintenanceTimers;
 type GatewayMaintenanceParams = Parameters<StartGatewayMaintenanceTimers>[0];
 
 const loadRemoteSkillsRuntimeModule = async () => await import("../skills/runtime/remote.js");
-
-/** Measure an early-startup step when tracing is enabled, otherwise run it directly. */
-async function measureStartup<T>(
-  startupTrace: GatewayStartupTrace | undefined,
-  name: string,
-  run: () => Awaitable<T>,
-): Promise<T> {
-  return startupTrace ? startupTrace.measure(name, run) : await run();
-}
 
 /** Start plugin discovery and return the Bonjour shutdown callback when discovery is active. */
 export async function startGatewayPluginDiscovery(params: {
@@ -57,7 +43,7 @@ export async function startGatewayPluginDiscovery(params: {
         ? { enabled: true, fingerprintSha256: params.gatewayTls.fingerprintSha256 }
         : undefined,
       gatewayDirectReachable: params.gatewayDirectReachable,
-      wideAreaDiscoveryEnabled: params.cfgAtStart.discovery?.wideArea?.enabled === true,
+      wideAreaDiscoveryEnabled: Boolean(params.cfgAtStart.discovery?.wideArea?.domain?.trim()),
       wideAreaDiscoveryDomain: params.cfgAtStart.discovery?.wideArea?.domain,
       tailscaleMode: params.tailscaleMode,
       mdnsMode: params.cfgAtStart.discovery?.mdns?.mode,
@@ -91,15 +77,15 @@ export async function startGatewayEarlyRuntime(params: {
   getPresenceVersion: GatewayMaintenanceParams["getPresenceVersion"];
   getHealthVersion: GatewayMaintenanceParams["getHealthVersion"];
   refreshGatewayHealthSnapshot: GatewayMaintenanceParams["refreshGatewayHealthSnapshot"];
+  restartRunningChannels: GatewayMaintenanceParams["restartRunningChannels"];
+  refreshPresence: GatewayMaintenanceParams["refreshPresence"];
+  resetEventLoopHealth: GatewayMaintenanceParams["resetEventLoopHealth"];
   logHealth: GatewayMaintenanceParams["logHealth"];
   dedupe: GatewayMaintenanceParams["dedupe"];
   chatAbortControllers: GatewayMaintenanceParams["chatAbortControllers"];
   chatQueuedTurns: GatewayMaintenanceParams["chatQueuedTurns"];
   restartRecoveryCandidates: GatewayMaintenanceParams["restartRecoveryCandidates"];
   chatRunState: GatewayMaintenanceParams["chatRunState"];
-  chatRunBuffers: GatewayMaintenanceParams["chatRunBuffers"];
-  chatDeltaSentAt: GatewayMaintenanceParams["chatDeltaSentAt"];
-  chatDeltaLastBroadcastLen: GatewayMaintenanceParams["chatDeltaLastBroadcastLen"];
   removeChatRun: GatewayMaintenanceParams["removeChatRun"];
   agentRunSeq: GatewayMaintenanceParams["agentRunSeq"];
   nodeSendToSession: GatewayMaintenanceParams["nodeSendToSession"];
@@ -151,6 +137,9 @@ export async function startGatewayEarlyRuntime(params: {
           ]);
         return registerSkillsChangeListener((event) => {
           if (event.reason === "remote-node") {
+            // The snapshot invalidation runs after remote descriptors/bins change;
+            // clients can now refetch authoritative skills.status without racing the probe.
+            params.broadcast("skills.changed", { reason: event.reason });
             return;
           }
           // Coalesce local skill changes before refreshing connected remote
@@ -161,7 +150,17 @@ export async function startGatewayEarlyRuntime(params: {
           }
           const nextTimer = setTimeout(() => {
             params.setSkillsRefreshTimer(null);
-            void refreshRemoteBinsForConnectedNodes(params.getRuntimeConfig());
+            void refreshRemoteBinsForConnectedNodes(params.getRuntimeConfig()).then(
+              () => {
+                params.broadcast("skills.changed", { reason: event.reason });
+              },
+              (error: unknown) => {
+                params.log.warn(
+                  `failed to refresh remote bins after skills change: ${String(error)}`,
+                );
+                params.broadcast("skills.changed", { reason: event.reason });
+              },
+            );
           }, params.skillsRefreshDelayMs);
           params.setSkillsRefreshTimer(nextTimer);
         });
@@ -181,15 +180,15 @@ export async function startGatewayEarlyRuntime(params: {
         getPresenceVersion: params.getPresenceVersion,
         getHealthVersion: params.getHealthVersion,
         refreshGatewayHealthSnapshot: params.refreshGatewayHealthSnapshot,
+        restartRunningChannels: params.restartRunningChannels,
+        refreshPresence: params.refreshPresence,
+        resetEventLoopHealth: params.resetEventLoopHealth,
         logHealth: params.logHealth,
         dedupe: params.dedupe,
         chatAbortControllers: params.chatAbortControllers,
         chatQueuedTurns: params.chatQueuedTurns,
         restartRecoveryCandidates: params.restartRecoveryCandidates,
         chatRunState: params.chatRunState,
-        chatRunBuffers: params.chatRunBuffers,
-        chatDeltaSentAt: params.chatDeltaSentAt,
-        chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
         removeChatRun: params.removeChatRun,
         agentRunSeq: params.agentRunSeq,
         nodeSendToSession: params.nodeSendToSession,

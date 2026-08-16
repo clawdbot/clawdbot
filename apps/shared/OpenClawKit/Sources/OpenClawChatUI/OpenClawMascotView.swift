@@ -1,5 +1,11 @@
 import SwiftUI
 
+public enum OpenClawMascotAccessory: Equatable, Sendable {
+    case none
+    case nightcap
+    case gradCap
+}
+
 /// Animated OpenClaw mascot. Redraws the canonical 120x120 vector from
 /// `ui/public/favicon.svg` so individual parts (claws, antennae, eyes) can
 /// animate like the openclaw.ai hero mark; the bundled PNG asset cannot.
@@ -16,30 +22,49 @@ public struct OpenClawMascotView: View {
 
     private let floats: Bool
     private let mood: OpenClawMascotMood
+    private let accessory: OpenClawMascotAccessory
     private let interactive: Bool
+    private let minimumFrameInterval: TimeInterval
+
+    private var staticPose: OpenClawMascotPose {
+        var pose = OpenClawMascotPose.staticPose(for: self.mood)
+        // One hat at a time: the working static pose already wears the hard
+        // hat, so a requested accessory stays off (mirrors the animator).
+        if self.accessory != .none, pose.hardHat == 0 {
+            pose.accessory = self.accessory
+            pose.accessoryAmount = 1
+        }
+        return pose
+    }
 
     /// - Parameters:
     ///   - floats: allow whole-body vertical travel (float loop, hops). Turn
     ///     off in tight layouts; bounces then show as squash-and-stretch only.
     ///   - mood: emotional state; transitions play an entrance gesture.
+    ///   - accessory: optional headwear layered over the mood pose.
     ///   - interactive: enables click reactions and auto-sleep (waking takes
     ///     a click). Off by default so the mascot never swallows taps meant
     ///     for an enclosing control.
+    ///   - minimumFrameInterval: minimum redraw interval for animated poses.
     public init(
         floats: Bool = true,
         mood: OpenClawMascotMood = .idle,
-        interactive: Bool = false)
+        accessory: OpenClawMascotAccessory = .none,
+        interactive: Bool = false,
+        minimumFrameInterval: TimeInterval = 1.0 / 30.0)
     {
         self.floats = floats
         self.mood = mood
+        self.accessory = accessory
         self.interactive = interactive
+        self.minimumFrameInterval = minimumFrameInterval
         self._animator = State(initialValue: OpenClawMascotAnimator(allowsAutoSleep: interactive))
     }
 
     public var body: some View {
         let palette = OpenClawMascotPalette.forScheme(self.colorScheme)
         if self.reduceMotion {
-            OpenClawMascotCanvas(pose: .staticPose(for: self.mood), palette: palette)
+            OpenClawMascotCanvas(pose: self.staticPose, palette: palette)
         } else {
             self.animatedMascot(palette: palette)
         }
@@ -47,7 +72,7 @@ public struct OpenClawMascotView: View {
 
     @ViewBuilder
     private func animatedMascot(palette: OpenClawMascotPalette) -> some View {
-        let core = TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+        let core = TimelineView(.animation(minimumInterval: self.minimumFrameInterval)) { timeline in
             let pose = self.animator.pose(at: timeline.date.timeIntervalSinceReferenceDate)
             // Float translates the whole canvas like the site floats the hero
             // container; drawing the offset inside the canvas would clip the
@@ -66,8 +91,12 @@ public struct OpenClawMascotView: View {
         .onChange(of: self.mood) { _, newMood in
             self.animator.setMood(newMood, at: self.now())
         }
+        .onChange(of: self.accessory) { _, newAccessory in
+            self.animator.setAccessory(newAccessory, at: self.now())
+        }
         .onAppear {
             self.animator.setMood(self.mood, at: self.now())
+            self.animator.setAccessory(self.accessory, at: self.now())
         }
 
         if self.interactive {
@@ -171,6 +200,11 @@ struct OpenClawMascotPose: Equatable {
     /// 0..1 surprised/yawning "o" (takes over from both mouth channels).
     var mouthRound: CGFloat = 0
     var blush: CGFloat = 0
+    /// 0..1: hard hat drops from above until seated on the head.
+    var hardHat: CGFloat = 0
+    var accessory: OpenClawMascotAccessory = .none
+    /// 0..1: requested headwear slides from above until seated.
+    var accessoryAmount: CGFloat = 0
     /// Degrees around the canvas center.
     var bodyTilt: CGFloat = 0
     /// Vertical squash-and-stretch about the feet; x compensates slightly.
@@ -189,6 +223,12 @@ struct OpenClawMascotPose: Equatable {
             break
         case .thinking:
             pose.gaze = CGSize(width: 0.3, height: -0.5)
+        case .working:
+            pose.hardHat = 1
+            pose.rightClawDegrees = -28
+            pose.gaze = CGSize(width: 0.4, height: 0.35)
+            pose.mouthCurve = 0.15
+            pose.bodyTilt = 2
         case .happy:
             pose.mouthCurve = 0.6
             pose.happyEyes = 0.4
@@ -208,6 +248,8 @@ struct OpenClawMascotPose: Equatable {
             pose.rightEyeOpenness = 0.25
             pose.eyeGlowOpacity = 0.5
             pose.antennaDroop = 0.35
+            pose.accessory = .nightcap
+            pose.accessoryAmount = 1
         }
         return pose
     }
@@ -231,6 +273,8 @@ struct OpenClawMascotPose: Equatable {
         self.mouthOpen = self.mouthOpen.clamped(to: 0...1)
         self.mouthRound = self.mouthRound.clamped(to: 0...1)
         self.blush = self.blush.clamped(to: 0...1)
+        self.hardHat = self.hardHat.clamped(to: 0...1)
+        self.accessoryAmount = self.accessoryAmount.clamped(to: 0...1)
         self.bodyTilt = self.bodyTilt.clamped(to: -8...8)
         self.bodyStretch = self.bodyStretch.clamped(to: 0.86...1.05)
         self.dizzy = self.dizzy.clamped(to: 0...1)
@@ -254,6 +298,7 @@ struct OpenClawMascotCanvas: View {
     private static let eyeGlowColor = Color(red: 0, green: 229 / 255, blue: 204 / 255)
     private static let blushColor = Color(red: 1, green: 0.62, blue: 0.68)
     private static let heartColor = Color(red: 1, green: 0.45, blue: 0.55)
+    static let hatAmber = Color(red: 0.95, green: 0.66, blue: 0.20)
     // Rotation pivots: claws hinge on their body-facing edge, antennae on their own center.
     private static let leftClawPivot = CGPoint(x: 26, y: 53)
     private static let rightClawPivot = CGPoint(x: 94, y: 53)
@@ -371,6 +416,8 @@ struct OpenClawMascotCanvas: View {
             }
         }
 
+        self.drawHardHat(context: context, amount: pose.hardHat)
+        self.drawAccessory(context: context, pose: pose)
         self.drawBlush(context: context, pose: pose)
         self.drawEye(context: context, center: self.leftEyeCenter, openness: pose.leftEyeOpenness, pose: pose)
         self.drawEye(context: context, center: self.rightEyeCenter, openness: pose.rightEyeOpenness, pose: pose)
@@ -552,6 +599,40 @@ struct OpenClawMascotCanvas: View {
                 zContext.opacity = Double(alpha * 0.9)
                 zContext.draw(text, at: position)
             }
+        case .sparks:
+            for index in 0..<5 {
+                let rawPhase = pose.effectPhase - CGFloat(index) * 0.025
+                guard rawPhase >= 0, rawPhase < 0.45 else { continue }
+                let alpha = rawPhase < 0.08 ? rawPhase / 0.08 : 1 - (rawPhase - 0.08) / 0.37
+                let angle = (-160 + CGFloat(index) * 35) * .pi / 180
+                let radius = 5 + 12 * rawPhase / 0.45
+                let particleSize = 2.2 + CGFloat(index % 3) * 0.8
+                let center = CGPoint(
+                    x: (106 + cos(angle) * radius).clamped(to: particleSize...(120 - particleSize)),
+                    y: (66 + sin(angle) * radius).clamped(to: particleSize...(120 - particleSize)))
+                var sparkContext = context
+                sparkContext.opacity = Double(alpha)
+                sparkContext.fill(
+                    self.sparklePath(center: center, size: particleSize),
+                    with: .color(index.isMultiple(of: 2) ? self.eyeGlowColor : self.hatAmber))
+            }
+        case .sweat:
+            let alpha = OpenClawMascotGesture.bell(pose.effectPhase)
+            guard alpha > 0.02 else { return }
+            let center = CGPoint(x: 42, y: 24 + 7 * pose.effectPhase)
+            var drop = Path()
+            drop.move(to: CGPoint(x: center.x, y: center.y - 3))
+            drop.addCurve(
+                to: CGPoint(x: center.x, y: center.y + 3),
+                control1: CGPoint(x: center.x - 4, y: center.y + 1),
+                control2: CGPoint(x: center.x - 2, y: center.y + 3))
+            drop.addCurve(
+                to: CGPoint(x: center.x, y: center.y - 3),
+                control1: CGPoint(x: center.x + 2, y: center.y + 3),
+                control2: CGPoint(x: center.x + 4, y: center.y + 1))
+            var sweatContext = context
+            sweatContext.opacity = Double(alpha)
+            sweatContext.fill(drop, with: .color(Color(red: 0.5, green: 0.83, blue: 1)))
         }
     }
 

@@ -1,18 +1,13 @@
 // Codex native asset tests cover doctor detection of native Codex asset state.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { collectCodexNativeAssetInfoNotes, scanCodexNativeAssets } from "./codex-native-assets.js";
+import { collectCodexNativeAssetInfoNotes } from "./codex-native-assets.js";
+import { scanCodexNativeAssets } from "./codex-native-assets.test-support.js";
 
-const tempRoots = new Set<string>();
-
-async function makeTempRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-codex-assets-"));
-  tempRoots.add(root);
-  return root;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function writeFile(filePath: string, content = ""): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -40,16 +35,9 @@ function hasAsset(hits: Array<{ kind: string; path: string }>, kind: string, ass
   return hits.some((hit) => hit.kind === kind && hit.path === assetPath);
 }
 
-afterEach(async () => {
-  for (const root of tempRoots) {
-    await fs.rm(root, { recursive: true, force: true });
-  }
-  tempRoots.clear();
-});
-
 describe("scanCodexNativeAssets", () => {
   it("finds personal Codex CLI assets that isolated agents will not load implicitly", async () => {
-    const root = await makeTempRoot();
+    const root = tempDirs.make("openclaw-doctor-codex-assets-");
     const codexHome = path.join(root, ".codex");
     await writeFile(path.join(codexHome, "skills", "tweet-helper", "SKILL.md"));
     await writeFile(path.join(root, ".agents", "skills", "agent-helper", "SKILL.md"));
@@ -94,7 +82,7 @@ describe("scanCodexNativeAssets", () => {
   });
 
   it("does not scan when Codex is not configured", async () => {
-    const root = await makeTempRoot();
+    const root = tempDirs.make("openclaw-doctor-codex-assets-");
     const codexHome = path.join(root, ".codex");
     await writeFile(path.join(codexHome, "skills", "tweet-helper", "SKILL.md"));
     await writeFile(path.join(root, ".agents", "skills", "agent-helper", "SKILL.md"));
@@ -110,7 +98,7 @@ describe("scanCodexNativeAssets", () => {
 
 describe("collectCodexNativeAssetInfoNotes", () => {
   it("points users at explicit Codex migration planning", async () => {
-    const root = await makeTempRoot();
+    const root = tempDirs.make("openclaw-doctor-codex-assets-");
     const codexHome = path.join(root, ".codex");
     await writeFile(path.join(root, ".agents", "skills", "agent-helper", "SKILL.md"));
 
@@ -128,7 +116,7 @@ describe("collectCodexNativeAssetInfoNotes", () => {
   });
 
   it("returns empty when no Codex assets are found", async () => {
-    const root = await makeTempRoot();
+    const root = tempDirs.make("openclaw-doctor-codex-assets-");
     const codexHome = path.join(root, ".codex");
 
     const notes = await collectCodexNativeAssetInfoNotes({

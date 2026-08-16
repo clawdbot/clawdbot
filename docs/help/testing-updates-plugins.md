@@ -56,11 +56,23 @@ Before any package Docker lane consumes a tarball, prove the package artifact:
 pnpm release:check
 ```
 
-`release:check` runs config/docs/API drift checks (config schema, config docs
-baseline, plugin SDK API baseline and exports, plugin versions/inventory),
-writes the package dist inventory, runs `npm pack --dry-run`, rejects forbidden
-packed files, installs the tarball into a temp prefix, runs postinstall, and
-smokes bundled channel entrypoints.
+`release:check` runs generated config/docs and plugin checks (config schema,
+config docs baseline, plugin SDK exports and surface budget, plugin
+versions/inventory), writes the package dist inventory, runs
+`npm pack --dry-run`, rejects forbidden packed files, installs the tarball into
+a temp prefix, runs postinstall, and smokes bundled channel entrypoints.
+
+For a Plugin SDK change, compare the exact commits separately:
+
+```bash
+base_sha=$(git merge-base origin/main HEAD)
+head_sha=$(git rev-parse HEAD)
+pnpm plugin-sdk:api:diff -- --base "$base_sha" --head "$head_sha"
+```
+
+Release npm preflight uses the same readable diff against the prior published
+dist-tag and prints the 8-character acknowledgement digest required when that
+release changes the Plugin SDK API.
 
 ## Docker lanes
 

@@ -1,5 +1,5 @@
 /**
- * Live Twitch IRC verification for the runStoppablePassiveMonitor lifecycle
+ * Live Twitch IRC verification for the passive account lifecycle
  * pattern used by the Twitch gateway.
  *
  * This test connects to irc.chat.twitch.tv using the same twurple stack the
@@ -19,7 +19,7 @@
 
 import { StaticAuthProvider } from "@twurple/auth";
 import { ChatClient } from "@twurple/chat";
-import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
+import { runPassiveAccountLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import { describe, expect, it } from "vitest";
 
 const LIVE = process.env.TWITCH_LIVE_TEST === "1";
@@ -33,7 +33,7 @@ const HAS_CREDS = Boolean(
 const maybeDescribe = LIVE && HAS_CREDS ? describe : describe.skip;
 
 maybeDescribe("twitch live IRC lifecycle (skipped unless TWITCH_LIVE_TEST=1)", () => {
-  it("real twurple connection + runStoppablePassiveMonitor stays pending until abort, then stops cleanly", async () => {
+  it("real twurple connection stays pending until abort, then stops cleanly", async () => {
     const accessTokenRaw = process.env.TWITCH_ACCESS_TOKEN!.replace(/^oauth:/, "");
     const clientId = process.env.TWITCH_CLIENT_ID!;
     const channel = process.env.TWITCH_CHANNEL!;
@@ -56,7 +56,7 @@ maybeDescribe("twitch live IRC lifecycle (skipped unless TWITCH_LIVE_TEST=1)", (
     let settled = false;
     let stopCalled = false;
 
-    const task = runStoppablePassiveMonitor({
+    const task = runPassiveAccountLifecycle({
       abortSignal: abort.signal,
       start: async () => {
         const chat = new ChatClient({
@@ -85,6 +85,9 @@ maybeDescribe("twitch live IRC lifecycle (skipped unless TWITCH_LIVE_TEST=1)", (
             chat.quit();
           },
         };
+      },
+      stop: async (monitor) => {
+        monitor.stop();
       },
     })
       .then(() => {

@@ -34,6 +34,7 @@ function selectQaFlowSuiteScenarios(params: {
   channelDriver?: QaScorecardChannelDriver | null;
   channel?: string | null;
   claudeCliAuthMode?: QaCliBackendAuthMode;
+  resolveModuleFlowSupport?: (channel?: string) => boolean;
 }) {
   const requestedScenarioIds =
     params.scenarioIds && params.scenarioIds.length > 0 ? new Set(params.scenarioIds) : null;
@@ -45,21 +46,21 @@ function selectQaFlowSuiteScenarios(params: {
     if (missingScenarioIds.length > 0) {
       throw new Error(`unknown QA scenario id(s): ${missingScenarioIds.join(", ")}`);
     }
-    const selectedScenarios = [...requestedScenarioIds].map(
-      (scenarioId) => scenarioById.get(scenarioId)!,
+    const selectedScenarios = [...requestedScenarioIds].map((scenarioId) =>
+      scenarioById.get(scenarioId)!,
     );
-    const nonFlowScenarios = selectedScenarios.filter(
+    const unsupportedScenarios = selectedScenarios.filter(
       (scenario) => scenario.execution.kind !== "flow",
     );
-    if (nonFlowScenarios.length > 0) {
-      const scenarioList = nonFlowScenarios
+    if (unsupportedScenarios.length > 0) {
+      const scenarioList = unsupportedScenarios
         .map((scenario) => `${scenario.id} (${scenario.execution.kind})`)
         .join(", ");
       throw new Error(
-        `flow execution requires execution.kind: flow; unsupported scenario(s): ${scenarioList}`,
+        `suite execution requires flow scenarios; unsupported scenario(s): ${scenarioList}`,
       );
     }
-    const channelDriverMismatches = selectedScenarios.flatMap((scenario) => {
+    const laneMismatches = selectedScenarios.flatMap((scenario) => {
       const mismatches = describeQaProviderLaneMismatches({
         scenario,
         providerMode: params.providerMode,
@@ -67,14 +68,15 @@ function selectQaFlowSuiteScenarios(params: {
         channelDriver: params.channelDriver,
         channel: params.channel,
         claudeCliAuthMode: params.claudeCliAuthMode,
-      }).filter(
-        (mismatch) => mismatch.startsWith("channelDriver=") || mismatch.startsWith("channel="),
-      );
+        supportsModuleFlows: params.resolveModuleFlowSupport?.(
+          params.channel ?? scenario.execution.channel,
+        ),
+      });
       return mismatches.length > 0 ? [`${scenario.id} (${mismatches.join(", ")})`] : [];
     });
-    if (channelDriverMismatches.length > 0) {
+    if (laneMismatches.length > 0) {
       throw new Error(
-        `selected QA scenario(s) do not match the current QA lane: ${channelDriverMismatches.join(", ")}`,
+        `selected QA scenario(s) do not match the current QA lane: ${laneMismatches.join(", ")}`,
       );
     }
     return selectedScenarios;
@@ -89,6 +91,9 @@ function selectQaFlowSuiteScenarios(params: {
         channelDriver: params.channelDriver,
         channel: params.channel,
         claudeCliAuthMode: params.claudeCliAuthMode,
+        supportsModuleFlows: params.resolveModuleFlowSupport?.(
+          params.channel ?? scenario.execution.channel,
+        ),
       }),
   );
 }
@@ -221,9 +226,13 @@ function collectQaSuiteGatewayConfigPatch(
 function collectQaSuiteGatewayRuntimeOptions(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
 ) {
+  let allowUnhealthyStartup = false;
   let forwardHostHome = false;
   let preserveDebugArtifacts = false;
   for (const scenario of scenarios) {
+    if (scenario.gatewayRuntime?.allowUnhealthyStartup === true) {
+      allowUnhealthyStartup = true;
+    }
     if (scenario.gatewayRuntime?.forwardHostHome === true) {
       forwardHostHome = true;
     }
@@ -231,8 +240,9 @@ function collectQaSuiteGatewayRuntimeOptions(
       preserveDebugArtifacts = true;
     }
   }
-  return forwardHostHome || preserveDebugArtifacts
+  return allowUnhealthyStartup || forwardHostHome || preserveDebugArtifacts
     ? {
+        ...(allowUnhealthyStartup ? { allowUnhealthyStartup: true } : {}),
         ...(forwardHostHome ? { forwardHostHome: true } : {}),
         ...(preserveDebugArtifacts ? { preserveDebugArtifacts: true } : {}),
       }
@@ -281,8 +291,8 @@ function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
     (params.concurrency > 1 ||
       params.scenarios.some(
         (scenario) =>
-          isQaMergePatchObject(scenario.gatewayConfigPatch) ||
-          (scenario.execution.kind === "flow" && scenario.execution.transportPolicy !== undefined),
+          scenarioRequiresIsolatedQaSuiteWorker(scenario) ||
+          (scenario.execution.kind === "flow" && scenario.execution.providerMode !== undefined),
       ))
   );
 }
@@ -293,6 +303,7 @@ function scenarioRequiresIsolatedQaSuiteWorker(scenario: QaSeedScenario) {
   }
   return (
     scenario.execution.suiteIsolation === "isolated" ||
+    scenario.execution.runtime !== undefined ||
     // Transport policy is fixed when the gateway starts; sharing it would leak routing rules.
     scenario.execution.transportPolicy !== undefined ||
     isQaMergePatchObject(scenario.gatewayConfigPatch) ||
@@ -363,8 +374,10 @@ async function mapQaSuiteWithConcurrency<T, U>(
   opts?: {
     startStaggerMs?: number;
     sleepImpl?: (ms: number) => Promise<unknown>;
+    shouldStop?: (result: U, index: number) => boolean;
   },
 ) {
+  let stopped = false;
   let nextStartGate = Promise.resolve();
   const startStaggerMs = Math.max(0, Math.floor(opts?.startStaggerMs ?? 0));
   const sleepImpl =
@@ -395,17 +408,34 @@ async function mapQaSuiteWithConcurrency<T, U>(
       }
     })();
   }
-  return await pMap(
+  const results = await pMap(
     items,
     async (item, index) => {
+      if (stopped) {
+        return undefined;
+      }
       await waitForStartSlot(index < items.length - 1);
-      return await mapper(item, index);
+      if (stopped) {
+        return undefined;
+      }
+      const result = await mapper(item, index);
+      if (opts?.shouldStop?.(result, index)) {
+        stopped = true;
+      }
+      return result;
     },
     {
       concurrency: Math.max(1, Math.floor(concurrency)),
       stopOnError: true,
     },
   );
+  const completed: U[] = [];
+  for (const result of results) {
+    if (result !== undefined) {
+      completed.push(result as U);
+    }
+  }
+  return completed;
 }
 
 async function resolveQaSuiteOutputDir(repoRoot: string, outputDir?: string) {

@@ -1,5 +1,5 @@
 // Inworld plugin module implements tts behavior.
-import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/media-runtime";
+import { canonicalizeBase64, MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech-core";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -186,7 +186,11 @@ export async function inworldTTS(params: {
       }
 
       if (parsed.result?.audioContent) {
-        const chunk = Buffer.from(parsed.result.audioContent, "base64");
+        const canonicalAudio = canonicalizeBase64(parsed.result.audioContent);
+        if (!canonicalAudio) {
+          throw new Error("Inworld TTS returned malformed base64 audio data");
+        }
+        const chunk = Buffer.from(canonicalAudio, "base64");
         const nextDecodedAudioBytes = decodedAudioBytes + chunk.length;
         if (nextDecodedAudioBytes > MAX_AUDIO_BYTES) {
           throw new Error(

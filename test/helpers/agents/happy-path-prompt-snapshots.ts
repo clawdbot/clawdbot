@@ -23,7 +23,14 @@ import type {
 } from "../../../src/plugin-sdk/agent-harness-runtime.js";
 import { normalizeAgentRuntimeTools } from "../../../src/plugin-sdk/agent-harness-runtime.js";
 import { createOpenClawCodingTools } from "../../../src/plugin-sdk/agent-harness.js";
+import type { PluginRegistry } from "../../../src/plugins/registry.js";
+import {
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../../../src/plugins/runtime.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
   CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
@@ -31,7 +38,7 @@ import {
 
 // Builds Codex happy-path prompt snapshot fixtures for agent prompt regression tests.
 
-export { CODEX_MODEL_PROMPT_FIXTURE_DIR, CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR };
+export { CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR };
 
 const WORKSPACE_DIR = "/tmp/openclaw-happy-path/workspace";
 const AGENT_DIR = "/tmp/openclaw-happy-path/agent";
@@ -52,7 +59,7 @@ const CODEX_YOLO_PERMISSION_INSTRUCTIONS = [
 ].join("\n");
 const HAPPY_PATH_TOOL_NAMES = new Set([
   "nodes",
-  "cron",
+  "automations",
   "message",
   "heartbeat_respond",
   "tts",
@@ -151,17 +158,85 @@ async function loadCodexPromptSnapshotApi(): Promise<CodexPromptSnapshotApi> {
   return (await import(CODEX_TEST_API_MODULE_ID)) as CodexPromptSnapshotApi;
 }
 
+type ScenarioChannelPluginFixture = {
+  pluginId: string;
+  plugin: unknown;
+};
+
+const scenarioChannelPluginFixtures = new Map<string, Promise<ScenarioChannelPluginFixture>>();
+
+/**
+ * Tool construction resolves the scenario's channel plugin for message-tool
+ * schema data. Without a loaded channel registry that lookup falls back to the
+ * bundled-channel jiti loader, which re-transpiles the core source graph and
+ * stalls snapshot generation by minutes. Import the entry-declared channel
+ * plugin surface through the ambient (tsx/vitest) module graph instead so the
+ * already-evaluated core modules are reused.
+ */
+function scenarioChannelPluginFixture(pluginId: string): Promise<ScenarioChannelPluginFixture> {
+  const cached = scenarioChannelPluginFixtures.get(pluginId);
+  if (cached) {
+    return cached;
+  }
+  const loading = loadScenarioChannelPluginFixture(pluginId);
+  scenarioChannelPluginFixtures.set(pluginId, loading);
+  return loading;
+}
+
+async function loadScenarioChannelPluginFixture(
+  pluginId: string,
+): Promise<ScenarioChannelPluginFixture> {
+  const moduleId = resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId,
+    artifactBasename: "channel-plugin-api.js",
+  });
+  const moduleNamespace = (await import(moduleId)) as Record<string, unknown>;
+  // Bundled channel entries (extensions/<id>/index.ts) declare their channel
+  // plugin export from channel-plugin-api.js as `<id>Plugin`; the setup-only
+  // sibling export shares the channel id, so name selection stays exact.
+  const exportName = `${pluginId}Plugin`;
+  const plugin = moduleNamespace[exportName];
+  if (!plugin || typeof plugin !== "object") {
+    throw new Error(
+      `missing channel plugin export "${exportName}" in ${moduleId}; align the snapshot helper with the ${pluginId} plugin entry`,
+    );
+  }
+  return { pluginId, plugin };
+}
+
+/**
+ * Pins exactly the scenario channel while its tools are built. Cross-channel
+ * action discovery walks every loaded channel plugin, so registering more than
+ * the scenario channel would change the generated message-tool schema bytes.
+ */
+function withScenarioChannelRegistry<T>(fixture: ScenarioChannelPluginFixture, build: () => T): T {
+  const previousRegistry: PluginRegistry | null = getActivePluginRegistry();
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: fixture.pluginId,
+        plugin: fixture.plugin,
+        source: "prompt-snapshot-fixture",
+        origin: "bundled",
+      },
+    ]),
+  );
+  try {
+    return build();
+  } finally {
+    if (previousRegistry) {
+      setActivePluginRegistry(previousRegistry);
+    } else {
+      resetPluginRuntimeStateForTest();
+    }
+  }
+}
+
 const CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES = [
   {
     path: path.join(WORKSPACE_DIR, "MEMORY.md"),
     content: "<MEMORY.md contents will be here>",
-  },
-] as const;
-
-const CODEX_WORKSPACE_THREAD_DEVELOPER_CONTEXT_FILES = [
-  {
-    path: path.join(WORKSPACE_DIR, "TOOLS.md"),
-    content: "<TOOLS.md contents will be here>",
   },
 ] as const;
 
@@ -186,7 +261,7 @@ const CODEX_HEARTBEAT_CONTEXT_FILE = {
 } as const;
 
 const CODEX_WORKSPACE_BOOTSTRAP_PROMPT_CONTEXT = [
-  "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. TOOLS.md is provided as inherited Codex developer instructions. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.",
+  "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.",
   "",
   "# Project Context",
   "",
@@ -194,21 +269,6 @@ const CODEX_WORKSPACE_BOOTSTRAP_PROMPT_CONTEXT = [
   "",
   ...CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES.flatMap((file) => [
     `## ${file.path}`,
-    "",
-    file.content,
-    "",
-  ]),
-]
-  .join("\n")
-  .trim();
-
-const CODEX_WORKSPACE_THREAD_DEVELOPER_INSTRUCTIONS = [
-  "## OpenClaw Workspace Instructions",
-  "",
-  "OpenClaw loaded these workspace instruction files from the active agent workspace. Internalize and follow them accordingly.",
-  "",
-  ...CODEX_WORKSPACE_THREAD_DEVELOPER_CONTEXT_FILES.flatMap((file) => [
-    `### ${file.path}`,
     "",
     file.content,
     "",
@@ -256,6 +316,7 @@ const baseConfig: OpenClawConfig = {
         every: "30m",
       },
     },
+    entries: { main: { default: true } },
   },
 };
 
@@ -342,7 +403,7 @@ function createExtraSystemPrompt(params: {
   intro?: string;
 }): string {
   return [
-    buildInboundMetaSystemPrompt(params.ctx),
+    buildInboundMetaSystemPrompt(params.ctx, {}),
     params.chatContext,
     params.intro,
     params.ctx.GroupSystemPrompt,
@@ -446,6 +507,11 @@ function createDynamicTools(params: {
     modelId: MODEL_ID,
     modelApi: "responses",
     model: happyPathModel,
+    // No provider runtime plugin owns tool-schema hooks for the `codex`
+    // harness provider, so a runtime plugin load can only rediscover that
+    // through the jiti source loader (minutes of core re-transpilation).
+    // Registry-only resolution keeps the same no-op outcome instantly.
+    allowProviderRuntimePluginLoad: false,
   });
   return params.codexApi.createCodexDynamicToolSpecsForPromptSnapshot({
     tools: normalized.filter((tool) => HAPPY_PATH_TOOL_NAMES.has(tool.name)),
@@ -453,7 +519,20 @@ function createDynamicTools(params: {
   });
 }
 
-function createScenarios(codexApi: CodexPromptSnapshotApi): PromptScenario[] {
+async function createScenarioDynamicTools(params: {
+  codexApi: CodexPromptSnapshotApi;
+  ctx: TemplateContext;
+  trigger: "user" | "heartbeat";
+}): Promise<CodexDynamicToolSpec[]> {
+  const provider = params.ctx.Provider;
+  if (!provider) {
+    throw new Error("prompt snapshot scenarios must set ctx.Provider for channel tool fixtures");
+  }
+  const fixture = await scenarioChannelPluginFixture(provider);
+  return withScenarioChannelRegistry(fixture, () => createDynamicTools(params));
+}
+
+async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<PromptScenario[]> {
   const telegramDirectCtx: TemplateContext = {
     Provider: "telegram",
     Surface: "telegram",
@@ -506,17 +585,21 @@ function createScenarios(codexApi: CodexPromptSnapshotApi): PromptScenario[] {
     Body: resolveHeartbeatPromptForResponseTool(),
     BodyStripped: resolveHeartbeatPromptForResponseTool(),
   };
-  const telegramDirectTools = createDynamicTools({
+  const telegramDirectTools = await createScenarioDynamicTools({
     codexApi,
     ctx: telegramDirectCtx,
     trigger: "user",
   });
-  const discordGroupTools = createDynamicTools({
+  const discordGroupTools = await createScenarioDynamicTools({
     codexApi,
     ctx: discordGroupCtx,
     trigger: "user",
   });
-  const heartbeatTools = createDynamicTools({ codexApi, ctx: heartbeatCtx, trigger: "heartbeat" });
+  const heartbeatTools = await createScenarioDynamicTools({
+    codexApi,
+    ctx: heartbeatCtx,
+    trigger: "heartbeat",
+  });
 
   return [
     {
@@ -746,7 +829,9 @@ function renderModelBoundPromptLayers(params: {
     "",
     "### Tools: Dynamic Tool Catalog",
     "",
-    `Full JSON: \`${params.scenario.toolSnapshotFile}\``,
+    params.scenario.toolSnapshotFile === "codex-dynamic-tools.telegram-direct.json"
+      ? `Full JSON: \`${params.scenario.toolSnapshotFile}\``
+      : `Full tool overrides: \`${params.scenario.toolSnapshotFile}\` (base: \`codex-dynamic-tools.telegram-direct.json\`)`,
     "",
   ];
 }
@@ -798,7 +883,6 @@ function renderScenarioSnapshot(
     appServer,
     config: CODEX_PROMPT_SNAPSHOT_THREAD_CONFIG,
     promptText: codexTurnPromptText,
-    developerInstructionAdditions: CODEX_WORKSPACE_THREAD_DEVELOPER_INSTRUCTIONS,
     turnScopedDeveloperInstructions: CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_INSTRUCTIONS,
     heartbeatCollaborationInstructions:
       scenario.trigger === "heartbeat" ? CODEX_HEARTBEAT_COLLABORATION_INSTRUCTIONS : undefined,
@@ -817,7 +901,7 @@ function renderScenarioSnapshot(
     "",
     ...scenario.notes.map((note) => `- ${note}`),
     "- This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.",
-    "- This also simulates Codex workspace bootstrap routing: `TOOLS.md` as inherited developer instructions, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.",
+    "- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.",
     "",
     "## Scenario Metadata",
     "",
@@ -837,8 +921,6 @@ function renderScenarioSnapshot(
         simulatedWorkspaceBootstrapFiles: CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES.map(
           (file) => file.path,
         ),
-        simulatedWorkspaceDeveloperInstructionFiles:
-          CODEX_WORKSPACE_THREAD_DEVELOPER_CONTEXT_FILES.map((file) => file.path),
         simulatedWorkspaceTurnScopedDeveloperInstructionFiles:
           CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES.map((file) => file.path),
         simulatedHeartbeatWorkspaceFile: CODEX_HEARTBEAT_CONTEXT_FILE.path,
@@ -891,6 +973,17 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "",
     "The tool catalog is pinned to the canonical happy-path OpenClaw tools so optional locally installed plugin tools do not create fixture churn.",
     "",
+    "The Telegram JSON is the complete shared tool catalog. Discord and heartbeat JSON fixtures contain readable, complete replacements for their changed top-level tools or namespaces; their `base` field points to the Telegram catalog.",
+    "",
+    "Materialize the complete, formatted tool catalog for a scenario with:",
+    "",
+    markdownFence(
+      "sh",
+      "node --import tsx scripts/generate-prompt-snapshots.ts --materialize discord-group",
+    ),
+    "",
+    "Replace `discord-group` with `heartbeat-turn` to inspect the complete heartbeat catalog.",
+    "",
     "The Codex model prompt fixture is generated from the same Codex model catalog/cache shape that the Codex runtime uses for remote model metadata. Regenerate it from Codex's runtime cache or, when present, a local Codex checkout with:",
     "",
     markdownFence("sh", "pnpm prompt:snapshots:sync-codex-model"),
@@ -927,7 +1020,7 @@ function renderReadme(scenarios: PromptScenario[]): string {
 /** Build all Codex happy-path prompt snapshot files without writing them. */
 export async function createHappyPathPromptSnapshotFiles(): Promise<PromptSnapshotFile[]> {
   const codexApi = await loadCodexPromptSnapshotApi();
-  const scenarios = createScenarios(codexApi);
+  const scenarios = await createScenarios(codexApi);
   const files = [
     {
       path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "README.md"),

@@ -19,6 +19,49 @@ Use for Tideclaw/OpenClaw alpha/nightly release automation, manual alpha trigger
 - Forward-port PRs contain only reusable fixes needed to make nightly/release checks pass. They must not contain alpha version bumps, release notes, changelog release entries, tags, generated artifacts, or state-file updates.
 - Keep only alpha/nightly branches from the last 3 days, plus any branch with an active run, open PR, or release tag.
 - Never run broad env/token dumps. For GitHub writes on the Tideclaw host, use the Tideclaw `gh` write wrapper below.
+- When an alpha, beta, or repair branch needs to discover or reuse backports
+  beyond its pinned base, complete the self-contained audit below before
+  mutating the candidate. Starting an alpha directly from the current pinned
+  `origin/main` does not create a backport audit by itself.
+
+## Audit Nightly Backports
+
+For any backport discovery, pin the exact release baseline and source main SHA.
+Start from the last accepted audit cursor or, when none exists, their merge
+base. Enumerate every non-patch-equivalent source commit, reconcile authorized
+public and private advisories, and record the bounds, counts, filters,
+applicability results, decisions, exclusions, dependencies, and blocked items
+in the existing alpha state file.
+
+Titles are signals, never gates. Classify the complete inventory, inspect every
+security- or reliability-signalled production diff, and separately review
+conventional `fix`, `perf`, and `doctor` commits in execution, authentication,
+sandboxing, networking, persistence, delivery, gateway, configuration, plugin,
+and major-channel paths. Mechanically try each such diff against a detached
+baseline worktree and record whether it is clean, conflicted,
+empty/already-covered, or failed. A clean patch is triage evidence, not an
+automatic backport.
+
+Also snapshot OpenClaw issues carrying `maturity:stable` at the pinned source
+SHA and record the label query time with the audit bounds. Reconcile every
+labelled issue, whether open or closed, whose fixing PR or commit actually
+landed in the scan range with a commit-ledger decision, and give every open
+P0/P1 labelled issue an explicit fixed, not-affected, maintainer-deferred, or
+blocked release disposition. Treat the label only as a completeness and
+priority signal: validate its review rationale, record feature, new
+configuration or policy, docs/support, and lower-maturity matches as
+`label-drift`, and never infer a fix, backport approval, or release blocker from
+the label alone.
+
+For every proposed item, inspect the complete change, baseline behavior,
+callers, callees, siblings, tests, dependency contracts, security impact, and
+publication surface. Collapse overlapping or dependent commits to the smallest
+final fix. Exclude features, migrations, new configuration or runtime
+requirements, and broad redesigns unless a maintainer explicitly approves them.
+Present the complete categorized set for approval before changing the candidate;
+then keep provenance in that state file, run focused proof and release
+validation, and dispatch npm preflight only after the canonical branch/tag has
+the exact final version and SHA.
 
 ## Identity
 
@@ -136,7 +179,11 @@ git for-each-ref refs/remotes/origin/tideclaw/alpha --format='%(refname:short) %
 git log --no-merges --reverse --format='%H%x09%s' origin/main..origin/tideclaw/alpha/YYYY-MM-DD-HHMMZ
 ```
 
-5. Cherry-pick only real stabilization fixes that still apply to the new alpha branch. Prefer commits recorded as `fixCommitShas` in the state file.
+5. Cherry-pick only real stabilization fixes that still apply to the new alpha
+   branch. When this is discovery rather than reuse of an already approved
+   state-file fix, apply the nightly backport audit before
+   selecting it; a clean cherry-pick or a benign title is not approval. Prefer
+   commits recorded as `fixCommitShas` in the state file.
 6. Skip version bumps, changelog release entries, tag artifacts, generated release notes, state-file-only commits, and one-off debug instrumentation.
 7. If a cherry-pick conflicts, inspect whether current main already contains an equivalent fix. If not, resolve minimally and keep the commit message clear.
 8. Record reused commit SHAs separately from newly authored fix SHAs in the alpha state and final Discord summary.
@@ -179,6 +226,7 @@ BRANCH="$(git branch --show-current)"
 
 "$GH" workflow run full-release-validation.yml --repo openclaw/openclaw --ref "$BRANCH" \
   -f ref="$BRANCH" \
+  -f expected_sha="$SHA" \
   -f release_profile=beta \
   -f rerun_group=all
 
@@ -192,11 +240,34 @@ BRANCH="$(git branch --show-current)"
 5. For alpha, blocking gates are the ones Tideclaw can repair directly or that prove package safety: normal CI, plugin prerelease, npm preflight, package preparation, install smoke, tag/reachability, and publish verification. Treat cross-OS, live channel, QA Lab, package acceptance, long Docker E2E, and Telegram package E2E failures as advisory; report them in Discord and continue if the blocking gates are green.
    - If `rerun_group=all` is stuck only on advisory lanes after CI, plugin prerelease, npm preflight, package preparation, and install smoke are green, dispatch a focused Full Release Validation on the same head with `-f rerun_group=install-smoke`. Use that successful focused Full Release Validation run as the publish proof, and include the separate CI/plugin/full advisory run IDs in the Discord summary.
 6. If a blocking gate fails, fix on the alpha branch, push, and rerun only the failed or required release CI. If the commit changes, discard old preflight/full-validation run IDs and rerun them for the new head.
-7. After full validation and npm preflight are green on the same branch head, create and push the release tag from that exact commit:
+7. After full validation and npm preflight are green on the same branch head,
+   review the npm preflight's `Plugin SDK API diff` summary. If it reports
+   changes, download the
+   `plugin-sdk-api-release-diff-<npm-preflight-run-id>-<run-attempt>` artifact,
+   inspect the changed declarations, and set
+   `PLUGIN_SDK_API_ACKNOWLEDGEMENT` to the first 8 characters of its `digest`.
+   Otherwise set it to an empty string. Then create and push the release tag
+   from that exact commit:
 
 ```bash
+NPM_PREFLIGHT_RUN_ATTEMPT="$(gh api \
+  "repos/openclaw/openclaw/actions/runs/${NPM_PREFLIGHT_RUN_ID}" \
+  --jq .run_attempt)"
+plugin_sdk_diff_dir="$(mktemp -d)"
+gh run download "$NPM_PREFLIGHT_RUN_ID" --repo openclaw/openclaw \
+  --name "plugin-sdk-api-release-diff-${NPM_PREFLIGHT_RUN_ID}-${NPM_PREFLIGHT_RUN_ATTEMPT}" \
+  --dir "$plugin_sdk_diff_dir"
+jq '{digest, entrypointsAdded, entrypointsRemoved, exports}' \
+  "$plugin_sdk_diff_dir/plugin-sdk-api-release-diff.json"
+
+PLUGIN_SDK_API_ACKNOWLEDGEMENT=""
+# After reviewing a nonempty diff, use its printed digest:
+# PLUGIN_SDK_API_ACKNOWLEDGEMENT="$(jq -r '.digest[0:8]' \
+#   "$plugin_sdk_diff_dir/plugin-sdk-api-release-diff.json")"
+
 git tag -a "$TAG" "$SHA" -m "openclaw ${TAG#v}"
 git push origin "$TAG"
+rm -rf "$plugin_sdk_diff_dir"
 ```
 
 8. Dispatch the publish wrapper from the same alpha branch. Use the successful npm preflight run ID and the full release validation run ID plus exact attempt from the same head SHA:
@@ -210,6 +281,7 @@ FULL_RELEASE_VALIDATION_RUN_ATTEMPT="$(gh api \
   -f preflight_run_id="$NPM_PREFLIGHT_RUN_ID" \
   -f full_release_validation_run_id="$FULL_RELEASE_VALIDATION_RUN_ID" \
   -f full_release_validation_run_attempt="$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" \
+  -f plugin_sdk_api_acknowledgement="$PLUGIN_SDK_API_ACKNOWLEDGEMENT" \
   -f npm_dist_tag=alpha \
   -f plugin_publish_scope=all-publishable \
   -f publish_openclaw_npm=true \

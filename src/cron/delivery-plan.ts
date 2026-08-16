@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
 import { resolveTargetPrefixedChannel } from "../infra/outbound/channel-target-prefix.js";
+import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
 import type { CronDelivery, CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
 
 /** Normalized routing plan for a cron job's primary delivery behavior. */
@@ -103,15 +104,15 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
     };
   }
 
-  const isDetachedOutputJob =
-    (job.payload.kind === "agentTurn" || job.payload.kind === "command") &&
-    typeof job.sessionTarget === "string" &&
-    (job.sessionTarget === "isolated" ||
-      job.sessionTarget === "current" ||
-      job.sessionTarget.startsWith("session:"));
   // Isolated/current/session output jobs default to announce delivery so their
-  // result reaches the initiating session unless the job opts out.
-  const resolvedMode = isDetachedOutputJob ? "announce" : "none";
+  // result reaches the initiating session unless the job opts out. Keep this
+  // aligned with create-time normalization and direct service callers.
+  const resolvedMode = shouldDefaultCronDeliveryToAnnounce({
+    payloadKind: job.payload.kind,
+    sessionTarget: job.sessionTarget,
+  })
+    ? "announce"
+    : "none";
 
   return {
     mode: resolvedMode,
@@ -169,8 +170,11 @@ export function resolveFailureDestination(
   }
 
   if (hasJobFailureDest) {
-    const jobChannel = normalizeChannel(jobFailureDest.channel);
     const jobTo = normalizeOptionalString(jobFailureDest.to);
+    const explicitJobChannel = normalizeChannel(jobFailureDest.channel);
+    const jobChannel =
+      explicitJobChannel ??
+      (jobTo ? (resolveTargetPrefixedChannel(jobTo) as CronMessageChannel | undefined) : undefined);
     const jobAccountId = normalizeOptionalString(jobFailureDest.accountId);
     const jobMode = normalizeFailureMode(jobFailureDest.mode);
     const hasJobChannelField = "channel" in jobFailureDest;
@@ -179,9 +183,19 @@ export function resolveFailureDestination(
     const hasJobModeField = "mode" in jobFailureDest;
 
     const jobToExplicitValue = hasJobToField && jobTo !== undefined;
+    const globalChannel = resolveAnnounceChannel({ channel, to });
 
-    if (hasJobChannelField) {
+    if (hasJobChannelField || (jobChannel && jobTo)) {
       channel = jobChannel;
+      if (jobChannel && jobChannel !== globalChannel) {
+        // Targets and accounts belong to the channel that supplied them.
+        if (!hasJobToField) {
+          to = undefined;
+        }
+        if (!hasJobAccountIdField) {
+          accountId = undefined;
+        }
+      }
     }
     if (hasJobToField) {
       to = jobTo;
@@ -196,9 +210,14 @@ export function resolveFailureDestination(
       const effectiveJobMode = jobImpliesAnnounce ? "announce" : jobMode;
       const globalMode = mode ?? "announce";
       const resolvedJobMode = effectiveJobMode ?? "announce";
-      if (!jobToExplicitValue && globalMode !== resolvedJobMode) {
-        // Do not carry an inherited target across modes; an announce chat is not a webhook URL.
-        to = undefined;
+      if (globalMode !== resolvedJobMode) {
+        // Chat targets and accounts cannot be reused as webhook routing, or vice versa.
+        if (!jobToExplicitValue) {
+          to = undefined;
+        }
+        if (!hasJobAccountIdField) {
+          accountId = undefined;
+        }
       }
       mode = effectiveJobMode;
     }

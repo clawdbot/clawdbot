@@ -1,7 +1,7 @@
 // Telegram tests cover group migration plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { migrateTelegramGroupConfig, migrateTelegramGroupsInPlace } from "./group-migration.js";
+import { migrateTelegramGroupConfig } from "./group-migration.js";
 
 function createTelegramGlobalGroupConfig(groups: Record<string, Record<string, unknown>>) {
   return {
@@ -112,12 +112,17 @@ describe("migrateTelegramGroupConfig", () => {
   });
 
   it("no-ops when old and new group ids are the same", () => {
-    const groups = {
+    const cfg = createTelegramGlobalGroupConfig({
       "-123": { requireMention: true },
-    };
-    const result = migrateTelegramGroupsInPlace(groups, "-123", "-123");
-    expect(result).toEqual({ migrated: false, skippedExisting: false });
-    expect(groups).toEqual({
+    });
+    const result = migrateTelegramGroupConfig({
+      cfg,
+      accountId: "default",
+      oldChatId: "-123",
+      newChatId: "-123",
+    });
+    expect(result).toEqual({ migrated: false, skippedExisting: false, scopes: [] });
+    expect(cfg.channels.telegram.groups).toEqual({
       "-123": { requireMention: true },
     });
   });

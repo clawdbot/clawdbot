@@ -1,4 +1,5 @@
 // JSON parse helpers recover structured values from partial model output.
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as partialParse } from "partial-json";
 
 const VALID_JSON_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
@@ -129,12 +130,6 @@ function looksLikeWindowsPathPrefix(prefix: string): boolean {
   return /^[A-Za-z]:(?:[\\/][^"\\/:*?<>|\r\n]*)*$/.test(prefix);
 }
 
-function asStreamingJsonRecord(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
 /**
  * Attempts to parse potentially incomplete JSON during streaming.
  * Always returns a valid object, even if the JSON is incomplete.
@@ -148,13 +143,13 @@ export function parseStreamingJson(partialJson: string | undefined): Record<stri
   }
 
   try {
-    return asStreamingJsonRecord(parseJsonWithRepair(partialJson));
+    return asNonArrayRecord(parseJsonWithRepair(partialJson));
   } catch {
     try {
-      return asStreamingJsonRecord(partialParse(partialJson));
+      return asNonArrayRecord(partialParse(partialJson));
     } catch {
       try {
-        return asStreamingJsonRecord(partialParse(repairJson(partialJson)));
+        return asNonArrayRecord(partialParse(repairJson(partialJson)));
       } catch {
         return {};
       }

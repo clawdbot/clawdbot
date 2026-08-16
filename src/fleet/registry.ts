@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import {
@@ -6,11 +7,11 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { allocateHostPort } from "./cell-profile.js";
 
 export type FleetCellRecord = {
@@ -86,24 +87,46 @@ function recordToRow(record: FleetCellRecord): Insertable<FleetCellsTable> {
 }
 
 export function listFleetCells(env: NodeJS.ProcessEnv = process.env): FleetCellRecord[] {
-  const db = openOpenClawStateDatabase({ env }).db;
-  const rows = executeSqliteQuerySync(
-    db,
-    kyselyFor(db).selectFrom("fleet_cells").selectAll().orderBy("tenant_id", "asc"),
-  ).rows;
-  return rows.map(rowToRecord);
+  if (!fs.existsSync(resolveOpenClawStateSqlitePath(env))) {
+    return [];
+  }
+  // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
+  return withOpenClawStateDatabaseReadOnly(
+    ({ db }) => {
+      if (!tableExists(db, "fleet_cells")) {
+        return [];
+      }
+      const rows = executeSqliteQuerySync(
+        db,
+        kyselyFor(db).selectFrom("fleet_cells").selectAll().orderBy("tenant_id", "asc"),
+      ).rows;
+      return rows.map(rowToRecord);
+    },
+    { env },
+  );
 }
 
 export function getFleetCell(
   env: NodeJS.ProcessEnv,
   tenantId: string,
 ): FleetCellRecord | undefined {
-  const db = openOpenClawStateDatabase({ env }).db;
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    kyselyFor(db).selectFrom("fleet_cells").selectAll().where("tenant_id", "=", tenantId),
+  if (!fs.existsSync(resolveOpenClawStateSqlitePath(env))) {
+    return undefined;
+  }
+  // CLI reads must not join the Gateway's writable SQLite lifecycle (#101290).
+  return withOpenClawStateDatabaseReadOnly(
+    ({ db }) => {
+      if (!tableExists(db, "fleet_cells")) {
+        return undefined;
+      }
+      const row = executeSqliteQueryTakeFirstSync(
+        db,
+        kyselyFor(db).selectFrom("fleet_cells").selectAll().where("tenant_id", "=", tenantId),
+      );
+      return row ? rowToRecord(row) : undefined;
+    },
+    { env },
   );
-  return row ? rowToRecord(row) : undefined;
 }
 
 export function reserveFleetCell(

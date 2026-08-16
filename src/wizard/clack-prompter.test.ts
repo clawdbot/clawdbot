@@ -1,5 +1,28 @@
 // Clack prompter tests cover prompt rendering, validation, and cancellation.
+import type { SpinnerOptions } from "@clack/prompts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const themeMocks = vi.hoisted(() => ({
+  isRich: vi.fn(() => false),
+}));
+
+const stdoutIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+const stdoutColumnsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "columns");
+
+function stubStdoutIsTTY(value: boolean): void {
+  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value });
+}
+
+function stubStdoutColumns(value: number | undefined): void {
+  Object.defineProperty(process.stdout, "columns", { configurable: true, value });
+}
+
+const cliProgressMocks = vi.hoisted(() => ({
+  createCliProgress: vi.fn(() => ({
+    done: vi.fn(),
+    setLabel: vi.fn(),
+  })),
+}));
 
 const clackMocks = vi.hoisted(() => ({
   autocomplete: vi.fn(),
@@ -13,7 +36,7 @@ const clackMocks = vi.hoisted(() => ({
   password: vi.fn(),
   select: vi.fn(),
   settings: { actions: new Set(["left", "right"]) },
-  spinner: vi.fn(() => ({
+  spinner: vi.fn((_options?: SpinnerOptions) => ({
     start: vi.fn(),
     message: vi.fn(),
     clear: vi.fn(),
@@ -32,6 +55,14 @@ const navigationPromptMocks = vi.hoisted(() => ({
   textWithNavigationFooter: vi.fn(),
 }));
 
+vi.mock("../../packages/terminal-core/src/theme.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../packages/terminal-core/src/theme.js")>();
+  return {
+    ...actual,
+    isRich: themeMocks.isRich,
+  };
+});
+
 vi.mock("@clack/prompts", () => ({
   autocomplete: clackMocks.autocomplete,
   autocompleteMultiselect: clackMocks.autocompleteMultiselect,
@@ -48,6 +79,10 @@ vi.mock("@clack/prompts", () => ({
   text: clackMocks.text,
 }));
 
+vi.mock("../cli/progress.js", () => ({
+  createCliProgress: cliProgressMocks.createCliProgress,
+}));
+
 vi.mock("./clack-navigation-prompts.js", () => ({
   autocompleteMultiselectWithNavigationFooter:
     navigationPromptMocks.autocompleteMultiselectWithNavigationFooter,
@@ -59,12 +94,25 @@ vi.mock("./clack-navigation-prompts.js", () => ({
   textWithNavigationFooter: navigationPromptMocks.textWithNavigationFooter,
 }));
 
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { createClackPrompter, tokenizedOptionFilter } from "./clack-prompter.js";
-import { WizardNavigationError } from "./prompts.js";
+import { WizardCancelledError, WizardNavigationError } from "./prompts.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
+  if (stdoutIsTTYDescriptor) {
+    Object.defineProperty(process.stdout, "isTTY", stdoutIsTTYDescriptor);
+  } else {
+    Reflect.deleteProperty(process.stdout, "isTTY");
+  }
+  if (stdoutColumnsDescriptor) {
+    Object.defineProperty(process.stdout, "columns", stdoutColumnsDescriptor);
+  } else {
+    Reflect.deleteProperty(process.stdout, "columns");
+  }
+  themeMocks.isRich.mockReturnValue(false);
   clackMocks.settings.actions = new Set(["left", "right"]);
 });
 
@@ -102,6 +150,112 @@ describe("tokenizedOptionFilter", () => {
 });
 
 describe("createClackPrompter", () => {
+  it("clamps long progress labels by display width without splitting grapheme clusters", () => {
+    stubStdoutColumns(20);
+    const prompter = createClackPrompter();
+
+    const progress = prompter.progress("12345678😀ABC");
+    progress.update("正在扫描已安装应用…");
+    progress.stop("1234567890ABC");
+
+    const spin = clackMocks.spinner.mock.results[0]!.value;
+    const osc = cliProgressMocks.createCliProgress.mock.results[0]!.value;
+    expect(spin.start).toHaveBeenCalledWith(theme.accent("12345678…"));
+    expect(spin.message).toHaveBeenCalledWith(theme.accent("正在扫描…"));
+    expect(spin.stop).toHaveBeenCalledWith("1234567890ABC");
+    expect(cliProgressMocks.createCliProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ label: "12345678😀ABC" }),
+    );
+    expect(osc.setLabel).toHaveBeenCalledWith("正在扫描已安装应用…");
+  });
+
+  it("preserves emoji joined by zero-width joiners when truncating", () => {
+    stubStdoutColumns(14);
+    const prompter = createClackPrompter();
+
+    prompter.progress("👨‍👩‍👧‍👦ABCDEFGH");
+
+    const spin = clackMocks.spinner.mock.results[0]!.value;
+    expect(spin.start).toHaveBeenCalledWith(theme.accent("👨‍👩‍👧‍👦A…"));
+  });
+
+  it("shrinks active progress labels without expanding past the initial width", () => {
+    stubStdoutColumns(20);
+    const initialResizeListeners = process.stdout.listenerCount("resize");
+    const prompter = createClackPrompter();
+
+    const progress = prompter.progress("123456789ABC");
+    stubStdoutColumns(14);
+    process.stdout.emit("resize");
+    stubStdoutColumns(30);
+    process.stdout.emit("resize");
+    progress.update("ABCDEFGHIJK");
+    progress.stop();
+
+    const spin = clackMocks.spinner.mock.results[0]!.value;
+    expect(spin.message).toHaveBeenNthCalledWith(1, theme.accent("123…"));
+    expect(spin.message).toHaveBeenNthCalledWith(2, theme.accent("ABC…"));
+    expect(process.stdout.listenerCount("resize")).toBe(initialResizeListeners);
+  });
+
+  it("leaves progress labels untouched when terminal columns are unavailable", () => {
+    stubStdoutColumns(undefined);
+    const prompter = createClackPrompter();
+
+    prompter.progress("1234567890ABC");
+
+    const spin = clackMocks.spinner.mock.results[0]!.value;
+    expect(spin.start).toHaveBeenCalledWith(theme.accent("1234567890ABC"));
+  });
+
+  it("leaves short progress labels untouched", () => {
+    stubStdoutColumns(20);
+    const prompter = createClackPrompter();
+
+    prompter.progress("Loading");
+
+    const spin = clackMocks.spinner.mock.results[0]!.value;
+    expect(spin.start).toHaveBeenCalledWith(theme.accent("Loading"));
+  });
+
+  it("uses an empty progress label when decoration consumes the terminal width", () => {
+    stubStdoutColumns(10);
+    const prompter = createClackPrompter();
+
+    prompter.progress("Loading");
+
+    const spin = clackMocks.spinner.mock.results[0]!.value;
+    expect(spin.start).toHaveBeenCalledWith(theme.accent(""));
+  });
+
+  it("uses the claw spinner on rich interactive terminals", () => {
+    stubStdoutIsTTY(true);
+    vi.stubEnv("CI", "");
+    vi.stubEnv("VITEST", "");
+    themeMocks.isRich.mockReturnValue(true);
+    const prompter = createClackPrompter();
+
+    prompter.progress("Loading");
+
+    expect(clackMocks.spinner).toHaveBeenCalledWith({
+      frames: ["(\\/)", "(||)", "(--)", "(||)"],
+      delay: 120,
+      styleFrame: theme.accent,
+    });
+  });
+
+  it("keeps Clack's default spinner on non-rich terminals", () => {
+    stubStdoutIsTTY(true);
+    vi.stubEnv("CI", "");
+    vi.stubEnv("VITEST", "");
+    themeMocks.isRich.mockReturnValue(false);
+    const prompter = createClackPrompter();
+
+    prompter.progress("Loading");
+
+    expect(clackMocks.spinner).toHaveBeenCalledWith();
+  });
+
   it("prints plain output without note framing", async () => {
     const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const prompter = createClackPrompter();
@@ -203,6 +357,27 @@ describe("createClackPrompter", () => {
         navigation: { canGoBack: true, canGoForward: true },
         signal: expect.any(AbortSignal),
       }),
+    );
+  });
+
+  it("cancels text prompts silently when their owner aborts them", async () => {
+    const controller = new AbortController();
+    clackMocks.isCancel.mockReturnValueOnce(true);
+    clackMocks.text.mockImplementation(
+      async ({ signal }: { signal?: AbortSignal }) =>
+        await new Promise<symbol>((resolve) => {
+          signal?.addEventListener("abort", () => resolve(Symbol("clack:cancel")), { once: true });
+        }),
+    );
+    const prompter = createClackPrompter();
+
+    const prompt = prompter.text({ message: "Paste callback", signal: controller.signal });
+    controller.abort();
+
+    await expect(prompt).rejects.toBeInstanceOf(WizardCancelledError);
+    expect(clackMocks.cancel).not.toHaveBeenCalled();
+    expect(clackMocks.text).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
     );
   });
 

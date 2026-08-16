@@ -143,6 +143,127 @@ describe("collectChannelStatusIssues", () => {
     });
   });
 
+  it.each([
+    {
+      name: "stale socket",
+      account: {
+        running: true,
+        connected: true,
+        lifecycle: "ready",
+        lastStartAt: 0,
+        lastTransportActivityAt: 0,
+      },
+      message:
+        "Channel reports connected, but transport activity is stale; inbound delivery may be broken.",
+    },
+    {
+      name: "running but disconnected",
+      account: { running: true, connected: false, lifecycle: "ready" },
+      message: "Channel reports running, but the runtime is disconnected.",
+    },
+  ])("reports Discord $name through the generic runtime path", ({ account, message }) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS + 1);
+    mocks.listChannelPlugins.mockReturnValue([createPlugin("discord")]);
+
+    expect(
+      collectChannelStatusIssues({
+        channelAccounts: {
+          discord: [{ accountId: "ops", enabled: true, configured: true, ...account }],
+        },
+      }),
+    ).toContainEqual({
+      channel: "discord",
+      accountId: "ops",
+      kind: "runtime",
+      message,
+      fix: "restart the channel or gateway",
+    });
+  });
+
+  it("reports blocked lifecycle through the generic runtime path", () => {
+    mocks.listChannelPlugins.mockReturnValue([createPlugin("slack")]);
+
+    expect(
+      collectChannelStatusIssues({
+        channelAccounts: {
+          slack: [
+            {
+              accountId: "default",
+              enabled: true,
+              configured: true,
+              running: true,
+              connected: true,
+              lifecycle: "blocked",
+            },
+          ],
+        },
+      }),
+    ).toContainEqual({
+      channel: "slack",
+      accountId: "default",
+      kind: "runtime",
+      message: "Channel runtime is blocked and needs operator action.",
+      fix: "resolve the reported channel error, then restart the channel",
+    });
+  });
+
+  it("reports stopped configured accounts without treating unknown runtime state as stopped", () => {
+    mocks.listChannelPlugins.mockReturnValue([createPlugin("discord")]);
+
+    expect(
+      collectChannelStatusIssues({
+        channelAccounts: {
+          discord: [
+            { accountId: "stopped", enabled: true, configured: true, running: false },
+            { accountId: "unknown", enabled: true, configured: true },
+            { accountId: "disabled", enabled: false, configured: true, running: false },
+            { accountId: "unconfigured", enabled: true, configured: false, running: false },
+          ],
+        },
+      }),
+    ).toEqual([
+      {
+        channel: "discord",
+        accountId: "stopped",
+        kind: "runtime",
+        message: "Channel is enabled and configured, but its runtime is not running.",
+        fix: "restart the channel or gateway",
+      },
+    ]);
+  });
+
+  it("reports dead ingress even while a restart is pending", () => {
+    mocks.listChannelPlugins.mockReturnValue([createPlugin("slack")]);
+
+    const issues = collectChannelStatusIssues({
+      channelAccounts: {
+        slack: [
+          {
+            accountId: "default",
+            enabled: true,
+            configured: true,
+            running: true,
+            connected: true,
+            restartPending: true,
+            ingressUnavailable: true,
+          },
+        ],
+      },
+    });
+
+    expect(issues).toEqual([
+      {
+        channel: "slack",
+        accountId: "default",
+        kind: "runtime",
+        message:
+          "Channel cannot admit inbound events; its durable ingress queue is unavailable. Outbound may still work.",
+        fix: "check openclaw logs for the ingress failure, then rerun openclaw doctor",
+      },
+    ]);
+  });
+
   it("keeps plugin-specific status issues while adding generic runtime issues", () => {
     const now = Date.now();
     vi.useFakeTimers();

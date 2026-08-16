@@ -23,6 +23,8 @@ export const PluginControlUiDescriptorSchema = closedObject({
     Type.Literal("tool"),
     Type.Literal("run"),
     Type.Literal("settings"),
+    Type.Literal("tab"),
+    Type.Literal("widget"),
   ]),
   label: NonEmptyString,
   description: Type.Optional(Type.String()),
@@ -45,6 +47,7 @@ export const PluginsSessionActionParamsSchema = closedObject({
   pluginId: NonEmptyString,
   actionId: NonEmptyString,
   sessionKey: Type.Optional(NonEmptyString),
+  agentId: Type.Optional(NonEmptyString),
   payload: Type.Optional(PluginJsonValueSchema),
 });
 
@@ -107,7 +110,10 @@ export const PluginCatalogEntrySchema = closedObject({
     Type.Literal("error"),
   ]),
   featured: Type.Optional(Type.Boolean()),
+  featuredAt: Type.Optional(Type.Integer({ minimum: 0 })),
   order: Type.Optional(Type.Number()),
+  /** True when the gateway can resolve a manifest or catalog icon for this plugin identity. */
+  hasIcon: Type.Optional(Type.Boolean()),
   install: Type.Optional(PluginCatalogInstallActionSchema),
   error: Type.Optional(Type.String()),
   /** Coarse manifest-derived grouping (channel, provider, memory, ...) for catalog UIs. */
@@ -168,10 +174,12 @@ export const PluginsInstallParamsSchema = Type.Union([
     packageName: NonEmptyString,
     version: Type.Optional(NonEmptyString),
     acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
+    acknowledgeInstallPolicyWarning: Type.Optional(Type.Literal(true)),
   }),
   closedObject({
     source: Type.Literal("official"),
     pluginId: NonEmptyString,
+    acknowledgeInstallPolicyWarning: Type.Optional(Type.Literal(true)),
   }),
 ]);
 
@@ -181,6 +189,14 @@ export const PluginsInstallResultSchema = closedObject({
   plugin: PluginCatalogEntrySchema,
   restartRequired: Type.Literal(true),
   warnings: Type.Optional(Type.Array(Type.String())),
+});
+
+/** Internal signal that persisted plugin metadata changed outside the Gateway process. */
+export const PluginsRefreshParamsSchema = closedObject({});
+
+/** Successful plugin metadata refresh admission. */
+export const PluginsRefreshResultSchema = closedObject({
+  ok: Type.Literal(true),
 });
 
 /** Request payload for removing one installed plugin and its managed files. */
@@ -218,6 +234,8 @@ export type PluginsSearchParams = Static<typeof PluginsSearchParamsSchema>;
 export type PluginsSearchResult = Static<typeof PluginsSearchResultSchema>;
 export type PluginsInstallParams = Static<typeof PluginsInstallParamsSchema>;
 export type PluginsInstallResult = Static<typeof PluginsInstallResultSchema>;
+export type PluginsRefreshParams = Static<typeof PluginsRefreshParamsSchema>;
+export type PluginsRefreshResult = Static<typeof PluginsRefreshResultSchema>;
 export type PluginsUninstallParams = Static<typeof PluginsUninstallParamsSchema>;
 export type PluginsUninstallResult = Static<typeof PluginsUninstallResultSchema>;
 export type PluginsSetEnabledParams = Static<typeof PluginsSetEnabledParamsSchema>;

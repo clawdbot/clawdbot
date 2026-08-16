@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../api/types.ts";
 import {
   resolveSessionKey,
@@ -16,7 +17,6 @@ import {
   resolveUiDefaultAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { normalizeOptionalLowercaseString } from "../../lib/string-coerce.ts";
 
 type ChatPickerPatchHost = SessionScopeHost & { sessions: SessionCapability };
 type ChatCommandSettingsContext = {
@@ -112,9 +112,11 @@ function trackPendingChatSettingsPatch(
 export function patchChatSessionSettings(
   host: ChatPickerPatchHost,
   sessionKey: string,
-  patch: Pick<SessionPatch, "model" | "thinkingLevel" | "fastMode">,
+  patch: Pick<SessionPatch, "model" | "thinkingLevel" | "fastMode" | "toolOverrides">,
   options: {
     agentId?: string;
+    deferModelOverride?: boolean;
+    ownsModelOverride?: () => boolean;
     reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
   } = {},
 ): Promise<SessionsPatchResult | null> {
@@ -125,6 +127,8 @@ export function patchChatSessionSettings(
     // redirect queued intent to a replacement Gateway.
     const result = await host.sessions.patch(sessionKey, patch, {
       agentId: options.agentId,
+      deferModelOverride: options.deferModelOverride,
+      ownsModelOverride: options.ownsModelOverride,
       waitFor: previous,
     });
     if (result) {
@@ -164,6 +168,11 @@ export async function patchChatCommandSessionSettings(
   context: ChatCommandSettingsContext,
   sessionKey: string,
   patch: SessionPatch,
+  options: {
+    deferModelOverride?: boolean;
+    ownsModelOverride?: () => boolean;
+    reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
+  } = {},
 ): Promise<NonNullable<Awaited<ReturnType<SessionCapability["patch"]>>>> {
   const result = await patchChatSessionSettings(
     {
@@ -174,7 +183,7 @@ export async function patchChatCommandSessionSettings(
     },
     sessionKey,
     patch,
-    selectedGlobalScope(sessionKey, context),
+    { ...selectedGlobalScope(sessionKey, context), ...options },
   );
   if (!result) {
     throw new Error("Session capability is unavailable");

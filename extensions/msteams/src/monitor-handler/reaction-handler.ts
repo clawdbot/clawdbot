@@ -24,12 +24,9 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
     const activity = context.activity;
 
     // Reactions are carried in reactionsAdded / reactionsRemoved on the activity.
-    const reactions: Array<{ type?: string }> =
-      direction === "added"
-        ? ((activity as unknown as { reactionsAdded?: Array<{ type?: string }> }).reactionsAdded ??
-          [])
-        : ((activity as unknown as { reactionsRemoved?: Array<{ type?: string }> })
-            .reactionsRemoved ?? []);
+    const rawReactions =
+      direction === "added" ? activity.reactionsAdded : activity.reactionsRemoved;
+    const reactions: Array<{ type?: string }> = Array.isArray(rawReactions) ? rawReactions : [];
 
     if (reactions.length === 0) {
       log.debug?.("reaction activity has no reactions; skipping");
@@ -65,9 +62,7 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
 
     // Resolve the agent route for this conversation/sender.
     // Extract teamId for team-scoped routing bindings (channel/group reactions).
-    const teamId = isDirectMessage
-      ? undefined
-      : (activity as unknown as { channelData?: { team?: { id?: string } } }).channelData?.team?.id;
+    const teamId = isDirectMessage ? undefined : activity.channelData?.team?.id;
     const route = core.channel.routing.resolveAgentRoute({
       cfg,
       channel: "msteams",
@@ -79,7 +74,7 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
     });
 
     // The replyToId points to the message that was reacted to.
-    const targetMessageId = (activity as unknown as { replyToId?: string }).replyToId ?? "unknown";
+    const targetMessageId = activity.replyToId ?? "unknown";
 
     for (const reaction of reactions) {
       const reactionType = reaction.type ?? "unknown";

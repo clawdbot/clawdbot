@@ -2,7 +2,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { registerWorkboardGatewayMethods } from "./gateway.js";
-import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
+import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
+import { WorkboardStore } from "./store.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
   const entries = new Map<string, T>();

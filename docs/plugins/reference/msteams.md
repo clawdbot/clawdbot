@@ -16,8 +16,8 @@ OpenClaw Microsoft Teams channel plugin for bot conversations.
 
 ## Surface
 
-channels: msteams
+channels: `msteams`
 
 ## Related docs
 
-- [msteams](/channels/msteams)
+- [Microsoft Teams](/channels/msteams)

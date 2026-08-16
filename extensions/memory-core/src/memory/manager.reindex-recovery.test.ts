@@ -7,11 +7,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetEmbeddingMocks } from "./embedding.test-mocks.js";
-import type { MemoryIndexManager } from "./index.js";
 import { acquireMemoryReindexLock } from "./manager-reindex-lock.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
+import type { MemoryIndexManager } from "./manager.js";
 
-type SessionDeltaState = { lastSize: number; pendingBytes: number; pendingMessages: number };
 type SyncArchiveParams = { needsFullReindex: boolean; targetArchiveFiles?: string[] };
 
 type ReindexHarness = {
@@ -27,7 +26,6 @@ type ReindexHarness = {
   sessionsDirty: boolean;
   sessionsFullRetryDirty: boolean;
   sessionsDirtyFiles: Set<string>;
-  sessionDeltas: Map<string, SessionDeltaState>;
 };
 
 describe("memory manager reindex recovery", () => {
@@ -62,21 +60,19 @@ describe("memory manager reindex recovery", () => {
     sources?: Array<"memory" | "sessions">;
   }): OpenClawConfig {
     return {
-      memory: { backend: "builtin" },
+      memory: {
+        search: {
+          provider: params.provider ?? "openai",
+          model: "mock-embed",
+          store: { vector: {} },
+          cache: { enabled: false },
+          sources: params.sources,
+          rememberAcrossConversations: params.sources?.includes("sessions") ?? false,
+        },
+      },
       agents: {
         defaults: {
           workspace: workspaceDir,
-          memorySearch: {
-            provider: params.provider ?? "openai",
-            model: "mock-embed",
-            store: { vector: { enabled: false } },
-            chunking: { tokens: 4000, overlap: 0 },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-            remote: { nonBatchConcurrency: 1 },
-            cache: { enabled: false },
-            sources: params.sources,
-            experimental: { sessionMemory: params.sources?.includes("sessions") ?? false },
-          },
         },
         list: [{ id: "main", default: true }],
       },
@@ -105,27 +101,13 @@ describe("memory manager reindex recovery", () => {
     );
     const harness = memoryManager as unknown as ReindexHarness;
     const dirtySessionFile = path.join(workspaceDir, "sessions", "dirty.jsonl");
-    const originalDelta: SessionDeltaState = {
-      lastSize: 42,
-      pendingBytes: 100,
-      pendingMessages: 2,
-    };
     const emptySyncPlan = { indexItems: [], finalize: () => undefined };
 
     harness.dirty = true;
     harness.sessionsDirty = true;
     harness.sessionsDirtyFiles.add(dirtySessionFile);
-    harness.sessionDeltas.set(dirtySessionFile, { ...originalDelta });
     harness.syncMemoryFiles = async () => emptySyncPlan;
-    harness.syncArchiveFiles = async () => {
-      const delta = harness.sessionDeltas.get(dirtySessionFile);
-      if (delta) {
-        delta.lastSize = 500;
-        delta.pendingBytes = 0;
-        delta.pendingMessages = 0;
-      }
-      return emptySyncPlan;
-    };
+    harness.syncArchiveFiles = async () => emptySyncPlan;
     harness.writeMeta = () => {
       throw new Error("late reindex failure");
     };
@@ -138,7 +120,6 @@ describe("memory manager reindex recovery", () => {
     expect(harness.memoryFullRetryDirty).toBe(true);
     expect(harness.sessionsDirty).toBe(true);
     expect(Array.from(harness.sessionsDirtyFiles)).toEqual([dirtySessionFile]);
-    expect(harness.sessionDeltas.get(dirtySessionFile)).toEqual(originalDelta);
   });
 
   it("marks clean full reindex work dirty after a shadow full reindex fails late", async () => {

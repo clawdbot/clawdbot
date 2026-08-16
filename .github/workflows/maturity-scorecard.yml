@@ -22,6 +22,11 @@ on:
         required: false
         default: true
         type: boolean
+      allow_failures:
+        description: Allow rendering from valid incomplete QA evidence
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
       qa_evidence_run_id:
@@ -38,6 +43,11 @@ on:
         required: false
         default: ""
         type: string
+      allow_failures:
+        description: Allow rendering from valid incomplete QA evidence
+        required: false
+        default: false
+        type: boolean
     secrets:
       OPENAI_API_KEY:
         description: OpenAI API key used by live QA profile scenarios
@@ -45,13 +55,16 @@ on:
       OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY:
         description: Optional OpenAI API key used by maturity scorecard agent steps
         required: false
+      OPENCLAW_QA_CONVEX_SITE_URL:
+        description: Optional Convex credential broker URL supplied by qa-live-shared
+        required: false
+      OPENCLAW_QA_CONVEX_SECRET_CI:
+        description: Optional Convex CI credential supplied by qa-live-shared
+        required: false
       # Mixed-trigger workflows must declare referenced secrets for actionlint. Reusable calls
       # remain artifact-only because exact caller and job workflow identities gate every use.
       CLAWSWEEPER_APP_PRIVATE_KEY:
         description: Optional contents-write App key used only by canonical direct dispatches
-        required: false
-      MANTIS_GITHUB_APP_ID:
-        description: Optional pull-request-write App id used only by canonical direct dispatches
         required: false
       MANTIS_GITHUB_APP_PRIVATE_KEY:
         description: Optional pull-request-write App key used only by canonical direct dispatches
@@ -151,7 +164,7 @@ jobs:
           fi
 
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ inputs.ref }}
@@ -170,20 +183,27 @@ jobs:
           set -euo pipefail
 
           selected_revision="$(git rev-parse HEAD)"
-          expected_sha="${EXPECTED_SHA,,}"
+          expected_sha="$(printf '%s' "$EXPECTED_SHA" | tr '[:upper:]' '[:lower:]')"
           branch_candidate="${INPUT_REF#refs/heads/}"
+          floating_default_branch=false
           trusted_reason=""
 
           if [[ -n "${expected_sha// }" && ! "$expected_sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "expected_sha must be a full 40-character SHA; got: ${EXPECTED_SHA}" >&2
             exit 1
           fi
-          if [[ -n "${expected_sha// }" && "${selected_revision,,}" != "$expected_sha" ]]; then
+          if [[ -n "${expected_sha// }" && "$selected_revision" != "$expected_sha" ]]; then
             echo "Ref '${INPUT_REF}' resolved to ${selected_revision}, expected ${EXPECTED_SHA}." >&2
             exit 1
           fi
 
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [[ -z "${expected_sha// }" && "$branch_candidate" == "$DEFAULT_BRANCH" ]]; then
+            # A direct main dispatch may wait while checkout fetches full history. Freeze the
+            # latest fetched main here so later reusable jobs never receive a moving branch.
+            floating_default_branch=true
+            selected_revision="$(git rev-parse refs/remotes/origin/main)"
+          fi
 
           if git merge-base --is-ancestor "$selected_revision" refs/remotes/origin/main; then
             trusted_reason="main-ancestor"
@@ -229,6 +249,9 @@ jobs:
             fi
             git fetch --no-tags origin "+refs/heads/${publication_base}:refs/remotes/origin/${publication_base}"
             publication_ref="refs/remotes/origin/${publication_base}"
+            if [[ "$floating_default_branch" == "true" && "$publication_base" == "$DEFAULT_BRANCH" ]]; then
+              selected_revision="$(git rev-parse "$publication_ref")"
+            fi
             if ! git merge-base --is-ancestor "$selected_revision" "$publication_ref"; then
               echo "Ref '${INPUT_REF}' is not an ancestor of pull request base '${publication_base}'." >&2
               echo "Historical divergent refs remain available through artifact-only workflow calls." >&2
@@ -273,7 +296,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout trusted workflow source
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -292,7 +315,7 @@ jobs:
         with:
           contents-client-id: Iv23liOECG0slfuhz093
           contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
-          pull-request-app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          pull-request-client-id: Iv23liPJCozR0uHm6P7G
           pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
 
   generate_qa_evidence:
@@ -305,11 +328,15 @@ jobs:
         inputs.qa_evidence_run_id == '' }}
     uses: ./.github/workflows/qa-profile-evidence.yml
     with:
-      ref: ${{ inputs.ref }}
+      ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+      trusted_ref: ${{ inputs.ref }}
       expected_sha: ${{ needs.validate_selected_ref.outputs.selected_revision }}
       qa_profile: all
+      allow_failures: ${{ inputs.allow_failures }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+      OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
 
   publish:
     name: Publish maturity docs PR
@@ -329,7 +356,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           fetch-depth: 0
@@ -402,9 +429,11 @@ jobs:
           TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
         run: |
           set -euo pipefail
-          node --input-type=module <<'NODE'
+          node --import tsx --input-type=module <<'NODE'
           import fs from "node:fs";
           import path from "node:path";
+          import { validateQaEvidenceSummaryJson } from "./extensions/qa-lab/src/evidence-summary.ts";
+          import { qaProfileEvidencePlan } from "./extensions/qa-lab/src/profile-evidence-plan.ts";
 
           const evidencePath = process.env.QA_EVIDENCE_PATH;
           const targetSha = process.env.TARGET_SHA;
@@ -415,9 +444,12 @@ jobs:
             throw new Error("TARGET_SHA is required");
           }
 
-          const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
+          const evidence = validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(evidencePath, "utf8")));
           if (evidence.profile !== "all") {
             throw new Error(`qa-evidence.json profile must be all, got ${JSON.stringify(evidence.profile)}`);
+          }
+          if (!evidence.profilePlan) {
+            throw new Error("qa-evidence.json is missing profilePlan; rerun the QA Profile Evidence workflow with current code.");
           }
 
           const artifactDir = path.dirname(evidencePath);
@@ -440,6 +472,19 @@ jobs:
           if (manifest.targetSha !== targetSha) {
             throw new Error(`QA evidence manifest targetSha ${manifest.targetSha} does not match selected ref ${targetSha}`);
           }
+          if (typeof manifest.profilePlanSha256 !== "string") {
+            throw new Error("QA evidence manifest is missing profilePlanSha256; rerun the QA Profile Evidence workflow with current code.");
+          }
+          const { plan: profilePlan, sha256: profilePlanSha256 } = qaProfileEvidencePlan.attest(
+            evidence.profilePlan,
+            manifest.qaPassed === true,
+          );
+          if (profilePlan.profile !== "all") {
+            throw new Error(`qa-evidence.json profilePlan.profile must be all, got ${JSON.stringify(profilePlan.profile)}`);
+          }
+          if (profilePlanSha256 !== manifest.profilePlanSha256) {
+            throw new Error("QA evidence profilePlan digest does not match the manifest");
+          }
           NODE
 
       - name: Ensure maturity scorecard agent key exists
@@ -453,7 +498,7 @@ jobs:
           fi
 
       - name: Run Codex maturity scorecard agent
-        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
         env:
           MATURITY_EVIDENCE_DIR: .artifacts/maturity-evidence
           MATURITY_SCORES_PATH: qa/maturity-scores.yaml
@@ -518,31 +563,46 @@ jobs:
           NODE
 
       - name: Render artifact docs
+        env:
+          ALLOW_FAILURES: ${{ inputs.allow_failures }}
         run: |
           set -euo pipefail
+          allow_failures_args=()
+          if [[ "$ALLOW_FAILURES" == "true" ]]; then
+            allow_failures_args+=(--allow-failures)
+          fi
           pnpm maturity:render -- \
             --output-dir .artifacts/maturity-docs \
             --static-assets-dir .artifacts/maturity-docs/assets/maturity \
             --scores qa/maturity-scores.yaml \
             --evidence-dir .artifacts/maturity-evidence \
-            --strict-inputs
+            --strict-inputs \
+            "${allow_failures_args[@]}"
           {
             echo "### Maturity scorecard docs"
             echo
             echo "- Source validation: passed"
             echo "- Artifact docs: \`.artifacts/maturity-docs\`"
             echo "- Strict inputs: \`true\`"
+            echo "- QA failures allowed: \`${ALLOW_FAILURES}\`"
             echo "- QA evidence: included"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Render committed docs preview
+        env:
+          ALLOW_FAILURES: ${{ inputs.allow_failures }}
         run: |
           set -euo pipefail
+          allow_failures_args=()
+          if [[ "$ALLOW_FAILURES" == "true" ]]; then
+            allow_failures_args+=(--allow-failures)
+          fi
           pnpm maturity:render -- \
             --output-dir docs \
             --scores qa/maturity-scores.yaml \
             --evidence-dir .artifacts/maturity-evidence \
-            --strict-inputs
+            --strict-inputs \
+            "${allow_failures_args[@]}"
 
       - name: Upload generated PR files
         if: ${{ inputs.publish_pull_request }}
@@ -585,7 +645,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout trusted workflow source
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           repository: ${{ needs.validate_selected_ref.outputs.workflow_repository }}
           ref: ${{ needs.validate_selected_ref.outputs.workflow_sha }}
@@ -593,7 +653,7 @@ jobs:
           submodules: false
 
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           path: selected
@@ -682,7 +742,7 @@ jobs:
         with:
           contents-client-id: Iv23liOECG0slfuhz093
           contents-private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
-          pull-request-app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          pull-request-client-id: Iv23liPJCozR0uHm6P7G
           pull-request-private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
           base-branch: ${{ needs.validate_selected_ref.outputs.publication_base }}
           head-branch: ${{ needs.validate_selected_ref.outputs.publication_head }}
@@ -706,7 +766,7 @@ jobs:
 
             ## Why This Change Was Made
 
-            The maturity workflow generated this update from the selected immutable source and strict QA evidence.
+            The maturity workflow generated this update from the selected immutable source and validated QA evidence.
 
             ## User Impact
 

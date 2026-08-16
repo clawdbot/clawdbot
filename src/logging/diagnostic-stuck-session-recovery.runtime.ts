@@ -57,12 +57,20 @@ function resolveStaleActiveLaneTaskReleaseMs(params: StuckSessionRecoveryParams)
 }
 
 function isActiveRunProgressStale(params: {
+  ageMs: number;
   sessionId?: string;
   sessionKey?: string;
   queueDepth?: number;
   staleAbortMs: number;
+  /**
+   * When false, staleness is evaluated even with a zero queued backlog.
+   * Run-handle recovery keeps the gate so an unqueued active run is not
+   * disturbed; reply-only ownership has no backlog to protect and must
+   * still expire when proven stale (phantom active reply work).
+   */
+  requireQueueBacklog?: boolean;
 }): boolean {
-  if ((params.queueDepth ?? 0) <= 0) {
+  if ((params.queueDepth ?? 0) <= 0 && params.requireQueueBacklog !== false) {
     return false;
   }
   const activity = getDiagnosticSessionActivitySnapshot({
@@ -70,7 +78,11 @@ function isActiveRunProgressStale(params: {
     sessionKey: params.sessionKey,
   });
   const lastProgressAgeMs = activity.lastProgressAgeMs;
-  return typeof lastProgressAgeMs === "number" && lastProgressAgeMs >= params.staleAbortMs;
+  // A missing activity row is the orphan-handle state: classification age is
+  // the only progress evidence available, so it owns the stale fallback.
+  return typeof lastProgressAgeMs === "number"
+    ? lastProgressAgeMs >= params.staleAbortMs
+    : params.ageMs >= params.staleAbortMs;
 }
 
 function formatRecoveryContext(
@@ -160,11 +172,30 @@ export async function recoverStuckDiagnosticSession(
     let forceCleared = false;
     const staleActiveProgressAbortMs = resolveStaleActiveProgressAbortMs(params);
     const staleActiveLaneTaskReleaseMs = resolveStaleActiveLaneTaskReleaseMs(params);
+    const activeReplyPhase = activeWorkSessionId
+      ? resolveEmbeddedAgentReplyRunPhase(activeWorkSessionId)
+      : undefined;
+
+    if (activeReplyPhase === "waiting_for_global_lane") {
+      // A global-lane queue owner is healthy pending work. Reclaiming it here
+      // reintroduces the silent reply drop that the wait phase prevents.
+      const outcome: StuckSessionRecoveryOutcome = {
+        status: "skipped",
+        action: "keep_lane",
+        reason: "global_lane_wait",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        activeSessionId: activeWorkSessionId,
+      };
+      diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+      return outcome;
+    }
 
     if (activeSessionId) {
       const reclaimStaleActiveRun =
         params.allowActiveAbort !== true &&
         isActiveRunProgressStale({
+          ageMs: params.ageMs,
           sessionId: activeSessionId,
           sessionKey: params.sessionKey,
           queueDepth: params.queueDepth,
@@ -206,7 +237,6 @@ export async function recoverStuckDiagnosticSession(
     }
 
     if (!activeSessionId && activeWorkSessionId && isEmbeddedAgentRunActive(activeWorkSessionId)) {
-      const activeReplyPhase = resolveEmbeddedAgentReplyRunPhase(activeWorkSessionId);
       if (activeReplyPhase === "waiting_for_deferred_maintenance") {
         const outcome: StuckSessionRecoveryOutcome = {
           status: "skipped",
@@ -222,10 +252,23 @@ export async function recoverStuckDiagnosticSession(
       const reclaimStaleReplyWork =
         params.allowActiveAbort !== true &&
         isActiveRunProgressStale({
+          ageMs: params.ageMs,
           sessionId: activeWorkSessionId,
           sessionKey: params.sessionKey,
           queueDepth: params.queueDepth,
           staleAbortMs: staleActiveProgressAbortMs,
+          // Reply-only ownership must expire when proven stale even with zero
+          // queued backlog; the queue gate exists to protect run handles that
+          // are actively draining queued turns, and there is no such backlog
+          // here to protect. Recognized maintenance phases are the exception:
+          // preflight compaction and memory flush are explicitly allowed to
+          // run longer than the stale threshold (they honor a configured
+          // compaction timeout), so they keep the queue-backlog guard and are
+          // never force-cleared early by this reclaim path.
+          requireQueueBacklog:
+            activeReplyPhase === "preflight_compacting" || activeReplyPhase === "memory_flushing"
+              ? undefined
+              : false,
         });
       if (params.allowActiveAbort === true || reclaimStaleReplyWork) {
         if (reclaimStaleReplyWork) {
@@ -386,11 +429,3 @@ export async function recoverStuckDiagnosticSession(
     recoveriesInFlight.delete(key);
   }
 }
-
-/** Test hooks for clearing in-flight recovery guards. */
-export const testing = {
-  resetRecoveriesInFlight(): void {
-    recoveriesInFlight.clear();
-  },
-};
-export { testing as __testing };

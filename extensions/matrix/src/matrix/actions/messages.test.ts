@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import * as sendModule from "../send.js";
-import { editMatrixMessage, readMatrixMessages } from "./messages.js";
+import { editMatrixMessage, readMatrixMessages, sendMatrixMessage } from "./messages.js";
 
 const MATRIX_ACTION_TEST_CFG = {
   channels: {
@@ -19,6 +19,7 @@ function installMatrixActionTestRuntime(): void {
     channel: {
       text: {
         resolveMarkdownTableMode: () => "code",
+        resolveTextChunkLimit: () => 4_000,
         convertMarkdownTables: (text: string) => text,
       },
     },
@@ -55,6 +56,34 @@ function createPollStartEvent(params?: {
         ...(params?.maxSelections !== undefined ? { max_selections: params.maxSelections } : {}),
         answers: params?.answers ?? [{ id: "a1", "m.text": "Apple" }],
       },
+    },
+  };
+}
+
+function createHistoryMessage(params: {
+  eventId: string;
+  body: string;
+  timestamp: number;
+  sender?: string;
+  replaces?: string;
+  omitNewContent?: boolean;
+}): Record<string, unknown> {
+  return {
+    event_id: params.eventId,
+    sender: params.sender ?? "@alice:example.org",
+    type: "m.room.message",
+    origin_server_ts: params.timestamp,
+    content: {
+      msgtype: "m.text",
+      body: params.replaces ? `* ${params.body}` : params.body,
+      ...(params.replaces
+        ? {
+            "m.relates_to": { rel_type: "m.replace", event_id: params.replaces },
+            ...(params.omitNewContent
+              ? {}
+              : { "m.new_content": { msgtype: "m.text", body: params.body } }),
+          }
+        : {}),
     },
   };
 }
@@ -148,18 +177,47 @@ function mockCallArg(
 }
 
 describe("matrix message actions", () => {
-  it("forwards timeoutMs to the shared Matrix edit helper", async () => {
+  it("preserves workspace media access through the shared Matrix send helper", async () => {
+    const mediaAccess = {
+      localRoots: ["/tmp/openclaw-matrix-test"],
+      readFile: async () => Buffer.from("chart"),
+      workspaceDir: "/tmp/openclaw-matrix-test",
+    };
+    const sendSpy = vi.spyOn(sendModule, "sendMessageMatrix").mockResolvedValue({
+      messageId: "$sent",
+      roomId: "!room:example.org",
+    } as never);
+
+    try {
+      await sendMatrixMessage("!room:example.org", "caption", {
+        cfg: MATRIX_ACTION_TEST_CFG,
+        mediaUrl: "chart.png",
+        mediaAccess,
+        mediaLocalRoots: mediaAccess.localRoots,
+      });
+
+      const options = sendSpy.mock.calls[0]?.[2];
+      expect(options?.mediaUrl).toBe("chart.png");
+      expect(options?.mediaAccess).toBe(mediaAccess);
+      expect(options?.mediaLocalRoots).toBe(mediaAccess.localRoots);
+    } finally {
+      sendSpy.mockRestore();
+    }
+  });
+
+  it("preserves Markdown indentation and forwards timeoutMs to the Matrix edit helper", async () => {
     const editSpy = vi.spyOn(sendModule, "editMessageMatrix").mockResolvedValue("evt-edit");
 
     try {
       const cfg = {} as never;
-      const result = await editMatrixMessage("!room:example.org", "$original", "hello", {
+      const markdown = "    @room";
+      const result = await editMatrixMessage("!room:example.org", "$original", markdown, {
         cfg,
         timeoutMs: 12_345,
       });
 
       expect(result).toEqual({ eventId: "evt-edit" });
-      expect(editSpy).toHaveBeenCalledWith("!room:example.org", "$original", "hello", {
+      expect(editSpy).toHaveBeenCalledWith("!room:example.org", "$original", markdown, {
         cfg,
         accountId: undefined,
         client: undefined,
@@ -168,6 +226,33 @@ describe("matrix message actions", () => {
     } finally {
       editSpy.mockRestore();
     }
+  });
+
+  it("preserves leading Markdown indentation while trimming trailing edit whitespace", async () => {
+    const editSpy = vi.spyOn(sendModule, "editMessageMatrix").mockResolvedValue("evt-edit");
+
+    try {
+      await editMatrixMessage("!room:example.org", "$original", "    @room  \t\n", {
+        cfg: MATRIX_ACTION_TEST_CFG,
+      });
+
+      expect(editSpy).toHaveBeenCalledWith("!room:example.org", "$original", "    @room", {
+        cfg: MATRIX_ACTION_TEST_CFG,
+        accountId: undefined,
+        client: undefined,
+        timeoutMs: undefined,
+      });
+    } finally {
+      editSpy.mockRestore();
+    }
+  });
+
+  it("rejects whitespace-only Matrix edits", async () => {
+    await expect(
+      editMatrixMessage("!room:example.org", "$original", "   \n  ", {
+        cfg: MATRIX_ACTION_TEST_CFG,
+      }),
+    ).rejects.toThrow("Matrix edit requires content");
   });
 
   it("routes edits through the shared Matrix edit helper so mentions are preserved", async () => {
@@ -284,6 +369,217 @@ describe("matrix message actions", () => {
     expectRecordFields(result.messages[0], { eventId: "$poll" });
     expect(result.messages[0]?.body).toContain("[Poll]");
     expect(getEvent).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      direction: "backward",
+      chunk: [
+        createHistoryMessage({
+          eventId: "$edit-new",
+          body: "final text",
+          timestamp: 30,
+          replaces: "$original",
+        }),
+        createHistoryMessage({
+          eventId: "$edit-old",
+          body: "intermediate text",
+          timestamp: 20,
+          replaces: "$original",
+        }),
+        createHistoryMessage({ eventId: "$original", body: "original text", timestamp: 10 }),
+      ],
+      after: undefined,
+    },
+    {
+      direction: "forward",
+      chunk: [
+        createHistoryMessage({ eventId: "$original", body: "original text", timestamp: 10 }),
+        createHistoryMessage({
+          eventId: "$edit-old",
+          body: "intermediate text",
+          timestamp: 20,
+          replaces: "$original",
+        }),
+        createHistoryMessage({
+          eventId: "$edit-new",
+          body: "final text",
+          timestamp: 30,
+          replaces: "$original",
+        }),
+      ],
+      after: "previous-page",
+    },
+  ])("collapses valid Matrix replacements in $direction history", async ({ chunk, after }) => {
+    const { client } = createMessagesClient({ chunk });
+
+    const result = await readMatrixMessages("room:!room:example.org", { client, after });
+
+    expect(result.messages).toEqual([
+      {
+        eventId: "$original",
+        sender: "@alice:example.org",
+        body: "final text",
+        msgtype: "m.text",
+        attachment: undefined,
+        timestamp: 10,
+        relatesTo: undefined,
+      },
+    ]);
+  });
+
+  it("uses the Matrix event-id tie-break for equally timed replacements", async () => {
+    const { client } = createMessagesClient({
+      chunk: [
+        createHistoryMessage({
+          eventId: "$edit-a",
+          body: "earlier tie",
+          timestamp: 20,
+          replaces: "$original",
+        }),
+        createHistoryMessage({
+          eventId: "$edit-z",
+          body: "winning tie",
+          timestamp: 20,
+          replaces: "$original",
+        }),
+        createHistoryMessage({ eventId: "$original", body: "original text", timestamp: 10 }),
+      ],
+    });
+
+    const result = await readMatrixMessages("room:!room:example.org", { client });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatchObject({ eventId: "$original", body: "winning tie" });
+  });
+
+  it("does not let replacement content change the original event relationship", async () => {
+    const edit = createHistoryMessage({
+      eventId: "$edit",
+      body: "edited text",
+      timestamp: 20,
+      replaces: "$original",
+    });
+    const content = edit.content as Record<string, unknown>;
+    (content["m.new_content"] as Record<string, unknown>)["m.relates_to"] = {
+      rel_type: "m.thread",
+      event_id: "$forged-thread",
+    };
+    const { client } = createMessagesClient({
+      chunk: [
+        edit,
+        createHistoryMessage({ eventId: "$original", body: "original text", timestamp: 10 }),
+      ],
+    });
+
+    const result = await readMatrixMessages("room:!room:example.org", { client });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatchObject({ eventId: "$original", body: "edited text" });
+    expect(result.messages[0]?.relatesTo).toBeUndefined();
+  });
+
+  it("ignores malformed and cross-sender Matrix replacements", async () => {
+    const { client } = createMessagesClient({
+      chunk: [
+        createHistoryMessage({
+          eventId: "$forged",
+          body: "forged text",
+          timestamp: 40,
+          replaces: "$original",
+          sender: "@mallory:example.org",
+        }),
+        createHistoryMessage({
+          eventId: "$malformed",
+          body: "malformed text",
+          timestamp: 30,
+          replaces: "$original",
+          omitNewContent: true,
+        }),
+        createHistoryMessage({ eventId: "$original", body: "original text", timestamp: 10 }),
+      ],
+    });
+
+    const result = await readMatrixMessages("room:!room:example.org", { client });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatchObject({ eventId: "$original", body: "original text" });
+  });
+
+  it("preserves a valid edit when its original is on another history page", async () => {
+    const { client } = createMessagesClient({
+      chunk: [
+        createHistoryMessage({
+          eventId: "$edit",
+          body: "cross-page final text",
+          timestamp: 20,
+          replaces: "$original",
+        }),
+      ],
+    });
+
+    const result = await readMatrixMessages("room:!room:example.org", {
+      client,
+      after: "previous-page",
+    });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatchObject({
+      eventId: "$edit",
+      body: "cross-page final text",
+      relatesTo: { relType: "m.replace", eventId: "$original" },
+    });
+  });
+
+  it("does not revive a redacted original through a replacement event", async () => {
+    const redactedOriginal = createHistoryMessage({
+      eventId: "$original",
+      body: "redacted original",
+      timestamp: 10,
+    });
+    redactedOriginal.unsigned = { redacted_because: {} };
+    const { client } = createMessagesClient({
+      chunk: [
+        createHistoryMessage({
+          eventId: "$edit",
+          body: "redacted edit",
+          timestamp: 20,
+          replaces: "$original",
+        }),
+        redactedOriginal,
+      ],
+    });
+
+    const result = await readMatrixMessages("room:!room:example.org", { client });
+
+    expect(result.messages).toEqual([]);
+  });
+
+  it("applies bundled Matrix replacements to first-page thread roots", async () => {
+    const threadRoot = createHistoryMessage({
+      eventId: "$thread-root",
+      body: "original root",
+      timestamp: 10,
+    });
+    threadRoot.unsigned = {
+      "m.relations": {
+        "m.replace": createHistoryMessage({
+          eventId: "$thread-edit",
+          body: "edited root",
+          timestamp: 20,
+          replaces: "$thread-root",
+        }),
+      },
+    };
+    const { client } = createMessagesClient({ chunk: [], pollRoot: threadRoot });
+
+    const result = await readMatrixMessages("room:!room:example.org", {
+      client,
+      threadId: "$thread-root",
+    });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatchObject({ eventId: "$thread-root", body: "edited root" });
   });
 
   it("uses hydrated history events so encrypted poll entries can be read", async () => {
@@ -594,6 +890,64 @@ describe("matrix message actions", () => {
     );
     expect(next.messages.map((message) => message.eventId)).toEqual(["$thread-reply"]);
   });
+
+  it.each([
+    ["appended junk", (cursor: string) => `${cursor}!`],
+    ["padding", (cursor: string) => `${cursor}=`],
+    [
+      "extra payload field",
+      (cursor: string) => {
+        const prefix = "openclaw.matrix.thread-relations-start:";
+        const payload = Buffer.from(
+          JSON.stringify({ v: 1, threadId: "$thread-root", extra: true }),
+          "utf8",
+        ).toString("base64url");
+        expect(cursor.startsWith(prefix)).toBe(true);
+        return `${prefix}${payload}`;
+      },
+    ],
+  ])(
+    "forwards a synthetic thread cursor with %s as an opaque Matrix token",
+    async (_name, alter) => {
+      const firstPage = createMessagesClient({
+        chunk: [],
+        pollRoot: {
+          event_id: "$thread-root",
+          sender: "@alice:example.org",
+          type: "m.room.message",
+          origin_server_ts: 10,
+          content: { msgtype: "m.text", body: "thread root" },
+        },
+        threadRelations: [{ event_id: "$thread-reply" }],
+      });
+      const first = await readMatrixMessages("room:!room:example.org", {
+        client: firstPage.client,
+        threadId: "$thread-root",
+        limit: 1,
+      });
+      const cursor = first.nextBatch;
+      if (!cursor) {
+        throw new Error("Expected a synthetic thread cursor");
+      }
+      const nonCanonicalCursor = alter(cursor);
+      const nextPage = createMessagesClient({ chunk: [], threadRelations: [] });
+
+      await readMatrixMessages("room:!room:example.org", {
+        client: nextPage.client,
+        threadId: "$thread-root",
+        limit: 1,
+        before: nonCanonicalCursor,
+      });
+
+      expect(nextPage.getRelations).toHaveBeenCalledWith(
+        "!room:example.org",
+        "$thread-root",
+        "m.thread",
+        undefined,
+        { dir: "b", from: nonCanonicalCursor, limit: 1 },
+      );
+    },
+  );
 
   it("does not reserve first-page thread capacity for a redacted root", async () => {
     const { client, doRequest, getEvent, getRelations } = createMessagesClient({

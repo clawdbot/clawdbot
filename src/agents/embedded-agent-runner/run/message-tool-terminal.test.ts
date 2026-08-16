@@ -55,6 +55,18 @@ describe("message-tool-only source replies", () => {
       expected: true,
     },
     {
+      label: "gateway plugin send result",
+      context: createAfterToolCallContext({
+        toolName: "message",
+        args: { action: "send", message: "visible reply" },
+        result: {
+          content: [{ type: "text", text: '{"message":{"id":"qa-message-1"}}' }],
+          details: { message: { id: "qa-message-1" } },
+        },
+      }),
+      expected: true,
+    },
+    {
       label: "hook result delivery evidence",
       context: createAfterToolCallContext({
         toolName: "message",
@@ -192,12 +204,13 @@ describe("message-tool-only source replies", () => {
     ).resolves.toEqual({
       content: [{ type: "text", text: "rewritten" }],
       details: { rewritten: true },
+      terminate: true,
     });
     expect(previousAfterToolCall).toHaveBeenCalledTimes(1);
     expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
   });
 
-  it("records delivery evidence without rewriting the default result", async () => {
+  it("terminates after a delivered completed source reply", async () => {
     const agent = {} as unknown as Agent;
     const onDeliveredSourceReply = vi.fn();
     installMessageToolOnlyTerminalHook({
@@ -213,8 +226,25 @@ describe("message-tool-only source replies", () => {
           args: { action: "send", message: "visible reply" },
         }),
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ terminate: true });
     expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("continues after delivered progress", async () => {
+    const agent = {} as unknown as Agent;
+    installMessageToolOnlyTerminalHook({
+      agent,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    await expect(
+      agent.afterToolCall?.(
+        createAfterToolCallContext({
+          toolName: "message",
+          args: { action: "send", message: "still working", final: false },
+        }),
+      ),
+    ).resolves.toBeUndefined();
   });
 
   it("leaves existing after-tool-call output alone when the send failed", async () => {

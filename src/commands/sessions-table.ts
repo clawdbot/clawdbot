@@ -5,8 +5,10 @@
  * terminal output stays aligned across commands.
  */
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 
 /** Display row derived from a persisted session entry. */
@@ -41,6 +43,7 @@ export type SessionDisplayRow = {
   outputTokens?: number;
   totalTokens?: number;
   totalTokensFresh?: boolean;
+  totalTokensVersion?: 1;
   model?: string;
   modelProvider?: string;
   providerOverride?: string;
@@ -61,12 +64,11 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
     updatedAt,
     ageMs: updatedAt ? Date.now() - updatedAt : null,
     sessionId: entry?.sessionId,
-    sessionFile: entry?.sessionFile,
     spawnedBy: entry?.spawnedBy,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
     parentSessionKey: entry?.parentSessionKey,
-    forkedFromParent: entry?.forkedFromParent,
+    forkedFromParent: sessionEntryForkedFromParent(entry) ? true : undefined,
     spawnDepth: entry?.spawnDepth,
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
@@ -87,6 +89,7 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
     outputTokens: entry?.outputTokens,
     totalTokens: entry?.totalTokens,
     totalTokensFresh: entry?.totalTokensFresh,
+    totalTokensVersion: entry?.totalTokensVersion,
     model: entry?.model,
     modelProvider: entry?.modelProvider,
     providerOverride: entry?.providerOverride,
@@ -114,7 +117,7 @@ function truncateSessionKey(key: string): string {
 
 /** Formats a session key cell for table output. */
 export function formatSessionKeyCell(key: string, rich: boolean): string {
-  const label = truncateSessionKey(key).padEnd(SESSION_KEY_PAD);
+  const label = truncateSessionKey(sanitizeTerminalText(key)).padEnd(SESSION_KEY_PAD);
   return rich ? theme.accent(label) : label;
 }
 
@@ -127,7 +130,7 @@ export function formatSessionAgeCell(updatedAt: number | null | undefined, rich:
 
 /** Formats a model cell for table output. */
 export function formatSessionModelCell(model: string | null | undefined, rich: boolean): string {
-  const label = (model ?? "unknown").padEnd(SESSION_MODEL_PAD);
+  const label = sanitizeTerminalText(model ?? "unknown").padEnd(SESSION_MODEL_PAD);
   return rich ? theme.info(label) : label;
 }
 
@@ -162,6 +165,6 @@ export function formatSessionFlagsCell(
     row.runtimePolicySessionKey ? `policy:${row.runtimePolicySessionKey}` : null,
     row.sessionId ? `id:${row.sessionId}` : null,
   ].filter(Boolean);
-  const label = flags.join(" ");
+  const label = sanitizeTerminalText(flags.join(" "));
   return label.length === 0 ? "" : rich ? theme.muted(label) : label;
 }

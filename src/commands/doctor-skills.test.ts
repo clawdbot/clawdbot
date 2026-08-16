@@ -49,11 +49,11 @@ function createSkill(overrides: Partial<SkillStatusEntry>): SkillStatusEntry {
   };
 }
 
-function createReport(skills: SkillStatusEntry[]): SkillStatusReport {
+function createReport(skills: SkillStatusEntry[], agentId = "main"): SkillStatusReport {
   return {
     workspaceDir: "/tmp/ws",
     managedSkillsDir: "/tmp/managed",
-    agentId: "main",
+    agentId,
     skills,
   };
 }
@@ -187,6 +187,43 @@ describe("doctor skills", () => {
     });
     const calls = await runSkillDoctor([githubSkill]);
     expect(calls.some((call) => call[1] === "GitHub CLI")).toBe(false);
+  });
+
+  it("does not offer a global disable when another agent can use the skill", async () => {
+    mocks.note.mockClear();
+    mocks.buildWorkspaceSkillStatus.mockClear();
+    const healthy = createSkill({ name: "shared", skillKey: "shared" });
+    const missing = createSkill({
+      name: "shared",
+      skillKey: "shared",
+      eligible: false,
+      missing: { bins: ["shared-bin"], anyBins: [], env: [], config: [], os: [] },
+    });
+    mocks.buildWorkspaceSkillStatus.mockImplementation((_workspaceDir, { agentId }) =>
+      createReport(agentId === "secondary" ? [missing] : [healthy], agentId),
+    );
+    const confirmAutoFix = vi.fn(async () => true);
+    const prompter = { ...createPrompter(), confirmAutoFix };
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: "/tmp/main" },
+          { id: "secondary", workspace: "/tmp/secondary" },
+        ],
+      },
+    };
+
+    const next = await maybeRepairSkillReadiness({ cfg, prompter });
+
+    expect(next).toBe(cfg);
+    expect(confirmAutoFix).not.toHaveBeenCalled();
+    expect(mocks.buildWorkspaceSkillStatus).toHaveBeenCalledTimes(2);
+    expect(
+      String(mocks.note.mock.calls.find(([, title]) => title === "Skills")?.[0] ?? ""),
+    ).toContain('Agent "secondary"');
+    expect(
+      String(mocks.note.mock.calls.find(([, title]) => title === "Skills")?.[0] ?? ""),
+    ).not.toContain("doctor --fix");
   });
 
   it("disables unavailable skills through skills.entries without dropping existing config", () => {

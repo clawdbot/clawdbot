@@ -2,6 +2,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const logWarnSpy = vi.hoisted(() => vi.fn());
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({ warn: logWarnSpy }),
+}));
+
 import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
@@ -27,12 +34,37 @@ function applyWithApnChannelConfig(extra?: {
   });
 }
 
+function materializeEnvCatalogCandidates(
+  stateDir: string,
+  candidates: Parameters<typeof materializePluginAutoEnableCandidates>[0]["candidates"] = [
+    { pluginId: "env-primary", kind: "channel-configured", channelId: "env-primary" },
+    { pluginId: "env-secondary", kind: "channel-configured", channelId: "env-secondary" },
+  ],
+) {
+  return materializePluginAutoEnableCandidates({
+    config: {
+      channels: {
+        "env-primary": { token: "primary" },
+        "env-secondary": { token: "secondary" },
+      },
+    },
+    candidates,
+    env: {
+      ...makeIsolatedEnv(),
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+    },
+    manifestRegistry: makeRegistry([]),
+  });
+}
+
 beforeEach(() => {
   resetPluginAutoEnableTestState();
 });
 
 afterEach(() => {
   resetPluginAutoEnableTestState();
+  logWarnSpy.mockClear();
 });
 
 describe("applyPluginAutoEnable channels", () => {
@@ -65,32 +97,7 @@ describe("applyPluginAutoEnable channels", () => {
       "utf-8",
     );
 
-    const result = materializePluginAutoEnableCandidates({
-      config: {
-        channels: {
-          "env-primary": { token: "primary" },
-          "env-secondary": { token: "secondary" },
-        },
-      },
-      candidates: [
-        {
-          pluginId: "env-primary",
-          kind: "channel-configured",
-          channelId: "env-primary",
-        },
-        {
-          pluginId: "env-secondary",
-          kind: "channel-configured",
-          channelId: "env-secondary",
-        },
-      ],
-      env: {
-        ...makeIsolatedEnv(),
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-      },
-      manifestRegistry: makeRegistry([]),
-    });
+    const result = materializeEnvCatalogCandidates(stateDir);
 
     expect(result.config.plugins?.entries?.["env-secondary"]?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.["env-primary"]).toBeUndefined();
@@ -140,37 +147,87 @@ describe("applyPluginAutoEnable channels", () => {
       "utf-8",
     );
 
-    const readFileSpy = vi.spyOn(fs, "readFileSync");
+    const realpathSpy = vi.spyOn(fs, "realpathSync");
 
     try {
-      materializePluginAutoEnableCandidates({
-        config: {
-          channels: {
-            "env-primary": { token: "primary" },
-            "env-secondary": { token: "secondary" },
-          },
-        },
-        candidates: Array.from({ length: 20 }, (_, index) => ({
+      materializeEnvCatalogCandidates(
+        stateDir,
+        Array.from({ length: 20 }, (_, index) => ({
           pluginId: index % 2 === 0 ? "env-primary" : "env-secondary",
           kind: "channel-configured" as const,
           channelId: index % 2 === 0 ? "env-primary" : "env-secondary",
         })),
-        env: {
-          ...makeIsolatedEnv(),
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-        },
-        manifestRegistry: makeRegistry([]),
-      });
+      );
 
       expect(
-        readFileSpy.mock.calls.filter(([filePath]) =>
+        realpathSpy.mock.calls.filter(([filePath]) =>
           String(filePath).endsWith("plugins/catalog.json"),
         ),
       ).toHaveLength(2);
     } finally {
-      readFileSpy.mockRestore();
+      realpathSpy.mockRestore();
     }
+  });
+
+  it("reads external catalog files through a symlink", () => {
+    const stateDir = makeTempDir();
+    const pluginsDir = path.join(stateDir, "plugins");
+    fs.mkdirSync(pluginsDir, { recursive: true });
+    const realPath = path.join(stateDir, "real-catalog.json");
+    fs.writeFileSync(
+      realPath,
+      JSON.stringify({
+        entries: [
+          {
+            name: "@openclaw/env-secondary",
+            openclaw: {
+              channel: {
+                id: "env-secondary",
+                label: "Env Secondary",
+                selectionLabel: "Env Secondary",
+                docsPath: "/channels/env-secondary",
+                blurb: "Env secondary entry",
+                preferOver: ["env-primary"],
+              },
+              install: { npmSpec: "@openclaw/env-secondary" },
+            },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+    const catalogPath = path.join(pluginsDir, "catalog.json");
+    fs.symlinkSync(realPath, catalogPath);
+
+    const result = materializeEnvCatalogCandidates(stateDir);
+
+    expect(result.config.plugins?.entries?.["env-secondary"]?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.["env-primary"]).toBeUndefined();
+  });
+
+  it("warns when an oversized catalog is skipped and continues selection", () => {
+    const stateDir = makeTempDir();
+    const catalogPath = path.join(stateDir, "plugins", "catalog.json");
+    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+    // Create a sparse file whose stat.size exceeds the 16 MiB cap without
+    // allocating actual disk blocks — the bounded read rejects it by size
+    // before loading content into memory.
+    const fd = fs.openSync(catalogPath, "w");
+    try {
+      fs.writeSync(fd, "{}\n");
+      fs.ftruncateSync(fd, 17 * 1024 * 1024);
+    } finally {
+      fs.closeSync(fd);
+    }
+
+    const result = materializeEnvCatalogCandidates(stateDir);
+
+    // Selection continues: env-secondary is still auto-enabled.
+    expect(result.config.plugins?.entries?.["env-secondary"]?.enabled).toBe(true);
+    // Warning was logged for the oversized catalog.
+    expect(logWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("skipping oversized external catalog file"),
+    );
   });
 
   describe("third-party channel plugins", () => {
@@ -364,6 +421,35 @@ describe("applyPluginAutoEnable channels", () => {
       expect(result.config.plugins?.entries?.["openclaw-modern-chat"]?.enabled).toBe(true);
       expect(result.config.plugins?.entries?.["legacy-bundled-chat"]?.enabled).toBe(false);
       expect(result.changes.join("\n")).toContain("Modern Chat configured, enabled automatically.");
+    });
+
+    it("does not disable a renamed external owner through its removed bundled channel id", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { qqbot: { appId: "app", clientSecret: "secret" } },
+          plugins: {
+            entries: {
+              "openclaw-qqbot": { enabled: true },
+            },
+          },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "openclaw-qqbot",
+            channels: ["qqbot"],
+            channelConfigs: {
+              qqbot: {
+                schema: { type: "object" },
+                preferOver: ["qqbot"],
+              },
+            },
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["openclaw-qqbot"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.qqbot).toBeUndefined();
     });
 
     it("falls back to the bundled channel when the preferred external plugin is disabled", () => {

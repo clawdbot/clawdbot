@@ -13,6 +13,7 @@ import {
   normalizePluginConfigId,
 } from "../plugins/plugin-config-trust.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
@@ -57,9 +58,19 @@ function buildProviderAuthAliasMapCacheKey(
   });
 }
 
-/** Clear provider auth alias cache for tests that mutate plugin metadata. */
-export function resetProviderAuthAliasMapCacheForTest(): void {
+/** Clears auth aliases when their process-scoped plugin metadata is retired. */
+function clearProviderAuthAliasMapCache(): void {
   providerAuthAliasMapCache = new WeakMap<NodeJS.ProcessEnv, Map<string, Record<string, string>>>();
+}
+
+// Reloads can replace plugin metadata without changing the config or env cache keys.
+registerPluginMetadataProcessMemoLifecycleClear(clearProviderAuthAliasMapCache);
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.providerAuthAliasesTestApi")] =
+    {
+      resetProviderAuthAliasMapCacheForTest: clearProviderAuthAliasMapCache,
+    };
 }
 
 function resolveProviderAuthAliasOriginPriority(origin: PluginOrigin | undefined): number {

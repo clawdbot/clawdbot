@@ -45,6 +45,14 @@ daemon. For install and product docs, see [lmstudio.ai](https://lmstudio.ai/).
 
     Choose `LM Studio`, then pick a model at the `Default model` prompt.
 
+    On a fresh guided setup, OpenClaw first queries `/api/v1/models` on the
+    default or configured LM Studio host. An existing LLM is offered automatically
+    only when LM Studio reports tool training and at least 16K of effective
+    context. For loaded models, the loaded instance context takes precedence over
+    the larger advertised maximum. The same CLI/macOS setup ladder verifies the
+    route with a real completion before saving it. The automatic check never
+    downloads a model and ignores embedding-only catalog entries.
+
   </Step>
 </Steps>
 
@@ -65,7 +73,7 @@ curl http://localhost:1234/api/v1/models
 ## Non-interactive onboarding
 
 ```bash
-openclaw onboard --non-interactive --accept-risk --auth-choice lmstudio
+openclaw onboard --non-interactive --accept-risk --skip-health --auth-choice lmstudio
 ```
 
 Or specify base URL, model, and API key explicitly:
@@ -74,6 +82,7 @@ Or specify base URL, model, and API key explicitly:
 openclaw onboard \
   --non-interactive \
   --accept-risk \
+  --skip-health \
   --auth-choice lmstudio \
   --custom-base-url http://localhost:1234/v1 \
   --lmstudio-api-key "$LM_API_TOKEN" \

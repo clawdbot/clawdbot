@@ -3,7 +3,7 @@ import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 
-export const SESSION_STATE_CONTEXT_PREFIX = "session-state:";
+const SESSION_STATE_CONTEXT_PREFIX = "session-state:";
 
 function encodeNoticeTarget(sessionKey: string): string {
   return Buffer.from(sessionKey, "utf8").toString("hex");
@@ -17,7 +17,16 @@ export function decodeSessionStateNoticeContextKey(contextKey: string): string |
   if (!encoded || encoded.length % 2 !== 0 || !/^[0-9a-f]+$/.test(encoded)) {
     return undefined;
   }
-  return Buffer.from(encoded, "hex").toString("utf8");
+  // encodeNoticeTarget always writes the hex of a valid UTF-8 session key, so a
+  // payload that fails strict UTF-8 decoding is corrupt: fail closed instead of
+  // letting U+FFFD collisions acknowledge an unrelated watcher cursor.
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      Buffer.from(encoded, "hex"),
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 // Terse on purpose: this line lands in model prompts, possibly repeatedly across
@@ -36,7 +45,7 @@ function shouldWakeWatcher(watcherSessionKey: string): boolean {
 // for one agent's child could be drained and acknowledged by another agent's global
 // turn — a cross-A2A metadata leak plus a lost notification. Until watcher identity
 // is agent-scoped end-to-end, such watchers get durable events and changesSince but
-// no notices or cursors.
+// no notices.
 export function isNotifiableWatcherKey(watcherSessionKey: string): boolean {
   return parseAgentSessionKey(watcherSessionKey) != null;
 }
@@ -45,11 +54,18 @@ export function enqueueSessionStateNotice(params: {
   watcherSessionKey: string;
   targetSessionKey: string;
   lastSeenSequence: number;
+  queueOnly?: boolean;
 }): void {
   enqueueSystemEvent(sessionStateNoticeText(params.targetSessionKey, params.lastSeenSequence), {
     sessionKey: params.watcherSessionKey,
     contextKey: `${SESSION_STATE_CONTEXT_PREFIX}${encodeNoticeTarget(params.targetSessionKey)}`,
+    ...(params.queueOnly ? { replace: true } : {}),
   });
+  // Group activity is ambient context. Coalesce it for the next main turn instead
+  // of waking the personal agent once per inbound group message.
+  if (params.queueOnly) {
+    return;
+  }
   if (!shouldWakeWatcher(params.watcherSessionKey)) {
     return;
   }

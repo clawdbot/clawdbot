@@ -1,3 +1,5 @@
+import { t } from "../../i18n/index.ts";
+
 // Keep this client guard aligned with the gateway protocol's 16 MiB limit so
 // oversized files never expand into a WebSocket base64 payload.
 const MAX_TERMINAL_UPLOAD_BYTES = 16 * 1024 * 1024;
@@ -6,20 +8,28 @@ type TerminalUploadFile = { name: string; contentBase64: string };
 type TerminalUploadResult = { path: string; size: number };
 
 type TerminalUploadClient = {
-  request<T = unknown>(method: string, params?: unknown): Promise<T>;
+  request<T = unknown>(
+    method: string,
+    params?: unknown,
+    options?: { signal?: AbortSignal },
+  ): Promise<T>;
 };
 
 export async function uploadTerminalFile(
   client: TerminalUploadClient,
   sessionId: string,
   file: TerminalUploadFile,
+  signal?: AbortSignal,
 ): Promise<TerminalUploadResult> {
-  return await client.request<TerminalUploadResult>("terminal.upload", { sessionId, ...file });
+  const params = { sessionId, ...file };
+  return await (signal
+    ? client.request<TerminalUploadResult>("terminal.upload", params, { signal })
+    : client.request<TerminalUploadResult>("terminal.upload", params));
 }
 
 export async function encodeTerminalUpload(file: File): Promise<string> {
   if (file.size > MAX_TERMINAL_UPLOAD_BYTES) {
-    throw new Error(`File exceeds the 16 MiB terminal upload limit: ${file.name}`);
+    throw new Error(t("terminal.uploadTooLarge", { file: file.name }));
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
   const chunks: string[] = [];
@@ -38,15 +48,13 @@ export function quoteTerminalUploadPath(filePath: string, shell: string): string
   }
   if (/^cmd(?:\.exe)?$/u.test(shellName)) {
     if (/[%!]/u.test(filePath)) {
-      throw new Error("Cannot safely insert an uploaded path containing % or ! into cmd.exe");
+      throw new Error(t("terminal.uploadUnsafeCmdPath"));
     }
     return `"${filePath.replaceAll('"', '""')}"`;
   }
   const posixShell = /^(?:(?:ba|da|a|k|z)?sh|fish)(?:\.exe)?$/u.test(shellName);
   if (!posixShell) {
-    throw new Error(
-      `Cannot safely insert an uploaded path into unsupported shell: ${shellName || shell}`,
-    );
+    throw new Error(t("terminal.uploadUnsupportedShell", { shell: shellName || shell }));
   }
   if (/^[A-Za-z0-9_@%+=:,./-]+$/u.test(filePath)) {
     return filePath;

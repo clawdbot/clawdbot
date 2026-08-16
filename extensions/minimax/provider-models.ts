@@ -16,6 +16,7 @@ export const MINIMAX_TEXT_MODEL_CATALOG = {
     reasoning: true,
     input: ["text", "image"],
     contextWindow: 1_000_000,
+    compat: { codeMode: "preferred" },
   },
   "MiniMax-M2.7": {
     name: "MiniMax M2.7",

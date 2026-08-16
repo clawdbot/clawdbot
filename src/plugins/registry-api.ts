@@ -25,7 +25,6 @@ import {
   type PluginSideEffectGuard,
 } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
-import { getActivePluginRegistry } from "./runtime.js";
 import type { OpenClawPluginApi, PluginLogger, PluginRegistrationMode } from "./types.js";
 
 function normalizeLogger(logger: PluginLogger): PluginLogger {
@@ -102,16 +101,15 @@ export function createPluginApiFactory(
     registerSessionAction,
     registerTypedHook,
     registerMemoryCapability,
-    registerMemoryPromptSection,
     registerMemoryPromptSupplement,
+    registerMemoryPromptPreparation,
     registerMemoryCorpusSupplement,
-    registerMemoryFlushPlan,
-    registerMemoryRuntime,
     registerMemoryEmbeddingProvider,
     registerCli,
     registerChannel,
   } = registrars;
-  const { resolvePluginRuntime, setPluginRuntimeRecord } = runtimeResolver;
+  const { resolvePluginRuntime, resolveRegisteredChannelRuntime, setPluginRuntimeRecord } =
+    runtimeResolver;
 
   const createPluginSideEffectGuard = (pluginId: string): PluginSideEffectGuard => {
     const guard = { active: true };
@@ -147,8 +145,11 @@ export function createPluginApiFactory(
     const sideEffectGuard = createPluginSideEffectGuard(record.id);
     const isLoadedRecordInRegistry = () =>
       registry.plugins.some((plugin) => plugin.id === record.id && plugin.status === "loaded");
-    const isLoadedRecordInActiveRegistry = () =>
-      getActivePluginRegistry() === registry && isLoadedRecordInRegistry();
+    const isLoadedRecordInLiveRegistry = () =>
+      sideEffectGuard.active &&
+      isPluginRegistryActivated(registry) &&
+      !isPluginRegistryRetired(registry) &&
+      isLoadedRecordInRegistry();
     const isActivatingLoadedRecord = () =>
       registryParams.activateGlobalSideEffects !== false &&
       record.enabled &&
@@ -236,7 +237,7 @@ export function createPluginApiFactory(
                 registerCodexAppServerExtensionFactory(record, factory);
               },
               registerAgentToolResultMiddleware: (handler, options) => {
-                registerAgentToolResultMiddleware(record, handler, options);
+                registerAgentToolResultMiddleware(record, handler, options, params.hookPolicy);
               },
               registerSessionExtension: (extension) => registerSessionExtension(record, extension),
               enqueueNextTurnInjection: (injection) => {
@@ -286,7 +287,11 @@ export function createPluginApiFactory(
                 shouldCommitWorkflowSideEffect()
                   ? setPluginRunContext({ pluginId: record.id, patch })
                   : false,
-              getRunContext: (get) => getPluginRunContext({ pluginId: record.id, get }),
+              getRunContext: (get) =>
+                registryParams.activateGlobalSideEffects !== false &&
+                shouldCommitWorkflowSideEffect()
+                  ? getPluginRunContext({ pluginId: record.id, get })
+                  : undefined,
               clearRunContext: (paramsLocal) => {
                 if (
                   registryParams.activateGlobalSideEffects === false ||
@@ -307,7 +312,7 @@ export function createPluginApiFactory(
                   return { ok: false, error: "global side effects disabled" };
                 }
                 try {
-                  if (!isLoadedRecordInActiveRegistry()) {
+                  if (!isLoadedRecordInLiveRegistry()) {
                     return { ok: false, error: "plugin is not loaded" };
                   }
                   const runtimeConfig =
@@ -336,7 +341,7 @@ export function createPluginApiFactory(
                   origin: record.origin,
                   schedule,
                   cron: getHostCronService(),
-                  shouldCommit: isLoadedRecordInActiveRegistry,
+                  shouldCommit: isLoadedRecordInLiveRegistry,
                   ownerRegistry: registry,
                 });
               },
@@ -345,7 +350,7 @@ export function createPluginApiFactory(
                   return { removed: 0, failed: 0 };
                 }
                 await Promise.resolve();
-                if (!isLoadedRecordInActiveRegistry()) {
+                if (!isLoadedRecordInLiveRegistry()) {
                   return { removed: 0, failed: 0 };
                 }
                 return unschedulePluginSessionTurnsByTag({
@@ -357,14 +362,12 @@ export function createPluginApiFactory(
               },
               registerMemoryCapability: (capability) =>
                 registerMemoryCapability(record, capability),
-              registerMemoryPromptSection: (builder) =>
-                registerMemoryPromptSection(record, builder),
               registerMemoryPromptSupplement: (builder) =>
                 registerMemoryPromptSupplement(record, builder),
+              registerMemoryPromptPreparation: (prepare) =>
+                registerMemoryPromptPreparation(record, prepare),
               registerMemoryCorpusSupplement: (supplement) =>
                 registerMemoryCorpusSupplement(record, supplement),
-              registerMemoryFlushPlan: (resolver) => registerMemoryFlushPlan(record, resolver),
-              registerMemoryRuntime: (runtime) => registerMemoryRuntime(record, runtime),
               registerMemoryEmbeddingProvider: (adapter) =>
                 registerMemoryEmbeddingProvider(record, adapter),
               on: (hookName, handler, opts) =>
@@ -382,7 +385,15 @@ export function createPluginApiFactory(
         // Allow setup-only/setup-runtime paths to surface parse-time CLI metadata
         // without opting into the wider full-registration surface.
         registerCli: (registrar, opts) => registerCli(record, registrar, opts),
-        registerChannel: (registration) => registerChannel(record, registration, registrationMode),
+        registerChannel: (registration) =>
+          registerChannel(
+            record,
+            registration,
+            registrationMode,
+            registrationCapabilities.runtimeChannel
+              ? () => resolveRegisteredChannelRuntime(record)
+              : undefined,
+          ),
       },
     });
   };

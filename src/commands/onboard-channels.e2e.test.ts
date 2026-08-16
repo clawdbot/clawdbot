@@ -20,7 +20,7 @@ const catalogMocks = vi.hoisted(() => ({
 }));
 
 const manifestRegistryMocks = vi.hoisted(() => ({
-  loadPluginManifestRegistry: vi.fn(() => ({ plugins: [], diagnostics: [] })),
+  loadPluginManifestRegistryCore: vi.fn(() => ({ plugins: [], diagnostics: [] })),
 }));
 
 function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
@@ -515,14 +515,9 @@ vi.mock("../plugins/manifest-registry.js", async () => {
   );
   return {
     ...actual,
-    loadPluginManifestRegistry: manifestRegistryMocks.loadPluginManifestRegistry,
+    loadPluginManifestRegistryCore: manifestRegistryMocks.loadPluginManifestRegistryCore,
   };
 });
-
-vi.mock("../plugin-sdk/matrix-deps.js", () => ({
-  ensureMatrixSdkInstalled: vi.fn(async () => {}),
-  isMatrixSdkAvailable: vi.fn(() => true),
-}));
 
 vi.mock("../channels/plugins/bundled.js", () => ({
   getBundledChannelSetupPlugin: (channel: string) =>
@@ -610,8 +605,8 @@ describe("setupChannels", () => {
     setMinimalOnboardingRegistryForTests();
     catalogMocks.listChannelPluginCatalogEntries.mockReset();
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([]);
-    manifestRegistryMocks.loadPluginManifestRegistry.mockReset();
-    manifestRegistryMocks.loadPluginManifestRegistry.mockReturnValue({
+    manifestRegistryMocks.loadPluginManifestRegistryCore.mockReset();
+    manifestRegistryMocks.loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
@@ -627,7 +622,7 @@ describe("setupChannels", () => {
     // Simulate missing registry entries (the scenario reported in #25545).
     setActivePluginRegistry(createEmptyPluginRegistry());
     // Avoid accidental env-token configuration changing the prompt path.
-    process.env.TELEGRAM_BOT_TOKEN = "";
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
 
     const note = vi.fn(async (_message?: string, _title?: string) => {});
     const select = vi.fn(async ({ message }: { message: string }) => {
@@ -887,7 +882,7 @@ describe("setupChannels", () => {
             ...qaChannelBase,
             meta: {
               ...qaChannelBase.meta,
-              showInSetup: false,
+              exposure: { setup: false },
             },
           },
         },

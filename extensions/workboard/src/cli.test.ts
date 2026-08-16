@@ -2,7 +2,8 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerWorkboardCli } from "./cli.js";
-import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
+import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
+import { WorkboardStore } from "./store.js";
 
 const gatewayRuntime = vi.hoisted(() => ({
   callGatewayFromCli: vi.fn(),
@@ -139,6 +140,20 @@ describe("registerWorkboardCli", () => {
     expect(defaultOutput).not.toContain("Archived card");
     expect(includeOutput).toContain("Active card");
     expect(includeOutput).toContain("Archived card");
+    expect(includeOutput).toContain("(archived)");
+  });
+
+  it("marks archived cards in show output", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const archived = await store.create({ title: "Archived card", status: "ready" });
+    await store.archive(archived.id, true);
+    const program = createProgram(store);
+
+    const output = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "show", archived.id], { from: "user" });
+    });
+
+    expect(output).toContain("Archived card (archived)");
   });
 
   it("preserves archived cards in JSON list output by default", async () => {

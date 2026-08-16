@@ -64,6 +64,7 @@ describe("CronService declarative jobs", () => {
         declarationKey: "agent:ops:daily-report",
         displayName: "Daily report",
         owner: { agentId: "ops", sessionKey: "agent:ops:main" },
+        payload: { toolsAllow: ["*"] },
       });
 
       const identical = declarativeResult(await cron.add(declaration(), { enabledExplicit: true }));

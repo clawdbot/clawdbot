@@ -34,7 +34,7 @@ import {
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveNextcloudTalkOutboundSessionRoute } from "./session-route.js";
-import { nextcloudTalkSetupAdapter } from "./setup-core.js";
+import { nextcloudTalkSetupContract } from "./setup-core.js";
 import { nextcloudTalkSetupWizard } from "./setup-surface.js";
 
 const meta = {
@@ -89,13 +89,16 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
       configSchema: buildChannelConfigSchema(NextcloudTalkConfigSchema),
       config: {
         ...nextcloudTalkConfigAdapter,
-        isConfigured: (account) => Boolean(account.secret?.trim() && account.baseUrl?.trim()),
+        isConfigured: (account) =>
+          Boolean(account.tokenStatus !== "missing" && account.baseUrl?.trim()),
         describeAccount: (account) =>
           describeWebhookAccountSnapshot({
             account,
-            configured: Boolean(account.secret?.trim() && account.baseUrl?.trim()),
+            configured: Boolean(account.tokenStatus !== "missing" && account.baseUrl?.trim()),
             extra: {
               secretSource: account.secretSource,
+              tokenStatus: account.tokenStatus,
+              apiCredentialStatus: account.apiCredentialStatus,
               baseUrl: account.baseUrl ? "[set]" : "[missing]",
             },
           }),
@@ -109,6 +112,8 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
       messaging: {
         targetPrefixes: ["nextcloud-talk", "nc-talk", "nc"],
         normalizeTarget: normalizeNextcloudTalkMessagingTarget,
+        inferTargetChatType: ({ to }) =>
+          normalizeNextcloudTalkMessagingTarget(to) ? "group" : undefined,
         resolveOutboundSessionRoute: (params) => resolveNextcloudTalkOutboundSessionRoute(params),
         targetResolver: {
           looksLikeId: looksLikeNextcloudTalkTargetId,
@@ -119,7 +124,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         secretTargetRegistryEntries,
         collectRuntimeConfigAssignments,
       },
-      setup: nextcloudTalkSetupAdapter,
+      setupContract: nextcloudTalkSetupContract,
       status: createComputedAccountStatusAdapter<ResolvedNextcloudTalkAccount>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
         buildChannelSummary: ({ snapshot }) =>
@@ -155,9 +160,11 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
           accountId: account.accountId,
           name: account.name,
           enabled: account.enabled,
-          configured: Boolean(account.secret?.trim() && account.baseUrl?.trim()),
+          configured: Boolean(account.tokenStatus !== "missing" && account.baseUrl?.trim()),
           extra: {
             secretSource: account.secretSource,
+            tokenStatus: account.tokenStatus,
+            apiCredentialStatus: account.apiCredentialStatus,
             baseUrl: account.baseUrl ? "[set]" : "[missing]",
             mode: "webhook",
           },

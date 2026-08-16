@@ -13,7 +13,7 @@ import {
   type SlackQaApprovalDecision,
   type SlackQaApprovalScenarioRun,
   type SlackQaScenarioContext,
-  type SlackQaScenarioDefinition,
+  type SlackQaScenarioMetadata,
   type SlackAuthIdentity,
   type SlackObservedMessage,
   type SlackApprovalArtifact,
@@ -168,7 +168,7 @@ export async function waitForSlackApprovalPrompt(params: {
   );
 }
 
-export function matchesSlackApprovalPromptText(params: {
+function matchesSlackApprovalPromptText(params: {
   approvalKind: SlackQaApprovalKind;
   extraTextMatches?: string[];
   text: string;
@@ -247,7 +247,7 @@ export async function waitForSlackApprovalResolvedUpdate(params: {
   );
 }
 
-export function matchesSlackApprovalResolvedUpdate(params: {
+function matchesSlackApprovalResolvedUpdate(params: {
   actionValues: string[];
   approvalKind: SlackQaApprovalKind;
   decision: SlackQaApprovalDecision;
@@ -291,7 +291,7 @@ export async function runSlackApprovalScenario(params: {
   context: Omit<SlackQaScenarioContext, "sentTs">;
   observedMessages: SlackObservedMessage[];
   run: SlackQaApprovalScenarioRun;
-  scenario: SlackQaScenarioDefinition;
+  scenario: SlackQaScenarioMetadata;
   sutAccountId: string;
 }) {
   const requestStartedAt = new Date();

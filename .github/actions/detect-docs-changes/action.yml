@@ -4,6 +4,11 @@ description: >
   markdown (.md/.mdx). Fail-safe: if detection fails, outputs false (run
   everything). Uses git diff — no API calls, no extra permissions needed.
 
+inputs:
+  base-sha:
+    description: Exact base commit to compare with the checked-out tree.
+    required: true
+
 outputs:
   docs_only:
     description: "'true' if all changes are docs/markdown, 'false' otherwise"
@@ -18,14 +23,10 @@ runs:
     - name: Detect docs-only changes
       id: check
       shell: bash
+      env:
+        BASE_SHA: ${{ inputs.base-sha }}
       run: |
-        if [ "${{ github.event_name }}" = "push" ]; then
-          BASE="${{ github.event.before }}"
-        else
-          # Use the exact base SHA from the event payload — stable regardless
-          # of base branch movement (avoids origin/<ref> drift).
-          BASE="${{ github.event.pull_request.base.sha }}"
-        fi
+        BASE="$BASE_SHA"
 
         # Fail-safe: if we can't diff, assume non-docs (run everything)
         CHANGED=$(git diff --name-only "$BASE" HEAD 2>/dev/null || echo "UNKNOWN")

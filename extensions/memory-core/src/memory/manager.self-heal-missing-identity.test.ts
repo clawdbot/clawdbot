@@ -7,6 +7,7 @@ import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runti
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import type { MemoryIndexManager } from "./manager.js";
+import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
 import "./test-runtime-mocks.js";
 
 const createEmbeddingProviderMock = vi.hoisted(() =>
@@ -93,22 +94,24 @@ describe("memory manager self-heal missing identity with FTS-only chunks", () =>
       params.vectorEnabled === undefined
         ? undefined
         : { vector: { enabled: params.vectorEnabled } };
-    const cfg = {
-      memory: { backend: "builtin" },
+    const cfg = isolateMemoryManagerTestConfig({
+      memory: {
+        backend: "builtin",
+        search: {
+          provider: params.provider ?? "auto",
+          model: "",
+          store,
+          cache: { enabled: false },
+          sync: { watch: false, onSessionStart: false, onSearch: false },
+        },
+      },
       agents: {
         defaults: {
           workspace: workspaceDir,
-          memorySearch: {
-            provider: params.provider ?? "auto",
-            model: "",
-            store,
-            cache: { enabled: false },
-            sync: { watch: false, onSessionStart: false, onSearch: false },
-          },
         },
         list: [{ id: "main", default: true }],
       },
-    } as OpenClawConfig;
+    } as OpenClawConfig);
     const result = await getMemorySearchManager({
       cfg,
       agentId: "main",

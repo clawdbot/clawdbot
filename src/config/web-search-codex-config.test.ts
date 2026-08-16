@@ -49,7 +49,8 @@ describe("web search Codex native config validation", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.config.tools?.web?.search?.customSearch).toEqual({
+      const search = result.config.tools?.web?.search as Record<string, unknown> | undefined;
+      expect(search?.customSearch).toEqual({
         endpoint: "https://search.example.test",
         mode: "strict",
       });

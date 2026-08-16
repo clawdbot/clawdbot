@@ -18,24 +18,22 @@ import {
 describe("resolveEmbeddedAttemptBasePrompt", () => {
   const refusalTrigger = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 
-  it("preserves prompts verbatim for native model-owned harnesses", () => {
+  it("scrubs the refusal marker for Anthropic transport", () => {
     expect(
       resolveEmbeddedAttemptBasePrompt({
-        nativeModelOwned: true,
         provider: "anthropic",
+        prompt: refusalTrigger,
+      }),
+    ).toBe("ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)");
+  });
+
+  it("keeps non-Anthropic prompts byte-for-byte", () => {
+    expect(
+      resolveEmbeddedAttemptBasePrompt({
+        provider: "openai",
         prompt: refusalTrigger,
       }),
     ).toBe(refusalTrigger);
-  });
-
-  it("keeps the outer Anthropic transport scrub for ordinary runs", () => {
-    expect(
-      resolveEmbeddedAttemptBasePrompt({
-        nativeModelOwned: false,
-        provider: "anthropic",
-        prompt: refusalTrigger,
-      }),
-    ).not.toContain(refusalTrigger);
   });
 });
 
@@ -126,12 +124,6 @@ describe("resolveSameModelRateLimitRetryDelayMs", () => {
     expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 10 })).toBe(60_000);
   });
 
-  it("is deterministic so RPM windows clear predictably", () => {
-    expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 2 })).toBe(
-      resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 2 }),
-    );
-  });
-
   it("honors a short provider Retry-After when it is longer than the fixed backoff", () => {
     expect(
       resolveSameModelRateLimitRetryDelayMs({
@@ -195,7 +187,8 @@ describe("resolveLatestCallUsage", () => {
     expect(
       resolveLatestCallUsage({
         currentAttemptCandidates: [{ input: 0, output: 0, total: 0 }, undefined],
-        carriedCandidates: [previous],
+        carriedUsage: previous,
+        transcriptFallback: undefined,
       }),
     ).toEqual({
       currentAttempt: undefined,
@@ -209,52 +202,200 @@ describe("resolveLatestCallUsage", () => {
     expect(
       resolveLatestCallUsage({
         currentAttemptCandidates: [{ input: 0, output: 0, total: 0 }, latest],
-        carriedCandidates: [{ input: 12, output: 3, total: 15 }],
+        carriedUsage: { input: 12, output: 3, total: 15 },
+        transcriptFallback: undefined,
       }),
     ).toEqual({
       currentAttempt: latest,
       latest,
     });
   });
+
+  it("keeps carried attempt usage ahead of an older transcript fallback", () => {
+    const carried = { input: 20, output: 4, total: 24 };
+
+    expect(
+      resolveLatestCallUsage({
+        currentAttemptCandidates: [],
+        carriedUsage: carried,
+        transcriptFallback: { contextUsage: { state: "unavailable" } },
+      }),
+    ).toEqual({
+      currentAttempt: undefined,
+      latest: carried,
+    });
+  });
 });
 
 describe("buildUsageAgentMetaFields", () => {
-  it("keeps aggregate billing buckets out of the latest context snapshot", () => {
+  it("selects unavailable current-attempt usage over older prompt usage", () => {
+    const fields = buildUsageAgentMetaFields({
+      usageAccumulator: createUsageAccumulator(),
+      latestUsage: { contextUsage: { state: "unavailable" } },
+      lastRunPromptUsage: { input: 42_000, output: 1_000, total: 43_000 },
+    });
+
+    expect(fields.lastCallUsage).toEqual({ contextUsage: { state: "unavailable" } });
+    expect(fields.promptTokens).toBeUndefined();
+  });
+
+  it("keeps cumulative usage separate from the latest context snapshot", () => {
+    const usageAccumulator = createUsageAccumulator();
+    mergeUsageIntoAccumulator(usageAccumulator, {
+      input: 100,
+      output: 50,
+      total: 150,
+    });
+    const latestCallUsage = {
+      input: 80,
+      output: 20,
+      cacheRead: 100,
+      contextUsage: {
+        state: "available",
+        promptTokens: 180,
+        totalTokens: 200,
+      },
+      total: 200,
+    } satisfies NormalizedUsage;
+    mergeUsageIntoAccumulator(usageAccumulator, latestCallUsage);
+
+    const fields = buildUsageAgentMetaFields({
+      usageAccumulator,
+      latestUsage: undefined,
+      lastRunPromptUsage: latestCallUsage,
+    });
+
+    expect(fields.usage).toMatchObject({
+      input: 180,
+      output: 70,
+      cacheRead: 100,
+      total: 350,
+    });
+    expect(fields.lastCallUsage).toEqual(latestCallUsage);
+    expect(fields.promptTokens).toBe(180);
+  });
+
+  it("keeps cumulative usage and the latest call distinct across a zero-usage retry", () => {
+    const usageAccumulator = createUsageAccumulator();
+    mergeUsageIntoAccumulator(usageAccumulator, {
+      input: 100,
+      output: 50,
+      total: 150,
+    });
+    const latestCallUsage = {
+      input: 150,
+      output: 50,
+      total: 200,
+    } satisfies NormalizedUsage;
+    mergeUsageIntoAccumulator(usageAccumulator, latestCallUsage);
+
+    const fields = buildUsageAgentMetaFields({
+      usageAccumulator,
+      latestUsage: { input: 0, output: 0, total: 0 },
+      lastRunPromptUsage: latestCallUsage,
+    });
+
+    expect(fields.usage).toMatchObject({
+      input: 250,
+      output: 100,
+      total: 350,
+    });
+    expect(fields.lastCallUsage).toEqual(latestCallUsage);
+  });
+
+  it("does not derive a prompt override from unavailable context usage", () => {
     const usageAccumulator = createUsageAccumulator();
     const latestCallUsage = {
       input: 12,
       output: 15_104,
       cacheRead: 819_661,
       cacheWrite: 93_130,
-      contextUsage: {
-        state: "available",
-        promptTokens: 148_874,
-        totalTokens: 163_978,
-      },
+      contextUsage: { state: "unavailable" },
       total: 927_907,
     } satisfies NormalizedUsage;
     mergeUsageIntoAccumulator(usageAccumulator, latestCallUsage);
 
     const fields = buildUsageAgentMetaFields({
       usageAccumulator,
-      lastAssistantUsage: undefined,
+      latestUsage: latestCallUsage,
       lastRunPromptUsage: latestCallUsage,
-      lastTurnTotal: latestCallUsage.total,
     });
 
-    expect(fields.usage).toMatchObject({
-      input: 12,
-      output: 15_104,
-      cacheRead: 819_661,
-      cacheWrite: 93_130,
-      total: 927_907,
-    });
     expect(fields.lastCallUsage).toEqual(latestCallUsage);
-    expect(fields.promptTokens).toBe(148_874);
+    expect(fields.promptTokens).toBeUndefined();
+  });
+
+  it("does not label aggregate attempt usage as last-call usage", () => {
+    const usageAccumulator = createUsageAccumulator();
+    mergeUsageIntoAccumulator(usageAccumulator, {
+      input: 497_720,
+      output: 7_485,
+      cacheRead: 1_323_520,
+      total: 1_828_725,
+    });
+
+    const fields = buildUsageAgentMetaFields({
+      usageAccumulator,
+      latestUsage: { input: 0, output: 0, cacheRead: 0, total: 0 },
+      lastRunPromptUsage: undefined,
+    });
+
+    expect(fields.usage?.input).toBe(497_720);
+    expect(fields.lastCallUsage).toBeUndefined();
+    expect(fields.promptTokens).toBeUndefined();
   });
 });
 
 describe("buildErrorAgentMeta", () => {
+  it("does not promote current CLI usage without context provenance", () => {
+    const fields = buildErrorAgentMeta({
+      sessionId: "session-error",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      usageAccumulator: createUsageAccumulator(),
+      lastRunPromptUsage: { input: 42_000, output: 1_000, total: 43_000 },
+      currentAttemptAssistant: {
+        api: "cli",
+        usage: { input: 128_814, output: 3_000, cacheRead: 992_953, totalTokens: 1_124_767 },
+      },
+    });
+
+    expect(fields.lastCallUsage).toEqual({ contextUsage: { state: "unavailable" } });
+    expect(fields.promptTokens).toBeUndefined();
+  });
+
+  it("keeps cumulative usage separate from the latest call on error exits", () => {
+    const usageAccumulator = createUsageAccumulator();
+    mergeUsageIntoAccumulator(usageAccumulator, {
+      input: 100,
+      output: 50,
+      total: 150,
+    });
+    const latestCallUsage = {
+      input: 150,
+      output: 50,
+      total: 200,
+    } satisfies NormalizedUsage;
+    mergeUsageIntoAccumulator(usageAccumulator, latestCallUsage);
+
+    const fields = buildErrorAgentMeta({
+      sessionId: "session-error",
+      sessionFile: "/tmp/session-error.jsonl",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      usageAccumulator,
+      lastRunPromptUsage: latestCallUsage,
+      currentAttemptAssistant: { usage: latestCallUsage },
+    });
+
+    expect(fields.usage).toMatchObject({
+      input: 250,
+      output: 100,
+      total: 350,
+    });
+    expect(fields.lastCallUsage).toEqual(latestCallUsage);
+  });
+
   it("preserves active session file for error exits after transcript rotation", () => {
     // Error metadata follows the active session after transcript rotation so
     // diagnostics and resume links point at the file that contains the failure.

@@ -1,0 +1,35 @@
+title: Gateway node control plane
+
+scenario:
+  id: gateway-node-control-plane
+  surface: gateway
+  category: gateway.nodes-and-remote-capabilities
+  coverage:
+    primary:
+      - gateway.node-presence
+      - gateway.node-capabilities
+      - gateway.node-inventory
+      - gateway.node-actions
+      - gateway.node-events
+      - gateway.remote-device-capabilities
+      - gateway.version-negotiation
+  objective: Verify a real authenticated Gateway pairs and operates a remote device through the node WebSocket control plane.
+  successCriteria:
+    - A real child Gateway accepts an authenticated operator and pairs an isolated iOS node identity over WebSocket.
+    - Approved reconnect declarations appear in node.list and node.describe with the effective capabilities, commands, permissions, name, platform, and connected state.
+    - Exact camera.list and location.get requests and results cross the same node.invoke and node.invoke.result socket boundary.
+    - A node.presence.alive event is persisted and becomes visible through both node.list and node.describe.
+    - A synthetic overlap fixture records the default node-role and node-mode v3-through-v4 envelope and rejects the current-only operator envelope; shipped-v3 peer behavior is outside this scenario.
+    - The same paired node identity reconnects across v3-only and v4 envelopes, with plugin features hidden and restored according to the advertised envelope.
+  docsRefs:
+    - docs/gateway/protocol.md
+    - docs/nodes/index.md
+  codeRefs:
+    - src/gateway/server-methods/nodes.read.ts
+    - src/gateway/server-methods/nodes.invoke.ts
+    - src/gateway/server-methods/nodes.event.ts
+    - test/e2e/qa-lab/runtime/gateway-node-control-plane.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/gateway-node-control-plane.e2e.test.ts
+    summary: Capture the default node v3-through-v4 connect envelope with a synthetic overlap fixture, pair a current iOS identity to a real child Gateway, verify v3-only filtering and same-identity reconnect behavior, invoke built-in and plugin commands, and persist node presence.

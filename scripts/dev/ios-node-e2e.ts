@@ -1,5 +1,6 @@
 // Ios Node E2E script supports OpenClaw repository automation.
 import { randomUUID } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
@@ -144,10 +145,6 @@ function parseWaitSeconds(raw: string | undefined): number {
     process.exit(1);
   }
   return parsed;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function payloadShapeError(command: string, payload: unknown): string | null {

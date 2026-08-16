@@ -3,7 +3,6 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
-import { withBundledPluginVitestCompat } from "./bundled-compat.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
@@ -169,14 +168,6 @@ function toManifestOwnerRecord(plugin: PluginRegistryRecord) {
   };
 }
 
-export function withBundledProviderVitestCompat(params: {
-  config: PluginLoadOptions["config"];
-  pluginIds: readonly string[];
-  env?: PluginLoadOptions["env"];
-}): PluginLoadOptions["config"] {
-  return withBundledPluginVitestCompat(params);
-}
-
 export function resolveBundledProviderCompatPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
@@ -267,34 +258,6 @@ function resolveRegistryManifestContractPluginIds(params: {
     })
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
-}
-
-export function resolveExternalAuthProfileCompatFallbackPluginIds(params: {
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  declaredPluginIds?: ReadonlySet<string>;
-  manifestRegistry?: PluginManifestRegistry;
-}): string[] {
-  const declaredPluginIds =
-    params.declaredPluginIds ?? new Set(resolveExternalAuthProfileProviderPluginIds(params));
-  const registry = loadProviderRegistrySnapshot(params);
-  const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
-    manifestRegistry: params.manifestRegistry,
-  });
-  return listRegistryPluginIds(
-    registry,
-    (plugin) =>
-      plugin.origin !== "bundled" &&
-      providerSurfacePluginIds.has(plugin.pluginId) &&
-      !declaredPluginIds.has(plugin.pluginId) &&
-      isProviderPluginEligibleForRuntimeOwnerActivation({
-        plugin,
-        normalizedConfig,
-        rootConfig: params.config,
-      }),
-  );
 }
 
 export function resolveDiscoveredProviderPluginIds(params: {
@@ -807,6 +770,7 @@ export function resolveCatalogHookProviderPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  metadataSnapshot?: ProviderManifestLoadParams["metadataSnapshot"];
 }): string[] {
   const registry = loadProviderRegistrySnapshot(params);
   const manifestRegistry = resolveManifestRegistry({

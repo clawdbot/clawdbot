@@ -1,7 +1,12 @@
 import { asNullableRecord as recordOrNull } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as stringValue } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
-import { compareSessionRowsByUpdatedAt } from "./navigation.ts";
+import {
+  compareSessionRowsByUpdatedAt,
+  sessionMatchesArchivedFilter,
+  type SessionArchivedFilter,
+} from "./navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -12,7 +17,7 @@ import {
 export type SessionReconcileOptions = {
   resultAgentId?: string | null;
   selectedGlobalAgentId?: string | null;
-  showArchived?: boolean;
+  archivedFilter?: SessionArchivedFilter;
 };
 
 export type SessionChangedResult = {
@@ -28,6 +33,43 @@ export type SessionChangedResult = {
   deletedKey?: string;
   result: SessionsListResult | null;
 };
+
+export type SessionRunTerminal = {
+  sessionKeys: readonly string[];
+  runId?: string | null;
+  /** Latest session status after this owned model run leaves the active registry. */
+  status: SessionRunStatus;
+  endedAt: number;
+};
+
+/** Merge canonical and filtered pages with the same cursor/deduplication contract. */
+export function appendSessionResults(
+  previous: SessionsListResult,
+  page: SessionsListResult,
+): SessionsListResult {
+  const seen = new Set<string>();
+  const sessions = [...previous.sessions, ...page.sessions].filter((row) => {
+    if (!row.key || seen.has(row.key)) {
+      return false;
+    }
+    seen.add(row.key);
+    return true;
+  });
+  const totalCount = page.totalCount ?? previous.totalCount;
+  const hasMore =
+    page.hasMore ??
+    (typeof totalCount === "number" && Number.isFinite(totalCount)
+      ? sessions.length < totalCount
+      : false);
+  return {
+    ...page,
+    count: sessions.length,
+    totalCount,
+    hasMore,
+    nextOffset: page.nextOffset ?? (hasMore ? sessions.length : null),
+    sessions,
+  };
+}
 
 type SessionChangedEventInfo = {
   key: string;
@@ -105,12 +147,73 @@ function preserveRicherThinkingMetadata<T extends ThinkingMetadataCarrier>(
   };
 }
 
+export function preserveRosterPresentationMetadata(
+  incoming: GatewaySessionRow,
+  existing: GatewaySessionRow | undefined,
+): GatewaySessionRow {
+  if (
+    !existing ||
+    !incoming.sessionId ||
+    incoming.sessionId !== existing.sessionId ||
+    (incoming.derivedTitle !== undefined && incoming.lastMessagePreview !== undefined)
+  ) {
+    return incoming;
+  }
+  return {
+    ...incoming,
+    ...(incoming.derivedTitle === undefined && existing.derivedTitle !== undefined
+      ? { derivedTitle: existing.derivedTitle }
+      : {}),
+    ...(incoming.lastMessagePreview === undefined && existing.lastMessagePreview !== undefined
+      ? { lastMessagePreview: existing.lastMessagePreview }
+      : {}),
+  };
+}
+
+export function reconcileRosterPresentationMetadata(
+  incoming: SessionsListResult | null,
+  existing: SessionsListResult | null,
+): SessionsListResult | null {
+  if (!incoming || !existing) {
+    return incoming;
+  }
+  const existingByKey = new Map(existing.sessions.map((session) => [session.key, session]));
+  let changed = false;
+  const sessions = incoming.sessions.map((session) => {
+    const reconciled = preserveRosterPresentationMetadata(session, existingByKey.get(session.key));
+    changed ||= reconciled !== session;
+    return reconciled;
+  });
+  return changed ? { ...incoming, sessions } : incoming;
+}
+
 function stripThinkingMetadata<T extends ThinkingMetadataCarrier>(value: T): T {
   const next = { ...value };
   delete next.thinkingLevels;
   delete next.thinkingOptions;
   delete next.thinkingDefault;
   return next;
+}
+
+/** Same-content merge detection; row values are wire scalars/plain objects, so one level suffices. */
+function isShallowEqualSessionRow(
+  incoming: GatewaySessionRow,
+  existing: GatewaySessionRow,
+): boolean {
+  const incomingKeys = Object.keys(incoming);
+  if (incomingKeys.length !== Object.keys(existing).length) {
+    return false;
+  }
+  return incomingKeys.every((key) => {
+    const a = (incoming as Record<string, unknown>)[key];
+    const b = (existing as Record<string, unknown>)[key];
+    return (
+      a === b ||
+      (a !== null && b !== null && typeof a === "object" && typeof b === "object"
+        ? JSON.stringify(a) === JSON.stringify(b)
+        : false)
+    );
+  });
 }
 
 function isOlderSessionSnapshot(
@@ -172,10 +275,6 @@ function sessionAgentId(
 
 function recordValue(record: Record<string, unknown>, key: string): unknown {
   return Object.hasOwn(record, key) ? record[key] : undefined;
-}
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function sessionRunStatus(value: unknown): SessionRunStatus | null {
@@ -324,8 +423,9 @@ export function reconcileSessionChanged(
     ts: _ts,
     ...rowFields
   } = source;
+  // The gateway wire folds cron/spawn-child into "direct" before projection
+  // (session-utils-row.ts, #115299); cron detection is isCronSessionKey.
   const kind =
-    rowFields.kind === "cron" ||
     rowFields.kind === "direct" ||
     rowFields.kind === "group" ||
     rowFields.kind === "global" ||
@@ -356,23 +456,17 @@ export function reconcileSessionChanged(
     updatedAt: updatedAt ?? null,
     ...(sessionId ? { sessionId } : {}),
   } as GatewaySessionRow;
-  if (rowFields.archivedAt === null) {
-    delete row.archivedAt;
-  }
-  if (rowFields.pinnedAt === null) {
-    delete row.pinnedAt;
-  }
-  if (rowFields.label === null) {
-    delete row.label;
-  }
-  if (rowFields.category === null) {
-    delete row.category;
-  }
-  if (rowFields.displayName === null) {
-    delete row.displayName;
-  }
-  if (rowFields.thinkingLevel === null) {
-    delete row.thinkingLevel;
+  // The gateway emits explicit null tombstones so subscribed clients clear
+  // fields during merge-reconcile (session-event-payload.ts). Row fields are
+  // typed optional-not-null, so every null tombstone deletes — a hand-kept
+  // field list here drifts as new tombstoned fields ship (it already had:
+  // toolOverrides/observerDigest/controlOwnerSessionKey/restartRecoveryStatus/
+  // goal leaked null). updatedAt/activeLeafEntryId are the schema's only
+  // legitimately nullable row fields and keep their explicit handling.
+  for (const [field, value] of Object.entries(rowFields)) {
+    if (value === null && field !== "updatedAt" && field !== "activeLeafEntryId") {
+      delete row[field as keyof GatewaySessionRow];
+    }
   }
   const next = reconcileSessionHistory(result, row, undefined, {
     ...options,
@@ -382,7 +476,15 @@ export function reconcileSessionChanged(
     return { applied: false, result };
   }
   const eventTs = typeof event.ts === "number" && Number.isFinite(event.ts) ? event.ts : null;
-  const reconciledResult = eventTs === null ? next : { ...next, ts: Math.max(next.ts, eventTs) };
+  const timestamped = eventTs === null ? next : { ...next, ts: Math.max(next.ts, eventTs) };
+  const ownershipChanged =
+    Object.hasOwn(rowFields, "createdActor") &&
+    (existing?.createdActor?.type !== row.createdActor?.type ||
+      existing?.createdActor?.id !== row.createdActor?.id ||
+      existing?.createdActor?.label !== row.createdActor?.label);
+  // The facet covers unloaded pages, so an ownership event invalidates it until
+  // the session capability's canonical list refresh supplies a complete replacement.
+  const reconciledResult = ownershipChanged ? { ...timestamped, creators: undefined } : timestamped;
   const reconciledRow = reconciledResult.sessions.find((candidate) =>
     matchesExistingSession(
       candidate,
@@ -414,7 +516,7 @@ export function reconcileSessionHistory(
     return result;
   }
   const session = sanitizeSessionRow(row);
-  const showArchived = options.showArchived === true;
+  const archivedFilter = options.archivedFilter ?? "active";
   const selectedGlobalAgentId = options.selectedGlobalAgentId ?? null;
   const resultAgentId = options.resultAgentId?.trim()
     ? normalizeAgentId(options.resultAgentId)
@@ -429,7 +531,7 @@ export function reconcileSessionHistory(
     const sessions =
       isPersistedSessionRow(session) &&
       !isOutsideResultScope &&
-      (session.archived === true) === showArchived
+      sessionMatchesArchivedFilter(session, archivedFilter)
         ? [session]
         : [];
     return {
@@ -458,24 +560,97 @@ export function reconcileSessionHistory(
     return defaults ? { ...result, defaults: nextDefaults } : result;
   }
   const visibleKey = existing?.key ?? session.key;
-  const visibleSession = preserveRicherThinkingMetadata(
-    visibleKey === session.key ? session : { ...session, key: visibleKey },
+  const visibleSession = preserveRosterPresentationMetadata(
+    preserveRicherThinkingMetadata(
+      visibleKey === session.key ? session : { ...session, key: visibleKey },
+      existing,
+    ),
     existing,
   );
   if (isStaleForActiveSession(visibleSession, existing)) {
-    return { ...result, defaults: nextDefaults };
+    // Keep result identity when nothing changed so the caller's
+    // result === state.result publish gate can skip a spurious re-render.
+    return defaults ? { ...result, defaults: nextDefaults } : result;
   }
-  const sessions =
-    (visibleSession.archived === true) === showArchived
-      ? [
-          ...result.sessions.filter((candidate) => candidate.key !== visibleKey),
-          visibleSession,
-        ].toSorted(compareSessionRowsByUpdatedAt)
-      : result.sessions.filter((candidate) => candidate.key !== visibleKey);
+  if (
+    existing &&
+    isShallowEqualSessionRow(visibleSession, existing) &&
+    sessionMatchesArchivedFilter(visibleSession, archivedFilter)
+  ) {
+    // The same event reconciled twice (capability handler + chat page) must
+    // no-op the second pass; a fresh array here defeats every downstream
+    // result === state.result publish gate and re-renders per event.
+    return defaults ? { ...result, defaults: nextDefaults } : result;
+  }
+  const sessions = sessionMatchesArchivedFilter(visibleSession, archivedFilter)
+    ? [
+        ...result.sessions.filter((candidate) => candidate.key !== visibleKey),
+        visibleSession,
+      ].toSorted(compareSessionRowsByUpdatedAt)
+    : result.sessions.filter((candidate) => candidate.key !== visibleKey);
   return {
     ...result,
     defaults: nextDefaults,
     count: sessions.length,
     sessions,
   };
+}
+
+export function reconcileSessionRunTerminal(
+  result: SessionsListResult | null,
+  terminal: SessionRunTerminal,
+): SessionsListResult | null {
+  const keys = terminal.sessionKeys.map((key) => key.trim()).filter(Boolean);
+  if (!result || keys.length === 0) {
+    return result;
+  }
+  const runId = terminal.runId?.trim() || null;
+  let changed = false;
+  const sessions = result.sessions.map((row): GatewaySessionRow => {
+    if (!keys.some((key) => areUiSessionKeysEquivalent(row.key, key))) {
+      return row;
+    }
+    if (row.hasActiveRun === true || isSessionRunActive(row)) {
+      // Active identity belongs to the originating model run, not a newer overlap.
+      if (!runId || !row.activeRunIds?.includes(runId)) {
+        return row;
+      }
+    }
+    const remainingRunIds = runId ? row.activeRunIds?.filter((id) => id !== runId) : [];
+    if (remainingRunIds?.length) {
+      changed = true;
+      return { ...row, activeRunIds: remainingRunIds, hasActiveRun: true, status: "running" };
+    }
+    const endedAt = row.endedAt ?? terminal.endedAt;
+    const runtimeMs =
+      typeof row.startedAt === "number" ? Math.max(0, endedAt - row.startedAt) : row.runtimeMs;
+    const activeRunIds = row.activeRunIds?.length ? [] : row.activeRunIds;
+    const abortedLastRun =
+      terminal.status === "killed"
+        ? true
+        : terminal.status === "running"
+          ? false
+          : row.abortedLastRun;
+    if (
+      row.hasActiveRun === false &&
+      row.status === terminal.status &&
+      row.endedAt === endedAt &&
+      row.runtimeMs === runtimeMs &&
+      row.activeRunIds === activeRunIds &&
+      row.abortedLastRun === abortedLastRun
+    ) {
+      return row;
+    }
+    changed = true;
+    return {
+      ...row,
+      activeRunIds,
+      hasActiveRun: false,
+      status: terminal.status,
+      endedAt,
+      runtimeMs,
+      abortedLastRun,
+    };
+  });
+  return changed ? { ...result, sessions } : result;
 }

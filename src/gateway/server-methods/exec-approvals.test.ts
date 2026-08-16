@@ -225,7 +225,7 @@ describe("exec approvals gateway methods", () => {
         baseHash: "base-hash",
       },
       commands: ["system.execApprovals.set"],
-      config: { gateway: { nodes: { denyCommands: ["system.execApprovals.set"] } } },
+      config: { gateway: { nodes: { commands: { deny: ["system.execApprovals.set"] } } } },
     },
   ])("blocks $method outside the effective command policy", async (testCase) => {
     const invoke = vi.fn();
@@ -251,6 +251,7 @@ describe("exec approvals gateway methods", () => {
           get: () => ({
             nodeId: "node-1",
             connId: "conn-1",
+            pairingGeneration: "generation-1",
             platform: "windows",
             deviceFamily: "Windows",
             declaredCommands: [testCase.command],
@@ -309,6 +310,7 @@ describe("exec approvals gateway methods", () => {
           get: () => ({
             nodeId: "node-1",
             connId: "conn-1",
+            pairingGeneration: "generation-1",
             clientId: "openclaw-macos",
             clientMode: "node",
             platform: "macOS 26.5.2",
@@ -323,8 +325,11 @@ describe("exec approvals gateway methods", () => {
 
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "node-1",
+      expectedConnId: "conn-1",
+      expectedPairingGeneration: "generation-1",
       command,
       params: { includeResolvedDefaults: true },
+      onDispatchReady: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(true, payload, undefined);
   });
@@ -396,6 +401,7 @@ describe("exec approvals gateway methods", () => {
           get: () => ({
             nodeId: "node-1",
             connId: "conn-1",
+            pairingGeneration: "generation-1",
             clientId: identity.clientId,
             clientMode: identity.clientMode,
             platform: identity.platform,
@@ -410,8 +416,11 @@ describe("exec approvals gateway methods", () => {
 
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "node-1",
+      expectedConnId: "conn-1",
+      expectedPairingGeneration: "generation-1",
       command,
       params: {},
+      onDispatchReady: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(true, payload, undefined);
   });
@@ -452,6 +461,7 @@ describe("exec approvals gateway methods", () => {
           get: () => ({
             nodeId: "windows-node",
             connId: "conn-1",
+            pairingGeneration: "generation-1",
             platform: "windows",
             deviceFamily: "Windows",
             declaredCommands: [command],
@@ -464,12 +474,15 @@ describe("exec approvals gateway methods", () => {
 
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "windows-node",
+      expectedConnId: "conn-1",
+      expectedPairingGeneration: "generation-1",
       command,
       params: {
         defaultAction: "deny",
         rules: [{ pattern: "hostname", action: "allow" }],
         baseHash: "sha256:current",
       },
+      onDispatchReady: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(true, { updated: true, hash: "sha256:next" }, undefined);
   });
@@ -498,6 +511,7 @@ describe("exec approvals gateway methods", () => {
           get: () => ({
             nodeId: "windows-node",
             connId: "conn-1",
+            pairingGeneration: "generation-1",
             platform: "windows",
             deviceFamily: "Windows",
             declaredCommands: [command],
@@ -549,6 +563,7 @@ describe("exec approvals gateway methods", () => {
       nodeId: "missing-node",
       command: "system.execApprovals.get",
       params: {},
+      onDispatchReady: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -557,6 +572,7 @@ describe("exec approvals gateway methods", () => {
         code: "UNAVAILABLE",
         details: {
           nodeError: { code: "NOT_CONNECTED", message: "node not connected" },
+          nodeCommandDispatched: false,
         },
       }),
     );

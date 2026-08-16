@@ -2,45 +2,10 @@ import path from "node:path";
 import process from "node:process";
 import { execa, type Options as ExecaOptions, type ResultPromise } from "execa";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
+import { mergeProcessEnv } from "../infra/process-env.js";
 import { resolveSafeChildProcessInvocation } from "./windows-command.js";
 
 export const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
-
-function assignChildEnvValue(params: {
-  env: NodeJS.ProcessEnv;
-  key: string;
-  platform: NodeJS.Platform;
-  value: string | undefined;
-}): void {
-  if (params.platform === "win32") {
-    const normalizedKey = params.key.toLowerCase();
-    for (const existingKey of Object.keys(params.env)) {
-      if (existingKey.toLowerCase() === normalizedKey && existingKey !== params.key) {
-        delete params.env[existingKey];
-      }
-    }
-  }
-  if (params.value === undefined) {
-    delete params.env[params.key];
-    return;
-  }
-  params.env[params.key] = params.value;
-}
-
-function mergeChildEnv(params: {
-  baseEnv: NodeJS.ProcessEnv;
-  env?: NodeJS.ProcessEnv;
-  platform: NodeJS.Platform;
-}): NodeJS.ProcessEnv {
-  const resolvedEnv: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(params.baseEnv)) {
-    assignChildEnvValue({ env: resolvedEnv, key, platform: params.platform, value });
-  }
-  for (const [key, value] of Object.entries(params.env ?? {})) {
-    assignChildEnvValue({ env: resolvedEnv, key, platform: params.platform, value });
-  }
-  return resolvedEnv;
-}
 
 export function shouldSpawnWithShell(params: {
   resolvedCommand: string;
@@ -55,13 +20,8 @@ export function shouldSpawnWithShell(params: {
   return false;
 }
 
-export type SpawnCommandOptions = Omit<
-  ExecaOptions,
-  "env" | "extendEnv" | "shell" | "windowsHide" | "windowsVerbatimArguments"
-> & {
+type SpawnCommandOptions = ExecaOptions & {
   baseEnv?: NodeJS.ProcessEnv;
-  env?: NodeJS.ProcessEnv;
-  windowsVerbatimArguments?: boolean;
 };
 
 export function spawnCommandWithInvocation<
@@ -88,7 +48,7 @@ export function spawnCommandWithInvocation<
     shell: false,
     windowsHide: invocation.windowsHide,
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-  }) as unknown as ResultPromise<OptionsType>;
+  } as ExecaOptions) as unknown as ResultPromise<OptionsType>;
   return { child, invocation };
 }
 
@@ -121,7 +81,7 @@ export function resolveCommandEnv(params: {
     return false;
   })();
 
-  const resolvedEnv = mergeChildEnv({ baseEnv, env: params.env, platform });
+  const resolvedEnv = mergeProcessEnv([baseEnv, params.env], platform);
   if (shouldSuppressNpmFund) {
     if (resolvedEnv.NPM_CONFIG_FUND == null) {
       resolvedEnv.NPM_CONFIG_FUND = "false";

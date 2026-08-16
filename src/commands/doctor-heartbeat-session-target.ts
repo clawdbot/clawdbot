@@ -1,13 +1,16 @@
+import fs from "node:fs";
 /** Doctor warnings for heartbeat.session values that resolve to missing delivery sessions. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries, listAgentIds, resolveAgentConfig } from "../agents/agent-scope.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatIntervalMs } from "../infra/heartbeat-summary.js";
 import { resolveHeartbeatDeliveryTarget } from "../infra/outbound/targets.js";
+import { loadLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import {
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
@@ -24,10 +27,7 @@ function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
 function resolveHeartbeatConfig(cfg: OpenClawConfig, agentId: string): HeartbeatConfig | undefined {
   const defaults = cfg.agents?.defaults?.heartbeat;
   const overrides = resolveAgentConfig(cfg, agentId)?.heartbeat;
-  if (!defaults && !overrides) {
-    return overrides;
-  }
-  return { ...defaults, ...overrides };
+  return defaults || overrides ? { ...defaults, ...overrides } : undefined;
 }
 
 function listHeartbeatDoctorAgents(cfg: OpenClawConfig) {
@@ -46,9 +46,8 @@ function listHeartbeatDoctorAgents(cfg: OpenClawConfig) {
 /**
  * Detect heartbeat configs that pin a non-existent session. The runtime
  * resolves `heartbeat.session` to a sessionKey via `resolveHeartbeatSession`;
- * if the entry is missing, `resolveHeartbeatDeliveryTarget` falls back to
- * `{channel:"none", reason:"no-target"}` and the heartbeat fires a model
- * call whose reply has nowhere to land. Common cause: the configured Slack
+ * a missing last route skips before the model, while a missing explicit target
+ * runs and drops its reply. Common cause: the configured Slack
  * channel ID does not match any channel the agent has ever joined (e.g.,
  * heartbeat pins channel `c0b2eddpw95` but the agent only has sessions in
  * `c0ag7jag35g`, or the agent has no Slack bot at all).
@@ -89,11 +88,12 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
       continue;
     }
     const target = normalizeOptionalString(heartbeatConfig.target);
-    if (!target || target === "none") {
+    if (target === "none") {
       continue;
     }
     const deliveryWithoutSession = resolveHeartbeatDeliveryTarget({
       cfg,
+      agentId: resolvedAgentId,
       heartbeat: heartbeatConfig,
     });
     if (deliveryWithoutSession.channel !== "none" && deliveryWithoutSession.to) {
@@ -120,17 +120,34 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
       continue;
     }
     const storeAgentId = resolvedAgentId;
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: storeAgentId });
-    const store = loadSessionStore(storePath, { skipCache: true, clone: false });
-    const entry = store[canonicalSession];
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: storeAgentId });
+    const entry =
+      loadSessionEntryReadOnly({
+        agentId: storeAgentId,
+        sessionKey: canonicalSession,
+        storePath,
+      }) ??
+      (fs.existsSync(storePath) ? loadLegacySessionStore(storePath)[canonicalSession] : undefined);
     if (entry) {
       continue;
     }
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: storeAgentId,
+    }).path;
+    const ownerTarget = target === undefined || target === "owner";
+    const missingRouteOutcome = ownerTarget
+      ? `  Heartbeats will skip with reason="no-route" until a configured owner resolves to a direct message.`
+      : deliveryWithoutSession.reason === "no-route"
+        ? `  Heartbeats will skip with reason="no-route" until that session has a delivery route.`
+        : `  Heartbeats will run but resolve delivery to channel="none"/reason="no-target", so replies are dropped.`;
+    const fix = ownerTarget
+      ? `  Fix: set commands.ownerAllowFrom or a channel allowFrom to a direct-message owner, set heartbeat.target="none", or choose an explicit heartbeat target.`
+      : `  Fix: point heartbeat.session at a session the agent actually owns, set heartbeat.target="none" to suppress delivery, or remove the heartbeat.session field to fall back to the agent main session.`;
     warnings.push(
       [
-        `- Agent ${agentId} heartbeat.session pins ${configuredSession} (resolved to ${canonicalSession}) but that session has no entry in ${storePath}.`,
-        `  Heartbeats will run but resolve delivery to channel="none"/reason="no-target", so replies are dropped silently.`,
-        `  Fix: point heartbeat.session at a session the agent actually owns, set heartbeat.target="none" to suppress delivery, or remove the heartbeat.session field to fall back to the agent main session.`,
+        `- Agent ${agentId} heartbeat.session pins ${configuredSession} (resolved to ${canonicalSession}) but that session has no entry in ${databasePath}.`,
+        missingRouteOutcome,
+        fix,
       ].join("\n"),
     );
   }

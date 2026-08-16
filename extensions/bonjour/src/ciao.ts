@@ -13,7 +13,7 @@ const CIAO_NETMASK_ASSERTION_MESSAGE_RE =
 const CIAO_INTERFACE_ENUMERATION_FAILURE_RE = /\bUV_INTERFACE_ADDRESSES\b/u;
 
 /** Known ciao process-level errors that OpenClaw handles specially. */
-export type CiaoProcessErrorClassification =
+type CiaoProcessErrorClassification =
   | { kind: "netmask-assertion"; formatted: string }
   | { kind: "interface-enumeration-failure"; formatted: string };
 

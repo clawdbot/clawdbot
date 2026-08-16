@@ -1,5 +1,7 @@
 // Verifies local shell process handling for TUI local mode.
+import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { join } from "node:path";
 import type { OverlayHandle } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { createLocalShellRunner } from "./tui-local-shell.js";
@@ -194,6 +196,41 @@ describe("createLocalShellRunner", () => {
     expect(harness.messages.join("\n")).not.toMatch(/[\uD800-\uDFFF]/u);
   });
 
+  it("preserves UTF-8 characters split across stdout and stderr chunks", async () => {
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const spawnCommand = vi.fn(() => ({
+      stdout,
+      stderr,
+      on: (event: string, callback: (...args: unknown[]) => void) => {
+        if (event === "close") {
+          setImmediate(() => {
+            const stdoutBytes = Buffer.from("猫", "utf8");
+            const stderrBytes = Buffer.from("😀", "utf8");
+            stdout.emit("data", stdoutBytes.subarray(0, 1));
+            stderr.emit("data", stderrBytes.subarray(0, 2));
+            setImmediate(() => {
+              stdout.emit("data", stdoutBytes.subarray(1));
+              stderr.emit("data", stderrBytes.subarray(2));
+              callback(0, null);
+            });
+          });
+        }
+      },
+    }));
+    const harness = createShellHarness({
+      spawnCommand: spawnCommand as unknown as typeof import("node:child_process").spawn,
+    });
+
+    const run = harness.runLocalShellLine("!unicode");
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+    await run;
+
+    expect(harness.messages).toContain("[local] 猫");
+    expect(harness.messages).toContain("[local] 😀");
+    expect(harness.messages.join("\n")).not.toContain("�");
+  });
+
   it("refuses to retarget local commands after the working directory is deleted", async () => {
     const harness = createShellHarness({ getCwd: () => undefined });
 
@@ -205,6 +242,28 @@ describe("createLocalShellRunner", () => {
     expect(harness.messages).toContain(
       "local shell: working directory was deleted; cd to an existing directory first",
     );
+  });
+
+  it("finishes a failed child before reporting the next local command", async () => {
+    const harness = createShellHarness({
+      spawnCommand: spawn,
+      getCwd: vi
+        .fn(() => process.cwd())
+        .mockReturnValueOnce(join(process.cwd(), ".missing-openclaw-local-shell-directory")),
+    });
+
+    const failedRun = harness.runLocalShellLine("!echo first");
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+    await failedRun;
+    await harness.runLocalShellLine("!echo second");
+
+    expect(harness.messages.filter((message) => message.startsWith("[local]"))).toEqual([
+      "[local] $ echo first",
+      expect.stringContaining("[local] error: "),
+      "[local] $ echo second",
+      "[local] second",
+      "[local] exit 0",
+    ]);
   });
 
   it("does not crash when stdout or stderr emit an error event", async () => {

@@ -27,7 +27,7 @@ vi.mock("../config/sessions.js", async () => {
     await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
   return {
     ...actual,
-    resolveStorePath: resolveStorePathMock,
+    resolveSessionStorePathCore: resolveStorePathMock,
   };
 });
 
@@ -44,7 +44,8 @@ vi.mock("../infra/state-migrations.js", async () => ({
 }));
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  listSessionEntries: listSessionEntriesMock,
+  listSessionEntriesCore: listSessionEntriesMock,
+  listSessionEntriesReadOnly: listSessionEntriesMock,
 }));
 
 import { sessionsCommand } from "./sessions.js";
@@ -156,8 +157,8 @@ describe("sessionsCommand default store agent selection", () => {
     expect(payload.count).toBe(2);
     expect(payload.allAgents).toBe(true);
     expect(payload.stores).toEqual([
-      { agentId: "main", path: "/tmp/shared-sessions.json" },
-      { agentId: "voice", path: "/tmp/shared-sessions.json" },
+      { agentId: "main", path: "/tmp/shared-sessions.sqlite" },
+      { agentId: "voice", path: "/tmp/shared-sessions.voice.sqlite" },
     ]);
     expect(payload.sessions?.map((session) => session.agentId).toSorted()).toEqual([
       "main",
@@ -177,7 +178,25 @@ describe("sessionsCommand default store agent selection", () => {
       agentId: "voice",
       storePath: "/tmp/sessions-voice.json",
     });
-    expect(logs[0]).toContain("Session store: /tmp/sessions-voice.json");
+    expect(logs[0]).toContain("Session store: /tmp/sessions-voice.voice.sqlite");
+  });
+
+  it("names both supported escapes when an explicit roster has no session-list owner", async () => {
+    loadConfigMock.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, helper: {}, third: {} },
+      },
+    });
+    const { runtime } = createRuntime();
+
+    await sessionsCommand({}, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Multiple agents are configured, but session-store selection has no explicit owner. Pass --agent <id> to select one agent, or --all-agents to include every configured agent.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("uses all configured agent stores with --all-agents", async () => {

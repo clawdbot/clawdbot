@@ -66,6 +66,8 @@ describe("buildStatusScanResult", () => {
     ];
     const agentStatus = {
       defaultId: "main",
+      ownership: "sole" as const,
+      selectionRequired: false,
       totalSessions: 0,
       bootstrapPendingCount: 0,
       agents: [
@@ -87,8 +89,8 @@ describe("buildStatusScanResult", () => {
     const pluginCompatibility = [
       {
         pluginId: "legacy",
-        code: "legacy-before-agent-start" as const,
-        compatCode: "legacy-before-agent-start" as const,
+        code: "deprecated-memory-embedding-provider-api" as const,
+        compatCode: "deprecated-memory-embedding-provider-api" as const,
         severity: "warn" as const,
         message: "warn",
       },

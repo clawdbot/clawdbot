@@ -1,7 +1,7 @@
 // Zalo helper module supports config schema behavior.
 import {
   AllowFromListSchema,
-  buildCatchallMultiAccountChannelSchema,
+  buildMultiAccountChannelSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
@@ -12,6 +12,7 @@ import { buildSecretInputSchema } from "./secret-input.js";
 const zaloAccountSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
+  configWrites: z.boolean().optional(),
   markdown: MarkdownConfigSchema,
   botToken: buildSecretInputSchema().optional(),
   tokenFile: z.string().optional(),
@@ -27,4 +28,6 @@ const zaloAccountSchema = z.object({
   responsePrefix: z.string().optional(),
 });
 
-export const ZaloConfigSchema = buildCatchallMultiAccountChannelSchema(zaloAccountSchema);
+export const ZaloConfigSchema = buildMultiAccountChannelSchema(zaloAccountSchema, {
+  accountsMode: "catchall",
+});

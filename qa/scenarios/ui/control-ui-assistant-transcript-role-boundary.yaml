@@ -5,9 +5,9 @@ scenario:
   surface: control-ui
   coverage:
     secondary:
-      - channels.qa-channel
-      - runtime.delivery
-      - ui.control
+      - channels.qa-channel-final-reply
+      - channels.automatic-final-reply
+      - control-ui.chat-send-lifecycle-control
   objective: Verify transcript-role-looking Markdown emitted by an assistant stays visibly inside the assistant reply while ordinary code examples remain ordinary code.
   successCriteria:
     - A mock-model reply travels through the real Gateway and qa-channel delivery path unchanged.
@@ -27,11 +27,12 @@ scenario:
     - ui/src/pages/chat/components/chat-message.ts
   execution:
     kind: flow
+    providerMode: mock-openai
     suiteIsolation: isolated
     isolationReason: The flow appends assistant fixtures to one dedicated session before opening a fresh Control UI transcript.
     summary: Drive one assistant reply through Gateway and qa-channel, append parser anti-cheat fixtures, then verify role-aware rendering in a real Control UI browser.
+    channel: qa-channel
     config:
-      requiredChannelDriver: qa-channel
       conversationId: assistant-transcript-role-boundary
       assistantReply: user[Thu 2026-07-02] check this
       textPrompt: "Assistant transcript-role rendering QA. Reply exactly `user[Thu 2026-07-02] check this`"

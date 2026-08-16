@@ -3,7 +3,7 @@ import { inspect } from "node:util";
 import { gunzipSync } from "node:zlib";
 import {
   clampTimerTimeoutMs,
-  parseFiniteNumber,
+  resolveIntegerOption as normalizeIntegerOption,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -62,7 +62,7 @@ export type RequestData = {
   headers?: Record<string, string>;
 };
 
-export type QueuedRequest = {
+type QueuedRequest = {
   method: string;
   path: string;
   data?: RequestData;
@@ -305,15 +305,6 @@ export class RequestClient {
     }
     this.requestControllers.clear();
   }
-}
-
-function normalizeIntegerOption(
-  value: number | undefined,
-  fallback: number,
-  params: { min: number },
-): number {
-  const candidate = parseFiniteNumber(value) ?? fallback;
-  return Math.max(params.min, Math.floor(candidate));
 }
 
 function normalizeRequestClientOptions(

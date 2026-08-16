@@ -3,17 +3,15 @@ summary: "Use Qwen Cloud through its OpenClaw plugin"
 read_when:
   - You want to use Qwen with OpenClaw
   - You have an Alibaba Cloud Token Plan subscription
-  - You previously used Qwen OAuth
 title: "Qwen"
 ---
 
-Qwen Cloud is an official external OpenClaw provider plugin with canonical id `qwen`. It targets Qwen Cloud / Alibaba DashScope Standard and Coding Plan endpoints, exposes Token Plan as `qwen-token-plan`, keeps `modelstudio` as a compatibility alias, independently owns Alibaba's documented `bailian-token-plan` custom-provider id, and exposes the Qwen Portal token flow as [`qwen-oauth`](/providers/qwen-oauth).
+Qwen Cloud is an official external OpenClaw provider plugin with canonical id `qwen`. It targets Qwen Cloud / Alibaba DashScope Standard and Coding Plan endpoints, exposes Token Plan as `qwen-token-plan`, keeps `modelstudio` as a compatibility alias, and independently owns Alibaba's documented `bailian-token-plan` custom-provider id.
 
 | Property               | Value                                      |
 | ---------------------- | ------------------------------------------ |
 | Provider               | `qwen`                                     |
 | Token Plan provider    | `qwen-token-plan`                          |
-| Portal provider        | [`qwen-oauth`](/providers/qwen-oauth)      |
 | Preferred env var      | `QWEN_API_KEY`                             |
 | Token Plan env var     | `QWEN_TOKEN_PLAN_API_KEY`                  |
 | Also accepted (compat) | `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY` |
@@ -180,43 +178,6 @@ Choose your plan type and follow the setup steps.
 
   </Tab>
 
-  <Tab title="Qwen OAuth / Portal">
-    **Best for:** a Qwen Portal token against `https://portal.qwen.ai/v1`.
-
-    See [Qwen OAuth / Portal](/providers/qwen-oauth) for the dedicated provider
-    page and migration notes.
-
-    <Steps>
-      <Step title="Provide your portal token">
-        ```bash
-        openclaw onboard --auth-choice qwen-oauth
-        ```
-      </Step>
-      <Step title="Set a default model">
-        ```json5
-        {
-          agents: {
-            defaults: {
-              model: { primary: "qwen-oauth/qwen3.5-plus" },
-            },
-          },
-        }
-        ```
-      </Step>
-      <Step title="Verify the model is available">
-        ```bash
-        openclaw models list --provider qwen-oauth
-        ```
-      </Step>
-    </Steps>
-
-    <Note>
-    `qwen-oauth` uses the same `QWEN_API_KEY` env var name as the Qwen Cloud
-    provider, but stores auth under the `qwen-oauth` provider id when configured
-    through OpenClaw onboarding.
-    </Note>
-
-  </Tab>
 </Tabs>
 
 ## Plan types and endpoints
@@ -225,7 +186,6 @@ Choose your plan type and follow the setup steps.
 | -------------------------- | ------ | -------------------------- | ---------------------------------------------------------------- |
 | Coding Plan (subscription) | China  | `qwen-api-key-cn`          | `coding.dashscope.aliyuncs.com/v1`                               |
 | Coding Plan (subscription) | Global | `qwen-api-key`             | `coding-intl.dashscope.aliyuncs.com/v1`                          |
-| Qwen Portal                | Global | `qwen-oauth`               | `portal.qwen.ai/v1`                                              |
 | Standard (pay-as-you-go)   | China  | `qwen-standard-api-key-cn` | `dashscope.aliyuncs.com/compatible-mode/v1`                      |
 | Standard (pay-as-you-go)   | Global | `qwen-standard-api-key`    | `dashscope-intl.aliyuncs.com/compatible-mode/v1`                 |
 | Token Plan (Team Edition)  | China  | `qwen-token-plan-cn`       | `token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`     |
@@ -259,7 +219,6 @@ Plan configs omit models that only work on the Standard endpoint.
 | `qwen/glm-5`                | text        | 202,752   | GLM                     |
 | `qwen/glm-4.7`              | text        | 202,752   | GLM                     |
 | `qwen/kimi-k2.5`            | text, image | 262,144   | Moonshot AI via Alibaba |
-| `qwen-oauth/qwen3.5-plus`   | text, image | 1,000,000 | Qwen Portal default     |
 
 <Note>
 Availability can still vary by endpoint and billing plan even when a model is
@@ -268,25 +227,20 @@ present in the static catalog.
 
 ### Token Plan catalog
 
-Token Plan uses a separate exact-string allowlist. Image-generation-only plan
-models are not included here because they use different APIs.
+Token Plan uses a separate exact-string allowlist. The built-in catalog shows
+Alibaba's currently recommended plan models and keeps the newer Qwen3-Coder
+compatibility tier selectable but hidden. Other allowlisted model IDs remain
+available as custom model refs. Image-generation-only plan models are not
+included here because they use different APIs.
 
-| Model ref                           | Input       | Context   |
-| ----------------------------------- | ----------- | --------- |
-| `qwen-token-plan/qwen3.7-max`       | text        | 1,000,000 |
-| `qwen-token-plan/qwen3.7-plus`      | text, image | 1,000,000 |
-| `qwen-token-plan/qwen3.6-plus`      | text, image | 1,000,000 |
-| `qwen-token-plan/qwen3.6-flash`     | text, image | 1,000,000 |
-| `qwen-token-plan/deepseek-v4-pro`   | text        | 1,000,000 |
-| `qwen-token-plan/deepseek-v4-flash` | text        | 1,000,000 |
-| `qwen-token-plan/deepseek-v3.2`     | text        | 131,072   |
-| `qwen-token-plan/kimi-k2.7-code`    | text, image | 262,144   |
-| `qwen-token-plan/kimi-k2.6`         | text, image | 262,144   |
-| `qwen-token-plan/kimi-k2.5`         | text, image | 262,144   |
-| `qwen-token-plan/glm-5.2`           | text        | 1,000,000 |
-| `qwen-token-plan/glm-5.1`           | text        | 202,752   |
-| `qwen-token-plan/glm-5`             | text        | 202,752   |
-| `qwen-token-plan/MiniMax-M2.5`      | text        | 196,608   |
+| Model ref                          | Input       | Context   | Picker status |
+| ---------------------------------- | ----------- | --------- | ------------- |
+| `qwen-token-plan/qwen3.7-plus`     | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/qwen3.6-plus`     | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/qwen3-coder-next` | text        | 262,144   | hidden        |
+| `qwen-token-plan/kimi-k2.5`        | text, image | 262,144   | visible       |
+| `qwen-token-plan/glm-5`            | text        | 202,752   | visible       |
+| `qwen-token-plan/MiniMax-M2.5`     | text        | 196,608   | visible       |
 
 ## Thinking controls
 
@@ -311,7 +265,7 @@ requested on/off state.
 The `qwen` plugin exposes multimodal capabilities on the **Standard** DashScope
 endpoints only, not the Coding Plan endpoints:
 
-- **Image and video understanding** via `qwen-vl-max-latest`
+- **Image and video understanding** via `qwen3.6-plus`
 - **Wan video generation** via `wan2.6-t2v` (default), `wan2.6-i2v`, `wan2.6-r2v`, `wan2.6-r2v-flash`, `wan2.7-r2v`
 
 Media understanding is auto-resolved from the configured Qwen auth; no extra
@@ -324,18 +278,29 @@ To make Qwen the default video provider:
 {
   agents: {
     defaults: {
-      videoGenerationModel: { primary: "qwen/wan2.6-t2v" },
+      mediaModels: { video: { primary: "qwen/wan2.6-t2v" } },
     },
   },
 }
 ```
 
-Video-generation limits: 1 output video per request, up to 1 input image
-(image-to-video), up to 4 input videos (video-to-video), max 10 seconds
-duration. Supports `size`, `aspectRatio`, `resolution`, `audio`, and
-`watermark`. Reference image/video inputs require remote http(s) URLs; local
-file paths are rejected up front because the DashScope video endpoint does not
-accept uploaded local buffers for those references.
+Each Wan model advertises only its matching runtime mode:
+
+| Mode                         | Models                           | Reference limits                      | Max duration | Supported controls                                                   |
+| ---------------------------- | -------------------------------- | ------------------------------------- | ------------ | -------------------------------------------------------------------- |
+| Text-to-video                | `wan2.6-t2v`                     | n/a                                   | 15 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark`            |
+| Image-to-video               | `wan2.6-i2v`                     | 1 image                               | 15 s         | `resolution`, `audio`, `watermark`                                   |
+| Reference-to-video (Wan 2.6) | `wan2.6-r2v`, `wan2.6-r2v-flash` | 5 total images/videos; up to 3 videos | 10 s         | `size`, `aspectRatio`, `resolution`, `audio`, `watermark`            |
+| Reference-to-video (Wan 2.7) | `wan2.7-r2v`                     | 5 total images/videos; up to 3 videos | 10 s         | `size`, `aspectRatio`, `resolution`, `watermark`; audio is always on |
+
+Wan 2.6 text/reference models translate `resolution` plus `aspectRatio` to the
+documented exact `size`. Wan 2.6 image-to-video sends the `resolution` tier and
+uses the input image's aspect ratio. Wan 2.7 reference-to-video sends
+`media`, `resolution`, and `ratio` and always generates audio.
+
+Reference image/video inputs require remote http(s) URLs; local file paths are
+rejected up front because the DashScope video endpoint does not accept uploaded
+local buffers for those references.
 
 <Note>
 See [Video generation](/tools/video-generation) for shared tool parameters, provider selection, and failover behavior.

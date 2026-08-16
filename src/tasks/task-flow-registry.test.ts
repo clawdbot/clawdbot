@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  createFlowRecord as createFlowRecordOrNull,
   createTaskFlowForTask as createTaskFlowForTaskOrNull,
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   deleteTaskFlowRecordById,
@@ -12,14 +11,17 @@ import {
   listTaskFlowRecords,
   requestFlowCancel,
   reloadTaskFlowRegistryFromStore,
-  resetTaskFlowRegistryForTests,
   resumeFlow,
   setFlowWaiting,
   syncFlowFromTaskResult,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-registry.js";
-import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import {
+  configureTaskFlowRegistryRuntime,
+  createFlowRecord as createFlowRecordOrNull,
+  resetTaskFlowRegistryForTests,
+} from "./task-runtime.test-helpers.js";
 
 function createFlowRecord(params: Parameters<typeof createFlowRecordOrNull>[0]): TaskFlowRecord {
   const flow = createFlowRecordOrNull(params);

@@ -1,7 +1,9 @@
 import { SpanKind } from "@opentelemetry/api";
+import { GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT } from "@opentelemetry/semantic-conventions/incubating";
+import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { asFiniteNumber, asFiniteNumberInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { DiagnosticEventPayload } from "../api.js";
 import { redactSensitiveText } from "../api.js";
-import { lowCardinalityAttr } from "./service-attributes.js";
 import {
   GEN_AI_LATEST_EXPERIMENTAL_OPT_IN,
   OTEL_SEMCONV_STABILITY_OPT_IN_ENV,
@@ -26,7 +28,13 @@ function emitLatestGenAiSemconv(): boolean {
 
 export function genAiOperationName(
   api: string | undefined,
-): "chat" | "generate_content" | "text_completion" {
+  observationUnit?: "request" | "turn",
+): "chat" | "generate_content" | "invoke_agent" | "text_completion" {
+  // CLI/app-server diagnostics bracket an opaque agent turn, not one inference request.
+  // Label that boundary as agent invocation so its latency stays distinct from request latency.
+  if (observationUnit === "turn") {
+    return GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT;
+  }
   const normalized = api?.trim().toLowerCase();
   if (!normalized) {
     return "chat";
@@ -41,7 +49,11 @@ export function genAiOperationName(
 }
 
 export function positiveFiniteNumber(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  return asFiniteNumberInRange(value, { min: 0, minExclusive: true });
+}
+
+function nonNegativeFiniteNumber(value: number | undefined): number | undefined {
+  return asFiniteNumberInRange(value, { min: 0 });
 }
 
 export function assignPositiveNumberAttr(
@@ -77,8 +89,9 @@ function assignNumberAttr(
   key: string,
   value: number | undefined,
 ): void {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    attrs[key] = value;
+  const normalized = asFiniteNumber(value);
+  if (normalized !== undefined) {
+    attrs[key] = normalized;
   }
 }
 
@@ -88,14 +101,17 @@ function modelCallPromptTokens(usage: {
   cacheRead?: number;
   cacheWrite?: number;
 }): number | undefined {
-  if (typeof usage.promptTokens === "number" && Number.isFinite(usage.promptTokens)) {
-    return usage.promptTokens;
+  const promptTokens = nonNegativeFiniteNumber(usage.promptTokens);
+  if (promptTokens !== undefined) {
+    return promptTokens;
   }
-  const input = usage.input ?? 0;
-  const cacheRead = usage.cacheRead ?? 0;
-  const cacheWrite = usage.cacheWrite ?? 0;
-  const total = input + cacheRead + cacheWrite;
-  return total > 0 ? total : undefined;
+  const input = nonNegativeFiniteNumber(usage.input);
+  const cacheRead = nonNegativeFiniteNumber(usage.cacheRead);
+  const cacheWrite = nonNegativeFiniteNumber(usage.cacheWrite);
+  if (input === undefined && cacheRead === undefined && cacheWrite === undefined) {
+    return undefined;
+  }
+  return (input ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
 }
 
 export function assignModelCallPromptStatsAttrs(
@@ -140,46 +156,73 @@ export function assignModelCallUsageAttrs(
     ["gen_ai.usage.cache_read.input_tokens", usage.cacheRead],
     ["gen_ai.usage.cache_creation.input_tokens", usage.cacheWrite],
   ] as const) {
-    assignPositiveNumberAttr(attrs, key, value);
+    const normalized = nonNegativeFiniteNumber(value);
+    if (normalized !== undefined) {
+      attrs[key] = normalized;
+    }
   }
 }
 
 export function assignGenAiSpanIdentityAttrs(
   attrs: Record<string, string | number | boolean>,
-  input: { api?: string; model?: string; provider?: string },
+  input: {
+    api?: string;
+    model?: string;
+    observationUnit?: "request" | "turn";
+    provider?: string;
+  },
 ): void {
   if (emitLatestGenAiSemconv()) {
-    attrs["gen_ai.provider.name"] = lowCardinalityAttr(input.provider);
+    attrs["gen_ai.provider.name"] = normalizeDiagnosticValue(input.provider);
   } else {
-    attrs["gen_ai.system"] = lowCardinalityAttr(input.provider);
+    attrs["gen_ai.system"] = normalizeDiagnosticValue(input.provider);
   }
   if (input.model) {
     // Span attributes carry the full model id; only metric labels need bounded cardinality
-    // (the gen_ai metrics below still use lowCardinalityAttr). The low-cardinality allowlist
+    // (the gen_ai metrics below still use normalizeDiagnosticValue). The low-cardinality allowlist
     // regex rejects "/", so provider-qualified ids like "anthropic/claude-sonnet-4.6" collapse
     // to "unknown" on the SPAN — breaking model attribution in trace backends (e.g. Langfuse
     // reads gen_ai.request.model). Keep the redacted raw model on the span.
     attrs["gen_ai.request.model"] = redactSensitiveText(input.model.trim());
   }
-  attrs["gen_ai.operation.name"] = genAiOperationName(input.api);
+  attrs["gen_ai.operation.name"] = genAiOperationName(input.api, input.observationUnit);
 }
 
 export function assignGenAiModelCallAttrs(
   attrs: Record<string, string | number | boolean>,
-  evt: { api?: string; model?: string; provider?: string },
+  evt: {
+    api?: string;
+    model?: string;
+    observationUnit?: "request" | "turn";
+    provider?: string;
+  },
 ): void {
   assignGenAiSpanIdentityAttrs(attrs, evt);
+  attrs["openclaw.model_call.observation_unit"] = modelCallObservationUnit(evt);
 }
 
-export function modelCallSpanName(evt: { api?: string; model?: string }): string {
+export function modelCallObservationUnit(evt: {
+  observationUnit?: "request" | "turn";
+}): "request" | "turn" {
+  return evt.observationUnit ?? "request";
+}
+
+export function modelCallSpanName(evt: {
+  api?: string;
+  model?: string;
+  observationUnit?: "request" | "turn";
+}): string {
   if (!emitLatestGenAiSemconv()) {
     return "openclaw.model.call";
   }
-  return `${genAiOperationName(evt.api)} ${lowCardinalityAttr(evt.model)}`;
+  const operationName = genAiOperationName(evt.api, evt.observationUnit);
+  return operationName === GEN_AI_OPERATION_NAME_VALUE_INVOKE_AGENT
+    ? operationName
+    : `${operationName} ${normalizeDiagnosticValue(evt.model)}`;
 }
 
 export function modelCallSpanKind(): SpanKind | undefined {
-  return emitLatestGenAiSemconv() ? SpanKind.CLIENT : undefined;
+  return SpanKind.CLIENT;
 }
 
 export function addUpstreamRequestIdSpanEvent(
@@ -189,7 +232,7 @@ export function addUpstreamRequestIdSpanEvent(
   if (!upstreamRequestIdHash) {
     return;
   }
-  const boundedHash = lowCardinalityAttr(upstreamRequestIdHash);
+  const boundedHash = normalizeDiagnosticValue(upstreamRequestIdHash);
   if (boundedHash === "unknown") {
     return;
   }

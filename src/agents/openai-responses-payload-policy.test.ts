@@ -1,13 +1,13 @@
+import {
+  applyOpenAIResponsesPayloadPolicy,
+  resolveOpenAIResponsesPayloadPolicy,
+} from "@openclaw/ai/transports";
 /**
  * Regression coverage for OpenAI Responses payload policy.
  * Verifies store, prompt-cache, compaction, service-tier, and reasoning mutations.
  */
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import {
-  applyOpenAIResponsesPayloadPolicy,
-  resolveOpenAIResponsesPayloadPolicy,
-} from "./openai-responses-payload-policy.js";
 
 describe("openai responses payload policy", () => {
   it("forces store for native OpenAI responses payloads but keeps disable mode for transport defaults", () => {
@@ -236,7 +236,7 @@ describe("openai responses payload policy", () => {
   it("emits store false for aliased native OpenAI Codex responses disable mode", () => {
     const policy = resolveOpenAIResponsesPayloadPolicy(
       {
-        api: "openclaw-openai-responses-transport",
+        api: "openclaw-openai-chatgpt-responses-transport",
         provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api/codex",
       },
@@ -246,6 +246,35 @@ describe("openai responses payload policy", () => {
     expect(policy.explicitStore).toBe(false);
     expect(policy.allowsServiceTier).toBe(true);
     expect(policy.shouldStripStore).toBe(false);
+  });
+
+  it("preserves native Azure payload policy after managed transport aliasing", () => {
+    const payload = {
+      input: [{ type: "message", role: "assistant", status: "completed", content: [] }],
+    } satisfies Record<string, unknown>;
+
+    applyOpenAIResponsesPayloadPolicy(
+      payload,
+      resolveOpenAIResponsesPayloadPolicy(
+        {
+          api: "openclaw-azure-openai-responses-transport",
+          provider: "azure-openai-responses",
+          baseUrl: "https://example.openai.azure.com/openai/v1",
+          contextWindow: 200_000,
+        },
+        {
+          enableServerCompaction: true,
+          extraParams: { responsesServerCompaction: true },
+          storeMode: "provider-policy",
+        },
+      ),
+    );
+
+    expect(payload).toEqual({
+      store: true,
+      context_management: [{ type: "compaction", compact_threshold: 140_000 }],
+      input: [{ type: "message", role: "assistant", status: "completed", content: [] }],
+    });
   });
 
   it("strips status from input items for custom openai-responses endpoints", () => {
@@ -309,6 +338,21 @@ describe("openai responses payload policy", () => {
       api: "azure-openai-responses",
       provider: "azure-openai",
       baseUrl: "https://example.openai.azure.com/openai/v1",
+    },
+    {
+      api: "azure-openai-responses",
+      provider: "azure",
+      baseUrl: "https://example.cognitiveservices.azure.com/openai/v1",
+    },
+    {
+      api: "azure-openai-responses",
+      provider: "azure",
+      baseUrl: "https://example.services.ai.azure.com/projects/demo/openai/v1",
+    },
+    {
+      api: "azure-openai-responses",
+      provider: "azure",
+      baseUrl: "https://example.api.cognitive.microsoft.com/openai/v1",
     },
   ])("preserves status for native $provider Responses endpoints", (route) => {
     const model = {

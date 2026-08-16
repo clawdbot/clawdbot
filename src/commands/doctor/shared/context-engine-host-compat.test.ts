@@ -1,10 +1,8 @@
 // Context engine host compatibility tests cover doctor warnings for host/context mismatches.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
-  getContextEngineFactory,
   getContextEngineRegistration,
-  registerContextEngine,
   registerContextEngineForOwner,
 } from "../../../context-engine/registry.js";
 import type { ContextEngine, ContextEngineHostCapability } from "../../../context-engine/types.js";
@@ -13,11 +11,42 @@ import {
   maybeRepairContextEngineHostCompatibility,
 } from "./context-engine-host-compat.js";
 
+vi.mock("../../../agents/cli-backends.js", () => ({
+  resolveCliBackendConfig: vi.fn((runtimeId: string) => ({ id: runtimeId })),
+}));
+
+vi.mock("../../../agents/harness/policy.js", () => ({
+  resolveAgentHarnessPolicy: vi.fn(
+    (params: { config: OpenClawConfig; modelId: string; provider: string }) => ({
+      runtime:
+        params.config.agents?.defaults?.models?.[`${params.provider}/${params.modelId}`]
+          ?.agentRuntime?.id ?? "openclaw",
+    }),
+  ),
+}));
+
+vi.mock("../../../agents/harness/registry.js", () => ({
+  getRegisteredAgentHarness: vi.fn(() => undefined),
+}));
+
+vi.mock("../../../context-engine/init.js", () => ({
+  ensureContextEnginesInitialized: vi.fn(),
+}));
+
 let engineCounter = 0;
 
 function uniqueEngineId(): string {
   engineCounter += 1;
   return `doctor-host-compat-${engineCounter}`;
+}
+
+function registerTestContextEngine(
+  id: string,
+  factory: Parameters<typeof registerContextEngineForOwner>[1],
+) {
+  return registerContextEngineForOwner(id, factory, `doctor-test-owner-${id}`, {
+    allowSameOwnerRefresh: true,
+  });
 }
 
 function registerEngine(requiredCapabilities: ContextEngineHostCapability[]): string {
@@ -46,7 +75,7 @@ function registerEngine(requiredCapabilities: ContextEngineHostCapability[]): st
       return { ok: true, compacted: false };
     },
   };
-  registerContextEngine(id, () => engine);
+  registerTestContextEngine(id, () => engine);
   return id;
 }
 
@@ -78,7 +107,6 @@ describe("doctor context-engine host compatibility", () => {
       factory,
       lifecycle: "readOnlyDiscovery",
     });
-    expect(getContextEngineFactory(id)).toBeUndefined();
   });
 
   it("evaluates native Codex and OpenClaw agent-run hosts", async () => {
@@ -112,6 +140,29 @@ describe("doctor context-engine host compatibility", () => {
             models: {
               "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             },
+          },
+        },
+      }),
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings).toEqual([]);
+  });
+
+  it("uses the system agent when inspecting an explicit multi-agent roster", async () => {
+    const engineId = registerEngine([]);
+    const warnings = await collectContextEngineHostCompatibilityWarnings({
+      cfg: configWithEngine(engineId, {
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            systemAgent: { agentId: "main" },
+            model: "anthropic/claude-sonnet-4-6",
+          },
+          entries: {
+            main: { agentDir: "/tmp/openclaw-doctor-host-compat" },
+            helper: {},
+            third: {},
           },
         },
       }),

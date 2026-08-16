@@ -22,6 +22,10 @@ import {
   type ClaudeCliFallbackSeed,
   readClaudeCliFallbackSeed,
 } from "../../gateway/cli-session-history.js";
+import {
+  buildAgentRunTerminalReplySnapshot,
+  type AgentRunTerminalReplySnapshot,
+} from "../agent-run-terminal-reply.js";
 import { cliBackendLog } from "../cli-runner/log.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
@@ -93,7 +97,7 @@ export async function sessionFileHasContent(sessionFile: string | undefined): Pr
 }
 
 /** Resolves the expected Claude CLI transcript JSONL path for a session. */
-export function claudeCliSessionTranscriptPath(params: {
+function claudeCliSessionTranscriptPath(params: {
   sessionId: string | undefined;
   workspaceDir: string | undefined;
   homeDir?: string;
@@ -383,7 +387,7 @@ function formatFallbackTurns(
  * Returns an empty string when neither a summary nor any usable turn fits in
  * the budget; callers can treat that as "no context to seed".
  */
-export function formatClaudeCliFallbackPrelude(
+function formatClaudeCliFallbackPrelude(
   seed: ClaudeCliFallbackSeed,
   options?: { charBudget?: number },
 ): string {
@@ -538,5 +542,17 @@ export function createAcpVisibleTextAccumulator() {
     finalizeRaw(): string {
       return visibleText;
     },
+    finalizeReplySnapshot(): AgentRunTerminalReplySnapshot {
+      return buildAgentRunTerminalReplySnapshot({
+        visibleText,
+        rawText: pendingSilentPrefix,
+      });
+    },
   };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.attemptExecutionHelpersTestApi")
+  ] = { claudeCliSessionTranscriptPath, formatClaudeCliFallbackPrelude };
 }

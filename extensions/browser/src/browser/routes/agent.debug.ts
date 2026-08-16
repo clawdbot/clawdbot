@@ -5,7 +5,6 @@
  * Playwright tracing scoped to the selected browser tab.
  */
 import crypto from "node:crypto";
-import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext } from "../server-context.js";
@@ -193,7 +192,7 @@ export function registerBrowserAgentDebugRoutes(
         if (!tracePath) {
           return;
         }
-        await pw.traceStopViaPlaywright({
+        const committedTracePath = await pw.traceStopViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
           path: tracePath,
@@ -201,7 +200,7 @@ export function registerBrowserAgentDebugRoutes(
         const url = await resolveTabUrl(tab.url);
         res.json({
           ...browserDebugTargetPayload(tab.targetId, url),
-          path: path.resolve(tracePath),
+          path: committedTracePath,
         });
       },
     });

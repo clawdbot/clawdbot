@@ -58,6 +58,9 @@ function formatCardDetails(card: WorkboardCard): string {
   if (card.runId) {
     lines.push(`run: ${card.runId}`);
   }
+  if (card.metadata?.archivedAt) {
+    lines.push("archived: yes (excluded from dispatch)");
+  }
   if (card.notes) {
     lines.push("", card.notes);
   }
@@ -96,7 +99,7 @@ function requireWriteAccess(params: {
   };
 }
 
-export async function handleWorkboardCommand(params: {
+async function handleWorkboardCommand(params: {
   api: WorkboardCommandApi;
   store: WorkboardStore;
   args?: string;

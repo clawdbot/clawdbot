@@ -88,6 +88,8 @@ export type WorkboardClaimInput = {
 export type WorkboardClaimOptions = {
   /** Trusted dispatcher guard; never accepted from public tool or gateway input. */
   expectedAuthority?: {
+    boardId: string;
+    status: WorkboardCard["status"];
     agentId?: string;
     workspace?: WorkboardWorkspace;
     workspaceAccess?: WorkboardWorkspaceAccess;
@@ -110,6 +112,7 @@ export type WorkboardCompleteInput = {
   token?: unknown;
   summary?: unknown;
   proof?: unknown;
+  proofId?: unknown;
   artifacts?: unknown;
   createdCardIds?: unknown;
 };

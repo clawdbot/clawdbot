@@ -7,10 +7,16 @@ export type TerminalEventSink = (connId: string, event: string, payload: unknown
 
 export type TerminalExitReason = "process_exit" | "closed" | "disconnected" | "detached" | "error";
 
+export type TerminalOwner =
+  | { kind: "conn"; connId: string }
+  | { kind: "agent"; agentSessionKey: string; agentId?: string };
+
 export type TerminalSession = {
   id: string;
-  /** Owning connection; null while the session is detached. */
-  connId: string | null;
+  /** Null only while a connection-owned session is detached. */
+  owner: TerminalOwner | null;
+  /** Operator connections co-attached to an agent-owned session. */
+  viewers: Set<string>;
   agentId: string;
   cwd: string;
   shell: string;
@@ -23,6 +29,10 @@ export type TerminalSession = {
   /** Kills the session when a detach outlives the grace period. */
   reaper: ReturnType<typeof setTimeout> | null;
   detachedAtMs: number | null;
+  /** Last PTY input/output timestamp; drives idle eviction under pool pressure. */
+  lastActivityAtMs: number;
+  /** Claimed by an in-flight open; killed only after its replacement spawns. */
+  evictionClaimed?: boolean;
 };
 
 export type TerminalSessionManagerOptions = {
@@ -38,7 +48,7 @@ export type TerminalSessionManagerOptions = {
 };
 
 export type TerminalOpenRequest = {
-  connId: string;
+  owner: TerminalOwner;
   agentId: string;
   cwd: string;
   shell: string;
@@ -46,6 +56,8 @@ export type TerminalOpenRequest = {
   cols: number;
   rows: number;
   env: Record<string, string>;
+  /** Request-scoped cancellation; a late backend is killed before registration. */
+  signal?: AbortSignal;
   createBackend?: () => Promise<TerminalBackend>;
   stageUpload?: (file: TerminalUploadFile) => Promise<TerminalUploadResult>;
 };
@@ -55,4 +67,8 @@ export type TerminalOpenOutcome =
   | { ok: false; code: "limit" | "spawn_failed" | "closed"; message: string };
 
 /** Abort state shared between a pending open and lifecycle/policy teardown. */
-export type TerminalPendingOpen = { agentId: string; abortMessage?: string };
+export type TerminalPendingOpen = {
+  agentId: string;
+  abortMessage?: string;
+  abort(message: string): void;
+};

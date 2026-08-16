@@ -1,9 +1,14 @@
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { avoidTrailingHighSurrogateBreak } from "./chunk-text.js";
 // Markdown Core module implements render aware chunking behavior.
 import { annotateAssistantTranscriptRoleMessageBoundary } from "./ir-annotations.js";
-import { mergeAnnotationSpans, type MarkdownAnnotationSpan } from "./ir-spans.js";
 import {
-  chunkMarkdownIR,
+  copyMarkdownLinkSpan,
+  isAutoLinkedMarkdownLink,
+  mergeAnnotationSpans,
+  type MarkdownAnnotationSpan,
+} from "./ir-spans.js";
+import {
   sliceMarkdownIR,
   type MarkdownIR,
   type MarkdownLinkSpan,
@@ -36,13 +41,6 @@ type RenderResolver<TRendered> = Pick<
   RenderMarkdownIRChunksWithinLimitOptions<TRendered>,
   "measureRendered" | "renderChunk"
 >;
-
-function resolveIntegerOption(value: number, fallback: number, opts: { min: number }): number {
-  if (!Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(opts.min, Math.trunc(value));
-}
 
 function prepareChunkForMessageBoundary<TRendered>(
   options: RenderMarkdownIRChunksWithinLimitOptions<TRendered>,
@@ -77,7 +75,7 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
   // Treat the pending worklist as a stack so each dequeue/enqueue stays O(1).
   // The initial reverse keeps the final order stable while avoiding shift/unshift
   // moving every remaining chunk for long messages.
-  const pending = chunkMarkdownIR(options.ir, normalizedLimit).toReversed();
+  const pending = splitMarkdownIRPreserveWhitespace(options.ir, normalizedLimit).toReversed();
   const finalized: MarkdownIR[] = [];
 
   while (pending.length > 0) {
@@ -288,11 +286,16 @@ function mergeAdjacentLinkSpans(links: MarkdownLinkSpan[]): MarkdownLinkSpan[] {
   const merged: MarkdownLinkSpan[] = [];
   for (const link of links) {
     const last = merged.at(-1);
-    if (last && last.href === link.href && link.start <= last.end) {
+    if (
+      last &&
+      last.href === link.href &&
+      isAutoLinkedMarkdownLink(last) === isAutoLinkedMarkdownLink(link) &&
+      link.start <= last.end
+    ) {
       last.end = Math.max(last.end, link.end);
       continue;
     }
-    merged.push({ ...link });
+    merged.push(copyMarkdownLinkSpan(link));
   }
   return merged;
 }
@@ -317,11 +320,12 @@ function mergeMarkdownIRChunks(left: MarkdownIR, right: MarkdownIR): MarkdownIR 
   }
   const shiftedLinks: MarkdownLinkSpan[] = [];
   for (const link of right.links) {
-    shiftedLinks.push({
-      ...link,
-      start: link.start + offset,
-      end: link.end + offset,
-    });
+    shiftedLinks.push(
+      copyMarkdownLinkSpan(link, {
+        start: link.start + offset,
+        end: link.end + offset,
+      }),
+    );
   }
   const annotations = mergeAnnotationSpans([...(left.annotations ?? []), ...shiftedAnnotations]);
   return {

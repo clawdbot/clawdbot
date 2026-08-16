@@ -1,6 +1,6 @@
 package ai.openclaw.app.voice
 
-import ai.openclaw.app.gateway.GatewayConnectErrorDetails
+import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
@@ -64,7 +64,7 @@ class TalkSpeakClientTest {
                   code = "UNAVAILABLE",
                   message = "talk unavailable",
                   details =
-                    GatewayConnectErrorDetails(
+                    GatewayErrorDetails(
                       code = null,
                       canRetryWithDeviceToken = false,
                       recommendedNextStep = null,
@@ -93,7 +93,7 @@ class TalkSpeakClientTest {
                   code = "UNAVAILABLE",
                   message = "provider failed",
                   details =
-                    GatewayConnectErrorDetails(
+                    GatewayErrorDetails(
                       code = null,
                       canRetryWithDeviceToken = false,
                       recommendedNextStep = null,

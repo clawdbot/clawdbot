@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ProviderRouteOverridePresence } from "../plugin-sdk/provider-model-types.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "./types.models.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -34,12 +35,6 @@ function normalizeModelId(provider: string, modelId: string): string {
     normalizeProviderId(trimmed.slice(0, slashIndex)) === normalizeProviderId(provider)
     ? trimmed.slice(slashIndex + 1).trim()
     : trimmed;
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function hasNonEmptyRecord(value: unknown): boolean {

@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements process tree cpu behavior.
 import { spawnSync } from "node:child_process";
 import { parseStrictFiniteNumber, parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveQaWindowsPowerShellExePath } from "./windows-system-tools.js";
 
 type ProcessTreeSnapshot = {
@@ -9,9 +10,7 @@ type ProcessTreeSnapshot = {
   rssByPid: Map<number, number>;
 };
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const PROCESS_TREE_SNAPSHOT_TIMEOUT_MS = 5_000;
 
 function parsePositiveInteger(value: unknown): number | null {
   const parsed = parseStrictInteger(value);
@@ -191,8 +190,10 @@ function readWindowsProcessTreeSnapshot(): ProcessTreeSnapshot | null {
     ],
     {
       encoding: "utf8",
+      killSignal: "SIGKILL",
       maxBuffer: 16 * 1024 * 1024,
       stdio: ["ignore", "pipe", "ignore"],
+      timeout: PROCESS_TREE_SNAPSHOT_TIMEOUT_MS,
     },
   );
   if (result.status !== 0) {
@@ -213,7 +214,9 @@ export function readProcessTreeCpuMs(rootPid: number | null | undefined): number
   }
   const result = spawnSync("ps", ["-eo", "pid=,ppid=,time="], {
     encoding: "utf8",
+    killSignal: "SIGKILL",
     stdio: ["ignore", "pipe", "ignore"],
+    timeout: PROCESS_TREE_SNAPSHOT_TIMEOUT_MS,
   });
   if (result.status !== 0) {
     return null;
@@ -257,7 +260,9 @@ export function readProcessTreeRssBytes(rootPid: number | null | undefined): num
   }
   const result = spawnSync("ps", ["-eo", "pid=,ppid=,rss="], {
     encoding: "utf8",
+    killSignal: "SIGKILL",
     stdio: ["ignore", "pipe", "ignore"],
+    timeout: PROCESS_TREE_SNAPSHOT_TIMEOUT_MS,
   });
   if (result.status !== 0) {
     return null;

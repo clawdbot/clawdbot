@@ -1,4 +1,3 @@
-"CFBundleDisplayName" = "$(OPENCLAW_APP_DISPLAY_NAME)";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
 "NSCalendarsFullAccessUsageDescription" = "OpenClawは、カレンダーへのアクセスを有効にしたときに、イベントとスケジュールのコンテキストを表示するためにカレンダーを使用します。";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
@@ -19,10 +18,10 @@
 "NSMicrophoneUsageDescription" = "OpenClaw はリアルタイムチャット、音声ウェイク、プッシュトゥトーク、ボイスメモにマイクを使用します。";
 /* OpenClaw source: "OpenClaw may use motion data to support device-aware interactions and automations." */
 "NSMotionUsageDescription" = "OpenClawは、デバイス対応のインタラクションと自動化をサポートするためにモーションデータを使用する場合があります。";
-/* OpenClaw source: "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider." */
-"NSHealthShareUsageDescription" = "ヘルスケア概要を有効にすると、OpenClaw は歩数、睡眠、安静時心拍数、ワークアウトを読み取り、要求された集計データを設定済みの AI プロバイダーと共有します。";
-/* OpenClaw source: "OpenClaw does not write or change Health data. Health Summaries read steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider." */
-"NSHealthUpdateUsageDescription" = "OpenClaw はヘルスデータの書き込みや変更を行いません。ヘルスサマリーは、歩数、睡眠、安静時心拍数、ワークアウトを読み取り、リクエストされた集計データを設定済みの AI プロバイダーと共有します。";
+/* OpenClaw source: "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider." */
+"NSHealthShareUsageDescription" = "OpenClawはAppleヘルスケアアプリから歩数、睡眠、安静時心拍数、ワークアウトを読み取り、リクエストされたサマリーを作成して、Gatewayを経由して設定済みのAIプロバイダーに送信します。";
+/* OpenClaw source: "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider." */
+"NSHealthUpdateUsageDescription" = "OpenClawはAppleヘルスケアアプリにデータを書き込みません。読み取り専用データを使用してリクエストされたサマリーを作成し、Gatewayを経由して設定済みのAIプロバイダーに送信します。";
 /* OpenClaw source: "OpenClaw lets your assistant read photos you allow and lets you choose photos to share." */
 "NSPhotoLibraryUsageDescription" = "OpenClaw は、許可した写真をアシスタントが読み取れるようにし、共有する写真を選択できるようにします。";
 /* OpenClaw source: "OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access." */

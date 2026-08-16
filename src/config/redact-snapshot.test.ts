@@ -12,7 +12,7 @@ import {
   restoreRedactedValues,
   type TestSnapshot,
 } from "./redact-snapshot.test-helpers.js";
-import { buildConfigSchema } from "./schema.js";
+import { buildConfigSchemaCore } from "./schema.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.openclaw.js";
 
 function expectNestedPairValue(
@@ -208,7 +208,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts and restores MCP SSE header values from schema hints", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const snapshot = makeSnapshot({
       mcp: {
         servers: {
@@ -252,7 +252,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts sensitive auth material from MCP SSE URLs", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   mcp: {
     servers: {
@@ -289,7 +289,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts media request auth and proxy transport secrets from config snapshots", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   tools: {
     media: {
@@ -346,7 +346,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts model provider request auth secrets from config snapshots", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   models: {
     providers: {
@@ -394,7 +394,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts model provider local service env values from config snapshots", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   models: {
     providers: {
@@ -448,7 +448,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts install policy env values from config snapshots", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   security: {
     installPolicy: {
@@ -498,7 +498,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts model provider request proxy URLs from config snapshots", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   models: {
     providers: {
@@ -657,8 +657,7 @@ describe("redactConfigSnapshot", () => {
     const sourceConfig = {
       tools: {
         exec: {
-          ask: "off",
-          security: "full",
+          mode: "full",
         },
       },
     } satisfies OpenClawConfig;
@@ -1414,7 +1413,7 @@ describe("redactConfigSnapshot", () => {
   });
 
   it("redacts browser cdpUrl secrets while preserving bare endpoints", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const raw = `{
   browser: {
     cdpUrl: "https://user:pass@chrome.browserless.io?token=supersecret123",

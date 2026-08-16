@@ -11,6 +11,93 @@ function roundTrip(schedule: CronSchedule): CronSchedule | null {
 }
 
 describe("schedule column codec round-trip", () => {
+  it("round-trips the creator account through the additive job_json envelope", () => {
+    const job = projectCronJobThroughStorageCodec(
+      makeCronJob({
+        owner: {
+          agentId: "main",
+          sessionKey: "agent:main:discord:group:ops",
+          accountId: "work",
+        },
+      }),
+    );
+
+    expect(job.owner).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:discord:group:ops",
+      accountId: "work",
+    });
+  });
+
+  it("round-trips scheduled authority through the additive job_json envelope", () => {
+    const job = projectCronJobThroughStorageCodec(
+      makeCronJob({
+        owner: {
+          agentId: "main",
+          sessionKey: "agent:main:discord:group:ops",
+          accountId: "work",
+        },
+        payload: { kind: "agentTurn", message: "run", toolsAllow: ["write"] },
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:discord:group:ops",
+          ownerAccountId: "work",
+        },
+      }),
+    );
+
+    expect(job.scheduledToolPolicy).toEqual({
+      version: 1,
+      mode: "account",
+      ownerSessionKey: "agent:main:discord:group:ops",
+      ownerAccountId: "work",
+    });
+  });
+
+  it("round-trips store-private scheduled caller origin without adding a column", () => {
+    const job = projectCronJobThroughStorageCodec({
+      ...makeCronJob({}),
+      toolsAllowProvenance: {
+        version: 1,
+        source: "final-executable-surface",
+        callerOrigin: { kind: "local" },
+      },
+    });
+
+    expect(job.toolsAllowProvenance?.callerOrigin).toEqual({ kind: "local" });
+  });
+
+  it("keeps private runtime authority out of job_json", () => {
+    const runtimeAuthority = {
+      version: 1 as const,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "calendar" }] },
+    };
+    const job = projectCronJobThroughStorageCodec({
+      ...makeCronJob({}),
+      runtimeAuthority,
+      runtimeAuthorityRecoveryRequired: true,
+    });
+    expect(job.runtimeAuthority).toBeUndefined();
+    expect(job.runtimeAuthorityRecoveryRequired).toBeUndefined();
+
+    const malformed = projectCronJobThroughStorageCodec({
+      ...makeCronJob({}),
+      runtimeAuthority: { ...runtimeAuthority, version: 2 } as never,
+    });
+    expect(malformed.runtimeAuthority).toBeUndefined();
+  });
+
+  it("round-trips pacing through the additive job_json envelope", () => {
+    const job = projectCronJobThroughStorageCodec(
+      makeCronJob({ pacing: { min: "15m", max: "4h" } }),
+    );
+
+    expect(job.pacing).toEqual({ min: "15m", max: "4h" });
+  });
+
   it("round-trips an on-exit schedule with command + cwd", () => {
     expect(roundTrip({ kind: "on-exit", command: "make build", cwd: "/repo" })).toEqual({
       kind: "on-exit",
@@ -23,6 +110,28 @@ describe("schedule column codec round-trip", () => {
     expect(roundTrip({ kind: "on-exit", command: "./watch.sh" })).toEqual({
       kind: "on-exit",
       command: "./watch.sh",
+    });
+  });
+
+  it("round-trips a stream schedule through job_json without new columns", () => {
+    expect(
+      roundTrip({
+        kind: "stream",
+        command: ["node", "events.mjs"],
+        cwd: "/repo",
+        mode: "match",
+        match: "^ready:",
+        batchMs: 100,
+        maxBatchBytes: 2_048,
+      }),
+    ).toEqual({
+      kind: "stream",
+      command: ["node", "events.mjs"],
+      cwd: "/repo",
+      mode: "match",
+      match: "^ready:",
+      batchMs: 100,
+      maxBatchBytes: 2_048,
     });
   });
 

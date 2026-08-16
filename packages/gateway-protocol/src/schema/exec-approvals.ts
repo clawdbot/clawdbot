@@ -1,6 +1,7 @@
 import type { Static } from "typebox";
 // Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
+import { ApprovalChannelReviewerSchema } from "./approvals.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -11,7 +12,7 @@ import { NonEmptyString } from "./primitives.js";
  * persisted policy, request snapshots, and resolve decisions stay explicit.
  */
 /** One persisted allowlist entry for a command pattern or resolved executable. */
-export const ExecApprovalsAllowlistEntrySchema = closedObject({
+const ExecApprovalsAllowlistEntrySchema = closedObject({
   id: Type.Optional(NonEmptyString),
   pattern: Type.String(),
   source: Type.Optional(Type.Literal("allow-always")),
@@ -49,16 +50,16 @@ const ExecApprovalsResolvedDefaultsSchema = closedObject({
 });
 
 /** Default exec approval policy shared by all agents unless overridden. */
-export const ExecApprovalsDefaultsSchema = closedObject(ExecApprovalsPolicyFields);
+const ExecApprovalsDefaultsSchema = closedObject(ExecApprovalsPolicyFields);
 
 /** Agent-specific exec approval policy and allowlist. */
-export const ExecApprovalsAgentSchema = closedObject({
+const ExecApprovalsAgentSchema = closedObject({
   ...ExecApprovalsPolicyFields,
   allowlist: Type.Optional(Type.Array(ExecApprovalsAllowlistEntrySchema)),
 });
 
 /** Versioned exec approvals config file edited through gateway APIs. */
-export const ExecApprovalsFileSchema = closedObject({
+const ExecApprovalsFileSchema = closedObject({
   version: Type.Literal(1),
   socket: Type.Optional(
     closedObject({
@@ -288,6 +289,9 @@ export const ExecApprovalRequestParamsSchema = closedObject({
   agentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   resolvedPath: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   sessionKey: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  sessionId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  runId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  toolCallId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   turnSourceChannel: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   turnSourceTo: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   turnSourceAccountId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
@@ -308,6 +312,7 @@ export const ExecApprovalRequestParamsSchema = closedObject({
 export const ExecApprovalResolveParamsSchema = closedObject({
   id: NonEmptyString,
   decision: NonEmptyString,
+  reviewer: Type.Optional(ApprovalChannelReviewerSchema),
 });
 
 // Owner-local wire types derived directly from local schema consts so the

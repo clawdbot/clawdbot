@@ -36,6 +36,7 @@ const SOURCE_DIRS = [
 const BASELINE_PATH = path.join(I18N_ASSETS_DIR, "raw-copy-baseline.json");
 const BASELINE_VERSION = 1;
 const INTERPOLATION_MARKER = "\u0000";
+const RAW_COPY_ATTRIBUTE_NAMES = new Set(["alt", "aria-label", "placeholder", "title"]);
 
 function toRepoPath(filePath: string): string {
   return path.relative(ROOT, filePath).split(path.sep).join("/");
@@ -77,6 +78,28 @@ function pushRawCopySegments(
   }
 }
 
+function collectStaticStringSegments(node: ts.Expression): string[] {
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+    return [node.text];
+  }
+  if (ts.isTemplateExpression(node)) {
+    return [node.head.text, ...node.templateSpans.map((span) => span.literal.text)];
+  }
+  if (ts.isParenthesizedExpression(node)) {
+    return collectStaticStringSegments(node.expression);
+  }
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    return [...collectStaticStringSegments(node.left), ...collectStaticStringSegments(node.right)];
+  }
+  if (ts.isConditionalExpression(node)) {
+    return [
+      ...collectStaticStringSegments(node.whenTrue),
+      ...collectStaticStringSegments(node.whenFalse),
+    ];
+  }
+  return [];
+}
+
 async function walkSourceFiles(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const files: string[] = [];
@@ -110,7 +133,7 @@ export function collectControlUiRawCopyFromSource(params: {
   const findings: RawCopyFinding[] = [];
   const toLine = (offset: number) => sourceFile.getLineAndCharacterOfPosition(offset).line + 1;
   const staticAttrPattern =
-    /\b(aria-label|placeholder|title)\s*=\s*"((?:(?!\$\{)[^"\\]|\\.)*?\p{L}(?:(?!\$\{)[^"\\]|\\.)*?)"/gu;
+    /\b(alt|aria-label|placeholder|title)\s*=\s*"((?:(?!\$\{)[^"\\]|\\.)*?\p{L}(?:(?!\$\{)[^"\\]|\\.)*?)"/gu;
   for (const match of source.matchAll(staticAttrPattern)) {
     const rawText = match[2];
     if (rawText) {
@@ -140,9 +163,32 @@ export function collectControlUiRawCopyFromSource(params: {
   }
 
   const attrPattern =
-    /\b(aria-label|placeholder|title)\s*=\s*"((?:[^"\\]|\\.)*?\p{L}(?:[^"\\]|\\.)*?)"/gu;
+    /\b(alt|aria-label|placeholder|title)\s*=\s*"((?:[^"\\]|\\.)*?\p{L}(?:[^"\\]|\\.)*?)"/gu;
   const textPattern = />\s*([^<>{}]*?\p{L}[^<>{}]*?)\s*</gu;
   const visit = (node: ts.Node) => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "setAttribute"
+    ) {
+      const [nameArg, valueArg] = node.arguments;
+      if (
+        nameArg &&
+        valueArg &&
+        (ts.isStringLiteral(nameArg) || ts.isNoSubstitutionTemplateLiteral(nameArg)) &&
+        RAW_COPY_ATTRIBUTE_NAMES.has(nameArg.text)
+      ) {
+        for (const text of collectStaticStringSegments(valueArg)) {
+          pushRawCopyFinding(findings, {
+            kind: "html-attribute",
+            line: toLine(valueArg.getStart(sourceFile)),
+            name: nameArg.text,
+            path: repoPath,
+            text,
+          });
+        }
+      }
+    }
     if (ts.isTaggedTemplateExpression(node) && node.tag.getText(sourceFile) === "html") {
       let logicalText: string;
       if (ts.isNoSubstitutionTemplateLiteral(node.template)) {

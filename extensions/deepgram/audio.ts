@@ -10,7 +10,7 @@ import {
   resolveProviderHttpRequestConfig,
   requireTranscriptionText,
 } from "openclaw/plugin-sdk/provider-http";
-import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const DEFAULT_DEEPGRAM_AUDIO_BASE_URL = "https://api.deepgram.com/v1";
 export const DEFAULT_DEEPGRAM_AUDIO_MODEL = "nova-3";
@@ -21,21 +21,21 @@ function resolveModel(model?: string): string {
 }
 
 function readDeepgramTranscript(payload: Record<string, unknown>): string | undefined {
-  const results = asRecord(payload.results);
+  const results = asOptionalRecord(payload.results);
   if (!results) {
     return undefined;
   }
   if (!Array.isArray(results.channels)) {
     throw new Error("Audio transcription failed: malformed JSON response");
   }
-  const channel = asRecord(results.channels[0]);
+  const channel = asOptionalRecord(results.channels[0]);
   if (!channel) {
     return undefined;
   }
   if (!Array.isArray(channel.alternatives)) {
     throw new Error("Audio transcription failed: malformed JSON response");
   }
-  const alternative = asRecord(channel.alternatives[0]);
+  const alternative = asOptionalRecord(channel.alternatives[0]);
   if (!alternative) {
     return undefined;
   }
@@ -85,6 +85,7 @@ export async function transcribeDeepgramAudio(
     headers,
     body,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn,
     allowPrivateNetwork,
     dispatcherPolicy,

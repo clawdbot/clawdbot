@@ -3,18 +3,23 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   type ModelsProbeParams,
   type ModelsProbeResult,
   validateModelsProbeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   type AuthProbeResult,
+  type AuthProbeReasonCode,
   type AuthProbeStatus,
+  redactAuthProbeError,
   runAuthProbes,
 } from "../../commands/models/list.probe.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatForLog } from "../ws-log.js";
+import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 const MIN_TIMEOUT_MS = 5_000;
@@ -44,6 +49,42 @@ const PROBE_ERROR_MESSAGES: Record<Exclude<AuthProbeStatus, "ok">, string> = {
 
 function safeProbeError(status: AuthProbeStatus): string | undefined {
   return status === "ok" ? undefined : PROBE_ERROR_MESSAGES[status];
+}
+
+const PROBE_REASON_MESSAGES: Partial<Record<AuthProbeReasonCode, string>> = {
+  excluded_by_auth_order:
+    "This profile is excluded by the provider auth order. Update the order or choose another profile, then retry.",
+  missing_credential:
+    "This credential is missing. Add it or remove the stale configuration, then retry.",
+  expired: "This credential has expired. Sign in again or replace it, then retry.",
+  invalid_expires:
+    "This credential has invalid expiry metadata. Sign in again or replace it, then retry.",
+  unresolved_ref:
+    "The configured credential could not be resolved. Update or remove it, then retry.",
+  ineligible_profile:
+    "This profile is not compatible with the provider configuration. Choose another profile, then retry.",
+  no_model: "No model is available for this provider. Configure a model, then retry.",
+};
+
+function safeProbeTargetLabel(result: AuthProbeResult): string {
+  const owner =
+    result.source === "profile"
+      ? `Profile ${result.label}`
+      : result.source === "models.json"
+        ? result.label === "config"
+          ? "Configured credential"
+          : "Provider configuration"
+        : `Environment credential (${result.label})`;
+  return result.model ? `${owner} · ${result.model}` : owner;
+}
+
+function safeProbeTargetError(result: AuthProbeResult): string | undefined {
+  if (result.status === "ok") {
+    return undefined;
+  }
+  return (
+    (result.reasonCode && PROBE_REASON_MESSAGES[result.reasonCode]) ?? safeProbeError(result.status)
+  );
 }
 
 function modelCandidatesFromConfig(cfg: OpenClawConfig): string[] {
@@ -79,27 +120,22 @@ function mapProbeResult(provider: string, results: AuthProbeResult[]): ModelsPro
     status,
     ...(latencyMs !== undefined ? { latencyMs } : {}),
     ...(error ? { error } : {}),
-    results: results.map((result) => ({
-      ...(result.profileId ? { profileId: result.profileId } : {}),
-      label: result.label,
-      status: result.status,
-      ...(result.latencyMs !== undefined ? { latencyMs: result.latencyMs } : {}),
-      ...(result.error ? { error: safeProbeError(result.status) } : {}),
-    })),
+    results: results.map((result) => {
+      const targetError = safeProbeTargetError(result);
+      return {
+        ...(result.profileId ? { profileId: result.profileId } : {}),
+        label: safeProbeTargetLabel(result),
+        status: result.status,
+        ...(result.latencyMs !== undefined ? { latencyMs: result.latencyMs } : {}),
+        ...(targetError ? { error: targetError } : {}),
+      };
+    }),
   };
 }
 
 export const modelsProbeHandlers: GatewayRequestHandlers = {
   "models.probe": async ({ params, respond, context }) => {
-    if (!validateModelsProbeParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid models.probe params: ${formatValidationErrors(validateModelsProbeParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateModelsProbeParams, "models.probe", respond)) {
       return;
     }
     const request = params as ModelsProbeParams;
@@ -119,12 +155,21 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
     );
     try {
       const cfg = context.getRuntimeConfig();
+      const scope = resolveModelAuthAgentScope(cfg, request.agentId);
+      if (!scope.ok) {
+        respond(false, undefined, modelAuthAgentScopeError(scope));
+        return;
+      }
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, scope.agentId);
       // Probe under the requested provider so model selection, catalog rows, and
       // a models.providers.<id> override resolve against the surface the client
       // asked about. The probe planner resolves credentials separately through
       // the provider's auth alias, matching normal agent runtime planning.
       const summary = await runAuthProbes({
         cfg,
+        agentId: scope.agentId,
+        agentDir: scope.agentDir,
+        workspaceDir,
         providers: [provider],
         modelCandidates: modelCandidatesFromConfig(cfg),
         options: {
@@ -141,7 +186,13 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
         result.error = "No probe targets are available for this provider.";
       }
       respond(true, result, undefined);
-    } catch {
+    } catch (error) {
+      context.logGateway.warn("Model connection probe failed.", {
+        event: "models_probe_failed",
+        provider,
+        timeoutMs,
+        error: redactAuthProbeError(formatForLog(error)),
+      });
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "Connection probe failed."));
     }
   },

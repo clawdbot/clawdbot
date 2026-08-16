@@ -1,8 +1,24 @@
 // TTS provider helpers manage provider temp files and output cleanup.
 import { rmSync } from "node:fs";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 
 const TEMP_FILE_CLEANUP_DELAY_MS = 5 * 60 * 1000; // 5 minutes
+
+/** Resolve the first non-blank API key in provider-defined precedence order. */
+export function resolveSpeechProviderApiKey(
+  ...candidates: Array<string | undefined>
+): string | undefined {
+  for (const candidate of candidates) {
+    const apiKey = normalizeOptionalString(candidate);
+    if (apiKey) {
+      return apiKey;
+    }
+  }
+  return undefined;
+}
 
 export function requireInRange(value: number, min: number, max: number, label: string): void {
   if (!Number.isFinite(value) || value < min || value > max) {

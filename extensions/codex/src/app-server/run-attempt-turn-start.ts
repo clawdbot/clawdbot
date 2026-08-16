@@ -4,10 +4,11 @@ import {
   runAgentCleanupStep,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
-  type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isIncognitoSessionKey } from "../incognito-session.js";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+  closeCodexStartupClientBestEffort,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
@@ -16,6 +17,7 @@ import {
   isInvalidCodexImagePayloadError,
 } from "./attempt-results.js";
 import { isCodexContextRestartSelectionChangedError } from "./attempt-startup.js";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexTurnStartResponse } from "./protocol.js";
 import { emitCodexAppServerEvent, runCodexAgentEndHook } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
@@ -29,6 +31,7 @@ import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
 import {
+  createCodexUsageLimitPromptError,
   formatCodexTurnStartUsageLimitError,
   markCodexAuthProfileBlockedFromRateLimits,
 } from "./usage-limit-error.js";
@@ -233,11 +236,27 @@ export async function startCodexAttemptTurn(
         ctx: hookContext,
         hookRunner,
       });
-      if (!state.timedOut) {
-        await unsubscribeCodexThreadBestEffort(resourceState.client, {
+      const bindingReleased = isIncognitoSessionKey(params.sessionKey)
+        ? await bindingStore.mutate(bindingIdentity, {
+            kind: "clear",
+            threadId: resourceState.thread.threadId,
+          })
+        : true;
+      if (!state.timedOut && bindingReleased && !resourceState.startupClientUnsafe) {
+        const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
           threadId: resourceState.thread.threadId,
           timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
         });
+        if (!released) {
+          // Detach the unsafe client before releasing this lease, but let sibling leases finish.
+          await runAgentCleanupStep({
+            runId: params.runId,
+            sessionId: params.sessionId,
+            step: "codex-retire-unsafe-startup-client",
+            log: embeddedAgentLog,
+            cleanup: async () => closeCodexStartupClientBestEffort(resourceState.client),
+          });
+        }
       }
       releaseCurrentRoute();
       activateNativePreToolUseFailureFallback();
@@ -262,6 +281,7 @@ export async function startCodexAttemptTurn(
           result: buildCodexTurnStartFailureResult({
             params,
             message: usageLimitError.message,
+            promptError: createCodexUsageLimitPromptError(usageLimitError.message),
             messagesSnapshot,
             systemPromptReport,
           }),
@@ -293,6 +313,16 @@ export async function startCodexAttemptTurn(
     await releaseSharedClientLeaseAndRetireOneShotClient();
     throw new Error("codex app-server turn/start failed without an error");
   }
+  const authoritySourceRef = context.attemptTools.scheduledAppAuthoritySourceRef;
+  if (resourceState.thread.pluginAppPolicyContext) {
+    authoritySourceRef.current = {
+      client: resourceState.client,
+      threadId: resourceState.thread.threadId,
+      policyContext: resourceState.thread.pluginAppPolicyContext,
+      configCwd: connection.effectiveCwd,
+    };
+  }
   turnIdRef.current = turn.turn.id;
+  resourceState.nativeSubagentMonitor?.bindTurn(turn.turn.id);
   return { turn };
 }

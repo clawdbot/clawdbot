@@ -1,5 +1,5 @@
 import {
-  asOptionalRecord as asRecord,
+  asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -35,7 +35,7 @@ function readMemoryToolResultEvidence(params: {
   hasUsableMemoryResult: boolean;
   hasUnavailableMemorySearchResult: boolean;
 } {
-  const result = asRecord(params.result);
+  const result = asOptionalRecord(params.result);
   const rawContent = result?.content;
   const textContent =
     normalizeOptionalString(result?.detailedContent) ??
@@ -63,11 +63,11 @@ function readMemoryToolResultEvidence(params: {
 }
 
 function extractAssistantTextFromSessionRecord(value: unknown): string {
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   if (!record) {
     return "";
   }
-  const nestedMessage = asRecord(record.message);
+  const nestedMessage = asOptionalRecord(record.message);
   const topLevelMessage = normalizeOptionalString(record.role) === "assistant" ? record : undefined;
   const message = nestedMessage ?? topLevelMessage;
   if (!message || normalizeOptionalString(message.role) !== "assistant") {
@@ -225,27 +225,16 @@ async function buildTimeoutRecallResult(params: {
       : undefined;
   const searchDebug =
     params.searchDebug ?? subagentPartialData.searchDebug ?? transcriptState?.searchDebug;
-  if (
+  const cannotUsePartial =
     summary.length === 0 ||
     isUnavailableMemorySearchDebug(searchDebug) ||
     !subagentPartialData.settled ||
     params.hasUnavailableMemorySearchResult ||
     subagentPartialData.hasUnavailableMemorySearchResult ||
-    transcriptState?.hasUnavailableMemorySearchResult
-  ) {
-    return {
-      status: "timeout",
-      elapsedMs: params.elapsedMs,
-      summary: null,
-      searchDebug,
-    };
-  }
-  return {
-    status: "timeout_partial",
-    elapsedMs: params.elapsedMs,
-    summary,
-    searchDebug,
-  };
+    transcriptState?.hasUnavailableMemorySearchResult;
+  return cannotUsePartial
+    ? { status: "timeout", elapsedMs: params.elapsedMs, summary: null, searchDebug }
+    : { status: "timeout_partial", elapsedMs: params.elapsedMs, summary, searchDebug };
 }
 
 function buildSubagentRecallResult(params: {
@@ -261,39 +250,18 @@ function buildSubagentRecallResult(params: {
   const hasUsableMemoryResult =
     params.subagentResult.hasUsableMemoryResult === true ||
     params.fallbackHasUsableMemoryResult === true;
-  const hasUnavailableMemorySearchResult =
-    params.subagentResult.hasUnavailableMemorySearchResult === true;
-  const canUseSummary = hasUsableMemoryResult;
-  return summary.length > 0 && canUseSummary
-    ? {
-        status: "ok",
-        elapsedMs: params.elapsedMs,
-        rawReply,
-        summary,
-        searchDebug,
-      }
-    : resultStatus === "failed"
-      ? {
-          status: "failed",
-          elapsedMs: params.elapsedMs,
-          summary: null,
-          searchDebug,
-        }
+  if (summary.length > 0 && hasUsableMemoryResult) {
+    return { status: "ok", elapsedMs: params.elapsedMs, rawReply, summary, searchDebug };
+  }
+  const status =
+    resultStatus === "failed"
+      ? "failed"
       : resultStatus === "unavailable" ||
           isUnavailableMemorySearchDebug(searchDebug) ||
-          hasUnavailableMemorySearchResult
-        ? {
-            status: "unavailable",
-            elapsedMs: params.elapsedMs,
-            summary: null,
-            searchDebug,
-          }
-        : {
-            status: "no_relevant_memory",
-            elapsedMs: params.elapsedMs,
-            summary: null,
-            searchDebug,
-          };
+          params.subagentResult.hasUnavailableMemorySearchResult === true
+        ? "unavailable"
+        : "no_relevant_memory";
+  return { status, elapsedMs: params.elapsedMs, summary: null, searchDebug };
 }
 
 function resetActiveMemoryTranscriptForTests(): void {

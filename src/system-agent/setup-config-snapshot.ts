@@ -16,7 +16,7 @@ export function requireValidSystemAgentSetupSnapshot(snapshot: ConfigFileSnapsho
   }
   const sourceConfig = snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {};
   const runtimeConfig = snapshot.exists ? (snapshot.runtimeConfig ?? snapshot.config) : {};
-  const reservedAgent = runtimeConfig.agents?.list?.find((entry) =>
+  const reservedAgent = listAgentEntries(runtimeConfig).find((entry) =>
     isReservedSystemAgentId(entry.id),
   );
   if (reservedAgent) {
@@ -26,3 +26,4 @@ export function requireValidSystemAgentSetupSnapshot(snapshot: ConfigFileSnapsho
   }
   return { sourceConfig, runtimeConfig };
 }
+import { listAgentEntries } from "../agents/agent-scope.js";

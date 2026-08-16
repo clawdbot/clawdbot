@@ -7,6 +7,13 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveConfiguredCapabilityProvider } from "../plugin-sdk/provider-selection-runtime.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import {
+  isInternalRealtimeVoiceBrowserSessionConfigured,
+  isInternalRealtimeVoiceGatewayRelayConfigured,
+  resolveInternalRealtimeVoiceBrowserSessionCapabilities,
+  resolveInternalRealtimeVoiceGatewayRelayCapabilities,
+  type InternalRealtimeVoiceProviderCapabilities,
+} from "./provider-internal.js";
 import { getRealtimeVoiceProvider, listRealtimeVoiceProviders } from "./provider-registry.js";
 import type { RealtimeVoiceProviderConfig } from "./provider-types.js";
 
@@ -25,12 +32,61 @@ export type ResolveConfiguredRealtimeVoiceProviderParams = {
   cfg?: OpenClawConfig;
   /** Alternate config object used by generic provider selection internals. */
   cfgForResolve?: OpenClawConfig;
+  /** Agent whose browser-session auth store should be inspected. */
+  agentId?: string;
   /** Test/runtime override for the provider list. */
   providers?: RealtimeVoiceProviderPlugin[];
   /** Model injected before provider-specific resolveConfig runs. */
   defaultModel?: string;
+  /** Runtime surface being selected. Defaults to the provider bridge path. */
+  surface?: "browser-session" | "gateway-relay" | "bridge";
   noRegisteredProviderMessage?: string;
 };
+
+export function resolveRealtimeVoiceProviderCapabilities(params: {
+  provider: RealtimeVoiceProviderPlugin;
+  providerConfig: RealtimeVoiceProviderConfig;
+  cfg?: OpenClawConfig;
+  /** Effective per-session model after request overrides. */
+  model?: string;
+  surface?: "browser-session" | "gateway-relay" | "bridge";
+}): InternalRealtimeVoiceProviderCapabilities | undefined {
+  if (params.surface === "browser-session") {
+    const internalCapabilities = resolveInternalRealtimeVoiceBrowserSessionCapabilities(params);
+    if (internalCapabilities) {
+      return internalCapabilities;
+    }
+  }
+  if (params.surface === "gateway-relay") {
+    const internalCapabilities = resolveInternalRealtimeVoiceGatewayRelayCapabilities(params);
+    if (internalCapabilities) {
+      return internalCapabilities;
+    }
+  }
+  return params.provider.capabilities;
+}
+
+export function isRealtimeVoiceProviderConfigured(params: {
+  provider: RealtimeVoiceProviderPlugin;
+  cfg?: OpenClawConfig;
+  providerConfig: RealtimeVoiceProviderConfig;
+  agentId?: string;
+  surface?: "browser-session" | "gateway-relay" | "bridge";
+}): boolean {
+  const internalConfigured =
+    params.surface === "browser-session"
+      ? isInternalRealtimeVoiceBrowserSessionConfigured(params)
+      : params.surface === "gateway-relay"
+        ? isInternalRealtimeVoiceGatewayRelayConfigured(params)
+        : undefined;
+  if (internalConfigured !== undefined) {
+    return internalConfigured;
+  }
+  return params.provider.isConfigured({
+    cfg: params.cfg,
+    providerConfig: params.providerConfig,
+  });
+}
 
 /** Resolve the configured realtime voice provider or auto-select the first configured one. */
 export function resolveConfiguredRealtimeVoiceProvider(
@@ -66,7 +122,13 @@ export function resolveConfiguredRealtimeVoiceProvider(
       );
     },
     isProviderConfigured: ({ provider, cfg, providerConfig }) =>
-      provider.isConfigured({ cfg, providerConfig }),
+      isRealtimeVoiceProviderConfigured({
+        provider,
+        cfg,
+        providerConfig,
+        agentId: params.agentId,
+        surface: params.surface,
+      }),
   });
 
   if (!resolution.ok && resolution.code === "missing-configured-provider") {

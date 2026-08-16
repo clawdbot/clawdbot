@@ -22,38 +22,153 @@
         "api": "openai-completions",
         "models": [
           {
-            "id": "deepseek-v3.2",
-            "name": "DEEPSEEK V3.2",
+            "id": "deepseek-v4-pro",
+            "name": "DeepSeek V4 Pro",
             "input": ["text"],
             "reasoning": true,
-            "contextWindow": 98304,
+            "contextWindow": 1000000,
+            "maxTokens": 393216,
+            "cost": {
+              "input": 1.771957,
+              "output": 3.543915,
+              "cacheRead": 0.147663,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "ernie-5.1",
+            "name": "ERNIE 5.1",
+            "input": ["text"],
+            "reasoning": false,
+            "contextWindow": 128000,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0.590652,
+              "output": 2.657936,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "tieredPricing": [
+                {
+                  "input": 0.590652,
+                  "output": 2.657936,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "range": [0, 32001]
+                },
+                {
+                  "input": 0.885979,
+                  "output": 3.248589,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "range": [32001]
+                }
+              ]
+            }
+          },
+          {
+            "id": "ernie-5.0",
+            "name": "ERNIE 5.0",
+            "input": ["text", "image"],
+            "reasoning": true,
+            "contextWindow": 128000,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0.885979,
+              "output": 3.543915,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "tieredPricing": [
+                {
+                  "input": 0.885979,
+                  "output": 3.543915,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "range": [0, 32001]
+                },
+                {
+                  "input": 1.476631,
+                  "output": 5.906525,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "range": [32001]
+                }
+              ]
+            }
+          },
+          {
+            "id": "deepseek-v3.2",
+            "name": "DeepSeek V3.2",
+            "input": ["text"],
+            "reasoning": false,
+            "contextWindow": 128000,
             "maxTokens": 32768,
             "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            }
+              "input": 0.295326,
+              "output": 0.442989,
+              "cacheRead": 0.059065,
+              "cacheWrite": 0,
+              "tieredPricing": [
+                {
+                  "input": 0.295326,
+                  "output": 0.442989,
+                  "cacheRead": 0.059065,
+                  "cacheWrite": 0,
+                  "range": [0, 32001]
+                },
+                {
+                  "input": 0.590652,
+                  "output": 0.885979,
+                  "cacheRead": 0.059065,
+                  "cacheWrite": 0,
+                  "range": [32001]
+                }
+              ]
+            },
+            "status": "deprecated",
+            "statusReason": "Still available by exact reference; use deepseek-v4-pro for new Qianfan setups.",
+            "replacedBy": "deepseek-v4-pro"
           },
           {
             "id": "ernie-5.0-thinking-preview",
             "name": "ERNIE-5.0-Thinking-Preview",
             "input": ["text", "image"],
             "reasoning": true,
-            "contextWindow": 119000,
-            "maxTokens": 64000,
+            "contextWindow": 128000,
+            "maxTokens": 65536,
             "cost": {
-              "input": 0,
-              "output": 0,
+              "input": 0.885979,
+              "output": 3.543915,
               "cacheRead": 0,
-              "cacheWrite": 0
-            }
+              "cacheWrite": 0,
+              "tieredPricing": [
+                {
+                  "input": 0.885979,
+                  "output": 3.543915,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "range": [0, 32001]
+                },
+                {
+                  "input": 1.476631,
+                  "output": 5.906525,
+                  "cacheRead": 0,
+                  "cacheWrite": 0,
+                  "range": [32001]
+                }
+              ]
+            },
+            "status": "deprecated",
+            "statusReason": "Still available by exact reference; use the stable ernie-5.0 id for new Qianfan setups.",
+            "replacedBy": "ernie-5.0"
           }
         ]
       }
     },
     "discovery": {
-      "qianfan": "static"
+      "qianfan": "refreshable"
     }
   },
   "providerAuthChoices": [

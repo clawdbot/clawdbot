@@ -16,12 +16,13 @@ import { resolveBundledSkillsContext } from "../loading/bundled-context.js";
 import {
   hasBinary,
   isBundledSkillAllowed,
+  isSkillEnvRequirementSatisfied,
   isSkillConfigPathTruthy,
   resolveBundledAllowlist,
   resolveSkillConfig,
   resolveSkillsInstallPreferences,
 } from "../loading/config.js";
-import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
+import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
 import type {
   SkillEntry,
@@ -269,11 +270,11 @@ function buildSkillStatus(
   const blockedByAgentFilter = agentSkillFilter !== undefined && !indexed.agentAllowed;
   const always = entry.metadata?.always === true;
   const isEnvSatisfied = (envName: string) =>
-    Boolean(
-      process.env[envName] ||
-      skillConfig?.env?.[envName] ||
-      (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
-    );
+    isSkillEnvRequirementSatisfied({
+      envName,
+      skillConfig,
+      primaryEnv: entry.metadata?.primaryEnv,
+    });
   const isConfigSatisfied = (pathStr: string) => isSkillConfigPathTruthy(config, pathStr);
   const skillSource = indexed.source;
   const bundled = indexed.bundled;
@@ -360,7 +361,7 @@ export function buildWorkspaceSkillStatus(
   // the loader must stay unfiltered; node-hosted skills merge in separately.
   const skillEntries = mergeRemoteNodeSkillEntries(
     opts?.entries ??
-      loadWorkspaceSkillEntries(workspaceDir, {
+      loadWorkspaceSkills(workspaceDir, {
         config: opts?.config,
         managedSkillsDir,
         bundledSkillsDir: bundledContext.dir,

@@ -1,5 +1,8 @@
 {
   "id": "canvas",
+  "doctorContract": {
+    "stateMigrations": true
+  },
   "activation": {
     "onStartup": true
   },
@@ -8,10 +11,34 @@
   "description": "Experimental Canvas control and A2UI rendering surfaces for paired nodes.",
   "skills": ["./skills"],
   "contracts": {
-    "tools": ["canvas", "show_widget"]
+    "tools": ["canvas"]
   },
   "configContracts": {
     "compatibilityMigrationPaths": ["canvasHost"]
+  },
+  "uiHints": {
+    "host": {
+      "label": "Canvas Host",
+      "help": "Serves local Canvas and A2UI files for paired nodes.",
+      "advanced": true
+    },
+    "host.enabled": {
+      "label": "Canvas Host Enabled",
+      "advanced": true
+    },
+    "host.root": {
+      "label": "Canvas Host Root Directory",
+      "help": "Directory to serve. Defaults to the OpenClaw state canvas directory.",
+      "advanced": true
+    },
+    "host.port": {
+      "label": "Canvas Host Port",
+      "advanced": true
+    },
+    "host.liveReload": {
+      "label": "Canvas Host Live Reload",
+      "advanced": true
+    }
   },
   "configSchema": {
     "type": "object",

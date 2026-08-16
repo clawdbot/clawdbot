@@ -16,14 +16,18 @@ import {
   text,
 } from "@clack/prompts";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import {
+  stripAnsi,
+  truncateToVisibleWidth,
+  visibleWidth,
+} from "../../packages/terminal-core/src/ansi.js";
 import { note as emitNote } from "../../packages/terminal-core/src/note.js";
 import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
 import {
   stylePromptMessage,
   stylePromptTitle,
 } from "../../packages/terminal-core/src/prompt-style.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { createCliProgress } from "../cli/progress.js";
 import {
   autocompleteMultiselectWithNavigationFooter,
@@ -37,11 +41,40 @@ import {
 import type { WizardProgress, WizardPrompter, WizardPromptNavigation } from "./prompts.js";
 import { WizardCancelledError, WizardNavigationError } from "./prompts.js";
 
+// Same species as the pixel-mascot banner, compressed into a four-column
+// spinner for long-running wizard steps.
+const CLAW_SPINNER_FRAMES = ["(\\/)", "(||)", "(--)", "(||)"];
+const SPINNER_DECORATION_COLUMNS = 10;
+
+function readProgressColumns(): number | undefined {
+  const columns = process.stdout.columns;
+  if (typeof columns !== "number" || !Number.isFinite(columns) || columns <= 0) {
+    return undefined;
+  }
+  return columns;
+}
+
+function clampProgressLabel(label: string, columns: number | undefined): string {
+  if (columns === undefined) {
+    return label;
+  }
+  const maxLabelWidth = columns - SPINNER_DECORATION_COLUMNS;
+  if (maxLabelWidth <= 0) {
+    return "";
+  }
+  if (visibleWidth(label) <= maxLabelWidth) {
+    return label;
+  }
+  return `${truncateToVisibleWidth(label, maxLabelWidth - 1)}…`;
+}
+
 // Clack-backed WizardPrompter implementation for interactive CLI setup. It
 // converts the generic wizard prompt contract into styled Clack prompts.
-function guardCancel<T>(value: T | symbol): T {
+function guardCancel<T>(value: T | symbol, signal?: AbortSignal): T {
   if (isCancel(value)) {
-    cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
+    if (!signal?.aborted) {
+      cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
+    }
     throw new WizardCancelledError();
   }
   return value;
@@ -95,12 +128,16 @@ async function withHorizontalCursorActionsDisabled<T>(
 async function runPromptWithNavigation<T>(
   navigation: WizardPromptNavigation | undefined,
   work: (signal: AbortSignal | undefined) => Promise<T | symbol>,
+  externalSignal?: AbortSignal,
 ): Promise<T> {
   if (!hasPromptNavigation(navigation)) {
-    return guardCancel(await work(undefined));
+    return guardCancel(await work(externalSignal), externalSignal);
   }
 
   const controller = new AbortController();
+  const signal = externalSignal
+    ? AbortSignal.any([controller.signal, externalSignal])
+    : controller.signal;
   let navigationDirection: "back" | "forward" | undefined;
   const onKeypress = (_input: string | undefined, key: KeypressInfo | undefined) => {
     const nextDirection = resolveNavigationDirection(navigation, key);
@@ -113,11 +150,11 @@ async function runPromptWithNavigation<T>(
 
   try {
     process.stdin.on("keypress", onKeypress);
-    const value = await work(controller.signal);
+    const value = await work(signal);
     if (navigationDirection) {
       throw new WizardNavigationError(navigationDirection);
     }
-    return guardCancel(value);
+    return guardCancel(value, externalSignal);
   } finally {
     process.stdin.off("keypress", onKeypress);
   }
@@ -253,38 +290,42 @@ export function createClackPrompter(): WizardPrompter {
       return await withHorizontalCursorActionsDisabled(
         hasPromptNavigation(params.navigation),
         async () =>
-          await runPromptWithNavigation(params.navigation, async (signal) => {
-            const message = stylePromptMessage(params.message);
-            const validateInput = validate
-              ? (value: string | undefined) => validate(value ?? "")
-              : undefined;
-            if (params.sensitive) {
+          await runPromptWithNavigation(
+            params.navigation,
+            async (signal) => {
+              const message = stylePromptMessage(params.message);
+              const validateInput = validate
+                ? (value: string | undefined) => validate(value ?? "")
+                : undefined;
+              if (params.sensitive) {
+                return params.navigation
+                  ? await passwordWithNavigationFooter({
+                      message,
+                      validate: validateInput,
+                      navigation: params.navigation,
+                      signal,
+                    })
+                  : await password({ message, validate: validateInput, signal });
+              }
               return params.navigation
-                ? await passwordWithNavigationFooter({
+                ? await textWithNavigationFooter({
                     message,
+                    initialValue: params.initialValue,
+                    placeholder: params.placeholder,
                     validate: validateInput,
                     navigation: params.navigation,
                     signal,
                   })
-                : await password({ message, validate: validateInput, signal });
-            }
-            return params.navigation
-              ? await textWithNavigationFooter({
-                  message,
-                  initialValue: params.initialValue,
-                  placeholder: params.placeholder,
-                  validate: validateInput,
-                  navigation: params.navigation,
-                  signal,
-                })
-              : await text({
-                  message,
-                  initialValue: params.initialValue,
-                  placeholder: params.placeholder,
-                  validate: validateInput,
-                  signal,
-                });
-          }),
+                : await text({
+                    message,
+                    initialValue: params.initialValue,
+                    placeholder: params.placeholder,
+                    validate: validateInput,
+                    signal,
+                  });
+            },
+            params.signal,
+          ),
       );
     },
     confirm: async (params) =>
@@ -311,8 +352,34 @@ export function createClackPrompter(): WizardPrompter {
           }),
       ),
     progress: (label: string): WizardProgress => {
-      const spin = spinner();
-      spin.start(theme.accent(label));
+      const useClawSpinner =
+        process.stdout.isTTY && isRich() && !process.env.CI && !process.env.VITEST;
+      const spin = useClawSpinner
+        ? spinner({
+            frames: CLAW_SPINNER_FRAMES,
+            delay: 120,
+            styleFrame: theme.accent,
+          })
+        : spinner();
+      let currentLabel = label;
+      let maxColumns = readProgressColumns();
+      const renderLabel = () => theme.accent(clampProgressLabel(currentLabel, maxColumns));
+      const handleResize = () => {
+        const columns = readProgressColumns();
+        if (maxColumns === undefined || columns === undefined || columns >= maxColumns) {
+          return;
+        }
+        // Clack snapshots its erase width when the spinner is created. Only
+        // tighten our label budget so later terminal growth cannot exceed it.
+        maxColumns = columns;
+        spin.message(renderLabel());
+      };
+      if (maxColumns !== undefined) {
+        process.stdout.on("resize", handleResize);
+      }
+      // Clack erases using bare-message wrapping but writes the frame and dots too.
+      // Keeping animated labels to one row prevents long scans from leaking a line each tick.
+      spin.start(renderLabel());
       const osc = createCliProgress({
         label,
         indeterminate: true,
@@ -323,10 +390,12 @@ export function createClackPrompter(): WizardPrompter {
       // display command progress outside the prompt line.
       return {
         update: (message) => {
-          spin.message(theme.accent(message));
+          currentLabel = message;
+          spin.message(renderLabel());
           osc.setLabel(message);
         },
         stop: (message) => {
+          process.stdout.off("resize", handleResize);
           osc.done();
           if (message === undefined) {
             spin.clear();

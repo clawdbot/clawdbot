@@ -30,14 +30,19 @@ function snapshotWith(
 function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
   return {
     getRuntimeSnapshot: vi.fn(() => snapshot),
+    getPluginCommandCatalogAccounts: vi.fn(() => new Map()),
     startChannels: vi.fn(),
     startChannel: vi.fn(),
     stopChannel: vi.fn(),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
+    recoverAutostartSuppression: vi.fn(async () => false),
+    setAmbientAutostartSuppressedChannelIds: vi.fn(),
+    isAmbientAutostartSuppressed: vi.fn(() => false),
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
+    isAutoRestartScheduled: vi.fn(() => false),
     resetRestartAttempts: vi.fn(),
   };
 }
@@ -256,6 +261,60 @@ describe("createReadinessChecker", () => {
     });
   });
 
+  it("uses fresh recorded lifecycle within connect grace", () => {
+    withReadinessClock(() => {
+      const { readiness } = createLongRunningReadinessHarness({
+        discord: managedAccount({
+          connected: false,
+          lifecycle: "starting",
+          lastStartAt: Date.now() - 30_000,
+        }),
+        slack: stoppedAccount({
+          connected: false,
+          lifecycle: "recovering",
+          lastStartAt: Date.now() - 30_000,
+        }),
+      });
+      expect(readiness()).toEqual(readySnapshot(THIRTY_ONE_MIN_MS));
+    });
+  });
+
+  it("reports a recorded starting lifecycle that outlives connect grace", () => {
+    withReadinessClock(() => {
+      const { readiness } = createLongRunningReadinessHarness({
+        discord: managedAccount({ connected: false, lifecycle: "starting" }),
+      });
+      expect(readiness()).toEqual(failingSnapshot(["discord"], THIRTY_ONE_MIN_MS));
+    });
+  });
+
+  it("reports recorded blocked lifecycle as not ready", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        accounts: {
+          slack: managedAccount({ lifecycle: "blocked" }),
+        },
+      });
+      expect(readiness()).toEqual(failingSnapshot(["slack"]));
+    });
+  });
+
+  it("does not hide a ready lifecycle disconnect behind wall-clock grace", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        startedAgoMs: 30_000,
+        accounts: {
+          discord: managedAccount({
+            connected: false,
+            lifecycle: "ready",
+            lastStartAt: Date.now() - 30_000,
+          }),
+        },
+      });
+      expect(readiness()).toEqual(failingSnapshot(["discord"], 30_000));
+    });
+  });
+
   it("treats intentionally skipped channels as ready", () => {
     withReadinessClock(() => {
       const { manager, readiness } = createReadinessHarness({
@@ -290,6 +349,24 @@ describe("createReadinessChecker", () => {
     });
   });
 
+  it("reports ambient-suppressed dev channels without failing readiness", () => {
+    withReadinessClock(() => {
+      const { manager, readiness } = createReadinessHarness({
+        accounts: {
+          discord: stoppedAccount({
+            restartPending: false,
+            lastError: "ambient credentials suppressed",
+          }),
+        },
+      });
+      vi.mocked(manager.isAmbientAutostartSuppressed).mockImplementation(
+        (channelId) => channelId === "discord",
+      );
+
+      expect(readiness()).toEqual(readySnapshot(FIVE_MIN_MS, { suppressed: ["discord"] }));
+    });
+  });
+
   it("keeps restart-pending channels ready during reconnect backoff", () => {
     withReadinessClock(() => {
       const startedAt = Date.now() - FIVE_MIN_MS;
@@ -305,6 +382,60 @@ describe("createReadinessChecker", () => {
         },
       });
       expect(readiness()).toEqual(readySnapshot());
+    });
+  });
+
+  it("keeps a dead-ingress channel ready while its restart backoff is still pending", () => {
+    // The next start re-proves ingress, so this window gets the same grace as any
+    // other restart handoff rather than flapping readiness on every retry.
+    withReadinessClock(() => {
+      const startedAt = Date.now() - FIVE_MIN_MS;
+      const { readiness } = createReadinessHarness({
+        accounts: {
+          discord: managedAccount({
+            running: false,
+            restartPending: true,
+            ingressUnavailable: true,
+            reconnectAttempts: 3,
+            lastStartAt: startedAt - 30_000,
+            lastStopAt: Date.now() - 5_000,
+          }),
+        },
+      });
+      expect(readiness()).toEqual(readySnapshot());
+    });
+  });
+
+  it("fails readiness for dead ingress once the restart ladder stops retrying", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        accounts: {
+          discord: managedAccount({
+            running: false,
+            restartPending: false,
+            ingressUnavailable: true,
+            reconnectAttempts: 11,
+          }),
+        },
+      });
+      expect(readiness()).toEqual(failingSnapshot(["discord"]));
+    });
+  });
+
+  it("fails readiness for a running channel whose transport is up but ingress is dead", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        accounts: {
+          discord: managedAccount({
+            running: true,
+            connected: true,
+            restartPending: true,
+            ingressUnavailable: true,
+            lastStartAt: Date.now() - THIRTY_ONE_MIN_MS,
+          }),
+        },
+      });
+      expect(readiness()).toEqual(failingSnapshot(["discord"]));
     });
   });
 
@@ -358,6 +489,7 @@ describe("createReadinessChecker", () => {
       const { readiness } = createReadinessHarness({
         getEventLoopHealth: () => ({
           degraded: true,
+          degradedSinceMs: 61_000,
           reasons: ["cpu", "event_loop_utilization"],
           intervalMs: 2_000,
           delayP99Ms: 42.1,
@@ -371,6 +503,7 @@ describe("createReadinessChecker", () => {
         readySnapshot(FIVE_MIN_MS, {
           eventLoop: {
             degraded: true,
+            degradedSinceMs: 61_000,
             reasons: ["cpu", "event_loop_utilization"],
             intervalMs: 2_000,
             delayP99Ms: 42.1,

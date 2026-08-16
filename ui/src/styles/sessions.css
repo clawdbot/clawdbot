@@ -169,7 +169,7 @@
   text-align: left;
   background: transparent;
   border: 0;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition: background var(--duration-fast) var(--ease-out);
 }
 
@@ -410,19 +410,6 @@
   min-width: 760px;
 }
 
-.sessions-sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  border: 0;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  clip-path: inset(50%);
-  white-space: nowrap;
-}
-
 .sessions-table tbody tr.session-data-row > td {
   white-space: nowrap;
 }
@@ -430,6 +417,17 @@
 .session-data-row--expandable:focus-visible {
   outline: 1px solid var(--border-strong);
   outline-offset: -2px;
+}
+
+.session-data-row--archived {
+  opacity: 0.62;
+}
+
+.session-data-row--archived:hover,
+.session-data-row--archived:focus-visible,
+.session-data-row--archived.session-data-row--expanded,
+.session-data-row--archived.session-data-row--menu-open {
+  opacity: 0.82;
 }
 
 /* Keep the expanded row visually attached to its drawer. */
@@ -501,7 +499,7 @@
 
 .session-avatar--group {
   color: var(--info);
-  background: rgba(59, 130, 246, 0.1);
+  background: var(--info-subtle);
 }
 
 .session-avatar--global {
@@ -1051,7 +1049,7 @@
 }
 
 /* --- Narrow layouts --- */
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   .sessions-overview {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-2);

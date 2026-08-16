@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it } from "vitest";
 import { redactSensitiveText } from "../logging/redact.js";
-import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 

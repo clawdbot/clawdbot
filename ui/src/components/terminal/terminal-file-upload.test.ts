@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it } from "vitest";
+import { i18n } from "../../i18n/index.ts";
 import {
   encodeTerminalUpload,
   quoteTerminalUploadPath,
@@ -11,21 +12,28 @@ const MAX_TERMINAL_UPLOAD_BYTES = 16 * 1024 * 1024;
 
 describe("terminal file upload", () => {
   it("requests terminal.upload with the session-bound payload", async () => {
-    const requests: Array<{ method: string; params: unknown }> = [];
+    const requests: Array<{ method: string; params: unknown; signal?: AbortSignal }> = [];
+    const abortController = new AbortController();
     const client = {
-      request: async <T>(method: string, params?: unknown) => {
-        requests.push({ method, params });
+      request: async <T>(method: string, params?: unknown, options?: { signal?: AbortSignal }) => {
+        requests.push({ method, params, signal: options?.signal });
         return { path: "/tmp/scan.pdf", size: 1 } as T;
       },
     };
 
     await expect(
-      uploadTerminalFile(client, "s1", { name: "scan.pdf", contentBase64: "AA==" }),
+      uploadTerminalFile(
+        client,
+        "s1",
+        { name: "scan.pdf", contentBase64: "AA==" },
+        abortController.signal,
+      ),
     ).resolves.toEqual({ path: "/tmp/scan.pdf", size: 1 });
     expect(requests).toEqual([
       {
         method: "terminal.upload",
         params: { sessionId: "s1", name: "scan.pdf", contentBase64: "AA==" },
+        signal: abortController.signal,
       },
     ]);
   });
@@ -84,4 +92,30 @@ describe("terminal file upload", () => {
       );
     },
   );
+
+  it("localizes upload validation while preserving file and shell details", async () => {
+    i18n.registerTranslation("pt-BR", {
+      terminal: {
+        uploadTooLarge: "O arquivo excede o limite de 16 MiB: {file}",
+        uploadUnsafeCmdPath: "O caminho enviado não é seguro para cmd.exe",
+        uploadUnsupportedShell: "Shell sem suporte para caminho enviado: {shell}",
+      },
+    });
+    await i18n.setLocale("pt-BR");
+    try {
+      const oversized = {
+        name: "archive.zip",
+        size: MAX_TERMINAL_UPLOAD_BYTES + 1,
+        arrayBuffer: () => Promise.reject(new Error("should not read")),
+      } as File;
+      await expect(encodeTerminalUpload(oversized)).rejects.toThrow(
+        "O arquivo excede o limite de 16 MiB: archive.zip",
+      );
+      expect(() => quoteTerminalUploadPath("/tmp/report.pdf", "nu")).toThrow(
+        "Shell sem suporte para caminho enviado: nu",
+      );
+    } finally {
+      await i18n.setLocale("en");
+    }
+  });
 });

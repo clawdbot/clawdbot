@@ -45,6 +45,19 @@ struct WindowPlacementTests {
     }
 
     @Test
+    func `cascade offsets a second window without leaving the screen`() {
+        let bounds = NSRect(x: 0, y: 0, width: 1000, height: 800)
+        let first = NSRect(x: 100, y: 100, width: 600, height: 500)
+        let next = WindowPlacement.cascadedFrame(from: first, in: bounds)
+
+        #expect(next == NSRect(x: 124, y: 76, width: 600, height: 500))
+
+        let edge = NSRect(x: 500, y: 0, width: 600, height: 900)
+        #expect(WindowPlacement.cascadedFrame(from: edge, in: bounds) ==
+            NSRect(x: 400, y: 0, width: 600, height: 800))
+    }
+
+    @Test
     func `ensure on screen uses fallback when window offscreen`() {
         let window = NSWindow(
             contentRect: NSRect(x: 100_000, y: 100_000, width: 200, height: 120),

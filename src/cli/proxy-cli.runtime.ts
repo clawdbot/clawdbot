@@ -22,6 +22,8 @@ import {
   getDebugProxyCaptureStore,
 } from "../proxy-capture/store.sqlite.js";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
+import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
+import { resolveSubprocessExitCode } from "./subprocess-exit-code.js";
 
 export async function runDebugProxyStartCommand(opts: { host?: string; port?: number }) {
   const settings = resolveDebugProxySettings();
@@ -108,7 +110,7 @@ export async function runDebugProxyRunCommand(opts: {
       });
       child.once("error", reject);
       child.once("exit", (code, signal) => {
-        process.exitCode = signal ? 1 : (code ?? 1);
+        process.exitCode = resolveSubprocessExitCode(code, signal);
         resolve();
       });
     });
@@ -186,11 +188,6 @@ function formatProxyCheckLine(
 function formatProxyValidationNextSteps(result: ProxyValidationResult): string[] {
   if (result.ok) {
     return [];
-  }
-  if (result.config.errors.some((error) => error.includes("proxy.enabled"))) {
-    return [
-      "Enable proxy.enabled with proxy.proxyUrl or OPENCLAW_PROXY_URL, or pass --proxy-url for an explicit one-off validation.",
-    ];
   }
   if (result.config.errors.some((error) => error.includes("proxy CA file could not be read"))) {
     return [
@@ -286,23 +283,25 @@ export async function runProxyValidateCommand(opts: {
   }
 }
 
-export async function runDebugProxySessionsCommand(opts: { limit?: number }) {
+export async function runDebugProxySessionsCommand(opts: { json?: boolean; limit?: number }) {
   const sessions = getDebugProxyCaptureStore().listSessions(opts.limit ?? 20);
-  process.stdout.write(`${JSON.stringify(sessions, null, 2)}\n`);
+  writeRuntimeJson(defaultRuntime, opts.json ? { sessions } : sessions);
   closeDebugProxyCaptureStore();
 }
 
 export async function runDebugProxyQueryCommand(opts: {
+  json?: boolean;
   preset: CaptureQueryPreset;
   sessionId?: string;
 }) {
   const rows = getDebugProxyCaptureStore().queryPreset(opts.preset, opts.sessionId);
-  process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
+  writeRuntimeJson(defaultRuntime, opts.json ? { rows } : rows);
   closeDebugProxyCaptureStore();
 }
 
 export async function runDebugProxyCoverageCommand() {
-  process.stdout.write(`${JSON.stringify(buildDebugProxyCoverageReport(), null, 2)}\n`);
+  const report = buildDebugProxyCoverageReport();
+  writeRuntimeJson(defaultRuntime, report);
   closeDebugProxyCaptureStore();
 }
 

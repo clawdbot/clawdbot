@@ -1,11 +1,9 @@
 // Shared session-handler target resolution and mutation guards.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
   errorShape,
   type SessionOperationEvent,
-  type SessionPlacement,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listConfiguredSessionStoreAgentIds, type SessionEntry } from "../../config/sessions.js";
@@ -14,54 +12,32 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import {
+  resolvePluginSessionOwnershipError,
+  type PluginSessionOwnershipAction,
+} from "../session-plugin-ownership.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "../session-store-key.js";
 import {
-  resolveFreshestSessionEntryFromStoreKeys,
+  resolveCanonicalSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
 import {
-  isWorkerPlacementSessionRuntimeSupported,
+  resolveWorkerPlacementExecutionMode,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
+import { isWorkerPlacementSafeForArchive } from "../worker-environments/session-placement-lifecycle.js";
+export {
+  resolveSessionWorkerPlacementMutationError,
+  retireSessionWorkerPlacementBeforeMutation,
+  SessionWorkerPlacementMutationError,
+} from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 export const sessionLog = createSubsystemLogger("gateway/sessions");
 
-export class SessionWorkerPlacementMutationError extends Error {
-  constructor(
-    readonly placementState: SessionPlacement["state"],
-    action: "delete" | "reset" | "restore",
-    key: string,
-  ) {
-    super(`Session ${key} cannot ${action} while cloud worker placement is ${placementState}.`);
-  }
-}
-
-export function resolveSessionWorkerPlacementMutationError(params: {
-  action: "delete" | "reset" | "restore";
-  context: GatewayRequestContext;
-  key: string;
-  sessionId: string | undefined;
-}): SessionWorkerPlacementMutationError | undefined {
-  if (!params.sessionId) {
-    return undefined;
-  }
-  const placement = params.context.workerSessionPlacementService
-    ?.getMany([params.sessionId])
-    .get(params.sessionId);
-  if (
-    !placement ||
-    placement.state === "local" ||
-    (params.action === "delete" && placement.state === "reclaimed")
-  ) {
-    return undefined;
-  }
-  return new SessionWorkerPlacementMutationError(placement.state, params.action, params.key);
-}
-
 export function respondSessionWorkerPlacementMutationError(
-  error: SessionWorkerPlacementMutationError,
+  error: { message: string },
   respond: RespondFn,
 ): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
@@ -85,8 +61,10 @@ export function resolveSessionWorkerPlacementPatchError(params: {
   if (!placement || placement.state === "local") {
     return undefined;
   }
-  if (params.patch.archived !== undefined) {
-    return `Session ${params.key} cannot change archive state while cloud worker placement is ${placement.state}.`;
+  if (params.patch.archived === false) {
+    if (!isWorkerPlacementSafeForArchive(params.context, placement)) {
+      return `Session ${params.key} cannot change archive state while cloud worker placement is ${placement.state}.`;
+    }
   }
   if (!params.validateModelRuntime || params.patch.model === undefined || !params.entry) {
     return undefined;
@@ -97,10 +75,13 @@ export function resolveSessionWorkerPlacementPatchError(params: {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
-  if (isWorkerPlacementSessionRuntimeSupported(runtime)) {
+  const executionMode = resolveWorkerPlacementExecutionMode(runtime);
+  if (executionMode === placement.executionMode) {
     return undefined;
   }
-  return `Session ${params.key} cannot select the ${runtime} runtime while cloud worker placement is ${placement.state}.`;
+  return executionMode
+    ? `Session ${params.key} cannot change cloud placement execution mode while placement is ${placement.state}.`
+    : `Session ${params.key} cannot select the ${runtime} runtime while cloud worker placement is ${placement.state}.`;
 }
 
 export function filterSessionStoreToConfiguredAgents(
@@ -154,27 +135,23 @@ export function requireSessionKey(key: unknown, respond: RespondFn): string | nu
   return normalized;
 }
 
-export function rejectPluginRuntimeDeleteMismatch(params: {
+export function rejectPluginRuntimeSessionOwnershipMismatch(params: {
+  action: PluginSessionOwnershipAction;
   client: GatewayClient | null;
   key: string;
   entry: SessionEntry | undefined;
   respond: RespondFn;
 }): boolean {
-  const pluginOwnerId = normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId);
-  if (!pluginOwnerId || !params.entry) {
+  const error = resolvePluginSessionOwnershipError({
+    action: params.action,
+    entry: params.entry,
+    key: params.key,
+    pluginOwnerId: params.client?.internal?.pluginRuntimeOwnerId,
+  });
+  if (!error) {
     return false;
   }
-  if (normalizeOptionalString(params.entry.pluginOwnerId) === pluginOwnerId) {
-    return false;
-  }
-  params.respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `Plugin "${pluginOwnerId}" cannot delete session "${params.key}" because it did not create it.`,
-    ),
-  );
+  params.respond(false, undefined, error);
   return true;
 }
 
@@ -246,7 +223,7 @@ export function loadSessionEntriesForTarget(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   const store = target.store;
-  const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
+  const entry = resolveCanonicalSessionEntryFromStoreKeys(store, target.storeKeys);
   return { target, storePath: target.storePath, store, entry };
 }
 
@@ -267,29 +244,6 @@ export function emitSessionOperation(
     connIds,
     { dropIfSlow: true },
   );
-}
-
-export function rejectWebchatSessionMutation(params: {
-  action: "patch" | "delete" | "compact" | "restore" | "dispatch";
-  client: GatewayClient | null;
-  isWebchatConnect: (params: GatewayClient["connect"] | null | undefined) => boolean;
-  respond: RespondFn;
-}): boolean {
-  if (!params.client?.connect || !params.isWebchatConnect(params.client.connect)) {
-    return false;
-  }
-  if (params.client.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI) {
-    return false;
-  }
-  params.respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `webchat clients cannot ${params.action} sessions; use chat.send for session-scoped updates`,
-    ),
-  );
-  return true;
 }
 
 export function isWorkerDispatchInputError(error: unknown): boolean {

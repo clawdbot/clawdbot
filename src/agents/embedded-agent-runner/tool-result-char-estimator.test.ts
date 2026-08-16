@@ -68,6 +68,18 @@ describe("tool-result-char-estimator", () => {
     expect(chars).toBe(22);
   });
 
+  it("uses CJK weighting without multiplying the existing ASCII safety floor", () => {
+    const msg = {
+      role: "toolResult",
+      toolName: "read",
+      content: [{ type: "text", text: "你好" }],
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const cache = createMessageCharEstimateCache();
+    expect(estimateMessageCharsCached(msg, cache)).toBe(8);
+  });
+
   it("estimates a large bashExecution near its rendered size", () => {
     const bigOutput = "build log line\n".repeat(60000);
     const msg = {

@@ -3,13 +3,12 @@ title: Long-context progress watchdog
 scenario:
   id: long-context-progress-watchdog
   surface: runtime
-  runtimeParityTier: live-only
   coverage:
     primary:
-      - runtime.gateway-log-sentinel.codex-progress
+      - session-memory.codex-progress-sentinel
     secondary:
-      - runtime.long-context
-      - runtime.codex-app-server
+      - session-memory.token-pressure-long-context
+      - openai.codex-harness
   objective: Fail live proof when long-context activity triggers Codex app-server timeout or stalled-progress sentinels.
   successCriteria:
     - Gateway config routes the selected QA model through the Codex app-server runtime.
@@ -23,6 +22,7 @@ scenario:
     - extensions/codex/src/app-server
   execution:
     kind: flow
+    runtime: codex
     summary: Seed a large workspace fixture, complete a read turn, and scan for Codex app-server progress failures.
     config:
       requiredProviderMode: live-frontier
@@ -43,113 +43,49 @@ flow:
           args:
             - ref: env
             - 60000
-        - call: readConfigSnapshot
-          saveAs: originalSnapshot
+        - assert:
+            expr: "env.runtimeId === config.harnessRuntime"
+            message:
+              expr: "`expected suite runtime ${config.harnessRuntime}, got ${env.runtimeId}`"
+        - call: reset
+        - set: logCursor
+          value:
+            expr: markGatewayLogCursor()
+        - set: fixturePath
+          value:
+            expr: "path.join(env.gateway.workspaceDir, config.fixtureFile)"
+        - call: fs.writeFile
+          args:
+            - ref: fixturePath
+            - expr: "`START LONG-CONTEXT-WATCHDOG\\n${Array.from({ length: config.repeatCount }, (_entry, index) => `context row ${index + 1}: alpha beta gamma`).join('\\n')}\\nTAIL ${config.expectedMarker}\\n`"
+            - utf8
+        - set: startIndex
+          value:
+            expr: state.getSnapshot().messages.length
+        - call: runAgentPrompt
           args:
             - ref: env
-        - set: originalModelEntry
-          value:
-            expr: originalSnapshot.config.agents?.defaults?.models?.[env.primaryModel]
-        - set: originalPluginAllow
-          value:
-            expr: originalSnapshot.config.plugins?.allow
-        - set: originalCodexPluginEntry
-          value:
-            expr: originalSnapshot.config.plugins?.entries?.codex
-        - set: originalCodexPluginEnabled
-          value:
-            expr: "originalCodexPluginEntry && typeof originalCodexPluginEntry === 'object' ? originalCodexPluginEntry.enabled : undefined"
-        - try:
-            actions:
-              - call: patchConfig
-                args:
-                  - env:
-                      ref: env
-                    patch:
-                      plugins:
-                        allow:
-                          expr: "Array.from(new Set([...(Array.isArray(originalPluginAllow) ? originalPluginAllow : []), 'codex']))"
-                        entries:
-                          codex:
-                            expr: "({ ...((originalCodexPluginEntry && typeof originalCodexPluginEntry === 'object') ? originalCodexPluginEntry : {}), enabled: true })"
-                      agents:
-                        defaults:
-                          models:
-                            expr: "({ [env.primaryModel]: { agentRuntime: { id: config.harnessRuntime } } })"
-              - call: waitForGatewayHealthy
-                args:
-                  - ref: env
-                  - 60000
-              - call: waitForQaChannelReady
-                args:
-                  - ref: env
-                  - 60000
-              - call: readConfigSnapshot
-                saveAs: snapshot
-                args:
-                  - ref: env
-              - assert:
-                  expr: "snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.agentRuntime?.id === config.harnessRuntime"
-                  message:
-                    expr: "`expected ${env.primaryModel} agentRuntime.id=${config.harnessRuntime}, got ${JSON.stringify(snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.agentRuntime)}`"
-              - call: reset
-              - set: logCursor
-                value:
-                  expr: markGatewayLogCursor()
-              - set: fixturePath
-                value:
-                  expr: "path.join(env.gateway.workspaceDir, config.fixtureFile)"
-              - call: fs.writeFile
-                args:
-                  - ref: fixturePath
-                  - expr: "`START LONG-CONTEXT-WATCHDOG\\n${Array.from({ length: config.repeatCount }, (_entry, index) => `context row ${index + 1}: alpha beta gamma`).join('\\n')}\\nTAIL ${config.expectedMarker}\\n`"
-                  - utf8
-              - set: startIndex
-                value:
-                  expr: state.getSnapshot().messages.length
-              - call: runAgentPrompt
-                args:
-                  - ref: env
-                  - sessionKey:
-                      expr: "`agent:qa:long-context-watchdog:${randomUUID().slice(0, 8)}`"
-                    message:
-                      expr: "`Read ${fixturePath}, find the marker on the TAIL line, and reply with that marker only.`"
-                    timeoutMs:
-                      expr: liveTurnTimeoutMs(env, 90000)
-              - call: waitForOutboundMessage
-                saveAs: outbound
-                args:
-                  - ref: state
-                  - lambda:
-                      params: [candidate]
-                      expr: "candidate.conversation.id === 'qa-operator' && normalizeLowercaseStringOrEmpty(candidate.text).includes(normalizeLowercaseStringOrEmpty(config.expectedMarker))"
-                  - expr: liveTurnTimeoutMs(env, 45000)
-                  - sinceIndex:
-                      ref: startIndex
-              - call: assertNoGatewayLogSentinels
-                args:
-                  - since:
-                      ref: logCursor
-                    kinds:
-                      - codex-app-server-timeout
-                      - stalled-agent-run
-            finally:
-              - call: patchConfig
-                args:
-                  - env:
-                      ref: env
-                    patch:
-                      plugins:
-                        entries:
-                          codex:
-                            enabled:
-                              expr: "originalCodexPluginEnabled === undefined ? null : originalCodexPluginEnabled"
-                      agents:
-                        defaults:
-                          models:
-                            expr: "({ [env.primaryModel]: originalModelEntry === undefined ? null : { ...originalModelEntry, agentRuntime: originalModelEntry.agentRuntime === undefined ? null : originalModelEntry.agentRuntime } })"
-              - call: waitForGatewayHealthy
-                args:
-                  - ref: env
-                  - 60000
+            - sessionKey:
+                expr: "`agent:qa:long-context-watchdog:${randomUUID().slice(0, 8)}`"
+              message:
+                expr: "`Read ${fixturePath}, find the marker on the TAIL line, and reply with that marker only.`"
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 90000)
+        - call: waitForOutboundMessage
+          saveAs: outbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === 'qa-operator' && normalizeLowercaseStringOrEmpty(candidate.text).includes(normalizeLowercaseStringOrEmpty(config.expectedMarker))"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - sinceIndex:
+                ref: startIndex
+        - call: assertNoGatewayLogSentinels
+          args:
+            - since:
+                ref: logCursor
+              kinds:
+                - codex-app-server-timeout
+                - stalled-agent-run
       detailsExpr: outbound.text

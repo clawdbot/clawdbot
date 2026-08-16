@@ -16,7 +16,7 @@ Adds MiniMax, MiniMax Portal model provider support to OpenClaw.
 
 ## Surface
 
-providers: minimax, minimax-portal; contracts: imageGenerationProviders, mediaUnderstandingProviders, musicGenerationProviders, speechProviders, usageProviders, videoGenerationProviders, webSearchProviders
+providers: `minimax`, `minimax-portal`; contracts: `imageGenerationProviders`, `mediaUnderstandingProviders`, `musicGenerationProviders`, `speechProviders`, `usageProviders`, `videoGenerationProviders`, `webSearchProviders`
 
 ## Related docs
 

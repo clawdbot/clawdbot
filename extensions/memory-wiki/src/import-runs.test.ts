@@ -36,7 +36,7 @@ describe("memory-wiki import runs", () => {
       createdCount: 1,
       updatedCount: 0,
       skippedCount: 0,
-      createdPaths: ["sources/old.md"],
+      createdPaths: [{ path: "sources/old.md" }],
       updatedPaths: [],
       rolledBackAt: "2026-04-09T11:00:00.000Z",
     });
@@ -51,12 +51,44 @@ describe("memory-wiki import runs", () => {
       createdCount: 1,
       updatedCount: 1,
       skippedCount: 0,
-      createdPaths: ["sources/new.md"],
+      createdPaths: [{ path: "sources/new.md" }],
       updatedPaths: [{ path: "sources/current.md", snapshotPath: "snapshots/current.md" }],
     });
+    await writeMemoryWikiImportRunRecord(vaultRoot, {
+      version: 1,
+      runId: "chatgpt-rolling",
+      importType: "chatgpt",
+      exportPath: "/tmp/rolling",
+      sourcePath: "/tmp/rolling/conversations.json",
+      appliedAt: "2026-04-11T10:00:00.000Z",
+      conversationCount: 1,
+      createdCount: 1,
+      updatedCount: 0,
+      skippedCount: 0,
+      createdPaths: [{ path: "sources/rolling.md" }],
+      updatedPaths: [],
+      rollbackStartedAt: "2026-04-11T10:01:00.000Z",
+      rollbackTargetsFinalizedAt: "2026-04-11T10:02:00.000Z",
+    });
 
-    await expect(listMemoryWikiImportRuns(config, { limit: 1 })).resolves.toEqual({
+    await expect(listMemoryWikiImportRuns(config, { limit: 3 })).resolves.toEqual({
       runs: [
+        {
+          runId: "chatgpt-rolling",
+          importType: "chatgpt",
+          appliedAt: "2026-04-11T10:00:00.000Z",
+          exportPath: "/tmp/rolling",
+          sourcePath: "/tmp/rolling/conversations.json",
+          conversationCount: 1,
+          createdCount: 1,
+          updatedCount: 0,
+          skippedCount: 0,
+          status: "rolling_back",
+          rollbackStartedAt: "2026-04-11T10:01:00.000Z",
+          rollbackTargetsFinalizedAt: "2026-04-11T10:02:00.000Z",
+          pagePaths: ["sources/rolling.md"],
+          samplePaths: ["sources/rolling.md"],
+        },
         {
           runId: "chatgpt-new",
           importType: "chatgpt",
@@ -71,9 +103,24 @@ describe("memory-wiki import runs", () => {
           pagePaths: ["sources/new.md", "sources/current.md"],
           samplePaths: ["sources/new.md", "sources/current.md"],
         },
+        {
+          runId: "chatgpt-old",
+          importType: "chatgpt",
+          appliedAt: "2026-04-09T10:00:00.000Z",
+          exportPath: "/tmp/old",
+          sourcePath: "/tmp/old/conversations.json",
+          conversationCount: 1,
+          createdCount: 1,
+          updatedCount: 0,
+          skippedCount: 0,
+          status: "rolled_back",
+          rolledBackAt: "2026-04-09T11:00:00.000Z",
+          pagePaths: ["sources/old.md"],
+          samplePaths: ["sources/old.md"],
+        },
       ],
-      totalRuns: 2,
-      activeRuns: 1,
+      totalRuns: 3,
+      activeRuns: 2,
       rolledBackRuns: 1,
     });
   });

@@ -9,7 +9,6 @@ import type { ChannelSetupDmPolicy } from "./setup-wizard-types.js";
 import type { ChannelSetupWizard } from "./setup-wizard.js";
 
 type PromptAllowFromParams = Parameters<NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]>>[0];
-type ResolveConfiguredParams = Parameters<ChannelSetupWizard["status"]["resolveConfigured"]>[0];
 type ResolveAllowFromEntriesParams = Parameters<
   NonNullable<ChannelSetupWizard["allowFrom"]>["resolveEntries"]
 >[0];
@@ -19,30 +18,6 @@ type ResolveAllowFromEntriesResult = Awaited<
 type ResolveGroupAllowlistParams = Parameters<
   NonNullable<NonNullable<ChannelSetupWizard["groupAccess"]>["resolveAllowlist"]>
 >[0];
-
-/**
- * Delegates setup configured-state checks to a lazily loaded wizard.
- */
-export function createDelegatedResolveConfigured(loadWizard: () => Promise<ChannelSetupWizard>) {
-  return async ({ cfg, accountId }: ResolveConfiguredParams) =>
-    await (await loadWizard()).status.resolveConfigured({ cfg, accountId });
-}
-
-/**
- * Delegates setup preparation to a lazily loaded wizard.
- */
-export function createDelegatedPrepare(loadWizard: () => Promise<ChannelSetupWizard>) {
-  return async (params: Parameters<NonNullable<ChannelSetupWizard["prepare"]>>[0]) =>
-    await (await loadWizard()).prepare?.(params);
-}
-
-/**
- * Delegates setup finalization to a lazily loaded wizard.
- */
-export function createDelegatedFinalize(loadWizard: () => Promise<ChannelSetupWizard>) {
-  return async (params: Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]) =>
-    await (await loadWizard()).finalize?.(params);
-}
 
 type DelegatedStatusBase = Omit<
   ChannelSetupWizard["status"],
@@ -70,7 +45,8 @@ export function createDelegatedSetupWizardProxy(params: {
     channel: params.channel,
     status: {
       ...params.status,
-      resolveConfigured: createDelegatedResolveConfigured(params.loadWizard),
+      resolveConfigured: async (statusParams) =>
+        await (await params.loadWizard()).status.resolveConfigured(statusParams),
       ...createDelegatedSetupWizardStatusResolvers(params.loadWizard),
     },
     // Keep static setup metadata available immediately, while expensive
@@ -78,10 +54,22 @@ export function createDelegatedSetupWizardProxy(params: {
     ...(params.resolveShouldPromptAccountIds
       ? { resolveShouldPromptAccountIds: params.resolveShouldPromptAccountIds }
       : {}),
-    ...(params.delegatePrepare ? { prepare: createDelegatedPrepare(params.loadWizard) } : {}),
+    ...(params.delegatePrepare
+      ? {
+          prepare: async (
+            prepareParams: Parameters<NonNullable<ChannelSetupWizard["prepare"]>>[0],
+          ) => await (await params.loadWizard()).prepare?.(prepareParams),
+        }
+      : {}),
     credentials: params.credentials ?? [],
     ...(params.textInputs ? { textInputs: params.textInputs } : {}),
-    ...(params.delegateFinalize ? { finalize: createDelegatedFinalize(params.loadWizard) } : {}),
+    ...(params.delegateFinalize
+      ? {
+          finalize: async (
+            finalizeParams: Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0],
+          ) => await (await params.loadWizard()).finalize?.(finalizeParams),
+        }
+      : {}),
     ...(params.completionNote ? { completionNote: params.completionNote } : {}),
     ...(params.dmPolicy ? { dmPolicy: params.dmPolicy } : {}),
     ...(params.disable ? { disable: params.disable } : {}),

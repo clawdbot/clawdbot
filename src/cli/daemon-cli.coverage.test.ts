@@ -14,6 +14,7 @@ const resolveGatewayProgramArguments = vi.fn(async (_opts?: unknown) => ({
 const serviceInstall = vi.fn().mockResolvedValue(undefined);
 const serviceStage = vi.fn().mockResolvedValue(undefined);
 const serviceUninstall = vi.fn().mockResolvedValue(undefined);
+const serviceStart = vi.fn().mockResolvedValue(undefined);
 const serviceStop = vi.fn().mockResolvedValue(undefined);
 const serviceRestart = vi.fn().mockResolvedValue({ outcome: "completed" });
 const serviceIsLoaded = vi.fn().mockResolvedValue(false);
@@ -29,6 +30,19 @@ const inspectPortUsage = vi.fn(async (port: number) => ({
   listeners: [],
   hints: [],
 }));
+const inspectPortUsages = vi.fn(async (ports: readonly number[]) => {
+  return new Map(
+    ports.map((port) => [
+      port,
+      {
+        port,
+        status: "free",
+        listeners: [],
+        hints: [],
+      },
+    ]),
+  );
+});
 const inspectPortConnections = vi.fn(async (port: number) => ({
   port,
   connections: [],
@@ -73,6 +87,11 @@ const mocks = await vi.hoisted(async () => {
 
 const { runtimeLogs } = mocks;
 
+vi.mock("../config/paths.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
+  return { ...actual, isDefaultInstallIdentity: () => true };
+});
+
 vi.mock("./daemon-cli/probe.js", () => ({
   probeGatewayStatus: (opts: unknown) => probeGatewayStatus(opts),
 }));
@@ -100,6 +119,7 @@ vi.mock("../daemon/service.js", async () => {
       stage: serviceStage,
       install: serviceInstall,
       uninstall: serviceUninstall,
+      start: serviceStart,
       stop: serviceStop,
       restart: serviceRestart,
       isLoaded: serviceIsLoaded,
@@ -118,9 +138,13 @@ vi.mock("../daemon/inspect.js", () => ({
   renderGatewayServiceCleanupHints: () => [],
 }));
 
-vi.mock("../infra/ports.js", () => ({
+vi.mock("../infra/ports-inspect.js", () => ({
   inspectPortConnections: (port: number) => inspectPortConnections(port),
   inspectPortUsage: (port: number) => inspectPortUsage(port),
+  inspectPortUsages: (ports: readonly number[]) => inspectPortUsages(ports),
+}));
+
+vi.mock("../infra/ports-format.js", () => ({
   formatPortDiagnostics: () => ["Port 18789 is already in use."],
 }));
 
@@ -199,6 +223,8 @@ describe("daemon-cli coverage", () => {
     resolveGatewayProbeAuthSafeWithSecretInputs.mockClear();
     findExtraGatewayServices.mockClear();
     inspectPortConnections.mockClear();
+    inspectPortUsage.mockClear();
+    inspectPortUsages.mockClear();
     buildGatewayInstallPlan.mockClear();
   });
 
@@ -224,7 +250,6 @@ describe("daemon-cli coverage", () => {
   it("derives probe URL from service args + env (json)", async () => {
     runtimeLogs.length = 0;
     probeGatewayStatus.mockClear();
-    inspectPortUsage.mockClear();
 
     serviceReadCommand.mockResolvedValueOnce({
       programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
@@ -242,7 +267,8 @@ describe("daemon-cli coverage", () => {
     expect(requireMockCallArg(probeGatewayStatus, "probeGatewayStatus").url).toBe(
       "ws://127.0.0.1:19001",
     );
-    expect(inspectPortUsage).toHaveBeenCalledWith(19001);
+    expect(inspectPortUsages).toHaveBeenCalledWith([19001, 18789]);
+    expect(inspectPortUsage).not.toHaveBeenCalled();
 
     const parsed = parseFirstJsonRuntimeLine<{
       gateway?: { port?: number; portSource?: string; probeUrl?: string; version?: string | null };
@@ -273,7 +299,7 @@ describe("daemon-cli coverage", () => {
 
   it("installs the daemon (json output)", async () => {
     runtimeLogs.length = 0;
-    serviceIsLoaded.mockResolvedValueOnce(false);
+    serviceIsLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     serviceInstall.mockClear();
 
     await runDaemonCommand([
@@ -299,7 +325,7 @@ describe("daemon-cli coverage", () => {
 
   it("passes the existing service environment into the install plan on forced reinstall", async () => {
     runtimeLogs.length = 0;
-    serviceIsLoaded.mockResolvedValueOnce(true);
+    serviceIsLoaded.mockResolvedValueOnce(true).mockResolvedValueOnce(true);
     serviceReadCommand.mockResolvedValueOnce({
       programArguments: ["/bin/node", "cli", "gateway", "--port", "18789"],
       environment: {
@@ -330,7 +356,7 @@ describe("daemon-cli coverage", () => {
 
   it("passes an explicit service wrapper into the install plan", async () => {
     runtimeLogs.length = 0;
-    serviceIsLoaded.mockResolvedValueOnce(false);
+    serviceIsLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 
     await runDaemonCommand([
       "daemon",
@@ -347,14 +373,15 @@ describe("daemon-cli coverage", () => {
 
   it("starts and stops daemon (json output)", async () => {
     runtimeLogs.length = 0;
-    serviceRestart.mockClear();
+    serviceStart.mockClear();
     serviceStop.mockClear();
     serviceIsLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValueOnce({ status: "stopped" });
 
     await runDaemonCommand(["daemon", "start", "--json"]);
-    await runDaemonCommand(["daemon", "stop", "--json"]);
+    await runDaemonCommand(["daemon", "stop", "--json", "--force"]);
 
-    expect(serviceRestart).toHaveBeenCalledTimes(1);
+    expect(serviceStart).toHaveBeenCalledTimes(1);
     expect(serviceStop).toHaveBeenCalledTimes(1);
     const jsonLines = runtimeLogs.filter((line) => line.trim().startsWith("{"));
     const parsed = jsonLines.map((line) => JSON.parse(line) as { action?: string; ok?: boolean });

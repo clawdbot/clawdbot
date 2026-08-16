@@ -6,10 +6,10 @@ scenario:
   category: followthrough
   coverage:
     primary:
-      - personal.task-followthrough
+      - agent-runtime.tool-task-followthrough
     secondary:
-      - tools.followthrough
-      - workspace.artifacts
+      - agent-runtime.tool-followthrough
+      - agent-runtime.tool-fs-write
   risk: medium
   capabilities:
     - tools.read

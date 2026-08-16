@@ -24,7 +24,9 @@ export type ToolCallRecord = {
   argsHash: string;
   toolCallId?: string;
   runId?: string;
+  outcomeKind?: "tool-loop-veto" | "terminal-exec-failure";
   resultHash?: string;
+  noProgress?: true;
   unknownToolName?: string;
   timestamp: number;
 };
@@ -194,11 +196,6 @@ export function peekDiagnosticSessionState(ref: SessionRef): SessionState | unde
     diagnosticSessionStates.get(key) ??
     (ref.sessionId ? findStateEntryBySessionId(ref.sessionId)?.[1] : undefined)
   );
-}
-
-/** Returns the current state count for pruning tests. */
-export function getDiagnosticSessionStateCountForTest(): number {
-  return diagnosticSessionStates.size;
 }
 
 /** Clears all process-local diagnostic session state for tests. */

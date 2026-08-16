@@ -1,7 +1,7 @@
+import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
 // OpenAI-compatible error helpers.
 // Converts OpenClaw failover/sampling errors to OpenAI-style HTTP responses.
-import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
-import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
+import type { FailoverReason } from "../agents/failover/signal.js";
 
 type OpenAiCompatError = {
   status: number;
@@ -12,19 +12,24 @@ type OpenAiCompatError = {
   };
 };
 
-const ERROR_TYPE_BY_REASON: Partial<Record<FailoverReason, string>> = {
+const ERROR_TYPE_BY_REASON = {
   auth: "authentication_error",
   auth_permanent: "permission_error",
-  billing: "insufficient_quota",
-  context_overflow: "invalid_request_error",
   format: "invalid_request_error",
-  model_not_found: "invalid_request_error",
-  overloaded: "api_error",
   rate_limit: "rate_limit_error",
+  overloaded: "api_error",
+  billing: "insufficient_quota",
   server_error: "api_error",
-  session_expired: "invalid_request_error",
   timeout: "api_error",
-};
+  tls_certificate: "api_error",
+  context_overflow: "invalid_request_error",
+  model_not_found: "invalid_request_error",
+  session_expired: "invalid_request_error",
+  empty_response: undefined,
+  no_error_details: undefined,
+  unclassified: undefined,
+  unknown: undefined,
+} satisfies Record<FailoverReason, string | undefined>;
 
 function statusForReason(reason: FailoverReason, status: number | undefined): number {
   if (reason === "server_error") {

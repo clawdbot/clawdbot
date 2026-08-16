@@ -1,8 +1,11 @@
+import type { ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import { listRaftAccountIds, resolveRaftAccount } from "./accounts.js";
 import { raftChannelConfigSchema } from "./config-schema.js";
 import { raftSetupPlugin } from "./setup.js";
+
+type RaftSetupInput = ChannelSetupInput & { profile?: string };
 
 const originalProfile = process.env.RAFT_PROFILE;
 const runtimeConfigSchema = raftChannelConfigSchema.runtime;
@@ -59,12 +62,12 @@ describe("Raft account resolution", () => {
   });
 
   it("keeps named account setup scoped to that account", () => {
-    const next = raftSetupPlugin.setup!.applyAccountConfig({
+    const next = raftSetupPlugin.setupContract!.applyAccountConfig({
       cfg: {} as OpenClawConfig,
       accountId: "support",
       input: {
         profile: "support-profile",
-      },
+      } as RaftSetupInput,
     });
 
     expect(next.channels?.raft).toEqual({

@@ -28,11 +28,6 @@ const cachedTokens = new Map<string, CachedTokenEntry>();
 const refreshPromises = new Map<string, Promise<{ apiKey: string; expiresAt: number }>>();
 const FOUNDRY_TOKEN_FALLBACK_LIFETIME_MS = 55 * 60 * 1000;
 
-export function resetFoundryRuntimeAuthCaches(): void {
-  cachedTokens.clear();
-  refreshPromises.clear();
-}
-
 async function refreshEntraToken(params?: {
   scope?: string;
   subscriptionId?: string;

@@ -172,9 +172,3 @@ export function shouldInjectParentContext(sessionKey: string, parentId: string):
 export function markParentContextInjected(sessionKey: string, parentId: string): void {
   touchLru(injectedParents, sessionKey, parentId, INJECTED_MAX);
 }
-
-// Exported for test isolation.
-export function resetThreadParentContextCachesForTest(): void {
-  parentCache.clear();
-  injectedParents.clear();
-}

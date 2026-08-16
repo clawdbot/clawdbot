@@ -22,6 +22,7 @@ import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTextBadge
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.uppercaseFirstGraphemeOrNull
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -598,15 +599,21 @@ private fun ClawHubSkillSearchPanel(
   if (state.results.isNotEmpty()) {
     ClawListPanel(items = state.results) { skill ->
       val installed =
-        skill.version?.let { version -> isClawHubSkillInstalled(installedSkills, skill.slug, version) }
-          ?: isClawHubSkillInstalled(installedSkills, skill.slug)
+        skill.version?.let { version -> isClawHubSkillInstalled(installedSkills, skill.reference, version) }
+          ?: isClawHubSkillInstalled(installedSkills, skill.reference)
+      val subtitleParts =
+        listOfNotNull(
+          skill.summary,
+          skill.reference,
+          skill.version?.let { nativeString("Version \$it", it) },
+        )
       ClawDetailRow(
         title = skill.displayName,
-        subtitle = listOfNotNull(skill.summary, skill.version?.let { nativeString("Version \$it", it) }).joinToString(" · "),
+        subtitle = subtitleParts.joinToString(" · "),
         leading = { ClawTextBadge(text = skillBadge(skill.displayName)) },
         trailing = {
-          val reviewing = state.reviewingSlug == skill.slug
-          val installing = isClawHubSkillOperationActive(state.installingSlugs, skill.slug)
+          val reviewing = state.reviewingSlug == skill.reference
+          val installing = isClawHubSkillOperationActive(state.installingSlugs, skill.reference)
           ClawSecondaryButton(
             text =
               when {
@@ -893,6 +900,6 @@ private fun skillBadge(name: String): String =
     .split(' ', '-', '_')
     .filter { it.isNotBlank() }
     .take(2)
-    .mapNotNull { it.firstOrNull()?.uppercaseChar()?.toString() }
+    .mapNotNull { it.uppercaseFirstGraphemeOrNull() }
     .joinToString("")
     .ifBlank { "S" }

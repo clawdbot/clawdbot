@@ -1,9 +1,11 @@
 // Diffs plugin module implements browser behavior.
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chromium } from "playwright-core";
 import type { OpenClawConfig } from "../api.js";
 import type { DiffRenderOptions, DiffTheme } from "./types.js";
@@ -313,11 +315,6 @@ async function writeExternalArtifactFile(params: {
   });
 }
 
-export async function resetSharedBrowserStateForTests(): Promise<void> {
-  executablePathCache = null;
-  await closeSharedBrowser();
-}
-
 function injectBaseHref(html: string): string {
   if (html.includes("<base ")) {
     return html;
@@ -525,17 +522,27 @@ function commonExecutablePathsForPlatform(): string[] {
   }
 
   if (process.platform === "win32") {
-    const localAppData = process.env.LOCALAPPDATA ?? "";
-    const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
-    const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+    const joinWindowsPath = path.win32.join;
+    const localAppData =
+      normalizeOptionalString(process.env.LOCALAPPDATA) ??
+      joinWindowsPath(os.homedir(), "AppData", "Local");
+    const programFiles = normalizeOptionalString(process.env.ProgramFiles) ?? "C:\\Program Files";
+    const programFilesX86 =
+      normalizeOptionalString(process.env["ProgramFiles(x86)"]) ?? "C:\\Program Files (x86)";
     return [
-      path.join(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
-      path.join(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
-      path.join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
-      path.join(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
-      path.join(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
-      path.join(programFiles, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
-      path.join(programFilesX86, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+      joinWindowsPath(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
+      joinWindowsPath(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
+      joinWindowsPath(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
+      joinWindowsPath(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
+      joinWindowsPath(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
+      joinWindowsPath(programFiles, "BraveSoftware", "Brave-Browser", "Application", "brave.exe"),
+      joinWindowsPath(
+        programFilesX86,
+        "BraveSoftware",
+        "Brave-Browser",
+        "Application",
+        "brave.exe",
+      ),
     ];
   }
 

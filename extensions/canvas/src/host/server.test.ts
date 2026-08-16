@@ -15,6 +15,8 @@ type MockWatcher = {
   __emit: (event: string, ...args: unknown[]) => void;
 };
 
+const CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
+
 type CanvasWatchFactory = NonNullable<
   Parameters<typeof import("./server.js").createCanvasHostHandler>[0]["watchFactory"]
 >;
@@ -119,14 +121,13 @@ async function captureHandlerResponse(
 }
 
 async function captureA2uiFixtureResponse(
-  rootDir: string,
   url: string,
   method = "GET",
   liveReload = true,
 ): Promise<CapturedResponse> {
-  const { createA2uiHttpRequestHandler } = await import("./a2ui.js");
+  const { handleA2uiHttpRequest } = await import("./a2ui.js");
   return await captureHttpResponse(
-    createA2uiHttpRequestHandler({ rootDir, liveReload }),
+    async (req, res) => await handleA2uiHttpRequest(req, res, { liveReload }),
     url,
     method,
   );
@@ -196,8 +197,6 @@ describe("canvas host", () => {
     log: (..._args: Parameters<typeof console.log>) => {},
   };
   let createCanvasHostHandler: typeof import("./server.js").createCanvasHostHandler;
-  let startCanvasHost: typeof import("./server.js").startCanvasHost;
-  let canvasLiveReloadMaxInboundMessageBytes = 0;
   let WebSocketServerClass: typeof import("ws").WebSocketServer;
   let watcherState: ReturnType<typeof createMockWatcherState>;
   let fixtureRoot = "";
@@ -226,7 +225,6 @@ describe("canvas host", () => {
     });
 
   beforeAll(async () => {
-    vi.doUnmock("undici");
     vi.doMock("node:timers", async (importOriginal) => {
       const actual = await importOriginal<typeof import("node:timers")>();
       return {
@@ -241,9 +239,7 @@ describe("canvas host", () => {
     });
     vi.resetModules();
     const serverModule = await import("./server.js");
-    ({ createCanvasHostHandler, startCanvasHost } = serverModule);
-    canvasLiveReloadMaxInboundMessageBytes =
-      serverModule.CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES;
+    ({ createCanvasHostHandler } = serverModule);
     const wsModule = await vi.importActual<typeof import("ws")>("ws");
     WebSocketServerClass = wsModule.WebSocketServer;
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-fixtures-"));
@@ -419,60 +415,33 @@ describe("canvas host", () => {
 
     try {
       const call = watcherState.watchCalls.at(-1);
-      expect(call?.root).toBe(await fs.realpath(dir));
+      const watchRoot = call?.root;
+      expect(watchRoot).toBe(await fs.realpath(dir));
+      if (typeof watchRoot !== "string") {
+        throw new TypeError("expected a single Canvas watch root");
+      }
       const ignored = call?.options?.ignored;
       expect(ignored).toBeTypeOf("function");
       const shouldIgnore = ignored as (candidatePath: string) => boolean;
-      expect(shouldIgnore(dir)).toBe(false);
-      expect(shouldIgnore(path.join(dir, "index.html"))).toBe(false);
-      expect(shouldIgnore(path.join(dir, ".draft.html"))).toBe(true);
-      expect(shouldIgnore(path.join(dir, "node_modules", "asset.js"))).toBe(true);
+      expect(shouldIgnore(watchRoot)).toBe(false);
+      expect(shouldIgnore(path.join(watchRoot, "index.html"))).toBe(false);
+      expect(shouldIgnore(path.join(watchRoot, ".draft.html"))).toBe(true);
+      expect(shouldIgnore(path.join(watchRoot, "node_modules", "asset.js"))).toBe(true);
     } finally {
       await handler.close();
     }
   });
 
-  it("serves sandbox-marked documents with a CSP sandbox header and no live reload", async () => {
+  it("leaves managed document requests to the core host", async () => {
     const dir = await createCaseDir();
-    const docDir = path.join(dir, "documents", "widget-1");
-    await fs.mkdir(docDir, { recursive: true });
-    await fs.writeFile(
-      path.join(docDir, "manifest.json"),
-      JSON.stringify({ id: "widget-1", cspSandbox: "scripts" }),
-      "utf8",
-    );
-    await fs.writeFile(path.join(docDir, "index.html"), "<html><body>widget</body></html>", "utf8");
-    const plainDir = path.join(dir, "documents", "plain-1");
-    await fs.mkdir(plainDir, { recursive: true });
-    await fs.writeFile(
-      path.join(plainDir, "manifest.json"),
-      JSON.stringify({ id: "plain-1" }),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(plainDir, "index.html"),
-      "<html><body>plain</body></html>",
-      "utf8",
-    );
     const handler = await createTestCanvasHostHandler(dir);
 
     try {
-      const widget = await captureHandlerResponse(
+      const response = await captureHandlerResponse(
         handler,
         `${CANVAS_HOST_PATH}/documents/widget-1/index.html`,
       );
-      expect(widget.status).toBe(200);
-      // Opaque origin on direct navigation: widget script must not run as the app origin.
-      expect(widget.headers["content-security-policy"]).toBe("sandbox allow-scripts");
-      expect(widget.body).toContain("widget");
-      expect(widget.body).not.toContain(CANVAS_WS_PATH);
-
-      const plain = await captureHandlerResponse(
-        handler,
-        `${CANVAS_HOST_PATH}/documents/plain-1/index.html`,
-      );
-      expect(plain.status).toBe(200);
-      expect(plain.headers["content-security-policy"]).toBeUndefined();
+      expect(response.handled).toBe(false);
     } finally {
       await handler.close();
     }
@@ -507,7 +476,7 @@ describe("canvas host", () => {
     try {
       expect(constructorOptions[0]).toMatchObject({
         noServer: true,
-        maxPayload: canvasLiveReloadMaxInboundMessageBytes,
+        maxPayload: CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES,
       });
       const socketOn = vi.fn();
       connectionHandler?.({ on: socketOn } as unknown as TrackingWebSocket);
@@ -531,14 +500,11 @@ describe("canvas host", () => {
     }
   });
 
-  it("serves canvas content from the mounted base path and reuses handlers without double close", async () => {
+  it("serves canvas content from the mounted base path", async () => {
     const dir = await createCaseDir();
     await fs.writeFile(path.join(dir, "index.html"), "<html><body>v1</body></html>", "utf8");
 
     const handler = await createTestCanvasHostHandler(dir);
-
-    const originalClose = handler.close;
-    const closeSpy = vi.fn(async () => originalClose());
 
     try {
       const response = await captureHandlerResponse(handler, `${CANVAS_HOST_PATH}/`);
@@ -552,25 +518,8 @@ describe("canvas host", () => {
 
       const miss = await captureHandlerResponse(handler, "/");
       expect(miss.handled).toBe(false);
-
-      handler.close = closeSpy;
-      const hosted = await startCanvasHost({
-        runtime: quietRuntime,
-        handler,
-        ownsHandler: false,
-        port: 0,
-        listenHost: "127.0.0.1",
-        allowInTests: true,
-      });
-
-      try {
-        expect(hosted.port).toBeGreaterThan(0);
-      } finally {
-        await hosted.close();
-        expect(closeSpy).not.toHaveBeenCalled();
-      }
     } finally {
-      await originalClose();
+      await handler.close();
     }
   });
 
@@ -662,60 +611,104 @@ describe("canvas host", () => {
   });
 
   it("serves A2UI scaffold and blocks traversal/symlink escapes", async () => {
-    const a2uiRoot = await createCaseDir();
-    const nestedAssetDir = path.join(a2uiRoot, "assets", "demo");
+    const fixtureEntryDir = await createCaseDir();
+    const a2uiRoot = path.join(fixtureEntryDir, "a2ui");
+    const nestedAssetDir = path.join(
+      a2uiRoot,
+      `test-assets-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    );
+    const nestedAssetUrlPath = path.basename(nestedAssetDir);
+    const bundlePath = path.join(a2uiRoot, "a2ui.bundle.js");
     const linkName = `test-link-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
     const linkPath = path.join(a2uiRoot, linkName);
-
-    await fs.mkdir(nestedAssetDir, { recursive: true });
-    await fs.writeFile(
-      path.join(a2uiRoot, "index.html"),
-      `<openclaw-a2ui-host></openclaw-a2ui-host>
-<script>openclawCanvasA2UIAction</script>`,
-      "utf8",
-    );
-    await fs.writeFile(path.join(a2uiRoot, "a2ui.bundle.js"), "window.openclawA2UI = {};", "utf8");
-    await fs.writeFile(path.join(nestedAssetDir, "sample.txt"), "nested asset", "utf8");
-    await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
+    const { setA2uiRootRealForTest } = await import("../../test-api.js");
 
     try {
-      const res = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/`);
+      await fs.mkdir(nestedAssetDir, { recursive: true });
+      await fs.writeFile(
+        path.join(a2uiRoot, "index.html"),
+        `<openclaw-a2ui-host></openclaw-a2ui-host>
+<script>openclawCanvasA2UIAction</script>`,
+        "utf8",
+      );
+      await fs.writeFile(bundlePath, "window.openclawA2UI = {};", "utf8");
+      await fs.writeFile(path.join(nestedAssetDir, "sample.txt"), "nested asset", "utf8");
+      await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
+      setA2uiRootRealForTest(await fs.realpath(a2uiRoot));
+
+      const res = await captureA2uiFixtureResponse(`${A2UI_PATH}/`);
       const html = res.body;
       expect(res.status).toBe(200);
       expect(html).toContain("openclaw-a2ui-host");
       expect(html).toContain("openclawCanvasA2UIAction");
 
-      const noReloadRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/`, "GET", false);
+      const noReloadRes = await captureA2uiFixtureResponse(`${A2UI_PATH}/`, "GET", false);
       expect(noReloadRes.body).toContain("openclawCanvasA2UIAction");
       expect(noReloadRes.body).not.toContain(CANVAS_WS_PATH);
 
-      const bundleRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/a2ui.bundle.js`);
+      const bundleRes = await captureA2uiFixtureResponse(`${A2UI_PATH}/a2ui.bundle.js`);
       const js = bundleRes.body;
       expect(bundleRes.status).toBe(200);
       expect(js).toContain("openclawA2UI");
 
       const assetRes = await captureA2uiFixtureResponse(
-        a2uiRoot,
-        `${A2UI_PATH}/assets/demo/sample.txt`,
+        `${A2UI_PATH}/${nestedAssetUrlPath}/sample.txt`,
       );
       expect(assetRes.status).toBe(200);
       expect(assetRes.headers["content-type"]).toBe("text/plain");
       expect(assetRes.body).toBe("nested asset");
 
-      const traversalRes = await captureA2uiFixtureResponse(
-        a2uiRoot,
-        `${A2UI_PATH}/%2e%2e%2fpackage.json`,
-      );
+      const traversalRes = await captureA2uiFixtureResponse(`${A2UI_PATH}/%2e%2e%2fpackage.json`);
       expect(traversalRes.status).toBe(404);
       expect(traversalRes.body).toBe("not found");
-      const malformedRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/%E0%A4%A`);
+      const malformedRes = await captureA2uiFixtureResponse(`${A2UI_PATH}/%E0%A4%A`);
       expect(malformedRes.status).toBe(404);
       expect(malformedRes.body).toBe("not found");
-      const symlinkRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/${linkName}`);
+      const symlinkRes = await captureA2uiFixtureResponse(`${A2UI_PATH}/${linkName}`);
       expect(symlinkRes.status).toBe(404);
       expect(symlinkRes.body).toBe("not found");
     } finally {
+      setA2uiRootRealForTest(undefined);
       await fs.rm(linkPath, { force: true });
+    }
+  });
+
+  it("serves Content-Length on A2UI HEAD responses", async () => {
+    const fixtureEntryDir = await createCaseDir();
+    const a2uiRoot = path.join(fixtureEntryDir, "a2ui");
+    const { setA2uiRootRealForTest } = await import("../../test-api.js");
+
+    try {
+      await fs.mkdir(a2uiRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(a2uiRoot, "index.html"),
+        `<openclaw-a2ui-host></openclaw-a2ui-host>
+<script>openclawCanvasA2UIAction</script>`,
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(a2uiRoot, "a2ui.bundle.js"),
+        "window.openclawA2UI = {};",
+        "utf8",
+      );
+      setA2uiRootRealForTest(await fs.realpath(a2uiRoot));
+
+      // HTML: HEAD Content-Length must match the injected GET body bytes.
+      const getHtml = await captureA2uiFixtureResponse(`${A2UI_PATH}/`);
+      const headHtml = await captureA2uiFixtureResponse(`${A2UI_PATH}/`, "HEAD");
+      expect(headHtml.status).toBe(200);
+      expect(headHtml.headers["content-length"]).toBe(String(getHtml.bodyBytes.byteLength));
+      expect(headHtml.bodyBytes.byteLength).toBe(0);
+      expect(headHtml.headers["content-type"]).toBe("text/html; charset=utf-8");
+
+      // Static asset: HEAD Content-Length must match the file bytes.
+      const getBundle = await captureA2uiFixtureResponse(`${A2UI_PATH}/a2ui.bundle.js`);
+      const headBundle = await captureA2uiFixtureResponse(`${A2UI_PATH}/a2ui.bundle.js`, "HEAD");
+      expect(headBundle.status).toBe(200);
+      expect(headBundle.headers["content-length"]).toBe(String(getBundle.bodyBytes.byteLength));
+      expect(headBundle.bodyBytes.byteLength).toBe(0);
+    } finally {
+      setA2uiRootRealForTest(undefined);
     }
   });
 });

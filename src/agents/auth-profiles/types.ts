@@ -106,6 +106,7 @@ export type ProfileUsageStats = {
   blockedReason?: AuthProfileBlockedReason;
   blockedSource?: AuthProfileBlockedSource;
   blockedModel?: string;
+  blockedScope?: "model";
   cooldownUntil?: number;
   cooldownReason?: AuthProfileFailureReason;
   cooldownModel?: string;
@@ -114,6 +115,7 @@ export type ProfileUsageStats = {
   errorCount?: number;
   failureCounts?: Partial<Record<AuthProfileFailureReason, number>>;
   lastFailureAt?: number;
+  lastProbeAt?: number;
 };
 
 /** Durable, non-secret auth profile selection state. */
@@ -153,6 +155,8 @@ export type AuthProfileStore = AuthProfileSecretsStore &
 
 /** Internal effective-store ownership metadata; never exposed through the plugin SDK. */
 export type RuntimeAuthProfileStore = AuthProfileStore & {
+  /** Runtime-only built-in CLI winners; internal provenance, never exposed or persisted. */
+  runtimeExternalCliProfileIds?: string[];
   runtimeLocalProfileIds?: string[];
   runtimeInheritsMainState?: boolean;
 };

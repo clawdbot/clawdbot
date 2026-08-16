@@ -1,0 +1,28 @@
+title: Plugin-managed TaskFlow registration
+
+scenario:
+  id: plugin-managed-flows
+  surface: plugins
+  category: automation.taskflow-managed-flows
+  coverage:
+    primary:
+      - automation.plugin-managedflows
+  objective: Verify a production-loaded plugin can contribute a tool that creates and updates a managed TaskFlow through the plugin runtime.
+  successCriteria:
+    - A real on-disk plugin manifest and module register a declared tool through the production plugin loader.
+    - Production tool resolution materializes the plugin tool with its trusted session context.
+    - The plugin runtime creates and finishes a managed TaskFlow with revision tracking.
+    - Owner-scoped TaskFlow consumers read the persisted flow and reject another owner.
+  docsRefs:
+    - docs/automation/taskflow.md
+    - docs/plugins/sdk-runtime.md
+  codeRefs:
+    - src/plugins/loader-runtime-load.ts
+    - src/plugins/tools.ts
+    - src/plugins/runtime/runtime-taskflow.ts
+    - src/tasks/task-flow-owner-access.ts
+    - src/tasks/plugin-managed-flows.e2e.test.ts
+  execution:
+    kind: vitest
+    path: src/tasks/plugin-managed-flows.e2e.test.ts
+    summary: Load and execute a real fixture plugin tool, then inspect the persisted managed flow through owner-scoped consumers.

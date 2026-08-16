@@ -12,6 +12,9 @@ export function formatQuotaReset(resetAt?: number): string | null {
     return "now";
   }
   const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 1) {
+    return "<1m";
+  }
   if (minutes < 60) {
     return `${minutes}m`;
   }

@@ -46,6 +46,7 @@ export function registerGoogleChatWebhookTarget(target: WebhookTarget): () => vo
       source: "googlechat-webhook",
       accountId: target.account.accountId,
       log: target.runtime.log,
+      throwOnFailure: true,
       handler: async (req, res) => {
         const handled = await handleGoogleChatWebhookRequest(req, res);
         if (!handled && !res.headersSent) {
@@ -58,7 +59,7 @@ export function registerGoogleChatWebhookTarget(target: WebhookTarget): () => vo
   }).unregister;
 }
 
-export async function handleGoogleChatWebhookRequest(
+async function handleGoogleChatWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {

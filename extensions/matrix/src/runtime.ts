@@ -4,7 +4,6 @@ import type { PluginRuntime } from "./runtime-api.js";
 
 const {
   setRuntime: setMatrixRuntime,
-  clearRuntime: clearMatrixRuntime,
   getRuntime: getMatrixRuntime,
   tryGetRuntime: getOptionalMatrixRuntime,
 } = createPluginRuntimeStore<PluginRuntime>({
@@ -12,4 +11,4 @@ const {
   errorMessage: "Matrix runtime not initialized",
 });
 
-export { clearMatrixRuntime, getMatrixRuntime, getOptionalMatrixRuntime, setMatrixRuntime };
+export { getMatrixRuntime, getOptionalMatrixRuntime, setMatrixRuntime };

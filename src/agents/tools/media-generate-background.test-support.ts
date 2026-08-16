@@ -71,7 +71,6 @@ type FallbackAnnouncementExpectation = {
 };
 
 type CompletionFixtureParams = {
-  directSend?: boolean;
   mediaUrls?: string[];
   result: string;
   runId: string;
@@ -98,16 +97,12 @@ function requireRecordArray(value: unknown, label: string): Record<string, unkno
 }
 
 export function createMediaCompletionFixture({
-  directSend,
   mediaUrls,
   result,
   runId,
   taskLabel,
 }: CompletionFixtureParams) {
   return {
-    ...(directSend
-      ? { config: { tools: { media: { asyncCompletion: { directSend: true } } } } }
-      : {}),
     handle: {
       taskId: "task-123",
       runId,

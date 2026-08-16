@@ -833,4 +833,16 @@ describe("restoreEnvVarRefs", () => {
       resolved: "${MY_TOKEN}", // should restore ref
     });
   });
+
+  it("does not restore env refs from inherited parsed properties", () => {
+    // isPlainObject accepts custom prototypes, but only own properties represent authored config.
+    const parsed = Object.create({
+      toString: "${TEST_VALUE}",
+    }) as Record<string, unknown>;
+    const testEnv = { TEST_VALUE: "resolved-value" } as unknown as NodeJS.ProcessEnv;
+
+    expect(restoreEnvVarRefs({ toString: "resolved-value" }, parsed, testEnv)).toEqual({
+      toString: "resolved-value",
+    });
+  });
 });

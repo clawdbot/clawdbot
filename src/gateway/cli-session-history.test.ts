@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { hashCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
+import type { AgentMessage } from "../agents/runtime/index.js";
+import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { readClaudeCliSessionMessages } from "./cli-session-history.claude.js";
 import {
@@ -13,7 +15,7 @@ import {
   resolveChatHistoryWithCliSessionImports,
 } from "./cli-session-history.js";
 import { mergeImportedChatHistoryMessages } from "./cli-session-history.merge.js";
-import { expectRecordFields, requireRecord } from "./test-helpers.assertions.js";
+import { expectRecordFields, requireGatewayRecord } from "./test-helpers.assertions.js";
 
 type ClaudeCliFallbackSeed = NonNullable<ReturnType<typeof readClaudeCliFallbackSeed>>;
 type AugmentCliHistoryParams = Parameters<typeof augmentChatHistoryWithCliSessionImports>[0];
@@ -33,7 +35,7 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 }
 
 function readRecord(value: unknown): Record<string, unknown> {
-  return requireRecord(value, "record");
+  return requireGatewayRecord(value, "record");
 }
 
 function expectCliSessionMarker(message: unknown, sessionId: string): void {
@@ -93,7 +95,7 @@ function createClaudeHistoryLines(sessionId: string) {
       message: {
         role: "user",
         content:
-          'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
+          'Sender: ⟦openclaw:ctx⟧\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
       },
     }),
     JSON.stringify({
@@ -153,6 +155,24 @@ function createClaudeHistoryLines(sessionId: string) {
       lastPrompt: "ignored",
     }),
   ].join("\n");
+}
+
+function createClaudeTextHistoryLines(
+  entries: Array<{ content: string; role: "assistant" | "user"; uuid: string }>,
+): string {
+  return entries
+    .map((entry, index) =>
+      JSON.stringify({
+        type: entry.role,
+        uuid: entry.uuid,
+        timestamp: new Date(Date.parse("2026-03-26T16:29:54.800Z") + index).toISOString(),
+        message: {
+          role: entry.role,
+          content: entry.content,
+        },
+      }),
+    )
+    .join("\n");
 }
 
 async function withClaudeProjectsDir<T>(
@@ -222,6 +242,34 @@ describe("cli session history", () => {
           content: "/tmp/demo",
           tool_use_id: "toolu_123",
         },
+      ]);
+    });
+  });
+
+  it("preserves Date.parse semantics for numeric-looking Claude timestamps", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      await fs.writeFile(
+        filePath,
+        [
+          { timestamp: "0", uuid: "numeric-zero", content: "zero" },
+          { timestamp: "2026", uuid: "numeric-year", content: "year" },
+        ]
+          .map((entry) =>
+            JSON.stringify({
+              type: "user",
+              uuid: entry.uuid,
+              timestamp: entry.timestamp,
+              message: { role: "user", content: entry.content },
+            }),
+          )
+          .join("\n"),
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+      expect(messages.map((message) => message.timestamp)).toEqual([
+        Date.parse("0"),
+        Date.parse("2026"),
       ]);
     });
   });
@@ -764,7 +812,7 @@ describe("cli session history", () => {
       {
         role: "user",
         content:
-          'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
+          'Sender: ⟦openclaw:ctx⟧\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
         timestamp: Date.parse("2026-03-26T16:29:54.800Z"),
         __openclaw: {
           importedFrom: "claude-cli",
@@ -802,6 +850,132 @@ describe("cli session history", () => {
     expectFields(readRecord(merged[2])["__openclaw"], {
       importedFrom: "claude-cli",
       externalId: "user-2",
+    });
+  });
+
+  it.each([
+    ["deduplicates a local redacted copy against an imported full copy", false],
+    ["deduplicates when both local and imported copies are already redacted", true],
+  ])("%s", async (_label, importRedacted) => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const secretText = "key is sk-abcdef1234567890xyz";
+      const localMessage = redactTranscriptMessage({
+        role: "user",
+        content: secretText,
+      } as AgentMessage);
+      const localMessages = [localMessage];
+      const redactedContent = readRecord(localMessage).content;
+      if (typeof redactedContent !== "string") {
+        throw new Error("expected redacted local text content");
+      }
+      await fs.writeFile(
+        filePath,
+        createClaudeTextHistoryLines([
+          {
+            role: "user",
+            uuid: "user-secret-copy",
+            content: importRedacted ? redactedContent : secretText,
+          },
+        ]),
+        "utf-8",
+      );
+
+      const messages = augmentBoundClaudeHistory({
+        homeDir,
+        sessionId,
+        provider: "claude-cli",
+        localMessages,
+      });
+
+      expect(messages).toBe(localMessages);
+    });
+  });
+
+  it("preserves repeated redacted Claude messages with distinct external UUIDs", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const content = "shared key sk-abcdef1234567890xyz";
+      const externalIds = [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+      ];
+      await fs.writeFile(
+        filePath,
+        createClaudeTextHistoryLines(
+          externalIds.map((uuid) => ({ role: "assistant", uuid, content })),
+        ),
+        "utf-8",
+      );
+
+      const messages = augmentBoundClaudeHistory({
+        homeDir,
+        sessionId,
+        provider: "claude-cli",
+      });
+
+      expect(messages).toHaveLength(2);
+      expect(
+        messages.map((message) => readRecord(readRecord(message)["__openclaw"]).externalId),
+      ).toEqual(externalIds);
+    });
+  });
+
+  it("deduplicates an edited local message by external identity", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const externalId = "edited-user-message";
+      await fs.writeFile(
+        filePath,
+        createClaudeTextHistoryLines([
+          { role: "user", uuid: externalId, content: "original imported text" },
+        ]),
+        "utf-8",
+      );
+      const localMessages = [
+        {
+          role: "user",
+          content: "edited local text",
+          __openclaw: {
+            importedFrom: "claude-cli",
+            externalId,
+            cliSessionId: sessionId,
+          },
+        },
+      ];
+
+      const messages = augmentBoundClaudeHistory({
+        homeDir,
+        sessionId,
+        provider: "claude-cli",
+        localMessages,
+      });
+
+      expect(messages).toBe(localMessages);
+    });
+  });
+
+  it("does not surface a secret present only in imported history after merge", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      const importedSecret = "sk-abcdef1234567890xyz";
+      await fs.writeFile(
+        filePath,
+        createClaudeTextHistoryLines([
+          {
+            role: "assistant",
+            uuid: "assistant-import-only-secret",
+            content: `imported only ${importedSecret}`,
+          },
+        ]),
+        "utf-8",
+      );
+
+      const messages = augmentBoundClaudeHistory({
+        homeDir,
+        sessionId,
+        provider: "claude-cli",
+        localMessages: [{ role: "user", content: "local visible text" }],
+      });
+
+      expect(messages).toHaveLength(2);
+      expect(JSON.stringify(messages)).not.toContain(importedSecret);
     });
   });
 

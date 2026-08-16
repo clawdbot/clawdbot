@@ -11,12 +11,12 @@ OpenClaw QQ Bot channel plugin for group and direct-message workflows.
 
 ## Distribution
 
-- Package: `@openclaw/qqbot`
-- Install route: npm; ClawHub
+- Package: `@tencent-connect/openclaw-qqbot`
+- Install route: npm
 
 ## Surface
 
-channels: qqbot; contracts: tools; skills
+channels: `qqbot`; contracts: `tools`; skills
 
 ## Related docs
 

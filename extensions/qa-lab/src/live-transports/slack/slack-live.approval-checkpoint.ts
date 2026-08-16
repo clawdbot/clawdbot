@@ -9,7 +9,6 @@ import {
 import {
   SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS,
   SLACK_QA_APPROVAL_CHECKPOINT_DEFAULT_TIMEOUT_MS,
-  type SlackQaScenarioId,
   type SlackQaApprovalKind,
   type SlackQaApprovalDecision,
   type SlackQaApprovalScenarioRun,
@@ -22,7 +21,7 @@ import {
 } from "./slack-live.contracts.js";
 import { buildSlackApprovalCheckpointMessage } from "./slack-live.observations.js";
 
-export function resolveSlackApprovalCheckpointConfig(env: NodeJS.ProcessEnv = process.env) {
+function resolveSlackApprovalCheckpointConfig(env: NodeJS.ProcessEnv = process.env) {
   const checkpointDir = env[SLACK_QA_APPROVAL_CHECKPOINT_DIR_ENV]?.trim();
   if (!checkpointDir) {
     return undefined;
@@ -79,7 +78,7 @@ export async function writeSlackApprovalCheckpoint(params: {
   decision?: SlackQaApprovalDecision;
   message: SlackMessage;
   observedAt: string;
-  scenarioId: SlackQaScenarioId;
+  scenarioId: string;
   state: SlackApprovalCheckpointState;
 }) {
   const config = resolveSlackApprovalCheckpointConfig();

@@ -41,20 +41,69 @@ private final class DashboardBrowserImportGate {
     }
 }
 
+private final class DashboardWindowGestureSpy: NSWindow {
+    private(set) var dragCount = 0
+    private(set) var zoomCount = 0
+
+    override func performDrag(with _: NSEvent) {
+        self.dragCount += 1
+    }
+
+    override func performZoom(_: Any?) {
+        self.zoomCount += 1
+    }
+}
+
 @Suite(.serialized)
 @MainActor
 struct DashboardWindowSmokeTests {
+    @Test func `dashboard frame routes single click to drag and double click to zoom`() throws {
+        let window = DashboardWindowGestureSpy(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false)
+        let dragRegion = DashboardWindowDragRegionView(
+            frame: NSRect(x: 0, y: 0, width: 300, height: 12))
+        window.contentView = dragRegion
+        let mouseDownEvent: (Int) -> NSEvent? = { clickCount in
+            NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: NSPoint(x: 100, y: 6),
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: clickCount,
+                clickCount: clickCount,
+                pressure: 1)
+        }
+
+        dragRegion.mouseDown(with: try #require(mouseDownEvent(1)))
+
+        #expect(window.dragCount == 1)
+        #expect(window.zoomCount == 0)
+
+        dragRegion.mouseDown(with: try #require(mouseDownEvent(2)))
+
+        #expect(window.dragCount == 1)
+        #expect(window.zoomCount == 1)
+    }
+
     @Test func `dashboard window controller shows and closes`() throws {
         let url = try #require(URL(string: "http://127.0.0.1:18789/control/#token=device-token"))
+        let windowAutosaveName = "OpenClawDashboardWindow-Test-\(UUID().uuidString)"
         let controller = DashboardWindowController(
             url: url,
             auth: DashboardWindowAuth(
                 gatewayUrl: "ws://127.0.0.1:18789/control/",
                 token: "device-token",
-                password: nil))
+                password: nil),
+            windowAutosaveName: windowAutosaveName)
         controller.show()
         #expect(controller.window?.styleMask.contains(.titled) == true)
         #expect(controller.window?.styleMask.contains(.closable) == true)
+        #expect(controller.window?.isRestorable == false)
         #expect(controller.window?.contentViewController != nil)
         #expect(controller.window?.standardWindowButton(.closeButton) != nil)
         // The empty unified toolbar is what grows the titlebar to 52pt so the
@@ -68,7 +117,7 @@ struct DashboardWindowSmokeTests {
         #expect(controller.window?.toolbar?.isVisible == true)
         #expect((controller.window?.frame.width ?? 0) >= DashboardWindowLayout.windowMinSize.width)
         #expect((controller.window?.frame.height ?? 0) >= DashboardWindowLayout.windowMinSize.height)
-        #expect(controller.window?.frameAutosaveName == DashboardWindowLayout.windowFrameAutosaveName)
+        #expect(controller.window?.frameAutosaveName == windowAutosaveName)
         controller.closeDashboard()
     }
 
@@ -188,17 +237,56 @@ struct DashboardWindowSmokeTests {
         let staleEndpoint = try #require(URL(string: "http://127.0.0.1:18790/control/chat"))
         #expect(try DashboardWindowController.shouldAllowNavigation(
             to: #require(URL(string: "http://127.0.0.1:18789/control/chat")),
-            dashboardURL: dashboard))
+            dashboardURL: dashboard,
+            isMainFrame: true))
         #expect(try !DashboardWindowController.shouldAllowNavigation(
             to: #require(URL(string: "https://docs.openclaw.ai/")),
-            dashboardURL: dashboard))
+            dashboardURL: dashboard,
+            isMainFrame: true))
         #expect(!DashboardWindowController.shouldAllowNavigation(
             to: staleEndpoint,
-            dashboardURL: dashboard))
+            dashboardURL: dashboard,
+            isMainFrame: true))
         #expect(!DashboardWindowController.shouldOpenExternalDashboardNavigation(
             staleEndpoint,
             navigationType: .backForward,
             buttonNumber: 1))
+    }
+
+    @Test func `dashboard permits only trusted ClickClack discussion subframes`() throws {
+        let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let channel = try #require(URL(string: "http://127.0.0.1:18890/embed/channel/T01/C01"))
+        let thread = try #require(URL(string: "http://127.0.0.1:18890/embed/thread/T01/M01"))
+        let hostnameAlias = try #require(URL(string: "http://localhost:18890/embed/channel/T01/C01"))
+        let ipv6Alias = try #require(URL(string: "http://[::1]:18890/embed/thread/T01/M01"))
+        let credentialedFrame = try #require(URL(string: "http://user:pass@localhost:18890/embed/channel/T01/C01"))
+        let unrelatedPath = try #require(URL(string: "http://127.0.0.1:18890/admin"))
+        let externalFrame = try #require(URL(string: "https://clickclack.example/embed/channel/T01/C01"))
+        let externalHTTPFrame = try #require(URL(string: "http://clickclack.example/embed/thread/T01/M01"))
+        let localFile = try #require(URL(string: "file:///tmp/discussion.html"))
+
+        #expect(DashboardWindowController.shouldAllowNavigation(
+            to: channel, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+        #expect(DashboardWindowController.shouldAllowNavigation(
+            to: thread, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+        #expect(DashboardWindowController.shouldAllowNavigation(
+            to: hostnameAlias, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+        #expect(DashboardWindowController.shouldAllowNavigation(
+            to: ipv6Alias, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+        #expect(DashboardWindowController.shouldAllowNavigation(
+            to: externalFrame, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+        #expect(DashboardWindowController.shouldAllowNavigation(
+            to: externalHTTPFrame, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+        #expect(!DashboardWindowController.shouldAllowNavigation(
+            to: channel, dashboardURL: dashboard, isMainFrame: true))
+        #expect(!DashboardWindowController.shouldAllowNavigation(
+            to: credentialedFrame, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+        #expect(!DashboardWindowController.shouldAllowNavigation(
+            to: unrelatedPath, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
+        #expect(!DashboardWindowController.shouldAllowNavigation(
+            to: externalFrame, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: false))
+        #expect(!DashboardWindowController.shouldAllowNavigation(
+            to: localFile, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
     }
 
     @Test func `dashboard navigation shortcuts target the focused browser`() throws {
@@ -425,8 +513,11 @@ struct DashboardWindowSmokeTests {
         #expect(controller._testLinkBrowserWebViewIdentity == nil)
         #expect(controller._testLinkBrowserDataStore === controller._testDashboardDataStore)
         #expect(!controller._testCanOpenWindowsAutomatically)
+        #expect(controller._testAllWebViewsEnableTabNavigation)
         #expect(controller._testLinkBrowserNavigationObservationCount == 0)
-        #expect(controller._testSplitAutosaveName == DashboardWindowLayout.linkBrowserSplitAutosaveName)
+        #expect(controller._testLinkBrowserTabBarIsHidden)
+        #expect(controller._testLinkBrowserTabBarHeight == 0)
+        #expect(controller._testLinkBrowserToolbarHeight == DashboardWindowLayout.linkBrowserToolbarHeight)
 
         let urlA = try #require(URL(string: "http://127.0.0.1:1/a"))
         let urlB = try #require(URL(string: "http://127.0.0.1:1/b"))
@@ -437,10 +528,19 @@ struct DashboardWindowSmokeTests {
         #expect(!controller._testLinkBrowserIsCollapsed)
         #expect(controller._testLinkBrowserRepresentedURL == urlA)
         #expect(!controller._testCanOpenWindowsAutomatically)
+        #expect(controller._testAllWebViewsEnableTabNavigation)
+        #expect(controller._testLinkBrowserTabBarIsHidden)
+        #expect(controller._testLinkBrowserTabBarHeight == 0)
+        #expect(controller._testLinkBrowserToolbarHeight == DashboardWindowLayout.linkBrowserToolbarHeight)
 
         controller._testOpenLinkBrowser(urlB)
         #expect(controller._testLinkBrowserTabURLs == [urlA, urlB])
         #expect(controller._testLinkBrowserActiveTabIndex == 1)
+        #expect(!controller._testLinkBrowserTabBarIsHidden)
+        #expect(controller._testLinkBrowserTabBarHeight == DashboardWindowLayout.linkBrowserTabBarHeight)
+        #expect(
+            controller._testLinkBrowserToolbarHeight ==
+                DashboardWindowLayout.linkBrowserToolbarWithTabsHeight)
         controller._testOpenLinkBrowser(urlA)
         #expect(controller._testLinkBrowserTabURLs == [urlA, urlB])
         #expect(controller._testLinkBrowserActiveTabIndex == 0)
@@ -453,6 +553,9 @@ struct DashboardWindowSmokeTests {
         #expect(controller._testLinkBrowserTabURLs == [urlA, urlA])
         #expect(controller._testLinkBrowserActiveTabIndex == 1)
         controller._testLinkBrowserCloseTab(at: 0)
+        #expect(controller._testLinkBrowserTabBarIsHidden)
+        #expect(controller._testLinkBrowserTabBarHeight == 0)
+        #expect(controller._testLinkBrowserToolbarHeight == DashboardWindowLayout.linkBrowserToolbarHeight)
         controller._testLinkBrowserCloseTab(at: 0)
         #expect(controller._testLinkBrowserIsCollapsed)
         #expect(controller._testLinkBrowserTabCount == 0)
@@ -473,6 +576,80 @@ struct DashboardWindowSmokeTests {
         #expect(controller._testLinkBrowserIsCollapsed)
         #expect(controller._testLinkBrowserTabCount == 0)
         #expect(controller._testLinkBrowserRepresentedURL == nil)
+    }
+
+    @Test func `dashboard link browser opens half width and remembers resizable pane width`() throws {
+        #expect(!DashboardWindowLayout.dividerMoved(from: nil, to: 100))
+        #expect(!DashboardWindowLayout.dividerMoved(from: 100, to: 100))
+        #expect(DashboardWindowLayout.dividerMoved(from: 100, to: 101))
+        #expect(DashboardWindowLayout.linkBrowserWidth(
+            splitWidth: 1241,
+            dividerThickness: 1,
+            persistedWidth: nil) == 620)
+        #expect(DashboardWindowLayout.linkBrowserWidth(
+            splitWidth: 1241,
+            dividerThickness: 1,
+            persistedWidth: 400) == 400)
+
+        let defaults = UserDefaults.standard
+        let key = DashboardWindowLayout.linkBrowserWidthDefaultsKey
+        let originalValue = defaults.object(forKey: key)
+        defaults.removeObject(forKey: key)
+        defer {
+            if let originalValue {
+                defaults.set(originalValue, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+
+        let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let link = try #require(URL(string: "http://127.0.0.1:1/half-width"))
+        let controller = DashboardWindowController(
+            url: dashboard,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        controller.show()
+        defer { controller.closeDashboard() }
+        controller.window?.setContentSize(DashboardWindowLayout.windowSize)
+
+        controller._testOpenLinkBrowser(link)
+        let openedSplitWidth = controller._testLinkBrowserSplitWidth
+        let dividerThickness = controller._testLinkBrowserDividerThickness
+        let openedLinkBrowserWidth = controller._testLinkBrowserWidth
+        let expectedWidth = DashboardWindowLayout.linkBrowserWidth(
+            splitWidth: openedSplitWidth,
+            dividerThickness: dividerThickness,
+            persistedWidth: nil)
+        #expect(abs(openedLinkBrowserWidth - expectedWidth) < 1)
+        #expect(
+            openedSplitWidth - dividerThickness - openedLinkBrowserWidth >=
+                DashboardWindowLayout.mainBrowserMinWidth)
+        #expect(controller._testLinkBrowserMaximumThickness == NSSplitViewItem.unspecifiedDimension)
+
+        defaults.set(Double(openedLinkBrowserWidth + 37), forKey: key)
+        controller._testCompleteLinkBrowserDividerDrag()
+        let resizedWidth = controller._testLinkBrowserWidth
+        #expect(abs(CGFloat(defaults.double(forKey: key)) - resizedWidth) < 1)
+        #expect(abs(CGFloat(defaults.double(forKey: key)) - openedLinkBrowserWidth - 37) >= 1)
+
+        controller._testCloseLinkBrowser()
+        controller.window?.setContentSize(DashboardWindowLayout.windowMinSize)
+        controller._testOpenLinkBrowser(link)
+        let compactExpectedWidth = DashboardWindowLayout.linkBrowserWidth(
+            splitWidth: controller._testLinkBrowserSplitWidth,
+            dividerThickness: controller._testLinkBrowserDividerThickness,
+            persistedWidth: resizedWidth)
+        #expect(abs(controller._testLinkBrowserWidth - compactExpectedWidth) < 1)
+        #expect(abs(CGFloat(defaults.double(forKey: key)) - resizedWidth) < 1)
+
+        controller._testCloseLinkBrowser()
+        controller.window?.setContentSize(DashboardWindowLayout.windowSize)
+        controller._testOpenLinkBrowser(link)
+        let restoredExpectedWidth = DashboardWindowLayout.linkBrowserWidth(
+            splitWidth: controller._testLinkBrowserSplitWidth,
+            dividerThickness: controller._testLinkBrowserDividerThickness,
+            persistedWidth: resizedWidth)
+        #expect(abs(controller._testLinkBrowserWidth - restoredExpectedWidth) < 1)
     }
 
     @Test func `dashboard link browser reorders and closes other tabs`() throws {

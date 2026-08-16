@@ -12,10 +12,10 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { TranscriptEvent } from "./session-accessor.js";
 import {
-  appendSqliteTranscriptEvent,
-  appendSqliteTranscriptMessage,
-  replaceSqliteTranscriptEvents,
-} from "./session-accessor.sqlite.js";
+  appendTranscriptEvent,
+  appendTranscriptMessage,
+  replaceTranscriptEvents,
+} from "./session-accessor.sqlite-transcript-write.js";
 import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
 import { searchSessionTranscripts } from "./session-transcript-search.js";
 
@@ -50,13 +50,13 @@ function transcriptScope(sessionId: string, sessionKey: string) {
 }
 
 async function appendUserMessage(sessionId: string, sessionKey: string, text: string) {
-  await appendSqliteTranscriptMessage(transcriptScope(sessionId, sessionKey), {
+  await appendTranscriptMessage(transcriptScope(sessionId, sessionKey), {
     message: { role: "user", content: [{ type: "text", text }] },
   });
 }
 
 async function appendAssistantMessage(sessionId: string, sessionKey: string, text: string) {
-  await appendSqliteTranscriptMessage(transcriptScope(sessionId, sessionKey), {
+  await appendTranscriptMessage(transcriptScope(sessionId, sessionKey), {
     message: { role: "assistant", content: [{ type: "text", text }] },
   });
 }
@@ -74,7 +74,8 @@ function search(query: string, options: { limit?: number; sessionKeys?: string[]
 async function waitForSearchReconcile(query: string): Promise<void> {
   await vi.waitFor(() => expect(search(query).indexing).toBe(false), {
     interval: 10,
-    timeout: 5_000,
+    // Compact CI shards can delay the asynchronous index worker beyond five seconds.
+    timeout: 15_000,
   });
 }
 
@@ -119,7 +120,7 @@ describe("searchSessionTranscripts", () => {
 
   it("ignores non-message events and misses non-matching queries", async () => {
     await appendUserMessage("session-1", "agent:main:main", "alpha topic");
-    await appendSqliteTranscriptEvent(transcriptScope("session-1", "agent:main:main"), {
+    await appendTranscriptEvent(transcriptScope("session-1", "agent:main:main"), {
       type: "model_change",
       id: "model-change-1",
       model: "sonnet-4.6",
@@ -158,7 +159,7 @@ describe("searchSessionTranscripts", () => {
 
   it("reindexes synchronously when a linear transcript is replaced", async () => {
     await appendUserMessage("session-1", "agent:main:main", "obsolete branch text");
-    await replaceSqliteTranscriptEvents(transcriptScope("session-1", "agent:main:main"), [
+    await replaceTranscriptEvents(transcriptScope("session-1", "agent:main:main"), [
       {
         type: "message",
         id: "m-new",
@@ -175,9 +176,9 @@ describe("searchSessionTranscripts", () => {
     expect(result.hits[0]?.messageId).toBe("m-new");
   });
 
-  it("only surfaces the active branch after a leaf-control rewind", async () => {
+  it("only surfaces the active branch after a deferred leaf-control rebuild", async () => {
     const scope = transcriptScope("session-1", "agent:main:main");
-    await replaceSqliteTranscriptEvents(scope, [
+    await replaceTranscriptEvents(scope, [
       {
         type: "message",
         id: "m1",
@@ -191,7 +192,7 @@ describe("searchSessionTranscripts", () => {
         message: { role: "assistant", content: [{ type: "text", text: "beta abandoned" }] },
       },
     ] as unknown as TranscriptEvent[]);
-    await appendSqliteTranscriptEvent(scope, {
+    await appendTranscriptEvent(scope, {
       type: "leaf",
       id: "leaf-1",
       parentId: "m2",
@@ -205,6 +206,33 @@ describe("searchSessionTranscripts", () => {
 
     expect(search("beta").hits).toHaveLength(0);
     expect(search("alpha").hits).toHaveLength(1);
+  });
+
+  it("streams large searchable projections to the writer in bounded chunks", async () => {
+    const scope = transcriptScope("session-1", "agent:main:main");
+    const largeText = "x".repeat(140 * 1024);
+    await replaceTranscriptEvents(
+      scope,
+      ["alpha-stream", "beta-stream", "gamma-stream"].map((marker, index) => ({
+        type: "message",
+        id: `m${index + 1}`,
+        parentId: index === 0 ? null : `m${index}`,
+        message: { role: "user", content: [{ type: "text", text: `${marker} ${largeText}` }] },
+      })) as unknown as TranscriptEvent[],
+    );
+    await appendTranscriptEvent(scope, {
+      type: "leaf",
+      id: "leaf-large",
+      parentId: "m3",
+      targetId: "m3",
+    } as unknown as TranscriptEvent);
+
+    expect(search("gamma-stream").indexing).toBe(true);
+    await waitForSearchReconcile("gamma-stream");
+
+    expect(search("alpha-stream").hits).toHaveLength(1);
+    expect(search("beta-stream").hits).toHaveLength(1);
+    expect(search("gamma-stream").hits).toHaveLength(1);
   });
 
   it("backfills transcripts that predate the index via reconcile", async () => {

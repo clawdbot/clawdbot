@@ -1,11 +1,14 @@
 // Exercises per-session fallback skip markers, TTL expiry, and opt-in cache defaults.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  resetFallbackSkipCacheForTest,
   getFallbackCandidateSkipReason,
   isFallbackCandidateSkipped,
   markFallbackCandidateSkipped,
 } from "./fallback-skip-cache.js";
+import {
+  listFallbackSkipCacheSessionIdsForTest,
+  resetFallbackSkipCacheForTest,
+} from "./fallback-skip-cache.test-support.js";
 
 describe("fallback-skip-cache", () => {
   beforeEach(() => {
@@ -166,6 +169,45 @@ describe("fallback-skip-cache", () => {
     ).toBe(false);
   });
 
+  it("isolates entries across explicit and automatic auth scopes", () => {
+    markFallbackCandidateSkipped({
+      sessionId: "s1",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      authScope: "anthropic:profile-a",
+      reason: "auth",
+      now: 1_000,
+      ttlMs: 60_000,
+    });
+
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        authScope: "anthropic:profile-a",
+        now: 30_000,
+      }),
+    ).toBe(true);
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        authScope: "anthropic:profile-b",
+        now: 30_000,
+      }),
+    ).toBe(false);
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        now: 30_000,
+      }),
+    ).toBe(false);
+  });
+
   it("re-marking the same triple refreshes the TTL", () => {
     markFallbackCandidateSkipped({
       sessionId: "s1",
@@ -204,9 +246,7 @@ describe("fallback-skip-cache", () => {
     ).toBe("auth_permanent");
   });
 
-  it("prunes expired buckets from sessions that are never queried again", async () => {
-    const { peekFallbackSkipBucketsForTest } = await import("./fallback-skip-cache.js");
-
+  it("prunes expired buckets from sessions that are never queried again", () => {
     // Two short-lived sessions write markers, then never come back.
     markFallbackCandidateSkipped({
       sessionId: "one-off-1",
@@ -225,7 +265,7 @@ describe("fallback-skip-cache", () => {
       ttlMs: 10_000,
     });
 
-    expect(peekFallbackSkipBucketsForTest().size).toBe(2);
+    expect(listFallbackSkipCacheSessionIdsForTest()).toEqual(["one-off-1", "one-off-2"]);
 
     // A third session writes well after the first two have expired. The
     // opportunistic global prune must drop the stale buckets even though
@@ -239,10 +279,7 @@ describe("fallback-skip-cache", () => {
       ttlMs: 10_000,
     });
 
-    const buckets = peekFallbackSkipBucketsForTest();
-    expect(buckets.has("one-off-1")).toBe(false);
-    expect(buckets.has("one-off-2")).toBe(false);
-    expect(buckets.has("later")).toBe(true);
+    expect(listFallbackSkipCacheSessionIdsForTest()).toEqual(["later"]);
   });
 
   it("does not skip by default when ttlMs is omitted", () => {

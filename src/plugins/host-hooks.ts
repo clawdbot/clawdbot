@@ -5,6 +5,7 @@ import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookToolContext,
+  PluginToolMatcher,
 } from "./hook-types.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 import type {
@@ -75,6 +76,7 @@ type PluginToolPolicyDecision =
 export type PluginTrustedToolPolicyRegistration = {
   id: string;
   description: string;
+  matcher?: PluginToolMatcher;
   evaluate: (
     event: PluginHookBeforeToolCallEvent,
     ctx: PluginHookToolContext,
@@ -93,8 +95,8 @@ type PluginControlUiTabGroup = "control" | "agent";
 
 export type PluginControlUiDescriptor = {
   id: string;
-  /** "tab" adds a Control UI sidebar tab; other surfaces attach to existing views. */
-  surface: "session" | "tool" | "run" | "settings" | "tab";
+  /** "tab" adds a sidebar tab; "widget" advertises a trusted dashboard renderer. */
+  surface: "session" | "tool" | "run" | "settings" | "tab" | "widget";
   label: string;
   description?: string;
   placement?: string;
@@ -117,6 +119,7 @@ export type PluginSessionActionContext = {
   pluginId: string;
   actionId: string;
   sessionKey?: string;
+  agentId?: string;
   payload?: PluginJsonValue;
   client?: {
     connId?: string;
@@ -222,6 +225,12 @@ type PluginSessionAttachmentFile = {
 };
 
 export type PluginAttachmentChannelHints = {
+  parseMode?: "HTML";
+  silent?: boolean;
+  /** Require host detection to match this MIME before forcing document delivery. */
+  forceDocumentMime?: string;
+  threadId?: string | number;
+  /** @deprecated Put portable attachment hints directly on `channelHints`. */
   telegram?: {
     parseMode?: "HTML";
     disableNotification?: boolean;
@@ -231,6 +240,7 @@ export type PluginAttachmentChannelHints = {
      */
     forceDocumentMime?: string;
   };
+  /** @deprecated Use `channelHints.threadId`. */
   slack?: {
     threadTs?: string;
   };

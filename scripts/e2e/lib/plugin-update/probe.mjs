@@ -43,9 +43,25 @@ function writeJson(file, value) {
 }
 
 function seedInstallState() {
-  writeJson(openclawPath("extensions", "lossless-claw", "package.json"), {
+  const pluginRoot = openclawPath("extensions", "lossless-claw");
+  const pluginSource = path.join(pluginRoot, "index.js");
+  const pluginManifest = path.join(pluginRoot, "openclaw.plugin.json");
+  writeJson(path.join(pluginRoot, "package.json"), {
     name: "@example/lossless-claw",
     version: "0.9.0",
+    type: "module",
+    openclaw: {
+      extensions: ["./index.js"],
+    },
+  });
+  fs.writeFileSync(
+    pluginSource,
+    'export default { id: "lossless-claw", register() {} };\n',
+    "utf8",
+  );
+  writeJson(pluginManifest, {
+    id: "lossless-claw",
+    configSchema: { type: "object" },
   });
   writeJson(process.env.OPENCLAW_CONFIG_PATH, { plugins: {} });
   writePluginInstallIndexForE2E({
@@ -68,7 +84,36 @@ function seedInstallState() {
         shasum: "same",
       },
     },
-    plugins: [],
+    plugins: [
+      {
+        pluginId: "lossless-claw",
+        manifestPath: pluginManifest,
+        manifestHash: "docker-e2e",
+        source: pluginSource,
+        rootDir: pluginRoot,
+        origin: "global",
+        enabled: true,
+        startup: {
+          sidecar: false,
+          memory: false,
+          agentHarnesses: [],
+          configPaths: [],
+        },
+        contributions: {
+          channels: [],
+          channelConfigs: [],
+          providers: [],
+          modelCatalogProviders: [],
+          modelSupportPrefixes: [],
+          modelSupportPatterns: [],
+          autoEnableProviderIds: [],
+          commandAliases: [],
+          contracts: {},
+        },
+        compat: [],
+        installOwner: "lossless-claw",
+      },
+    ],
     diagnostics: [],
   });
 }
@@ -286,6 +331,17 @@ function assertLegacyPostUpdatePluginFailure(updateJsonPath) {
   }
 }
 
+function assertDisabledPluginPolicyPreserved(configPath, pluginId) {
+  const config = readJson(configPath);
+  const allow = config.plugins?.allow;
+  if (JSON.stringify(allow) !== JSON.stringify([pluginId])) {
+    throw new Error(`expected plugins.allow to preserve ${pluginId}, got ${JSON.stringify(allow)}`);
+  }
+  if (config.plugins?.entries?.[pluginId]?.enabled !== false) {
+    throw new Error(`expected ${pluginId} to be disabled after update failure`);
+  }
+}
+
 const [command, arg, arg2] = process.argv.slice(2);
 const commands = {
   "legacy-compat": () => console.log(legacyPackageAcceptanceCompat(arg || "") ? "1" : "0"),
@@ -297,6 +353,7 @@ const commands = {
   "assert-corrupt-update": () => assertCorruptUpdate(arg, arg2),
   "assert-corrupt-plugin-result": () => assertCorruptPluginResult(arg, arg2),
   "assert-legacy-post-update-plugin-failure": () => assertLegacyPostUpdatePluginFailure(arg),
+  "assert-disabled-policy-preserved": () => assertDisabledPluginPolicyPreserved(arg, arg2),
 };
 const run = commands[command];
 await (

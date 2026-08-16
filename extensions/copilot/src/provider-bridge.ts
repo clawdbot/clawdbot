@@ -2,13 +2,17 @@
 import type { ProviderConfig } from "@github/copilot-sdk";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  filterStringRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tokenFingerprint } from "./auth-bridge.js";
 
-export const COPILOT_BYOK_PROVIDER_ERROR =
+const COPILOT_BYOK_PROVIDER_ERROR =
   "[copilot-attempt] BYOK requires an OpenAI-compatible or Anthropic model api and a non-empty baseUrl";
-export const COPILOT_BYOK_TRANSPORT_POLICY_ERROR =
+const COPILOT_BYOK_TRANSPORT_POLICY_ERROR =
   "[copilot-attempt] BYOK does not support OpenClaw provider request proxy, TLS, or private-network policy overrides";
-export const COPILOT_BYOK_ENDPOINT_POLICY_ERROR =
+const COPILOT_BYOK_ENDPOINT_POLICY_ERROR =
   "[copilot-attempt] BYOK endpoint is blocked by OpenClaw SSRF policy";
 
 const CREDENTIAL_QUERY_PARAM_NAMES = new Set([
@@ -83,7 +87,7 @@ export function resolveCopilotProvider(params: {
     return { mode: "github-copilot" };
   }
 
-  const baseUrl = readString(params.model.baseUrl);
+  const baseUrl = normalizeOptionalString(params.model.baseUrl);
   if (!baseUrl) {
     throw new Error(COPILOT_BYOK_PROVIDER_ERROR);
   }
@@ -92,11 +96,11 @@ export function resolveCopilotProvider(params: {
     throw new Error(COPILOT_BYOK_TRANSPORT_POLICY_ERROR);
   }
 
-  const api = readString(params.model.api)?.toLowerCase() ?? "openai-responses";
+  const api = normalizeOptionalString(params.model.api)?.toLowerCase() ?? "openai-responses";
   const provider = resolveProviderType(api, baseUrl, params.model.azureApiVersion);
   const resolvedApiKey = resolveProviderCredential(params.resolvedApiKey);
-  const headers = resolveProviderHeaders(params.model.headers);
-  const requestAuthMode = readString(params.model.requestAuthMode)?.toLowerCase();
+  const headers = filterStringRecord(params.model.headers);
+  const requestAuthMode = normalizeOptionalString(params.model.requestAuthMode)?.toLowerCase();
   const usePreparedRequestAuth =
     requestAuthMode !== undefined && requestAuthMode !== "provider-default";
   const providerConfig: ProviderConfig = {
@@ -156,16 +160,16 @@ export function supportsCopilotByokProviderShape(
     "api" | "baseUrl" | "requestProxy" | "requestTls" | "requestAllowPrivateNetwork"
   >,
 ): boolean {
-  if (!readString(model.baseUrl) || hasUnsupportedTransportPolicy(model)) {
+  if (!normalizeOptionalString(model.baseUrl) || hasUnsupportedTransportPolicy(model)) {
     return false;
   }
   try {
     resolveProviderType(
-      readString(model.api)?.toLowerCase() ?? "openai-responses",
-      readString(model.baseUrl)!,
+      normalizeOptionalString(model.api)?.toLowerCase() ?? "openai-responses",
+      normalizeOptionalString(model.baseUrl)!,
       undefined,
     );
-    assertByokEndpointHostAllowed(readString(model.baseUrl)!);
+    assertByokEndpointHostAllowed(normalizeOptionalString(model.baseUrl)!);
     return true;
   } catch {
     return false;
@@ -274,7 +278,7 @@ function resolveAzureProviderType(
   url.pathname = "";
   url.search = "";
   url.hash = "";
-  const resolvedApiVersion = readString(apiVersion);
+  const resolvedApiVersion = normalizeOptionalString(apiVersion);
   return {
     type: "azure",
     wireApi: "responses",
@@ -317,23 +321,7 @@ function stableSerialize(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function resolveProviderCredential(value: string | undefined): string | undefined {
-  const credential = readString(value);
+  const credential = normalizeOptionalString(value);
   return credential && !isNonSecretApiKeyMarker(credential) ? credential : undefined;
-}
-
-function resolveProviderHeaders(
-  headers: Record<string, string | null | undefined> | undefined,
-): Record<string, string> | undefined {
-  if (!headers) {
-    return undefined;
-  }
-  const resolved = Object.fromEntries(
-    Object.entries(headers).filter(([, value]) => typeof value === "string"),
-  ) as Record<string, string>;
-  return Object.keys(resolved).length > 0 ? resolved : undefined;
 }

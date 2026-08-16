@@ -1,10 +1,6 @@
+import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 // Zalouser plugin module implements accounts behavior.
-import {
-  createAccountListHelpers,
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-  resolveMergedAccountConfig,
-} from "openclaw/plugin-sdk/account-resolution";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -15,7 +11,9 @@ const loadZalouserAccountsRuntime = createLazyRuntimeModule(() => import("./acco
 const {
   listAccountIds: listZalouserAccountIds,
   resolveDefaultAccountId: resolveDefaultZalouserAccountId,
-} = createAccountListHelpers("zalouser", {
+  resolveAccountConfig: resolveMergedZalouserAccountConfig,
+} = createAccountListHelpers<ZalouserAccountConfig>("zalouser", {
+  omitKeys: ["defaultAccount"],
   implicitDefaultAccount: {
     channelKeys: ["profile"],
     envVars: ["ZALOUSER_PROFILE", "ZCA_PROFILE"],
@@ -24,14 +22,7 @@ const {
 export { listZalouserAccountIds, resolveDefaultZalouserAccountId };
 
 function mergeZalouserAccountConfig(cfg: OpenClawConfig, accountId: string): ZalouserAccountConfig {
-  const merged = resolveMergedAccountConfig<ZalouserAccountConfig>({
-    channelConfig: cfg.channels?.zalouser as ZalouserAccountConfig | undefined,
-    accounts: (cfg.channels?.zalouser as ZalouserConfig | undefined)?.accounts as
-      | Record<string, Partial<ZalouserAccountConfig>>
-      | undefined,
-    accountId,
-    omitKeys: ["defaultAccount"],
-  });
+  const merged = resolveMergedZalouserAccountConfig(cfg, accountId);
   return {
     ...merged,
     // Match Telegram's safe default: groups stay allowlisted unless explicitly opened.
@@ -83,19 +74,6 @@ export function resolveZalouserAccountSync(params: {
     profile,
     authenticated: false,
     config: merged,
-  };
-}
-
-export async function getZcaUserInfo(
-  profile: string,
-): Promise<{ userId?: string; displayName?: string } | null> {
-  const info = await (await loadZalouserAccountsRuntime()).getZaloUserInfo(profile);
-  if (!info) {
-    return null;
-  }
-  return {
-    userId: info.userId,
-    displayName: info.displayName,
   };
 }
 

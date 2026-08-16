@@ -6,8 +6,10 @@ import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asNullableObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES } from "./google-auth-limits.js";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type GoogleAuthRuntime = typeof import("google-auth-library");
@@ -45,8 +47,6 @@ const GOOGLE_AUTH_TOKEN_URI = "https://oauth2.googleapis.com/token";
 const GOOGLE_AUTH_UNIVERSE_DOMAIN = "googleapis.com";
 const GOOGLE_CLIENT_CERTS_URL_PREFIX = "https://www.googleapis.com/robot/v1/metadata/x509/";
 const MAX_GOOGLE_AUTH_RESPONSE_BYTES = 1024 * 1024;
-const MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES = 64 * 1024;
-
 let googleAuthRuntimePromise: Promise<GoogleAuthRuntime> | null = null;
 
 function normalizeGoogleAuthPreparedRequestHeaders<T extends RequestInit & { headers?: unknown }>(
@@ -77,10 +77,6 @@ function installGoogleAuthHeaderCompatibilityInterceptor(
     resolved: async (response) => normalizeGoogleAuthResponseHeaders(response),
   });
   return transport;
-}
-
-function asNullableObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
 
 function hasProxyAgentShape(value: unknown): value is ProxyAgentLike {
@@ -411,7 +407,7 @@ function resolveGoogleAuthDispatcherPolicy(
   return { init: nextInit };
 }
 
-export function createGoogleAuthFetch(baseFetch?: FetchLike): FetchLike {
+function createGoogleAuthFetch(): FetchLike {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = input instanceof Request ? input.url : String(input);
     const guardedOptions = resolveGoogleAuthDispatcherPolicy(input, init);
@@ -423,7 +419,6 @@ export function createGoogleAuthFetch(baseFetch?: FetchLike): FetchLike {
       signal: guardedOptions.init?.signal ?? undefined,
       timeoutMs: GOOGLE_AUTH_FETCH_TIMEOUT_MS,
       url,
-      ...(baseFetch ? { fetchImpl: baseFetch } : {}),
     });
     try {
       const body = await readGoogleAuthResponseBytes(response);
@@ -434,6 +429,12 @@ export function createGoogleAuthFetch(baseFetch?: FetchLike): FetchLike {
         statusText: response.statusText,
       });
     } finally {
+      // The size guard can reject before the stream is touched, leaving an
+      // unread body. Start cancellation before release; awaiting it can
+      // deadlock when debug capture tees the stream.
+      if (!response.bodyUsed) {
+        void response.body?.cancel().catch(() => undefined);
+      }
       await release();
     }
   };
@@ -520,14 +521,3 @@ export async function resolveValidatedGoogleChatCredentials(
   }
   return null;
 }
-
-export const testing = {
-  resetGoogleAuthRuntimeForTests(): void {
-    googleAuthRuntimePromise = null;
-  },
-  normalizeGoogleAuthPreparedRequestHeaders,
-  normalizeGoogleAuthResponseHeaders,
-  resolveGoogleAuthEnvProxyUrl,
-  validateGoogleChatServiceAccountCredentials,
-};
-export { testing as __testing };

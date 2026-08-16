@@ -2,6 +2,7 @@
 import { isAbsolute, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Command } from "commander";
+import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import {
   exitCodeFromFindings,
   healthFindingMeetsSeverity,
@@ -12,6 +13,8 @@ import {
   type HealthCheckContext,
   type HealthFinding,
 } from "openclaw/plugin-sdk/health";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { defaultRuntime as cliRuntime } from "openclaw/plugin-sdk/runtime";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./doctor/fix-metadata.js";
 import { POLICY_CHECK_IDS, evaluatePolicy } from "./doctor/register.js";
 import {
@@ -27,6 +30,7 @@ type PolicyCommandRuntime = {
 };
 
 interface PolicyCheckOptions {
+  readonly agent?: string;
   readonly json?: boolean;
   readonly severityMin?: string;
   readonly cwd?: string;
@@ -38,6 +42,7 @@ interface PolicyWatchOptions extends PolicyCheckOptions {
 }
 
 interface PolicyCompareOptions {
+  readonly agent?: string;
   readonly baseline?: string;
   readonly policy?: string;
   readonly json?: boolean;
@@ -60,7 +65,7 @@ const defaultRuntime: PolicyCommandRuntime = {
     process.stdout.write(value);
   },
   error(value) {
-    process.stderr.write(`${value}\n`);
+    cliRuntime.error(value);
   },
   sleep(ms) {
     return sleep(ms);
@@ -75,6 +80,7 @@ export function registerPolicyCli(program: Command): void {
     .description("Compare policy.jsonc against an authored baseline policy file")
     .requiredOption("--baseline <path>", "Baseline policy file to compare against")
     .option("--policy <path>", "Policy file to check; defaults to configured policy path")
+    .option("--agent <id>", "Agent id for relative policy workspace paths")
     .option("--json", "Emit JSON output")
     .action(async (options: PolicyCompareOptions) => {
       process.exitCode = await policyCompareCommand(options);
@@ -83,6 +89,7 @@ export function registerPolicyCli(program: Command): void {
   policy
     .command("check")
     .description("Check policy requirements and emit an audit attestation")
+    .option("--agent <id>", "Agent id (required when multiple agents are configured)")
     .option("--json", "Emit JSON output")
     .option("--severity-min <severity>", "Minimum severity: info, warning, or error")
     .action(async (options: PolicyCheckOptions) => {
@@ -92,6 +99,7 @@ export function registerPolicyCli(program: Command): void {
   policy
     .command("watch")
     .description("Watch policy evidence and report accepted-attestation drift")
+    .option("--agent <id>", "Agent id (required when multiple agents are configured)")
     .option("--json", "Emit JSON output")
     .option("--severity-min <severity>", "Minimum severity: info, warning, or error")
     .option("--interval-ms <ms>", "Polling interval in milliseconds")
@@ -128,7 +136,7 @@ async function policyCheckCommand(
   runtime: PolicyCommandRuntime = defaultRuntime,
 ): Promise<number> {
   try {
-    const report = await buildPolicyCheckReport(options, runtime);
+    const report = await buildPolicyCheckReport(options, runtime, "policy check");
     writePolicyCheckReport(report, options, runtime);
     return report.exitCode;
   } catch (err) {
@@ -145,7 +153,7 @@ async function policyWatchCommand(
     const intervalMs = normalizeWatchIntervalMs(options.intervalMs);
     let previousKey: string | undefined;
     for (;;) {
-      const report = await buildPolicyCheckReport(options, runtime);
+      const report = await buildPolicyCheckReport(options, runtime, "policy watch");
       const status = policyWatchStatus(report);
       const key = `${status}:${report.attestation?.attestationHash ?? ""}:${report.exitCode}`;
       if (previousKey === undefined || previousKey !== key || options.once === true) {
@@ -170,6 +178,7 @@ async function policyWatchCommand(
 async function buildPolicyCheckReport(
   options: PolicyCheckOptions,
   runtime: PolicyCommandRuntime,
+  ownerSurface: "policy check" | "policy watch",
 ): Promise<PolicyCheckReport> {
   const severityMin =
     options.severityMin === undefined ? "info" : parseHealthFindingSeverity(options.severityMin);
@@ -198,7 +207,9 @@ async function buildPolicyCheckReport(
     };
   }
   const cfg = snapshot.valid ? policyCommandConfig(snapshot.config) : {};
-  const cwd = options.cwd ?? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  const cwd =
+    options.cwd ??
+    resolveAgentWorkspaceDir(cfg, resolvePolicyCommandAgentId(cfg, options.agent, ownerSurface));
   const ctx: HealthCheckContext = {
     mode: "lint",
     runtime: {
@@ -266,6 +277,30 @@ function policyCommandConfig(cfg: HealthCheckContext["cfg"]): HealthCheckContext
   };
 }
 
+function resolvePolicyCommandAgentId(
+  cfg: HealthCheckContext["cfg"],
+  rawAgentId: string | undefined,
+  surface: "policy check" | "policy watch" | "policy compare",
+): string {
+  const requestedAgentId = rawAgentId?.trim();
+  if (rawAgentId !== undefined && !requestedAgentId) {
+    throw new Error("--agent must not be blank");
+  }
+  if (requestedAgentId) {
+    const agentId = normalizeAgentId(requestedAgentId);
+    if (!listAgentIds(cfg).includes(agentId)) {
+      throw new Error(
+        `Unknown agent id "${requestedAgentId}". Run \`openclaw agents list\` to see configured agents.`,
+      );
+    }
+    return agentId;
+  }
+  return resolveDefaultAgentId(cfg, {
+    surface,
+    hint: "Pass --agent <id>.",
+  });
+}
+
 async function policyCompareCandidatePath(options: PolicyCompareOptions): Promise<string> {
   if (options.policy !== undefined && options.policy.trim() !== "") {
     return options.policy.trim();
@@ -286,7 +321,10 @@ async function policyCompareCandidatePath(options: PolicyCompareOptions): Promis
   }
   const cwd =
     options.cwd ??
-    resolveAgentWorkspaceDir(snapshot.config, resolveDefaultAgentId(snapshot.config));
+    resolveAgentWorkspaceDir(
+      snapshot.config,
+      resolvePolicyCommandAgentId(snapshot.config, options.agent, "policy compare"),
+    );
   return resolve(cwd, policyPath);
 }
 

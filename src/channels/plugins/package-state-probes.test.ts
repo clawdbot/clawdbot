@@ -13,6 +13,7 @@ const listChannelCatalogEntriesMock = vi.hoisted(() => vi.fn());
 const isBundledSourceOverlayPathMock = vi.hoisted(() =>
   vi.fn((_params: { sourcePath: string }) => false),
 );
+const probeLogWarnMock = vi.hoisted(() => vi.fn());
 const tempDirs: string[] = [];
 
 vi.mock("../../plugins/channel-catalog-registry.js", () => ({
@@ -21,6 +22,16 @@ vi.mock("../../plugins/channel-catalog-registry.js", () => ({
 vi.mock("../../plugins/bundled-source-overlays.js", () => ({
   isBundledSourceOverlayPath: isBundledSourceOverlayPathMock,
 }));
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      warn: probeLogWarnMock,
+    }),
+  };
+});
 
 function makeBundledChannelCatalogEntry(params: {
   pluginId: string;
@@ -52,6 +63,7 @@ beforeEach(() => {
   listChannelCatalogEntriesMock.mockReset();
   isBundledSourceOverlayPathMock.mockReset();
   isBundledSourceOverlayPathMock.mockReturnValue(false);
+  probeLogWarnMock.mockReset();
 });
 
 afterEach(() => {
@@ -82,6 +94,42 @@ describe("channel package-state probes", () => {
         channelId: "vendor-alias-chat-plugin",
         cfg: {},
         env: { ALIAS_CHAT_TOKEN: "token" },
+      }),
+    ).toBe(false);
+  });
+
+  it("uses manifest env metadata without loading a configured-state module", () => {
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        ...makeBundledChannelCatalogEntry({
+          pluginId: "env-chat",
+          channelId: "env-chat",
+        }),
+        channel: {
+          id: "env-chat",
+          configuredState: {
+            env: { allOf: ["ENV_CHAT_TOKEN"] },
+            specifier: "./missing-configured-state",
+            exportName: "missingConfiguredState",
+          },
+        },
+      } satisfies PluginChannelCatalogEntry,
+    ]);
+
+    expect(
+      hasBundledChannelPackageState({
+        metadataKey: "configuredState",
+        channelId: "env-chat",
+        cfg: {},
+        env: { ENV_CHAT_TOKEN: "token" },
+      }),
+    ).toBe(true);
+    expect(
+      hasBundledChannelPackageState({
+        metadataKey: "configuredState",
+        channelId: "env-chat",
+        cfg: {},
+        env: { ENV_CHAT_TOKEN: " " },
       }),
     ).toBe(false);
   });
@@ -259,6 +307,42 @@ describe("channel package-state probes", () => {
         cfg: {},
       }),
     ).toBe(true);
+  });
+
+  it("reports a missing built package-state artifact as not found, not a boundary escape", () => {
+    // Reproduces a rebuild window: the catalog root is the built plugin dir while
+    // `dist/extensions/<id>` has not been re-emitted yet.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-missing-"));
+    tempDirs.push(root);
+    const builtRoot = path.join(root, "dist", "extensions", "matrix");
+    fs.mkdirSync(builtRoot, { recursive: true });
+
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        pluginId: "matrix",
+        origin: "bundled",
+        rootDir: builtRoot,
+        channel: {
+          id: "matrix",
+          persistedAuthState: {
+            specifier: "./auth-presence",
+            exportName: "hasAnyMatrixAuth",
+          },
+        },
+      } satisfies PluginChannelCatalogEntry,
+    ]);
+
+    expect(
+      hasBundledChannelPackageState({
+        metadataKey: "persistedAuthState",
+        channelId: "matrix",
+        cfg: {},
+      }),
+    ).toBe(false);
+    const warning = String(probeLogWarnMock.mock.calls.at(0)?.[0] ?? "");
+    expect(warning).toContain("failed to load persistedAuthState checker for matrix");
+    expect(warning).toContain(`plugin module path not found: ${builtRoot}`);
+    expect(warning).not.toContain("escapes plugin root");
   });
 
   it("tries dist-runtime package-state probes before falling back to source", () => {

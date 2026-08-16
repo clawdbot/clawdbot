@@ -2,8 +2,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   asDateTimestampMs,
+  asPositiveFiniteNumber,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import type { IMessageApprovalGatewayRuntime } from "./approval-gateway-types.js";
 import {
   extractIMessageApprovalPromptBinding,
   handleIMessageApprovalReaction,
@@ -37,7 +39,7 @@ type HistoryMessage = IMessagePayload & {
 };
 
 function normalizeChatId(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+  return asPositiveFiniteNumber(value) ?? null;
 }
 
 function listTargetChatIds(
@@ -227,6 +229,7 @@ export async function pollPendingIMessageApprovalReactions(params: {
   cfg: OpenClawConfig;
   accountId: string;
   allowRecentChatDiscovery?: boolean;
+  gatewayRuntime?: IMessageApprovalGatewayRuntime;
   logVerboseMessage?: (message: string) => void;
 }): Promise<void> {
   const targets = listPendingIMessageApprovalReactionPollTargets({
@@ -291,6 +294,7 @@ export async function pollPendingIMessageApprovalReactions(params: {
           accountId: params.accountId,
           message: reactionPayload,
           bodyText: reactionPayload.text ?? "",
+          gatewayRuntime: params.gatewayRuntime,
           logVerboseMessage: params.logVerboseMessage,
         });
         if (handled.stopPolling) {

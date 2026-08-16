@@ -2,6 +2,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 /**
  * Routes compaction through selected native agent harnesses when supported.
  */
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
@@ -34,6 +35,7 @@ import {
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import { resolveAgentHarnessPolicy as resolveConfiguredAgentHarnessPolicy } from "./policy.js";
 import {
+  resolveAgentHarnessNativeToolPolicyRestricted,
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
   type AgentHarnessPreparedModelProvider,
@@ -70,6 +72,8 @@ type InternalAgentHarnessCompactionCapability = {
 
 type InternalAgentHarness = AgentHarness & InternalAgentHarnessCompactionCapability;
 type HarnessCompactionResolvedAuth = { apiKey?: string };
+
+const log = createSubsystemLogger("agents/harness-compaction");
 
 function runtimePlanRequiresHostApiKey(plan?: AgentRuntimeAuthPlan): boolean {
   return plan?.modelRoute?.authRequirement === "api-key";
@@ -153,12 +157,14 @@ async function resolveHarnessCompactApiKey(params: {
     runtimeModel?: Model,
     runtimeAuthPlan?: AgentRuntimeAuthPlan,
   ) => {
-    if (harness.authBootstrap === "harness" && !runtimeAuthPlan) {
+    const apiKey = compactParams.resolvedApiKey?.trim() || undefined;
+    if (harness.authBootstrap === "harness" && !runtimeAuthPlan && apiKey) {
+      // Ambient keys need a verified route before crossing into harness-owned auth.
+      // With no key, the harness can safely use its own native auth store.
       throw new Error(
         `Unable to prepare a route-locked native compaction attempt for ${provider}/${modelId}; refusing harness-owned ambient auth.`,
       );
     }
-    const apiKey = compactParams.resolvedApiKey?.trim() || undefined;
     return {
       harness,
       ...(apiKey ? { apiKey } : {}),
@@ -181,7 +187,7 @@ async function resolveHarnessCompactApiKey(params: {
         }),
       ),
       config: compactParams.config,
-      agentId: params.agentId,
+      agentId: parseAgentSessionKey(params.sessionKey) ? undefined : params.agentId,
       sessionKey: params.sessionKey,
       agentHarnessId: params.pinnedHarnessId,
     });
@@ -221,7 +227,10 @@ async function resolveHarnessCompactApiKey(params: {
           workspaceDir,
         })
       ).model;
-    } catch {
+    } catch (error) {
+      log.warn(
+        `native compaction model resolution failed for ${provider}/${modelId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
       return fallbackResolution(initialHarness);
     }
   }
@@ -262,7 +271,10 @@ async function resolveHarnessCompactApiKey(params: {
   } else {
     try {
       preparation = prepareRuntimeAuth(initialHarness);
-    } catch {
+    } catch (error) {
+      log.warn(
+        `native compaction auth preparation failed for ${provider}/${modelId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
       return fallbackResolution(initialHarness, model);
     }
   }
@@ -272,7 +284,10 @@ async function resolveHarnessCompactApiKey(params: {
   if (!params.pinnedHarnessId && !reusableRuntimeAuthPlan && harness.id !== initialHarness.id) {
     try {
       preparation = prepareRuntimeAuth(harness);
-    } catch {
+    } catch (error) {
+      log.warn(
+        `native compaction auth preparation failed for ${provider}/${modelId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
       return fallbackResolution(harness, model);
     }
     const confirmedHarness = selectPreparedHarness(preparation.attempts, model);
@@ -346,7 +361,10 @@ async function resolveHarnessCompactApiKey(params: {
       },
       errorMessage: `Prepared native compaction auth attempts could not be resolved for ${provider}/${modelId}.`,
     });
-  } catch {
+  } catch (error) {
+    log.warn(
+      `native compaction prepared auth resolution failed for ${provider}/${modelId}: ${error instanceof Error ? error.message : String(error)}`,
+    );
     return fallbackResolution(harness, model, preparation.plan);
   }
   return {
@@ -386,7 +404,7 @@ export async function maybeCompactAgentHarnessSession(
       !params.model ||
       !agentRuntimeAuthPlanMatchesTarget(runtimeAuthPlan, {
         provider: params.provider,
-        modelId: params.model,
+        modelId: params.model ?? "",
       }))
   ) {
     throw new Error(
@@ -448,7 +466,17 @@ export async function maybeCompactAgentHarnessSession(
   }
   const compactIdentity = resolveHarnessCompactIdentity(params);
   let resolvedRuntimeAuthPlan = runtimeAuthPlan;
-  const compactParams = {
+  const resolveNativeToolPolicyRestricted = (targetHarness: AgentHarness) =>
+    resolveAgentHarnessNativeToolPolicyRestricted(
+      {
+        ...params,
+        agentId: compactIdentity.agentId,
+        provider: params.provider ?? "",
+        modelId: params.model ?? "",
+      },
+      targetHarness,
+    );
+  const compactParams: CompactEmbeddedAgentSessionParams = {
     ...params,
     agentDir: compactIdentity.agentDir,
     agentId: compactIdentity.agentId,
@@ -470,6 +498,8 @@ export async function maybeCompactAgentHarnessSession(
     pinnedHarnessId,
   });
   harness = resolved.harness;
+  const nativeToolPolicyRestricted = resolveNativeToolPolicyRestricted(harness);
+  compactParams.nativeToolSurface = nativeToolPolicyRestricted ? "host-isolated" : "unrestricted";
   resolvedRuntimeAuthPlan = resolved.runtimeAuthPlan ?? resolvedRuntimeAuthPlan;
   const internalHarness = harness as InternalAgentHarness;
   const shouldCompactAfterContextEngine =
@@ -488,12 +518,22 @@ export async function maybeCompactAgentHarnessSession(
     }
     return undefined;
   }
+  if (
+    nativeToolPolicyRestricted &&
+    harness.id !== "openclaw" &&
+    harness.conversationToolPolicySupport !== "exact"
+  ) {
+    throw new Error(
+      `Agent harness ${harness.id} cannot enforce the host-isolated tool policy required for compaction`,
+    );
+  }
   // Native runtimes own subscription login, but a provider-locked Platform
   // route must receive the exact host-prepared key selected for this attempt.
   const harnessOwnsAuth =
     harness.authBootstrap === "harness" && !runtimePlanRequiresHostApiKey(resolvedRuntimeAuthPlan);
   const resolvedApiKey = harnessOwnsAuth ? undefined : resolved.apiKey;
-  const runtimeModel = resolved.runtimeModel;
+  const runtimeModel =
+    harnessOwnsAuth && !resolvedRuntimeAuthPlan ? undefined : resolved.runtimeModel;
   const compactParamsWithResolvedAuth = resolvedRuntimeAuthPlan
     ? {
         ...compactParams,

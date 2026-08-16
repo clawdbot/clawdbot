@@ -53,7 +53,7 @@ async function callPluginSessionActionForTest(params: {
     } as GatewayClient,
     isWebchatConnect: () => false,
     respond,
-    context: {} as never,
+    context: { getRuntimeConfig: () => ({}) } as never,
   });
   return response ?? { ok: false, error: new Error("handler did not respond") };
 }
@@ -93,6 +93,7 @@ async function callPluginSessionActionThroughGatewayForTest(params: {
       logGateway: {
         warn() {},
       },
+      getRuntimeConfig: () => ({}),
     } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
   });
   return response ?? { ok: false, error: new Error("handler did not respond") };
@@ -550,8 +551,15 @@ describe("plugin session actions", () => {
       scopes: [READ_SCOPE],
     });
     const missingApprovalScopeError = requireHookError(missingApprovalScope);
-    expect(missingApprovalScopeError.code).toBe("INVALID_REQUEST");
-    expect(missingApprovalScopeError.message).toBe(`missing scope: ${APPROVALS_SCOPE}`);
+    expect(missingApprovalScopeError).toEqual({
+      code: "FORBIDDEN",
+      message: `missing scope: ${APPROVALS_SCOPE}`,
+      details: {
+        code: "MISSING_SCOPE",
+        missingScope: APPROVALS_SCOPE,
+        requiredScopes: [APPROVALS_SCOPE],
+      },
+    });
     expect(handlerCalls).toEqual([
       { scopes: [APPROVALS_SCOPE], sessionKey: undefined },
       { scopes: [WRITE_SCOPE], action: "view" },
@@ -647,7 +655,7 @@ describe("plugin session actions", () => {
       respond: (ok, payload, error) => {
         response = { ok, payload, error };
       },
-      context: {} as never,
+      context: { getRuntimeConfig: () => ({}) } as never,
     });
 
     expect(response).toEqual({
@@ -741,6 +749,23 @@ describe("plugin session actions", () => {
         }),
       ).toEqual({ emitted: true, stream: "approval" });
       expect(
+        bundledApi?.agent?.events.emitAgentEvent({
+          runId: "run-emit",
+          stream: "lifecycle",
+          data: { phase: "start" },
+        }),
+      ).toEqual({
+        emitted: false,
+        reason: "lifecycle start requires a finite startedAt timestamp",
+      });
+      expect(
+        bundledApi?.agent?.events.emitAgentEvent({
+          runId: "run-emit",
+          stream: "lifecycle",
+          data: { phase: "start", startedAt: 1_234 },
+        }),
+      ).toEqual({ emitted: true, stream: "lifecycle" });
+      expect(
         workspaceApi?.emitAgentEvent({
           runId: "run-emit",
           stream: "lifecycle",
@@ -782,7 +807,7 @@ describe("plugin session actions", () => {
       unsubscribe();
     }
 
-    expect(observed).toHaveLength(2);
+    expect(observed).toHaveLength(3);
     const bundledEvent = requireObservedEvent(observed, 0);
     expect(bundledEvent.runId).toBe("run-emit");
     expect(bundledEvent.sessionKey).toBe("agent:main:main");
@@ -792,7 +817,15 @@ describe("plugin session actions", () => {
       pluginId: "event-plugin",
       pluginName: "Event Plugin",
     });
-    const workspaceEvent = requireObservedEvent(observed, 1);
+    const lifecycleEvent = requireObservedEvent(observed, 1);
+    expect(lifecycleEvent.stream).toBe("lifecycle");
+    expect(lifecycleEvent.data).toEqual({
+      phase: "start",
+      startedAt: 1_234,
+      pluginId: "event-plugin",
+      pluginName: "Event Plugin",
+    });
+    const workspaceEvent = requireObservedEvent(observed, 2);
     expect(workspaceEvent.runId).toBe("run-emit");
     expect(workspaceEvent.sessionKey).toBeUndefined();
     expect(workspaceEvent.stream).toBe("workspace-event-plugin.workflow");

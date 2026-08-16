@@ -4,10 +4,7 @@ import {
   describeImageWithModel,
 } from "openclaw/plugin-sdk/media-understanding";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import {
-  deepinfraMediaUnderstandingProvider,
-  transcribeDeepInfraAudio,
-} from "./media-understanding-provider.js";
+import { deepinfraMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 const { transcribeOpenAiCompatibleAudioMock } = vi.hoisted(() => ({
   transcribeOpenAiCompatibleAudioMock: vi.fn(async () => ({ text: "hello", model: "whisper" })),
@@ -41,7 +38,7 @@ describe("deepinfra media understanding provider", () => {
         image: 45,
         audio: 45,
       },
-      transcribeAudio: transcribeDeepInfraAudio,
+      transcribeAudio: expect.any(Function),
       describeImage: describeImageWithModel,
       describeImages: describeImagesWithModel,
     });
@@ -49,7 +46,7 @@ describe("deepinfra media understanding provider", () => {
 
   it("routes audio transcription through the OpenAI-compatible DeepInfra endpoint", async () => {
     const buffer = Buffer.from("audio");
-    const result = await transcribeDeepInfraAudio({
+    const result = await deepinfraMediaUnderstandingProvider.transcribeAudio!({
       buffer,
       fileName: "clip.mp3",
       apiKey: "deepinfra-key",
