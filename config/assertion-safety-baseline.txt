@@ -3108,7 +3108,7 @@ src/gateway/server.auth.control-ui.bootstrap-lifecycle.suite.ts	8
 src/gateway/server.auth.control-ui.device-token.suite.ts	2
 src/gateway/server.auth.control-ui.mobile-bootstrap.suite.ts	7
 src/gateway/server.auth.control-ui.owner-bootstrap.suite.ts	5
-src/gateway/server.auth.control-ui.pairing.suite.ts	11
+src/gateway/server.auth.control-ui.pairing.suite.ts	6
 src/gateway/server.auth.control-ui.trusted-proxy.suite.ts	5
 src/gateway/server.auth.default-token.suite.ts	11
 src/gateway/server.auth.modes.suite.ts	1
