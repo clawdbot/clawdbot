@@ -384,6 +384,19 @@ restore_file_atomically() {
     [[ "$(stat -f '%Lp' "$destination")" == "$mode" ]]
 }
 
+restore_install_receipt_after_rollback() {
+  if [[ -n "$ROLLBACK_INSTALL_RECEIPT" ]]; then
+    restore_file_atomically \
+      "$ROLLBACK_INSTALL_RECEIPT" \
+      "$RECEIPT_PATH" \
+      "$ROLLBACK_INSTALL_RECEIPT_SHA" \
+      600
+  elif [[ -e "$RECEIPT_PATH" || -L "$RECEIPT_PATH" ]]; then
+    [[ -f "$RECEIPT_PATH" && ! -L "$RECEIPT_PATH" ]] || return 1
+    rm "$RECEIPT_PATH"
+  fi
+}
+
 receipt_string() {
   local receipt="$1" filter="$2" label="$3"
   local value
@@ -1709,6 +1722,9 @@ recover_install() {
       recovery_failed=1
     fi
   fi
+  if [[ "$CUTOVER_RECOVERY_ATTEMPTED" != "1" ]]; then
+    restore_install_receipt_after_rollback || recovery_failed=1
+  fi
   if [[ "$CUTOVER_ADOPTION_STOPPED" == "1" && "$recovery_failed" == "0" ]]; then
     restore_adopted_app_after_cutover || recovery_failed=1
   fi
@@ -1910,6 +1926,8 @@ recover_host() {
     fi
     [[ "$ROLLBACK_ELEVATION_PLIST_SHA" =~ ^[0-9a-f]{64}$ ]] ||
       fail 'receipt elevation plist backup digest is invalid'
+    backup_file_matches "$ROLLBACK_ELEVATION_PLIST" "$ROLLBACK_ELEVATION_PLIST_SHA" ||
+      fail 'receipt elevation plist backup failed digest validation'
   fi
   if [[ -n "$ROLLBACK_INSTALL_RECEIPT" ]]; then
     state_backup_path_is_canonical \
@@ -1919,6 +1937,8 @@ recover_host() {
       fail 'receipt previous install receipt path is not canonical'
     [[ "$ROLLBACK_INSTALL_RECEIPT_SHA" =~ ^[0-9a-f]{64}$ ]] ||
       fail 'receipt previous install receipt digest is invalid'
+    backup_file_matches "$ROLLBACK_INSTALL_RECEIPT" "$ROLLBACK_INSTALL_RECEIPT_SHA" ||
+      fail 'receipt previous install receipt failed digest validation'
   fi
   if [[ -n "$ROLLBACK_MIGRATION_SOURCE" ]]; then
     [[ "$(dirname "$ROLLBACK_MIGRATION_SOURCE")" == "$HOME/Library/LaunchAgents" ]] ||
@@ -1935,6 +1955,8 @@ recover_host() {
       fail 'receipt migration plist backup path is not canonical'
     [[ "$ROLLBACK_MIGRATION_PLIST_SHA" =~ ^[0-9a-f]{64}$ ]] ||
       fail 'receipt migration plist backup digest is invalid'
+    backup_file_matches "$ROLLBACK_MIGRATION_PLIST" "$ROLLBACK_MIGRATION_PLIST_SHA" ||
+      fail 'receipt migration plist backup failed digest validation'
     [[ ! -e "$ROLLBACK_MIGRATION_SOURCE" && ! -L "$ROLLBACK_MIGRATION_SOURCE" ]] ||
       fail 'could not restore the previous OpenClaw installation completely'
     [[ "$(job_loaded_state "$launch_domain/$ROLLBACK_MIGRATION_LABEL")" == "absent" ]] ||
