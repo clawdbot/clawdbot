@@ -21,6 +21,7 @@
     "@modelcontextprotocol/ext-apps": "1.7.5",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@noble/ed25519": "3.1.0",
+    "@noble/hashes": "2.2.0",
     "@novnc/novnc": "1.7.0",
     "@openclaw/gateway-client": "workspace:*",
     "@openclaw/gateway-protocol": "workspace:*",

@@ -2366,6 +2366,9 @@ importers:
       '@noble/ed25519':
         specifier: 3.1.0
         version: 3.1.0
+      '@noble/hashes':
+        specifier: 2.2.0
+        version: 2.2.0
       '@novnc/novnc':
         specifier: 1.7.0
         version: 1.7.0

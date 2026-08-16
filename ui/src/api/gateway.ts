@@ -429,21 +429,21 @@ export class GatewayBrowserClient {
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
     const explicitPassword = this.opts.password?.trim() || undefined;
 
-    // crypto.subtle is only available in secure contexts (HTTPS, localhost).
-    // Token/password auth cannot replace browser device identity over plain HTTP.
-    const isSecureContext = typeof crypto !== "undefined" && Boolean(crypto.subtle);
-    let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
+    // Device identity signs with pure-JS Ed25519, so it works on any origin,
+    // including plain-HTTP LAN dashboards where crypto.subtle is unavailable.
+    // Blocked storage (for example some private-browsing modes) degrades to a
+    // device-less connect instead of failing the handshake.
     let selectedAuth: GatewayConnectAuthSelection = {
       authToken: explicitGatewayToken,
       authPassword: explicitPassword,
     };
-
-    if (isSecureContext) {
-      deviceIdentity = await loadOrCreateDeviceIdentity();
-      this.client.recordTiming("device-identity-ready", generation, undefined, {
-        secureContext: true,
-        hasDeviceIdentity: true,
-      });
+    const deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null =
+      await loadOrCreateDeviceIdentity().catch(() => null);
+    this.client.recordTiming("device-identity-ready", generation, undefined, {
+      secureContext: typeof window !== "undefined" && window.isSecureContext === true,
+      hasDeviceIdentity: deviceIdentity !== null,
+    });
+    if (deviceIdentity) {
       selectedAuth = this.selectConnectAuth({
         role,
         deviceId: deviceIdentity.deviceId,

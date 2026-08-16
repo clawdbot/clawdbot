@@ -1,7 +1,7 @@
 // Presentation-free by contract: confirmations and secret reveals belong to the owning
 // page, because native window.confirm/window.prompt silently answer in webviews with no
 // dialog bridge and would end the action with no outcome and no recorded reason.
-import { getPublicKeyAsync, signAsync, utils } from "@noble/ed25519";
+import { getPublicKeyAsync, hashes, signAsync, utils } from "@noble/ed25519";
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -14,6 +14,19 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 import { cloneConfigObject, removePathValue, setPathValue } from "../config-form-utils.ts";
 // Shared Nodes operations used by the Control UI page and Gateway event hooks.
 import { formatUiError } from "../format-error.ts";
+
+// @noble/ed25519 defaults its SHA-512 to crypto.subtle, which browsers gate to
+// secure contexts. On plain-HTTP origins the pure-JS digests load lazily so
+// device identity keeps working there — the signing key is the one credential
+// that never crosses the wire — while secure contexts pay no startup bytes.
+const loadPureSha2 = () => import("@noble/hashes/sha2.js");
+const subtleSha512Async = hashes.sha512Async;
+hashes.sha512Async = async (message: Uint8Array) => {
+  if (globalThis.crypto?.subtle && subtleSha512Async) {
+    return await subtleSha512Async(message);
+  }
+  return (await loadPureSha2()).sha512(message);
+};
 
 type GatewayRequestClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
@@ -897,8 +910,14 @@ function bytesToHex(bytes: Uint8Array): string {
 }
 
 async function fingerprintPublicKey(publicKey: Uint8Array): Promise<string> {
-  const hash = await crypto.subtle.digest("SHA-256", publicKey.slice().buffer);
-  return bytesToHex(new Uint8Array(hash));
+  // Prefer the platform digest where the context provides it; the pure-JS
+  // fallback keeps identity working on plain-HTTP origins without subtle.
+  const subtle = globalThis.crypto?.subtle;
+  if (subtle) {
+    const hash = await subtle.digest("SHA-256", publicKey.slice().buffer);
+    return bytesToHex(new Uint8Array(hash));
+  }
+  return bytesToHex((await loadPureSha2()).sha256(publicKey));
 }
 
 async function generateIdentity(): Promise<DeviceIdentity> {
