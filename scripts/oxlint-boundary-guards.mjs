@@ -666,7 +666,17 @@ export default {
         "packages/ai",
         "src/acp/client.ts", // Node and Web ReadableStream types live in separate namespaces.
         "src/acp/server.ts", // Node and Web ReadableStream types live in separate namespaces.
-        "src/agents",
+        "src/agents/agent-hooks/compaction-safeguard.ts", // AgentMessage custom roles exceed the Copilot header message contract.
+        "src/agents/agent-model-discovery.ts", // Persisted registry rows need a fully resolved model parser owner.
+        "src/agents/embedded-agent-helpers/images.ts", // Assistant blocks cross the tool-image sanitizer's narrower block namespace.
+        "src/agents/embedded-agent-runner/run/attempt-stream.ts", // Synthetic yield stream metadata is wider than the provider model contract.
+        "src/agents/embedded-agent-runner/run/images.ts", // Provider-only video blocks cross the canonical AgentMessage namespace.
+        "src/agents/mcp-http-fetch.ts", // Undici Response crosses the DOM FetchLike type namespace.
+        "src/agents/model-auth-model.ts", // Null Authorization sentinel crosses the SDK's string-only header type.
+        "src/agents/model-provider-auth.ts", // Route-fact cache keys cross a config-only hash API.
+        "src/agents/modes/interactive/theme/theme.ts", // Global symbol registry and Proxy receiver bridge duplicate module copies.
+        "src/agents/subagents/spawn/subagent-depth.ts", // Generic session projections cross the fixed accessor entry type.
+        "src/agents/tool-search-transcript.ts", // Synthetic target turns omit provider-owned assistant metadata.
         "src/channels/plugins/config-schema.ts", // Public SDK Zod generics preserve caller schema identity.
         "src/commands/channel-test-registry.ts", // Test support.
         "src/commands/doctor/cron/legacy-repair.ts", // Partially validated legacy rows cross the canonical cron store type.
@@ -683,7 +693,9 @@ export default {
         "src/infra/net/runtime-fetch.ts", // Undici and DOM fetch types live in separate namespaces.
         "src/infra/state-migrations.meeting-transcripts-files.ts", // Legacy summary validation does not prove element types.
         "src/infra/unhandled-rejections.ts", // Global symbol registry crosses module copies.
-        "src/meeting-bot",
+        "src/meeting-bot/browser-controller.ts", // Generic health fallbacks cannot construct arbitrary platform subtypes.
+        "src/meeting-bot/platform-adapter.ts", // Generic parsers add adapter-owned health and transcript fields.
+        "src/meeting-bot/plugin-shell.ts", // Type-only plugin namespace factory has no runtime value.
         "src/plugin-sdk/channel-config-helpers.ts", // Public SDK accessor generics are intentionally decoupled.
         "src/plugin-sdk/provider-stream-shared.ts", // Untyped normalizer events need a transport stream API redesign.
         "src/plugin-sdk/qa-runtime.ts", // Public SDK lazy module exposes a narrower runtime surface.
