@@ -1787,8 +1787,8 @@ describe("runMemoryFlushIfNeeded", () => {
 
   it("fails required preflight when nothing new compacts while the session stays over budget", async () => {
     // Regression for #121617: an already-compacted verdict on a required
-    // token preflight means fixed overhead overflows the budget; the gate must
-    // reject with the unresolved-overflow reason instead of skipping ahead.
+    // token preflight leaves the over-budget session unresolved; the gate
+    // must reject with the unresolved reason instead of skipping ahead.
     const sessionFile = path.join(rootDir, "session.jsonl");
     await fs.writeFile(
       sessionFile,
@@ -1838,7 +1838,7 @@ describe("runMemoryFlushIfNeeded", () => {
         onCompactionNotice,
       }),
     ).rejects.toThrow(
-      "Preflight compaction required but failed: Context still exceeds target budget after the latest compaction; nothing new to compact (overflow is driven by fixed per-turn overhead)",
+      "Preflight compaction required but failed: Context still exceeds the target budget after the latest compaction; nothing new to compact",
     );
     expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
     expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "incomplete");

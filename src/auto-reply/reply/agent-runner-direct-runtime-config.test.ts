@@ -1,6 +1,7 @@
 // Tests direct runtime config overrides passed into agent runner execution.
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { UNRESOLVED_TOKEN_PREFLIGHT_COMPACTION_REASON } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -617,6 +618,34 @@ describe("runReplyAgent runtime config", () => {
     expect(result.text).toContain("auto-compaction could not recover");
     expect(result.text).toContain("/compact");
     expect(result.text).toContain("/new");
+    const metadata = getReplyPayloadMetadata(result);
+    expect(metadata?.deliverDespiteSourceReplySuppression).toBe(true);
+  });
+
+  it("shows the unresolved-preflight cause and remedy in the default reply", async () => {
+    // Regression for #121617 review: the unresolved token-preflight rejection
+    // must reach the user as a cause plus a working remedy (/new), not the
+    // generic compaction advice that cannot recover this state.
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    runPreflightCompactionIfNeededMock.mockRejectedValue(
+      new Error(
+        `Preflight compaction required but failed: ${UNRESOLVED_TOKEN_PREFLIGHT_COMPACTION_REASON}`,
+      ),
+    );
+    runMemoryFlushIfNeededMock.mockResolvedValue({ sessionEntry: undefined, outcome: "skipped" });
+
+    const result = await runReplyAgent(replyParams);
+
+    if (!result || Array.isArray(result)) {
+      throw new Error("expected a single unresolved preflight failure reply payload");
+    }
+    expect(result.text).toContain("even after compaction");
+    expect(result.text).toContain("nothing new can be compacted");
+    expect(result.text).toContain("/new");
+    expect(result.text).not.toContain("Try again, use /compact");
     const metadata = getReplyPayloadMetadata(result);
     expect(metadata?.deliverDespiteSourceReplySuppression).toBe(true);
   });
