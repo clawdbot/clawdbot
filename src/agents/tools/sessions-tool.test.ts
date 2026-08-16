@@ -159,7 +159,9 @@ describe("sessions tool", () => {
         label: { type: "string", description: expect.stringContaining("Empty string clears") },
         icon: {
           type: "string",
-          description: expect.stringContaining("Distinct from attention"),
+          description: expect.stringContaining(
+            "named icon: braces, book, monitor, bot, kanban, coins",
+          ),
         },
         statusNote: { type: "string", maxLength: 120 },
         attention: {

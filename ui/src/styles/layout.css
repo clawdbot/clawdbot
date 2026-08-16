@@ -2818,6 +2818,22 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   padding: 2px;
 }
 
+.session-menu__icon-options {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.session-menu__icon-section-label {
+  padding: 4px 4px 2px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
 .session-menu__icon-grid {
   display: grid;
   grid-template-columns: repeat(6, 28px);
@@ -2854,6 +2870,22 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
+.session-menu__icon-choice--custom {
+  border: 1px dashed var(--border);
+  color: var(--muted);
+}
+
+.session-menu__icon-choice--custom svg,
+.session-menu__icon-choice--glyph svg {
+  width: 16px;
+  height: 16px;
+}
+
+.session-menu__icon-choice--glyph {
+  color: var(--text);
+  font-size: inherit;
+}
+
 .session-menu__icon-separator {
   margin: 5px 4px 3px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
@@ -2876,6 +2908,96 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 .session-menu__icon-remove:hover,
 .session-menu__icon-remove:focus-visible {
   background: var(--bg-hover);
+}
+
+.session-menu__icon-custom-entry {
+  width: 180px;
+}
+
+.session-menu__icon-custom-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 3px 4px;
+  color: var(--text);
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 600;
+}
+
+.session-menu__icon-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.session-menu__icon-back svg {
+  width: 15px;
+  height: 15px;
+}
+
+.session-menu__icon-back:hover,
+.session-menu__icon-back:focus-visible {
+  background: var(--bg-hover);
+}
+
+.session-menu__icon-custom-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px;
+}
+
+.session-menu__icon-custom-input {
+  min-width: 0;
+  height: 30px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--menu-item-radius);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.session-menu__icon-custom-input:focus {
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  outline-offset: -1px;
+}
+
+.session-menu__icon-set {
+  min-width: 42px;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: var(--accent);
+  color: var(--accent-foreground);
+  cursor: var(--cursor-action);
+  font: inherit;
+  font-size: calc(12px * var(--control-ui-text-scale));
+  font-weight: 600;
+}
+
+.session-menu__icon-set:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.session-menu__icon-custom-hint {
+  padding: 6px 2px 2px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.35;
 }
 
 .session-menu__icon-remove:focus-visible {

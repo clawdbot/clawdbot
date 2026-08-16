@@ -1,7 +1,8 @@
 import { html, nothing } from "lit";
-import { property } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
+import { normalizeSessionIconValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { t } from "../i18n/index.ts";
 import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../lib/editor-links.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
@@ -9,6 +10,7 @@ import { DropdownMenuController } from "./dropdown-menu-controller.ts";
 import { icons } from "./icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+import { renderSessionIconPicker } from "./session-icon-picker.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
 
 type SessionMenuData = {
@@ -59,20 +61,6 @@ const EMPTY_SESSION: SessionMenuData = {
   categoryClearReturnsToGroups: false,
 };
 
-const SESSION_ICON_CHOICES = [
-  "🦞",
-  "🚀",
-  "🐛",
-  "✅",
-  "🔥",
-  "📦",
-  "🧪",
-  "📝",
-  "🔍",
-  "⚡",
-  "🎯",
-  "⭐",
-] as const;
 const SESSION_ICON_GRID_COLUMNS = 6;
 
 class SessionMenu extends OpenClawLightDomElement {
@@ -98,10 +86,12 @@ class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) workboard: { captured: boolean; busy: boolean } | null = null;
   @property({ attribute: false }) onAction: (action: SessionMenuAction) => void = () => {};
   @property({ attribute: false }) onClose: () => void = () => {};
+  @state() private iconPickerMode: "grid" | "custom" = "grid";
+  @state() private customIconValue = "";
   readonly menuLifecycle = new DropdownMenuController(this, {
     getTrigger: () => this.trigger,
     onClose: () => this.onClose(),
-    onKeydown: (event) => activateMenuShortcut(this, event),
+    onKeydown: (event) => this.handleMenuKeydown(event),
   });
 
   override connectedCallback() {
@@ -287,56 +277,84 @@ class SessionMenu extends OpenClawLightDomElement {
   }
 
   private renderIconSubmenu() {
-    const currentIcon = this.session.icon;
-    const tabStop =
-      SESSION_ICON_CHOICES.find((icon) => icon === currentIcon) ?? SESSION_ICON_CHOICES[0];
-    return html`
-      <div slot="submenu" class="session-menu__icon-picker">
-        <div
-          class="session-menu__icon-grid"
-          role="group"
-          aria-label=${t("sessionsView.setIconMenu")}
-          @keydown=${this.handleIconGridKeydown}
-        >
-          ${SESSION_ICON_CHOICES.map((icon) => {
-            const checked = currentIcon === icon;
-            return html`
-              <button
-                type="button"
-                class="session-menu__icon-choice"
-                aria-pressed=${String(checked)}
-                tabindex=${icon === tabStop ? "0" : "-1"}
-                ?disabled=${this.actionDisabled("set-icon")}
-                title=${this.actionTitle("set-icon")}
-                @click=${(event: MouseEvent) => this.selectIcon(event, icon)}
-              >
-                ${icon}
-              </button>
-            `;
-          })}
-        </div>
-        ${currentIcon
-          ? html`
-              <div class="session-menu__icon-separator" role="separator"></div>
-              <button
-                type="button"
-                class="session-menu__icon-remove"
-                ?disabled=${this.actionDisabled("set-icon")}
-                title=${this.actionTitle("set-icon")}
-                @click=${this.removeIcon}
-              >
-                ${t("sessionsView.removeIcon")}
-              </button>
-            `
-          : nothing}
-      </div>
-    `;
+    return renderSessionIconPicker({
+      mode: this.iconPickerMode,
+      currentIcon: this.session.icon,
+      customIconValue: this.customIconValue,
+      disabled: this.actionDisabled("set-icon"),
+      disabledReason: this.actionDisabledReasons["set-icon"],
+      onSelect: this.selectIcon,
+      onShowCustom: this.showCustomIconEntry,
+      onBack: this.showIconGrid,
+      onInput: this.updateCustomIconValue,
+      onApply: this.applyCustomIcon,
+      onRemove: this.removeIcon,
+      onGridKeydown: this.handleIconGridKeydown,
+    });
   }
 
   private readonly selectIcon = (event: MouseEvent, icon: string) => {
     event.stopPropagation();
     this.runAction({ kind: "set-icon", icon });
   };
+
+  private readonly showCustomIconEntry = (event: MouseEvent) => {
+    event.stopPropagation();
+    this.iconPickerMode = "custom";
+    this.customIconValue = "";
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLInputElement>(".session-menu__icon-custom-input")?.focus();
+    });
+  };
+
+  private readonly showIconGrid = (event?: Event) => {
+    event?.stopPropagation();
+    this.iconPickerMode = "grid";
+    this.customIconValue = "";
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLButtonElement>(".session-menu__icon-choice--custom")?.focus();
+    });
+  };
+
+  private readonly updateCustomIconValue = (event: InputEvent) => {
+    if (event.currentTarget instanceof HTMLInputElement) {
+      this.customIconValue = event.currentTarget.value;
+    }
+  };
+
+  private readonly applyCustomIcon = (event?: Event) => {
+    event?.stopPropagation();
+    const icon = normalizeSessionIconValue(this.customIconValue);
+    if (icon) {
+      this.runAction({ kind: "set-icon", icon });
+    }
+  };
+
+  private handleMenuKeydown(event: KeyboardEvent) {
+    const input = event
+      .composedPath()
+      .find(
+        (target): target is HTMLInputElement =>
+          target instanceof HTMLInputElement &&
+          target.classList.contains("session-menu__icon-custom-input"),
+      );
+    if (!input) {
+      activateMenuShortcut(this, event);
+      return;
+    }
+    event.stopPropagation();
+    if (event.key === "Escape") {
+      event.preventDefault();
+      this.showIconGrid();
+    } else if (event.key === "Enter") {
+      const icon = normalizeSessionIconValue(input.value);
+      if (icon) {
+        event.preventDefault();
+        this.customIconValue = input.value;
+        this.applyCustomIcon();
+      }
+    }
+  }
 
   private readonly removeIcon = (event: MouseEvent) => {
     event.stopPropagation();
@@ -383,9 +401,18 @@ class SessionMenu extends OpenClawLightDomElement {
     if (!(item instanceof HTMLElement) || event.detail.item !== item) {
       return;
     }
-    requestAnimationFrame(() => {
-      item.querySelector<HTMLButtonElement>('.session-menu__icon-choice[tabindex="0"]')?.focus();
-    });
+    // Web Awesome re-runs submenu setup when grid/custom content replaces the
+    // slot. Only a closed submenu is a user reopen that should reset state.
+    if (item.getAttribute("aria-expanded") === "true") {
+      return;
+    }
+    this.iconPickerMode = "grid";
+    this.customIconValue = "";
+    void this.updateComplete.then(() =>
+      requestAnimationFrame(() => {
+        item.querySelector<HTMLButtonElement>('.session-menu__icon-choice[tabindex="0"]')?.focus();
+      }),
+    );
   };
 
   override render() {

@@ -296,28 +296,32 @@ describe("session menu", () => {
     expect(onAction).toHaveBeenCalledWith({ kind: "new-group" });
   });
 
-  it("renders the icon grid, marks the current icon, and dispatches set and remove", async () => {
+  it("renders emoji and glyph sections with a custom entry and remove action", async () => {
     const onAction = vi.fn<(action: SessionMenuAction) => void>();
     const menu = await mountMenu({ session: { icon: "🦞" }, onAction });
     const submenu = menuItem(menu, "Set icon");
     (submenu as SessionMenuItem & { submenuOpen: boolean }).submenuOpen = true;
 
     const choices = iconChoices(submenu);
-    expect(submenu.querySelector(".session-menu__icon-grid")?.getAttribute("role")).toBe("group");
-    expect(choices.map((choice) => choice.textContent?.trim())).toEqual([
-      "🦞",
-      "🚀",
-      "🐛",
-      "✅",
-      "🔥",
-      "📦",
-      "🧪",
-      "📝",
-      "🔍",
-      "⚡",
-      "🎯",
-      "⭐",
-    ]);
+    expect(submenu.querySelector(".session-menu__icon-options")?.getAttribute("role")).toBe(
+      "group",
+    );
+    expect(
+      Array.from(submenu.querySelectorAll(".session-menu__icon-section-label")).map((label) =>
+        label.textContent?.trim(),
+      ),
+    ).toEqual(["Emoji", "Icons"]);
+    const grids = submenu.querySelectorAll(".session-menu__icon-grid");
+    expect(
+      Array.from(grids[0]?.querySelectorAll<HTMLButtonElement>("button") ?? []).map((choice) =>
+        choice.textContent?.trim(),
+      ),
+    ).toEqual(["🦞", "🚀", "🐛", "✅", "🔥", "📦", "🧪", "📝", "🔍", "⚡", "🎯", ""]);
+    expect(grids[0]?.querySelectorAll("button")).toHaveLength(12);
+    expect(grids[0]?.querySelector("button:nth-child(12)")?.getAttribute("aria-label")).toBe(
+      "Custom emoji…",
+    );
+    expect(grids[1]?.querySelectorAll("button")).toHaveLength(6);
     const current = choices[0];
     if (!current) {
       throw new Error("Expected the first icon choice");
@@ -336,11 +340,105 @@ describe("session menu", () => {
     expect(onAction).toHaveBeenCalledWith({ kind: "set-icon", icon: null });
   });
 
+  it("validates and applies a custom emoji with Enter", async () => {
+    const calls: string[] = [];
+    const menu = await mountMenu({
+      onClose: () => calls.push("close"),
+      onAction: (action) =>
+        calls.push(`${action.kind}:${action.kind === "set-icon" ? action.icon : ""}`),
+    });
+    const submenu = menuItem(menu, "Set icon");
+    submenu.querySelector<HTMLButtonElement>('[aria-label="Custom emoji…"]')?.click();
+    await menu.updateComplete;
+
+    const input = submenu.querySelector<HTMLInputElement>(".session-menu__icon-custom-input");
+    const set = submenu.querySelector<HTMLButtonElement>(".session-menu__icon-set");
+    expect(input).not.toBeNull();
+    expect(input?.getAttribute("aria-label")).toBe("Custom emoji");
+    expect(document.activeElement).toBe(input);
+    expect(set?.disabled).toBe(true);
+
+    if (!input) {
+      throw new Error("Expected custom emoji input");
+    }
+    input.value = "a";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await menu.updateComplete;
+    expect(submenu.querySelector<HTMLButtonElement>(".session-menu__icon-set")?.disabled).toBe(
+      true,
+    );
+
+    input.value = "🧜‍♀️";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await menu.updateComplete;
+    expect(submenu.querySelector<HTMLButtonElement>(".session-menu__icon-set")?.disabled).toBe(
+      false,
+    );
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    );
+
+    expect(calls).toEqual(["close", "set-icon:🧜‍♀️"]);
+  });
+
+  it("returns from custom entry on Escape without closing the menu", async () => {
+    const onClose = vi.fn();
+    const menu = await mountMenu({ onClose });
+    const submenu = menuItem(menu, "Set icon");
+    submenu.querySelector<HTMLButtonElement>('[aria-label="Custom emoji…"]')?.click();
+    await menu.updateComplete;
+    const input = submenu.querySelector<HTMLInputElement>(".session-menu__icon-custom-input");
+    if (!input) {
+      throw new Error("Expected custom emoji input");
+    }
+
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    await menu.updateComplete;
+
+    expect(submenu.querySelector(".session-menu__icon-custom-input")).toBeNull();
+    expect(submenu.querySelector('[aria-label="Custom emoji…"]')).not.toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("keeps custom entry open when Web Awesome rebinds its open submenu slot", async () => {
+    const menu = await mountMenu();
+    const submenu = menuItem(menu, "Set icon");
+    submenu.querySelector<HTMLButtonElement>('[aria-label="Custom emoji…"]')?.click();
+    await menu.updateComplete;
+    submenu.setAttribute("aria-expanded", "true");
+
+    submenu.dispatchEvent(
+      new CustomEvent("submenu-opening", {
+        bubbles: true,
+        composed: true,
+        detail: { item: submenu },
+      }),
+    );
+    await menu.updateComplete;
+
+    expect(submenu.querySelector(".session-menu__icon-custom-input")).not.toBeNull();
+  });
+
+  it("marks and dispatches named glyph icons", async () => {
+    const onAction = vi.fn<(action: SessionMenuAction) => void>();
+    const menu = await mountMenu({ session: { icon: "braces" }, onAction });
+    const submenu = menuItem(menu, "Set icon");
+    const braces = submenu.querySelector<HTMLButtonElement>('[aria-label="braces"]');
+    const book = submenu.querySelector<HTMLButtonElement>('[aria-label="book"]');
+
+    expect(braces?.getAttribute("aria-pressed")).toBe("true");
+    expect(braces?.tabIndex).toBe(0);
+    book?.click();
+    expect(onAction).toHaveBeenCalledWith({ kind: "set-icon", icon: "book" });
+  });
+
   it("only renders Remove icon for a session with an icon", async () => {
     const menu = await mountMenu();
     const submenu = menuItem(menu, "Set icon");
 
-    expect(iconChoices(submenu)).toHaveLength(12);
+    expect(iconChoices(submenu)).toHaveLength(18);
     expect(submenu.querySelector(".session-menu__icon-separator")).toBeNull();
     expect(submenu.querySelector(".session-menu__icon-remove")).toBeNull();
   });
