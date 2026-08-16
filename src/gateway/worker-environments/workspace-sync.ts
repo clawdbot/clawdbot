@@ -125,12 +125,11 @@ export function createWorkerWorkspaceActions(
     const signal = command.signal
       ? AbortSignal.any([options.ownerSignal, command.signal])
       : options.ownerSignal;
-    const prepared =
-      command.transportRetry === "idempotent"
-        ? await withTimeout(options.waitForPrepared(), timeoutMs, {
-            message: "Worker tunnel did not reconnect within the workspace command timeout",
-          })
-        : requirePrepared();
+    // Waiting before first dispatch is safe for every command. `transportRetry` only controls
+    // whether an ambiguous SSH result may be replayed after dispatch.
+    const prepared = await withTimeout(options.waitForPrepared(), timeoutMs, {
+      message: "Worker tunnel did not reconnect within the workspace command timeout",
+    });
     const remainingCommandTimeoutMs = () => Math.max(0, deadlineMs - Date.now());
     const commandOptions = (remainingTimeoutMs: number): CommandOptions => {
       const base = workerSshCommandOptions({

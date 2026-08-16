@@ -62,6 +62,8 @@ describe("worker tunnel manager", () => {
     expect(tunnel?.argv).toContain("StreamLocalBindMask=0177");
     expect(tunnel?.argv).toContain("StreamLocalBindUnlink=yes");
     expect(tunnel?.options.input).not.toContain("rm -f");
+    expect(tunnel?.options.input).toContain("sleep 15; printf '.'");
+    expect(tunnel?.options.input).toContain("remote command received SIGHUP");
     expect(tunnel?.argv[tunnel.argv.indexOf("-R") + 1]).toMatch(
       /^\/tmp\/ocw-[a-f0-9]{16}-3\/gateway\.sock:127\.0\.0\.1:18789$/u,
     );
@@ -115,7 +117,8 @@ describe("worker tunnel manager", () => {
     expect(remoteLaunchCommand).toContain('exec node "$HOME/.openclaw-worker/$1/worker.mjs"');
     expect(remoteLaunchCommand).toContain(`'${BUNDLE_HASH}'`);
     expect(launch?.options.input).toContain('"connectionEndpoint":{"kind":"unix"');
-    expect(launch?.options.timeoutMs).toBe(123);
+    expect(launch?.options.timeoutMs).toBeGreaterThan(0);
+    expect(launch?.options.timeoutMs).toBeLessThanOrEqual(123);
     await handle.stop();
     expect(tunnel?.process.stopCount).toBe(1);
     expect(manager.status("worker:one")).toBe("stopped");
@@ -277,7 +280,7 @@ describe("worker tunnel manager", () => {
     await handle.stop();
   });
 
-  it("keeps stateful commands fail closed and aborts idempotent reconnect waits on stop", async () => {
+  it("waits before stateful dispatch and aborts reconnect waits on owner stop", async () => {
     const fake = fakeRunner();
     const sleepStarted = deferred<AbortSignal>();
     const { handle } = await startConnectedTunnel(fake, "worker:reconnect-command-policy", 1, {
@@ -309,12 +312,34 @@ describe("worker tunnel manager", () => {
     const idempotentResult = expect(idempotent).rejects.toThrow(
       "Worker tunnel owner is no longer connected",
     );
-    await expect(
-      handle.runWorkspaceCommand({ ...PWD_COMMAND, transportRetry: "never" }),
-    ).rejects.toThrow("Worker tunnel owner is no longer connected");
+    const stateful = handle.runWorkspaceCommand({ ...PWD_COMMAND, transportRetry: "never" });
+    const statefulSettled = vi.fn();
+    void stateful.then(statefulSettled, statefulSettled);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(statefulSettled).not.toHaveBeenCalled();
 
     await handle.stop();
     await idempotentResult;
+    await expect(stateful).rejects.toThrow("Worker tunnel owner is no longer connected");
+  });
+
+  it("does not replay a stateful command after an ambiguous transport exit", async () => {
+    const fake = fakeRunner((argv) =>
+      argv.at(-1)?.includes("'pwd'") ? { ...success(), code: 255 } : undefined,
+    );
+    const { handle } = await startConnectedTunnel(fake, "worker:stateful-no-replay", 1, {
+      ssh: { ...SSH, port: 2222, fallbackPorts: [22] },
+    });
+
+    try {
+      await expect(
+        handle.runWorkspaceCommand({ ...PWD_COMMAND, transportRetry: "never" }),
+      ).resolves.toMatchObject({ code: 255 });
+      expect(fake.runs.filter((run) => run.argv.at(-1)?.includes("'pwd'"))).toHaveLength(1);
+    } finally {
+      await handle.stop();
+    }
   });
 
   it("shares setup and best-effort stop cleanup deadlines across fallback candidates", async () => {

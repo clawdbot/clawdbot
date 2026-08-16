@@ -1,16 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
+import type { WorkerWorkspaceQuiescence } from "./tunnel-contract.js";
 import {
   deferred,
+  fakeRunner,
   localWorkspaceRunner,
   memoryWorkspaceJournal,
   startConnectedTunnel,
   waitForFast,
   waitForStarts,
 } from "./tunnel.test-support.js";
+import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 
 const tunnelWarn = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
@@ -27,6 +29,10 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("worker workspace reconnect", () => {
+  beforeEach(() => {
+    tunnelWarn.mockClear();
+  });
+
   it("reconciles a completed result across a same-owner SSH reconnect", async () => {
     const root = tempDirs.make("openclaw-worker-reconcile-reconnect-");
     const localPath = path.join(root, "local");
@@ -35,31 +41,14 @@ describe("worker workspace reconnect", () => {
     await fs.writeFile(path.join(localPath, "result.txt"), "before\n");
 
     const releaseReconnect = deferred<void>();
-    const resultTransfersCompleted = deferred<void>();
     let disconnectAfterManifest = false;
-    let disconnected = false;
-    let resultTransferCount = 0;
-    const fake = localWorkspaceRunner(
-      remoteHome,
-      async (_argv, localArgv, options) => {
-        if (!disconnected) {
-          return undefined;
-        }
-        const result = await runCommandWithTimeout(localArgv, options);
-        resultTransferCount += 1;
-        if (resultTransferCount === 2) {
-          resultTransfersCompleted.resolve();
-        }
-        return result;
-      },
-      (argv) => {
-        if (disconnectAfterManifest && argv.at(-1)?.includes("'memo-v1'")) {
-          disconnectAfterManifest = false;
-          disconnected = true;
-          fake.starts[0]!.process.exit(255);
-        }
-      },
-    );
+    let manifestCount = 0;
+    const fake = localWorkspaceRunner(remoteHome, undefined, (argv) => {
+      if (disconnectAfterManifest && argv.at(-1)?.includes("'memo-v1'") && ++manifestCount === 1) {
+        disconnectAfterManifest = false;
+        fake.starts[0]!.process.exit(255);
+      }
+    });
     const { handle, manager } = await startConnectedTunnel(fake, "worker:reconcile-reconnect", 13, {
       manager: {
         sleep: async (_ms, signal) => {
@@ -89,45 +78,97 @@ describe("worker workspace reconnect", () => {
         generation: 1,
       });
       await fs.writeFile(path.join(synced.remoteWorkspaceDir, "result.txt"), "after\n");
-      disconnectAfterManifest = true;
-
-      const reconciling = handle.reconcileWorkspace({
+      const reconciliation = await handle.reconcileWorkspace({
         localPath,
         remoteWorkspaceDir: synced.remoteWorkspaceDir,
         baseManifestRef: synced.manifestRef,
         journal: memoryWorkspaceJournal(),
       });
-      const reconcileSettled = vi.fn();
-      void reconciling.then(reconcileSettled, reconcileSettled);
+      const quiescence: WorkerWorkspaceQuiescence = {
+        assertActive: async () => {
+          const result = await handle.runWorkspaceCommand({
+            transportRetry: "never",
+            argv: ["pwd"],
+          });
+          expect(result.code).toBe(0);
+        },
+        resume: async () => {},
+      };
+      manifestCount = 0;
+      disconnectAfterManifest = true;
+      const finalizing = verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+      const finalizationSettled = vi.fn();
+      void finalizing.then(finalizationSettled, finalizationSettled);
 
       await waitForFast(() =>
         expect(manager.status("worker:reconcile-reconnect")).toBe("reconnecting"),
       );
-      await resultTransfersCompleted.promise;
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 100);
       });
-      expect(reconcileSettled).not.toHaveBeenCalled();
+      expect(finalizationSettled).not.toHaveBeenCalled();
 
       releaseReconnect.resolve();
       await waitForStarts(fake.starts, 2);
       fake.starts[1]!.process.becomeReady();
 
-      await expect(reconciling).resolves.toMatchObject({ changed: true });
+      await expect(finalizing).resolves.toBeDefined();
       await expect(fs.readFile(path.join(localPath, "result.txt"), "utf8")).resolves.toBe(
         "after\n",
       );
+    } finally {
+      releaseReconnect.resolve();
+      await handle.stop();
+    }
+  });
+
+  it("logs an in-flight child exit and the reconnect attempt before readiness", async () => {
+    const commandStarted = deferred<void>();
+    const releaseCommand = deferred<void>();
+    const fake = fakeRunner(async (argv) => {
+      if (argv.at(-1)?.includes("'pwd'")) {
+        commandStarted.resolve();
+        await releaseCommand.promise;
+      }
+      return undefined;
+    });
+    const { handle } = await startConnectedTunnel(fake, "worker:reconnect-diagnostics", 14, {
+      manager: { sleep: async () => {} },
+    });
+
+    try {
+      const running = handle.runWorkspaceCommand({ transportRetry: "idempotent", argv: ["pwd"] });
+      await commandStarted.promise;
+      fake.starts[0]!.process.exit(255, "ssh transport closed");
+
+      await waitForStarts(fake.starts, 2);
       expect(tunnelWarn).toHaveBeenCalledWith(
         "worker tunnel SSH child exited during workspace operation",
         expect.objectContaining({
-          environmentId: "worker:reconcile-reconnect",
-          ownerEpoch: 13,
-          code: 255,
-          workspaceTaskCount: expect.any(Number),
+          environmentId: "worker:reconnect-diagnostics",
+          ownerEpoch: 14,
+          exitCode: 255,
+          signal: null,
+          stderrTail: "ssh transport closed",
+          workspaceTaskCount: 1,
         }),
       );
+      expect(tunnelWarn).toHaveBeenCalledWith(
+        "worker tunnel reconnect attempt started",
+        expect.objectContaining({
+          environmentId: "worker:reconnect-diagnostics",
+          ownerEpoch: 14,
+          attempt: 2,
+          status: "reconnecting",
+          port: expect.any(Number),
+          workspaceTaskCount: 1,
+        }),
+      );
+      fake.starts[1]!.process.becomeReady();
+      releaseCommand.resolve();
+      await expect(running).resolves.toMatchObject({ code: 0 });
     } finally {
-      releaseReconnect.resolve();
+      releaseCommand.resolve();
       await handle.stop();
     }
   });

@@ -70,8 +70,12 @@ const REMOTE_TUNNEL_READY_SCRIPT = String.raw`set -eu
 socket=$1
 test -S "$socket"
 printf '%s\n' '${WORKER_TUNNEL_READY_MARKER}'
-trap 'exit 0' HUP INT TERM
-while :; do sleep 3600; done
+trap 'printf "%s\n" "worker tunnel remote command received SIGHUP" >&2; exit 129' HUP
+trap 'printf "%s\n" "worker tunnel remote command received SIGINT" >&2; exit 130' INT
+trap 'printf "%s\n" "worker tunnel remote command received SIGTERM" >&2; exit 143' TERM
+# ServerAlive messages protect the SSH transport, not an idle session channel. Keep the control
+# channel active too so provider sshd ChannelTimeout policies cannot retire a healthy tunnel.
+while :; do sleep 15; printf '.'; done
 `;
 
 const REMOTE_SOCKET_CLEANUP_SCRIPT = String.raw`set -eu
@@ -337,6 +341,19 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     const reconnectSupervisor = new RetrySupervisor(backoff);
     while (isCurrent(entry)) {
       entry.status = reconnectSupervisor.attempts === 0 ? "connecting" : "reconnecting";
+      const attempt = reconnectSupervisor.attempts + 1;
+      const reconnecting = entry.status === "reconnecting";
+      const connectStartedAtMs = now();
+      if (reconnecting) {
+        tunnelLog.warn("worker tunnel reconnect attempt started", {
+          environmentId: entry.environmentId,
+          ownerEpoch: entry.ownerEpoch,
+          attempt,
+          status: entry.status,
+          port: entry.prepared?.port,
+          workspaceTaskCount: entry.workspaceTasks.size,
+        });
+      }
       let child: WorkerSshProcess | undefined;
       let childPort: number | undefined;
       try {
@@ -352,6 +369,15 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
           return;
         }
         entry.status = "connected";
+        if (reconnecting) {
+          tunnelLog.info("worker tunnel reconnected", {
+            environmentId: entry.environmentId,
+            ownerEpoch: entry.ownerEpoch,
+            attempt,
+            port: childPort,
+            durationMs: now() - connectStartedAtMs,
+          });
+        }
         const connectionReadiness = entry.readiness;
         connectionReadiness.resolve(createHandle(entry));
         const connectedAtMs = now();
@@ -369,8 +395,9 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
           tunnelLog.warn("worker tunnel SSH child exited during workspace operation", {
             environmentId: entry.environmentId,
             ownerEpoch: entry.ownerEpoch,
-            code: exit.code,
+            exitCode: exit.code,
             signal: exit.signal,
+            ...(exit.stderrTail ? { stderrTail: exit.stderrTail } : {}),
             workspaceTaskCount: entry.workspaceTasks.size,
           });
         }
