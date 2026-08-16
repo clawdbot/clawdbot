@@ -20,6 +20,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStoredSessionOwnerAgentId } from "../gateway/session-store-key.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeLegacySessionEntryDelivery as normalizeSessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
@@ -197,10 +198,7 @@ function resolveDoctorSessionSqliteMaintenanceRoots(
 }
 
 function isPathWithin(rootPath: string, candidatePath: string): boolean {
-  const relativePath = path.relative(rootPath, path.resolve(candidatePath));
-  return (
-    relativePath === "" || (!relativePath.startsWith(`..${path.sep}`) && relativePath !== "..")
-  );
+  return isPathInside(rootPath, path.resolve(candidatePath));
 }
 
 function commonPathAncestor(leftPath: string, rightPath: string): string {

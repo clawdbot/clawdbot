@@ -25,7 +25,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
-import { isNotFoundPathError } from "../infra/path-guards.js";
+import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { getActivePluginHttpRouteRegistry } from "../plugins/runtime.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -300,19 +300,9 @@ function getValidatedHostReadText(buffer?: Buffer): string | undefined {
   return printableRatio > 0.95 ? text : undefined;
 }
 
-function isPathInsideRoot(filePath: string | undefined, root: string): boolean {
-  if (!filePath) {
-    return false;
-  }
-  const relative = path.relative(path.resolve(root), path.resolve(filePath));
-  return (
-    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
-  );
-}
-
 function resolveLocalMediaFileName(filePath: string): string | undefined {
   const fileName = basenameFromAnyPath(filePath) || undefined;
-  return fileName && isPathInsideRoot(filePath, getMediaDir())
+  return fileName && isPathInside(getMediaDir(), filePath)
     ? extractOriginalFilename(fileName)
     : fileName;
 }
@@ -375,15 +365,13 @@ async function resolveTrustedGeneratedHostReadHtml(
   }
   // Outbound staging always requires provenance, even when a custom state dir
   // places media/outbound underneath the otherwise trusted temp root.
-  if (outboundRoot && isPathInsideRoot(resolvedFilePath, outboundRoot)) {
+  if (outboundRoot && isPathInside(outboundRoot, resolvedFilePath)) {
     const marker = await getTrustedGeneratedHtmlMarker(resolvedFilePath);
     return marker
       ? { source: "outbound", expectedSha256: marker.sha256, expectedSize: marker.size }
       : undefined;
   }
-  return tmpRoot && isPathInsideRoot(resolvedFilePath, tmpRoot)
-    ? { source: "temp-root" }
-    : undefined;
+  return tmpRoot && isPathInside(tmpRoot, resolvedFilePath) ? { source: "temp-root" } : undefined;
 }
 
 /** Records exact-byte provenance for a trusted generated HTML staged outbound. */
@@ -393,7 +381,7 @@ export async function markTrustedGeneratedHtmlPath(
 ): Promise<void> {
   const resolvedFilePath = await realpath(filePath);
   const outboundRoot = await realpath(path.join(getMediaDir(), "outbound")).catch(() => undefined);
-  if (!outboundRoot || !isPathInsideRoot(resolvedFilePath, outboundRoot)) {
+  if (!outboundRoot || !isPathInside(outboundRoot, resolvedFilePath)) {
     throw new Error(
       `markTrustedGeneratedHtmlPath: refusing path outside outbound staging: ${resolvedFilePath}`,
     );
