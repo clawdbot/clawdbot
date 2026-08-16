@@ -418,7 +418,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
 ): Promise<void> {
   retainedGatewayRunOwners.clear(owners);
   const { defaultWorkspaceDir: workspace, allowGatewaySubagentBinding: bindings } = options;
-  const catalogMode = options.catalogMode ?? "live";
+  const defaultCatalogMode = options.catalogMode ?? "live";
   gatewayLifecycleActive ||= options.gatewayLifecycle === true;
   const staleError = new Error("prepared model runtime owner is stale after config publication");
   for (const owner of owners.values()) {
@@ -462,6 +462,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
     }
   }
   const candidates = entries.map(({ owner: existing, input }) => {
+    const catalogMode = options.catalogModeForAgent?.(input.agentId) ?? defaultCatalogMode;
     // Dynamic and standalone owners have different lifetime contracts. A configured publication
     // must replace them so an older lease release cannot remove the committed generation.
     const owner =

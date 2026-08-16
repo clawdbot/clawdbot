@@ -2241,6 +2241,42 @@ describe("startGatewayPostAttachRuntime", () => {
     });
   });
 
+  it("selects catalog mode per agent and keeps legacy wildcards static", async () => {
+    await withEnvAsync(
+      { OPENCLAW_SKIP_STARTUP_MODEL_PREWARM: "1" },
+      async () =>
+        await startGatewaySidecars({
+          cfg: {
+            agents: {
+              defaults: { models: { "openai/*": {} } },
+              list: [
+                { id: "main", modelPolicy: { allow: ["openai/*"] } },
+                { id: "research", modelPolicy: { allow: ["openai/gpt-5.6"] } },
+                { id: "legacy" },
+              ],
+            },
+            hooks: { internal: { enabled: false } },
+          } as never,
+          pluginRegistry: createPostAttachParams().pluginRegistry,
+          defaultWorkspaceDir: "/tmp/openclaw-workspace",
+          deps: {} as never,
+          startChannels: vi.fn(async () => {}),
+          log: { warn: vi.fn() },
+          logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          logChannels: { info: vi.fn(), error: vi.fn() },
+        }),
+    );
+
+    const options = hoisted.refreshPreparedModelRuntimeSnapshots.mock.calls.at(-1)?.[1] as
+      | { catalogModeForAgent?: (agentId: string | undefined) => "live" | "static" }
+      | undefined;
+
+    expect(options?.catalogModeForAgent).toEqual(expect.any(Function));
+    expect(options?.catalogModeForAgent?.("main")).toBe("live");
+    expect(options?.catalogModeForAgent?.("research")).toBe("static");
+    expect(options?.catalogModeForAgent?.("legacy")).toBe("static");
+  });
+
   it("marks startup main-session orphans before model runtime and channel startup", async () => {
     const events: string[] = [];
     let releaseMarking: (() => void) | undefined;

@@ -512,21 +512,21 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
 }): Promise<void> {
   const [
     { refreshPreparedModelRuntimeSnapshots },
-    { listAgentIds },
-    { parseConfiguredModelVisibilityEntries },
+    { modelCatalogBrowseRequiresFullDiscovery },
   ] = await Promise.all([
     import("../agents/prepared-model-runtime.js"),
-    import("../agents/agent-scope.js"),
-    loadModelSelectionSharedModule(),
+    import("../agents/model-catalog-browse.js"),
   ]);
-  const hasProviderWildcard = listAgentIds(params.cfg).some(
-    (agentId) =>
-      parseConfiguredModelVisibilityEntries({ cfg: params.cfg, agentId }).providerWildcards.size >
-      0,
-  );
   await refreshPreparedModelRuntimeSnapshots(params.cfg, {
     gatewayLifecycle: true,
-    catalogMode: hasProviderWildcard ? "live" : "static",
+    catalogModeForAgent: (agentId) =>
+      modelCatalogBrowseRequiresFullDiscovery({
+        cfg: params.cfg,
+        agentId,
+        view: "default",
+      })
+        ? "live"
+        : "static",
     allowGatewaySubagentBinding: true,
     ...(params.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
