@@ -121,24 +121,30 @@ describe("device worker provider", () => {
       name: "missing pairing",
       getPairedDevice: async () => null,
       listCurrentNodes: async () => [connectedNode()],
+      expectedMessage: `device worker is not a paired node host: ${DEVICE_ID}`,
     },
     {
       name: "offline device",
       getPairedDevice: async () => pairedDevice(),
       listCurrentNodes: async () => [],
+      expectedMessage: `device worker node is not connected: ${DEVICE_ID}`,
     },
     {
-      name: "connected node without worker session hosting",
+      name: "connected node at capacity",
       getPairedDevice: async () => pairedDevice(),
       listCurrentNodes: async () => [connectedNode(DEVICE_ID, null)],
+      expectedMessage: `device worker is at capacity (all worker slots in use): ${DEVICE_ID}; retry after a running turn completes`,
     },
-  ])("rejects $name during provision", async ({ getPairedDevice, listCurrentNodes }) => {
-    const provider = deviceRuntime({ getPairedDevice, listCurrentNodes }).provider;
+  ])(
+    "rejects $name during provision",
+    async ({ getPairedDevice, listCurrentNodes, expectedMessage }) => {
+      const provider = deviceRuntime({ getPairedDevice, listCurrentNodes }).provider;
+      const provision = provider.provision({ device: DEVICE_ID }, "operation");
 
-    await expect(provider.provision({ device: DEVICE_ID }, "operation")).rejects.toBeInstanceOf(
-      WorkerProviderError,
-    );
-  });
+      await expect(provision).rejects.toBeInstanceOf(WorkerProviderError);
+      await expect(provision).rejects.toMatchObject({ message: expectedMessage });
+    },
+  );
 
   it("returns the exact update-and-reconnect recovery for an outdated connected node", async () => {
     const provider = deviceRuntime({
