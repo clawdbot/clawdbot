@@ -8,22 +8,40 @@ import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 export { stripInternalRuntimeScaffolding };
 
 const HTML_TAG_RE = /<\/?[a-z][a-z0-9_-]*\b[^>]*>/gi;
+// RFC 5322 angle-addr: <local@domain> — preserve these before tag stripping.
+const RFC5322_ANGLE_ADDR_RE = /<([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})>/g;
 const MAY_CONTAIN_MARKDOWN_CODE_RE = /[`~]|\t| {4}/;
 const CODE_ESCAPE = "\u0000e";
 const CODE_PLACEHOLDER = "\u0000p";
+// Control character used for escaping; defined as constant to avoid no-control-regex lint.
+const CONTROL_CHAR = "\u0000";
 
 // Quoted attribute values may contain `>`; normalize convertible openers without leaking attribute text.
 const CONVERTIBLE_HTML_OPEN_TAG_RE =
   /<(b|strong|i|em|s|strike|del|code|h[1-6]|li)(?=\s|>)(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi;
 
 function stripRemainingHtmlTags(text: string): string {
+  // Preserve RFC 5322 angle-addr email addresses before stripping tags.
+  const preservedEmails: string[] = [];
+  const masked = text.replace(RFC5322_ANGLE_ADDR_RE, (_match, email) => {
+    preservedEmails.push(email);
+    return `${CONTROL_CHAR}email${preservedEmails.length - 1}${CONTROL_CHAR}`;
+  });
+
   let previous: string;
-  let current = text;
+  let current = masked;
   do {
     previous = current;
     current = current.replace(HTML_TAG_RE, "");
   } while (current !== previous);
-  return current;
+
+  // Restore preserved email addresses.
+  return current.replace(
+    new RegExp(`${CONTROL_CHAR}email(\\d+)${CONTROL_CHAR}`, "g"),
+    (_match, index) => {
+      return `<${preservedEmails[Number(index)]}>`;
+    },
+  );
 }
 
 function convertHtmlOutsideCode(text: string, options: { style?: "markdown" }): string {
@@ -73,17 +91,17 @@ export function sanitizeForPlainText(text: string, options: { style?: "markdown"
     return convertHtmlOutsideCode(prepared, options);
   }
   const preservedCode: string[] = [];
-  let masked = "";
+  let maskedText = "";
   let cursor = 0;
   for (const region of codeRegions) {
-    masked += prepared.slice(cursor, region.start).replaceAll("\u0000", CODE_ESCAPE);
-    masked += CODE_PLACEHOLDER;
+    maskedText += prepared.slice(cursor, region.start).replaceAll("\u0000", CODE_ESCAPE);
+    maskedText += CODE_PLACEHOLDER;
     preservedCode.push(prepared.slice(region.start, region.end));
     cursor = region.end;
   }
-  masked += prepared.slice(cursor).replaceAll("\u0000", CODE_ESCAPE);
+  maskedText += prepared.slice(cursor).replaceAll("\u0000", CODE_ESCAPE);
 
-  const converted = convertHtmlOutsideCode(masked, options);
+  const converted = convertHtmlOutsideCode(maskedText, options);
   let restored = "";
   cursor = 0;
   for (const code of preservedCode) {

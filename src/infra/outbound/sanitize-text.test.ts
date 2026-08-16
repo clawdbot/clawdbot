@@ -170,6 +170,18 @@ describe("sanitizeForPlainText", () => {
     );
   });
 
+  it("preserves RFC 5322 angle-addr email addresses", () => {
+    expect(sanitizeForPlainText("Contact us at Support <support@example.com> or reply here")).toBe(
+      "Contact us at Support <support@example.com> or reply here",
+    );
+    expect(sanitizeForPlainText("Ping <alice@example.org> and <bob@example.net>")).toBe(
+      "Ping <alice@example.org> and <bob@example.net>",
+    );
+    expect(sanitizeForPlainText("See <mailto:support@example.com> now")).toBe(
+      "See mailto:support@example.com now",
+    );
+  });
+
   // --- passthrough --------------------------------------------------------
 
   it("passes through clean text unchanged", () => {
