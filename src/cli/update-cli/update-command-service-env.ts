@@ -6,6 +6,10 @@ const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
 ] as const;
+const MANAGED_UPDATE_SELECTOR_ENV_KEYS = [
+  "OPENCLAW_HOME",
+  ...GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
+] as const;
 
 function applyManagedServiceSelectorEnv(params: {
   baseEnv: NodeJS.ProcessEnv;
@@ -14,7 +18,7 @@ function applyManagedServiceSelectorEnv(params: {
 }): NodeJS.ProcessEnv {
   const resolved = { ...params.baseEnv };
   const selectorEnv = params.selectorEnv ?? params.serviceEnv;
-  for (const key of GATEWAY_SERVICE_SELECTOR_ENV_KEYS) {
+  for (const key of MANAGED_UPDATE_SELECTOR_ENV_KEYS) {
     if (selectorEnv[key]?.trim()) {
       resolved[key] = params.serviceEnv[key];
     } else {

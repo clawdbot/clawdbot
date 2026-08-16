@@ -260,12 +260,14 @@ describe("resolvePostInstallDoctorEnv", () => {
       invocationCwd: "/srv/openclaw",
       baseEnv: {
         PATH: "/bin",
+        OPENCLAW_HOME: "/wrong/home",
         OPENCLAW_STATE_DIR: "/wrong/state",
         OPENCLAW_CONFIG_PATH: "/wrong/openclaw.json",
         OPENCLAW_PROFILE: "wrong",
         OPENCLAW_SYSTEMD_UNIT: "wrong.service",
       },
       serviceEnv: {
+        OPENCLAW_HOME: "daemon-home",
         OPENCLAW_STATE_DIR: "daemon-state",
         OPENCLAW_CONFIG_PATH: "daemon-state/openclaw.json",
         OPENCLAW_PROFILE: "work",
@@ -275,6 +277,7 @@ describe("resolvePostInstallDoctorEnv", () => {
 
     expect(env.PATH).toBe("/bin");
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
+    expect(env.OPENCLAW_HOME).toBe(path.join("/srv/openclaw", "daemon-home"));
     expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw", "daemon-state"));
     expect(env.OPENCLAW_CONFIG_PATH).toBe(
       path.join("/srv/openclaw", "daemon-state", "openclaw.json"),
@@ -324,6 +327,7 @@ describe("resolveUpdatedInstallCommandEnv", () => {
     const env = resolveOwnedManagedUpdateEnv({
       processEnv: {
         HOME: "/home/operator",
+        OPENCLAW_HOME: "/home/operator/openclaw-home",
         OPENCLAW_PROFILE: "personal",
         OPENCLAW_STATE_DIR: "/home/operator/.openclaw-personal",
         OPENCLAW_CONFIG_PATH: "/home/operator/.openclaw-personal/openclaw.json",
@@ -332,6 +336,7 @@ describe("resolveUpdatedInstallCommandEnv", () => {
       },
       serviceEnv: {
         HOME: "/home/operator",
+        OPENCLAW_HOME: "/home/operator/openclaw-home",
         OPENCLAW_PROFILE: "personal",
         OPENCLAW_STATE_DIR: "/home/operator/.openclaw-personal",
         OPENCLAW_CONFIG_PATH: "/home/operator/.openclaw-personal/openclaw.json",
@@ -342,6 +347,7 @@ describe("resolveUpdatedInstallCommandEnv", () => {
     });
 
     expect(env.HOME).toBe("/home/operator");
+    expect(env.OPENCLAW_HOME).toBeUndefined();
     expect(env.OPENCLAW_PROFILE).toBeUndefined();
     expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
     expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
