@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import type { NodeWorkerSupervisorReceipt } from "../../worker/node-supervisor-protocol.js";
@@ -31,6 +32,7 @@ import type {
   WorkerTunnelStatus,
   WorkerWorkspaceCommand,
 } from "./tunnel-contract.js";
+import { boundedWorkerError } from "./worker-error.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 import {
@@ -44,6 +46,7 @@ import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
 const RETRY_DELAY_MS = 100;
+const tunnelLog = createSubsystemLogger("gateway/worker-tunnel");
 const RETRYABLE_TRANSPORT_CODES = new Set([
   "DISCONNECTED",
   "NOT_CONNECTED",
@@ -664,11 +667,16 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         if (!isLiveEntry(entry)) {
           return;
         }
-        const restoredWorkspace = await resolveWorkspaceBinding?.({
-          environmentId: request.environmentId,
-          ownerEpoch: request.ownerEpoch,
-          sessionId: request.sessionId,
-        });
+        const restoredWorkspace = resolveWorkspaceBinding
+          ? await raceWithSignal(
+              resolveWorkspaceBinding({
+                environmentId: request.environmentId,
+                ownerEpoch: request.ownerEpoch,
+                sessionId: request.sessionId,
+              }),
+              entry.abortController.signal,
+            )
+          : undefined;
         if (!isLiveEntry(entry)) {
           return;
         }
@@ -682,7 +690,15 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       })();
       void entry.initialization.catch((error: unknown) => {
         readiness.reject(error);
-        void stopEntry(entry);
+        // Startup already reports the owning error through readiness. Keep secondary cleanup
+        // failures visible without replacing that shared result for concurrent callers.
+        void stopEntry(entry).catch((cleanupError: unknown) => {
+          tunnelLog.warn("node worker tunnel cleanup failed after initialization error", {
+            environmentId: entry.environmentId,
+            ownerEpoch: entry.ownerEpoch,
+            error: boundedWorkerError(cleanupError),
+          });
+        });
       });
       return await readiness.promise;
     },

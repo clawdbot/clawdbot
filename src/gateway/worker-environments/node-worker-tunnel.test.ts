@@ -27,13 +27,17 @@ import type { WorkerEnvironmentRecord } from "./store.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 const workspaceInfo = vi.hoisted(() => vi.fn());
+const tunnelWarn = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
   return {
     ...actual,
     createSubsystemLogger: (subsystem: string) => {
       const logger = actual.createSubsystemLogger(subsystem);
-      return subsystem === "gateway/worker-workspace" ? { ...logger, info: workspaceInfo } : logger;
+      if (subsystem === "gateway/worker-workspace") {
+        return { ...logger, info: workspaceInfo };
+      }
+      return subsystem === "gateway/worker-tunnel" ? { ...logger, warn: tunnelWarn } : logger;
     },
   };
 });
@@ -216,6 +220,73 @@ describe("node worker tunnel manager", () => {
     const [firstHandle, secondHandle] = await Promise.all([first, second]);
     expect(resolveWorkspaceBinding).toHaveBeenCalledOnce();
     expect(secondHandle).toBe(firstHandle);
+  });
+
+  it.each(["stop", "stopAll"] as const)(
+    "%s fences a pending workspace resolver without waiting for it",
+    async (operation) => {
+      const record = environment();
+      const workspaceBinding = createDeferred<undefined>();
+      const resolverSettled = vi.fn();
+      void workspaceBinding.promise.then(resolverSettled);
+      const transfer = {
+        ...workspaceTransfer(),
+        closeAll: vi.fn(async () => {}),
+      } as unknown as NodeWorkspaceTransferService;
+      const resolveWorkspaceBinding = vi.fn(async () => await workspaceBinding.promise);
+      const manager = createNodeWorkerTunnelManager({
+        gatewayDeviceId: "gateway-device-1",
+        getEnvironment: () => record,
+        getTransport: transport,
+        launchNodeWorker: vi.fn(),
+        validateWorkerTurn: () => true,
+        workspaceTransfer: transfer,
+      });
+      manager.bindWorkspaceBindingResolver(resolveWorkspaceBinding);
+
+      const starting = manager.start(startRequest());
+      await vi.waitFor(() => expect(resolveWorkspaceBinding).toHaveBeenCalledOnce());
+      await (operation === "stop"
+        ? manager.stop("environment-1", record.ownerEpoch)
+        : manager.stopAll());
+
+      expect(resolverSettled).not.toHaveBeenCalled();
+      await expect(starting).rejects.toThrow("stopped before connecting");
+      expect(manager.status("environment-1")).toBe("stopped");
+      workspaceBinding.resolve(undefined);
+    },
+  );
+
+  it("reports a cleanup failure after workspace binding initialization fails", async () => {
+    tunnelWarn.mockClear();
+    const record = environment();
+    const transfer = workspaceTransfer();
+    transfer.close = vi.fn(async () => {
+      throw new Error("workspace cleanup failed");
+    });
+    const manager = createNodeWorkerTunnelManager({
+      gatewayDeviceId: "gateway-device-1",
+      getEnvironment: () => record,
+      getTransport: transport,
+      launchNodeWorker: vi.fn(),
+      validateWorkerTurn: () => true,
+      workspaceTransfer: transfer,
+    });
+    manager.bindWorkspaceBindingResolver(async () => {
+      throw new Error("workspace binding failed");
+    });
+
+    await expect(manager.start(startRequest())).rejects.toThrow("workspace binding failed");
+    await vi.waitFor(() =>
+      expect(tunnelWarn).toHaveBeenCalledWith(
+        "node worker tunnel cleanup failed after initialization error",
+        {
+          environmentId: "environment-1",
+          ownerEpoch: record.ownerEpoch,
+          error: "workspace cleanup failed",
+        },
+      ),
+    );
   });
 
   it.each(["success", "failure"] as const)(
