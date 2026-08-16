@@ -288,9 +288,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
     // loginGatePinned protects manual submissions.
     const initialConnectPending =
       runtime.documentMode === null &&
-      (gatewaySnapshot.phase === "connecting" || gatewaySnapshot.phase === "starting") &&
-      !this.loginGatePinned &&
-      gatewaySnapshot.lastError === null;
+      gatewaySnapshot.lastError === null &&
+      (gatewaySnapshot.phase === "starting" ||
+        (gatewaySnapshot.phase === "connecting" && !this.loginGatePinned));
     if (initialConnectPending) {
       return html`
         <openclaw-tooltip-provider>

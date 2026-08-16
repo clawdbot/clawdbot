@@ -113,6 +113,58 @@ describe("Control UI Gateway target lineage", () => {
     expect(surface).not.toContain("<openclaw-login-gate");
   });
 
+  it("shows startup progress after a manual connection attempt", () => {
+    const { gateway, clients } = createGatewayHarness();
+    gateway.start();
+    clients[0]?.opts.onClose?.({
+      code: 1006,
+      reason: "manual connection required",
+      willRetry: true,
+    });
+    const app = document.createElement("openclaw-app") as unknown as {
+      runtime: Pick<ApplicationRuntime, "context" | "documentMode">;
+      render: () => { strings: readonly string[] };
+      synchronizeGateway: (gateway: ApplicationGateway) => void;
+    };
+    app.runtime = {
+      documentMode: null,
+      context: {
+        gateway,
+        basePath: "",
+        agentSelection: { state: { selectedId: null } },
+        config: { current: { terminalEnabled: false } },
+      } as unknown as ApplicationContext,
+    };
+    app.synchronizeGateway(gateway);
+    const container = document.createElement("div");
+    render(app.render(), container);
+    const loginGate = container.querySelector("openclaw-login-gate") as unknown as {
+      props: { onConnect: () => void };
+    };
+
+    loginGate.props.onConnect();
+    clients[1]?.opts.onClose?.({
+      code: 4013,
+      reason: "gateway starting",
+      willRetry: true,
+      error: {
+        code: "UNAVAILABLE",
+        message: "gateway starting; retry shortly",
+        details: { reason: "startup-sidecars" },
+        retryable: true,
+        retryAfterMs: 250,
+      },
+    });
+    render(app.render(), container);
+
+    expect(container.innerHTML).toContain("Gateway starting…");
+    expect(container.innerHTML).not.toContain("<openclaw-login-gate");
+
+    clients[1]?.opts.onHello?.(HELLO);
+    render(app.render(), container);
+    expect(container.innerHTML).toContain("<openclaw-app-shell");
+  });
+
   it.each(["desktop", "terminal"] as const)(
     "shows retryable Gateway startup in the standalone %s document",
     (documentView) => {
