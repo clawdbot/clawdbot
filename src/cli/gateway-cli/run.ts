@@ -1199,6 +1199,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
           ...(startupConfigSnapshotReadForThisStart
             ? { startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart }
             : {}),
+          sidecarStartup: "defer",
           ...(channelAutostartSuppression ? { channelAutostartSuppression } : {}),
           ...(channelAutostartSuppression ? { tryRecoverChannelAutostartSuppression } : {}),
           ambientEnvTriggers,

@@ -482,6 +482,7 @@ describe("gateway run option collisions", () => {
       channelAutostartSuppression?: { reason?: string; message?: string };
       tryRecoverChannelAutostartSuppression?: () => boolean;
       ambientEnvTriggers?: "allow" | "suppress";
+      sidecarStartup?: "defer" | "start";
       startupConfigSnapshotRead?: { snapshot?: Record<string, unknown> };
       startupStartedAt?: number;
     };
@@ -504,6 +505,7 @@ describe("gateway run option collisions", () => {
 
     expect(beforeRun).toHaveBeenCalledOnce();
     expect(callOrder).toEqual(["bootstrap", "normalize", "normalize", "start"]);
+    expect(gatewayStartOptions().sidecarStartup).toBe("defer");
   });
 
   it("rejects invalid gateway ports before startup", async () => {

@@ -1182,32 +1182,28 @@ export async function startGatewayPostAttachRuntime(
     start: loadStartupPluginsIfNeeded,
     stop: () => {},
   });
-  await startupPluginsResident.start();
 
-  const startupOutcomes = createGatewayStartupOutcomeRecorder({
-    cfg: params.gatewayPluginConfigAtStart,
-    gatewayStartHooks: hasGatewayStartHooks(pluginRegistry),
-  });
-
-  const startupLogPromise = measureStartup(params.startupTrace, "post-attach.log", () =>
-    runtimeDeps.logGatewayStartup({
-      cfg: params.cfgAtStart,
-      activationSourceConfig: params.activationSourceConfig,
-      env: process.env,
-      manifestRecords: params.pluginManifestRecords,
-      ...(params.ambientEnvTriggers ? { ambientEnvTriggers: params.ambientEnvTriggers } : {}),
-      bindHost: params.bindHost,
-      bindHosts: params.bindHosts,
-      port: params.port,
-      tlsEnabled: params.tlsEnabled,
-      loadedPluginIds: pluginRegistry.plugins
-        .filter((plugin) => plugin.status === "loaded")
-        .map((plugin) => plugin.id),
-      log: params.log,
-      isNixMode: params.isNixMode,
-      startupStartedAt: params.startupStartedAt,
-    }),
-  );
+  let startupLogPromise: Promise<void> | undefined;
+  const startStartupLog = () =>
+    (startupLogPromise ??= measureStartup(params.startupTrace, "post-attach.log", () =>
+      runtimeDeps.logGatewayStartup({
+        cfg: params.cfgAtStart,
+        activationSourceConfig: params.activationSourceConfig,
+        env: process.env,
+        manifestRecords: params.pluginManifestRecords,
+        ...(params.ambientEnvTriggers ? { ambientEnvTriggers: params.ambientEnvTriggers } : {}),
+        bindHost: params.bindHost,
+        bindHosts: params.bindHosts,
+        port: params.port,
+        tlsEnabled: params.tlsEnabled,
+        loadedPluginIds: pluginRegistry.plugins
+          .filter((plugin) => plugin.status === "loaded")
+          .map((plugin) => plugin.id),
+        log: params.log,
+        isNixMode: params.isNixMode,
+        startupStartedAt: params.startupStartedAt,
+      }),
+    ));
 
   const updateCheck = params.minimalTestGateway
     ? { start: () => {}, stop: () => {} }
@@ -1276,14 +1272,19 @@ export async function startGatewayPostAttachRuntime(
 
   const startSidecars = () =>
     params.minimalTestGateway
-      ? Promise.resolve({
+      ? startStartupLog().then(() => ({
           pluginServices: null,
           pluginRegistry,
           postReadySidecars: [],
           gatewayLifetimeSidecars: [],
-        })
+        }))
       : waitForSidecarStartTurn().then(async () => {
           await startupPluginsResident.start();
+          await startStartupLog();
+          const startupOutcomes = createGatewayStartupOutcomeRecorder({
+            cfg: params.gatewayPluginConfigAtStart,
+            gatewayStartHooks: hasGatewayStartHooks(pluginRegistry),
+          });
           const workerEnvironmentSidecar = params.isClosing?.()
             ? null
             : ((await params.startWorkerEnvironmentRuntime?.()) ?? null);
@@ -1406,9 +1407,7 @@ export async function startGatewayPostAttachRuntime(
             ["postReadySidecarCount", postReadySidecars.length + gatewayLifetimeSidecars.length],
           ]);
           params.startupTrace?.mark("sidecars.ready");
-          if (params.sidecarStartup !== "defer") {
-            params.log.info("gateway ready");
-          }
+          params.log.info("gateway ready");
           return { ...result, postReadySidecars, gatewayLifetimeSidecars, pluginRegistry };
         });
   let startedSidecars: ReturnType<typeof startSidecars> | undefined;
@@ -1488,8 +1487,7 @@ export async function startGatewayPostAttachRuntime(
     });
 
   if (params.sidecarStartup !== "defer") {
-    const [, tailscaleCleanup, sidecarsResult] = await Promise.all([
-      startupLogPromise,
+    const [tailscaleCleanup, sidecarsResult] = await Promise.all([
       tailscaleCleanupPromise,
       sidecarsPromise,
     ]);
@@ -1501,7 +1499,7 @@ export async function startGatewayPostAttachRuntime(
     };
   }
 
-  const [, tailscaleCleanup] = await Promise.all([startupLogPromise, tailscaleCleanupPromise]);
+  const tailscaleCleanup = await tailscaleCleanupPromise;
   updateCheckResident.start();
 
   return {
