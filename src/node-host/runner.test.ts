@@ -1,6 +1,7 @@
 /** Tests node-host runner command parsing, timeout, and plugin dispatch behavior. */
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
@@ -28,7 +29,7 @@ const mocks = vi.hoisted(() => ({
   nodeSkillDescriptors: [] as Array<Record<string, unknown>>,
   runtimeSteps: [] as string[],
   useFakeRuntime: false,
-  fakeRuntimeWorkerRuns: false,
+  fakeRuntimeWorkerHosting: false,
   runnerAvailabilityChanged: undefined as ((available: boolean) => void) | undefined,
   nodeHostCommands: [] as string[],
   nodeHostCaps: [] as string[],
@@ -36,11 +37,6 @@ const mocks = vi.hoisted(() => ({
   availabilityChanged: undefined as (() => void) | undefined,
   normalizedPath: null as string | null,
   resolvedExecutables: new Map<string, string>(),
-  nodeWorkerBuild: {
-    bundleHash: "a".repeat(64),
-    openclawVersion: "2026.8.12",
-    protocolFeatures: ["worker-heartbeat-v1"],
-  },
   runtimeClient: undefined as
     | { request: (method: string, params?: unknown) => Promise<unknown> }
     | undefined,
@@ -166,14 +162,6 @@ vi.mock("./mcp.js", () => ({
   })),
 }));
 
-vi.mock("./node-worker-build.js", () => ({
-  resolveNodeWorkerInstallation: vi.fn(async () => ({
-    packageRoot: "/tmp/openclaw-node-worker",
-    revalidateBuild: vi.fn(async () => true),
-    build: structuredClone(mocks.nodeWorkerBuild),
-  })),
-}));
-
 vi.mock("./skills.js", () => ({
   scanNodeHostedSkills: vi.fn(() => mocks.nodeSkillDescriptors),
 }));
@@ -197,10 +185,8 @@ vi.mock("./runtime.js", async (importOriginal) => {
           caps: [],
           commands: [],
           pathEnv: process.env.PATH ?? "",
-          ...(mocks.fakeRuntimeWorkerRuns
-            ? { workerRuns: structuredClone(mocks.nodeWorkerBuild) }
-            : {}),
         },
+        workerHostingEnabled: mocks.fakeRuntimeWorkerHosting,
         initialInventory: { skills: [], pluginTools: [] },
         start: (params) => {
           mocks.runtimeClient = params.client;
@@ -236,7 +222,7 @@ describe("runNodeHost", () => {
     mocks.nodeSkillDescriptors = [];
     mocks.runtimeSteps = [];
     mocks.useFakeRuntime = false;
-    mocks.fakeRuntimeWorkerRuns = false;
+    mocks.fakeRuntimeWorkerHosting = false;
     mocks.runnerAvailabilityChanged = undefined;
     mocks.nodeHostCommands = [];
     mocks.nodeHostCaps = [];
@@ -625,7 +611,7 @@ describe("runNodeHost", () => {
     expect(lastCapturedOptions()?.workerRuns).toBeUndefined();
   });
 
-  it("advertises the local worker build only after node-local opt-in", async () => {
+  it("keeps runner consent out of the connection handshake", async () => {
     mocks.getRuntimeConfig.mockReturnValue({
       gateway: { handshakeTimeoutMs: 1_000 },
       nodeHost: { workerRuns: { enabled: true } },
@@ -635,7 +621,7 @@ describe("runNodeHost", () => {
       "event loop readiness timeout",
     );
 
-    expect(lastCapturedOptions()?.workerRuns).toEqual(mocks.nodeWorkerBuild);
+    expect(lastCapturedOptions()?.workerRuns).toBeUndefined();
   });
 
   it("advertises Claude agent runs only after node-local opt-in and binary resolution", async () => {
@@ -685,10 +671,11 @@ describe("runNodeHost", () => {
     });
     expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
       protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+      workerHost: { enabled: false },
     });
   });
 
-  it("publishes the opt-in local worker build in the atomic runner inventory", async () => {
+  it("publishes opt-in consent and capacity in the atomic runner inventory", async () => {
     mocks.getRuntimeConfig.mockReturnValue({
       gateway: { handshakeTimeoutMs: 1_000 },
       nodeHost: { workerRuns: { enabled: true } },
@@ -706,29 +693,42 @@ describe("runNodeHost", () => {
 
     expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
       protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-      workerRuns: mocks.nodeWorkerBuild,
+      workerHost: {
+        enabled: true,
+        capacity: "available",
+        bundlePrewarm: 1,
+      },
     });
   });
 
   it("withdraws and restores worker launch eligibility without reconnecting", async () => {
     mocks.useFakeRuntime = true;
-    mocks.fakeRuntimeWorkerRuns = true;
+    mocks.fakeRuntimeWorkerHosting = true;
     await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
       "event loop readiness timeout",
     );
     const options = mocks.capturedGatewayClientOptions[0];
     const client = mocks.capturedGatewayClients[0];
-    expect(options?.workerRuns).toEqual(mocks.nodeWorkerBuild);
+    expect(options?.workerRuns).toBeUndefined();
 
     mocks.runnerAvailabilityChanged?.(true);
     options?.onHelloOk?.({
       protocol: 4,
-      features: { methods: [], events: [] },
+      features: {
+        methods: [],
+        events: [],
+        capabilities: [GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION],
+      },
     } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
     await vi.waitFor(() => {
       expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerRuns: mocks.nodeWorkerBuild,
+        workerHost: {
+          enabled: true,
+          capacity: "available",
+          bundlePrewarm: 1,
+          bundleRetention: 1,
+        },
       });
     });
 
@@ -736,6 +736,12 @@ describe("runNodeHost", () => {
     await vi.waitFor(() => {
       expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: {
+          enabled: true,
+          capacity: "full",
+          bundlePrewarm: 1,
+          bundleRetention: 1,
+        },
       });
     });
 
@@ -743,7 +749,12 @@ describe("runNodeHost", () => {
     await vi.waitFor(() => {
       expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerRuns: mocks.nodeWorkerBuild,
+        workerHost: {
+          enabled: true,
+          capacity: "available",
+          bundlePrewarm: 1,
+          bundleRetention: 1,
+        },
       });
     });
     expect(client?.updateNodeManifest).not.toHaveBeenCalled();

@@ -8,17 +8,20 @@ import {
   isIncognitoOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import {
-  sqliteSessionStateDeleteSnapshotsEqual,
-  type MaterializedSessionStateDeletePlan,
-  type SessionStateDeletePlan,
+import { persistSessionTranscriptArchive } from "./session-accessor.sqlite-archive-store.js";
+import type {
+  MaterializedSessionStateDeletePlan,
+  SessionStateDeletePlan,
 } from "./session-accessor.sqlite-archive.js";
 import type {
   SessionEntryLifecycleRemoval,
   SessionEntryLifecycleUpsert,
   SessionLifecycleArchivedTranscript,
 } from "./session-accessor.sqlite-contract.js";
-import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
+import {
+  readSessionStateDeleteSnapshot,
+  sqliteSessionStateDeleteSnapshotsEqual,
+} from "./session-accessor.sqlite-delete-snapshot.js";
 import {
   deleteSessionEntryRows,
   readExactSessionEntryJsonForCanonicalRepair,
@@ -244,6 +247,9 @@ export function deleteMaterializedSessionStatePlans(
     if (!sqliteSessionStateDeleteSnapshotsEqual(currentSnapshot, plan.snapshot)) {
       throw new Error(`SQLite session state changed before deletion for ${plan.sessionId}`);
     }
+    if (plan.archive) {
+      persistSessionTranscriptArchive(database, plan);
+    }
     deleteSqliteSessionStateRows(database, plan.sessionId);
     if (plan.snapshot.lastSeq !== null && plan.archivedTranscript) {
       archivedTranscripts.push(plan.archivedTranscript);
@@ -333,6 +339,20 @@ export async function projectSessionEntryLifecycleMutation(
     if (!shouldRemoveSessionEntry(entry, removal)) {
       continue;
     }
+    if (removal.expectedTranscriptSnapshot) {
+      const sessionId = entry.sessionId;
+      if (
+        !sessionId ||
+        !sqliteSessionStateDeleteSnapshotsEqual(
+          readSessionStateDeleteSnapshot(database.db, sessionId),
+          removal.expectedTranscriptSnapshot,
+        )
+      ) {
+        // Classification happens before the lifecycle writer lane. A stale fact
+        // must become a no-op so newly live state is never archived and deleted.
+        continue;
+      }
+    }
     projectedRemovals.push({
       expectedEntry: cloneSessionEntry(entry),
       removal,
@@ -403,6 +423,21 @@ export async function projectSessionEntryLifecycleMutation(
       referencedSessionIds,
     }),
   );
+  const observedSnapshotsBySessionId = new Map(
+    projectedRemovals.flatMap(({ expectedEntry, removal }) =>
+      expectedEntry.sessionId && removal.expectedTranscriptSnapshot
+        ? [[expectedEntry.sessionId, removal.expectedTranscriptSnapshot] as const]
+        : [],
+    ),
+  );
+  for (const plan of deletePlans) {
+    const observedSnapshot = observedSnapshotsBySessionId.get(plan.sessionId);
+    if (observedSnapshot) {
+      // Keep the delete plan bound to classification, even if another process
+      // changes the transcript after the initial projection comparison.
+      plan.snapshot = observedSnapshot;
+    }
+  }
   const plannedIds = new Set(deletePlans.map((plan) => plan.sessionId));
   for (const sessionId of readSessionGenerationIdsForKeys(database, removedKeysToArchive)) {
     if (plannedIds.has(sessionId)) {

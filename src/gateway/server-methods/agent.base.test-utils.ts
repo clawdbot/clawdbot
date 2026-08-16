@@ -695,7 +695,7 @@ describe("gateway agent handler", () => {
     );
 
     expectRespondError(respond, {
-      message: `Error: Session "${sessionKey}" was deleted while starting work. Retry.`,
+      message: `Session "${sessionKey}" was deleted while starting work. Retry.`,
     });
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
@@ -723,7 +723,7 @@ describe("gateway agent handler", () => {
     );
 
     expectRespondError(respond, {
-      message: `Error: Session "${sessionKey}" was deleted while starting work. Retry.`,
+      message: `Session "${sessionKey}" was deleted while starting work. Retry.`,
     });
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
@@ -756,7 +756,7 @@ describe("gateway agent handler", () => {
     );
 
     expectRespondError(respond, {
-      message: `Error: Session "${sessionKey}" was deleted while starting work. Retry.`,
+      message: `Session "${sessionKey}" was deleted while starting work. Retry.`,
     });
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });

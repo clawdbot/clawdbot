@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { supportsWorkerExecutionContextLaunch } from "./admission.js";
-import { DEVICE_WORKER_PROVIDER_ID, isDeviceWorkerAvailable } from "./device-provider.js";
+import * as device from "./device-provider.js";
 import {
   createPlacementFailureActions,
   isUnavailableEnvironment,
@@ -81,31 +81,13 @@ type WorkerPlacementDispatchOptions = {
 function requireProvisionedEnvironment(
   environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>,
   expectedEnvironmentId: string,
-):
-  | { transport: "node"; environmentId: string; ownerEpoch: number; bundleHash: string }
-  | { transport: "ssh"; environmentId: string; ownerEpoch: number; bundleHash: string } {
+): { environmentId: string; ownerEpoch: number; bundleHash: string } {
+  // Node vs SSH transport is decided later from the environment itself; both
+  // arms of the old discriminated return carried identical fields, so this
+  // only validates dispatchability and hands back the prepared facts.
   if (
     (environment.state !== "ready" && environment.state !== "idle") ||
-    environment.environmentId !== expectedEnvironmentId
-  ) {
-    throw new Error(
-      `Worker environment is not dispatchable with the current execution-context contract: ${environment.state}`,
-    );
-  }
-  if (
-    environment.providerId === DEVICE_WORKER_PROVIDER_ID &&
-    !environment.sshEndpoint &&
-    environment.bootstrapReceipt?.installKind === "local" &&
-    supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt)
-  ) {
-    return {
-      transport: "node",
-      environmentId: environment.environmentId,
-      ownerEpoch: environment.ownerEpoch,
-      bundleHash: environment.bootstrapReceipt.bundleHash,
-    };
-  }
-  if (
+    environment.environmentId !== expectedEnvironmentId ||
     !environment.bootstrapReceipt ||
     !supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt)
   ) {
@@ -114,7 +96,6 @@ function requireProvisionedEnvironment(
     );
   }
   return {
-    transport: "ssh",
     environmentId: environment.environmentId,
     ownerEpoch: environment.ownerEpoch,
     bundleHash: environment.bootstrapReceipt.bundleHash,
@@ -183,10 +164,14 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           return placement;
         },
       });
-      if (request.deviceId && !(await isDeviceWorkerAvailable(environments, request.deviceId))) {
-        throw new Error(
-          `device worker requires a connected current node host; reconnect or reprovision: ${request.deviceId}`,
+      if (request.deviceId) {
+        const availability = await device.resolveDeviceWorkerAvailability(
+          environments,
+          request.deviceId,
         );
+        if (!availability.available) {
+          throw new Error(device.deviceUnavailableText(request.deviceId, availability));
+        }
       }
       const localPath = await options.resolveWorkspacePath(request);
       const idempotencyKey = `session-dispatch:${request.sessionId}:${placement.generation}`;

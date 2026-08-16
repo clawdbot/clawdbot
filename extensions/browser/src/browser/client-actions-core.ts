@@ -64,6 +64,7 @@ async function postDownloadRequest(
   body: Record<string, unknown>,
   profile?: string,
   timeoutMs?: number,
+  signal?: AbortSignal,
 ): Promise<BrowserDownloadActionResult> {
   const q = buildProfileQuery(profile);
   return await fetchBrowserJson<BrowserDownloadActionResult>(withBaseUrl(baseUrl, `${route}${q}`), {
@@ -71,6 +72,7 @@ async function postDownloadRequest(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     timeoutMs: resolveBrowserOperationRequestTimeoutMs(timeoutMs),
+    signal,
   });
 }
 
@@ -160,6 +162,7 @@ export async function browserWaitForDownload(
     targetId?: string;
     timeoutMs?: number;
     profile?: string;
+    signal?: AbortSignal;
   },
 ): Promise<BrowserDownloadActionResult> {
   return await postDownloadRequest(
@@ -172,6 +175,7 @@ export async function browserWaitForDownload(
     },
     opts.profile,
     opts.timeoutMs,
+    opts.signal,
   );
 }
 
@@ -184,6 +188,7 @@ export async function browserDownload(
     targetId?: string;
     timeoutMs?: number;
     profile?: string;
+    signal?: AbortSignal;
   },
 ): Promise<BrowserDownloadActionResult> {
   return await postDownloadRequest(
@@ -197,6 +202,7 @@ export async function browserDownload(
     },
     opts.profile,
     opts.timeoutMs,
+    opts.signal,
   );
 }
 

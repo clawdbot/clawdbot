@@ -6607,6 +6607,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(realGatewayRuns).toEqual([
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/mcp-app-conformance.e2e.test.ts",
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
+      "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/logs-lifecycle.e2e.test.ts",
     ]);
     const realGatewayRunContract = realGatewayRuns.join("\n");
     expect(realGatewayRunContract).not.toContain("--retry");
@@ -6719,12 +6720,19 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(parityStep.run).not.toContain("pnpm apple:i18n:check");
   });
 
-  it("verifies built runtime artifacts with hosted-serial and Blacksmith-parallel modes", () => {
+  it("runs built runtime verifiers inside the artifact-check wave", () => {
     const workflow = readCiWorkflow();
-    const verifierStep = workflow.jobs["build-artifacts"].steps.find(
-      (step: WorkflowStep) => step.name === "Verify built runtime artifacts",
+    const steps = workflow.jobs["build-artifacts"].steps;
+    const verifierStep = steps.find(
+      (step: WorkflowStep) => step.name === "Run built artifact checks",
     );
 
+    // The verifiers always run, so the shared step cannot be gated on the
+    // selected checks; each check keeps its own RUN_* gate inside the body.
+    expect(verifierStep.if).toBeUndefined();
+    expect(steps.some((step: WorkflowStep) => step.name === "Verify built runtime artifacts")).toBe(
+      false,
+    );
     // The hosted RSS allowance and the serial fallback keep the startup-memory
     // measurement unperturbed on 4-core hosted runners.
     expect(verifierStep.env.OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB).toBe(
@@ -6742,12 +6750,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(verifierStep.run).toContain("--config test/vitest/vitest.e2e.config.ts");
     expect(verifierStep.run).toContain("Selected target predates");
     expect(verifierStep.run).toContain("pnpm test:build:singleton");
-    // The parallel branch must complete any startup asset rebuild before
-    // forking so concurrent verifiers never read dist mid-write.
+    // The startup asset rebuild must complete before any verifier forks so
+    // concurrent readers never observe dist mid-write.
     expect(verifierStep.run).toContain("scripts/ensure-cli-startup-build.mts");
     expect(verifierStep.run).toContain("scripts/check-cli-startup-memory.mjs");
-    expect(verifierStep.run).toContain("pnpm test:startup:memory");
     expect(verifierStep.run).toContain(".artifacts/startup-memory/summary.md");
+    // Every verifier reports through the shared results map so a failure can
+    // never be swallowed by the wave.
+    for (const name of ["doctor-plugin-index", "plugin-singleton", "startup-memory"]) {
+      expect(verifierStep.run).toContain(`run_verifier "${name}"`);
+      expect(verifierStep.run).toContain(`["${name}"]="skipped"`);
+    }
+    expect(verifierStep.run).toContain(
+      "for name in channels core-support-boundary doctor-plugin-index gateway-watch plugin-singleton startup-memory tui-pty; do",
+    );
   });
 
   it("runs the scoped SQLite lifecycle proof against the exact built artifact", () => {
@@ -6888,7 +6904,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "launches openclaw (chat as local mode|tui against a real Gateway) through a real PTY",
     );
     expect(run).toContain("wait_checks()");
-    expect(run.match(/wait_checks$/gmu)).toHaveLength(3);
+    // Three wave barriers plus the one inside run_verifier, which serializes
+    // the built-runtime verifiers on hosted runners only.
+    expect(run.match(/wait_checks$/gmu)).toHaveLength(4);
   });
 
   it("keeps docs i18n CI on the workflow-owned patched Go toolchain", () => {
@@ -7036,9 +7054,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(workflow.on.pull_request).not.toHaveProperty("paths-ignore");
     expect(gate.name).toBe("openclaw/ci-gate");
     expect(gate.needs).toEqual([...requiredJobs, ...selectedJobs]);
+    // Every job in the file is gated; a new lane cannot slip in ungated.
     expect(gate.needs.toSorted()).toEqual(
       Object.keys(workflow.jobs)
-        .filter((job) => job !== "ci-gate" && job !== "ci-timings-summary")
+        .filter((job) => job !== "ci-gate")
         .toSorted(),
     );
     expect(gate.if).toBe(

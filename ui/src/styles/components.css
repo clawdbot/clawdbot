@@ -754,7 +754,9 @@ openclaw-github-link-hovercard-provider {
   box-shadow: var(--shadow-lg);
   color: var(--text);
   font-family: var(--font-body);
-  pointer-events: none;
+  /* Interactive by design: hover intent and text selection both need the card to
+     receive pointer events (see github-link-hovercard.runtime.ts). */
+  pointer-events: auto;
   opacity: 0;
   transform: translateY(-5px) scale(0.99);
   transform-origin: bottom left;
@@ -817,11 +819,23 @@ openclaw-github-link-hovercard-provider {
   box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 14%, transparent);
 }
 
+/* The repo reference, author and files chip are links too, but the title owns
+   the card's only underline; the rest stay text until hovered or focused. */
 .github-link-hovercard__repo {
   min-width: 0;
+  color: inherit;
   overflow: hidden;
+  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.github-link-hovercard__repo:hover,
+.github-link-hovercard__repo:focus-visible,
+.github-link-hovercard__author:hover,
+.github-link-hovercard__author:focus-visible {
+  color: var(--text-strong);
+  text-decoration: none;
 }
 
 .github-link-hovercard__time {
@@ -831,6 +845,7 @@ openclaw-github-link-hovercard-provider {
 }
 
 .github-link-hovercard__title {
+  display: block;
   margin: 15px 0 17px;
   color: var(--text-strong);
   font-size: var(--control-ui-text-lg);
@@ -838,6 +853,12 @@ openclaw-github-link-hovercard-provider {
   letter-spacing: -0.012em;
   line-height: 1.35;
   overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.github-link-hovercard__title:hover,
+.github-link-hovercard__title:focus-visible {
+  text-decoration: underline;
 }
 
 .github-link-hovercard__footer {
@@ -857,6 +878,7 @@ openclaw-github-link-hovercard-provider {
   color: var(--muted);
   font-size: var(--control-ui-text-md);
   overflow: hidden;
+  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -885,6 +907,17 @@ openclaw-github-link-hovercard-provider {
   font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.github-link-hovercard__metric--files {
+  text-decoration: none;
+}
+
+.github-link-hovercard__metric--files:hover,
+.github-link-hovercard__metric--files:focus-visible {
+  background: var(--bg-muted);
+  color: var(--text-strong);
+  text-decoration: none;
 }
 
 .github-link-hovercard__metric--additions {
@@ -1673,6 +1706,16 @@ openclaw-chat-session-rail {
   animation: none;
 }
 
+.chat-session-rail--embedded {
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+
 .chat-session-rail__header {
   display: flex;
   flex: 0 0 auto;
@@ -1924,16 +1967,6 @@ openclaw-chat-session-rail {
   align-items: flex-start;
   gap: 6px;
   padding: 0 14px 10px;
-}
-
-/* Centred in the thread's empty space, both axes: margin auto claims the free
-   vertical room inside the flex column. */
-.chat-session-rail__empty {
-  margin: auto 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.45;
-  text-align: center;
 }
 
 .chat-session-rail__starter {

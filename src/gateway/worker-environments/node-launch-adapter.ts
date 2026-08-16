@@ -1,4 +1,3 @@
-import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import {
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
@@ -14,7 +13,6 @@ import {
   type NodeWorkerSupervisorIdentity,
   type NodeWorkerSupervisorReceipt,
 } from "../../worker/node-supervisor-protocol.js";
-import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
@@ -211,7 +209,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
   const findNode = async (params: {
     transport: NodeWorkerSupervisorTransport;
     deviceId: string;
-    expectedWorkerRuns?: WorkerAdmissionHandshake;
+    requireLaunchAvailability?: boolean;
     signal: AbortSignal;
   }): Promise<NodeWorkerSupervisorNodeProof> => {
     let nodes: readonly NodeWorkerSupervisorNodeProof[];
@@ -229,9 +227,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     const node = nodes.find(
       (candidate) =>
         candidate.nodeId === params.deviceId &&
-        (!params.expectedWorkerRuns ||
-          (candidate.workerRuns &&
-            sameWorkerBuild(candidate.workerRuns, params.expectedWorkerRuns))),
+        (!params.requireLaunchAvailability || candidate.workerHost.capacity === "available"),
     );
     if (!node) {
       throw new NodeWorkerLaunchTransportError(
@@ -249,7 +245,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       | typeof NODE_WORKER_SUPERVISOR_STATUS_COMMAND
       | typeof NODE_WORKER_SUPERVISOR_CANCEL_COMMAND;
     payload: unknown;
-    expectedWorkerRuns?: WorkerAdmissionHandshake;
+    requireLaunchAvailability?: boolean;
     isAuthorized: () => boolean;
     deadline: OperationDeadline;
     onDispatchReady?: () => void;
@@ -288,7 +284,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       const node = await findNode({
         transport,
         deviceId: params.deviceId,
-        expectedWorkerRuns: params.expectedWorkerRuns,
+        requireLaunchAvailability: params.requireLaunchAvailability,
         signal,
       });
       const operation = transport.invoke({
@@ -451,7 +447,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
               ? NODE_WORKER_SUPERVISOR_STATUS_COMMAND
               : NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
             payload: pollStatus ? { launchId: input.launchId } : input,
-            ...(!pollStatus ? { expectedWorkerRuns: input.descriptor.admission.handshake } : {}),
+            ...(!pollStatus ? { requireLaunchAvailability: true } : {}),
             isAuthorized: stableRequest.isDispatchAuthorized,
             deadline: attemptDeadline,
             ...(!pollStatus

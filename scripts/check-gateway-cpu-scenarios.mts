@@ -488,6 +488,23 @@ async function runGatewayCpuScenarios(
     privateQaBuildFailed = privateQaBuild.status !== 0;
   }
 
+  if (!options.skipQa) {
+    steps.push(
+      privateQaBuildFailed
+        ? { name: "node worker finalization gate", signal: null, status: 1 }
+        : runStep(
+            "node worker finalization gate",
+            process.execPath,
+            [
+              "scripts/run-vitest.mjs",
+              "test/e2e/qa-lab/runtime/node-worker-launch-wire.e2e.test.ts",
+            ],
+            { env: qaBuildEnv },
+            params,
+          ),
+    );
+  }
+
   let qaStep = null;
   if (!options.skipQa) {
     const qaCommand = pnpmCommand(

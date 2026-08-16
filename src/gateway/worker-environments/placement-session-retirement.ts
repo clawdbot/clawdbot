@@ -3,7 +3,10 @@ import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 
-type PlacementSessionEvidence = "current" | "absent" | "unknown";
+export type PlacementSessionEvidence = "current" | "absent" | "unknown";
+export type PlacementSessionEvidenceResolver = (
+  placement: WorkerSessionPlacementRecord,
+) => Promise<PlacementSessionEvidence>;
 
 type PlacementSessionRetirementDeps = {
   placements: Pick<WorkerSessionPlacementStore, "get" | "list" | "retireSessionPlacement">;
@@ -12,9 +15,9 @@ type PlacementSessionRetirementDeps = {
     environmentId: string,
     onCleanupError?: (error: unknown) => void,
   ) => Promise<unknown>;
-  resolveSessionEvidence: (
-    placement: WorkerSessionPlacementRecord,
-  ) => Promise<PlacementSessionEvidence>;
+  createSessionEvidenceResolver: (
+    placements: readonly WorkerSessionPlacementRecord[],
+  ) => Promise<PlacementSessionEvidenceResolver>;
   warn: (message: string) => void;
 };
 
@@ -48,8 +51,11 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
     return true;
   };
 
-  const reconcilePlacement = async (placement: WorkerSessionPlacementRecord): Promise<void> => {
-    const evidence = await deps.resolveSessionEvidence(placement);
+  const reconcilePlacement = async (
+    placement: WorkerSessionPlacementRecord,
+    resolveSessionEvidence: PlacementSessionEvidenceResolver,
+  ): Promise<void> => {
+    const evidence = await resolveSessionEvidence(placement);
     if (evidence !== "absent") {
       return;
     }
@@ -95,9 +101,11 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
   };
 
   const reconcile = async (): Promise<void> => {
-    for (const placement of deps.placements.list()) {
+    const placements = deps.placements.list();
+    const resolveSessionEvidence = await deps.createSessionEvidenceResolver(placements);
+    for (const placement of placements) {
       try {
-        await reconcilePlacement(placement);
+        await reconcilePlacement(placement, resolveSessionEvidence);
       } catch (error) {
         deps.warn(
           `Worker placement session evidence check failed for ${placement.sessionId}: ${String(error)}`,

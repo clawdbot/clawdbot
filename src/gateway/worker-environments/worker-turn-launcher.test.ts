@@ -338,6 +338,66 @@ describe("worker turn launcher local placement", () => {
     expect([placement?.state, placement?.turnClaim]).toEqual(["active", null]);
   });
 
+  it("records a remote-exec reconciliation failure and releases its local claim", async () => {
+    seedActivePlacement("remote-exec");
+    const reconciliationError = new Error("workspace manifest memo exceeds its entry limit");
+    const tunnel: WorkerTunnelHandle = {
+      environmentId: ENVIRONMENT_ID,
+      ownerEpoch: OWNER_EPOCH,
+      launchTurn: vi.fn(),
+      runWorkspaceCommand: vi.fn(),
+      quiesceWorkspace: vi.fn(async () => ({
+        assertActive: vi.fn(async () => {}),
+        resume: vi.fn(async () => {}),
+      })),
+      syncWorkspace: vi.fn(),
+      reconcileWorkspace: vi.fn(async () => {
+        throw reconciliationError;
+      }),
+      stop: vi.fn(async () => {}),
+    };
+    const environments: WorkerTurnEnvironmentService = {
+      ...unusedEnvironments(),
+      get: vi.fn(() => attachedEnvironment()),
+      startTunnel: vi.fn(async () => tunnel),
+    };
+    const recoverPendingWorkspaceResult = vi.fn(async () => {
+      const placement = placements.get(SESSION_ID);
+      if (placement?.state !== "failed" || placement.turnClaim !== null) {
+        throw new Error("expected terminal placement before teardown recovery");
+      }
+      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+    });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments,
+      placements,
+      recoverPendingWorkspaceResult,
+    });
+
+    await expect(
+      provider.executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "run-remote-exec-reconcile-failure",
+        },
+        turn("run-remote-exec-reconcile-failure"),
+        async () => ({ payloads: [{ text: "remote work completed" }], meta: { durationMs: 1 } }),
+      ),
+    ).rejects.toThrow(
+      "Cloud worker finished, but its workspace result could not be reconciled: workspace manifest memo exceeds its entry limit",
+    );
+
+    expect(recoverPendingWorkspaceResult).toHaveBeenCalledWith(ENVIRONMENT_ID);
+    expect(placements.get(SESSION_ID)).toMatchObject({
+      state: "failed",
+      turnClaim: null,
+      terminalReason: expect.stringContaining("workspace manifest memo exceeds its entry limit"),
+    });
+    expect(placements.listPendingWorkspaceResults()).toEqual([]);
+  });
+
   it("rejects a reused worker bundle without execution context before launch", async () => {
     seedActivePlacement();
     const oldEnvironment = attachedEnvironment();

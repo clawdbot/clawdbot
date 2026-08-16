@@ -270,6 +270,20 @@ export type AgentHarnessCompactParams =
   import("../embedded-agent-runner/compact.types.js").CompactEmbeddedAgentSessionParams;
 export type AgentHarnessCompactResult =
   import("../embedded-agent-runner/types.js").EmbeddedAgentCompactResult;
+export type AgentHarnessNativeCompactionRequest = "after_context_engine" | "required_preflight";
+export type AgentHarnessNativeCompactionParams = AgentHarnessCompactParams & {
+  nativeCompactionRequest: AgentHarnessNativeCompactionRequest;
+};
+export type AgentHarnessNativeCompaction = (
+  params: AgentHarnessNativeCompactionParams,
+) => Promise<AgentHarnessCompactResult | undefined>;
+export type AgentHarnessRegistrationOptions = {
+  /**
+   * Registers the Codex-only native preflight bridge in host-owned registry
+   * metadata. Arbitrary properties on the public harness never grant it.
+   */
+  nativeCompaction?: AgentHarnessNativeCompaction;
+};
 export type AgentHarnessResetParams = {
   agentId?: string;
   sessionId?: string;

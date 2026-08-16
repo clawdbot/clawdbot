@@ -267,6 +267,7 @@ export type GatewayClientOptions = {
   caps?: string[];
   commands?: string[];
   computerUse?: ConnectParams["computerUse"];
+  /** @deprecated Compatibility for the shipped v1 node-host connect envelope. */
   workerRuns?: ConnectParams["workerRuns"];
   permissions?: Record<string, boolean>;
   pathEnv?: string;
@@ -465,6 +466,7 @@ export class GatewayClient {
     caps: string[];
     commands: string[];
     computerUse?: ConnectParams["computerUse"];
+    /** @deprecated Compatibility for the shipped v1 node-host connect envelope. */
     workerRuns?: ConnectParams["workerRuns"];
   }): void {
     this.opts = {

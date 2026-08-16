@@ -283,7 +283,9 @@ export async function readConfigFileSnapshotInternal(
     }
     const snapshotConfig = await deps.measure("config.snapshot.read.materialize", () =>
       materializeRuntimeConfig(validated.config, "snapshot", {
-        manifestRegistry: pluginMetadata.getSnapshot()?.manifestRegistry,
+        manifestRegistry:
+          pluginMetadata.getSnapshot()?.manifestRegistry ??
+          (context.options.pluginValidation === "core-only" ? { plugins: [] } : undefined),
       }),
     );
     return await deps.measure("config.snapshot.read.observe", () =>

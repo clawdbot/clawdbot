@@ -7,7 +7,8 @@ import { stripSessionArchiveCompressionSuffix } from "./archive-compression.js";
 
 export type SessionArchiveReason = "bak" | "reset" | "deleted";
 
-const ARCHIVE_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z$/;
+const ARCHIVE_SUFFIX_RE =
+  /^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z)(?:\.([0-9a-f]{32}))?$/;
 const LEGACY_STORE_BACKUP_RE = /^sessions\.json\.bak\.\d+$/;
 const MIGRATION_ARCHIVE_RE = /\.migrated(?:\.\d+)?$/u;
 const COMPACTION_CHECKPOINT_TRANSCRIPT_RE =
@@ -15,7 +16,7 @@ const COMPACTION_CHECKPOINT_TRANSCRIPT_RE =
 
 function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boolean {
   // Compressed archives carry a trailing .zst; strip it so every classifier
-  // sees one canonical `<id>.jsonl.<reason>.<timestamp>` shape.
+  // sees one canonical `<id>.jsonl.<reason>.<timestamp>[.<generation>]` shape.
   const marker = `.${reason}.`;
   const normalized = stripSessionArchiveCompressionSuffix(fileName);
   const index = normalized.lastIndexOf(marker);
@@ -23,7 +24,7 @@ function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boole
     return false;
   }
   const raw = normalized.slice(index + marker.length);
-  return ARCHIVE_TIMESTAMP_RE.test(raw);
+  return ARCHIVE_SUFFIX_RE.test(raw);
 }
 
 /** Returns true for archived session artifacts and legacy store backup names. */
@@ -181,9 +182,10 @@ export function parseSessionArchiveTimestamp(
   if (!raw) {
     return null;
   }
-  if (!ARCHIVE_TIMESTAMP_RE.test(raw)) {
+  const timestampRaw = ARCHIVE_SUFFIX_RE.exec(raw)?.[1];
+  if (!timestampRaw) {
     return null;
   }
-  const timestamp = Date.parse(restoreSessionArchiveTimestamp(raw));
+  const timestamp = Date.parse(restoreSessionArchiveTimestamp(timestampRaw));
   return Number.isNaN(timestamp) ? null : timestamp;
 }

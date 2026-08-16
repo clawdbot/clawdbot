@@ -464,7 +464,7 @@ export async function authenticateGatewayConnect(
     scopes = applyConnectionScopeCap({ scopes, upgradeReq });
     connectParams.scopes = scopes;
   }
-  const skipControlUiPairingForDevice = shouldSkipControlUiPairing(
+  const controlUiPairingKind = shouldSkipControlUiPairing(
     controlUiAuthPolicy,
     role,
     trustedProxyAuthOk,
@@ -510,7 +510,7 @@ export async function authenticateGatewayConnect(
     handoffBootstrapProfile,
     trustedProxyAuthOk,
     allowControlUiDeviceAuthMigration,
-    skipControlUiPairingForDevice,
+    controlUiPairingKind,
     skipLocalBackendSelfPairing,
     rejectUnauthorized,
   };

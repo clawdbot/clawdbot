@@ -82,6 +82,10 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
     ),
   );
   const retired: WorkerSessionPlacementRetirement[] = [];
+  const resolveSessionEvidence = vi.fn(
+    async (_placement: WorkerSessionPlacementRecord) => "absent" as const,
+  );
+  const createSessionEvidenceResolver = vi.fn(async () => resolveSessionEvidence);
   const forceDestroyEnvironment = vi.fn(async (environmentId: string) => {
     environments.set(environmentId, {
       environmentId,
@@ -115,10 +119,17 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
       get: (environmentId) => environments.get(environmentId) as never,
     },
     forceDestroyEnvironment,
-    resolveSessionEvidence: async () => "absent",
+    createSessionEvidenceResolver,
     warn: vi.fn(),
   });
-  return { forceDestroyEnvironment, placements, retired, retirement };
+  return {
+    createSessionEvidenceResolver,
+    forceDestroyEnvironment,
+    placements,
+    resolveSessionEvidence,
+    retired,
+    retirement,
+  };
 }
 
 describe("placement session retirement", () => {
@@ -171,7 +182,7 @@ describe("placement session retirement", () => {
       forceDestroyEnvironment: async () => {
         throw new Error("must not destroy");
       },
-      resolveSessionEvidence: async (placement) =>
+      createSessionEvidenceResolver: async () => async (placement) =>
         placement.sessionId === current.sessionId ? "current" : "unknown",
       warn: vi.fn(),
     });
@@ -179,5 +190,18 @@ describe("placement session retirement", () => {
     await retirement.reconcile();
 
     expect(harness.placements.size).toBe(2);
+  });
+
+  it("creates one evidence resolver for the reconcile snapshot", async () => {
+    const placements = [localPlacement("session-one"), localPlacement("session-two")];
+    const harness = createHarness(placements);
+
+    await harness.retirement.reconcile();
+
+    expect(harness.createSessionEvidenceResolver).toHaveBeenCalledOnce();
+    expect(harness.createSessionEvidenceResolver).toHaveBeenCalledWith(placements);
+    expect(harness.resolveSessionEvidence.mock.calls.map(([placement]) => placement)).toEqual(
+      placements,
+    );
   });
 });

@@ -18,10 +18,11 @@ import {
   workerSshOptions,
   workerSshRemoteCommand,
 } from "./ssh.js";
-import type {
-  WorkerTunnelHandle,
-  WorkerTunnelRequest,
-  WorkerTunnelStatus,
+import {
+  WorkerTunnelOwnerDisconnectedError,
+  type WorkerTunnelHandle,
+  type WorkerTunnelRequest,
+  type WorkerTunnelStatus,
 } from "./tunnel-contract.js";
 import {
   createWorkerSshRunner,
@@ -69,8 +70,12 @@ const REMOTE_TUNNEL_READY_SCRIPT = String.raw`set -eu
 socket=$1
 test -S "$socket"
 printf '%s\n' '${WORKER_TUNNEL_READY_MARKER}'
-trap 'exit 0' HUP INT TERM
-while :; do sleep 3600; done
+trap 'printf "%s\n" "worker tunnel remote command received SIGHUP" >&2; exit 129' HUP
+trap 'printf "%s\n" "worker tunnel remote command received SIGINT" >&2; exit 130' INT
+trap 'printf "%s\n" "worker tunnel remote command received SIGTERM" >&2; exit 143' TERM
+# ServerAlive messages protect the SSH transport, not an idle session channel. Keep the control
+# channel active too so provider sshd ChannelTimeout policies cannot retire a healthy tunnel.
+while :; do sleep 15; printf '.'; done
 `;
 
 const REMOTE_SOCKET_CLEANUP_SCRIPT = String.raw`set -eu
@@ -79,7 +84,7 @@ directory=$2
 rm -f -- "$socket"
 rmdir -- "$directory" 2>/dev/null || true
 `;
-const WORKER_LAUNCH_SCRIPT = 'exec node "$HOME/.openclaw-worker/$1/openclaw.mjs" worker';
+const WORKER_LAUNCH_SCRIPT = 'exec node "$HOME/.openclaw-worker/$1/worker.mjs"';
 
 type WorkerTunnelStartRequest = WorkerTunnelRequest & {
   bundleHash: string;
@@ -233,12 +238,33 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
   };
 
   const createHandle = (entry: TunnelEntry): WorkerTunnelHandle => {
+    const getPrepared = () =>
+      isCurrent(entry) && entry.status === "connected" ? entry.prepared : undefined;
+    // Handles outlive individual SSH children. Wait only on this owner's current barrier;
+    // replacement or stop makes the entry non-current and must remain fail-closed.
+    const waitForPrepared = async (): Promise<PreparedWorkerSsh> => {
+      while (isCurrent(entry)) {
+        const prepared = getPrepared();
+        if (prepared) {
+          return prepared;
+        }
+        const readiness = entry.readiness;
+        try {
+          await readiness.promise;
+        } catch (error) {
+          if (!isCurrent(entry)) {
+            break;
+          }
+          throw error;
+        }
+      }
+      throw new WorkerTunnelOwnerDisconnectedError();
+    };
     const workspace = createWorkerWorkspaceActions({
       environmentId: entry.environmentId,
       sharedHost: entry.sharedHost,
       ownerSignal: entry.abortController.signal,
-      isConnected: () => isCurrent(entry) && entry.status === "connected",
-      getPrepared: () => entry.prepared,
+      waitForPrepared,
       runner,
       tasks: entry.workspaceTasks,
       bundleHash: entry.bundleHash,
@@ -314,6 +340,19 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     const reconnectSupervisor = new RetrySupervisor(backoff);
     while (isCurrent(entry)) {
       entry.status = reconnectSupervisor.attempts === 0 ? "connecting" : "reconnecting";
+      const attempt = reconnectSupervisor.attempts + 1;
+      const reconnecting = entry.status === "reconnecting";
+      const connectStartedAtMs = now();
+      if (reconnecting) {
+        tunnelLog.warn("worker tunnel reconnect attempt started", {
+          environmentId: entry.environmentId,
+          ownerEpoch: entry.ownerEpoch,
+          attempt,
+          status: entry.status,
+          port: entry.prepared?.port,
+          workspaceTaskCount: entry.workspaceTasks.size,
+        });
+      }
       let child: WorkerSshProcess | undefined;
       let childPort: number | undefined;
       try {
@@ -329,6 +368,15 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
           return;
         }
         entry.status = "connected";
+        if (reconnecting) {
+          tunnelLog.info("worker tunnel reconnected", {
+            environmentId: entry.environmentId,
+            ownerEpoch: entry.ownerEpoch,
+            attempt,
+            port: childPort,
+            durationMs: now() - connectStartedAtMs,
+          });
+        }
         const connectionReadiness = entry.readiness;
         connectionReadiness.resolve(createHandle(entry));
         const connectedAtMs = now();
@@ -342,6 +390,16 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
             entry.readiness = readiness;
           }
         });
+        if (isCurrent(entry) && entry.workspaceTasks.size > 0) {
+          tunnelLog.warn("worker tunnel SSH child exited during workspace operation", {
+            environmentId: entry.environmentId,
+            ownerEpoch: entry.ownerEpoch,
+            exitCode: exit.code,
+            signal: exit.signal,
+            ...(exit.stderrTail ? { stderrTail: exit.stderrTail } : {}),
+            workspaceTaskCount: entry.workspaceTasks.size,
+          });
+        }
         if (entry.prepared) {
           advanceWorkerSshAfterTransportExit(entry.prepared, childPort, exit);
         }

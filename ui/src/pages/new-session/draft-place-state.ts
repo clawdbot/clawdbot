@@ -7,7 +7,7 @@ import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
 import type { DraftNode } from "./discovery.ts";
-import { readDraftNodes } from "./discovery.ts";
+import { isDraftNodeSessionEligible, readDraftNodes } from "./discovery.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftRepositoryController } from "./draft-repository-state.ts";
@@ -165,7 +165,7 @@ export class DraftPlaceState {
   }
 
   execNodes(): DraftNode[] {
-    return this.executionNodes().filter((node) => node.connected);
+    return this.executionNodes().filter(isDraftNodeSessionEligible);
   }
 
   execNodeReady(): boolean {
@@ -500,6 +500,12 @@ export class DraftPlaceState {
     if (snapshot.submitting || snapshot.pendingCloudSessionKey) {
       return;
     }
+    if (
+      execNode &&
+      !this.nodesValue.some((node) => node.nodeId === execNode && isDraftNodeSessionEligible(node))
+    ) {
+      return;
+    }
     if (execNode === this.execNodeValue && !this.cloudProfileIdValue) {
       return;
     }
@@ -726,7 +732,9 @@ export class DraftPlaceState {
       this.nodesHydrated = true;
       if (
         this.execNodeValue &&
-        !nodes.some((node) => node.nodeId === this.execNodeValue && node.canExec)
+        !nodes.some(
+          (node) => node.nodeId === this.execNodeValue && isDraftNodeSessionEligible(node),
+        )
       ) {
         this.execNodeValue = "";
         this.folderValue = this.workspacePath();

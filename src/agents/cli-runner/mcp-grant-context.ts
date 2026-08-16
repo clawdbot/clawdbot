@@ -146,6 +146,9 @@ export function buildCliMcpGrantContext(params: {
     ...(params.run.scheduledToolPolicy
       ? { scheduledToolPolicy: { ...params.run.scheduledToolPolicy } }
       : {}),
+    ...(params.run.cronCreatorCallerOrigin
+      ? { cronCreatorCallerOrigin: { ...params.run.cronCreatorCallerOrigin } }
+      : {}),
     modelProvider: params.modelProvider,
     modelId: params.modelId,
     messageProvider,

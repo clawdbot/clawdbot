@@ -30,6 +30,14 @@ describe("node worker bundle install protocol", () => {
     );
   });
 
+  it("accepts only the mutually supported prewarm form", () => {
+    const prewarmInput = { ...input, bundlePrewarm: 1 };
+    expect(parseNodeWorkerBundleInstallInput(JSON.stringify(prewarmInput))).toEqual(prewarmInput);
+    expect(() =>
+      parseNodeWorkerBundleInstallInput(JSON.stringify({ ...input, bundlePrewarm: 2 })),
+    ).toThrow("INVALID_REQUEST");
+  });
+
   it.each([
     { ...input, extra: true },
     { ...input, gatewayNamespace: "../escape" },

@@ -18,7 +18,7 @@ import type { PluginNodeCapabilitySurface } from "../../plugin-node-capability.j
 import type { GatewayRole } from "../../role-policy.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
-import type { resolveControlUiAuthPolicy } from "./connect-policy.js";
+import type { ControlUiPairingKind, resolveControlUiAuthPolicy } from "./connect-policy.js";
 import type { resolvePairingLocality } from "./handshake-auth-helpers.js";
 import type { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
@@ -29,6 +29,8 @@ type PairingLocalityKind = ReturnType<typeof resolvePairingLocality>;
 export type WsOriginCheckMetrics = {
   hostHeaderFallbackAccepted: number;
 };
+
+type WsSendResult = { kind: "sent" | "unavailable" } | { kind: "serialization"; error: unknown };
 
 export type GatewayWsMessageHandlerParams = {
   socket: WebSocket;
@@ -63,7 +65,7 @@ export type GatewayWsMessageHandlerParams = {
   buildRequestContext: () => GatewayRequestContext;
   nodeLifecycleDispatch: GatewayNodeLifecycleDispatchTracker;
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
-  send: (obj: unknown) => void;
+  send: (obj: unknown) => WsSendResult;
   close: (code?: number, reason?: string) => void;
   isClosed: () => boolean;
   clearHandshakeTimer: () => void;
@@ -146,7 +148,7 @@ export type AuthenticatedGatewayConnect = {
   handoffBootstrapProfile: DeviceBootstrapProfile | null;
   trustedProxyAuthOk: boolean;
   allowControlUiDeviceAuthMigration: boolean;
-  skipControlUiPairingForDevice: boolean;
+  controlUiPairingKind: ControlUiPairingKind;
   skipLocalBackendSelfPairing: boolean;
   rejectUnauthorized: (failedAuth: GatewayAuthResult) => void;
 };

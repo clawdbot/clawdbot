@@ -257,11 +257,8 @@ export class MemoryDB {
       throw new Error(`Invalid memory ID format: ${id}`);
     }
     const predicate = scopedPredicate(agentId, { column: "id", operator: "=", value: id });
-    if ((await this.table!.countRows(predicate)) === 0) {
-      return false;
-    }
-    await this.table!.delete(predicate);
-    return true;
+    const result = await this.table!.delete(predicate);
+    return result.numDeletedRows > 0;
   }
 
   async count(agentId: string): Promise<number> {

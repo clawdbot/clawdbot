@@ -28,14 +28,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   private headerSessionOperationsLoad: Promise<
     typeof import("../../components/session-organizer-operations.runtime.ts")
   > | null = null;
-  private headerPresentationGeneration = 0;
-  protected override presentedChanged(presented: boolean): void {
-    this.headerPresentationGeneration += 1;
-    super.presentedChanged(presented);
-  }
-  private get headerOutcomeOwner() {
-    return `${this.connectionGeneration}:${this.headerPresentationGeneration}`;
-  }
   protected async loadHeaderPlatform(
     client: GatewayBrowserClient,
     generation: number,
@@ -226,12 +218,13 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       sessions: this.context.sessions,
       client,
       selectedAgentId: this.context.agentSelection.state.selectedId ?? "main",
+      signal: this.headerSessionMutationAbortController.signal,
     };
   }
 
   private isHeaderSessionActionCurrent(scope: SidebarSessionMutationScope, owner: string): boolean {
     return (
-      owner === this.headerOutcomeOwner &&
+      this.ownsHeaderOutcome(owner) &&
       this.isConnected &&
       this.context === scope.context &&
       this.context.gateway === scope.gateway &&
@@ -398,7 +391,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (copiedValue) {
       const owner = this.headerOutcomeOwner;
       void copy(copiedValue).then((copied) => {
-        if (!this.presented || owner !== this.headerOutcomeOwner) {
+        if (!this.ownsHeaderOutcome(owner)) {
           return;
         }
         if (copied) {
@@ -415,7 +408,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   }
 
   protected publishHeaderError(error: unknown, owner = this.headerOutcomeOwner): void {
-    if (!this.state || !this.presented || owner !== this.headerOutcomeOwner) {
+    if (!this.state || !this.ownsHeaderOutcome(owner)) {
       return;
     }
     this.state.chatError = this.state.lastError =

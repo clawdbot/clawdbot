@@ -302,6 +302,7 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
       allAgents: opts.allAgents,
     },
     runtime,
+    json: opts.json,
   });
   if (!targets) {
     return;

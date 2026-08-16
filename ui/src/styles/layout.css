@@ -272,7 +272,6 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 }
 
 .settings-sidebar {
-  --scrollbar-size: 6px;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -481,7 +480,6 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   padding: 14px 12px 18px;
   overflow-y: auto;
   overflow-x: hidden;
-  scrollbar-width: thin;
 }
 
 .settings-sidebar__empty {
@@ -915,7 +913,6 @@ openclaw-settings-save-indicator {
   /* One rhythm for every group boundary in the sidebar (Pages and each
      session section) so the column reads as separate shelves, not one list. */
   --sidebar-group-gap: var(--space-4);
-  --scrollbar-size: 6px;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -1025,17 +1022,10 @@ openclaw-settings-save-indicator {
      horizontal scrollbar beside the divider. */
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-color: color-mix(in srgb, currentColor 8%, transparent) transparent;
-  scrollbar-width: thin;
   /* Cancel the shell's horizontal padding so the thumb hugs its right edge;
      both values share --sidebar-pad-x so they cannot drift. */
   margin-right: calc(-1 * var(--sidebar-pad-x));
   padding-right: var(--sidebar-pad-x);
-}
-
-.sidebar-shell__body::-webkit-scrollbar,
-.sidebar-shell__body::-webkit-scrollbar-track {
-  background: transparent;
 }
 
 .sidebar-shell__footer {
@@ -2822,6 +2812,75 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 .session-menu__separator {
   margin: 4px 8px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.session-menu__icon-picker {
+  padding: 2px;
+}
+
+.session-menu__icon-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 28px);
+  gap: 3px;
+}
+
+.session-menu__icon-choice {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  cursor: var(--cursor-action);
+  font-size: 17px;
+  line-height: 1;
+}
+
+.session-menu__icon-choice:hover,
+.session-menu__icon-choice:focus-visible {
+  background: var(--bg-hover);
+}
+
+.session-menu__icon-choice:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: -2px;
+}
+
+.session-menu__icon-choice[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.session-menu__icon-separator {
+  margin: 5px 4px 3px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.session-menu__icon-remove {
+  width: 100%;
+  min-height: 28px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  background: transparent;
+  color: var(--text);
+  cursor: var(--cursor-action);
+  font: inherit;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  text-align: left;
+}
+
+.session-menu__icon-remove:hover,
+.session-menu__icon-remove:focus-visible {
+  background: var(--bg-hover);
+}
+
+.session-menu__icon-remove:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: -2px;
 }
 
 /* Nav rail entries are anchors (for middle-click/new-tab) but read as app

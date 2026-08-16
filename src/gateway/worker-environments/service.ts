@@ -88,7 +88,7 @@ type WorkerEnvironmentServiceOptions = {
     profile: WorkerProfile;
     keyRef: SecretRef;
   }) => Promise<WorkerSshIdentity>;
-  resolveNodeWorkerBuild?: (deviceId: string) => Promise<WorkerAdmissionHandshake | undefined>;
+  ensureNodeWorkerBundle?: (deviceId: string) => Promise<WorkerAdmissionHandshake>;
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: NodeWorkerTunnelManager;
   stopNodeWorkerBundleTransfers?: () => void;
@@ -279,7 +279,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     prepareInstallation: options.prepareInstallation,
     bootstrapWorker: options.bootstrapWorker,
     resolveSshIdentity: options.resolveSshIdentity,
-    resolveNodeWorkerBuild: options.resolveNodeWorkerBuild,
+    ensureNodeWorkerBundle: options.ensureNodeWorkerBundle,
     providerCallTimeoutMs: options.providerCallTimeoutMs,
     tunnelManager: tunnelLifecycle,
     credentialBroker,

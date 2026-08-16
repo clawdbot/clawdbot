@@ -273,6 +273,22 @@ export interface SessionTranscriptActiveEvents {
   session_id: string;
 }
 
+export interface SessionTranscriptArchives {
+  archive_blob: Uint8Array;
+  archive_name: string;
+  archive_sha256: string;
+  created_at: number;
+  encoding: string;
+  generation: string;
+  last_publish_attempt_at: number | null;
+  last_publish_error: string | null;
+  publish_attempts: Generated<number>;
+  published_at: number | null;
+  reason: string;
+  session_id: string;
+  session_key: string;
+}
+
 export interface SessionTranscriptFts {
   message_id: string | null;
   role: string | null;
@@ -450,6 +466,7 @@ export interface DB {
   session_nodes: SessionNodes;
   session_suggestions: SessionSuggestions;
   session_transcript_active_events: SessionTranscriptActiveEvents;
+  session_transcript_archives: SessionTranscriptArchives;
   session_transcript_fts: SessionTranscriptFts;
   session_transcript_fts_config: SessionTranscriptFtsConfig;
   session_transcript_fts_content: SessionTranscriptFtsContent;

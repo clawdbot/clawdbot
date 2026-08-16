@@ -52,18 +52,6 @@ vi.mock("./node-worker-supervisor.js", () => ({
   })),
 }));
 
-vi.mock("./node-worker-build.js", () => ({
-  resolveNodeWorkerInstallation: vi.fn(async () => ({
-    packageRoot: "/tmp/openclaw-node-worker",
-    revalidateBuild: vi.fn(async () => true),
-    build: {
-      bundleHash: "a".repeat(64),
-      openclawVersion: "2026.8.1",
-      protocolFeatures: [],
-    },
-  })),
-}));
-
 vi.mock("./node-worker-workspace.js", () => ({
   NodeWorkerWorkspaceRuntime: class {
     readonly exec = vi.fn();
@@ -138,6 +126,19 @@ function holdInvoke() {
     release: () => release?.(),
   };
 }
+
+describe("node-host worker manifest", () => {
+  it("keeps local consent separate from connection metadata", async () => {
+    const prepared = await prepareNodeHostRuntime({
+      config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
+      env: { PATH: "/usr/bin" },
+      enableWorkerRuns: true,
+    });
+
+    expect(prepared.workerHostingEnabled).toBe(true);
+    expect(prepared.manifest).not.toHaveProperty("workerRuns");
+  });
+});
 
 describe("node-host invocation cancellation", () => {
   it("cancels ordinary node invocations", async () => {

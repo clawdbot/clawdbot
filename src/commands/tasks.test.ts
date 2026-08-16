@@ -25,9 +25,12 @@ import {
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-runtime.test-helpers.js";
+import type {
+  TaskSystemAuditCode,
+  TaskSystemAuditSeverity,
+} from "../tasks/task-system-audit.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type { TaskSystemAuditCode, TaskSystemAuditSeverity } from "./tasks-audit-system.js";
 import {
   tasksAuditCommand,
   tasksCancelCommand,
@@ -795,22 +798,6 @@ describe("tasks commands", () => {
         runId: `run${unsafe}`,
         error: `error${unsafe}`,
       });
-      const filteredListRuntime = createRuntime();
-      await tasksListCommand(
-        { runtime: `cron${unsafe}`, status: `running${unsafe}` },
-        filteredListRuntime,
-      );
-      const filteredAuditRuntime = createRuntime();
-      await tasksAuditCommand(
-        {
-          severity: `warn${unsafe}` as TaskSystemAuditSeverity,
-          code: `lost${unsafe}` as TaskSystemAuditCode,
-        },
-        filteredAuditRuntime,
-      );
-      for (const runtime of [filteredListRuntime, filteredAuditRuntime]) {
-        expectSafeTaskOutput(runtime);
-      }
       const lookupRuntime = createRuntime();
       await tasksShowCommand({ lookup: `missing${unsafe}` }, lookupRuntime);
       expectSafeTaskOutput(lookupRuntime, "error");

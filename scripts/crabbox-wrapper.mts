@@ -49,9 +49,14 @@ type RunFacts = ReturnType<typeof analyzeRemoteCommand>;
 type AwsMacosScriptRequirements = ReturnType<typeof awsMacosScriptBootstrapRequirements>;
 type FullCheckout = ReturnType<typeof prepareFullCheckoutForSync>;
 type KeepaliveOptions = { intervalMs?: number; onMissing?: () => void };
+type DoctorCheck = { status: string; check: string; details?: Record<string, string> };
+type DoctorResult = { ok: boolean; provider: string; checks: DoctorCheck[] };
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CRABBOX_METADATA_PROBE_TIMEOUT_MS = 5_000;
+// Crabbox gives a provider doctor check 10s; the wrapper must outlive that
+// contract or it can kill a valid diagnostic before Crabbox reports readiness.
+const CRABBOX_DOCTOR_TIMEOUT_MS = 15_000;
 const MAX_TIMING_JSON_LINE_CHARS = 1024 * 1024;
 const REMOTE_CHANGED_GATE_BUNDLE_FILE = ".openclaw-crabbox-changed-gate.bundle";
 // A cold Crabbox (first call after an upgrade, or one on a loaded machine) can
@@ -839,8 +844,6 @@ function requestedWorkload(commandArgs: string[]) {
   return normalizeCrabboxWorkload(raw);
 }
 
-let managedBrokerAuthConfiguredCache: boolean | undefined;
-
 function crabboxProviderReadiness(provider: string, version: string, context: TargetContext) {
   const canonicalProvider = canonicalProviderName(provider);
   if (
@@ -863,13 +866,6 @@ function crabboxProviderReadiness(provider: string, version: string, context: Ta
       recovery: "update Crabbox, then retry",
     };
   }
-  if (["aws", "azure", "daytona"].includes(canonicalProvider) && !managedBrokerAuthConfigured()) {
-    return {
-      ready: false,
-      reason: "managed Crabbox broker auth unavailable",
-      recovery: `run \`${recoveryCommand(["login", "--url", "https://crabbox.openclaw.ai"])}\`, then retry`,
-    };
-  }
   const doctorArgs = ["doctor", "--provider", canonicalProvider];
   if (context.target) {
     doctorArgs.push("--target", context.target);
@@ -878,16 +874,67 @@ function crabboxProviderReadiness(provider: string, version: string, context: Ta
     doctorArgs.push("--windows-mode", context.windowsMode);
   }
   doctorArgs.push("--json");
-  const doctor = checkedOutput(binary, doctorArgs);
-  if (doctor.status !== 0) {
-    const diagnostic = compactDiagnosticText(doctor.text);
-    return {
-      ready: false,
-      reason: `doctor exited ${doctor.status}${diagnostic ? `: ${diagnostic}` : ""}`,
-      recovery: `run \`${recoveryCommand(doctorArgs)}\``,
-    };
+  const doctor = checkedOutput(binary, doctorArgs, CRABBOX_DOCTOR_TIMEOUT_MS);
+  const result = parseDoctorResult(doctor.stdout, canonicalProvider, doctor.status);
+  const managed = ["aws", "azure", "daytona"].includes(canonicalProvider);
+  const broker = result?.checks.find((check) => check.check === "broker");
+  const brokerReady = !managed || broker?.status === "ok";
+  const brokerAuthFailure =
+    result?.checks.some(
+      (check) => check.status === "failed" && check.details?.class === "broker_auth",
+    ) === true;
+  const ready = result?.ok === true && brokerReady;
+  const diagnostic = compactDiagnosticText(doctor.text);
+  return {
+    ready,
+    reason: ready
+      ? "doctor-ready"
+      : result
+        ? `doctor exited ${doctor.status}${diagnostic ? `: ${diagnostic}` : ""}`
+        : `invalid doctor JSON${diagnostic ? `: ${diagnostic}` : ""}`,
+    ...(ready ? {} : { recovery: `run \`${recoveryCommand(doctorArgs)}\`` }),
+    brokerReady,
+    brokerAuthFailure,
+  };
+}
+
+function isDoctorCheck(value: unknown): value is DoctorCheck {
+  return (
+    isRecord(value) &&
+    typeof value.status === "string" &&
+    Boolean(value.status) &&
+    typeof value.check === "string" &&
+    Boolean(value.check) &&
+    (value.details === undefined ||
+      (isRecord(value.details) &&
+        Object.values(value.details).every((detail) => typeof detail === "string")))
+  );
+}
+
+function parseDoctorResult(value: string, provider: string, status: number): DoctorResult | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (
+      !isRecord(parsed) ||
+      typeof parsed.ok !== "boolean" ||
+      parsed.provider !== provider ||
+      !Array.isArray(parsed.checks) ||
+      (parsed.ok ? status !== 0 : status !== 1)
+    ) {
+      return null;
+    }
+    const checks = parsed.checks;
+    if (
+      !checks.every(isDoctorCheck) ||
+      parsed.ok !==
+        checks.every((check) => !["failed", "missing"].includes(check.status.trim().toLowerCase()))
+    ) {
+      return null;
+    }
+    return parsed as DoctorResult;
+  } catch {
+    return null;
   }
-  return { ready: true, reason: "doctor-ready" };
 }
 
 function compactDiagnosticText(value: string, maxLength = 500) {
@@ -942,23 +989,6 @@ function directCloudOverrideEnabled(providerName: string) {
   );
 }
 
-function managedBrokerAuthConfigured() {
-  if (managedBrokerAuthConfiguredCache !== undefined) {
-    return managedBrokerAuthConfiguredCache;
-  }
-  const parsed = resolvedCrabboxConfig();
-  if (
-    !parsed?.coordinator ||
-    parsed?.brokerMode !== "managed" ||
-    parsed?.brokerAuth !== "configured"
-  ) {
-    managedBrokerAuthConfiguredCache = false;
-    return managedBrokerAuthConfiguredCache;
-  }
-  managedBrokerAuthConfiguredCache = checkedOutput(binary, ["whoami"]).status === 0;
-  return managedBrokerAuthConfiguredCache;
-}
-
 function enforceBrokeredDaytonaVersion(
   commandArgs: string[],
   providerName: string,
@@ -987,25 +1017,37 @@ function enforceBrokeredCloud(
   commandArgs: string[],
   provider: string,
   explicit: boolean | undefined,
+  routedReadiness?: ProviderReadiness,
 ) {
-  if (
-    !shouldRequireBrokeredCloud(commandArgs, provider, explicit) ||
-    managedBrokerAuthConfigured()
-  ) {
+  if (!shouldRequireBrokeredCloud(commandArgs, provider, explicit)) {
     return;
   }
   const canonicalProvider = canonicalProviderName(provider);
-  const instructions = [
-    `[crabbox] provider=${canonicalProvider} requires a configured managed Crabbox broker for OpenClaw proof.`,
-    `[crabbox] run \`${recoveryCommand(["login", "--url", "https://crabbox.openclaw.ai"])}\`, then retry.`,
-  ];
-  if (canonicalProvider !== "aws") {
-    instructions.push(
-      `[crabbox] direct ${canonicalProvider} debugging requires an original \`--provider ${canonicalProvider}\`, no \`--workload\`, and OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD=1.`,
-    );
+  const readiness =
+    routedReadiness ??
+    crabboxProviderReadiness(canonicalProvider, version.text, effectiveTargetContext(commandArgs));
+  if ("brokerAuthFailure" in readiness && readiness.brokerAuthFailure) {
+    const instructions = [
+      `[crabbox] provider=${canonicalProvider} requires managed Crabbox broker authentication for OpenClaw proof.`,
+      `[crabbox] run \`${recoveryCommand(["login", "--url", "https://crabbox.openclaw.ai"])}\`, then retry.`,
+    ];
+    if (canonicalProvider !== "aws") {
+      instructions.push(
+        `[crabbox] direct ${canonicalProvider} debugging requires an original \`--provider ${canonicalProvider}\`, no \`--workload\`, and OPENCLAW_CRABBOX_ALLOW_DIRECT_CLOUD=1.`,
+      );
+    }
+    console.error(instructions.join("\n"));
+    process.exit(2);
   }
-  console.error(instructions.join("\n"));
-  process.exit(2);
+  if (!("brokerReady" in readiness) || !readiness.brokerReady) {
+    console.error(
+      [
+        `[crabbox] provider=${canonicalProvider} failed readiness for OpenClaw proof: ${readiness.reason}.`,
+        ...(readiness.recovery ? [`[crabbox] recovery: ${readiness.recovery}.`] : []),
+      ].join("\n"),
+    );
+    process.exit(2);
+  }
 }
 
 function optionValue(commandArgsInput: string[], name: string) {
@@ -2601,9 +2643,9 @@ function isHydratedNativeWindowsProvider(providerName: string) {
 
 function remoteWindowsHydratedNodeModulesBootstrap() {
   return [
-    "$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR",
+    "$openclawModulesDir = if ($env:CRABBOX_PNPM_MODULES_DIR) { $env:CRABBOX_PNPM_MODULES_DIR } else { $env:PNPM_CONFIG_MODULES_DIR }",
     "if ($openclawModulesDir) {",
-    'if (-not (Test-Path $openclawModulesDir)) { throw "PNPM_CONFIG_MODULES_DIR does not exist: $openclawModulesDir" }',
+    'if (-not (Test-Path $openclawModulesDir)) { throw "hydrated pnpm modules directory does not exist: $openclawModulesDir" }',
     '$openclawWorkspaceModules = Join-Path (Get-Location).Path "node_modules"',
     '$openclawSelfModules = Join-Path $openclawModulesDir "node_modules"',
     'if (-not (Test-Path $openclawSelfModules)) { cmd /c mklink /J "$openclawSelfModules" "$openclawModulesDir" | Out-Host; if ($LASTEXITCODE -ne 0) { throw "failed to link hydrated pnpm node_modules" } }',
@@ -2615,7 +2657,7 @@ function remoteWindowsHydratedNodeModulesBootstrap() {
 function remotePosixHydratedNodeModulesBootstrap() {
   // Knip and other non-pnpm tools walk node_modules, while hydrated boxes keep it external.
   // Without this link, dead-code scans silently lose consumer edges and report false positives.
-  return 'if [ -n "${PNPM_CONFIG_MODULES_DIR:-}" ] && [ -d "$PNPM_CONFIG_MODULES_DIR" ] && [ ! -e node_modules ]; then ln -s "$PNPM_CONFIG_MODULES_DIR" node_modules; fi;';
+  return 'openclaw_modules_dir="${CRABBOX_PNPM_MODULES_DIR:-${PNPM_CONFIG_MODULES_DIR:-}}"; if [ -n "$openclaw_modules_dir" ] && [ -d "$openclaw_modules_dir" ] && [ ! -e node_modules ]; then ln -s "$openclaw_modules_dir" node_modules; fi;';
 }
 
 function injectRemoteWindowsHydratedNodeModulesBootstrap(
@@ -3842,7 +3884,12 @@ if (canonicalProvider === "blacksmith-testbox") {
 
 const explicitProviderRequested = Boolean(commandProviderValue);
 enforceBrokeredDaytonaVersion(normalizedArgs, provider, version.text, explicitProviderRequested);
-enforceBrokeredCloud(normalizedArgs, provider, explicitProviderRequested);
+enforceBrokeredCloud(
+  normalizedArgs,
+  provider,
+  explicitProviderRequested,
+  providerSelection.readiness?.get(canonicalProvider),
+);
 
 if (canonicalProvider === "blacksmith-testbox") {
   const envProviderLocal = process.env.CRABBOX_PROVIDER?.trim();

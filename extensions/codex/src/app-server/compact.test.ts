@@ -695,6 +695,59 @@ describe("maybeCompactCodexAppServerSession", () => {
     );
   });
 
+  it("records the required-preflight origin on native app-server compaction requests", async () => {
+    const fake = createFakeCodexClient({ retainedThreadId: null });
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding({
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint: "policy-1",
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-1",
+          fingerprint: "fingerprint-1",
+        },
+      },
+    });
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "budget",
+          preflightRequired: true,
+          currentTokenCount: 456,
+        },
+        {
+          allowNonManualNativeRequest: true,
+          nativeCompactionRequest: "required_preflight",
+        },
+      ),
+    );
+
+    expect(fake.request).toHaveBeenCalledWith(
+      "thread/compact/start",
+      { threadId: "thread-1" },
+      { timeoutMs: 60_000 },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(true);
+    expect(compactDetails(result)).toMatchObject({
+      backend: "codex-app-server",
+      threadId: "thread-1",
+      signal: "thread/compact/start",
+      pending: false,
+      completed: true,
+      request: "required_preflight",
+      trigger: "budget",
+    });
+  });
+
   it("preserves projection when aborted before guarded native compaction", async () => {
     const fake = createFakeCodexClient();
     setCodexAppServerClientFactoryForTest(async () => fake.client);
@@ -830,6 +883,76 @@ describe("maybeCompactCodexAppServerSession", () => {
         },
       },
     });
+  });
+
+  it("reports a recoverable stale-binding failure when a required-preflight native request sees the binding change", async () => {
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const originalContextEngine = {
+      schemaVersion: 1 as const,
+      engineId: "lossless-claw",
+      policyFingerprint: "policy-1",
+      projection: {
+        schemaVersion: 1 as const,
+        mode: "thread_bootstrap" as const,
+        epoch: "epoch-1",
+        fingerprint: "fingerprint-1",
+      },
+    };
+    const sessionFile = await writeTestBinding({
+      contextEngine: originalContextEngine,
+    });
+    let bindingReads = 0;
+    const bindingStore = {
+      ...testCodexAppServerBindingStore,
+      read: vi.fn(async (...args: Parameters<typeof testCodexAppServerBindingStore.read>) => {
+        const result = await testCodexAppServerBindingStore.read(...args);
+        if (bindingReads++ === 0) {
+          seedCodexTestBinding(sessionFile, {
+            threadId: "thread-2",
+            cwd: tempDir,
+            contextEngine: {
+              ...originalContextEngine,
+              projection: {
+                schemaVersion: 1,
+                mode: "thread_bootstrap",
+                epoch: "epoch-2",
+                fingerprint: "fingerprint-2",
+              },
+            },
+          });
+        }
+        return result;
+      }),
+    };
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "budget",
+          preflightRequired: true,
+          currentTokenCount: 456,
+        },
+        {
+          allowNonManualNativeRequest: true,
+          nativeCompactionRequest: "required_preflight",
+          bindingStore,
+        },
+      ),
+    );
+
+    // A required-preflight request has not compacted yet, so a binding change
+    // must surface as the recoverable failure rather than a benign ok:true skip,
+    // letting the queued harness fall back to the context engine.
+    expect(fake.request).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe("codex app-server binding changed before native compaction");
+    expect(result.failure?.reason).toBe("stale_thread_binding");
   });
 
   it("blocks same-process binding writes until guarded native compaction starts", async () => {
@@ -1707,6 +1830,35 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(result.reason).toBe("no codex app-server thread binding");
     expect(result.failure?.reason).toBe("missing_thread_binding");
     expect(result.result).toBeUndefined();
+  });
+
+  it("reports required-preflight missing binding as a recoverable native failure", async () => {
+    const sessionFile = path.join(tempDir, "required-preflight-missing-binding.jsonl");
+
+    const result = requireCompactResult(
+      await maybeCompactCodexAppServerSession(
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "budget",
+          preflightRequired: true,
+        },
+        {
+          allowNonManualNativeRequest: true,
+          nativeCompactionRequest: "required_preflight",
+        },
+      ),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      compacted: false,
+      failure: {
+        reason: "missing_thread_binding",
+      },
+    });
   });
 
   it("preserves stale thread binding metadata for recovery and reports failed native compaction", async () => {

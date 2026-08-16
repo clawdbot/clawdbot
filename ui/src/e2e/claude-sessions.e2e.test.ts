@@ -326,11 +326,14 @@ async function catalogHeaderAffordances(header: Locator) {
 
 async function expandCodingSection(page: Page) {
   const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
-  await page.waitForFunction(() =>
-    Boolean(
-      document.querySelector('[data-session-section="work"]') ??
-      document.querySelector('[data-session-section^="catalog:"]'),
-    ),
+  await page.waitForFunction(
+    () =>
+      Boolean(
+        document.querySelector('[data-session-section="work"]') ??
+        document.querySelector('[data-session-section^="catalog:"]'),
+      ),
+    undefined,
+    { timeout: 30_000 },
   );
   if ((await toggle.count()) === 0) {
     return;
@@ -340,14 +343,22 @@ async function expandCodingSection(page: Page) {
   }
 }
 
-async function openClaudeCatalogTerminal(page: Page) {
+async function navigateToClaudeCatalog(page: Page) {
   await page.goto(`${suite.server.baseUrl}chat`);
   await expandCodingSection(page);
+}
+
+async function triggerClaudeCatalogTerminal(page: Page, options: { force?: boolean } = {}) {
   const row = page.locator('[data-session-key^="catalog:"]').filter({
     hasText: "Native Claude terminal",
   });
-  await row.click({ button: "right" });
-  await page.locator('wa-dropdown-item[value="terminal"]').click();
+  await row.click({ button: "right", force: options.force });
+  await page.locator('wa-dropdown-item[value="terminal"]').click({ force: options.force });
+}
+
+async function openClaudeCatalogTerminal(page: Page) {
+  await navigateToClaudeCatalog(page);
+  await triggerClaudeCatalogTerminal(page);
 }
 
 suite.define(() => {
@@ -542,14 +553,19 @@ suite.define(() => {
       });
 
       await openClaudeCatalogTerminal(page);
-      const open = await gateway.waitForRequest("terminal.open");
-      expect(open.params).toMatchObject({
-        catalog: {
-          catalogId: "claude",
-          hostId: "gateway:local",
-          threadId: "claude-terminal-session",
-        },
-      });
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("terminal.open")).map((request) => request.params),
+        )
+        .toContainEqual(
+          expect.objectContaining({
+            catalog: {
+              catalogId: "claude",
+              hostId: "gateway:local",
+              threadId: "claude-terminal-session",
+            },
+          }),
+        );
       const connecting = page.getByRole("status").filter({ hasText: "Connecting to session" });
       await connecting.waitFor();
       expect(await page.locator(".tabstrip-tab.is-connecting").count()).toBe(1);
@@ -609,22 +625,38 @@ suite.define(() => {
         terminalEnabled: true,
       });
 
+      await navigateToClaudeCatalog(page);
       await page.clock.install();
-      await openClaudeCatalogTerminal(page);
-      await gateway.waitForRequest("terminal.open");
+      await triggerClaudeCatalogTerminal(page, { force: true });
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("terminal.open")).map((request) => request.params),
+        )
+        .toContainEqual(
+          expect.objectContaining({ catalog: expect.objectContaining({ catalogId: "claude" }) }),
+        );
       await page.getByRole("status").filter({ hasText: "Connecting to session" }).waitFor();
-      await page.clock.runFor(30_001);
+      await page
+        .locator("openclaw-terminal-panel .tabstrip-tab", {
+          hasText: "claude --resume claude-termi…",
+        })
+        .waitFor();
+      const resize = await gateway.waitForRequest("terminal.resize");
+      expect(resize.params).toEqual(
+        expect.objectContaining({ sessionId: "claude-terminal-timeout" }),
+      );
+      await page.clock.fastForward(30_001);
+      await page.clock.runFor(100);
 
       await page.getByText("Session did not connect within 30 seconds.", { exact: true }).waitFor();
       const close = await gateway.waitForRequest("terminal.close");
       expect(close.params).toEqual({ sessionId: "claude-terminal-timeout" });
-      expect(await page.locator(".tabstrip-tab").count()).toBe(0);
+      expect(await page.locator("openclaw-terminal-panel .tabstrip-tab").count()).toBe(0);
     });
   });
 
   it("auto-loads older chat without moving the viewport and disables paired-node continuation", async () => {
     const page = await suite.browser.newPage();
-    await page.clock.install();
     const catalogResponse = (threadId: string, name: string, nextCursor?: string) => ({
       catalogs: [
         {
@@ -718,7 +750,14 @@ suite.define(() => {
       cursors: { "node:devbox": "catalog-page-2" },
     });
     const catalogRequestCount = (await gateway.getRequests("sessions.catalog.list")).length;
-    await page.clock.runFor(30_000);
+    await page.clock.install();
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await page.clock.runFor(50);
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
+      .toBeGreaterThanOrEqual(catalogRequestCount + 1);
+    await page.clock.fastForward(30_000);
+    await page.clock.runFor(100);
     await expect
       .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
       .toBeGreaterThanOrEqual(catalogRequestCount + 2);

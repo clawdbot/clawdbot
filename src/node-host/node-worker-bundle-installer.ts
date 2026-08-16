@@ -1,22 +1,30 @@
+import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs";
+import { once } from "node:events";
+import fs, { type Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
+import { promisify } from "node:util";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   validateWorkerAdmissionHandshake,
   type WorkerAdmissionHandshake,
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../config/paths.js";
+import { hasErrnoCode } from "../infra/errors.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import {
   DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
   extractWorkerBundleArchive,
   readWorkerBundleDirectoryManifest,
 } from "../shared/worker-bundle-archive.js";
-import { hashWorkerBundleManifest } from "../shared/worker-bundle-hash.js";
+import {
+  hashWorkerBundleManifest,
+  WORKER_BUNDLE_ENTRY_PATH,
+} from "../shared/worker-bundle-hash.js";
 import { MAX_WORKER_BUNDLE_ARCHIVE_BYTES } from "../shared/worker-bundle-limits.js";
 import {
   nodeWorkerBundleTransferPath,
@@ -24,34 +32,20 @@ import {
   type NodeWorkerBundleInstallInput,
 } from "../worker/node-bundle-install-protocol.js";
 import { sameWorkerBuild } from "../worker/worker-build-identity.js";
+import { snapshotNodeWorkerEnv } from "./node-worker-environment.js";
 import {
   NodeWorkerTransferHttpError,
   openNodeWorkerTransferHttpRequest,
 } from "./node-worker-transfer-http.js";
 
 const INSTALL_RECEIPT = "bootstrap-receipt.json";
-const INSTALL_TIMEOUT_MS = 35 * 60_000;
-const INSTALL_IGNORED_TOP_LEVEL = new Set(["node_modules", INSTALL_RECEIPT]);
-
-type BundleInstallCommandRunner = typeof runCommandWithTimeout;
-
-function commandEnv(homeDir: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return {
-    ...env,
-    HOME: homeDir,
-    ...(process.platform === "win32" ? { USERPROFILE: homeDir } : {}),
-    CI: "1",
-    GIT_ASKPASS: "",
-    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_TERMINAL_PROMPT: "0",
-    NPM_CONFIG_AUDIT: "false",
-    NPM_CONFIG_FUND: "false",
-    NPM_CONFIG_IGNORE_SCRIPTS: "true",
-    NPM_CONFIG_UPDATE_NOTIFIER: "false",
-    SSH_ASKPASS: "",
-  };
-}
+const INSTALL_IGNORED_TOP_LEVEL = new Set([INSTALL_RECEIPT]);
+const BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
+const STAGING_PATTERN = /^\.staging-[a-f0-9]{64}-/u;
+const PREVIOUS_PATTERN = /^[a-f0-9]{64}\.previous-/u;
+const BUNDLE_DELETE_BATCH = 16;
+const WORKER_PREWARM_TIMEOUT_MS = 10 * 60_000;
+const execFileAsync = promisify(execFile);
 
 async function responseBody(response: IncomingMessage, maxBytes = 64 * 1024): Promise<string> {
   const chunks: Buffer[] = [];
@@ -104,10 +98,7 @@ async function downloadBundle(params: {
       }
       hash.update(chunk);
       if (!output.write(chunk)) {
-        await new Promise<void>((resolve, reject) => {
-          output.once("drain", resolve);
-          output.once("error", reject);
-        });
+        await once(output, "drain");
       }
     }
     await new Promise<void>((resolve, reject) => {
@@ -158,7 +149,7 @@ async function validateInstalledBundle(
       return false;
     }
     const root = await fsp.realpath(bundleDir);
-    const entry = await fsp.realpath(path.join(root, "openclaw.mjs"));
+    const entry = await fsp.realpath(path.join(root, WORKER_BUNDLE_ENTRY_PATH));
     return isPathInside(root, entry) && (await fsp.stat(entry)).isFile();
   } catch {
     return false;
@@ -202,21 +193,50 @@ async function publishBundle(destination: string, staging: string): Promise<void
 
 export class NodeWorkerBundleInstaller {
   readonly #root: string;
-  readonly #env: NodeJS.ProcessEnv;
-  readonly #runCommand: BundleInstallCommandRunner;
   readonly #operations = new KeyedAsyncQueue();
+  readonly #bundleGenerationsByNamespace = new Map<string, Map<string, number>>();
+  readonly #currentGenerationByNamespace = new Map<string, number>();
+  readonly #prewarmedBundles = new Set<string>();
+  readonly #workerEnv: NodeJS.ProcessEnv;
 
-  constructor(
-    options: {
-      root?: string;
-      env?: NodeJS.ProcessEnv;
-      runCommand?: BundleInstallCommandRunner;
-    } = {},
-  ) {
+  constructor(options: { root?: string; env?: NodeJS.ProcessEnv } = {}) {
     const env = options.env ?? process.env;
     this.#root = path.resolve(options.root ?? path.join(resolveStateDir(env), "node-host"));
-    this.#env = { ...env };
-    this.#runCommand = options.runCommand ?? runCommandWithTimeout;
+    this.#workerEnv = snapshotNodeWorkerEnv(env);
+  }
+
+  #markPendingRetention(gatewayNamespace: string, bundleHash: string): void {
+    const generation = (this.#currentGenerationByNamespace.get(gatewayNamespace) ?? 0) + 1;
+    this.#currentGenerationByNamespace.set(gatewayNamespace, generation);
+    const generations =
+      this.#bundleGenerationsByNamespace.get(gatewayNamespace) ?? new Map<string, number>();
+    generations.set(bundleHash, generation);
+    this.#bundleGenerationsByNamespace.set(gatewayNamespace, generations);
+  }
+
+  async #prewarmBundle(bundleDir: string, signal?: AbortSignal): Promise<void> {
+    if (this.#prewarmedBundles.has(bundleDir)) {
+      return;
+    }
+    try {
+      await execFileAsync(
+        process.execPath,
+        [path.join(bundleDir, WORKER_BUNDLE_ENTRY_PATH), "--internal-worker-prewarm"],
+        {
+          cwd: bundleDir,
+          env: this.#workerEnv,
+          timeout: WORKER_PREWARM_TIMEOUT_MS,
+          windowsHide: true,
+          ...(signal ? { signal } : {}),
+        },
+      );
+    } catch (error) {
+      if (signal?.aborted) {
+        throw signal.reason ?? error;
+      }
+      throw error;
+    }
+    this.#prewarmedBundles.add(bundleDir);
   }
 
   async ensure(params: {
@@ -234,6 +254,10 @@ export class NodeWorkerBundleInstaller {
         const bundlesRoot = path.join(this.#root, input.gatewayNamespace, "bundles");
         const destination = path.join(bundlesRoot, input.build.bundleHash);
         if (await validateInstalledBundle(destination, input.build)) {
+          if (input.bundlePrewarm) {
+            await this.#prewarmBundle(destination, params.signal);
+          }
+          this.#markPendingRetention(input.gatewayNamespace, input.build.bundleHash);
           return structuredClone(input.build);
         }
         await fsp.mkdir(bundlesRoot, { recursive: true, mode: 0o700 });
@@ -244,8 +268,6 @@ export class NodeWorkerBundleInstaller {
         try {
           const archivePath = path.join(operationRoot, "bundle.tgz");
           const staging = path.join(operationRoot, "root");
-          const homeDir = path.join(operationRoot, "home");
-          await fsp.mkdir(homeDir, { mode: 0o700 });
           await downloadBundle({
             gatewayUrl: params.gatewayUrl,
             gatewayTlsFingerprint: params.gatewayTlsFingerprint,
@@ -259,38 +281,6 @@ export class NodeWorkerBundleInstaller {
             expectedBundleHash: input.build.bundleHash,
             limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
           });
-          const install = await this.#runCommand(
-            [
-              "npm",
-              "install",
-              "--prefix",
-              staging,
-              "--ignore-scripts",
-              "--omit=dev",
-              "--no-audit",
-              "--no-fund",
-              "--package-lock=false",
-            ],
-            {
-              cwd: staging,
-              baseEnv: commandEnv(homeDir, this.#env),
-              timeoutMs: INSTALL_TIMEOUT_MS,
-              signal: params.signal,
-              maxOutputBytes: 256 * 1024,
-              maxCombinedOutputBytes: 512 * 1024,
-            },
-          );
-          if (install.termination !== "exit" || install.code !== 0) {
-            throw new Error("worker bundle dependency installation failed");
-          }
-          const installedManifest = await readWorkerBundleDirectoryManifest({
-            root: staging,
-            limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
-            ignoreTopLevel: new Set(["node_modules"]),
-          });
-          if (hashWorkerBundleManifest(installedManifest) !== input.build.bundleHash) {
-            throw new Error("worker bundle changed during dependency installation");
-          }
           const receipt = await fsp.open(path.join(staging, INSTALL_RECEIPT), "wx", 0o600);
           try {
             await receipt.writeFile(`${JSON.stringify(input.build)}\n`);
@@ -302,6 +292,10 @@ export class NodeWorkerBundleInstaller {
           if (!(await validateInstalledBundle(destination, input.build))) {
             throw new Error("published worker bundle failed validation");
           }
+          if (input.bundlePrewarm) {
+            await this.#prewarmBundle(destination, params.signal);
+          }
+          this.#markPendingRetention(input.gatewayNamespace, input.build.bundleHash);
           return structuredClone(input.build);
         } finally {
           await fsp.rm(operationRoot, { recursive: true, force: true });
@@ -318,13 +312,80 @@ export class NodeWorkerBundleInstaller {
             { cause: error },
           );
         }
+        const detail = truncateUtf16Safe(
+          redactSensitiveText(error instanceof Error ? error.message : String(error)),
+          512,
+        );
         throw new NodeWorkerBundleInstallError(
-          "worker-bundle-install-failed: bundle installation did not complete",
+          `worker-bundle-install-failed: ${detail || "bundle installation did not complete"}`,
           { cause: error },
         );
       }
     });
   }
+
+  async retain(params: {
+    gatewayNamespace: string;
+    bundleHashes: readonly string[];
+    acknowledgedGeneration?: number;
+  }): Promise<{ deleted: number; hasMore: boolean; generation: number }> {
+    return await this.#operations.enqueue(params.gatewayNamespace, async () => {
+      const bundlesRoot = path.join(this.#root, params.gatewayNamespace, "bundles");
+      let entries: Dirent[];
+      try {
+        entries = await fsp.readdir(bundlesRoot, { withFileTypes: true });
+      } catch (error) {
+        if (hasErrnoCode(error, "ENOENT")) {
+          return {
+            deleted: 0,
+            hasMore: false,
+            generation: this.#currentGenerationByNamespace.get(params.gatewayNamespace) ?? 0,
+          };
+        }
+        throw error;
+      }
+      const protectedHashes = new Set(params.bundleHashes);
+      const generations =
+        this.#bundleGenerationsByNamespace.get(params.gatewayNamespace) ??
+        new Map<string, number>();
+      const acknowledgedGeneration = params.acknowledgedGeneration ?? 0;
+      for (const [bundleHash, generation] of generations) {
+        if (generation > acknowledgedGeneration) {
+          protectedHashes.add(bundleHash);
+        } else {
+          generations.delete(bundleHash);
+        }
+      }
+      if (generations.size > 0) {
+        this.#bundleGenerationsByNamespace.set(params.gatewayNamespace, generations);
+      } else {
+        this.#bundleGenerationsByNamespace.delete(params.gatewayNamespace);
+      }
+      const candidates = entries
+        .filter(
+          (entry) =>
+            entry.isDirectory() &&
+            !entry.isSymbolicLink() &&
+            ((BUNDLE_HASH_PATTERN.test(entry.name) && !protectedHashes.has(entry.name)) ||
+              STAGING_PATTERN.test(entry.name) ||
+              PREVIOUS_PATTERN.test(entry.name)),
+        )
+        .map((entry) => entry.name)
+        .toSorted();
+      const selected = candidates.slice(0, BUNDLE_DELETE_BATCH);
+      for (const name of selected) {
+        const target = path.join(bundlesRoot, name);
+        await fsp.rm(target, { recursive: true, force: true });
+        this.#prewarmedBundles.delete(target);
+      }
+      return {
+        deleted: selected.length,
+        hasMore: candidates.length > selected.length,
+        generation: this.#currentGenerationByNamespace.get(params.gatewayNamespace) ?? 0,
+      };
+    });
+  }
 }
 
-export type NodeWorkerBundleInstallerControl = Pick<NodeWorkerBundleInstaller, "ensure">;
+export type NodeWorkerBundleInstallerControl = Pick<NodeWorkerBundleInstaller, "ensure"> &
+  Partial<Pick<NodeWorkerBundleInstaller, "retain">>;

@@ -2,7 +2,10 @@ import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
-import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  WorktreeRecord,
+  WorktreesRemoveResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
@@ -32,7 +35,6 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees";
 
 type WorktreesListResult = { worktrees: WorktreeRecord[] };
-type WorktreesRemoveResult = { removed: boolean; snapshotError?: string };
 type WorktreeBranchesResult = {
   branches: Array<{ name: string }>;
   defaultBranch?: string;
@@ -184,7 +186,13 @@ class WorktreesPage extends OpenClawLightDomElement {
         return;
       }
       try {
-        await scope.client.request("worktrees.remove", { id: record.id, force: true });
+        const forced = await scope.client.request<WorktreesRemoveResult>("worktrees.remove", {
+          id: record.id,
+          force: true,
+        });
+        if (this.gateway.isCurrent(scope)) {
+          this.error = forced.snapshotError ?? null;
+        }
       } catch (forceError) {
         if (this.gateway.isCurrent(scope)) {
           this.error = String(forceError);

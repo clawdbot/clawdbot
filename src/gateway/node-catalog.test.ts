@@ -181,35 +181,6 @@ describe("gateway/node-catalog", () => {
     });
   });
 
-  it("does not infer live session hosting from the connect-time build ceiling", () => {
-    const catalog = createKnownNodeCatalog({
-      pairedDevices: [pairedDevice()],
-      pairedNodes: [pairedNode()],
-      connectedNodes: [
-        {
-          nodeId: "mac-1",
-          connId: "conn-1",
-          client: {} as never,
-          declaredCaps: [],
-          caps: [],
-          declaredCommands: [],
-          commands: [],
-          workerRuns: {
-            bundleHash: "a".repeat(64),
-            openclawVersion: "2026.8.12",
-            protocolFeatures: ["worker-heartbeat-v1"],
-          },
-          declaredNodePluginTools: [],
-          nodePluginTools: [],
-          nodeSkills: [],
-          connectedAtMs: 1,
-        },
-      ],
-    });
-
-    expect(getKnownNode(catalog, "mac-1")?.sessionHost).toBe(false);
-  });
-
   it("keeps the operator node name across live metadata and reconnects", () => {
     const connectedNode = (connId: string, displayName: string) => ({
       nodeId: "mac-1",

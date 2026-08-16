@@ -9303,6 +9303,38 @@ describe("handleSendChat", () => {
     expect(host.applySettings).not.toHaveBeenCalled();
   });
 
+  it("surfaces an unconfirmed steer failure globally when the pane is no longer visible", async () => {
+    const toastHost = document.createElement("openclaw-toast-host");
+    document.body.append(toastHost);
+    const original = { id: "queued-1", text: "tighten the plan", createdAt: 1 };
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.send": () => {
+          // The operator navigates away before transport fails, so the stale
+          // visibility gate used to swallow the terminal outcome entirely.
+          host.sessionKey = "agent:main:second";
+          throw new Error("network dropped");
+        },
+      },
+      chatRunId: "run-1",
+      chatDisplayedLeafEntryId: "leaf-active",
+      chatQueue: [original],
+      sessionKey: "agent:main:main",
+    });
+    expect(admitQueuedMessageForSession(host, host.sessionKey, original)).toBe(true);
+
+    await steerQueuedChatMessage(host, "queued-1");
+
+    // Pre-fix: the failure was parked on the queue row with no visible outcome.
+    expect(host.lastError).toBeNull();
+    await waitForFast(() =>
+      expect(document.body.textContent).toContain(
+        "Steer delivery could not be confirmed. Check the active run before retrying.",
+      ),
+    );
+    document.body.replaceChildren();
+  });
+
   it("removes pending steer indicators when the run finishes", () => {
     const host = makeChatHost({
       chatQueue: [
@@ -9413,6 +9445,233 @@ describe("handleSendChat", () => {
     expect(host.chatQueue).toEqual([expect.objectContaining({ id: "sibling" })]);
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:queued");
+  });
+
+  it("surfaces a terminal send failure through the global toast when the pane is not visible", async () => {
+    const toastHost = document.createElement("openclaw-toast-host");
+    document.body.append(toastHost);
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": idleChatHistory("agent:other"),
+        "chat.send": () => {
+          throw new GatewayRequestError({
+            code: "UNAUTHORIZED",
+            message: "gateway auth failed",
+            retryable: false,
+          });
+        },
+      },
+      chatQueue: [
+        {
+          id: "hidden-terminal-failure",
+          text: "fails while another session is visible",
+          createdAt: 1,
+          sendAttempts: 0,
+          sendRunId: "hidden-terminal-run",
+          sendState: "waiting-idle",
+          sessionKey: "agent:other",
+          agentId: "other",
+        },
+      ],
+      sessionKey: "agent:main",
+      sessionsResult: createSessionsResult([
+        row("agent:other", { hasActiveRun: false, status: "done" }),
+      ]),
+    });
+    admitHostQueueItems(host);
+
+    await retryReconnectableQueuedChatSends(host);
+
+    // The invisible pane's inline error stays untouched; the failure surfaces globally.
+    expect(host.lastError).toBeNull();
+    await waitForFast(() => expect(document.body.textContent).toContain("gateway auth failed"));
+    expect(
+      listStoredChatOutboxes(host)
+        .flatMap((outbox) => outbox.queue)
+        .find((entry) => entry.id === "hidden-terminal-failure"),
+    ).toMatchObject({ sendState: "failed", sendError: "gateway auth failed" });
+    document.body.replaceChildren();
+  });
+
+  it("fails a never-attempted head visibly and unblocks the lane when head reconcile is rejected as non-retryable", async () => {
+    const sends: string[] = [];
+    let historyCalls = 0;
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": () => {
+          historyCalls += 1;
+          if (historyCalls === 1) {
+            throw new GatewayRequestError({
+              code: "UNAUTHORIZED",
+              message: "gateway auth failed",
+              retryable: false,
+            });
+          }
+          return idleChatHistory();
+        },
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "post-unblock send payload");
+          sends.push(String(payload.message));
+          return { runId: payload.idempotencyKey, status: "ok" };
+        },
+      },
+      chatQueue: [
+        {
+          id: "wedged-head",
+          text: "head the gateway rejects",
+          createdAt: 1,
+          sendAttempts: 0,
+          sendRunId: "wedged-head-run",
+          sendState: "waiting-idle",
+          sessionKey: "agent:main",
+        },
+        {
+          id: "queued-behind-head",
+          text: "message stuck behind the head",
+          createdAt: 2,
+          sendAttempts: 0,
+          sendRunId: "queued-behind-run",
+          sendState: "waiting-idle",
+          sessionKey: "agent:main",
+        },
+      ],
+    });
+    admitHostQueueItems(host);
+    const surfacedErrors: (string | null)[] = [];
+    let trackedError: string | null = host.lastError ?? null;
+    Object.defineProperty(host, "lastError", {
+      get: () => trackedError,
+      set: (value: string | null) => {
+        trackedError = value;
+        surfacedErrors.push(value);
+      },
+    });
+
+    await retryReconnectableQueuedChatSends(host);
+
+    // Pre-fix: the head stayed silently "blocked" forever and nothing surfaced.
+    expect(surfacedErrors).toContain("gateway auth failed");
+    const stored = listStoredChatOutboxes(host).flatMap((outbox) => outbox.queue);
+    expect(stored.find((entry) => entry.id === "wedged-head")).toMatchObject({
+      sendState: "failed",
+      sendError: "gateway auth failed",
+    });
+    // The lane moved past the terminally failed head instead of wedging.
+    await waitForFast(() => expect(sends).toContain("message stuck behind the head"));
+  });
+
+  it("parks an attempted head as unconfirmed instead of failing it on a non-retryable reconcile rejection", async () => {
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": () => {
+          throw new GatewayRequestError({
+            code: "UNAUTHORIZED",
+            message: "gateway auth failed",
+            retryable: false,
+          });
+        },
+      },
+      chatQueue: [
+        {
+          id: "attempted-head",
+          text: "head that may have reached the server",
+          createdAt: 1,
+          sendAttempts: 1,
+          sendRunId: "attempted-head-run",
+          sendState: "waiting-reconnect",
+          sessionKey: "agent:main",
+        },
+      ],
+    });
+    admitHostQueueItems(host);
+
+    await retryReconnectableQueuedChatSends(host);
+
+    // An attempted head may already be a server-side turn; it must park for
+    // review rather than fail-and-release, and the outcome must be visible.
+    expect(host.lastError).toBe(
+      "Delivery could not be confirmed after reconnect. Check the conversation before retrying.",
+    );
+    const stored = listStoredChatOutboxes(host).flatMap((outbox) => outbox.queue);
+    expect(stored.find((entry) => entry.id === "attempted-head")).toMatchObject({
+      sendState: "unconfirmed",
+    });
+    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+  });
+
+  it("surfaces a failed local command globally after a route switch", async () => {
+    const toastHost = document.createElement("openclaw-toast-host");
+    document.body.append(toastHost);
+    const item = createQueuedLocalCommand("route-switched-command", "/think", {
+      sessionKey: "agent:main:first",
+    });
+    // The dispatcher reports failure after the operator navigated away, so its
+    // stale-scope guard withholds the inline error.
+    executeSlashCommandMock.mockImplementation(async () => {
+      host.sessionKey = "agent:main:second";
+      return { failed: true, content: "think mode rejected" };
+    });
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": () => idleChatHistory("agent:main:first"),
+      },
+      chatQueue: [item],
+      sessionKey: item.sessionKey,
+    });
+    admitHostQueueItems(host);
+
+    await retryReconnectableQueuedChatSends(host);
+
+    // Pre-fix: the failure was recorded on the queue item with no visible outcome.
+    expect(host.lastError).toBeNull();
+    await waitForFast(() => expect(document.body.textContent).toContain("Command /think failed."));
+    expect(listStoredChatOutboxes(host).flatMap((outbox) => outbox.queue)).toEqual([
+      expect.objectContaining({ id: item.id, sendState: "failed" }),
+    ]);
+    document.body.replaceChildren();
+  });
+
+  it("names the failed agent's global session in the toast, not another agent's row", async () => {
+    const toastHost = document.createElement("openclaw-toast-host");
+    document.body.append(toastHost);
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": idleChatHistory("global"),
+        "chat.send": () => {
+          throw new GatewayRequestError({
+            code: "UNAUTHORIZED",
+            message: "gateway auth failed",
+            retryable: false,
+          });
+        },
+      },
+      chatQueue: [
+        {
+          id: "global-agent-scoped-failure",
+          text: "fails on the second agent's global session",
+          createdAt: 1,
+          sendAttempts: 0,
+          sendRunId: "global-agent-scoped-run",
+          sendState: "waiting-idle",
+          sessionKey: "global",
+          agentId: "writer",
+        },
+      ],
+      sessionKey: "agent:main:elsewhere",
+      sessionsResult: createSessionsResult([
+        row("global", { agentId: "main", label: "Main global chat" }),
+        row("global", { agentId: "writer", label: "Writer global chat" }),
+      ]),
+    });
+    admitHostQueueItems(host);
+
+    await retryReconnectableQueuedChatSends(host);
+
+    await waitForFast(() => expect(document.body.textContent).toContain("gateway auth failed"));
+    // Global rows share one key; the toast must borrow the failed agent's label.
+    expect(document.body.textContent).toContain("Writer global chat");
+    expect(document.body.textContent).not.toContain("Main global chat");
+    document.body.replaceChildren();
   });
 });
 

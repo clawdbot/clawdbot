@@ -31,7 +31,10 @@ import { isAcpxExtensionRoot } from "../test/vitest/vitest.extension-acpx-paths.
 import { isActiveMemoryExtensionRoot } from "../test/vitest/vitest.extension-active-memory-paths.mjs";
 import { isBrowserExtensionRoot } from "../test/vitest/vitest.extension-browser-paths.mjs";
 import { resolveSplitChannelExtensionShard } from "../test/vitest/vitest.extension-channel-split-paths.mjs";
-import { isCodexExtensionRoot } from "../test/vitest/vitest.extension-codex-paths.mjs";
+import {
+  codexExtensionTestRoots,
+  isCodexExtensionRoot,
+} from "../test/vitest/vitest.extension-codex-paths.mjs";
 import { isDiffsExtensionRoot } from "../test/vitest/vitest.extension-diffs-paths.mjs";
 import { isFeishuExtensionRoot } from "../test/vitest/vitest.extension-feishu-paths.mjs";
 import { isIrcExtensionRoot } from "../test/vitest/vitest.extension-irc-paths.mjs";
@@ -261,6 +264,7 @@ const UNIT_SECURITY_VITEST_CONFIG = "test/vitest/vitest.unit-security.config.ts"
 const UNIT_SRC_VITEST_CONFIG = "test/vitest/vitest.unit-src.config.ts";
 const UNIT_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.unit-support.config.ts";
 const EXTENSION_TEST_PROCESS_ROOTS = new Map([
+  [EXTENSION_CODEX_VITEST_CONFIG, codexExtensionTestRoots],
   [EXTENSION_MATRIX_VITEST_CONFIG, matrixExtensionTestRoots],
   [EXTENSION_TELEGRAM_VITEST_CONFIG, telegramExtensionTestRoots],
 ]);

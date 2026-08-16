@@ -12,7 +12,10 @@ import {
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { registerCodexCliMetadata } from "./cli-metadata.js";
-import { createCodexAppServerAgentHarness } from "./harness.js";
+import {
+  createCodexAppServerAgentHarness,
+  createCodexAppServerNativeCompaction,
+} from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { readCodexPluginConfig } from "./src/app-server/config.js";
 import { createCodexAppServerConnectionHealthService } from "./src/app-server/connection-health.js";
@@ -175,15 +178,16 @@ export default definePluginEntry({
         { names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES] },
       );
     }
-    api.registerAgentHarness(
-      createCodexAppServerAgentHarness({
-        bindingStore,
-        sessionCatalogControlFactory,
-        resolveConfig: resolveCurrentConfig,
-        resolvePluginConfig: resolveCurrentPluginConfig,
-        runtime: api.runtime,
-      }),
-    );
+    const agentHarnessOptions = {
+      bindingStore,
+      sessionCatalogControlFactory,
+      resolveConfig: resolveCurrentConfig,
+      resolvePluginConfig: resolveCurrentPluginConfig,
+      runtime: api.runtime,
+    };
+    api.registerAgentHarness(createCodexAppServerAgentHarness(agentHarnessOptions), {
+      nativeCompaction: createCodexAppServerNativeCompaction(agentHarnessOptions),
+    });
     api.registerMediaUnderstandingProvider(
       buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
     );

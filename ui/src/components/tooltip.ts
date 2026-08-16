@@ -413,9 +413,12 @@ class Tooltip extends OpenClawLitElement {
     }
     const content = normalizeTooltipText(this.content);
     const triggerText = normalizeTooltipText(trigger.textContent ?? "");
-    const clipsContent = [trigger, ...trigger.querySelectorAll("*")].some(
-      (element) => isHtmlElement(element) && element.scrollWidth > element.clientWidth,
-    );
+    const clipsContent =
+      trigger.matches("[data-tooltip-overflow]") ||
+      trigger.querySelector("[data-tooltip-overflow]") !== null ||
+      [trigger, ...trigger.querySelectorAll("*")].some(
+        (element) => isHtmlElement(element) && element.scrollWidth > element.clientWidth,
+      );
     return Boolean(content && triggerText && triggerText.includes(content) && !clipsContent);
   }
 
@@ -430,7 +433,9 @@ class Tooltip extends OpenClawLitElement {
       this.descriptionCaptured = true;
     }
     if (!this.descriptionElement) {
-      const description = document.createElement("span");
+      // ownerDocument, not the global: slotchange can fire after a test
+      // environment tears down its window, where bare `document` throws.
+      const description = this.ownerDocument.createElement("span");
       description.id = this.descriptionId;
       description.hidden = true;
       this.append(description);

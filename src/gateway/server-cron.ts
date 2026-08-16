@@ -106,11 +106,15 @@ export type GatewayCronState = {
   cron: GatewayCronServiceContract;
   storePath: string;
   cronEnabled: boolean;
-  reconcileExitWatchers?: () => Promise<void>;
-  stopExitWatchers?: () => void;
-  reconcileStreamWatchers?: () => Promise<void>;
-  stopStreamWatchers?: () => Promise<void>;
-  reconcileHeartbeatJobs?: (cfg?: OpenClawConfig) => Promise<void>;
+  // Required, not optional: reload rules call these hooks directly on whatever
+  // cronState is live (including the lazy proxy). An optional member here let
+  // the proxy silently omit reconcileHeartbeatJobs, turning every
+  // restart-heartbeat reload into a permanent no-op until gateway restart.
+  reconcileExitWatchers: () => Promise<void>;
+  stopExitWatchers: () => void;
+  reconcileStreamWatchers: () => Promise<void>;
+  stopStreamWatchers: () => Promise<void>;
+  reconcileHeartbeatJobs: (cfg?: OpenClawConfig) => Promise<void>;
 };
 
 function classifyCronScriptFailure(code: CronTriggerFailureCode): CronRunErrorClassification {
@@ -1018,7 +1022,7 @@ export function buildGatewayCronService(params: {
         webhookToken: params.cfg.cron?.webhookToken,
         ssrfPolicy: webhookSsrfPolicy,
       }),
-    log: getChildLogger({ module: "cron", storePath }),
+    log: getChildLogger({ module: "cron", storeKey: storePath }),
     onEvent: (evt) => {
       // Any job/store change can alter session automation bindings, including
       // in-place enable flips during runs; run/schedule events bump too (cheap).

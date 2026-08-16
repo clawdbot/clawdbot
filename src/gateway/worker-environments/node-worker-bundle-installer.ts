@@ -1,3 +1,4 @@
+import { WORKER_BUNDLE_PREWARM_VERSION } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_BUNDLE_INSTALL_COMMAND } from "../../infra/node-commands.js";
 import { parseNodeWorkerBundleInstallResult } from "../../worker/node-bundle-install-protocol.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
@@ -27,10 +28,15 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
     }
     const artifact = await options.prepareBundle();
     const isAuthorized = () => transport.isCurrent(node);
+    const bundlePrewarm =
+      (node.workerHost.bundlePrewarm ?? 0) >= WORKER_BUNDLE_PREWARM_VERSION
+        ? WORKER_BUNDLE_PREWARM_VERSION
+        : undefined;
     const prepared = options.transfer.prepare({
       node,
       gatewayNamespace: options.gatewayNamespace,
       artifact,
+      ...(bundlePrewarm ? { bundlePrewarm } : {}),
       isAuthorized,
       signal: params.signal,
     });
@@ -69,7 +75,3 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
     }
   };
 }
-
-export type GatewayNodeWorkerBundleInstaller = ReturnType<
-  typeof createGatewayNodeWorkerBundleInstaller
->;

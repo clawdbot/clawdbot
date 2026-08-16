@@ -19,7 +19,6 @@ import {
   DEVICE_WORKER_PROVIDER_ID,
 } from "./worker-environments/device-provider.js";
 import type { WorkerLiveEventReceiver } from "./worker-environments/live-events.js";
-import type { GatewayNodeWorkerBundleInstaller } from "./worker-environments/node-worker-bundle-installer.js";
 import type { NodeWorkerBundleTransferHttpCallback } from "./worker-environments/node-worker-bundle-transfer-http.js";
 import { nodeWorkerGatewayNamespace as resolveNodeWorkerGatewayNamespace } from "./worker-environments/node-worker-gateway-namespace.js";
 import type { NodeWorkerWorkspaceBindingResolver } from "./worker-environments/node-worker-tunnel.js";
@@ -53,7 +52,6 @@ export type GatewayWorkerEnvironmentRuntime = {
   workerLiveEvents?: WorkerLiveEventReceiver;
   workerTunnelManager?: WorkerTunnelManager;
   nodeWorkerGatewayNamespace?: string;
-  ensureNodeWorkerBundle?: GatewayNodeWorkerBundleInstaller;
   bindWorkerSessionDispatch?: (dispatch: WorkerPlacementDispatchContract["dispatch"]) => void;
   bindDeviceNodeControl?: (transport: NodeWorkerSupervisorTransport) => void;
   bindNodeWorkspaceBindingResolver?: (resolver: NodeWorkerWorkspaceBindingResolver) => void;
@@ -244,10 +242,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
         ? deviceRuntime.provider
         : resolveWorkerProvider(params.getPluginRegistry(), providerId),
     prepareInstallation,
-    resolveNodeWorkerBuild: async (deviceId) => {
-      const build = await deviceRuntime.resolveWorkerBuild(deviceId);
-      return build ? structuredClone(build) : undefined;
-    },
+    ensureNodeWorkerBundle: async (deviceId) => await ensureNodeWorkerBundle({ deviceId }),
     tunnelManager: workerTunnelManager,
     nodeTunnelManager: nodeWorkerTunnelManager,
     stopNodeWorkerBundleTransfers: () => nodeWorkerBundleTransfer.closeAll(),
@@ -299,7 +294,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     logger: workerEnvironmentLog,
   });
   const workerEnvironmentService = workerEnvironmentServiceBase;
-  bindDeviceWorkerAvailability(workerEnvironmentService, deviceRuntime.isAvailable);
+  bindDeviceWorkerAvailability(workerEnvironmentService, deviceRuntime.resolveAvailability);
   bindDeviceWorkerReconciliation(workerEnvironmentService, async (deviceId) => {
     const environmentIds = params.startup.store
       .listForReconcile()
@@ -337,7 +332,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     workerLiveEvents,
     workerTunnelManager,
     nodeWorkerGatewayNamespace,
-    ensureNodeWorkerBundle,
     bindWorkerSessionDispatch: (dispatch) => {
       dispatchChild = dispatch;
     },

@@ -1,6 +1,5 @@
 /** Transport-independent CLI node-host runtime shared by Gateway and app workers. */
 import fs from "node:fs";
-import type { WorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
@@ -28,7 +27,6 @@ import { handleInvoke, type NodeInvokeRequestPayload, type SkillBinsProvider } f
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
 import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
-import { resolveNodeWorkerInstallation } from "./node-worker-build.js";
 import { NodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
@@ -48,7 +46,6 @@ type NodeHostManifest = {
   commands: string[];
   computerUse?: ComputerUseCapabilityDescriptor;
   pathEnv: string;
-  workerRuns?: WorkerAdmissionHandshake;
 };
 
 export type NodeHostInventory = {
@@ -58,6 +55,7 @@ export type NodeHostInventory = {
 
 type PreparedNodeHostRuntime = {
   manifest: NodeHostManifest;
+  workerHostingEnabled: boolean;
   initialInventory: NodeHostInventory;
   start(params: {
     client: NodeHostClient;
@@ -240,8 +238,7 @@ function sameManifest(left: NodeHostManifest, right: NodeHostManifest): boolean 
     left.pathEnv === right.pathEnv &&
     sameStringList(left.caps, right.caps) &&
     sameStringList(left.commands, right.commands) &&
-    JSON.stringify(left.computerUse) === JSON.stringify(right.computerUse) &&
-    JSON.stringify(left.workerRuns) === JSON.stringify(right.workerRuns)
+    JSON.stringify(left.computerUse) === JSON.stringify(right.computerUse)
   );
 }
 
@@ -283,11 +280,8 @@ export async function prepareNodeHostRuntime(params?: {
     params?.enableAgentRuns === true && config.nodeHost?.agentRuns?.claude?.enabled === true
       ? resolveExecutableTrustPathFromEnv("claude", pathEnv)
       : null;
-  const workerInstallation =
-    params?.enableWorkerRuns === true && config.nodeHost?.workerRuns?.enabled === true
-      ? await resolveNodeWorkerInstallation()
-      : undefined;
-  const workerRuns = workerInstallation?.build;
+  const workerRunsEnabled =
+    params?.enableWorkerRuns === true && config.nodeHost?.workerRuns?.enabled === true;
   const skills = config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
   const buildManifest = (pluginManifest: typeof pluginNodeHost): NodeHostManifest => ({
     caps: [
@@ -313,7 +307,6 @@ export async function prepareNodeHostRuntime(params?: {
     ].toSorted(),
     ...(pluginManifest.computerUse ? { computerUse: pluginManifest.computerUse } : {}),
     pathEnv,
-    ...(workerRuns ? { workerRuns } : {}),
   });
   const manifest = buildManifest(pluginNodeHost);
   const initialInventory = createInventory({
@@ -323,19 +316,19 @@ export async function prepareNodeHostRuntime(params?: {
 
   return {
     manifest,
+    workerHostingEnabled: workerRunsEnabled,
     initialInventory,
     start({ client, onInventoryChanged, onManifestChanged, onRunnerAvailabilityChanged }) {
       const mcpAbort = new AbortController();
-      const workerWorkspace = workerInstallation
+      const workerWorkspace = workerRunsEnabled
         ? new NodeWorkerWorkspaceRuntime({ env })
         : undefined;
-      const workerBundleInstaller = workerInstallation
+      const workerBundleInstaller = workerRunsEnabled
         ? new NodeWorkerBundleInstaller({ env })
         : undefined;
-      const workerSupervisor = workerInstallation
+      const workerSupervisor = workerRunsEnabled
         ? createNodeWorkerSupervisor({
             env,
-            localInstallation: workerInstallation,
             onAvailabilityChanged: onRunnerAvailabilityChanged,
             workspace: workerWorkspace,
           })
