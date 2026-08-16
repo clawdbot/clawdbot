@@ -1301,6 +1301,9 @@ export async function startGatewayPostAttachRuntime(
             try {
               workerEnvironmentSidecar = (await params.startWorkerEnvironmentRuntime?.()) ?? null;
             } catch (error) {
+              if (params.sidecarStartup !== "defer") {
+                throw error;
+              }
               params.log.warn(`worker environment sidecar failed to start: ${String(error)}`);
             }
           }

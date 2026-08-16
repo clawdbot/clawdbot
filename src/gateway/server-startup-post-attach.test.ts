@@ -2781,6 +2781,28 @@ describe("startGatewayPostAttachRuntime", () => {
     });
   });
 
+  it("propagates worker placement startup failures in synchronous mode", async () => {
+    const startupError = new Error("worker environment startup failed");
+    const startGatewaySidecarsValue = vi.fn(async () => ({
+      pluginServices: null,
+      postReadySidecars: [],
+    }));
+
+    await expect(
+      startGatewayPostAttachRuntime(
+        {
+          ...createPostAttachParams({ sidecarStartup: "start" }),
+          startWorkerEnvironmentRuntime: vi.fn(async () => {
+            throw startupError;
+          }),
+        },
+        createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsValue }),
+      ),
+    ).rejects.toBe(startupError);
+
+    expect(startGatewaySidecarsValue).not.toHaveBeenCalled();
+  });
+
   it("unlocks core methods when deferred sidecar startup fails", async () => {
     const unavailableGatewayMethods = new Set<string>(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
     const onSidecarsReady = vi.fn();
