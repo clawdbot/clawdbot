@@ -29,28 +29,6 @@ export const terminalPanelStyles = css`
     width: 100%;
     height: 100%;
   }
-  /* The strip and its tabs stretch to the rail height so a tab's underline lands
-     on the rail's bottom edge. Management actions keep their shared 28px size. */
-  .tp-header .tabstrip,
-  .tp-header .tabstrip::part(base),
-  .tp-header .tabstrip::part(nav),
-  .tp-header .tabstrip::part(tabs),
-  .tp-header .tabstrip-tab,
-  .tp-header .tabstrip-new {
-    height: 100%;
-    align-self: stretch;
-  }
-  .tp-header .tabstrip::part(nav),
-  .tp-header .tabstrip::part(tabs) {
-    align-items: stretch;
-  }
-  .tp-header .tabstrip-tab::part(base) {
-    box-sizing: border-box;
-    height: 100%;
-    /* Offset the underline so the label centres on the same line as the
-       management icons instead of riding 2px high. */
-    padding-top: 2px;
-  }
   .tp-header .tabstrip-tab__icon {
     color: var(--muted, #8a919e);
   }
@@ -68,31 +46,6 @@ export const terminalPanelStyles = css`
     width: 15px;
     height: 15px;
     stroke-width: 1.6px;
-  }
-  .tp-header .tabstrip-tab[active]::part(base) {
-    border-bottom-color: var(--text, #d7dae0);
-  }
-  .tp-header .tabstrip-tab__close {
-    box-sizing: border-box;
-    border-bottom: 2px solid transparent;
-    border-radius: 0;
-  }
-  .tp-header .tabstrip-tab[active] + .tabstrip-tab__close {
-    border-bottom-color: var(--text, #d7dae0);
-  }
-  .tp-header .tabstrip-new {
-    position: relative;
-    margin-left: 6px;
-  }
-  .tp-header .tabstrip-tab[active] + .tabstrip-tab__close + .tabstrip-new::before {
-    position: absolute;
-    top: 50%;
-    left: -4px;
-    width: 1px;
-    height: 14px;
-    background: color-mix(in srgb, var(--muted, #8a919e) 20%, transparent);
-    content: "";
-    transform: translateY(-50%);
   }
   .tp-dock-modes {
     display: flex;
