@@ -39,7 +39,9 @@ import { listStoredChatOutboxes, storedChatOutboxScopeKey } from "./composer-per
 import { formatConnectError } from "./connect-error.ts";
 import {
   isQueuedMessageBeingEdited,
+  isQueuedMessageRetryBlocked,
   isQueuedMessageReorderBlocked,
+  QUEUED_MESSAGE_RETRY_CONFLICT_ERROR,
   QUEUED_MESSAGE_REORDER_CONFLICT_ERROR,
 } from "./queued-message-edit.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
@@ -202,6 +204,10 @@ export function moveQueuedChatMessage(
 
 export async function retryQueuedChatMessage(host: ChatHost, id: string) {
   let item = host.chatQueue.find((entry) => entry.id === id);
+  if (isQueuedMessageRetryBlocked(host, id)) {
+    setChatError(host, QUEUED_MESSAGE_RETRY_CONFLICT_ERROR);
+    return;
+  }
   if (
     !item ||
     item.pendingRunId ||

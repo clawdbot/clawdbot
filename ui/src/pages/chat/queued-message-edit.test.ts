@@ -17,6 +17,7 @@ import {
   isQueuedMessageBeingEdited,
   isQueuedMessageRemovalBlocked,
   isQueuedMessageReorderBlocked,
+  isQueuedMessageRetryBlocked,
   updateQueuedMessageEdit,
 } from "./queued-message-edit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./steer-lifecycle.ts";
@@ -339,6 +340,7 @@ describe("queued message edit round-trip", () => {
       expect(isQueuedMessageBeingEdited(peer as never, original.id)).toBe(true);
       expect(isQueuedMessageRemovalBlocked(peer as never, original.id)).toBe(true);
       expect(isQueuedMessageReorderBlocked(peer as never, original.id)).toBe(true);
+      expect(isQueuedMessageRetryBlocked(peer as never, original.id)).toBe(true);
     } finally {
       stopPeer();
       unsubscribe();

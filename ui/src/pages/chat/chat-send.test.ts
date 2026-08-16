@@ -5639,6 +5639,43 @@ describe("handleSendChat", () => {
     }
   });
 
+  it("blocks retry while another pane owns the failed row edit", async () => {
+    const item = {
+      id: "failed-item-being-edited",
+      text: "do not dispatch the source while editing",
+      createdAt: 1,
+      sendError: "previous failure",
+      sendRunId: "failed-item-run",
+      sendState: "failed" as const,
+      sessionKey: "agent:main",
+    };
+    const source = makeChatHost({ chatQueue: [item], sessionKey: item.sessionKey });
+    const peer = makeChatHost({
+      requestHandlers: {},
+      chatQueue: [{ ...item }],
+      sessionKey: item.sessionKey,
+    });
+    const stopSource = subscribeChatOutboxProjection(source);
+    const stopPeer = subscribeChatOutboxProjection(peer);
+    try {
+      expect(admitQueuedMessageForSession(source, item.sessionKey, item)).toBe(true);
+      expect(beginQueuedMessageEdit(source, item.id)).toBe("started");
+
+      await retryQueuedChatMessage(peer, item.id);
+
+      expect(peer.request).not.toHaveBeenCalled();
+      expect(listStoredChatOutboxes(peer)[0]?.queue[0]).toMatchObject({
+        id: item.id,
+        sendState: "failed",
+        text: item.text,
+      });
+      expect(peer.lastError).toContain("before retrying it");
+    } finally {
+      stopPeer();
+      stopSource();
+    }
+  });
+
   it("coalesces duplicate in-flight chat submits before the gateway acknowledges them", async () => {
     const sent = createDeferred<unknown>();
 

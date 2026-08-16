@@ -254,7 +254,7 @@ function renderChatQueueItem(
           ></textarea>`
         : html`<span class="chat-queue__text" title=${text}>${text}</span>`}
       <span class="chat-queue__actions">
-        ${failed && props.onQueueRetry
+        ${failed && !editing && props.onQueueRetry
           ? html`
               <button
                 class="chat-queue__retry"

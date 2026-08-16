@@ -40,6 +40,8 @@ export const QUEUED_MESSAGE_EDIT_CONFLICT_ERROR =
   "A queued message is being edited in another pane. Finish or cancel that edit before removing it.";
 export const QUEUED_MESSAGE_REORDER_CONFLICT_ERROR =
   "A queued message is being edited in another pane. Finish or cancel that edit before reordering it.";
+export const QUEUED_MESSAGE_RETRY_CONFLICT_ERROR =
+  "A queued message is being edited in another pane. Finish or cancel that edit before retrying it.";
 
 /**
  * The edit belongs to the scope it started in — session and agent, the pair every
@@ -70,6 +72,11 @@ export function isQueuedMessageRemovalBlocked(host: QueuedMessageEditHost, id: s
 
 /** Reordering is also conflicting: submit must not restore a stale position. */
 export function isQueuedMessageReorderBlocked(host: QueuedMessageEditHost, id: string): boolean {
+  return isQueuedMessageBeingEdited(host, id);
+}
+
+/** Retrying must not dispatch the source payload while another pane edits it. */
+export function isQueuedMessageRetryBlocked(host: QueuedMessageEditHost, id: string): boolean {
   return isQueuedMessageBeingEdited(host, id);
 }
 
