@@ -223,6 +223,7 @@ export async function handleSendChat(
     return;
   }
   const isInlineEditSubmission = requestedEditId != null && inlineEdit?.id === requestedEditId;
+  const submittedInlineEditRevision = isInlineEditSubmission ? inlineEdit.revision : null;
   const parsedCommand = !skillWorkshopRevision ? parseSlashCommand(message) : null;
   if (isInlineEditSubmission && (parsedCommand || isChatStopCommand(message))) {
     setChatError(
@@ -494,7 +495,11 @@ export async function handleSendChat(
     // History can await while the operator cancels or replaces the row edit.
     // Do not admit that stale replacement as a new queued message.
     const resumedEditCandidate = activeQueuedMessageEdit(host);
-    if (isInlineEditSubmission && resumedEditCandidate !== inlineEdit) {
+    if (
+      isInlineEditSubmission &&
+      (resumedEditCandidate !== inlineEdit ||
+        resumedEditCandidate.revision !== submittedInlineEditRevision)
+    ) {
       return;
     }
     const cleared =
