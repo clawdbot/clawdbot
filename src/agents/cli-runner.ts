@@ -575,6 +575,7 @@ export async function runPreparedCliAgent(
           effectiveCliSessionId,
           bindingFlushOk,
           assistantTranscriptOwned: assistantTranscript.owned,
+          assistantTranscriptIdempotencyKey: assistantTranscript.idempotencyKey,
           usedHistoryPrompt,
           userTurnHandled,
           sessionBindingDisabled,

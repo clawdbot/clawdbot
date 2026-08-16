@@ -30,6 +30,7 @@ import { resolveFastModeState } from "../fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch.js";
+import { findModelInCatalog, modelSupportsInput } from "../model-catalog-lookup.js";
 import { modelKey, resolveThinkingDefault } from "../model-selection.js";
 import { resolveConfiguredThinkingDefault } from "../model-thinking-default.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
@@ -450,6 +451,10 @@ export async function runEmbeddedAgentAttempt(params: {
             preparedRunAdmission: params.preparedRunAdmission,
             providerOverride,
             modelOverride,
+            modelHasVision: modelSupportsInput(
+              findModelInCatalog(thinkingCatalog ?? [], providerOverride, modelOverride),
+              "image",
+            ),
             configuredAuthProfileId,
             modelFallbacksOverride: effectiveFallbacksOverride,
             originalProvider: provider,

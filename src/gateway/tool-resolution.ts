@@ -74,6 +74,7 @@ export function resolveGatewayScopedTools(params: {
   cwd?: string;
   modelProvider?: string;
   modelId?: string;
+  modelHasVision?: boolean;
   onYield?: (message: string) => Promise<void> | void;
   messageProvider?: string;
   currentChannelId?: string;
@@ -312,6 +313,7 @@ export function resolveGatewayScopedTools(params: {
     authProfileStore: params.authProfileStore,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
+    modelHasVision: params.modelHasVision,
     clientCaps: params.clientCaps,
     workspaceDir,
     sandboxed: sandboxRuntime.sandboxed,
@@ -370,6 +372,7 @@ export function resolveGatewayScopedTools(params: {
           cwd: params.cwd?.trim() || workspaceDir,
           modelProvider: params.modelProvider,
           modelId: params.modelId,
+          modelHasVision: params.modelHasVision,
           messageProvider: params.messageProvider,
           messageChannel: params.messageProvider,
           clientCaps: params.clientCaps,

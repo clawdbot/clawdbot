@@ -49,7 +49,7 @@ import {
   createNodeProcessDynamicTool,
   isCodexDynamicToolExcluded,
 } from "./shell-dynamic-tools.js";
-import { filterToolsForVisionInputs } from "./vision-tools.js";
+import { filterCodexVisionTools } from "./vision-tools.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
 type OpenClawCodingToolsOptions = NonNullable<
@@ -402,9 +402,9 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     nativeExecutionPolicy,
   );
   toolBuildStages.mark("codex-filtering");
-  const visionFilteredTools = filterToolsForVisionInputs(codexFilteredTools, {
+  const visionFilteredTools = filterCodexVisionTools(codexFilteredTools, {
     modelHasVision,
-    hasInboundImages: (params.images?.length ?? 0) > 0,
+    nativeImageInspectionEnabled: input.nativeToolSurfaceEnabled === true,
   });
   toolBuildStages.mark("vision-filtering");
   const webSearchPresent = visionFilteredTools.some((tool) => tool.name === "web_search");
