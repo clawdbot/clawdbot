@@ -112,21 +112,20 @@ function wrapStreamPromoteStandaloneTextToolCalls(
   };
 
   const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  Object.defineProperty(stream, Symbol.asyncIterator, {
-    configurable: true,
-    async *value() {
-      const source = {
-        [Symbol.asyncIterator]: originalAsyncIterator,
-      } as AsyncIterable<unknown>;
-      yield* normalizePlainTextToolCallStreamEvents(source, {
-        createPromotedToolCallEvents: createPromotedPlainTextToolCallEvents,
-        matcher,
-        normalizeTerminalMessage,
-        resolveProtectedRanges: findCodeRegions,
-      });
-    },
-    writable: true,
-  });
+  const wrappedAsyncIterator = async function* () {
+    const source = {
+      [Symbol.asyncIterator]: originalAsyncIterator,
+    } as AsyncIterable<unknown>;
+    yield* normalizePlainTextToolCallStreamEvents(source, {
+      createPromotedToolCallEvents: createPromotedPlainTextToolCallEvents,
+      matcher,
+      normalizeTerminalMessage,
+      resolveProtectedRanges: findCodeRegions,
+    });
+  };
+  if (!Reflect.set(stream, Symbol.asyncIterator, wrappedAsyncIterator)) {
+    throw new TypeError("Cannot replace stream async iterator");
+  }
 
   return stream;
 }
