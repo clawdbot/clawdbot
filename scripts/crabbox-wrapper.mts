@@ -898,6 +898,19 @@ function crabboxProviderReadiness(provider: string, version: string, context: Ta
   };
 }
 
+function isDoctorCheck(value: unknown): value is DoctorCheck {
+  return (
+    isRecord(value) &&
+    typeof value.status === "string" &&
+    Boolean(value.status) &&
+    typeof value.check === "string" &&
+    Boolean(value.check) &&
+    (value.details === undefined ||
+      (isRecord(value.details) &&
+        Object.values(value.details).every((detail) => typeof detail === "string")))
+  );
+}
+
 function parseDoctorResult(value: string, provider: string, status: number): DoctorResult | null {
   try {
     const parsed: unknown = JSON.parse(value);
@@ -912,24 +925,9 @@ function parseDoctorResult(value: string, provider: string, status: number): Doc
     }
     const checks = parsed.checks;
     if (
-      !checks.every(
-        (check) =>
-          isRecord(check) &&
-          typeof check.status === "string" &&
-          Boolean(check.status) &&
-          typeof check.check === "string" &&
-          Boolean(check.check) &&
-          (check.details === undefined ||
-            (isRecord(check.details) &&
-              Object.values(check.details).every((detail) => typeof detail === "string"))),
-      ) ||
+      !checks.every(isDoctorCheck) ||
       parsed.ok !==
-        checks.every(
-          (check) =>
-            !["failed", "missing"].includes(
-              (check as Record<string, string>).status.trim().toLowerCase(),
-            ),
-        )
+        checks.every((check) => !["failed", "missing"].includes(check.status.trim().toLowerCase()))
     ) {
       return null;
     }
@@ -1028,7 +1026,7 @@ function enforceBrokeredCloud(
   const readiness =
     routedReadiness ??
     crabboxProviderReadiness(canonicalProvider, version.text, effectiveTargetContext(commandArgs));
-  if (readiness.brokerAuthFailure) {
+  if ("brokerAuthFailure" in readiness && readiness.brokerAuthFailure) {
     const instructions = [
       `[crabbox] provider=${canonicalProvider} requires managed Crabbox broker authentication for OpenClaw proof.`,
       `[crabbox] run \`${recoveryCommand(["login", "--url", "https://crabbox.openclaw.ai"])}\`, then retry.`,
@@ -1041,7 +1039,7 @@ function enforceBrokeredCloud(
     console.error(instructions.join("\n"));
     process.exit(2);
   }
-  if (!readiness.brokerReady) {
+  if (!("brokerReady" in readiness) || !readiness.brokerReady) {
     console.error(
       [
         `[crabbox] provider=${canonicalProvider} failed readiness for OpenClaw proof: ${readiness.reason}.`,
