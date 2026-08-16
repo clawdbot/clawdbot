@@ -15,6 +15,7 @@ import {
   deriveCanonicalEd25519PrivateKeyRaw,
   deriveCanonicalEd25519PublicKeyRaw,
 } from "./ed25519-signature.js";
+import { hasErrnoCode } from "./errno.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -40,6 +41,7 @@ export type DeviceIdentityStoreOptions = OpenClawStateDatabaseOptions & {
 type DeviceIdentityDatabase = Pick<OpenClawStateKyselyDatabase, "device_identities">;
 type DeviceIdentityRow = Selectable<DeviceIdentityDatabase["device_identities"]>;
 type DeviceIdentityInsert = Insertable<DeviceIdentityDatabase["device_identities"]>;
+type SqliteMasterDatabase = { sqlite_master: { name: string } };
 
 export class DeviceIdentityStorageError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -252,14 +254,16 @@ function isEmptyBootstrapIdentityTableMiss(
 ): boolean {
   if (
     !(error instanceof Error) ||
-    (error as NodeJS.ErrnoException).code !== "ERR_SQLITE_ERROR" ||
+    !hasErrnoCode(error, "ERR_SQLITE_ERROR") ||
     !/\bno such table: device_identities\b/iu.test(error.message)
   ) {
     return false;
   }
-  return !database.db
-    .prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1")
-    .get();
+  const db = getNodeSqliteKysely<SqliteMasterDatabase>(database.db);
+  return !executeSqliteQueryTakeFirstSync(
+    database.db,
+    db.selectFrom("sqlite_master").select("name").where("name", "not like", "sqlite_%").limit(1),
+  );
 }
 
 /** Resolve the concrete database and row identity used by process caches and diagnostics. */
