@@ -80,32 +80,33 @@ suite.define(() => {
     const lineBRestartPrefix = logLine(messageBRestartPrefix, "info", 5);
     const lineBRestartTail = logLine("source B restart tail", "error", 6);
     const lineBAfterReconnect = logLine("source B after reconnect", "warn", 7);
-    await Promise.all([
-      writeFile(sourceA, `${lineA}\n`, "utf8"),
-      writeFile(sourceB, `${lineBPrefix}\n${lineBTail}\n`, "utf8"),
-      mkdir(readFailure),
-    ]);
-    await state.writeConfig({
-      gateway: {
-        auth: { mode: "none" },
-        controlUi: {
-          allowedOrigins: [new URL(suite.server.baseUrl).origin],
-          enabled: false,
-        },
-        port,
-      },
-    });
-    state.applyEnv();
-    setLoggerOverride({ consoleLevel: "silent", file: sourceA, level: "silent" });
     const { startGatewayServer } = await import("../../../src/gateway/server.js");
-    let gateway = await startGatewayServer(port, {
-      auth: { mode: "none" },
-      bind: "loopback",
-      controlUiEnabled: false,
-      sidecarStartup: "defer",
-    });
+    let gateway: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
 
     try {
+      await Promise.all([
+        writeFile(sourceA, `${lineA}\n`, "utf8"),
+        writeFile(sourceB, `${lineBPrefix}\n${lineBTail}\n`, "utf8"),
+        mkdir(readFailure),
+      ]);
+      await state.writeConfig({
+        gateway: {
+          auth: { mode: "none" },
+          controlUi: {
+            allowedOrigins: [new URL(suite.server.baseUrl).origin],
+            enabled: false,
+          },
+          port,
+        },
+      });
+      setLoggerOverride({ consoleLevel: "silent", file: sourceA, level: "silent" });
+      gateway = await startGatewayServer(port, {
+        auth: { mode: "none" },
+        bind: "loopback",
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      });
+
       await suite.withPage(
         {
           locale: "en-US",
@@ -168,7 +169,8 @@ suite.define(() => {
           await expect.poll(() => error.count()).toBe(0);
           await expect.poll(() => visibleMessages(page)).toHaveLength(3);
 
-          await gateway.close({ reason: "logs lifecycle reconnect proof" });
+          await gateway?.close({ reason: "logs lifecycle reconnect proof" });
+          gateway = null;
           await page.waitForFunction(() => {
             const app = document.querySelector("openclaw-app") as
               | (HTMLElement & {
@@ -201,7 +203,7 @@ suite.define(() => {
         },
       );
     } finally {
-      await gateway.close({ reason: "logs lifecycle e2e cleanup" });
+      await gateway?.close({ reason: "logs lifecycle e2e cleanup" });
       resetLogger();
       await state.cleanup();
     }

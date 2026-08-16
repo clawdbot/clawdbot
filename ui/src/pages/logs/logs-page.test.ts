@@ -221,7 +221,7 @@ describe("LogsPage lifecycle", () => {
         cursor: 18,
         file: "/tmp/source-b.log",
         lines: ["B-tail"],
-        reset: true,
+        reset: false,
       })
       .mockResolvedValueOnce({
         cursor: 18,
