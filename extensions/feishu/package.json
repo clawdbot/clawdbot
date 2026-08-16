@@ -7,6 +7,10 @@
     "url": "https://github.com/openclaw/openclaw"
   },
   "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./api.js": "./dist/api.js"
+  },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "1.71.1",
     "mdast-util-from-markdown": "2.0.3",

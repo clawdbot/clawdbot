@@ -42,6 +42,28 @@ OpenClaw durably queues authenticated `im.message.receive_v1` and `drive.notice.
 
 If a WebSocket event cannot be persisted after bounded retries, OpenClaw closes that socket and forces a fresh authenticated connection instead of continuing past an uncommitted turn. Other Feishu event types, including reactions and VC meeting invitations, use their normal event paths and do not receive this durable-queue guarantee.
 
+## Organization event bridge for code plugins
+
+An installed code plugin can subscribe to Feishu directory events without creating a second WebSocket connection or opening an HTTP listener. Import the public Feishu plugin API and subscribe before the Feishu channel starts:
+
+```ts
+import { subscribeFeishuOrganizationEvents } from "@openclaw/feishu/api.js";
+
+const stopOrganizationEvents = subscribeFeishuOrganizationEvents(async (event) => {
+  // event: { accountId, eventId, eventType, data }
+  await enqueueDirectorySync(event.eventId, event.eventType);
+});
+
+// Call stopOrganizationEvents() when this code plugin stops or reloads.
+```
+
+The bridge opts the channel's existing dispatcher into these event types only when a subscriber exists at monitor startup:
+
+- `contact.user.created_v3`, `contact.user.updated_v3`, `contact.user.deleted_v3`
+- `contact.department.created_v3`, `contact.department.updated_v3`, `contact.department.deleted_v3`
+
+`eventId` and `eventType` are preserved for downstream idempotency. A failing subscriber is isolated from other subscribers and normal Feishu message handling. The `data` field contains the provider event payload, so consuming plugins must treat it as tenant-private data and avoid logging it.
+
 ## Access control
 
 ### Direct messages

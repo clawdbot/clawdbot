@@ -1,5 +1,11 @@
 // Feishu API module exposes the plugin public contract.
 export { feishuPlugin } from "./src/channel.js";
+export {
+  subscribeFeishuOrganizationEvents,
+  type FeishuOrganizationEvent,
+  type FeishuOrganizationEventListener,
+  type FeishuOrganizationEventType,
+} from "./src/organization-event-bridge.js";
 export { registerFeishuDocTools } from "./src/docx.js";
 export { registerFeishuChatTools } from "./src/chat.js";
 export { registerFeishuWikiTools } from "./src/wiki.js";
