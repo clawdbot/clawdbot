@@ -6727,6 +6727,34 @@ describe("chat model controls", () => {
     expect(visibleOptions[0]?.dataset.chatModelDefault).toBe("true");
   });
 
+  it("leaves digit keys to the model search and selects the numbered row from the picker", () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      models: [
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+        { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+      ],
+    });
+    const onModelSelect = vi.fn(async () => true);
+    const container = renderModelControls(state, { onModelSelect });
+    document.body.append(container);
+
+    const details = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
+    const search = container.querySelector<HTMLInputElement>("[data-chat-model-search]");
+    details!.open = true;
+    search!.value = "claude";
+    search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+
+    search!.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
+    expect(onModelSelect).not.toHaveBeenCalled();
+    expect(search!.value).toBe("claude");
+
+    details!.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
+    expect(onModelSelect).toHaveBeenCalledWith("anthropic/claude-sonnet-4-6", "main");
+    container.remove();
+  });
+
   it("groups legacy Codex model references under OpenAI", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
