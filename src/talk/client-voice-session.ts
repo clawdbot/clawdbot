@@ -459,7 +459,8 @@ function appendVoiceTranscript(params: {
         throw new Error(`agent session not found (${normalized.sessionKey})`);
       }
       const observedAt = Date.now();
-      const timestamp = normalized.timestamp ?? observedAt;
+      // STRICT session_nodes.updated_at requires INTEGER; round fractional timestamps.
+      const timestamp = Math.round(normalized.timestamp ?? observedAt);
       // Reserve before the fallible append. A crash can leave a conservative
       // retry requirement, but can never let close skip an accepted entry.
       runOpenClawAgentWriteTransaction(
