@@ -151,10 +151,11 @@ the same plan the conversational `openclaw setup` chat would apply on "yes" —
 then offers plugin and skill recommendations from installed apps; app names
 are matched through your configured model and ClawHub search, and the step can
 be disabled with [`wizard.appRecommendations`](/gateway/configuration-reference#wizard).
-In a macOS, Linux, or Windows desktop session, it then opens the authenticated
+When the platform has a supported browser opener, it then opens the authenticated
 Control UI dashboard and waits up to 60 seconds for the browser client to
 connect. The short-lived handoff gives that exact signed browser a durable
-administrator credential. On headless Linux or over SSH, it prints a prominent
+administrator credential. This includes display-less WSL when `wslview` is installed.
+On headless Linux, WSL without an opener, or over SSH without a display, it prints a prominent
 copy-pasteable dashboard URL, including an SSH port-forward command for a
 loopback Gateway, and waits up to five minutes. A successful connection
 continues in the browser; an unreachable Gateway or a timeout falls back to the

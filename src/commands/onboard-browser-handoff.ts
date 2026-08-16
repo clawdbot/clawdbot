@@ -20,6 +20,7 @@ import {
   type ControlUiHandoffTarget,
 } from "./control-ui-handoff.js";
 import {
+  detectBrowserOpenSupport,
   formatControlUiSshHint,
   openUrl,
   resolveAdvertisedControlUiLinks,
@@ -80,24 +81,6 @@ type BrowserHatchHandoffDeps = {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 };
-
-function hasSshSession(env: NodeJS.ProcessEnv): boolean {
-  return Boolean(env.SSH_CONNECTION || env.SSH_TTY);
-}
-
-/** Pure graphical-session detection used before attempting a browser launch. */
-export function detectGraphicalSession(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): boolean {
-  if (hasSshSession(env)) {
-    return false;
-  }
-  if (platform === "darwin" || platform === "win32") {
-    return true;
-  }
-  if (platform === "linux") {
-    return Boolean(env.DISPLAY || env.WAYLAND_DISPLAY);
-  }
-  return false;
-}
 
 async function resolveBrowserHatchTarget(
   config: OpenClawConfig,
@@ -234,10 +217,11 @@ export async function runBrowserHatchHandoff(
 ): Promise<BrowserHatchHandoffResult> {
   const env = deps.env ?? process.env;
   const platform = deps.platform ?? process.platform;
-  const graphical = detectGraphicalSession(env, platform);
   if (params.suppressTokenOutput === true || params.config.gateway?.controlUi?.enabled === false) {
     return { handedOff: false, reason: "target-unavailable" };
   }
+  const browserSupport = await detectBrowserOpenSupport({ env, platform });
+  const canOpenBrowser = browserSupport.ok;
   let target: BrowserHatchTarget;
   try {
     target = await (deps.resolveTarget ?? resolveBrowserHatchTarget)(params.config, env);
@@ -274,7 +258,7 @@ export async function runBrowserHatchHandoff(
   }
 
   let opened = false;
-  if (graphical) {
+  if (canOpenBrowser) {
     try {
       const browserHandoff = await (deps.issueBrowserHandoff ?? issueControlUiBrowserHandoff)(
         target.dashboardUrl,
@@ -294,9 +278,9 @@ export async function runBrowserHatchHandoff(
     const remoteBind = bind === "lan" || bind === "tailnet" || bind === "custom";
     // Plain HTTP on a remote host cannot create the device identity required by
     // the Control UI. Keep those browsers on a tunneled localhost secure context.
-    const directRemoteDisplay = !graphical && remoteBind && target.tlsConfig?.enabled === true;
+    const directRemoteDisplay = !canOpenBrowser && remoteBind && target.tlsConfig?.enabled === true;
     const tunnelHint =
-      !graphical && !directRemoteDisplay
+      !canOpenBrowser && !directRemoteDisplay
         ? (target.sshHint ??
           (remoteBind
             ? formatControlUiSshHint({
@@ -335,7 +319,7 @@ export async function runBrowserHatchHandoff(
   const wait = await (deps.pollForClient ?? waitForDashboardClient)({
     target,
     baselineClientKeys: new Set(baseline.clientKeys),
-    timeoutMs: graphical ? GUI_HANDOFF_TIMEOUT_MS : HEADLESS_HANDOFF_TIMEOUT_MS,
+    timeoutMs: canOpenBrowser ? GUI_HANDOFF_TIMEOUT_MS : HEADLESS_HANDOFF_TIMEOUT_MS,
     probe: probePresence,
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.sleep ? { sleep: deps.sleep } : {}),

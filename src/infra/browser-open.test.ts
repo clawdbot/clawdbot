@@ -33,7 +33,7 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: runCommandWithTimeoutMock,
 }));
 
-import { openUrl, resolveBrowserOpenCommand } from "./browser-open.js";
+import { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand } from "./browser-open.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -93,6 +93,25 @@ describe("openUrl", () => {
 });
 
 describe("resolveBrowserOpenCommand", () => {
+  it("reports display-less WSL support only when wslview is installed", async () => {
+    detectBinaryMock.mockImplementation(async (binary) => binary === "wslview");
+
+    await expect(
+      detectBrowserOpenSupport({
+        platform: "linux",
+        env: { WSL_DISTRO_NAME: "Ubuntu" },
+      }),
+    ).resolves.toEqual({ ok: true, command: "wslview" });
+
+    detectBinaryMock.mockResolvedValue(false);
+    await expect(
+      detectBrowserOpenSupport({
+        platform: "linux",
+        env: { WSL_DISTRO_NAME: "Ubuntu" },
+      }),
+    ).resolves.toEqual({ ok: false, reason: "wsl-no-wslview" });
+  });
+
   it("does not resolve Windows browser launching through a relative SystemRoot", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.stubEnv("SystemRoot", ".\\fake-root");
@@ -135,5 +154,19 @@ describe("resolveBrowserOpenCommand", () => {
     const resolved = await resolveBrowserOpenCommand();
 
     expect(resolved).toEqual({ argv: null, reason: "ssh-no-display" });
+  });
+
+  it("resolves xdg-open over Linux SSH with a forwarded display", async () => {
+    detectBinaryMock.mockImplementation(async (binary) => binary === "xdg-open");
+
+    const resolved = await resolveBrowserOpenCommand({
+      platform: "linux",
+      env: {
+        DISPLAY: "localhost:10.0",
+        SSH_CONNECTION: "192.0.2.1 12345 192.0.2.2 22",
+      },
+    });
+
+    expect(resolved).toEqual({ argv: ["xdg-open"], command: "xdg-open" });
   });
 });
