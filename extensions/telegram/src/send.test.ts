@@ -1,5 +1,6 @@
 // Telegram tests cover send plugin behavior.
 import fs from "node:fs";
+import type { Bot } from "grammy";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -48,6 +49,7 @@ import {
   getTelegramSendTestMocks,
   importTelegramSendModule,
   installTelegramSendTestHooks,
+  makeTelegramInvalidApiResultMock,
   makeTelegramApiTestMock,
 } from "./send.test-harness.js";
 import { recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
@@ -57,6 +59,71 @@ import {
 } from "./sent-message-cache.legacy-state.js";
 
 installTelegramSendTestHooks();
+
+type TelegramPollMessage = Awaited<ReturnType<Bot["api"]["sendPoll"]>>;
+type TelegramChatFullInfo = Awaited<ReturnType<Bot["api"]["getChat"]>>;
+
+function makeTelegramPollMessage(
+  overrides: {
+    messageId?: number;
+    chat?: {
+      id?: number | string;
+      type?: "private" | "supergroup";
+      firstName?: string;
+      title?: string;
+    };
+    poll?: Partial<TelegramPollMessage["poll"]>;
+  } = {},
+): TelegramPollMessage {
+  const chatId = Number(overrides.chat?.id ?? 555);
+  const chat =
+    overrides.chat?.type === "supergroup"
+      ? {
+          id: chatId,
+          type: "supergroup" as const,
+          title: overrides.chat.title ?? "Test group",
+        }
+      : {
+          id: chatId,
+          type: "private" as const,
+          first_name: overrides.chat?.firstName ?? "Ada",
+        };
+  return {
+    message_id: overrides.messageId ?? 123,
+    date: 0,
+    chat,
+    poll: {
+      id: "test-poll",
+      question: "Ready?",
+      options: [],
+      total_voter_count: 0,
+      is_closed: false,
+      is_anonymous: true,
+      type: "regular",
+      allows_multiple_answers: false,
+      allows_revoting: false,
+      members_only: false,
+      ...overrides.poll,
+    },
+  };
+}
+
+function makeTelegramChatFullInfo(id: number): TelegramChatFullInfo {
+  return {
+    id,
+    type: "private",
+    first_name: "Test chat",
+    accent_color_id: 0,
+    max_reaction_count: 0,
+    accepted_gift_types: {
+      unlimited_gifts: false,
+      limited_gifts: false,
+      unique_gifts: false,
+      premium_subscription: false,
+      gifts_from_channels: false,
+    },
+  };
+}
 
 const {
   botApi,
@@ -5642,7 +5709,9 @@ describe("sendPollTelegram", () => {
 
   it("sends polls with 12 options", async () => {
     const api = makeTelegramApiTestMock({
-      sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
+      sendPoll: vi.fn<Bot["api"]["sendPoll"]>(async () =>
+        makeTelegramPollMessage({ poll: { id: "p1" } }),
+      ),
     });
     const options = Array.from({ length: 12 }, (_, index) => `Option ${index + 1}`);
 
@@ -5658,11 +5727,13 @@ describe("sendPollTelegram", () => {
   it("records a successful General-topic poll for later message mutations", async () => {
     const storePath = `/tmp/openclaw-telegram-poll-context-${process.pid}-${Date.now()}.json`;
     const chatId = "-100123";
-    const sendPoll = vi.fn().mockResolvedValue({
-      message_id: 124,
-      chat: { id: chatId, type: "supergroup" },
-      poll: { id: "p2", question: "Q", options: [] },
-    });
+    const sendPoll = vi.fn<Bot["api"]["sendPoll"]>().mockResolvedValue(
+      makeTelegramPollMessage({
+        messageId: 124,
+        chat: { id: chatId, type: "supergroup" },
+        poll: { id: "p2", question: "Q", options: [] },
+      }),
+    );
     const api = makeTelegramApiTestMock({ sendPoll });
 
     await sendPollTelegram(
@@ -5683,8 +5754,10 @@ describe("sendPollTelegram", () => {
 
   it("propagates gateway client scopes when resolving legacy poll targets", async () => {
     const api = makeTelegramApiTestMock({
-      getChat: vi.fn(async () => ({ id: -100321 })),
-      sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
+      getChat: vi.fn<Bot["api"]["getChat"]>(async () => makeTelegramChatFullInfo(-100321)),
+      sendPoll: vi.fn<Bot["api"]["sendPoll"]>(async () =>
+        makeTelegramPollMessage({ poll: { id: "p1" } }),
+      ),
     });
 
     await sendPollTelegram(
@@ -5708,7 +5781,9 @@ describe("sendPollTelegram", () => {
 
   it("maps durationSeconds to open_period", async () => {
     const api = makeTelegramApiTestMock({
-      sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
+      sendPoll: vi.fn<Bot["api"]["sendPoll"]>(async () =>
+        makeTelegramPollMessage({ poll: { id: "p1" } }),
+      ),
     });
 
     const res = await sendPollTelegram(
@@ -6073,11 +6148,9 @@ describe("sendPollTelegram", () => {
   it("reports default anonymous polls as unavailable without registering them", async () => {
     const store = await installPollRegistryStore();
     const api = makeTelegramApiTestMock({
-      sendPoll: vi.fn(async () => ({
-        message_id: 123,
-        chat: { id: 555, type: "private", first_name: "Ada" },
-        poll: { id: "poll-anonymous" },
-      })),
+      sendPoll: vi.fn<Bot["api"]["sendPoll"]>(async () =>
+        makeTelegramPollMessage({ poll: { id: "poll-anonymous" } }),
+      ),
     });
 
     await expect(
@@ -6122,11 +6195,9 @@ describe("sendPollTelegram", () => {
       channel: {},
     } as TelegramRuntime);
     const api = makeTelegramApiTestMock({
-      sendPoll: vi.fn(async () => ({
-        message_id: 123,
-        chat: { id: 555, type: "private", first_name: "Ada" },
-        poll: { id: "poll-write-error" },
-      })),
+      sendPoll: vi.fn<Bot["api"]["sendPoll"]>(async () =>
+        makeTelegramPollMessage({ poll: { id: "poll-write-error" } }),
+      ),
     });
 
     await expect(
@@ -6155,7 +6226,7 @@ describe("sendPollTelegram", () => {
   it("fails poll sends instead of retrying without message_thread_id", async () => {
     const api = makeTelegramApiTestMock({
       sendPoll: vi
-        .fn()
+        .fn<Bot["api"]["sendPoll"]>()
         .mockRejectedValueOnce(new Error("400: Bad Request: message thread not found")),
     });
 
@@ -6180,7 +6251,7 @@ describe("sendPollTelegram", () => {
   });
 
   it("rejects durationHours for Telegram polls", async () => {
-    const api = makeTelegramApiTestMock({ sendPoll: vi.fn() });
+    const api = makeTelegramApiTestMock({ sendPoll: vi.fn<Bot["api"]["sendPoll"]>() });
 
     await expect(
       sendPollTelegram(
@@ -6195,7 +6266,10 @@ describe("sendPollTelegram", () => {
 
   it("fails when poll send returns no message_id", async () => {
     const api = makeTelegramApiTestMock({
-      sendPoll: vi.fn(async () => ({ chat: { id: 555 }, poll: { id: "p1" } })),
+      sendPoll: makeTelegramInvalidApiResultMock("sendPoll", async () => ({
+        chat: { id: 555 },
+        poll: { id: "p1" },
+      })),
     });
 
     await expect(

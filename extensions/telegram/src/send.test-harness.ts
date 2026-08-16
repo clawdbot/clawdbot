@@ -10,16 +10,25 @@ import { beforeEach, vi } from "vitest";
 import { markdownToTelegramHtml } from "./format.js";
 import { inputRichBlocksToPlainText, type InputRichBlock } from "./rich-block-model.js";
 
+type TelegramApiMethod = (...args: never[]) => unknown;
 type TelegramApiTestOverrides = {
-  [Key in keyof Bot["api"] as Bot["api"][Key] extends (...args: never[]) => unknown
-    ? Key
-    : never]?: MockFn;
+  [Key in keyof Bot["api"] as Bot["api"][Key] extends TelegramApiMethod ? Key : never]?: MockFn<
+    Extract<Bot["api"][Key], TelegramApiMethod>
+  >;
 };
 
 export function makeTelegramApiTestMock<Overrides extends TelegramApiTestOverrides>(
   overrides: Overrides,
 ): Overrides & Partial<Bot["api"]> {
   return overrides as Overrides & Partial<Bot["api"]>;
+}
+
+export function makeTelegramInvalidApiResultMock<Key extends keyof Bot["api"]>(
+  _method: Key,
+  implementation: (...args: Parameters<Extract<Bot["api"][Key], TelegramApiMethod>>) => unknown,
+): MockFn<Extract<Bot["api"][Key], TelegramApiMethod>> {
+  return vi.fn(implementation) as ReturnType<typeof vi.fn> &
+    MockFn<Extract<Bot["api"][Key], TelegramApiMethod>>;
 }
 
 function richMessagePlainTextForTest(richMessage: {
