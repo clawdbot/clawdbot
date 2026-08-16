@@ -79,27 +79,29 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
     let cause = readProperty(value, "cause");
     const seen = new Set<unknown>([value]);
     const seenMessages = new Set<string>([formatted]);
-    const appendCauseMessage = (message: string | undefined): void => {
-      if (!message || seenMessages.has(message)) {
+    const appendDetail = (detail: unknown): void => {
+      if (typeof detail !== "string" && typeof detail !== "number") {
         return;
       }
-      formatted += ` | ${message}`;
-      seenMessages.add(message);
+      const text = String(detail);
+      if (!text || seenMessages.has(text)) {
+        return;
+      }
+      formatted += ` | ${text}`;
+      seenMessages.add(text);
     };
+    appendDetail(readProperty(value, "code"));
     while (cause && !seen.has(cause)) {
       seen.add(cause);
       if (cause instanceof Error) {
-        appendCauseMessage(cause.message);
-        const code = readProperty(cause, "code");
-        if (typeof code === "string" || typeof code === "number") {
-          appendCauseMessage(String(code));
-        }
+        appendDetail(cause.message);
+        appendDetail(readProperty(cause, "code"));
         cause = readProperty(cause, "cause");
       } else if (typeof cause === "string") {
-        appendCauseMessage(cause);
+        appendDetail(cause);
         break;
       } else {
-        appendCauseMessage(formatStatusAndCode(cause));
+        appendDetail(formatStatusAndCode(cause));
         break;
       }
     }
