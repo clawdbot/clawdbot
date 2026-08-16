@@ -516,36 +516,33 @@ export async function createGatewaySession(params: {
       agentId: parentSelectedAgentId,
     });
     if (!parent.entry?.sessionId) {
-      return {
-        ok: false,
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `unknown parent session: ${parentSessionKey}`,
-        ),
-      };
+      // Parent session doesn't exist yet (e.g., clean gateway). Create without parent.
+      canonicalParentSessionKey = undefined;
+      parentSessionEntry = undefined;
+    } else {
+      const parentOwnershipError = resolvePluginSessionOwnershipError({
+        action: params.fork === true ? "fork" : "link",
+        entry: parent.entry,
+        key: parent.canonicalKey,
+        pluginOwnerId: params.authorizedPluginId,
+      });
+      if (parentOwnershipError) {
+        return { ok: false, error: parentOwnershipError };
+      }
+      if (isModelSelectionLocked(parent.entry)) {
+        return {
+          ok: false,
+          error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE),
+        };
+      }
+      canonicalParentSessionKey = parent.canonicalKey;
+      parentSessionEntry = parent.entry;
+      parentSessionTarget = resolveGatewaySessionStoreTarget({
+        cfg: params.cfg,
+        key: parentSessionKey,
+        ...(parentSelectedAgentId ? { agentId: parentSelectedAgentId } : {}),
+      });
     }
-    const parentOwnershipError = resolvePluginSessionOwnershipError({
-      action: params.fork === true ? "fork" : "link",
-      entry: parent.entry,
-      key: parent.canonicalKey,
-      pluginOwnerId: params.authorizedPluginId,
-    });
-    if (parentOwnershipError) {
-      return { ok: false, error: parentOwnershipError };
-    }
-    if (isModelSelectionLocked(parent.entry)) {
-      return {
-        ok: false,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE),
-      };
-    }
-    canonicalParentSessionKey = parent.canonicalKey;
-    parentSessionEntry = parent.entry;
-    parentSessionTarget = resolveGatewaySessionStoreTarget({
-      cfg: params.cfg,
-      key: parentSessionKey,
-      ...(parentSelectedAgentId ? { agentId: parentSelectedAgentId } : {}),
-    });
   }
   const parentIncognito =
     parentSessionEntry?.incognito === true || isIncognitoSessionKey(canonicalParentSessionKey);
