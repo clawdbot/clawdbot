@@ -60,12 +60,12 @@ type ChannelStructuredContextResolution =
   | { kind: "present"; entries: ChannelStructuredContextEntries };
 type BoundTaskFlowRuntime = ReturnType<PluginRuntime["tasks"]["managedFlows"]["bindSession"]>;
 
-// Vitest's Mock<T> erases generic and overload relationships. Keep that unsoundness in one
+type GenericMockProcedure = (...args: never[]) => unknown;
+
+// Vitest's Mock<T> erases generic and overload relationships. Keep that conversion in one
 // test-only boundary while ordinary runtime methods continue to use exact vi.fn<T> checking.
-// oxlint-disable-next-line typescript/no-explicit-any
-function createGenericMock<T extends (...args: any[]) => any>(
-  // oxlint-disable-next-line typescript/no-explicit-any
-  implementation?: T | ((...args: any[]) => any),
+function createGenericMock<T extends GenericMockProcedure>(
+  implementation?: T | GenericMockProcedure,
 ): T {
   return (implementation ? vi.fn(implementation) : vi.fn()) as ReturnType<typeof vi.fn> & T;
 }
