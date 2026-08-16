@@ -171,7 +171,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       return;
     }
     const sessionKey = scope.state.sessionKey;
-    const operation = Symbol();
+    const operation = Symbol("task-suggestion-operation");
     const isCurrent = () =>
       this.isConnectionScopeCurrent(scope) &&
       scope.state.sessionKey === sessionKey &&

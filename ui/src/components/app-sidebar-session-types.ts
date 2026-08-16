@@ -126,9 +126,9 @@ export type SidebarRecentSession = {
 };
 
 export const enum RowVisibilityReason {
-  Any,
-  ActiveRun,
-  Attention,
+  Any = 0,
+  ActiveRun = 1,
+  Attention = 2,
 }
 
 export function rowDemandsVisibility(

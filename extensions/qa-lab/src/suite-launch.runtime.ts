@@ -504,7 +504,7 @@ async function runWeightedUnifiedPartitionTasks(
       }
       finished = true;
       if (firstError) {
-        reject(firstError);
+        reject(new Error(firstError.message, { cause: firstError }));
         return;
       }
       resolve(results);

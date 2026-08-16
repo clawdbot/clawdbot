@@ -342,7 +342,7 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
     status.loading = true;
     status.error = null;
     publish();
-    const owner = Symbol();
+    const owner = Symbol("agent-files-request-owner");
     fileRequestOwners.set(agentId, owner);
     const request = loadAgentFilesList(scope.client, agentId)
       .then((result) => {

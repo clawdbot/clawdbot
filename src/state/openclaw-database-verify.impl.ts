@@ -92,7 +92,7 @@ export function runDatabaseVerifyWorker(
       }
       settle(() => {
         if (protocolError) {
-          reject(protocolError);
+          reject(new Error(protocolError.message, { cause: protocolError }));
         } else if (completedExit.code !== 0) {
           reject(
             new Error(
