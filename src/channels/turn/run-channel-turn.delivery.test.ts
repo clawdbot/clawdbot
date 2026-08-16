@@ -6,12 +6,6 @@ import {
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
-import { createReplyDispatchSettledCounts } from "../../auto-reply/reply/reply-dispatch-outcome.js";
-import type {
-  ReplyDispatchKind,
-  ReplyDispatchReceipt,
-  ReplyDispatchSettledCounts,
-} from "../../auto-reply/reply/reply-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
@@ -24,6 +18,10 @@ import {
 } from "./agent-run-terminal-outcome.js";
 import { hasVisibleChannelTurnDispatchFromReceipt as hasVisibleChannelTurnDispatch } from "./dispatch-result.js";
 import { dispatchAssembledChannelTurn, dispatchRoutedChannelTurn } from "./lifecycle.js";
+import {
+  createReplyDispatchReceipt,
+  expectNonVisibleFinalReceipt,
+} from "./run-channel-turn.delivery.test-helpers.js";
 import type { ChannelDeliveryInfo, ChannelTurnResult } from "./types.js";
 
 const deliverOutboundPayloads = vi.hoisted(() => vi.fn());
@@ -122,29 +120,6 @@ function createRecordInboundSession(events: string[] = []): RecordInboundSession
   }) as unknown as RecordInboundSession;
 }
 
-function createReceipt(
-  outcomes: Partial<Record<ReplyDispatchKind, Partial<ReplyDispatchSettledCounts>>>,
-): ReplyDispatchReceipt {
-  const counts = (kind: ReplyDispatchKind): ReplyDispatchSettledCounts => ({
-    ...createReplyDispatchSettledCounts(),
-    ...outcomes[kind],
-  });
-  const receipt = { tool: counts("tool"), block: counts("block"), final: counts("final") };
-  const anyVisibleDelivered = Object.values(receipt).some(
-    (entry) => entry.delivered > 0 || entry.failedAfterSend > 0,
-  );
-  return { counts: receipt, anyVisibleDelivered };
-}
-
-function expectNonVisibleFinalReceipt(result: unknown) {
-  expect(result).toMatchObject({
-    settledReceipt: {
-      anyVisibleDelivered: false,
-      counts: { final: { deliveredNotVisible: 1 } },
-    },
-  });
-}
-
 function createDispatch(
   events: string[] = [],
   deliverPayload: { text: string } = { text: "reply" },
@@ -160,7 +135,7 @@ function createDispatch(
     return {
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 1 },
-      settledReceipt: createReceipt({
+      settledReceipt: createReplyDispatchReceipt({
         final: deliveredNotVisible ? { deliveredNotVisible: 1 } : { delivered: 1 },
       }),
     };
@@ -534,7 +509,7 @@ describe("channel turn delivery", () => {
         {
           queuedFinal: true,
           counts: { tool: 0, block: 1, final: 1 },
-          settledReceipt: createReceipt({
+          settledReceipt: createReplyDispatchReceipt({
             block: { delivered: 1 },
             final: { deliveredNotVisible: 1 },
           }),
