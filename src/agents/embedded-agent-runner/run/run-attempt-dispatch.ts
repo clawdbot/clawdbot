@@ -298,10 +298,12 @@ export async function dispatchEmbeddedRunAttempt(input: {
     ...(runtime.contextEngine
       ? {
           contextEngine: runtime.contextEngine,
-          contextTokenBudget: runtime.contextTokenBudget,
           contextWindowInfo: runtime.contextWindowInfo,
         }
       : {}),
+    ...(runtime.contextTokenBudget === undefined
+      ? {}
+      : { contextTokenBudget: runtime.contextTokenBudget }),
     skillsSnapshot: params.skillsSnapshot,
     prompt: pluginHarnessPrompt ?? preparedExecApprovalContinuation.prompt,
     transcriptPrompt:

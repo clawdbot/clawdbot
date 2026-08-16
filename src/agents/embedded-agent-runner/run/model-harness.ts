@@ -1,4 +1,6 @@
 import type { Model } from "../../../llm/types.js";
+import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agent-runtime-id.js";
+import { resolveAuthoredModelContextTokens } from "../../context-resolution.js";
 import {
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
@@ -31,18 +33,32 @@ export function resolveEmbeddedRunEffectiveModel(
     nativeModelOwned: boolean;
   },
 ) {
-  return resolveEmbeddedRuntimeModelPolicy({
+  const contextConfigProvider = resolveContextConfigProviderForRuntime({
+    provider: params.modelConfigProvider,
+    runtimeId: params.agentHarnessId,
+    config: params.runParams.config,
+  });
+  const resolved = resolveEmbeddedRuntimeModelPolicy({
     cfg: params.runParams.config,
     provider: params.provider,
-    contextConfigProvider: resolveContextConfigProviderForRuntime({
-      provider: params.modelConfigProvider,
-      runtimeId: params.agentHarnessId,
-      config: params.runParams.config,
-    }),
+    contextConfigProvider,
     modelId: params.modelId,
     runtimeModel: params.runtimeModel,
     nativeModelOwned: params.nativeModelOwned,
   });
+  if (params.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID) {
+    return resolved;
+  }
+  // Native transports own discovery and fixed-contract windows. Forward only
+  // the operator-authored cap so provider metadata cannot become a native override.
+  return {
+    ...resolved,
+    contextTokenBudget: resolveAuthoredModelContextTokens({
+      cfg: params.runParams.config,
+      provider: contextConfigProvider,
+      model: params.modelId,
+    }),
+  };
 }
 
 function buildHarnessModelProvider(

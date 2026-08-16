@@ -442,6 +442,9 @@ export function buildCodexRuntimeThreadConfigForRun(
             options.hostSystemAgentActive,
             restrictedToolSurfaceMcpServerNames,
           ),
+      params.contextTokenBudget === undefined
+        ? undefined
+        : { model_context_window: params.contextTokenBudget },
     ) ?? baseConfig;
   if (params.bootstrapContextMode !== "lightweight") {
     return runtimeConfig;

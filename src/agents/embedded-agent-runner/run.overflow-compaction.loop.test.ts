@@ -152,6 +152,19 @@ describe("embedded run retry dispatch", () => {
     expect(mocks.settleRequesterAfterSessionSpawns).not.toHaveBeenCalled();
   });
 
+  it("forwards a prepared context cap to plugin harness params without a context engine (#124702)", async () => {
+    const cappedInput = makeDispatchInput({}, createEmbeddedRunReplayState());
+    cappedInput.runtime.contextTokenBudget = 32_000;
+    const capped = await dispatchEmbeddedRunAttempt(cappedInput);
+
+    expect(capped.preparedAttempt.contextTokenBudget).toBe(32_000);
+
+    const uncappedInput = makeDispatchInput({}, createEmbeddedRunReplayState());
+    const uncapped = await dispatchEmbeddedRunAttempt(uncappedInput);
+
+    expect(uncapped.preparedAttempt).not.toHaveProperty("contextTokenBudget");
+  });
+
   it.each([true, false])(
     "settles accepted spawns before a late post-compaction abort (yielded: %s)",
     async (yieldDetected) => {

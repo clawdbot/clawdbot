@@ -255,6 +255,11 @@ agents. Codex compacts through its native app-server thread state, so
 OpenClaw ignores those local summarizer overrides at runtime, and
 `openclaw doctor --fix` removes them when the agent uses Codex.
 
+An authored `models.providers.*.models[].contextTokens` cap is forwarded to
+Codex thread start and resume as `model_context_window`. Codex clamps the value
+to the model's native maximum and derives automatic compaction from the capped
+window. When the model entry has no authored cap, OpenClaw sends no override.
+
 Lossless remains supported as a context engine for assembly, ingestion, and
 maintenance around Codex turns, configured through
 `plugins.slots.contextEngine: "lossless-claw"` and

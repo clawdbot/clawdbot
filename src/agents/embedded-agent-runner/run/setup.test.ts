@@ -6,6 +6,7 @@ import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import { AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE } from "../../../sessions/agent-harness-session-key.js";
+import { resolveEmbeddedRunEffectiveModel } from "./model-harness.js";
 import {
   buildBeforeModelResolveAttachments,
   resolveAgentHarnessRunAdmissionError,
@@ -295,6 +296,30 @@ describe("resolveEmbeddedRuntimeModelPolicy", () => {
       tokens: 272_000,
     });
     expect(result.effectiveModel.contextWindow).toBe(272_000);
+  });
+
+  it("prepares only an authored per-model cap for plugin-owned transports (#124702)", () => {
+    const resolve = (models: ModelDefinitionConfig[]) =>
+      resolveEmbeddedRunEffectiveModel({
+        runParams: {
+          config: {
+            models: { providers: { openai: { baseUrl: "https://api.openai.com/v1", models } } },
+          },
+        } as never,
+        provider: "openai",
+        modelConfigProvider: "openai",
+        modelId: "gpt-5.5",
+        agentHarnessId: "codex",
+        runtimeModel: createRuntimeModel(),
+        nativeModelOwned: false,
+      });
+
+    expect(resolve([createConfiguredModel({ contextTokens: 32_000 })]).contextTokenBudget).toBe(
+      32_000,
+    );
+    expect(
+      resolve([createConfiguredModel({ contextTokens: undefined })]).contextTokenBudget,
+    ).toBeUndefined();
   });
 });
 

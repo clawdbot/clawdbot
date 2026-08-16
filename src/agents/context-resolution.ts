@@ -131,6 +131,26 @@ function resolveConfiguredRuntimeModel(
     : undefined;
 }
 
+function readAuthoredModelContextTokens(model: ConfigModelEntry | undefined): number | undefined {
+  return typeof model?.contextTokens === "number" && model.contextTokens > 0
+    ? model.contextTokens
+    : undefined;
+}
+
+/** Returns only the per-model contextTokens value authored in OpenClaw config. */
+export function resolveAuthoredModelContextTokens(
+  params: Pick<ContextTokenResolutionParams, "cfg" | "provider" | "modelProvider" | "model">,
+): number | undefined {
+  const ref = resolveProviderModelRef(params);
+  const explicitProvider = params.provider?.trim();
+  if (!ref || !explicitProvider) {
+    return undefined;
+  }
+  return readAuthoredModelContextTokens(
+    resolveConfiguredRuntimeModel(params.cfg, explicitProvider, params.modelProvider, ref.model),
+  );
+}
+
 function resolveModelFamilyId(modelId: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return normalized.includes("/") ? (normalized.split("/").at(-1) ?? normalized) : normalized;
@@ -203,10 +223,7 @@ export function resolveContextTokensForModelFromCache(
     const fixedContextWindow = resolveAnthropicFixedContextWindow(ref.provider, ref.model, {
       claudeCli1M: effectiveContext1M === true,
     });
-    const configuredContextTokens =
-      typeof configuredModel?.contextTokens === "number" && configuredModel.contextTokens > 0
-        ? configuredModel.contextTokens
-        : undefined;
+    const configuredContextTokens = readAuthoredModelContextTokens(configuredModel);
     if (configuredContextTokens !== undefined) {
       return fixedContextWindow === undefined
         ? configuredContextTokens
