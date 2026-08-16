@@ -399,7 +399,7 @@ export async function prepareGatewayKernelState(params: {
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
-  const isGatewayStartupPending = () => !startupState.sidecarsReady && sidecarStartup === "start";
+  const isGatewayStartupPending = () => !startupState.sidecarsReady;
   const startupCheckerDeps = {
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
