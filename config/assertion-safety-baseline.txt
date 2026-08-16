@@ -1417,7 +1417,6 @@ extensions/whatsapp/src/approval-reactions.ts	1
 extensions/whatsapp/src/auth-store.ts	3
 extensions/whatsapp/src/auto-reply/monitor.ts	3
 extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts	4
-extensions/whatsapp/src/auto-reply/monitor/on-message.ts	1
 extensions/whatsapp/src/auto-reply/monitor/process-message.ts	2
 extensions/whatsapp/src/channel-outbound.ts	1
 extensions/whatsapp/src/connection-controller-runtime-context.ts	1
@@ -1426,19 +1425,16 @@ extensions/whatsapp/src/connection-owner.ts	1
 extensions/whatsapp/src/group-config-path.ts	4
 extensions/whatsapp/src/image-preview.ts	2
 extensions/whatsapp/src/inbound-policy.ts	1
-extensions/whatsapp/src/inbound/admission.ts	1
 extensions/whatsapp/src/inbound/durable-payload.ts	2
 extensions/whatsapp/src/inbound/extract.ts	10
 extensions/whatsapp/src/inbound/group-metadata-cache.ts	7
 extensions/whatsapp/src/inbound/ingress-lifecycle.ts	2
 extensions/whatsapp/src/inbound/media.ts	4
-extensions/whatsapp/src/inbound/message-aliases.ts	43
 extensions/whatsapp/src/inbound/message-delivery.ts	2
 extensions/whatsapp/src/inbound/message-enrichment.ts	4
 extensions/whatsapp/src/inbound/outbound-mentions.ts	1
 extensions/whatsapp/src/inbound/send-api.ts	5
 extensions/whatsapp/src/inbound/socket-session.ts	5
-extensions/whatsapp/src/inbound/test-message.test-helper.ts	1
 extensions/whatsapp/src/qa-driver.runtime.ts	1
 extensions/whatsapp/src/quoted-message.ts	1
 extensions/whatsapp/src/reconnect.ts	1
@@ -2375,7 +2371,6 @@ src/channels/plugins/setup-promotion-helpers.ts	1
 src/channels/plugins/setup-promotion-keys.ts	1
 src/channels/plugins/setup-registry.ts	2
 src/channels/plugins/setup-wizard-helpers.ts	13
-src/channels/plugins/setup-wizard-legacy-compat.ts	9
 src/channels/plugins/setup-wizard-proxy.ts	1
 src/channels/plugins/setup-wizard.ts	5
 src/channels/plugins/status.ts	2
@@ -3626,7 +3621,7 @@ src/plugins/gateway-startup-plugin-config.ts	1
 src/plugins/hook-decision-types.ts	1
 src/plugins/hook-isolation.ts	3
 src/plugins/hook-runner-global-state.ts	1
-src/plugins/hook-types.ts	3
+src/plugins/hook-types.ts	2
 src/plugins/hooks.ts	19
 src/plugins/host-hook-attachments.ts	2
 src/plugins/host-hook-json.ts	1
@@ -3668,6 +3663,7 @@ src/plugins/manifest-registry.ts	2
 src/plugins/manifest-setup-normalizers.ts	5
 src/plugins/manifest.ts	2
 src/plugins/marketplace.ts	7
+src/plugins/memory-embedding-providers.ts	1
 src/plugins/memory-runtime.ts	1
 src/plugins/module-export.ts	2
 src/plugins/native-module-require.ts	3
@@ -3720,7 +3716,7 @@ src/plugins/runtime-workspace-state.ts	2
 src/plugins/runtime.ts	2
 src/plugins/runtime/channel-runtime-contexts.ts	1
 src/plugins/runtime/index.ts	1
-src/plugins/runtime/runtime-agent.ts	2
+src/plugins/runtime/runtime-agent.ts	1
 src/plugins/runtime/runtime-channel.ts	1
 src/plugins/runtime/runtime-llm-isolated.ts	4
 src/plugins/runtime/runtime-llm.runtime.ts	5
