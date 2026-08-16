@@ -26,7 +26,6 @@ const MODEL_ID = "proof-model";
 const MODEL_REF = `proof/${MODEL_ID}`;
 const CHILD_TASK = "PROOF_CHILD_TASK_7f3a";
 const CHILD_RESULT = "PROOF_CHILD_RESULT_7f3a";
-const PARENT_DONE = "PROOF_PARENT_DONE_7f3a";
 const WAKE_MARKER = "Every subagent spawned from this session has now settled";
 
 type MockModelRequest = {
@@ -227,6 +226,9 @@ async function startMockModelServer(): Promise<MockModelServer> {
         return;
       }
       if (classification === "wake") {
+        // Hold the wake response behind child completion so the reset can be
+        // observed alongside the durable requester-settle fence.
+        await childReleasePromise;
         writeSse(res, textResponseEvents(requests.length, "PROOF_WAKE_ACK"));
         return;
       }
@@ -248,9 +250,9 @@ async function startMockModelServer(): Promise<MockModelServer> {
         writeSse(
           res,
           spawnToolCallEvents(
-            `call_bash_${requests.length}`,
-            "bash",
-            JSON.stringify({ command: "sleep 25", yieldMs: 40_000 }),
+            `call_yield_${requests.length}`,
+            "sessions_yield",
+            JSON.stringify({ message: "waiting for child completion" }),
           ),
         );
         return;
@@ -309,7 +311,7 @@ async function startMockModelServer(): Promise<MockModelServer> {
 function proofConfig(workspace: string, baseUrl: string): OpenClawConfig {
   return {
     plugins: { enabled: false },
-    tools: { allow: ["sessions_spawn", "bash"] },
+    tools: { allow: ["sessions_spawn", "sessions_yield", "bash"] },
     models: {
       mode: "replace",
       providers: {
@@ -503,7 +505,7 @@ describe("requester lifecycle fence real-runtime proof", () => {
         message: [
           `Spawn one subagent with task text that contains ${CHILD_TASK}.`,
           "Use the sessions_spawn tool with taskName proof_child and cleanup keep.",
-          `After the spawn is accepted, reply exactly ${PARENT_DONE}.`,
+          'After the spawn is accepted, call sessions_yield with message="waiting for child completion".',
         ].join("\n"),
       },
       { expectFinal: true, timeoutMs: 120_000 },
@@ -578,9 +580,12 @@ describe("requester lifecycle fence real-runtime proof", () => {
         const afterReset = readParentLifecycleRevision(instance.stateDir, sessionKey);
         expect(afterReset).toBeTruthy();
         expect(afterReset).not.toBe(beforeReset);
-        expect(outcome.wakeRequestCount).toBe(0);
+        // The wake provider request may be admitted before reset; the durable
+        // delivery remains fenced and never reaches the requester session.
+        expect(outcome.wakeRequestCount).toBe(1);
         expect(outcome.runs.length).toBeGreaterThan(0);
         for (const run of outcome.runs) {
+          expect(run.lifecycleMismatch).toBe("requester_replaced");
           expect(run.deliveredAt).toBeUndefined();
           expect(run.announcedAt).toBeUndefined();
         }
@@ -614,19 +619,6 @@ describe("requester lifecycle fence real-runtime proof", () => {
           240_000,
         );
 
-        await client
-          .request<{ result?: unknown }>(
-            "agent",
-            {
-              sessionKey,
-              idempotencyKey: `proof-followup-${randomUUID()}`,
-              deliver: false,
-              timeout: 120,
-              message: "Continue.",
-            },
-            { expectFinal: true, timeoutMs: 120_000 },
-          )
-          .catch(() => undefined);
         await new Promise((resolve) => {
           setTimeout(resolve, 10_000);
         });
@@ -636,7 +628,7 @@ describe("requester lifecycle fence real-runtime proof", () => {
           JSON.stringify(outcome, null, 2),
         );
         console.log(`[proof:control] ${JSON.stringify(outcome)}`);
-        expect(outcome.wakeRequestCount).toBe(0);
+        expect(outcome.wakeRequestCount).toBe(1);
         expect(outcome.runs.length).toBeGreaterThan(0);
         for (const run of outcome.runs) {
           expect(run.lifecycleMismatch).toBeUndefined();
