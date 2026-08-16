@@ -67,7 +67,7 @@ export {
   resolveAbsolutePathForWrite,
 } from "../infra/fs-safe.js";
 export { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
-export { privateFileStoreSync } from "../infra/private-file-store.js";
+export { privateFileStore, privateFileStoreSync } from "../infra/private-file-store.js";
 export { movePathWithCopyFallback, replaceFileAtomic } from "../infra/replace-file.js";
 
 export { assertNoSymlinkParents, assertNoSymlinkParentsSync } from "../infra/fs-safe-advanced.js";
