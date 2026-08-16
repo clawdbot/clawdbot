@@ -9,15 +9,20 @@ import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { parseCliEnumFilter } from "../cli/enum-filter.js";
 import { formatLookupMiss } from "../cli/error-format.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, getRuntimeConfigForInspection } from "../config/config.js";
 import {
   resolveAllAgentSessionStoreTargetsSync,
   runSessionRegistryMaintenanceForStore,
 } from "../config/sessions.js";
 import { normalizeCronLaneSegment } from "../cron/service/task-runs.js";
-import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
+import * as cronStore from "../cron/store.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
+import {
+  ensureTaskRuntimeStateReady,
+  ensureTaskRuntimeStateReadyForInspection,
+  getTaskById,
+  updateTaskNotifyPolicyById,
+} from "../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
 import { listTaskFlowAuditFindings } from "../tasks/task-flow-registry.audit.js";
 import {
@@ -154,12 +159,15 @@ function resolveExplicitCronSessionSegment(sessionKey: string | undefined): stri
   return match?.[1]?.toLowerCase();
 }
 
-function readRunningCronJobIds(): { ids: Set<string>; count: number } {
+async function readRunningCronJobIds(params: {
+  readOnly: boolean;
+}): Promise<{ ids: Set<string>; count: number }> {
   try {
-    const cronStorePath = resolveCronJobsStorePath();
-    const runningJobs = loadCronJobsStoreSync(cronStorePath).jobs.filter(
-      (job) => typeof job.state?.runningAtMs === "number",
-    );
+    const cronStorePath = cronStore.resolveCronJobsStorePath();
+    const store = params.readOnly
+      ? (await cronStore.loadCronJobsStoreWithConfigJobsReadOnly(cronStorePath)).store
+      : cronStore.loadCronJobsStoreSync(cronStorePath);
+    const runningJobs = store.jobs.filter((job) => typeof job.state?.runningAtMs === "number");
     return {
       // A running job may have been retargeted after its session was created. Keep both historical
       // shapes; the registry has no producer metadata, so retaining an ambiguous alias is safer
@@ -185,8 +193,8 @@ function readRunningCronJobIds(): { ids: Set<string>; count: number } {
 async function runSessionRegistryMaintenance(params: {
   apply: boolean;
 }): Promise<SessionRegistryMaintenanceSummary> {
-  const cfg = getRuntimeConfig();
-  const runningCronJobs = readRunningCronJobIds();
+  const cfg = params.apply ? getRuntimeConfig() : getRuntimeConfigForInspection();
+  const runningCronJobs = await readRunningCronJobIds({ readOnly: !params.apply });
   const stores: SessionRegistryMaintenanceStoreSummary[] = [];
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
     const result = await runSessionRegistryMaintenanceForStore({
@@ -454,6 +462,7 @@ export async function tasksNotifyCommand(
   opts: { lookup: string; notify: TaskNotifyPolicy },
   runtime: RuntimeEnv,
 ) {
+  ensureTaskRuntimeStateReady();
   const task = reconcileTaskLookupToken(opts.lookup);
   if (!task) {
     runtime.error(formatTaskLookupMiss(opts.lookup));
@@ -476,6 +485,7 @@ export async function tasksNotifyCommand(
 
 /** Cancels a detached task run by lookup token. */
 export async function tasksCancelCommand(opts: { lookup: string }, runtime: RuntimeEnv) {
+  ensureTaskRuntimeStateReady();
   const task = reconcileTaskLookupToken(opts.lookup);
   if (!task) {
     runtime.error(formatTaskLookupMiss(opts.lookup));
@@ -542,6 +552,7 @@ async function runTaskRecoveryCommand(
     runtime.exit(1);
     return;
   }
+  ensureTaskRuntimeStateReady();
   const tasks: TaskRecord[] = [];
   for (const lookup of lookups) {
     const task = reconcileTaskLookupToken(lookup);
@@ -606,6 +617,7 @@ export async function tasksAuditCommand(
   },
   runtime: RuntimeEnv,
 ) {
+  ensureTaskRuntimeStateReadyForInspection();
   const severityFilter = parseCliEnumFilter(
     opts.severity,
     "--severity",
@@ -671,29 +683,35 @@ export async function tasksMaintenanceCommand(
   runtime: RuntimeEnv,
 ) {
   configureTaskMaintenanceFromConfig();
+  const apply = Boolean(opts.apply);
+  if (apply) {
+    ensureTaskRuntimeStateReady();
+  } else {
+    ensureTaskRuntimeStateReadyForInspection();
+  }
   assertTaskFlowRegistryMaintenanceReady();
   const auditBefore = getInspectableTaskAuditSummary();
   const flowAuditBefore = getInspectableTaskFlowAuditSummary();
-  const taskMaintenance = opts.apply
+  const taskMaintenance = apply
     ? await runTaskRegistryMaintenance()
     : previewTaskRegistryMaintenance();
   // JSON diagnostics explain the task-maintenance decision above, before the
   // separate session-registry sweep can prune backing session rows.
   const diagnostics = opts.json ? getTaskRegistryMaintenanceDiagnostics() : undefined;
-  const flowMaintenance = opts.apply
+  const flowMaintenance = apply
     ? await runTaskFlowRegistryMaintenance()
     : previewTaskFlowRegistryMaintenance();
-  const sessionMaintenance = await runSessionRegistryMaintenance({ apply: Boolean(opts.apply) });
+  const sessionMaintenance = await runSessionRegistryMaintenance({ apply });
   const summary = getInspectableTaskRegistrySummary();
-  const auditAfter = opts.apply ? getInspectableTaskAuditSummary() : auditBefore;
-  const flowAuditAfter = opts.apply ? getInspectableTaskFlowAuditSummary() : flowAuditBefore;
+  const auditAfter = apply ? getInspectableTaskAuditSummary() : auditBefore;
+  const flowAuditAfter = apply ? getInspectableTaskFlowAuditSummary() : flowAuditBefore;
   const retainedLostAfter = summarizeRetainedLostTaskAuditFindings(
     listTaskAuditFindings({ tasks: reconcileInspectableTasks() }),
   );
 
   if (opts.json) {
     writeRuntimeJson(runtime, {
-      mode: opts.apply ? "apply" : "preview",
+      mode: apply ? "apply" : "preview",
       maintenance: {
         tasks: taskMaintenance,
         taskFlows: flowMaintenance,

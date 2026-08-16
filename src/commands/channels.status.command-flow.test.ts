@@ -36,11 +36,12 @@ vi.mock("../cli/command-config-resolution.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  readConfigFileSnapshot: () => mocks.readConfigFileSnapshot(),
+  readConfigFileSnapshot: (options: unknown) => mocks.readConfigFileSnapshot(options),
 }));
 
 vi.mock("./config-validation.js", () => ({
-  requireValidConfig: (runtime: unknown) => mocks.requireValidConfig(runtime),
+  requireValidConfig: (runtime: unknown, options: unknown) =>
+    mocks.requireValidConfig(runtime, options),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -285,6 +286,8 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
 
     expect(errors.join("\n")).toContain("Gateway not reachable");
     expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledOnce();
+    expect(mocks.requireValidConfig).toHaveBeenCalledWith(runtime, { observe: false });
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
     const configResolutionRequest = mocks.resolveCommandConfigWithSecrets.mock.calls[0]?.[0];
     expect(configResolutionRequest?.commandName).toBe("channels status");
     expect(configResolutionRequest?.mode).toBe("read_only_status");

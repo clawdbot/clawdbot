@@ -11,7 +11,11 @@ import { getRuntimeConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
-import { listTasksForFlowId } from "../tasks/runtime-internal.js";
+import {
+  ensureTaskRuntimeStateReady,
+  ensureTaskRuntimeStateReadyForInspection,
+  listTasksForFlowId,
+} from "../tasks/runtime-internal.js";
 import { cancelFlowById, getFlowTaskSummary } from "../tasks/task-executor.js";
 import {
   TASK_FLOW_STATUSES,
@@ -166,6 +170,7 @@ export async function flowsListCommand(
   opts: { json?: boolean; status?: string },
   runtime: RuntimeEnv,
 ) {
+  ensureTaskRuntimeStateReadyForInspection();
   const statusFilter = parseCliEnumFilter(opts.status, "--status", TASK_FLOW_STATUSES);
   const flows = listTaskFlowRecords().filter((flow) => {
     if (statusFilter && flow.status !== statusFilter) {
@@ -209,6 +214,7 @@ export async function flowsShowCommand(
   opts: { json?: boolean; lookup: string },
   runtime: RuntimeEnv,
 ) {
+  ensureTaskRuntimeStateReadyForInspection();
   const flow = resolveTaskFlowForLookupToken(opts.lookup);
   if (!flow) {
     runtime.error(formatFlowLookupMiss(opts.lookup));
@@ -267,6 +273,7 @@ export async function flowsShowCommand(
 
 /** Requests cancellation for one TaskFlow selected by id or lookup token. */
 export async function flowsCancelCommand(opts: { lookup: string }, runtime: RuntimeEnv) {
+  ensureTaskRuntimeStateReady();
   const flow = resolveTaskFlowForLookupToken(opts.lookup);
   if (!flow) {
     runtime.error(formatFlowLookupMiss(opts.lookup));

@@ -6,6 +6,7 @@ export {
   registerConfigWriteListener,
   createConfigIO,
   getRuntimeConfig,
+  getRuntimeConfigForInspection,
   getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,

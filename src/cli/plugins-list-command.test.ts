@@ -33,6 +33,7 @@ function mockPluginListSnapshot(
 ): void {
   vi.doMock("../config/config.js", () => ({
     getRuntimeConfig: () => config,
+    getRuntimeConfigForInspection: () => config,
   }));
   vi.doMock("../plugins/status-snapshot.js", () => ({
     buildPluginRegistrySnapshotReport: () => ({
@@ -105,6 +106,7 @@ describe("runPluginsListCommand", () => {
 
     vi.doMock("../config/config.js", () => ({
       getRuntimeConfig: () => ({}),
+      getRuntimeConfigForInspection: () => ({}),
     }));
     vi.doMock("../plugins/status.js", () => {
       throw new Error("plugins list JSON must use the snapshot status module");

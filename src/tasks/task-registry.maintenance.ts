@@ -54,6 +54,7 @@ import {
   resolveTaskForLookupToken,
   setTaskCleanupAfterById,
 } from "./runtime-internal.js";
+import { ensureTaskRegistryReadyForInspection } from "./task-registry-state.js";
 import {
   configureTaskAuditTaskProvider,
   listTaskAuditFindings,
@@ -107,6 +108,7 @@ type TaskRegistryMaintenanceRuntime = {
   hasActiveTaskForChildSessionKey: typeof hasActiveTaskForChildSessionKey;
   deleteTaskRecordById: typeof deleteTaskRecordById;
   ensureTaskRegistryReady: typeof ensureTaskRegistryReady;
+  ensureTaskRegistryReadyForInspection?: typeof ensureTaskRegistryReadyForInspection;
   getTaskById: typeof getTaskById;
   listTaskRecords: typeof listTaskRecords;
   markTaskLostById: typeof markTaskLostById;
@@ -146,6 +148,7 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   hasActiveTaskForChildSessionKey,
   deleteTaskRecordById,
   ensureTaskRegistryReady,
+  ensureTaskRegistryReadyForInspection,
   getTaskById,
   listTaskRecords,
   markTaskLostById,
@@ -811,7 +814,10 @@ function reconcileTaskRecordsForOperatorInspection(tasks: TaskRecord[]): TaskRec
 }
 
 export function reconcileInspectableTasks(): TaskRecord[] {
-  taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
+  (
+    taskRegistryMaintenanceRuntime.ensureTaskRegistryReadyForInspection ??
+    taskRegistryMaintenanceRuntime.ensureTaskRegistryReady
+  )();
   return reconcileTaskRecordsForOperatorInspection(
     taskRegistryMaintenanceRuntime.listTaskRecords(),
   );
@@ -884,7 +890,10 @@ export function getInspectableTaskAuditFindings(
 }
 
 export function reconcileTaskLookupToken(token: string): TaskRecord | undefined {
-  taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
+  (
+    taskRegistryMaintenanceRuntime.ensureTaskRegistryReadyForInspection ??
+    taskRegistryMaintenanceRuntime.ensureTaskRegistryReady
+  )();
   const task = taskRegistryMaintenanceRuntime.resolveTaskForLookupToken(token);
   return task ? reconcileTaskRecordForOperatorInspection(task) : undefined;
 }
@@ -893,7 +902,10 @@ export function reconcileTaskLookupToken(token: string): TaskRecord | undefined 
 // so hook-recovered tasks are counted under reconciled here. Durable cron
 // recovery is synchronous and can be previewed exactly.
 export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary {
-  taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
+  (
+    taskRegistryMaintenanceRuntime.ensureTaskRegistryReadyForInspection ??
+    taskRegistryMaintenanceRuntime.ensureTaskRegistryReady
+  )();
   const now = Date.now();
   let reconciled = 0;
   let recovered = 0;
@@ -960,7 +972,10 @@ function explainActiveTaskRetention(params: {
 }
 
 export function getTaskRegistryMaintenanceDiagnostics(): TaskRegistryMaintenanceDiagnostics {
-  taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
+  (
+    taskRegistryMaintenanceRuntime.ensureTaskRegistryReadyForInspection ??
+    taskRegistryMaintenanceRuntime.ensureTaskRegistryReady
+  )();
   const now = Date.now();
   const cronRecoveryContext = createCronRecoveryContext();
   const backingSessionContext = createBackingSessionLookupContext();

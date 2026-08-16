@@ -5,7 +5,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingCurrentOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -363,7 +363,7 @@ export function loadTaskRegistryStateFromSqlite(): TaskRegistryStoreSnapshot {
 /** Loads task records without creating or migrating shared state. */
 export function loadTaskRegistryStateFromSqliteReadOnly(): TaskRegistryStoreSnapshot {
   return (
-    withExistingOpenClawStateDatabaseReadOnly(readTaskRegistrySnapshot) ?? {
+    withExistingCurrentOpenClawStateDatabaseReadOnly(readTaskRegistrySnapshot) ?? {
       tasks: new Map(),
       deliveryStates: new Map(),
     }
@@ -389,7 +389,7 @@ export function listTaskRegistryRecordsByRuntimeSourceIdFromSqlite(params: {
     return [];
   }
   return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) =>
+    withExistingCurrentOpenClawStateDatabaseReadOnly(({ db }) =>
       selectTaskRowsByRuntimeSourceId(db, params.runtime, sourceId).map(rowToTaskRecord),
     ) ?? []
   );

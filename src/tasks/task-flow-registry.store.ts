@@ -3,6 +3,7 @@ import {
   closeTaskFlowRegistryDatabase,
   deleteTaskFlowRegistryRecordFromSqlite,
   loadTaskFlowRegistryStateFromSqlite,
+  loadTaskFlowRegistryStateFromSqliteReadOnly,
   saveTaskFlowRegistryStateToSqlite,
   upsertTaskFlowRegistryRecordToSqlite,
 } from "./task-flow-registry.store.sqlite.js";
@@ -11,6 +12,7 @@ import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
 type TaskFlowRegistryStore = {
   loadSnapshot: () => TaskFlowRegistryStoreSnapshot;
+  loadSnapshotReadOnly?: () => TaskFlowRegistryStoreSnapshot;
   saveSnapshot: (snapshot: TaskFlowRegistryStoreSnapshot) => void;
   upsertFlow?: (flow: TaskFlowRecord) => void;
   deleteFlow?: (flowId: string) => void;
@@ -40,6 +42,7 @@ type TaskFlowRegistryObservers = {
 
 const defaultFlowRegistryStore: TaskFlowRegistryStore = {
   loadSnapshot: loadTaskFlowRegistryStateFromSqlite,
+  loadSnapshotReadOnly: loadTaskFlowRegistryStateFromSqliteReadOnly,
   saveSnapshot: saveTaskFlowRegistryStateToSqlite,
   upsertFlow: upsertTaskFlowRegistryRecordToSqlite,
   deleteFlow: deleteTaskFlowRegistryRecordFromSqlite,

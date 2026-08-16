@@ -8,6 +8,7 @@ import {
 } from "./task-flow-registry.audit.js";
 import {
   deleteTaskFlowRecordById,
+  ensureTaskFlowRegistryReadyForInspection,
   getTaskFlowById,
   getTaskFlowRegistryRestoreFailure,
   listTaskFlowRecords,
@@ -139,6 +140,7 @@ export function getInspectableTaskFlowAuditSummary(): TaskFlowAuditSummary {
 }
 
 export function previewTaskFlowRegistryMaintenance(): TaskFlowRegistryMaintenanceSummary {
+  ensureTaskFlowRegistryReadyForInspection();
   const now = Date.now();
   let reconciled = 0;
   let pruned = 0;

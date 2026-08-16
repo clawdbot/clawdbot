@@ -1,8 +1,14 @@
 // Flows command tests cover task creation, task execution, and runtime command output.
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  OPENCLAW_STATE_SCHEMA_VERSION,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createRunningTaskRunCore as createRunningTaskRunOrNull } from "../tasks/task-executor.js";
 import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "../tasks/task-flow-registry.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
@@ -62,6 +68,28 @@ function createRuntime(): TestRuntime {
     writeStdout: vi.fn(),
     writeJson: vi.fn(),
   };
+}
+
+function setStateSchemaVersion(databasePath: string, version: number): void {
+  const database = new DatabaseSync(databasePath);
+  try {
+    database.exec(`
+      PRAGMA user_version = ${version};
+      UPDATE schema_meta SET schema_version = ${version} WHERE meta_key = 'primary';
+    `);
+  } finally {
+    database.close();
+  }
+}
+
+function readStateSchemaVersion(databasePath: string): number {
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const row = database.prepare("PRAGMA user_version").get() as { user_version: number };
+    return row.user_version;
+  } finally {
+    database.close();
+  }
 }
 
 async function withTaskFlowCommandStateDir(run: (root: string) => Promise<void>): Promise<void> {
@@ -709,6 +737,41 @@ describe("flows commands", () => {
           }),
         ],
       });
+    });
+  });
+
+  it("keeps old-schema flow inspection read-only, then migrates through cancellation", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/flows-old-schema",
+        goal: "Exercise old-schema flow command routing",
+        status: "running",
+      });
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      closeOpenClawStateDatabaseForTest();
+      const databasePath = resolveOpenClawStateSqlitePath();
+      const oldVersion = OPENCLAW_STATE_SCHEMA_VERSION - 1;
+      setStateSchemaVersion(databasePath, oldVersion);
+      const runtime = createRuntime();
+
+      await expect(flowsListCommand({ json: true }, runtime)).rejects.toThrow(
+        new RegExp(
+          `older schema version ${oldVersion}.*will not migrate it.*openclaw doctor --fix`,
+          "u",
+        ),
+      );
+      expect(readStateSchemaVersion(databasePath)).toBe(oldVersion);
+
+      await flowsCancelCommand({ lookup: flow.flowId }, runtime);
+
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(runtime.log).toHaveBeenCalledWith(
+        `Cancelled ${flow.flowId} (managed) with status cancelled.`,
+      );
+      expect(readStateSchemaVersion(databasePath)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     });
   });
 });

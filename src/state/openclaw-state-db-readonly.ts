@@ -52,6 +52,18 @@ function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void 
   }
 }
 
+function assertCurrentSchemaVersion(db: DatabaseSync, pathname: string): void {
+  const userVersion = readSqliteUserVersion(db);
+  if (userVersion < OPENCLAW_STATE_SCHEMA_VERSION) {
+    const error = new Error(
+      `OpenClaw state database ${pathname} uses older schema version ${userVersion}; this read-only command requires ${OPENCLAW_STATE_SCHEMA_VERSION} and will not migrate it. ` +
+        "Start the gateway or run openclaw doctor --fix, then retry.",
+    );
+    error.name = "SqliteSchemaVersionError";
+    throw error;
+  }
+}
+
 function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions,
@@ -131,4 +143,15 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
         { ...options, path: existingPath },
         existingPath,
       );
+}
+
+/** Read existing shared state only when its schema is already current. */
+export function withExistingCurrentOpenClawStateDatabaseReadOnly<T>(
+  operation: (database: OpenClawStateReadOnlyDatabase) => T,
+  options: OpenClawStateDatabaseOptions = {},
+): T | undefined {
+  return withExistingOpenClawStateDatabaseReadOnly((database) => {
+    assertCurrentSchemaVersion(database.db, database.path);
+    return operation(database);
+  }, options);
 }
