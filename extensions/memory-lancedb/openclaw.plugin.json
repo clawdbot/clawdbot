@@ -16,6 +16,7 @@
     "tools": ["memory_forget", "memory_recall", "memory_store"]
   },
   "toolMetadata": {
+    "memory_forget": { "sideEffecting": true },
     "memory_store": { "sideEffecting": true }
   },
   "uiHints": {

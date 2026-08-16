@@ -82,6 +82,13 @@ export {
   shouldCapture,
 } from "./memory-policy.js";
 
+function memoryNotFoundResult(id: string) {
+  return {
+    content: [{ type: "text" as const, text: `Memory ${id} was not found.` }],
+    details: { action: "not_found", id },
+  };
+}
+
 export default definePluginEntry({
   id: "memory-lancedb",
   name: "Memory (LanceDB)",
@@ -435,10 +442,7 @@ export default definePluginEntry({
             if (memoryId) {
               const deleted = await db.delete(agentId, memoryId);
               if (!deleted) {
-                return {
-                  content: [{ type: "text", text: `Memory ${memoryId} was not found.` }],
-                  details: { action: "not_found", id: memoryId },
-                };
+                return memoryNotFoundResult(memoryId);
               }
               return {
                 content: [{ type: "text", text: `Memory ${memoryId} forgotten.` }],
@@ -463,7 +467,10 @@ export default definePluginEntry({
 
               const singleResult = results.length === 1 ? results[0] : undefined;
               if (singleResult && singleResult.score > 0.9) {
-                await db.delete(agentId, singleResult.entry.id);
+                const deleted = await db.delete(agentId, singleResult.entry.id);
+                if (!deleted) {
+                  return memoryNotFoundResult(singleResult.entry.id);
+                }
                 return {
                   content: [{ type: "text", text: `Forgotten: "${singleResult.entry.text}"` }],
                   details: { action: "deleted", id: singleResult.entry.id },

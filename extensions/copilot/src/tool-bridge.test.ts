@@ -10,6 +10,12 @@ import {
   type SandboxContext,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  buildContractReplyPayloads,
+  createContractToolTerminalObserver,
+  createOwnerBackedContractTool,
+  textToolResult,
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearMemoryPluginState,
@@ -2016,6 +2022,112 @@ describe("createCopilotToolBridge tool conversion", () => {
     });
   });
 
+  it("surfaces an owner-backed memory delete failure before a false final claim", async () => {
+    const tool = createOwnerBackedContractTool({
+      pluginId: "memory-lancedb",
+      name: "memory_forget",
+      result: textToolResult("unused"),
+    });
+    tool.execute = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("memory delete failed"))
+      .mockResolvedValueOnce(textToolResult("Memory forgotten.", { action: "deleted" }));
+    const terminalObserver = createContractToolTerminalObserver("run-copilot-forget");
+    let lastToolError: ReturnType<typeof terminalObserver>["lastToolError"];
+    const observeToolTerminal: typeof terminalObserver = (observation) => {
+      const resolution = terminalObserver(observation);
+      lastToolError = resolution.lastToolError;
+      return resolution;
+    };
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(tool, { observeToolTerminal });
+    const result = await runSdkTool(
+      sdkTool,
+      { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" },
+      makeInvocation({ toolCallId: "forget-1", toolName: "memory_forget" }),
+    );
+    const payloads = buildContractReplyPayloads({
+      assistantText: "Done - I forgot that memory.",
+      lastToolError,
+    });
+
+    expect(lastToolError).toMatchObject({
+      ownerKey: '["memory-lancedb","memory_forget"]',
+      mutatingAction: true,
+      actionFingerprint: expect.stringContaining('owner=["memory-lancedb","memory_forget"]|args='),
+    });
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toContain("I forgot");
+    expect(payloads[1]).toMatchObject({ isError: true });
+    expect(JSON.stringify(result)).not.toContain("memory-lancedb");
+    expect(JSON.stringify(payloads)).not.toContain("memory-lancedb");
+
+    await runSdkTool(
+      sdkTool,
+      { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" },
+      makeInvocation({ toolCallId: "forget-2", toolName: "memory_forget" }),
+    );
+    expect(lastToolError).toBeUndefined();
+  });
+
+  it("keeps owner-backed failures before execution non-mutating", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const tool = createOwnerBackedContractTool({
+      pluginId: "memory-lancedb",
+      name: "memory_forget",
+      result: textToolResult("unused"),
+    });
+    const terminalObserver = createContractToolTerminalObserver("run-copilot-pre-execution");
+    let lastToolError: ReturnType<typeof terminalObserver>["lastToolError"];
+    const observeToolTerminal: typeof terminalObserver = (observation) => {
+      const resolution = terminalObserver(observation);
+      lastToolError = resolution.lastToolError;
+      return resolution;
+    };
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(tool, {
+      abortSignal: controller.signal,
+      observeToolTerminal,
+    });
+
+    await runSdkTool(sdkTool, { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" });
+
+    expect(lastToolError).toMatchObject({
+      ownerKey: '["memory-lancedb","memory_forget"]',
+      mutatingAction: false,
+    });
+    expect(tool.execute).not.toHaveBeenCalled();
+  });
+
+  it("does not classify an unowned same-name Copilot tool as mutating", async () => {
+    const terminalObserver = createContractToolTerminalObserver("run-copilot-unowned-forget");
+    let lastToolError: ReturnType<typeof terminalObserver>["lastToolError"];
+    const observeToolTerminal: typeof terminalObserver = (observation) => {
+      const resolution = terminalObserver(observation);
+      lastToolError = resolution.lastToolError;
+      return resolution;
+    };
+    const sdkTool = await convertOpenClawToolToSdkToolForTest(
+      makeTool({
+        name: "memory_forget",
+        execute: vi.fn(async () => {
+          throw new Error("third-party failure");
+        }),
+      }),
+      { observeToolTerminal },
+    );
+
+    await runSdkTool(sdkTool, { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" });
+
+    expect(lastToolError).toMatchObject({ mutatingAction: false });
+    expect(lastToolError).not.toHaveProperty("ownerKey");
+    expect(
+      buildContractReplyPayloads({
+        assistantText: "Done - I forgot that memory.",
+        lastToolError,
+      }),
+    ).toHaveLength(1);
+  });
+
   it("reports returned OpenClaw error results to both tool observers", async () => {
     const onAgentToolResult = vi.fn();
     const onToolCompleted = vi.fn();
@@ -2045,7 +2157,7 @@ describe("createCopilotToolBridge tool conversion", () => {
     );
   });
 
-  it("reports catalog tool failures to the host terminal observer", async () => {
+  it("reports owner-backed catalog tool failures to the host terminal observer", async () => {
     type CatalogExecutor = (params: {
       tool: AnyAgentTool;
       toolName: string;
@@ -2077,13 +2189,15 @@ describe("createCopilotToolBridge tool conversion", () => {
       modelProvider: "github-copilot",
       sessionId: "session-1",
     });
-    const target = makeTool({
-      execute: vi.fn(async () => {
-        throw new Error("catalog delivery failed");
-      }),
-      name: "message",
+    const target = createOwnerBackedContractTool({
+      pluginId: "memory-lancedb",
+      name: "memory_forget",
+      result: textToolResult("unused"),
     });
-    const args = { action: "send", message: "hello", target: "room-1" };
+    target.execute = vi.fn(async () => {
+      throw new Error("catalog delete failed");
+    });
+    const args = { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" };
 
     await expect(
       expectDefined(
@@ -2091,22 +2205,23 @@ describe("createCopilotToolBridge tool conversion", () => {
         "Copilot catalog executor",
       )({
         tool: target,
-        toolName: "message",
+        toolName: "memory_forget",
         source: "openclaw",
-        sourceName: "core",
-        toolCallId: "catalog-send-1",
+        sourceName: "memory-lancedb",
+        toolCallId: "catalog-forget-1",
         parentToolCallId: "tool-search-1",
         input: args,
       }),
-    ).rejects.toThrow("catalog delivery failed");
+    ).rejects.toThrow("catalog delete failed");
 
     expect(observeToolTerminal).toHaveBeenCalledWith({
-      toolCallId: "catalog-send-1",
-      toolName: "message",
+      toolCallId: "catalog-forget-1",
+      toolName: "memory_forget",
       arguments: args,
       executionStarted: true,
       outcome: "failure",
-      failure: { error: "catalog delivery failed" },
+      failure: { error: "catalog delete failed" },
+      ownerMutation: { ownerKey: '["memory-lancedb","memory_forget"]' },
     });
   });
 

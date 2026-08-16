@@ -134,22 +134,28 @@ describe("prepareEmbeddedAttemptClientTools", () => {
   it("binds side-effect metadata to the concrete plugin tool owner", () => {
     const catalogRef = seedCatalog("tool-search", TOOL_SEARCH_CONFIG);
     const memoryStore = createStubTool("memory_store");
-    setPluginToolMeta(memoryStore as never, {
-      pluginId: "memory-lancedb",
-      optional: false,
-      sideEffecting: true,
-    });
+    const memoryForget = createStubTool("memory_forget");
+    for (const tool of [memoryStore, memoryForget]) {
+      setPluginToolMeta(tool as never, {
+        pluginId: "memory-lancedb",
+        optional: false,
+        sideEffecting: true,
+      });
+    }
 
     const result = prepare({
       codeModeControlsEnabledForRun: false,
       attemptConfig: CATALOGS_DISABLED_CONFIG,
       toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
       catalogRef,
-      uncompactedEffectiveTools: [memoryStore],
+      uncompactedEffectiveTools: [memoryStore, memoryForget],
     });
 
     expect(result.sideEffectToolOwners).toEqual(
-      new Map([["memory_store", '["memory-lancedb","memory_store"]']]),
+      new Map([
+        ["memory_store", '["memory-lancedb","memory_store"]'],
+        ["memory_forget", '["memory-lancedb","memory_forget"]'],
+      ]),
     );
   });
 });

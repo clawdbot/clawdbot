@@ -256,13 +256,73 @@ describe("createCodexDynamicToolBridge", () => {
     );
   });
 
-  it("leaves an unowned same-name Codex tool outside persistence correction", async () => {
+  it("surfaces a rejected owner-backed memory delete before a false final claim", async () => {
+    const tool = createOwnerBackedContractTool({
+      pluginId: "memory-lancedb",
+      name: "memory_forget",
+      result: textToolResult("unused"),
+    });
+    tool.execute = vi.fn(async () => {
+      throw new Error("memory delete failed");
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+    });
+    const response = await handleDynamicToolCallWithTimeout({
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-memory-forget",
+        namespace: null,
+        tool: "memory_forget",
+        arguments: { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" },
+      },
+      toolBridge: bridge,
+      signal: new AbortController().signal,
+      timeoutMs: 1_000,
+      observeToolTerminal: createContractToolTerminalObserver("run-codex-forget"),
+    });
+    const payloads = buildContractReplyPayloads({
+      assistantText: "Done - I forgot that memory.",
+      lastToolError: response.terminalResolution?.lastToolError,
+    });
+
+    expect(response.terminalResolution?.lastToolError).toMatchObject({
+      ownerKey: '["memory-lancedb","memory_forget"]',
+      mutatingAction: true,
+      actionFingerprint: expect.stringContaining('owner=["memory-lancedb","memory_forget"]|args='),
+    });
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toContain("I forgot");
+    expect(payloads[1]).toMatchObject({ isError: true });
+    expect(JSON.stringify(response)).not.toContain("memory-lancedb");
+    expect(JSON.stringify(toCodexDynamicToolProtocolResponse(response))).not.toContain(
+      "memory-lancedb",
+    );
+  });
+
+  it.each([
+    {
+      name: "memory_store",
+      args: { text: "Tuesday 09:00 release window" },
+      assistantText: "Got it - I'll remember the Tuesday release window.",
+    },
+    {
+      name: "memory_forget",
+      args: { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" },
+      assistantText: "Done - I forgot that memory.",
+    },
+  ])("leaves unowned same-name Codex tool $name outside correction", async (testCase) => {
     const bridge = createCodexDynamicToolBridge({
       tools: [
         createTool({
-          name: "memory_store",
+          name: testCase.name,
           execute: vi.fn(async () =>
-            textToolResult("Store unavailable.", { status: "blocked", error: "unavailable" }),
+            textToolResult("Mutation unavailable.", {
+              status: "blocked",
+              error: "unavailable",
+            }),
           ),
         }),
       ],
@@ -272,18 +332,18 @@ describe("createCodexDynamicToolBridge", () => {
       call: {
         threadId: "thread-1",
         turnId: "turn-1",
-        callId: "call-unowned-store",
+        callId: `call-unowned-${testCase.name}`,
         namespace: null,
-        tool: "memory_store",
-        arguments: { text: "Tuesday 09:00 release window" },
+        tool: testCase.name,
+        arguments: testCase.args,
       },
       toolBridge: bridge,
       signal: new AbortController().signal,
       timeoutMs: 1_000,
-      observeToolTerminal: createContractToolTerminalObserver("run-unowned-store"),
+      observeToolTerminal: createContractToolTerminalObserver(`run-unowned-${testCase.name}`),
     });
     const payloads = buildContractReplyPayloads({
-      assistantText: "Got it - I'll remember the Tuesday release window.",
+      assistantText: testCase.assistantText,
       lastToolError: response.terminalResolution?.lastToolError,
     });
 
@@ -292,13 +352,26 @@ describe("createCodexDynamicToolBridge", () => {
     expect(payloads).toHaveLength(1);
   });
 
-  it("does not warn after a successful owner-backed Codex memory write", async () => {
+  it.each([
+    {
+      name: "memory_store",
+      args: { text: "Tuesday 09:00 release window" },
+      result: textToolResult("Stored memory.", { action: "created" }),
+      assistantText: "Stored the Tuesday release window.",
+    },
+    {
+      name: "memory_forget",
+      args: { memoryId: "9e107d9d-3729-4ff5-a8c0-01d29c61f49d" },
+      result: textToolResult("Forgotten memory.", { action: "deleted" }),
+      assistantText: "Forgot that memory.",
+    },
+  ])("does not warn after a successful owner-backed Codex $name", async (testCase) => {
     const bridge = createCodexDynamicToolBridge({
       tools: [
         createOwnerBackedContractTool({
           pluginId: "memory-lancedb",
-          name: "memory_store",
-          result: textToolResult("Stored memory.", { action: "created" }),
+          name: testCase.name,
+          result: testCase.result,
         }),
       ],
       signal: new AbortController().signal,
@@ -307,18 +380,18 @@ describe("createCodexDynamicToolBridge", () => {
       call: {
         threadId: "thread-1",
         turnId: "turn-1",
-        callId: "call-created-memory",
+        callId: `call-successful-${testCase.name}`,
         namespace: null,
-        tool: "memory_store",
-        arguments: { text: "Tuesday 09:00 release window" },
+        tool: testCase.name,
+        arguments: testCase.args,
       },
       toolBridge: bridge,
       signal: new AbortController().signal,
       timeoutMs: 1_000,
-      observeToolTerminal: createContractToolTerminalObserver("run-created-memory"),
+      observeToolTerminal: createContractToolTerminalObserver(`run-successful-${testCase.name}`),
     });
     const payloads = buildContractReplyPayloads({
-      assistantText: "Stored the Tuesday release window.",
+      assistantText: testCase.assistantText,
       lastToolError: response.terminalResolution?.lastToolError,
     });
 

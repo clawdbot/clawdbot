@@ -3568,6 +3568,76 @@ describe("memory plugin e2e", () => {
     expect(detectCategory("Random note")).toBe("other");
   });
 
+  test("memory_forget reports authoritative delete receipts", async () => {
+    const memoryId = "890e1fae-1234-4678-abcd-ef0123456789";
+    const embeddingsCreate = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3] }],
+    }));
+    const deleteRows = vi
+      .fn()
+      .mockResolvedValueOnce({ numDeletedRows: 0, version: 1 })
+      .mockResolvedValueOnce({ numDeletedRows: 0, version: 2 })
+      .mockResolvedValueOnce({ numDeletedRows: 1, version: 3 });
+    const toArray = vi.fn(async () => [
+      {
+        id: memoryId,
+        text: "User prefers concise replies",
+        category: "preference",
+        vector: [0.1, 0.2, 0.3],
+        importance: 0.8,
+        createdAt: Date.now(),
+        _distance: 0.01,
+      },
+    ]);
+    const limit = vi.fn(() => ({ toArray }));
+    const vectorSearch = vi.fn(() => createAgentScopedVectorQuery(limit));
+
+    await withMockedOpenAiMemoryPlugin({
+      ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
+      embeddingsCreate,
+      loadLanceDbModule: async () => ({
+        connect: vi.fn(async () => ({
+          tableNames: vi.fn(async () => ["memories"]),
+          openTable: vi.fn(async () => ({
+            schema: createAgentScopedSchemaMock(),
+            vectorSearch,
+            countRows: vi.fn(async () => 1),
+            delete: deleteRows,
+          })),
+        })),
+      }),
+      run: async (dynamicMemoryPlugin) => {
+        const registeredTools: any[] = [];
+        const mockApi = createMemoryPluginApi(getDbPath(), {
+          registerTool: (tool: any, opts: any) => {
+            registeredTools.push({ tool, opts });
+          },
+        });
+        registerTestPlugin(dynamicMemoryPlugin, mockApi);
+        const forgetTool = materializeRegisteredTool(
+          registeredTools.find((entry) => entry.opts?.name === "memory_forget")?.tool,
+        );
+        expectToolExecute(forgetTool, "memory_forget");
+
+        const directAbsent = await forgetTool.execute("forget-direct-absent", { memoryId });
+        expect(directAbsent.details).toEqual({ action: "not_found", id: memoryId });
+
+        const queryAbsent = await forgetTool.execute("forget-query-absent", {
+          query: "concise replies",
+        });
+        expect(queryAbsent.details).toEqual({ action: "not_found", id: memoryId });
+        expect(queryAbsent.content?.[0]?.text).not.toContain("Forgotten");
+
+        const queryDeleted = await forgetTool.execute("forget-query-deleted", {
+          query: "concise replies",
+        });
+        expect(queryDeleted.details).toEqual({ action: "deleted", id: memoryId });
+        expect(queryDeleted.content?.[0]?.text).toContain("Forgotten");
+        expect(deleteRows).toHaveBeenCalledTimes(3);
+      },
+    });
+  });
+
   test("memory_forget candidate list shows full UUIDs, not truncated IDs", async () => {
     const fakeUuid1 = "890e1fae-1234-5678-abcd-ef0123456789";
     const fakeUuid2 = "a1b2c3d4-5678-9abc-def0-1234567890ab";
