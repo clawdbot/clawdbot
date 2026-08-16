@@ -67,6 +67,7 @@ import {
 } from "./openclaw-state-db-schema-additive.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
+  type AgentDatabasePathMigrationSummary as AgentPathSummary,
   assertCanonicalStateSchemaShape,
   detectOpenClawStateDatabaseSchemaMigrationsFromDatabase,
   dropLegacyStateTables,
@@ -398,7 +399,7 @@ function ensureSchema(db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv
         dropLegacyStateTables(db);
         migrateRetiredCommitmentsSchema(db, previousVersion);
         migrateWorkerPlacementExecutionModeSchema(db, previousVersion);
-        const agentPathMigration = migrateAgentPaths(db, previousVersion, pathname);
+        const pathMigration: AgentPathSummary = migrateAgentPaths(db, previousVersion, pathname);
         ensureAdditiveStateColumns(db);
         sessionWatchMigration.migrateSessionWatchCursorProvenance(db);
         assertCanonicalStateSchemaShape(db, pathname);
@@ -457,7 +458,7 @@ function ensureSchema(db: DatabaseSync, pathname: string, env: NodeJS.ProcessEnv
             ),
         );
         assertOpenClawStateDatabaseForMaintenance(db, { pathname });
-        warnAgentPathMigration(stateDbLog, agentPathMigration, pathname);
+        warnAgentPathMigration(stateDbLog, pathMigration, pathname);
       },
       {
         busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
