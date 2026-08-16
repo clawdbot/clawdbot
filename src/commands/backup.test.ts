@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatCliOperatorError } from "../cli/failure-output.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
@@ -441,6 +441,12 @@ describe("backup commands", () => {
       detail: "The destination does not have enough free space",
       recovery: "Free up disk space and run `openclaw backup create --output <archive>` again.",
     },
+    {
+      code: "EIO",
+      detail: "The output path could not be prepared",
+      recovery:
+        "Check the path and filesystem, then run `openclaw backup create --output <archive>` again.",
+    },
   ])("reports an actionable $code output-parent failure", async ({ code, detail, recovery }) => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const outputParent = path.join(tempHome.home, "missing-parent", "daily");
@@ -459,8 +465,11 @@ describe("backup commands", () => {
     }).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(Error);
-    expect(formatErrorMessage(error)).toBe(
-      `Backup archive creation failed: ${outputPath}. ${detail}: ${outputParent}. ${recovery}`,
+    const operatorMessage = `Backup archive creation failed: ${outputPath}. ${detail}: ${outputParent}. ${recovery}`;
+    expect(formatCliOperatorError(error, { argv: [], env: {} })).toBe(operatorMessage);
+    const debugMessage = `${operatorMessage} | ${code}: filesystem error, mkdir '${outputParent}' | ${code}`;
+    expect(formatCliOperatorError(error, { argv: [], env: { OPENCLAW_DEBUG: "1" } })).toBe(
+      debugMessage,
     );
   });
 
@@ -476,8 +485,10 @@ describe("backup commands", () => {
     }).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(Error);
-    expect(formatErrorMessage(error)).toBe(
-      `Backup archive creation failed: ${outputPath}. Backup output parent is not a directory: ${outputParent}. Choose a directory path and run \`openclaw backup create --output <archive>\` again.`,
+    const operatorMessage = `Backup archive creation failed: ${outputPath}. Backup output parent is not a directory: ${outputParent}. Choose a directory path and run \`openclaw backup create --output <archive>\` again.`;
+    expect(formatCliOperatorError(error, { argv: [], env: {} })).toBe(operatorMessage);
+    expect(formatCliOperatorError(error, { argv: [], env: { OPENCLAW_DEBUG: "1" } })).toMatch(
+      /\| EEXIST: .*mkdir.*\| EEXIST/u,
     );
   });
 

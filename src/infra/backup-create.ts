@@ -211,9 +211,9 @@ function formatBackupOutputFailure(
       detail = `The destination storage quota is exhausted: ${outputParent}. Free up space or choose another path, then ${retry}`;
       break;
     default:
-      detail = `The output path could not be prepared. ${formatErrorMessage(filesystemError)} Resolve the reported filesystem error and ${retry}`;
+      detail = `The output path could not be prepared: ${outputParent}. Check the path and filesystem, then ${retry}`;
   }
-  return new Error(`Backup archive creation failed: ${outputPath}. ${detail}`);
+  return new Error(`Backup archive creation failed: ${outputPath}. ${detail}`, { cause: error });
 }
 
 async function assertOutputPathReady(outputPath: string): Promise<void> {
@@ -803,6 +803,10 @@ export async function createBackupArchive(
     );
   }
 
+  if (!opts.dryRun) {
+    await assertOutputPathReady(outputPath);
+  }
+
   const createdAt = new Date(nowMs).toISOString();
   const stateAsset = plan.included.find((asset) => asset.kind === "state");
   const pluginSkillsPath = stateAsset
@@ -825,7 +829,6 @@ export async function createBackupArchive(
     return result;
   }
 
-  await assertOutputPathReady(outputPath);
   await prepareBackupOutputParent(outputPath);
   const tempRoot = await chooseBackupTempRoot({ assets: result.assets, outputPath });
   await fs.mkdir(tempRoot, { recursive: true });
