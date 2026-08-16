@@ -91,7 +91,7 @@ Version 3 was an unshipped development step folded into version 4.
 
 ### State schema 9
 
-Schema 9 stores an `agent_databases.path` value relative to the state directory when the registered agent database is inside that directory. Explicit external database paths remain absolute. This keeps a copied state directory self-contained: its registry resolves agent databases beneath the copied root instead of continuing to discover files beneath the source root.
+Schema 9 stores an `agent_databases.path` value relative to the state directory when the registered agent database is inside that directory. During migration, a foreign default-layout row is re-anchored to the in-root counterpart when that file exists. It is deleted only when the same agent already holds its in-root registration, because dual default-layout registrations cannot produce a valid combined session list. Otherwise, the absolute row is preserved, so genuine external registrations are never deleted. This keeps a copied state directory self-contained without dropping supported external database paths.
 
 ## Integrity checks
 

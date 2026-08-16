@@ -1583,14 +1583,40 @@ describe("openclaw state database", () => {
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = materializeCurrentStateDatabase(stateDir);
     const inRootPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-    const foreignDefaultPath = path.join(
+    const dualInRootPath = path.join(stateDir, "agents", "dual", "agent", "openclaw-agent.sqlite");
+    const dualForeignPath = path.join(
       foreignStateDir,
       "agents",
-      "foreign",
+      "dual",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    const copiedForeignPath = path.join(
+      foreignStateDir,
+      "agents",
+      "copied",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    const copiedInRootPath = path.join(
+      stateDir,
+      "agents",
+      "copied",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    const preservedDefaultPath = path.join(
+      foreignStateDir,
+      "agents",
+      "preserved",
       "agent",
       "openclaw-agent.sqlite",
     );
     const externalPath = path.join(foreignStateDir, "explicit", "external.sqlite");
+    fs.mkdirSync(path.dirname(dualInRootPath), { recursive: true });
+    fs.writeFileSync(dualInRootPath, "");
+    fs.mkdirSync(path.dirname(copiedInRootPath), { recursive: true });
+    fs.writeFileSync(copiedInRootPath, "");
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(databasePath);
     const insert = legacy.prepare(
@@ -1599,7 +1625,10 @@ describe("openclaw state database", () => {
        ) VALUES (?, ?, 17, 1, NULL)`,
     );
     insert.run("main", inRootPath);
-    insert.run("foreign", foreignDefaultPath);
+    insert.run("dual", dualInRootPath);
+    insert.run("dual", dualForeignPath);
+    insert.run("copied", copiedForeignPath);
+    insert.run("preserved", preservedDefaultPath);
     insert.run("external", externalPath);
     legacy.exec(`
       PRAGMA user_version = 8;
@@ -1616,15 +1645,27 @@ describe("openclaw state database", () => {
     expect(
       migrated.db.prepare("SELECT agent_id, path FROM agent_databases ORDER BY agent_id").all(),
     ).toEqual([
+      {
+        agent_id: "copied",
+        path: path.join("agents", "copied", "agent", "openclaw-agent.sqlite"),
+      },
+      {
+        agent_id: "dual",
+        path: path.join("agents", "dual", "agent", "openclaw-agent.sqlite"),
+      },
       { agent_id: "external", path: externalPath },
       {
         agent_id: "main",
         path: path.join("agents", "main", "agent", "openclaw-agent.sqlite"),
       },
+      { agent_id: "preserved", path: preservedDefaultPath },
     ]);
     expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
+      expect.objectContaining({ agentId: "copied", path: copiedInRootPath }),
+      expect.objectContaining({ agentId: "dual", path: dualInRootPath }),
       expect.objectContaining({ agentId: "external", path: externalPath }),
       expect.objectContaining({ agentId: "main", path: inRootPath }),
+      expect.objectContaining({ agentId: "preserved", path: preservedDefaultPath }),
     ]);
   });
 

@@ -30,7 +30,10 @@ import {
 } from "./openclaw-state-db-schema-helpers.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
-import { resolveOpenClawAgentDatabaseStoredPath } from "./openclaw-state-db.paths.js";
+import {
+  resolveOpenClawAgentDatabaseStoredPath,
+  resolveOpenClawStateDirForDatabasePath,
+} from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 export function dropLegacyStateTables(db: DatabaseSync): void {
@@ -475,6 +478,9 @@ export function migrateAgentDatabaseRelativePaths(
     "UPDATE agent_databases SET path = ? WHERE agent_id = ? AND path = ?",
   );
   const deletePath = db.prepare("DELETE FROM agent_databases WHERE agent_id = ? AND path = ?");
+  const hasPath = db.prepare(
+    "SELECT 1 FROM agent_databases WHERE agent_id = ? AND path = ? LIMIT 1",
+  );
   let changed = false;
   for (const row of rows) {
     const agentId = row.agent_id;
@@ -485,18 +491,48 @@ export function migrateAgentDatabaseRelativePaths(
     if (!path.isAbsolute(registeredPath)) {
       continue;
     }
-    const absolutePath = path.resolve(registeredPath);
     const storedPath = resolveOpenClawAgentDatabaseStoredPath(databasePath, registeredPath);
     if (!path.isAbsolute(storedPath)) {
       updatePath.run(storedPath, agentId, registeredPath);
       changed = true;
+    }
+  }
+  const stateDir = resolveOpenClawStateDirForDatabasePath(databasePath);
+  for (const row of rows) {
+    const agentId = row.agent_id;
+    const registeredPath = row.path;
+    if (
+      typeof agentId !== "string" ||
+      typeof registeredPath !== "string" ||
+      !path.isAbsolute(registeredPath) ||
+      !path.isAbsolute(resolveOpenClawAgentDatabaseStoredPath(databasePath, registeredPath))
+    ) {
       continue;
     }
+    const absolutePath = path.resolve(registeredPath);
     if (isDefaultAgentDatabasePath(absolutePath, agentId)) {
-      // Copied registries can retain another state root's default-layout rows.
-      // They are discovery metadata and self-heal when that agent database next opens.
-      deletePath.run(agentId, registeredPath);
-      changed = true;
+      const counterpartAbsolute = path.join(
+        stateDir,
+        "agents",
+        agentId,
+        "agent",
+        "openclaw-agent.sqlite",
+      );
+      const counterpartStored = resolveOpenClawAgentDatabaseStoredPath(
+        databasePath,
+        counterpartAbsolute,
+      );
+      if (hasPath.get(agentId, counterpartStored)) {
+        // The same agent already owns its in-root canonical registration. Keeping a second
+        // default-layout registration guarantees duplicate canonical session keys on every list.
+        deletePath.run(agentId, registeredPath);
+        changed = true;
+      } else if (existsSync(counterpartAbsolute)) {
+        // Re-anchor a copied or moved state directory onto its copied database instead of
+        // deleting the registration or leaving it dangling at the source root.
+        updatePath.run(counterpartStored, agentId, registeredPath);
+        changed = true;
+      }
     }
   }
   return changed;
