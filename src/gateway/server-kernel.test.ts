@@ -256,6 +256,7 @@ describe("createGatewayKernel", () => {
         "control-ui.root",
         "tls.runtime",
         "runtime.state",
+        "gateway.shutdown-runtime-import",
         "runtime.early",
         "runtime.early.discovery",
         "runtime.post-early-imports",

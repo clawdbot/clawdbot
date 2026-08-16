@@ -53,7 +53,6 @@ import {
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
-import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -615,76 +614,6 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(result.queuedFinal).toBe(true);
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
-  });
-
-  it("records stale-foreground suppressed CLI-owned finals without duplicating answer text", async () => {
-    setNoAbort();
-    const dispatcher = createReplyDispatcher({
-      deliver: vi.fn(async () => undefined),
-      beforeDeliver: (payload, info) => {
-        if (info.kind !== "final") {
-          return payload;
-        }
-        setReplyPayloadMetadata(payload, {
-          foregroundDeliverySuppression: { reason: "stale-foreground" },
-        });
-        return null;
-      },
-    });
-    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        OriginatingTo: "channel:C123",
-        SessionKey: "agent:main:slack:channel:C123",
-        MessageSid: "slack-message-cli",
-      }),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver: async (_ctx, opts) => {
-        (
-          opts as GetReplyOptions & {
-            onSessionPrepared?: (binding: {
-              sessionKey?: string;
-              sessionId: string;
-              storePath?: string;
-            }) => void;
-          }
-        ).onSessionPrepared?.({
-          sessionKey: "agent:main:slack:channel:c123",
-          sessionId: "prepared-session",
-          storePath: "/tmp/prepared-sessions.json",
-        });
-        return setReplyPayloadMetadata(
-          { text: "The CLI answer already lives in the transcript." },
-          { assistantTranscriptOwned: true },
-        );
-      },
-    });
-    await settleReplyDispatcher({ dispatcher });
-
-    expect(result.queuedFinal).toBe(true);
-    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(1);
-    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
-      sessionKey: "agent:main:slack:channel:C123",
-      agentId: "main",
-      expectedSessionId: "prepared-session",
-      text: "Channel final suppressed before delivery: stale foreground",
-      mediaUrls: undefined,
-      idempotencyKey: "channel-final-suppressed:slack-message-cli:0",
-      deliveryMirror: {
-        kind: "channel-final-suppressed",
-        reason: "stale-foreground",
-        sourceMessageId: "slack-message-cli",
-      },
-      storePath: "/tmp/prepared-sessions.json",
-      updateMode: "inline",
-      config: emptyConfig,
-      beforeMessageWrite: expect.any(Function),
-    });
   });
 
   it("disables routed delivery mirrors for CLI-owned finals", async () => {

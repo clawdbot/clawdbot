@@ -34,7 +34,6 @@ import {
   SAFETY_MARGIN,
   SUMMARIZATION_OVERHEAD_TOKENS,
   computeAdaptiveChunkRatio,
-  isOversizedForSummary,
   resolveContextWindowTokens,
   summarizeInStages,
 } from "../compaction.js";
@@ -302,19 +301,13 @@ function containsRealConversation(messages: AgentMessage[]): boolean {
  * Only called when no compaction provider is available or the provider failed.
  */
 async function summarizeViaLLM(params: Parameters<typeof summarizeInStages>[0]): Promise<string> {
-  const result = await compactionSafeguardDeps.summarizeInStages({
+  // Summarization failure throws CompactionError (b942db4d569b) — there is no
+  // degraded-fallback return shape to preserve a previous summary against.
+  return await compactionSafeguardDeps.summarizeInStages({
     ...params,
     messages: prependPreviousSummaryForRedistill(params),
     previousSummary: undefined,
   });
-  if (result.kind === "summary") {
-    return result.text;
-  }
-
-  // A generic fallback means redistillation never happened. Preserve the
-  // known summary verbatim so a temporary model outage cannot erase it.
-  const previousSummary = params.previousSummary?.trim();
-  return previousSummary ? `${previousSummary}\n\n${result.text}` : result.text;
 }
 
 /**
@@ -577,14 +570,6 @@ function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY
   }
   const budget = maxChars - marker.length;
   return `${truncateUtf16Safe(summary, budget)}${marker}`;
-}
-
-function capCompactionSummaryPreservingSuffix(
-  summaryBody: string,
-  suffix: string,
-  maxChars = MAX_COMPACTION_SUMMARY_CHARS,
-): string {
-  return budgetCompactionSummary(summaryBody, suffix, maxChars).summary;
 }
 
 function normalizeCompactionSuffix(suffix: string | CompactionSuffix): CompactionSuffix {
@@ -901,10 +886,6 @@ function buildPreservedTurnsSection(messages: AgentMessage[]): ContextSection {
     truncatedMarker: PRESERVED_TURNS_TRUNCATED_MARKER,
     truncatedLoss: "preserved-turn-head",
   });
-}
-
-function formatPreservedTurnsSection(messages: AgentMessage[]): string {
-  return buildPreservedTurnsSection(messages).text;
 }
 
 function buildSplitTurnContextSection(
@@ -1463,7 +1444,7 @@ const testing = {
   collectToolFailures,
   formatToolFailuresSection,
   splitPreservedRecentTurns,
-  formatPreservedTurnsSection,
+  buildPreservedTurnsSection,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
   prependPreviousSummaryForRedistill,
@@ -1473,10 +1454,9 @@ const testing = {
   extractOpaqueIdentifiers,
   auditSummaryQuality,
   capCompactionSummary,
-  capCompactionSummaryPreservingSuffix,
+  budgetCompactionSummary,
   formatFileOperations,
   computeAdaptiveChunkRatio,
-  isOversizedForSummary,
   readWorkspaceContextForSummary,
   hasMeaningfulConversationContent,
   isRealConversationMessage,

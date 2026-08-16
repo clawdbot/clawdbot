@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Model } from "@openclaw/llm-core";
+import type { AssistantMessageEvent, Model } from "@openclaw/llm-core";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import {
@@ -70,7 +70,7 @@ export async function processCompletionsStream(
   responseStream: AsyncIterable<ChatCompletionChunk>,
   output: MutableAssistantOutput,
   model: Model,
-  stream: { push(event: unknown): void },
+  stream: { push(event: AssistantMessageEvent): void },
   options?: {
     signal?: AbortSignal;
     emitReasoning?: boolean;
@@ -113,7 +113,7 @@ export async function processCompletionsStream(
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
   let chunkPushedEvent = false;
-  const pushStreamEvent = (event: unknown) => {
+  const pushStreamEvent = (event: AssistantMessageEvent) => {
     chunkPushedEvent = true;
     stream.push(event);
   };
@@ -519,6 +519,9 @@ export async function processCompletionsStream(
     allowSilentToolCallPromotion:
       sawStopFinishReason || (sawNativeToolCallDelta && (options?.sawStreamDONE?.() ?? false)),
     onConfirmedToolCall(block, contentIndex) {
+      if (block.type !== "toolCall") {
+        return;
+      }
       pushStreamEvent({
         type: "toolcall_end",
         contentIndex,

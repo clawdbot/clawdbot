@@ -215,6 +215,12 @@ describe("cli program (nodes basics)", () => {
     const output = getRuntimeOutput();
     expect(output).toContain("Pending: 0 · Paired: 1");
     expect(output).toContain("Pairing Scoped");
+    // The degraded table must never look authoritative: the fallback is
+    // announced on stderr so --json stdout stays parseable.
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("live node view unavailable"),
+    );
+    expect(output).not.toContain("live node view unavailable");
   });
 
   it("sanitizes untrusted nodes list table fields while preserving JSON values", async () => {

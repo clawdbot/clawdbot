@@ -5920,50 +5920,30 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       }),
     );
 
-    const push = runCiManifestFixture({
-      bundledPlanner: true,
-      eventName: "push",
-    });
-    expect(push.status, push.output).toBe(0);
-    expect(
-      JSON.parse(
-        expectDefined(
-          push.outputs.checks_node_core_nondist_matrix,
-          "push node core nondist matrix output",
-        ),
-      ).include,
-    ).toContainEqual(
-      expect.objectContaining({
-        check_name: "bundled-node-plan",
-        env: {
-          OPENCLAW_CI_TEST_COMPACT_MODE: "push",
-          OPENCLAW_CI_TEST_RUNNER_BACKEND: "",
-        },
-      }),
-    );
-
-    const githubPush = runCiManifestFixture({
-      bundledPlanner: true,
-      eventName: "push",
-      runnerBackend: "github",
-    });
-    expect(githubPush.status, githubPush.output).toBe(0);
-    expect(
-      JSON.parse(
-        expectDefined(
-          githubPush.outputs.checks_node_core_nondist_matrix,
-          "GitHub-hosted push node core nondist matrix output",
-        ),
-      ).include,
-    ).toContainEqual(
-      expect.objectContaining({
-        check_name: "bundled-node-plan",
-        env: {
-          OPENCLAW_CI_TEST_COMPACT_MODE: "push",
-          OPENCLAW_CI_TEST_RUNNER_BACKEND: "github",
-        },
-      }),
-    );
+    for (const runnerBackend of [undefined, "github", "hybrid"] as const) {
+      const push = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName: "push",
+        runnerBackend,
+      });
+      expect(push.status, push.output).toBe(0);
+      expect(
+        JSON.parse(
+          expectDefined(
+            push.outputs.checks_node_core_nondist_matrix,
+            `${runnerBackend ?? "default"} push node core nondist matrix output`,
+          ),
+        ).include,
+      ).toContainEqual(
+        expect.objectContaining({
+          check_name: "bundled-node-plan",
+          env: {
+            OPENCLAW_CI_TEST_COMPACT_MODE: "push",
+            OPENCLAW_CI_TEST_RUNNER_BACKEND: runnerBackend ?? "",
+          },
+        }),
+      );
+    }
 
     const changedPullRequest = runCiManifestFixture({
       bundledPlanner: true,

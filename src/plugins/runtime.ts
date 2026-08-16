@@ -2,6 +2,7 @@
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   getPluginCommandExecutionCount,
   isPluginCommandExecutionActiveHere,
@@ -63,13 +64,19 @@ function isRegistryLive(registry: PluginRegistry): boolean {
   return state.activeRegistry === registry;
 }
 
-async function cleanupPreviousPluginHostRegistry(params: {
-  previousRegistry: PluginRegistry;
-}): Promise<void> {
+const loadPluginHostCleanupRuntime = createLazyRuntimeModule(async () => {
   const [{ getRuntimeConfig }, { cleanupReplacedPluginHostRegistry }] = await Promise.all([
     import("../config/config.js"),
     import("./host-hook-cleanup.js"),
   ]);
+  return { getRuntimeConfig, cleanupReplacedPluginHostRegistry };
+});
+
+async function cleanupPreviousPluginHostRegistry(params: {
+  previousRegistry: PluginRegistry;
+}): Promise<void> {
+  const { getRuntimeConfig, cleanupReplacedPluginHostRegistry } =
+    await loadPluginHostCleanupRuntime();
   const nextRegistry = asPluginRegistry(state.activeRegistry);
   if (nextRegistry === params.previousRegistry) {
     return;
@@ -436,6 +443,10 @@ export async function clearActivePluginRegistry(): Promise<void> {
     return;
   }
   await completion;
+}
+
+export async function prepareActivePluginRegistryShutdown(): Promise<void> {
+  await loadPluginHostCleanupRuntime();
 }
 
 export function resetPluginRuntimeStateForTest(): void {

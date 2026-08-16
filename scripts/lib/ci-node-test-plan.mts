@@ -165,19 +165,18 @@ const COMPACT_EMBEDDED_GROUP_NAMES = [
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // Compact bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
-// The group hints below are loaded-fleet CI walls. Three-way striping plus a
-// Blacksmith keeps the proven 200s/276s admission caps and 28-worker ceiling.
-// Standard 4-core GitHub runners use direct hosted wall hints below. These
-// budgets target roughly 160 seconds of predicted body work, leaving the
-// measured ~70-second setup overhead inside a roughly 230-second lane.
+// Default Blacksmith plans pack the Blacksmith base hints with 200s/276s
+// admission caps. GitHub-hosted plans use direct hosted hints with 90s/95s
+// packing caps. Hybrid keeps the expanded topology but packs its attempt-1
+// Blacksmith rows with the refit Blacksmith estimates below.
 const COMPACT_LARGE_NODE_TEST_JOB_SECONDS = 200;
 const COMPACT_SMALL_NODE_TEST_JOB_SECONDS = 276;
 const COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS = 90;
 const COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS = 95;
 const COMPACT_GITHUB_GROUP_SECONDS_SCALE = 1.6;
-// Wall-time ceiling per hosted lane: with ~70s of fixed setup, a 150-second
-// body keeps every Node lane inside a ~220-second job. The former 210-second
-// ceiling let single fat groups own ~280-second critical paths.
+const COMPACT_HYBRID_GROUP_SECONDS_SCALE = 0.87;
+// Split groups above this hosted prediction before packing. Hybrid reuses the
+// hosted-derived splits so retries cannot reunite an oversized hosted group.
 const COMPACT_GITHUB_MAX_PREDICTED_SECONDS = 150;
 const COMPACT_GITHUB_NODE_TEST_JOB_CAP = 96;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
@@ -530,6 +529,14 @@ const COMPACT_GITHUB_GROUP_SECONDS_HINTS = new Map<string, number>([
   ["core-unit-support", 32],
 ]);
 
+// Hybrid-specific Blacksmith observations from 31949756966, plus the
+// gateway-core-3 139.5s spike in 31938297538 that must stay singleton.
+const COMPACT_HYBRID_GROUP_SECONDS_HINTS = new Map<string, number>([
+  ["agentic-commands-doctor", 64],
+  ["agentic-gateway-core-3", 140],
+  ["core-runtime-cron-service", 80],
+]);
+
 // Advisory per-file wall-clock hints (seconds) for stripe balancing, measured
 // from single-file local runs (M4 Max) and static import-graph size. Packing
 // only: a stale entry skews stripe balance but never correctness. Unlisted
@@ -631,8 +638,19 @@ function estimateDefaultCompactGroupSeconds(group: NodeTestShardGroup): number {
   return DEFAULT_WHOLE_GROUP_SECONDS;
 }
 
-function usesGithubRunnerProfile(runnerBackend: string | undefined): boolean {
+function usesExpandedRunnerProfile(runnerBackend: string | undefined): boolean {
   return runnerBackend === "github" || runnerBackend === "hybrid";
+}
+
+function estimateHybridCompactGroupSeconds(group: NodeTestShardGroup, seconds: number): number {
+  // The 4,723s Blacksmith push hint sum measured 3,742.046s/3,756.674s
+  // (79.230%/79.540%) in runs 31945998653/31949756966. A 0.87 scale keeps
+  // 9.379% headroom above the higher ratio. With direct outlier hints, it sits
+  // one point above the 0.86 packing cliff.
+  return (
+    COMPACT_HYBRID_GROUP_SECONDS_HINTS.get(group.shard_name) ??
+    Math.round(seconds * COMPACT_HYBRID_GROUP_SECONDS_SCALE)
+  );
 }
 
 function estimateCompactGroupSeconds(
@@ -640,7 +658,13 @@ function estimateCompactGroupSeconds(
   runnerBackend: string | undefined,
 ): number {
   const defaultSeconds = estimateDefaultCompactGroupSeconds(group);
-  if (!usesGithubRunnerProfile(runnerBackend)) {
+  // Hybrid attempt 1 runs on Blacksmith. It keeps the expanded topology for
+  // hosted retries, but its packing weights must describe the runner that
+  // normally executes the plan.
+  if (runnerBackend === "hybrid") {
+    return estimateHybridCompactGroupSeconds(group, defaultSeconds);
+  }
+  if (runnerBackend !== "github") {
     return defaultSeconds;
   }
   return (
@@ -653,13 +677,15 @@ function estimateCompactStripeSeconds(
   group: NodeTestShardGroup,
   runnerBackend: string | undefined,
 ): number {
-  if (usesGithubRunnerProfile(runnerBackend)) {
+  if (runnerBackend === "github") {
     return estimateCompactGroupSeconds(group, runnerBackend);
   }
-  return (
+  const blacksmithSeconds =
     COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS.get(group.shard_name) ??
-    estimateDefaultCompactGroupSeconds(group)
-  );
+    estimateDefaultCompactGroupSeconds(group);
+  return runnerBackend === "hybrid"
+    ? estimateHybridCompactGroupSeconds(group, blacksmithSeconds)
+    : blacksmithSeconds;
 }
 
 // Equal-weight sibling stripes can otherwise land in one bin and recreate the
@@ -2111,20 +2137,24 @@ const WHOLE_CONFIG_SPLIT_FILE_LISTERS = new Map<string, () => string[]>([
 
 function splitOversizedGithubCompactGroup(
   group: NodeTestShardGroup,
+  runnerBackend: string | undefined,
 ): Array<{ group: NodeTestShardGroup; seconds: number }> {
-  const seconds = estimateCompactGroupSeconds(group, "github");
-  if (seconds <= COMPACT_GITHUB_MAX_PREDICTED_SECONDS) {
-    return [{ group, seconds }];
+  // Hybrid retries run hosted, so retain hosted-derived striping even though
+  // Blacksmith timings own its attempt-1 packing weights.
+  const githubSeconds = estimateCompactGroupSeconds(group, "github");
+  const profileSeconds = estimateCompactGroupSeconds(group, runnerBackend);
+  if (githubSeconds <= COMPACT_GITHUB_MAX_PREDICTED_SECONDS) {
+    return [{ group, seconds: profileSeconds }];
   }
 
   const includePatterns =
     group.includePatterns ?? WHOLE_CONFIG_SPLIT_FILE_LISTERS.get(group.shard_name)?.();
   if (!includePatterns || includePatterns.length === 0) {
-    return [{ group, seconds }];
+    return [{ group, seconds: profileSeconds }];
   }
 
-  const stripeCount = Math.ceil(seconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS);
-  const splitSeconds = Math.ceil(seconds / stripeCount);
+  const stripeCount = Math.ceil(githubSeconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS);
+  const splitSeconds = Math.ceil(profileSeconds / stripeCount);
   return createStripedBatches(includePatterns, stripeCount, stripeFileWeight).map(
     (patterns, index) => ({
       group: {
@@ -2145,7 +2175,7 @@ function createCompactNodeTestShardBundles(
     (shard) => compactMode !== "push" || !COMPACT_PUSH_EXCLUDED_SHARDS.has(shard.shardName),
   );
   const groupsByRunner = new Map<string, NodeTestShardGroup[]>();
-  const hostedSplitSeconds = new Map<string, number>();
+  const synthesizedSplitSeconds = new Map<string, number>();
 
   for (const shard of shards) {
     const runner = resolveCiNodeTestRunner(shard);
@@ -2159,13 +2189,15 @@ function createCompactNodeTestShardBundles(
       runner,
       shard_name: shard.shardName,
     });
-    const plannedGroups = usesGithubRunnerProfile(options.runnerBackend)
-      ? splitOversizedGithubCompactGroup(group)
+    const plannedGroups = usesExpandedRunnerProfile(options.runnerBackend)
+      ? splitOversizedGithubCompactGroup(group, options.runnerBackend)
       : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
     for (const planned of plannedGroups) {
       groups.push(planned.group);
-      if (usesGithubRunnerProfile(options.runnerBackend)) {
-        hostedSplitSeconds.set(planned.group.shard_name, planned.seconds);
+      // Synthesized hosted stripes need their divided parent weight. Native
+      // groups must reach the runner-specific stripe estimator during rebalance.
+      if (planned.group.shard_name !== group.shard_name) {
+        synthesizedSplitSeconds.set(planned.group.shard_name, planned.seconds);
       }
     }
     groupsByRunner.set(key, groups);
@@ -2173,10 +2205,10 @@ function createCompactNodeTestShardBundles(
 
   const compactJobs: CompactNodeTestShard[] = [];
   const estimateGroupSeconds = (group: NodeTestShardGroup) =>
-    hostedSplitSeconds.get(group.shard_name) ??
+    synthesizedSplitSeconds.get(group.shard_name) ??
     estimateCompactGroupSeconds(group, options.runnerBackend);
   const estimateStripeSeconds = (group: NodeTestShardGroup) =>
-    hostedSplitSeconds.get(group.shard_name) ??
+    synthesizedSplitSeconds.get(group.shard_name) ??
     estimateCompactStripeSeconds(group, options.runnerBackend);
   for (const groups of groupsByRunner.values()) {
     // First-fit decreasing sets the existing registration count from the
@@ -2192,7 +2224,7 @@ function createCompactNodeTestShardBundles(
       const exclusive = isExclusiveCompactGroup(group);
       const secondsCap = exclusive
         ? COMPACT_EXCLUSIVE_JOB_SECONDS
-        : usesGithubRunnerProfile(options.runnerBackend)
+        : usesExpandedRunnerProfile(options.runnerBackend)
           ? group.runner.includes("-8vcpu-")
             ? COMPACT_GITHUB_LARGE_NODE_TEST_JOB_SECONDS
             : COMPACT_GITHUB_SMALL_NODE_TEST_JOB_SECONDS
@@ -2280,7 +2312,7 @@ function createCompactNodeTestShardBundles(
   }
 
   if (
-    usesGithubRunnerProfile(options.runnerBackend) &&
+    usesExpandedRunnerProfile(options.runnerBackend) &&
     compactJobs.length > COMPACT_GITHUB_NODE_TEST_JOB_CAP
   ) {
     throw new Error(
