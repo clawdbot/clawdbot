@@ -322,6 +322,45 @@ suite.define(() => {
     }
   });
 
+  it("retires the static startup fallback after rendering auth-required guidance", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      window.addEventListener("openclaw-control-ui-rendered", () => {
+        const key = "openclaw.control-ui-e2e.render-count";
+        const count = Number.parseInt(sessionStorage.getItem(key) ?? "0", 10);
+        sessionStorage.setItem(key, String(count + 1));
+      });
+    });
+    await page.clock.install();
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    try {
+      await page.goto(suite.server.baseUrl);
+      await gateway.waitForRequest("connect");
+      await gateway.rejectDeferred("connect", {
+        code: "INVALID_REQUEST",
+        message: "token missing",
+        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+      });
+
+      const authRequired = page.locator('.login-gate__failure[data-kind="auth-required"]');
+      await authRequired.waitFor({ timeout: 10_000 });
+      await page.clock.runFor(12_001);
+
+      expect(await authRequired.isVisible()).toBe(true);
+      expect(await page.locator("#openclaw-mount-fallback").isHidden()).toBe(true);
+      expect((await page.locator("body").getAttribute("class")) ?? "").not.toContain(
+        "openclaw-mount-fallback-active",
+      );
+      expect(
+        await page.evaluate(() => sessionStorage.getItem("openclaw.control-ui-e2e.render-count")),
+      ).toBe("1");
+    } finally {
+      await closeContext(context);
+    }
+  });
+
   it("keeps mobile controls compact, touchable, and keyboard-friendly", async () => {
     const context = await suite.browser.newContext({
       hasTouch: true,

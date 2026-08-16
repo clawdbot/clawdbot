@@ -151,6 +151,12 @@ export class OpenClawApp extends OpenClawLightDomElement {
     super.disconnectedCallback();
   }
 
+  protected override firstUpdated(): void {
+    if (this.runtime) {
+      globalThis.dispatchEvent(new Event("openclaw-control-ui-rendered"));
+    }
+  }
+
   private synchronizeGateway(gateway: ApplicationContext["gateway"]) {
     const sourceChanged = gateway !== this.loginGatewaySource;
     if (sourceChanged) {
