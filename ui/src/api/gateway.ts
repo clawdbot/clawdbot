@@ -404,7 +404,6 @@ export class GatewayBrowserClient {
 
   private connectPlanTimingPayload(plan: ConnectPlan): Partial<GatewayConnectTiming> {
     return {
-      // Device identity no longer implies a secure context; report the real fact.
       secureContext: browserSecureContext(),
       hasDeviceIdentity: Boolean(plan.deviceIdentity),
       hasDevice: Boolean(plan.params.device),
@@ -435,26 +434,20 @@ export class GatewayBrowserClient {
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
     const explicitPassword = this.opts.password?.trim() || undefined;
 
-    // Device identity signs with pure-JS Ed25519, so it works on any origin,
-    // including plain-HTTP LAN dashboards where crypto.subtle is unavailable.
-    // Blocked storage yields an ephemeral in-memory identity; only a failed
-    // mint (no WebCrypto RNG) degrades to a device-less connect instead of
-    // failing the handshake.
+    // Pure-JS Ed25519 signing keeps device identity working on any origin,
+    // including plain-HTTP dashboards without crypto.subtle; only a failed
+    // mint (no WebCrypto RNG) degrades to a device-less connect.
     let selectedAuth: GatewayConnectAuthSelection = {
       authToken: explicitGatewayToken,
       authPassword: explicitPassword,
     };
-    const deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null =
-      await loadOrCreateDeviceIdentity().catch(() => null);
+    const deviceIdentity = await loadOrCreateDeviceIdentity().catch(() => null);
     this.client.recordTiming("device-identity-ready", generation, undefined, {
       secureContext: browserSecureContext(),
       hasDeviceIdentity: deviceIdentity !== null,
     });
     if (deviceIdentity) {
-      selectedAuth = this.selectConnectAuth({
-        role,
-        deviceId: deviceIdentity.deviceId,
-      });
+      selectedAuth = this.selectConnectAuth({ role, deviceId: deviceIdentity.deviceId });
     }
     const scopes = resolveGatewayConnectScopes({
       requestedScopes: selectedAuth.authBootstrapToken
