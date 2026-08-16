@@ -1,4 +1,3 @@
-/* oxlint-disable max-lines -- grandfathered oversized test file. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createManifestRecord } from "./model.static-catalog.test-helpers.js";
 

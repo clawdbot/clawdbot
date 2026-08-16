@@ -368,6 +368,12 @@
       "rules": {
         "max-lines": ["error", { "max": 1200, "skipBlankLines": true, "skipComments": true }]
       }
+    },
+    {
+      "files": ["src/agents/embedded-agent-runner/model.static-catalog.test.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 1100, "skipBlankLines": true, "skipComments": true }]
+      }
     }
   ]
 }
