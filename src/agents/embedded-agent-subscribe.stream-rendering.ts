@@ -597,7 +597,10 @@ export function createStreamRendering({
     }
   };
 
-  const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
+  const resetAssistantMessageState = (
+    nextAssistantTextBaseline: number,
+    options?: { preserveReplyDirectiveState?: boolean },
+  ) => {
     state.deltaBuffer = "";
     state.thinkingTagStream = createThinkingTagStreamState();
     state.blockBuffer = "";
@@ -643,8 +646,17 @@ export function createStreamRendering({
     state.lastAssistantTextMessageIndex = -1;
     state.lastAssistantTextNormalized = undefined;
     state.lastAssistantTextTrimmed = undefined;
-    state.assistantTextBaseline = nextAssistantTextBaseline;
+    if (!options?.preserveReplyDirectiveState) {
+      state.assistantTextBaseline = nextAssistantTextBaseline;
+      state.deliveredBlockReplyTexts = [];
+      state.attemptedBlockReplyTexts = [];
+      state.deferredBlockReplyTexts = [];
+    }
     state.pendingAssistantReplyDirectives = undefined;
+    if (!options?.preserveReplyDirectiveState) {
+      state.deferredAssistantReplyDirectives = undefined;
+      state.lastDeliveredAssistantReplyDirectives = undefined;
+    }
   };
 
   return {
