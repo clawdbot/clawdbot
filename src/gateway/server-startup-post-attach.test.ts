@@ -1842,7 +1842,7 @@ describe("startGatewayPostAttachRuntime", () => {
         releaseChannels();
 
         await runtime.startupSettled;
-        expect(onSidecarsReady).toHaveBeenCalledTimes(1);
+        expect(onSidecarsReady).not.toHaveBeenCalled();
         expect(hoisted.startPluginServices).not.toHaveBeenCalled();
         expect(onPluginServices).toHaveBeenCalledWith(null);
       },

@@ -1,6 +1,7 @@
 // Gateway run loop tests cover foreground gateway lifecycle and restart behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServer } from "../../gateway/server-public.js";
+import { createGatewayStartupSettlement } from "../../gateway/server-startup-settlement.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
@@ -567,6 +568,29 @@ describe("runGatewayLoop", () => {
       });
       expect(runtime.exit).toHaveBeenCalledWith(0);
       expect(flushLogger).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("completes SIGTERM shutdown while sidecar startup remains unresolved", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const unresolvedSidecarStartup = new Promise<void>(() => {});
+      const startup = createGatewayStartupSettlement(unresolvedSidecarStartup);
+      const close = vi.fn<GatewayCloseFn>(async () => startup.settleOnClose());
+      const { start, started } = createSignaledStart(close);
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      await runLoopWithStart({ start, runtime });
+      await waitForStart(started);
+
+      captureSignal("SIGTERM")();
+
+      await expect(exited).resolves.toBe(0);
+      await expect(startup.startupSettled).resolves.toBeUndefined();
+      expect(close).toHaveBeenCalledWith({
+        reason: "gateway stopping",
+        restartExpectedMs: null,
+      });
     });
   });
 

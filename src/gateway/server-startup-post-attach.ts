@@ -1334,6 +1334,14 @@ export async function startGatewayPostAttachRuntime(
               throw error;
             }
           })();
+          if (params.isClosing?.()) {
+            await workerEnvironmentSidecar?.stop();
+            await result.pluginServices?.stop();
+            for (const postReadySidecar of result.postReadySidecars) {
+              await postReadySidecar.stop();
+            }
+            return emptySidecarResult();
+          }
           const loaderStatsAfter = getPluginModuleLoaderStats();
           params.startupTrace?.detail("sidecars.plugin-loader", [
             ["callsCount", loaderStatsAfter.calls - loaderStatsBefore.calls],

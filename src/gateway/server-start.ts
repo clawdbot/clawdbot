@@ -7,6 +7,7 @@ import {
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
 import { finishGatewayStartup } from "./server-startup-finish.js";
+import { createGatewayStartupSettlement } from "./server-startup-settlement.js";
 
 const loadGatewayStartupPostAttachModule = createLazyRuntimeModule(
   () => import("./server-startup-post-attach.js"),
@@ -27,6 +28,7 @@ export async function startGatewayServerCore(
     releasePostReadyWork = resolve;
   });
   const gatewayKernel = await createGatewayKernel(port, opts);
+  let settleStartupOnClose: () => void = () => {};
   let startupSettled: Promise<void>;
   const {
     beginClosePrelude,
@@ -57,7 +59,9 @@ export async function startGatewayServerCore(
       loadGatewayStartupPostAttachModule,
       waitForPostReadyWork: () => postReadyWorkBarrier,
     });
-    startupSettled = startup.startupSettled;
+    ({ startupSettled, settleOnClose: settleStartupOnClose } = createGatewayStartupSettlement(
+      startup.startupSettled,
+    ));
   } catch (err) {
     await closeOnStartupFailure();
     throw err;
@@ -74,8 +78,9 @@ export async function startGatewayServerCore(
     close: async (optsLocal) => {
       try {
         markClosePreludeStarted();
-        // Close owns the deferred startup task. Joining after the close fence prevents
-        // this generation from publishing runtime state into its replacement.
+        // Closing settles this generation's startup join while the close fence prevents
+        // unresolved sidecar work from publishing into its replacement.
+        settleStartupOnClose();
         await startupSettled.catch(() => {});
         await beginClosePrelude();
         // Kill any live operator shells before the socket layer tears down.
