@@ -23,7 +23,7 @@ import { replaceRemoteNodeSkills } from "../../skills/runtime/remote-skills.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../skills/runtime/remote.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
-  getNodeRunnerInventoryIssue,
+  collectNodeRunnerIssuesByNodeId,
   isNodeRunnerSessionHost,
   updateNodeRunnerInventory,
 } from "../node-registry-private.js";
@@ -98,15 +98,9 @@ async function listNodesForClient(params: {
     connectedNodes: params.connectedNodes,
     nodeRegistry: params.context.nodeRegistry,
   });
-  const issuesByNodeId = new Map(
-    params.connectedNodes.flatMap((node) => {
-      const issue = getNodeRunnerInventoryIssue({
-        registry: params.context.nodeRegistry,
-        nodeId: node.nodeId,
-        connId: node.connId,
-      });
-      return issue ? [[node.nodeId, [issue]] as const] : [];
-    }),
+  const issuesByNodeId = collectNodeRunnerIssuesByNodeId(
+    params.context.nodeRegistry,
+    params.connectedNodes,
   );
   const catalog = createKnownNodeCatalog({
     pairedDevices: params.pairedDevices,
