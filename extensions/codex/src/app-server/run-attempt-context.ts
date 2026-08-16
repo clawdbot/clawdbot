@@ -1,5 +1,6 @@
 import {
   bootstrapHarnessContextEngine,
+  buildAgentHookContextIdentityFields,
   buildHarnessContextEngineRuntimeContext,
   CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
   embeddedAgentLog,
@@ -103,6 +104,16 @@ export async function prepareCodexAttemptContext(
     trigger: params.trigger,
     channelId: hookChannelId,
     ...hookContextWindowFields,
+    // Identity comes from the inbound attempt params, not the supervision-swapped
+    // runtime view, so a supervised turn still reports the real sender/message.
+    ...buildAgentHookContextIdentityFields({
+      trigger: params.trigger,
+      senderId: params.senderId,
+      messageId: params.currentMessageId,
+      senderIsOwner: params.senderIsOwner,
+      chatId: params.chatId,
+      channelContext: params.channelContext,
+    }),
   };
   const hookRunner = getAgentHarnessHookRunner();
   const buildActiveContextEngineRuntimeContext = () =>

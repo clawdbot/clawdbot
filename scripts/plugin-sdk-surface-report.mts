@@ -286,7 +286,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -17: retire the messaging-targets subpath, embedded Pi aliases, and shipped
       // channel setup compatibility helpers.
       // +1: concrete plugin side-effect owner resolution for agent harness runtimes.
-      4313,
+      // +1: authenticated agent-hook identity projection, so bundled harnesses build
+      // the same sender/message/owner block as core instead of hand-rolling it.
+      4314,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -361,7 +363,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: remove the orphan diagnostic traceparent propagation export.
       // -12: retire the callable messaging-targets, embedded Pi, and channel setup helpers.
       // +1: concrete plugin side-effect owner resolution for agent harness runtimes.
-      2565,
+      // +1: authenticated agent-hook identity projection, so bundled harnesses build
+      // the same sender/message/owner block as core instead of hand-rolling it.
+      2566,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

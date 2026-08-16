@@ -744,6 +744,51 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(result.payloads?.[0]?.text).toBe("user turn claimed");
   });
 
+  it("gives the claim hook the authenticated inbound message and owner bit", async () => {
+    // The claim hook decides before the model runs, so it must be able to bind
+    // its decision to one exact authenticated message instead of re-deriving
+    // the turn from prompt text.
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    runBeforeAgentReplyMock.mockResolvedValue({ handled: true, reply: { text: "claimed" } });
+
+    await runCliAgent({
+      ...baseRunParams,
+      trigger: "user",
+      senderId: "sender-1",
+      senderIsOwner: true,
+      chatId: "chat-1",
+      currentMessageId: 4242,
+    });
+
+    expect(runBeforeAgentReplyMock).toHaveBeenCalledTimes(1);
+    const [, hookContext] = runBeforeAgentReplyMock.mock.calls.at(0) ?? [];
+    expect(hookContext).toMatchObject({
+      trigger: "user",
+      senderId: "sender-1",
+      chatId: "chat-1",
+      messageId: "4242",
+      senderIsOwner: true,
+    });
+  });
+
+  it("keeps the owner bit out of the claim hook for non-user triggers", async () => {
+    // senderIsOwner is a user-turn fact; automation turns must not inherit it.
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    runBeforeAgentReplyMock.mockResolvedValue({ handled: true, reply: { text: "claimed" } });
+
+    await runCliAgent({
+      ...baseRunParams,
+      trigger: "cron",
+      senderId: "sender-1",
+      senderIsOwner: true,
+      currentMessageId: "msg-1",
+    });
+
+    const [, hookContext] = runBeforeAgentReplyMock.mock.calls.at(0) ?? [];
+    expect(hookContext).not.toHaveProperty("senderIsOwner");
+    expect(hookContext).not.toHaveProperty("messageId");
+  });
+
   it("lets before_agent_reply claim heartbeat runs before CLI preparation", async () => {
     hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
     runBeforeAgentReplyMock.mockResolvedValue({

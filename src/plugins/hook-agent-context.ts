@@ -1,5 +1,8 @@
 /** Builds plugin hook agent context snapshots from active session and model state. */
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "@openclaw/normalization-core/string-coerce";
 import { parseRawSessionConversationRef } from "../sessions/session-key-utils.js";
 import type { PluginHookChannelContext } from "./hook-channel-context.types.js";
 import type { PluginHookAgentContext } from "./hook-types.js";
@@ -126,12 +129,27 @@ export function buildAgentHookContextChannelFields(params: {
   };
 }
 
+/**
+ * Projects the host-authenticated turn identity onto a plugin hook context.
+ *
+ * Every field is copied from a value the host already resolved; nothing here
+ * infers identity from prompt text, session keys, or routing metadata. The
+ * non-`user` trigger gate drops the whole block so automation turns cannot
+ * carry a sender.
+ */
 export function buildAgentHookContextIdentityFields(params: {
   trigger?: string | null;
   senderId?: string | null;
   chatId?: string | null;
   channelContext?: PluginHookChannelContext;
-}): Pick<PluginHookAgentContext, "senderId" | "chatId" | "channelContext"> {
+  /** Authenticated current inbound message id, stringified for channels that mint numeric ids. */
+  messageId?: string | number | null;
+  /** Host-resolved owner bit. Omitted unless the host actually resolved it. */
+  senderIsOwner?: boolean;
+}): Pick<
+  PluginHookAgentContext,
+  "senderId" | "chatId" | "channelContext" | "messageId" | "senderIsOwner"
+> {
   const trigger = normalizeOptionalString(params.trigger);
   if (trigger && trigger !== "user") {
     return {};
@@ -139,6 +157,7 @@ export function buildAgentHookContextIdentityFields(params: {
 
   const senderId = normalizeOptionalString(params.senderId);
   const chatId = normalizeOptionalString(params.chatId);
+  const messageId = normalizeOptionalStringifiedId(params.messageId);
   const sender = senderId
     ? { ...params.channelContext?.sender, id: senderId }
     : params.channelContext?.sender;
@@ -157,6 +176,8 @@ export function buildAgentHookContextIdentityFields(params: {
   return {
     ...(senderId ? { senderId } : {}),
     ...(chatId ? { chatId } : {}),
+    ...(messageId ? { messageId } : {}),
+    ...(typeof params.senderIsOwner === "boolean" ? { senderIsOwner: params.senderIsOwner } : {}),
     ...(channelContext ? { channelContext } : {}),
   };
 }

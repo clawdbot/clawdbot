@@ -285,6 +285,18 @@ export type PluginHookAgentContext = {
   chatId?: string;
   /** Sender identity for channel-originated runs when available. */
   senderId?: string;
+  /**
+   * Host-authenticated id of the inbound message that started this turn. Absent
+   * for non-message runs and for triggers other than `user`. Never derived from
+   * prompt text, so plugins can correlate a decision to one exact message.
+   */
+  messageId?: string;
+  /**
+   * Host-resolved owner bit for `senderId`. Absent when the host did not resolve
+   * ownership; absence is unknown, never "not owner". Mirrors the same field on
+   * `PluginHookToolRequesterContext` and `PluginHookBeforeAgentRunEvent`.
+   */
+  senderIsOwner?: boolean;
   trigger?: string;
   channelId?: string;
   /** Resolved effective context-token budget after model/config/agent caps. */

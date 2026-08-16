@@ -616,6 +616,14 @@ When sender identity is available, agent hook contexts also include:
 - `ctx.chatId` - transport-native conversation identifier (e.g. Feishu
   `chat_id`, Telegram `chat_id`). Populated when the originating channel
   provides a native conversation ID.
+- `ctx.messageId` - the inbound message that started this turn, the same
+  canonical id `before_dispatch` and `message_received` report. Lets a hook
+  bind its decision to one exact message instead of correlating prompt text.
+- `ctx.senderIsOwner` - the host-resolved owner bit for `ctx.senderId`, the
+  same value carried on `PluginHookToolRequesterContext` and the
+  `before_agent_run` event. Absent when the host did not resolve ownership;
+  absence means unknown, never "not owner", so authorization checks must
+  require `=== true` rather than treating a missing field as `false`.
 - `ctx.channelContext.sender.id` - the same sender ID as `ctx.senderId`, under
   a channel-owned object plugins can extend with channel-specific fields.
 - `ctx.channelContext.chat.id` - the same conversation ID as `ctx.chatId`,

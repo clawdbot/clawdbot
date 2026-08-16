@@ -89,8 +89,38 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     expect(hookContext?.senderId).toBeUndefined();
     expect(hookContext?.chatId).toBeUndefined();
     expect(hookContext?.channel).toBeUndefined();
+    expect(hookContext?.messageId).toBeUndefined();
+    expect(hookContext?.senderIsOwner).toBeUndefined();
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.text).toBe("dreaming claimed");
+  });
+
+  it("gives the claim hook the authenticated inbound message and owner bit", async () => {
+    // A plugin that gates a user turn before the model runs must be able to ask
+    // "is this the authenticated owner, on which exact message?" from the
+    // context itself rather than correlating indirect signals.
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName: string) => hookName === "before_agent_reply",
+    );
+    mockedGlobalHookRunner.runBeforeAgentReply.mockResolvedValue({
+      handled: true,
+      reply: { text: "claimed" },
+    });
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      trigger: "user",
+      senderId: "sender-1",
+      senderIsOwner: true,
+      chatId: "chat-1",
+      currentMessageId: 4242,
+    });
+
+    const [, hookContext] = firstBeforeAgentReplyCall();
+    expect(hookContext?.senderId).toBe("sender-1");
+    expect(hookContext?.chatId).toBe("chat-1");
+    expect(hookContext?.messageId).toBe("4242");
+    expect(hookContext?.senderIsOwner).toBe(true);
   });
 
   it("re-arms setup progress when a cron hook does not claim", async () => {

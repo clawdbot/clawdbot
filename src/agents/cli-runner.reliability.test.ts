@@ -2850,6 +2850,8 @@ describe("runCliAgent reliability", () => {
           messageChannel: "telegram",
           trigger: "user",
           senderId: "sender-1",
+          senderIsOwner: true,
+          currentMessageId: "inbound-9",
           chatId: "chat-1",
           channelContext: {
             sender: { id: "sender-1" },
@@ -2892,6 +2894,8 @@ describe("runCliAgent reliability", () => {
       expect(llmInputContext.channelId).toBe("telegram");
       expect(llmInputContext.senderId).toBe("sender-1");
       expect(llmInputContext.chatId).toBe("chat-1");
+      expect(llmInputContext.messageId).toBe("inbound-9");
+      expect(llmInputContext.senderIsOwner).toBe(true);
       expect(llmInputContext.channelContext).toEqual({
         sender: { id: "sender-1" },
         chat: { id: "chat-1" },
@@ -2939,6 +2943,10 @@ describe("runCliAgent reliability", () => {
       );
       expect(agentEndContext.senderId).toBe("sender-1");
       expect(agentEndContext.chatId).toBe("chat-1");
+      // agent_end re-enters buildAgentHookContext, so this also proves the
+      // identity block survives that round trip instead of being rebuilt empty.
+      expect(agentEndContext.messageId).toBe("inbound-9");
+      expect(agentEndContext.senderIsOwner).toBe(true);
       expect(agentEndContext.channelContext).toEqual({
         sender: { id: "sender-1" },
         chat: { id: "chat-1" },
