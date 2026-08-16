@@ -87,7 +87,7 @@ const CronSessionTargetSchema = Type.Union([
   Type.Literal("main"),
   Type.Literal("isolated"),
   Type.Literal("current"),
-  Type.TemplateLiteral("session:${string}", { pattern: "^session:.+" }),
+  Type.String({ pattern: "^session:.+" }),
 ]);
 /** Whether a cron job waits for heartbeat processing or wakes immediately. */
 const CronWakeModeSchema = Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]);

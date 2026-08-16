@@ -105,6 +105,15 @@ function isCronPayload(value: unknown): value is CronPayload {
   return false;
 }
 
+function isCronFormSessionTarget(value: string): value is CronFormState["sessionTarget"] {
+  return (
+    value === "main" ||
+    value === "isolated" ||
+    value === "current" ||
+    (value.startsWith("session:") && value.length > "session:".length)
+  );
+}
+
 export function getCronJobPayload(job: CronJob): CronPayload | null {
   const payload = (job as { payload?: unknown }).payload;
   return isCronPayload(payload) ? payload : null;
@@ -844,6 +853,9 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   const failureAlert = job.failureAlert;
   const payload = getCronJobPayload(job);
   const payloadLocked = isReadOnlyCronPayload(payload);
+  if (!isCronFormSessionTarget(job.sessionTarget)) {
+    throw new TypeError(`Invalid cron session target: ${job.sessionTarget}`);
+  }
   const next: CronFormState = {
     ...prev,
     name: job.name,
