@@ -124,6 +124,8 @@ type EmbeddedRunAttemptParamsBase = Omit<
   | "pluginHarnessToolPolicySafeDeniedTools"
   | "trajectoryRecorder"
 > & {
+  /** Per-model contextTokens cap authored by the operator; absent when none was authored. */
+  authoredContextTokenCap?: number;
   /** Audited exact denies that the plugin harness must enforce against native equivalents. */
   pluginHarnessToolPolicySafeDeniedTools?: readonly string[];
 };
