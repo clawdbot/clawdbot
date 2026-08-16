@@ -54,9 +54,6 @@ type DoctorResult = { ok: boolean; provider: string; checks: DoctorCheck[] };
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CRABBOX_METADATA_PROBE_TIMEOUT_MS = 5_000;
-// Crabbox gives a provider doctor check 10s; the wrapper must outlive that
-// contract or it can kill a valid diagnostic before Crabbox reports readiness.
-const CRABBOX_DOCTOR_TIMEOUT_MS = 15_000;
 const MAX_TIMING_JSON_LINE_CHARS = 1024 * 1024;
 const REMOTE_CHANGED_GATE_BUNDLE_FILE = ".openclaw-crabbox-changed-gate.bundle";
 // A cold Crabbox (first call after an upgrade, or one on a loaded machine) can
@@ -439,7 +436,7 @@ function buildBatchCommandLine(command: string, commandArgs: string[]) {
 function checkedOutput(
   command: string,
   commandArgs: string[],
-  timeoutMs = resolveMetadataProbeTimeoutMs(process.env),
+  timeoutMs: number | null = resolveMetadataProbeTimeoutMs(process.env),
 ) {
   const invocation = spawnInvocation(command, commandArgs, process.env, process.platform);
   const result = spawnSync(invocation.command, invocation.args, {
@@ -447,7 +444,7 @@ function checkedOutput(
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-    timeout: timeoutMs,
+    ...(timeoutMs === null ? {} : { timeout: timeoutMs }),
     killSignal: "SIGKILL",
   });
   const timedOut = result.error?.name === "Error" && result.signal === "SIGKILL";
@@ -874,7 +871,8 @@ function crabboxProviderReadiness(provider: string, version: string, context: Ta
     doctorArgs.push("--windows-mode", context.windowsMode);
   }
   doctorArgs.push("--json");
-  const doctor = checkedOutput(binary, doctorArgs, CRABBOX_DOCTOR_TIMEOUT_MS);
+  // Crabbox owns the provider deadlines; wait for it to serialize the final stdout document.
+  const doctor = checkedOutput(binary, doctorArgs, null);
   const result = parseDoctorResult(doctor.stdout, canonicalProvider, doctor.status);
   const managed = ["aws", "azure", "daytona"].includes(canonicalProvider);
   const broker = result?.checks.find((check) => check.check === "broker");

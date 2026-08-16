@@ -107,6 +107,7 @@ async function main() {
   if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
   if (args[0] === "doctor") {
     const provider = optionValue("provider"); const target = optionValue("target"); const windowsMode = optionValue("windows-mode");
+    if (process.env.OPENCLAW_FAKE_CRABBOX_DOCTOR_PROGRESS) process.stderr.write(process.env.OPENCLAW_FAKE_CRABBOX_DOCTOR_PROGRESS + "\n");
     await wait(Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_DOCTOR_DELAY_MS || "0", 10));
     if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET && target !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_TARGET) { process.stderr.write("doctor target mismatch: got=" + target + "\n"); process.exit(64); }
     if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE && windowsMode !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_DOCTOR_WINDOWS_MODE) { process.stderr.write("doctor windows mode mismatch: got=" + windowsMode + "\n"); process.exit(64); }
@@ -1201,14 +1202,17 @@ describe("scripts/crabbox-wrapper", () => {
     expect(output.args).toContain("aws");
   });
 
-  it("allows a provider-scoped doctor to use its full dependency timeout", () => {
+  it("lets doctor own its timeout and parses machine output from stdout", () => {
     const { output } = runSuccessfulBrokerWrapper(["run", "--provider", "aws", "--", "echo ok"], {
-      env: { OPENCLAW_FAKE_CRABBOX_DOCTOR_DELAY_MS: "5500" },
-      timeoutMs: 20_000,
+      env: {
+        OPENCLAW_FAKE_CRABBOX_DOCTOR_DELAY_MS: "250",
+        OPENCLAW_FAKE_CRABBOX_DOCTOR_PROGRESS: "checking provider readiness",
+      },
+      nodePreload: testTimingPreload({ spawnTimeoutMs: 100 }),
     });
 
     expect(output.args).toContain("aws");
-  }, 20_000);
+  });
 
   it("probes native Windows readiness with the requested target context", () => {
     const { output, result } = runSuccessfulBrokerWrapper(
