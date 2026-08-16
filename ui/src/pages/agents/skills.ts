@@ -67,7 +67,7 @@ export async function clearAgentSkillFilter(
         },
       },
       note: "Enable all agent skills",
-      replacePaths: [`agents.list.${target.entry.id}.skills`],
+      replacePaths: ["agents.list[].skills"],
       canDispatch,
     });
   }

@@ -58,7 +58,7 @@ describe("clearAgentSkillFilter", () => {
     expect(patch).toHaveBeenCalledWith({
       raw: { agents: { list: [{ id: "main", skills: null }] } },
       note: "Enable all agent skills",
-      replacePaths: ["agents.list.main.skills"],
+      replacePaths: ["agents.list[].skills"],
       canDispatch: expect.any(Function),
     });
   });
