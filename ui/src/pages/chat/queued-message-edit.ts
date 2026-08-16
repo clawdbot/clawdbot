@@ -23,6 +23,7 @@ export type QueuedMessageEdit = {
   draftText: string;
   id: string;
   orderKey: number;
+  replyToId?: string;
   sessionKey: string;
 };
 
@@ -81,6 +82,7 @@ export function beginQueuedMessageEdit(
     draftText: item.text,
     id,
     orderKey: chatQueueOrderKey(item),
+    ...(item.replyToId ? { replyToId: item.replyToId } : {}),
     sessionKey: host.sessionKey,
   };
   return "started";

@@ -440,9 +440,14 @@ export async function handleSendChat(
     }
   }
 
-  const replyTarget = host.chatReplyTarget;
+  const requestedEditId = opts?.resumeQueuedMessageEditId;
+  const inlineEdit = requestedEditId ? activeQueuedMessageEdit(host) : null;
+  const isInlineEditSubmission = requestedEditId != null && inlineEdit?.id === requestedEditId;
+  const replyTarget = isInlineEditSubmission ? null : host.chatReplyTarget;
   // Persisted ids use replyToId; synthetic replies fall back to a quote.
-  const replyToId = replyTarget?.sourceMessageId?.trim() || undefined;
+  const replyToId = isInlineEditSubmission
+    ? inlineEdit.replyToId
+    : replyTarget?.sourceMessageId?.trim() || undefined;
   const effectiveMessage =
     replyTarget && !replyToId ? prependReplyQuote(message, replyTarget) : message;
 

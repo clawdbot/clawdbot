@@ -146,6 +146,37 @@ describe("queued message edit round-trip", () => {
     unsubscribe();
   });
 
+  it("preserves the queued reply target instead of the composer target", async () => {
+    const queuedReplyTarget = {
+      messageId: "queued-reply",
+      sourceMessageId: "queued-reply",
+      text: "the queued source",
+      senderLabel: "Queue source",
+    };
+    const composerReplyTarget = {
+      messageId: "composer-reply",
+      sourceMessageId: "composer-reply",
+      text: "the composer source",
+      senderLabel: "Composer source",
+    };
+    const { host, unsubscribe } = queueHost([{ replyToId: queuedReplyTarget.sourceMessageId }]);
+    host.chatReplyTarget = composerReplyTarget;
+    beginQueuedMessageEdit(host as never, "queued-1");
+    updateQueuedMessageEdit(host as never, "edited queued reply");
+    const edit = host.chatQueuedEdit!;
+
+    await handleSendChat(host as never, edit.draftText, {
+      attachmentsOverride: [...edit.attachments],
+      resumeQueuedMessageEditId: edit.id,
+    });
+
+    expect(listStoredChatOutboxes(host as never)[0]?.queue[0]?.replyToId).toBe(
+      queuedReplyTarget.sourceMessageId,
+    );
+    expect(host.chatReplyTarget).toEqual(composerReplyTarget);
+    unsubscribe();
+  });
+
   it("releases only the images the replacement dropped", async () => {
     const kept = stageQueuedImage("att-kept");
     const dropped = stageQueuedImage("att-dropped");
