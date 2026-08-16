@@ -14,6 +14,7 @@ const MAX_ENV_SPLIT_PAYLOAD_DEPTH = 32;
 const COMMAND_EXECUTING_OPTIONS = new Set(["-p"]);
 const COMMAND_QUERY_OPTIONS = new Set(["-v", "-V"]);
 const ENV_OPTIONS_WITH_VALUE = new Set([
+  "-a",
   "-C",
   "-P",
   "-S",

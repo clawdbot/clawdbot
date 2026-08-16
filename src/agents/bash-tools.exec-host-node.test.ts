@@ -103,6 +103,7 @@ const callGatewayToolMock = vi.hoisted(() => vi.fn());
 const listNodesMock = vi.hoisted(() => vi.fn());
 const parsePreparedSystemRunPayloadMock = vi.hoisted(() => vi.fn());
 const commandRequiresSecurityAuditSuppressionApprovalMock = vi.hoisted(() => vi.fn(() => false));
+const commandRequiresOpenClawLifecycleApprovalMock = vi.hoisted(() => vi.fn(() => false));
 const evaluateShellAllowlistMock = vi.hoisted(() =>
   vi.fn(
     (_raw?: ShellAllowlistMockParams): MockAllowlistResult => ({
@@ -236,6 +237,7 @@ const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
 vi.mock("../infra/exec-approvals.js", () => ({
   evaluateShellAllowlist: evaluateShellAllowlistMock,
   evaluateShellAllowlistWithAuthorization: evaluateShellAllowlistMock,
+  commandRequiresOpenClawLifecycleApproval: commandRequiresOpenClawLifecycleApprovalMock,
   commandRequiresSecurityAuditSuppressionApproval:
     commandRequiresSecurityAuditSuppressionApprovalMock,
   hasDurableExecApproval: hasDurableExecApprovalMock,
@@ -584,6 +586,8 @@ describe("executeNodeHostCommand", () => {
 
     commandRequiresSecurityAuditSuppressionApprovalMock.mockReset();
     commandRequiresSecurityAuditSuppressionApprovalMock.mockReturnValue(false);
+    commandRequiresOpenClawLifecycleApprovalMock.mockReset();
+    commandRequiresOpenClawLifecycleApprovalMock.mockReturnValue(false);
     evaluateShellAllowlistMock.mockReset();
     evaluateShellAllowlistMock.mockReturnValue({
       allowlistMatches: [],
@@ -2745,6 +2749,108 @@ describe("executeNodeHostCommand", () => {
     expect(warnings).toContain(
       "Warning: security audit suppression changes require explicit approval unless exec is running in yolo mode.",
     );
+  });
+
+  it("keeps OpenClaw lifecycle commands off the auto-review path", async () => {
+    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "test reviewer would allow it",
+    }));
+    const warnings: string[] = [];
+    commandRequiresOpenClawLifecycleApprovalMock.mockReturnValue(true);
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "on-miss",
+      askFallback: "deny",
+    });
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run", "system.run.prepare"],
+        platform: "windows",
+      },
+    ]);
+
+    const result = await executeNodeHostCommand({
+      command: "launchctl stop gui/$UID/com.openclaw.gateway",
+      workdir: "/tmp/work",
+      env: {},
+      security: "allowlist",
+      ask: "on-miss",
+      autoReview: true,
+      autoReviewer,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings,
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(result.details?.status).toBe("approval-pending");
+    expect(autoReviewer).not.toHaveBeenCalled();
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(commandRequiresOpenClawLifecycleApprovalMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        envComplete: false,
+        platform: "win32",
+      }),
+    );
+    expect(warnings).toContain(
+      "Warning: OpenClaw lifecycle commands require explicit approval unless exec is running in yolo mode.",
+    );
+  });
+
+  it("keeps pending lifecycle commands explicit when policy switches to yolo", async () => {
+    commandRequiresOpenClawLifecycleApprovalMock.mockReturnValue(true);
+    resolveExecHostApprovalContextMock
+      .mockReturnValueOnce({
+        approvals: { allowlist: [], file: { version: 1, agents: {} } },
+        hostSecurity: "allowlist",
+        hostAsk: "always",
+        askFallback: "full",
+      })
+      .mockReturnValue({
+        approvals: { allowlist: [], file: { version: 1, agents: {} } },
+        hostSecurity: "full",
+        hostAsk: "off",
+        askFallback: "full",
+      });
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(null);
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: true },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    enforceStrictInlineEvalApprovalBoundaryMock.mockImplementation((value) =>
+      value.baseDecision.timedOut && value.requiresInlineEvalApproval
+        ? { approvedByAsk: false, deniedReason: "approval-timeout" }
+        : { approvedByAsk: value.approvedByAsk, deniedReason: value.deniedReason },
+    );
+
+    const result = await executeNodeHostCommand(
+      createNodeHostRequest({
+        command: "openclaw gateway restart",
+        security: "allowlist",
+        ask: "always",
+      }),
+    );
+
+    expect(result.details?.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+        expect.objectContaining({ approvalId: "approval-1" }),
+        "Exec denied (node=node-1 id=approval-1, approval-timeout): openclaw gateway restart",
+      );
+    });
+    expect(
+      callGatewayToolMock.mock.calls.some(
+        ([method, , params]) =>
+          method === "node.invoke" &&
+          (params as MockNodeInvokeParams | undefined)?.command === "system.run",
+      ),
+    ).toBe(false);
   });
 
   it("requests human approval when node auto-review cannot bind a single parsed command", async () => {

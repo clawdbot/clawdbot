@@ -1005,6 +1005,99 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
   });
 
+  it("does not auto-review direct system.run OpenClaw lifecycle commands", async () => {
+    const tmp = createFixtureDir("openclaw-system-run-auto-review-lifecycle-");
+    const executablePath = createTempExecutable({ dir: tmp, name: "openclaw" });
+    setRuntimeConfigSnapshot({
+      tools: {
+        exec: {
+          mode: "auto",
+        },
+      },
+    });
+    try {
+      const autoReviewer = vi.fn<ExecAutoReviewer>(() => ({
+        decision: "allow-once",
+        rationale: "test reviewer would allow it",
+        risk: "low",
+      }));
+      const runCommand = vi.fn(async () => createLocalRunResult("should-not-run"));
+      const prepared = buildSystemRunApprovalPlan({
+        command: [executablePath, "gateway", "restart"],
+        cwd: tmp,
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error("unreachable");
+      }
+      const invoke = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        command: prepared.plan.argv,
+        cwd: prepared.plan.cwd ?? tmp,
+        systemRunPlan: prepared.plan,
+        runCommand,
+        resolveExecSecurity: resolveProductionExecSecurity,
+        resolveExecAsk: resolveProductionExecAsk,
+        autoReviewer,
+      });
+
+      expect(autoReviewer).not.toHaveBeenCalled();
+      expect(runCommand).not.toHaveBeenCalled();
+      expectInvokeErrorMessage(invoke.sendInvokeResult, {
+        message: "SYSTEM_RUN_DENIED: approval required",
+      });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
+  it("does not auto-review system.run lifecycle commands hidden behind empty env operands", async () => {
+    const tmp = createFixtureDir("openclaw-system-run-auto-review-empty-env-");
+    const envPath = createTempExecutable({ dir: tmp, name: "env" });
+    const executablePath = createTempExecutable({ dir: tmp, name: "openclaw" });
+    setRuntimeConfigSnapshot({
+      tools: {
+        exec: {
+          mode: "auto",
+        },
+      },
+    });
+    try {
+      const autoReviewer = vi.fn<ExecAutoReviewer>(() => ({
+        decision: "allow-once",
+        rationale: "test reviewer would allow it",
+        risk: "low",
+      }));
+      const runCommand = vi.fn(async () => createLocalRunResult("should-not-run"));
+      const prepared = buildSystemRunApprovalPlan({
+        command: [envPath, "-a", "", executablePath, "gateway", "restart"],
+        cwd: tmp,
+      });
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error("unreachable");
+      }
+      const invoke = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        command: prepared.plan.argv,
+        cwd: prepared.plan.cwd ?? tmp,
+        systemRunPlan: prepared.plan,
+        runCommand,
+        resolveExecSecurity: resolveProductionExecSecurity,
+        resolveExecAsk: resolveProductionExecAsk,
+        autoReviewer,
+      });
+
+      expect(autoReviewer).not.toHaveBeenCalled();
+      expect(runCommand).not.toHaveBeenCalled();
+      expectInvokeErrorMessage(invoke.sendInvokeResult, {
+        message: "SYSTEM_RUN_DENIED: approval required",
+      });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
   it("defers to human approval when system.run auto reviewer asks", async () => {
     const tmp = createFixtureDir("openclaw-system-run-auto-review-ask-");
     const executablePath = createTempExecutable({ dir: tmp, name: "read-info" });

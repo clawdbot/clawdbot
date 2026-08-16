@@ -159,9 +159,12 @@ export async function executeNodeHostCommand(
     nodeAsk,
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
+    requiresOpenClawLifecycleApproval,
     autoReviewArgv,
     allowAlwaysPersistence,
   } = approvalAnalysis;
+  const requiresInitialOpenClawLifecycleApproval =
+    requiresOpenClawLifecycleApproval && !(hostSecurity === "full" && hostAsk === "off");
   const approvalDecisionAsk =
     nodeApprovalPolicyKnown && nodeAsk !== undefined ? maxAsk(hostAsk, nodeAsk) : "always";
   const allowedDecisions = resolveExecApprovalAllowedDecisions({
@@ -183,7 +186,8 @@ export async function executeNodeHostCommand(
       durableApprovalSatisfied,
     }) ||
     inlineEvalHit !== null ||
-    requiresSecurityAuditSuppressionApproval;
+    requiresSecurityAuditSuppressionApproval ||
+    requiresInitialOpenClawLifecycleApproval;
   if (requiresAsk && params.nonInteractiveApproval) {
     const text = `Exec denied (approval_required): ${params.command}`;
     return {
@@ -202,6 +206,11 @@ export async function executeNodeHostCommand(
   if (requiresSecurityAuditSuppressionApproval) {
     params.warnings.push(
       "Warning: security audit suppression changes require explicit approval unless exec is running in yolo mode.",
+    );
+  }
+  if (requiresInitialOpenClawLifecycleApproval) {
+    params.warnings.push(
+      "Warning: OpenClaw lifecycle commands require explicit approval unless exec is running in yolo mode.",
     );
   }
   const registerNodeApproval = async (
@@ -279,7 +288,8 @@ export async function executeNodeHostCommand(
           askFallback: current.askFallback,
           requiresExplicitApproval:
             currentAnalysis.inlineEvalHit !== null ||
-            currentAnalysis.requiresSecurityAuditSuppressionApproval,
+            currentAnalysis.requiresSecurityAuditSuppressionApproval ||
+            currentAnalysis.requiresOpenClawLifecycleApproval,
         };
       }
       const authorizationSatisfied =
@@ -293,7 +303,8 @@ export async function executeNodeHostCommand(
         askFallback: current.askFallback,
         requiresExplicitApproval:
           currentAnalysis.inlineEvalHit !== null ||
-          currentAnalysis.requiresSecurityAuditSuppressionApproval,
+          currentAnalysis.requiresSecurityAuditSuppressionApproval ||
+          currentAnalysis.requiresOpenClawLifecycleApproval,
       };
     } catch {
       return {
@@ -325,13 +336,15 @@ export async function executeNodeHostCommand(
     let autoReviewRequiresHumanApproval =
       autoReviewBlockedByNodePolicy ||
       (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand) ||
-      requiresSecurityAuditSuppressionApproval;
+      requiresSecurityAuditSuppressionApproval ||
+      requiresInitialOpenClawLifecycleApproval;
     if (
       params.autoReview === true &&
       hostAsk !== "always" &&
       autoReviewHasBoundCommand &&
       !autoReviewBlockedByNodePolicy &&
-      !requiresSecurityAuditSuppressionApproval
+      !requiresSecurityAuditSuppressionApproval &&
+      !requiresInitialOpenClawLifecycleApproval
     ) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
       const autoReviewReason =
@@ -704,7 +717,8 @@ export async function executeNodeHostCommand(
         durableApprovalSatisfied,
       }) &&
       inlineEvalHit === null &&
-      !requiresSecurityAuditSuppressionApproval,
+      !requiresSecurityAuditSuppressionApproval &&
+      !requiresInitialOpenClawLifecycleApproval,
   });
   params.signal?.throwIfAborted();
   const invocation = await invokeNodeSystemRun({

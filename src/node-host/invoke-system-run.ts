@@ -11,6 +11,7 @@ import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import {
   commitExecAuthorizationLocked,
+  commandRequiresOpenClawLifecycleApproval,
   commandRequiresSecurityAuditSuppressionApproval,
   createExecApprovalPolicySnapshot,
   hasDurableExecApproval,
@@ -652,14 +653,28 @@ async function evaluateSystemRunPolicyPhase(
       env: parsed.env,
       segments,
     }) && !(baseSecurity === "full" && baseAsk === "off" && !fallbackRequest);
-  if (forwardedAutoReview && requiresSecurityAuditSuppressionApproval) {
+  const requiresOpenClawLifecycleApproval =
+    commandRequiresOpenClawLifecycleApproval({
+      command: parsed.commandText,
+      cwd: parsed.cwd,
+      env: parsed.env,
+      envComplete: false,
+      segments,
+    }) && !(baseSecurity === "full" && baseAsk === "off" && !fallbackRequest);
+  if (
+    forwardedAutoReview &&
+    (requiresSecurityAuditSuppressionApproval || requiresOpenClawLifecycleApproval)
+  ) {
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: "approval-required",
       message: "SYSTEM_RUN_DENIED: explicit approval required",
     });
     return null;
   }
-  if (requiresSecurityAuditSuppressionApproval && !policy.approvedByAsk) {
+  if (
+    (requiresSecurityAuditSuppressionApproval || requiresOpenClawLifecycleApproval) &&
+    !policy.approvedByAsk
+  ) {
     policy = {
       allowed: false,
       eventReason: "approval-required",
@@ -715,6 +730,7 @@ async function evaluateSystemRunPolicyPhase(
       parsed.approvalPlan !== null &&
       inlineEvalHit === null &&
       !requiresSecurityAuditSuppressionApproval &&
+      !requiresOpenClawLifecycleApproval &&
       policy.eventReason !== "security=deny";
     if (canAutoReviewApprovalMiss) {
       const reviewer = await resolveSystemRunAutoReviewer({

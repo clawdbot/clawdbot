@@ -17,6 +17,7 @@ import {
   type ExecCommandSegment,
   type ExecSecurity,
   type SystemRunApprovalPlan,
+  commandRequiresOpenClawLifecycleApproval,
   commandRequiresSecurityAuditSuppressionApproval,
   evaluateShellAllowlistWithAuthorization,
   hasDurableExecApproval,
@@ -80,6 +81,7 @@ type NodeApprovalAnalysis = {
   nodeAsk?: ExecAsk;
   inlineEvalHit: InterpreterInlineEvalHit | null;
   requiresSecurityAuditSuppressionApproval: boolean;
+  requiresOpenClawLifecycleApproval: boolean;
   autoReviewArgv?: string[];
   allowAlwaysPersistence: AllowAlwaysPersistenceDecision;
 };
@@ -172,6 +174,27 @@ function buildNodeApprovalAnalysisEnv(env: Record<string, string> | undefined): 
     PATH: "",
     Path: "",
   };
+}
+
+function resolveLifecycleAnalysisPlatforms(platform: string | null | undefined): NodeJS.Platform[] {
+  const normalized = platform?.trim().toLowerCase() ?? "";
+  if (normalized === "windows" || normalized === "win32" || normalized.startsWith("windows ")) {
+    return ["win32"];
+  }
+  if (
+    normalized === "macos" ||
+    normalized === "darwin" ||
+    normalized.startsWith("macos ") ||
+    normalized.startsWith("darwin-")
+  ) {
+    return ["darwin"];
+  }
+  if (normalized === "linux" || normalized.startsWith("linux-")) {
+    return ["linux"];
+  }
+  // The classifier only has Windows-vs-POSIX branches. Unknown node metadata
+  // must be evaluated under both rather than inheriting the gateway's OS.
+  return ["win32", "linux"];
 }
 
 function hasNodeAllowAlwaysCommandApproval(params: {
@@ -598,6 +621,18 @@ export async function analyzeNodeApprovalRequirement(params: {
         segments: entry.allowlistEval.segments,
       }),
     ) && !(params.hostSecurity === "full" && params.hostAsk === "off");
+  const requiresOpenClawLifecycleApproval = suppressionCommandEvals.some((entry) =>
+    resolveLifecycleAnalysisPlatforms(params.target.platform).some((platform) =>
+      commandRequiresOpenClawLifecycleApproval({
+        command: entry.command,
+        cwd: entry.cwd,
+        env: analysisEnv,
+        envComplete: false,
+        platform,
+        segments: entry.allowlistEval.segments,
+      }),
+    ),
+  );
   if (
     (params.hostAsk === "always" ||
       params.hostSecurity === "allowlist" ||
@@ -698,6 +733,7 @@ export async function analyzeNodeApprovalRequirement(params: {
     nodeAsk: params.prepared.execPolicy?.ask,
     inlineEvalHit,
     requiresSecurityAuditSuppressionApproval,
+    requiresOpenClawLifecycleApproval,
     allowAlwaysPersistence: resolveAllowAlwaysPersistenceDecision({
       segments: baseAllowlistEval.segments,
       commandText: approvalCommand,
