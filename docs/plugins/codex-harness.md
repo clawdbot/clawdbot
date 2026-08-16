@@ -57,6 +57,11 @@ runtime allowlist disables native Code Mode and leaves the turn without an
 execution environment, OpenClaw keeps its policy-filtered `exec` and `process`
 tools available instead for direct, unsandboxed execution.
 
+When `tools.exec.host: "node"` or `/exec host=node` makes the node the session
+default, OpenClaw hides the Codex-native shell and exposes `node_exec` and
+`node_process` as the shell path. This keeps the configured execution host from
+silently falling back to the app-server or Gateway machine.
+
 This Codex-native feature is separate from
 [OpenClaw Code Mode](/tools/code-mode), an opt-in QuickJS-WASI runtime
 for generic OpenClaw runs with a different `exec` input shape. For the
