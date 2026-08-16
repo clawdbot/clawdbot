@@ -307,6 +307,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       }),
       requirementsToml,
       policyLocked: startupBinding?.connectionScope === "supervision",
+      execMode: execPolicy.mode,
     });
   const resolveFinalAppServer = (
     configured: typeof configuredAppServer,

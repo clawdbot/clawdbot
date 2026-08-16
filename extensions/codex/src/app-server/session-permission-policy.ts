@@ -7,6 +7,7 @@ import type {
   CodexAppServerRuntimeOptions,
   CodexAppServerSandboxMode,
   CodexPluginConfig,
+  OpenClawExecMode,
 } from "./config-contracts.js";
 import { selectGuardianSandbox } from "./config-exec-policy.js";
 import {
@@ -71,6 +72,23 @@ function requirementsAllowTuple(
   );
 }
 
+function tightenTupleForExecMode(
+  tuple: CodexSessionPermissionTuple,
+  execMode: OpenClawExecMode | undefined,
+): CodexSessionPermissionTuple {
+  switch (execMode) {
+    case "deny":
+    case "allowlist":
+      return { sandbox: "read-only", approvalPolicy: "on-request", approvalsReviewer: "user" };
+    case "ask":
+      return { ...tuple, approvalPolicy: "on-request", approvalsReviewer: "user" };
+    case "auto":
+    case "full":
+    case undefined:
+      return tuple;
+  }
+}
+
 function clampSessionPermissionTuple(params: {
   mode: SessionPermissionMode;
   requested: CodexSessionPermissionTuple;
@@ -119,6 +137,7 @@ export function applyCodexSessionPermissionPolicy(params: {
   requirementsToml?: string;
   hostName?: string;
   policyLocked?: boolean;
+  execMode?: OpenClawExecMode;
 }): CodexAppServerRuntimeOptions {
   if (!params.permissionMode) {
     return params.appServer;
@@ -131,7 +150,10 @@ export function applyCodexSessionPermissionPolicy(params: {
     return { ...params.appServer, sessionRoot };
   }
 
-  const requested = tupleForMode(params.permissionMode, params.canUseAutoReview);
+  const requested = tightenTupleForExecMode(
+    tupleForMode(params.permissionMode, params.canUseAutoReview),
+    params.execMode,
+  );
   const tuple =
     params.appServer.start.transport === "stdio"
       ? clampSessionPermissionTuple({

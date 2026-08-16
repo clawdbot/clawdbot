@@ -98,6 +98,34 @@ describe("Codex session permission policy", () => {
     });
   });
 
+  it.each([
+    {
+      mode: "full" as const,
+      execMode: "ask" as const,
+      sandbox: "danger-full-access",
+    },
+    {
+      mode: "guarded" as const,
+      execMode: "deny" as const,
+      sandbox: "read-only",
+    },
+  ])("lets effective $execMode exec floors tighten a $mode tuple", (expected) => {
+    const resolved = applyCodexSessionPermissionPolicy({
+      appServer: appServer(),
+      permissionMode: expected.mode,
+      sessionRoot: "/workspace/project",
+      pluginConfig,
+      canUseAutoReview: true,
+      execMode: expected.execMode,
+    });
+
+    expect(resolved).toMatchObject({
+      sandbox: expected.sandbox,
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
+    });
+  });
+
   it("fails closed when requirements cannot provide mandatory user review", () => {
     expect(() =>
       applyCodexSessionPermissionPolicy({
