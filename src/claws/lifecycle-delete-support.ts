@@ -25,6 +25,7 @@ import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { root as fsSafeRoot, FsSafeError } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { unregisterOpenClawAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -283,6 +284,23 @@ export async function cleanupClawAgentFilesystem(params: {
     errors.push(`Could not trash session transcripts ${params.targets.sessionsDir}.`);
   }
   return errors;
+}
+
+/** Release deleted-agent database discovery only after Claw filesystem cleanup succeeds. */
+export function releaseClawAgentDatabaseRegistry(
+  agentId: string,
+  cleanupErrors: string[],
+  env?: NodeJS.ProcessEnv,
+): void {
+  if (cleanupErrors.length > 0) {
+    return;
+  }
+  try {
+    unregisterOpenClawAgentDatabases({ agentId, env });
+  } catch (error) {
+    // The partial install record owns retry, so a registry failure must keep removal incomplete.
+    cleanupErrors.push(coerceErrorMessage(error));
+  }
 }
 
 export const clawRemoveQuietRuntime: RuntimeEnv = {
