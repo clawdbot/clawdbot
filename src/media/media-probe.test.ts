@@ -277,35 +277,72 @@ describe("probeVideoDimensions", () => {
 
   it("falls back to a seekable temp file when the pipe probe yields no dimensions", async () => {
     const buffer = Buffer.from("moov-at-end video");
+    let probed: { args: string[]; content: Buffer } | undefined;
     runFfprobe.mockRejectedValueOnce(new Error("pipe:0: Invalid data found when processing input"));
-    runFfprobe.mockResolvedValueOnce(
-      JSON.stringify({ streams: [{ codec_type: "video", width: 1920, height: 1080 }] }),
-    );
+    runFfprobe.mockImplementationOnce(async (args: string[]) => {
+      probed = { args, content: await fs.readFile(args.at(-1) as string) };
+      return JSON.stringify({ streams: [{ codec_type: "video", width: 1920, height: 1080 }] });
+    });
 
     await expect(probeVideoDimensions(buffer)).resolves.toEqual({ width: 1920, height: 1080 });
     expect(runFfprobe).toHaveBeenCalledTimes(2);
-    expect(runFfprobe).toHaveBeenLastCalledWith(
-      [
-        "-v",
-        "error",
-        "-protocol_whitelist",
-        "fd",
-        "-show_entries",
-        "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height:stream_disposition=default,attached_pic",
-        "-of",
-        "json",
-        "-fd",
-        "0",
-        "fd:",
-      ],
-      { stdinFileDescriptor: expect.any(Number) },
-    );
+    expect(probed?.args).toEqual([
+      "-v",
+      "error",
+      "-protocol_whitelist",
+      "file",
+      "-show_entries",
+      "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height:stream_disposition=default,attached_pic",
+      "-of",
+      "json",
+      expect.stringContaining("video-probe-"),
+    ]);
+    expect(probed?.content.equals(buffer)).toBe(true);
+    const probedPath = probed?.args.at(-1) as string;
+    await expect(fs.access(probedPath)).rejects.toThrow();
+    await expect(fs.access(path.dirname(probedPath))).rejects.toThrow();
   });
 
-  it("returns undefined when both the pipe and the temp-file probe fail", async () => {
+  it("returns undefined and still cleans up when the temp-file probe fails too", async () => {
     const buffer = Buffer.from("not a video");
-    runFfprobe.mockRejectedValue(new Error("pipe:0: Invalid data found when processing input"));
+    const filePaths: string[] = [];
+    runFfprobe.mockImplementation(async (args: string[]) => {
+      const target = args.at(-1) as string;
+      if (target !== "pipe:0") {
+        filePaths.push(target);
+      }
+      throw new Error("Invalid data found when processing input");
+    });
 
     await expect(probeVideoDimensions(buffer)).resolves.toBeUndefined();
+    expect(filePaths).toHaveLength(1);
+    await expect(fs.access(filePaths[0])).rejects.toThrow();
+    await expect(fs.access(path.dirname(filePaths[0]))).rejects.toThrow();
+  });
+
+  it("keeps concurrent fallback probes isolated in separate workspaces", async () => {
+    const bufferA = Buffer.from("video payload A");
+    const bufferB = Buffer.from("video payload B");
+    runFfprobe.mockImplementation(async (args: string[]) => {
+      const target = args.at(-1) as string;
+      if (target === "pipe:0") {
+        throw new Error("Invalid data found when processing input");
+      }
+      const written = await fs.readFile(target);
+      if (written.equals(bufferA)) {
+        return JSON.stringify({ streams: [{ codec_type: "video", width: 100, height: 200 }] });
+      }
+      if (written.equals(bufferB)) {
+        return JSON.stringify({ streams: [{ codec_type: "video", width: 300, height: 400 }] });
+      }
+      throw new Error(`unexpected probe payload at ${target}`);
+    });
+
+    const [a, b] = await Promise.all([
+      probeVideoDimensions(bufferA),
+      probeVideoDimensions(bufferB),
+    ]);
+    expect(a).toEqual({ width: 100, height: 200 });
+    expect(b).toEqual({ width: 300, height: 400 });
   });
 });

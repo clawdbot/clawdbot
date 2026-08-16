@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import type { MediaKind } from "@openclaw/media-core/constants";
 import {
   asPositiveSafeInteger as parsePositiveInteger,
   asSafeIntegerInRange,
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { withTempWorkspace } from "../infra/private-temp-workspace.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfprobe } from "./ffmpeg-exec.js";
 
 export type MediaProbeKind = Extract<MediaKind, "audio" | "video">;
@@ -43,7 +43,10 @@ type MediaProbeBatchOptions = {
   maxProbes: number;
 };
 
-type FfprobeSource = { kind: "fileDescriptor"; fd: number } | { kind: "buffer"; buffer: Buffer };
+type FfprobeSource =
+  | { kind: "fileDescriptor"; fd: number }
+  | { kind: "buffer"; buffer: Buffer }
+  | { kind: "filePath"; filePath: string };
 
 function parseDurationMs(value: unknown): number | undefined {
   if (typeof value !== "number" && typeof value !== "string") {
@@ -130,8 +133,7 @@ function parseFfprobeMediaMetadata(
   };
 }
 
-function buildFfprobeMetadataArgs(protocol: "fd" | "pipe"): string[] {
-  const isFileDescriptor = protocol === "fd";
+function buildFfprobeMetadataArgs(protocol: "fd" | "pipe" | "file", filePath?: string): string[] {
   return [
     "-v",
     "error",
@@ -141,8 +143,11 @@ function buildFfprobeMetadataArgs(protocol: "fd" | "pipe"): string[] {
     "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height:stream_disposition=default,attached_pic",
     "-of",
     "json",
-    ...(isFileDescriptor ? ["-fd", "0"] : []),
-    isFileDescriptor ? "fd:" : "pipe:0",
+    ...(protocol === "fd"
+      ? ["-fd", "0", "fd:"]
+      : protocol === "pipe"
+        ? ["pipe:0"]
+        : [filePath ?? ""]),
   ];
 }
 
@@ -162,15 +167,19 @@ async function probeMediaSource(
   kind: MediaProbeKind,
   options: MediaProbeOptions = {},
 ): Promise<PlaybackMediaProbeResult | null> {
-  const runProbe = async (protocol: "fd" | "pipe") =>
+  const runProbe = async (protocol: "fd" | "pipe" | "file") =>
     await runFfprobe(
-      buildFfprobeMetadataArgs(protocol),
+      buildFfprobeMetadataArgs(protocol, source.kind === "filePath" ? source.filePath : undefined),
       source.kind === "buffer"
         ? { input: source.buffer, ...options }
-        : { stdinFileDescriptor: source.fd, ...options },
+        : source.kind === "fileDescriptor"
+          ? { stdinFileDescriptor: source.fd, ...options }
+          : { ...options },
     );
   try {
-    const stdout = await runProbe(source.kind === "fileDescriptor" ? "fd" : "pipe");
+    const stdout = await runProbe(
+      source.kind === "fileDescriptor" ? "fd" : source.kind === "filePath" ? "file" : "pipe",
+    );
     return parseFfprobeMediaMetadata(stdout, kind);
   } catch (error) {
     if (source.kind === "fileDescriptor" && isMissingFdProtocolError(error)) {
@@ -270,32 +279,27 @@ export async function probeVideoDimensions(buffer: Buffer): Promise<VideoDimensi
 }
 
 /**
- * MP4s whose moov atom trails the mdat (and other non-streamable layouts) cannot
- * be parsed from the non-seekable stdin pipe, so large videos silently lose their
- * dimensions and Telegram renders them with a wrong aspect ratio (#97826).
- * Retry from a seekable temp file before degrading to absent fields.
+ * Probing a buffer through stdin can fail even for valid videos: ffprobe may
+ * exit before draining the non-seekable pipe (typical once a large MP4's moov
+ * atom is parsed), so the write aborts and dimensions silently go absent —
+ * Telegram then renders the video with a wrong aspect ratio (#97826). Retry
+ * from a seekable file inside the hardened temp workspace before giving up;
+ * a plain path stays seekable even where ffprobe lacks the `fd` protocol.
  */
 async function probeVideoDimensionsFromTempFile(
   buffer: Buffer,
 ): Promise<VideoDimensions | undefined> {
-  let tempDir: string | undefined;
   try {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-video-probe-"));
-    const tempPath = path.join(tempDir, "probe.bin");
-    await fs.writeFile(tempPath, buffer);
-    const handle = await fs.open(tempPath, "r");
-    try {
-      const { width, height } =
-        (await probeMediaSource({ kind: "fileDescriptor", fd: handle.fd }, "video")) ?? {};
-      return width && height ? { width, height } : undefined;
-    } finally {
-      await handle.close().catch(() => {});
-    }
+    return await withTempWorkspace(
+      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "video-probe-" },
+      async (workspace) => {
+        const filePath = await workspace.write("probe-input.bin", buffer);
+        const { width, height } =
+          (await probeMediaSource({ kind: "filePath", filePath }, "video")) ?? {};
+        return width && height ? { width, height } : undefined;
+      },
+    );
   } catch {
     return undefined;
-  } finally {
-    if (tempDir) {
-      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
-    }
   }
 }
