@@ -792,7 +792,7 @@ suite.define(() => {
           ),
         )
         .toBe(41);
-      await page.clock.fastForward(100);
+      await page.clock.runFor(100);
     } finally {
       paintResult = await stopVirtualRowPaintProbe(thread);
     }
