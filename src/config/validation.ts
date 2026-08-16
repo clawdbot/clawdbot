@@ -178,7 +178,7 @@ function validateConfigObjectWithPluginsBase(
           (opts.pluginValidation === "core-only" ? { plugins: [] } : undefined),
       })
     : parsedConfig;
-  if (opts.pluginValidation !== "full") {
+  if (opts.pluginValidation === "skip" || opts.pluginValidation === "core-only") {
     return { ok: true, config, warnings: [] };
   }
 
