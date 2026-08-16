@@ -10,7 +10,6 @@ import {
   shouldAutoPromptNotificationsOnSend,
 } from "../../app/notifications-auto-prompt.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
-import { t } from "../../i18n/index.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import {
@@ -35,7 +34,12 @@ import {
   handleChatInputHistoryKey,
   resetChatInputHistoryNavigation,
 } from "./input-history.ts";
-import { beginQueuedMessageEdit, cancelQueuedMessageEdit } from "./queued-message-edit.ts";
+import {
+  activeQueuedMessageEdit,
+  beginQueuedMessageEdit,
+  cancelQueuedMessageEdit,
+  updateQueuedMessageEdit,
+} from "./queued-message-edit.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import { handleAbortChat, hasAbortableSessionRun, isChatStopCommand } from "./run-lifecycle.ts";
 import { handleChatScroll, resetChatScroll, scheduleChatScroll } from "./scroll.ts";
@@ -332,10 +336,21 @@ export function createPageState(
     renderLifecycle.invalidate();
   };
   state.editQueuedChatMessage = (id) => {
-    if (beginQueuedMessageEdit(state, id) === "composer-busy") {
-      setChatError(state, t("chat.queue.editNeedsEmptyComposer"));
-    }
+    beginQueuedMessageEdit(state, id);
     renderLifecycle.invalidate();
+  };
+  state.updateQueuedChatMessageEdit = (draftText) => {
+    updateQueuedMessageEdit(state, draftText);
+    renderLifecycle.invalidate();
+  };
+  state.submitQueuedChatMessageEdit = () => {
+    const edit = activeQueuedMessageEdit(state);
+    if (!edit) {
+      return;
+    }
+    void state.handleSendChat(edit.draftText, {
+      attachmentsOverride: [...edit.attachments],
+    });
   };
   state.cancelQueuedChatMessageEdit = () => {
     cancelQueuedMessageEdit(state);

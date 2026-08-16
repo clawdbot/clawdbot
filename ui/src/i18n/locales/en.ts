@@ -5098,8 +5098,6 @@ export const en: TranslationMap = {
       editQueuedMessage: "Edit queued message",
       editing: "Editing a queued message",
       cancelEdit: "Cancel editing and keep the queued message",
-      editNeedsEmptyComposer:
-        "Editing needs an empty composer. Send or clear your current message first.",
       states: {
         steering: "Steering",
         applyingSettings: "Applying chat settings",

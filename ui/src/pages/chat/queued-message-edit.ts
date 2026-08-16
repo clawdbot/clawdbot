@@ -1,11 +1,8 @@
-// Control UI chat module owns lifting a queued message back into the composer.
+// Control UI chat module owns editing a queued message in its queue row.
 import { chatQueueOrderKey, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
-import {
-  cloneChatAttachmentsForIndependentOwner,
-  releaseChatAttachmentPayloads,
-} from "./attachment-payload-store.ts";
+import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import {
   anyChatOutboxPaneMatches,
   isDurableQueuedMessage,
@@ -16,26 +13,25 @@ import {
 
 /**
  * The edited row stays in the queue, holding its own place, so the operator can
- * see where the message will land. This records which row the composer owns, the
- * outbox scope that owns the row, the payloads that row still owns, and the
- * position the replacement inherits.
+ * see where the message will land. This records the row-local draft, the outbox
+ * scope that owns the row, the payloads that row still owns, and the position
+ * the replacement inherits.
  */
 export type QueuedMessageEdit = {
   agentId?: string;
   attachments: readonly ChatAttachment[];
+  draftText: string;
   id: string;
   orderKey: number;
   sessionKey: string;
 };
 
 type QueuedMessageEditHost = ChatQueueScopedSessionHost & {
-  chatMessage: string;
-  chatAttachments: ChatAttachment[];
   chatQueuedEdit?: QueuedMessageEdit | null;
 };
 
 /** Closed outcomes so the page owns the operator-visible wording. */
-type QueuedMessageEditResult = "started" | "unavailable" | "composer-busy";
+type QueuedMessageEditResult = "started" | "unavailable";
 
 /**
  * The edit belongs to the scope it started in — session and agent, the pair every
@@ -74,25 +70,29 @@ export function beginQueuedMessageEdit(
   ) {
     return "unavailable";
   }
-  // Never overwrite newer composer input; the same rule guards command recovery.
-  if (host.chatMessage.trim() || host.chatAttachments.length > 0) {
-    return "composer-busy";
-  }
   // The row is left in storage on purpose: it keeps its place visibly, and the
-  // drain refuses it while this edit owns it (see chat-outbox-drain).
+  // drain refuses it while this edit owns it (see chat-outbox-drain). The draft
+  // belongs to this token rather than the global composer, so editing a queued
+  // row never overwrites text the operator is composing for a different send.
   const agentId = scopedAgentIdForSession(host, host.sessionKey);
-  // The payloads travel with the token because the row they belong to is gone by
-  // the time the edit ends: the write that admits the replacement retires it.
   host.chatQueuedEdit = {
     ...(agentId ? { agentId } : {}),
     attachments: item.attachments ?? [],
+    draftText: item.text,
     id,
     orderKey: chatQueueOrderKey(item),
     sessionKey: host.sessionKey,
   };
-  host.chatMessage = item.text;
-  host.chatAttachments = item.attachments ?? [];
   return "started";
+}
+
+export function updateQueuedMessageEdit(host: QueuedMessageEditHost, draftText: string): boolean {
+  const edit = activeQueuedMessageEdit(host);
+  if (!edit) {
+    return false;
+  }
+  edit.draftText = draftText;
+  return true;
 }
 
 /** Cancel touches storage not at all: the row never left the queue. */
@@ -101,14 +101,9 @@ export function cancelQueuedMessageEdit(host: QueuedMessageEditHost): boolean {
   if (!edit) {
     return false;
   }
-  // Keep the current draft visible, but fork any row-owned attachments so the
-  // composer can keep editing even if the queued row later drains or is removed.
-  const originalAttachmentIds = new Set(edit.attachments.map((attachment) => attachment.id));
-  host.chatAttachments = host.chatAttachments.map((attachment) =>
-    originalAttachmentIds.has(attachment.id)
-      ? cloneChatAttachmentsForIndependentOwner([attachment])[0]!
-      : attachment,
-  );
+  // The durable row still owns its original payloads. The row-local draft has
+  // no separate attachment owner, so cancellation has nothing to release or
+  // copy and leaves the main composer exactly as it was.
   host.chatQueuedEdit = null;
   return true;
 }
@@ -139,8 +134,7 @@ export function retireEditedQueuedMessageSource(
   // The payloads come from the token: a successful write already retired the row
   // and told every pane, so re-reading it here would find nothing to release.
   const retainedIds = new Set(nextAttachments.map((attachment) => attachment.id));
-  const droppedAttachments = edit.attachments.filter(
-    (attachment) => !retainedIds.has(attachment.id),
+  releaseChatAttachmentPayloads(
+    edit.attachments.filter((attachment) => !retainedIds.has(attachment.id)),
   );
-  releaseChatAttachmentPayloads(droppedAttachments);
 }

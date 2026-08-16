@@ -201,8 +201,9 @@ export async function handleSendChat(
   const submittedAtMs = controlUiNowMs();
   const submittedSessionKey = host.sessionKey;
   let expectedLeafEntryId = resolveDisplayedLeafEntryId(host);
-  const attachmentsToSend =
-    messageOverride == null ? snapshotChatAttachments(host.chatAttachments) : [];
+  const attachmentsToSend = snapshotChatAttachments(
+    messageOverride == null ? host.chatAttachments : (opts?.attachmentsOverride ?? []),
+  );
   const hasAttachments = attachmentsToSend.length > 0;
   const skillWorkshopRevision = opts?.skillWorkshopRevision;
   // Materialize hidden annotation context before command classification and queue admission.

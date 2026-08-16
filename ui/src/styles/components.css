@@ -3046,6 +3046,27 @@ td.data-table-key-col {
   line-height: 1.4;
 }
 
+.chat-queue__edit-input {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 26px;
+  margin: -1px 0;
+  padding: 4px 6px;
+  border: 1px solid color-mix(in srgb, var(--info) 42%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--chat-text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.chat-queue__edit-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
 /* Wraps onto its own flex line below the row (see renderChatQueueItem). */
 .chat-queue__error {
   flex-basis: 100%;
@@ -3100,7 +3121,9 @@ td.data-table-key-col {
 }
 
 .chat-queue__edit,
-.chat-queue__remove {
+.chat-queue__remove,
+.chat-queue__edit-submit,
+.chat-queue__edit-cancel {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3117,19 +3140,25 @@ td.data-table-key-col {
 /* Inert instead of removed: an open edit keeps every action slot in place so the
    rows below it never shift while the operator retypes. */
 .chat-queue__edit:disabled,
-.chat-queue__remove:disabled {
+.chat-queue__remove:disabled,
+.chat-queue__edit-submit:disabled,
+.chat-queue__edit-cancel:disabled {
   color: color-mix(in srgb, var(--muted) 34%, transparent);
   cursor: default;
 }
 
 .chat-queue__edit:hover:not(:disabled),
-.chat-queue__remove:hover:not(:disabled) {
+.chat-queue__remove:hover:not(:disabled),
+.chat-queue__edit-submit:hover:not(:disabled),
+.chat-queue__edit-cancel:hover:not(:disabled) {
   color: var(--text);
   background: color-mix(in srgb, var(--text) 10%, transparent);
 }
 
 .chat-queue__edit svg,
-.chat-queue__remove svg {
+.chat-queue__remove svg,
+.chat-queue__edit-submit svg,
+.chat-queue__edit-cancel svg {
   width: 13px;
   height: 13px;
   fill: none;

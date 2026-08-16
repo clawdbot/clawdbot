@@ -19,7 +19,11 @@ type ChatQueueProps = {
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, toIndex: number) => void;
   onQueueEdit?: (id: string) => void;
+  onQueueEditChange?: (text: string) => void;
+  onQueueEditSubmit?: () => void;
+  onQueueEditCancel?: () => void;
   editingId?: string | null;
+  editingText?: string;
   onQueueRemove: (id: string) => void;
 };
 
@@ -125,8 +129,8 @@ function renderChatQueueItem(
   // a row that may actually move gets a live handle.
   const showsHandle = Boolean(move) && reorder.offered;
   const canMove = showsHandle && moveIndex >= 0 && segment.length > 1;
-  // Every row keeps its handle, pencil and discard slots in every state and goes
-  // inert instead of empty while an edit is open, so no column moves mid-flow.
+  // Every row keeps its handle and action slots in every state and goes inert
+  // instead of empty while an edit is open, so no column moves mid-flow.
   const editable =
     Boolean(props.onQueueEdit) && isMovableChatQueueItem(item) && !item.localCommandName;
   const canEdit = editable && !props.editingId;
@@ -226,7 +230,28 @@ function renderChatQueueItem(
               >${stateLabel}</span
             >`
           : nothing}
-      <span class="chat-queue__text" title=${text}>${text}</span>
+      ${editing
+        ? html`<textarea
+            class="chat-queue__edit-input"
+            rows="1"
+            .value=${props.editingText ?? item.text}
+            aria-label=${t("chat.queue.editQueuedMessage")}
+            @input=${(event: Event) => {
+              props.onQueueEditChange?.((event.currentTarget as HTMLTextAreaElement).value);
+            }}
+            @keydown=${(event: KeyboardEvent) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                props.onQueueEditCancel?.();
+              } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                props.onQueueEditSubmit?.();
+              }
+            }}
+            autofocus
+          ></textarea>`
+        : html`<span class="chat-queue__text" title=${text}>${text}</span>`}
       <span class="chat-queue__actions">
         ${failed && props.onQueueRetry
           ? html`
@@ -254,22 +279,41 @@ function renderChatQueueItem(
               </button>
             `
           : nothing}
-        ${editable
+        ${editing
           ? html`
-              <openclaw-tooltip .content=${t("chat.queue.editQueuedMessage")}>
-                <button
-                  class="chat-queue__edit"
-                  type="button"
-                  ?disabled=${!canEdit}
-                  aria-label=${t("chat.queue.editQueuedMessage")}
-                  @click=${() => props.onQueueEdit?.(item.id)}
-                >
-                  ${icons.pencil}
-                </button>
-              </openclaw-tooltip>
+              <button
+                class="chat-queue__edit-submit"
+                type="button"
+                aria-label=${t("chat.runControls.sendMessage")}
+                @click=${() => props.onQueueEditSubmit?.()}
+              >
+                ${icons.check}
+              </button>
+              <button
+                class="chat-queue__edit-cancel"
+                type="button"
+                aria-label=${t("chat.queue.cancelEdit")}
+                @click=${() => props.onQueueEditCancel?.()}
+              >
+                ${icons.x}
+              </button>
             `
-          : nothing}
-        ${busy
+          : editable
+            ? html`
+                <openclaw-tooltip .content=${t("chat.queue.editQueuedMessage")}>
+                  <button
+                    class="chat-queue__edit"
+                    type="button"
+                    ?disabled=${!canEdit}
+                    aria-label=${t("chat.queue.editQueuedMessage")}
+                    @click=${() => props.onQueueEdit?.(item.id)}
+                  >
+                    ${icons.pencil}
+                  </button>
+                </openclaw-tooltip>
+              `
+            : nothing}
+        ${busy || editing
           ? nothing
           : html`
               <openclaw-tooltip .content=${t("chat.queue.removeQueuedMessage")}>

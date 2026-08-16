@@ -29,9 +29,12 @@ import type {
 
 /** One shape for the queued-message edit state and its two actions. */
 export type ChatQueuedEditProps = {
-  /** Id of the row the composer currently owns, or null when composing fresh. */
+  /** Id of the row with an inline draft, or null when no row is being edited. */
   editingId: string | null;
+  editingText?: string;
   onEdit?: (id: string) => void;
+  onEditChange?: (text: string) => void;
+  onEditSubmit?: () => void;
   onCancel: () => void;
 };
 

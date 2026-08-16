@@ -2622,53 +2622,6 @@ button.chat-pr__diff {
   min-height: var(--chat-composer-control-height);
 }
 
-/* Edit-mode marker beside the input: the queued row already names the state, so
-   this only says which mode the composer is in and how to leave it. It takes the
-   row's control height like every other child, so it needs no alignment nudge. */
-.agent-chat__composer-edit {
-  display: inline-flex;
-  align-items: center;
-  gap: 1px;
-  flex-shrink: 0;
-  padding-inline: 7px 3px;
-  border-radius: var(--radius-full);
-  background: var(--info-subtle);
-  color: var(--info);
-}
-
-.agent-chat__composer-edit-icon,
-.agent-chat__composer-edit-cancel {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.agent-chat__composer-edit-icon svg,
-.agent-chat__composer-edit-cancel svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.85px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.agent-chat__composer-edit-cancel {
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-full);
-  background: none;
-  color: inherit;
-  cursor: var(--cursor-action);
-}
-
-.agent-chat__composer-edit-cancel:hover {
-  background: color-mix(in srgb, var(--info) 18%, transparent);
-}
-
 .agent-chat__disabled-reason {
   display: flex;
   align-items: center;

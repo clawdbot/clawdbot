@@ -197,7 +197,7 @@ describe("chat composer queue reordering", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
-  it("holds every action slot inert while one edit is open", () => {
+  it("renders the inline editor while keeping other rows actionable", () => {
     const onQueueEdit = vi.fn();
     const onQueueRemove = vi.fn();
     const container = renderQueue({
@@ -209,25 +209,53 @@ describe("chat composer queue reordering", () => {
     });
 
     const rows = [...container.querySelectorAll(".chat-queue__item")];
-    // Every row keeps both buttons, so no column shifts while the edit is open.
-    for (const selector of [".chat-queue__edit", ".chat-queue__remove"]) {
-      const present = rows.map((row) => row.querySelector(selector) !== null);
-      expect(present).toEqual([true, true, true]);
-    }
-    // One edit at a time, so every pencil waits; discarding another row is still
-    // safe, so only the edited row's X goes inert.
+    expect(rows.map((row) => row.querySelector(".chat-queue__edit") !== null)).toEqual([
+      true,
+      false,
+      true,
+    ]);
+    expect(rows[1]?.querySelector(".chat-queue__edit-input")).not.toBeNull();
+    expect(rows[1]?.querySelector(".chat-queue__edit-submit")).not.toBeNull();
+    expect(rows[1]?.querySelector(".chat-queue__edit-cancel")).not.toBeNull();
+
+    // One edit at a time, so the other pencils wait; removing another row is
+    // still safe while the inline editor remains open.
     const disabled = (selector: string) =>
-      rows.map((row) => row.querySelector(selector)!.hasAttribute("disabled"));
-    expect(disabled(".chat-queue__edit")).toEqual([true, true, true]);
-    expect(disabled(".chat-queue__remove")).toEqual([false, true, false]);
+      rows.map((row) => row.querySelector(selector)?.hasAttribute("disabled") ?? false);
+    expect(disabled(".chat-queue__edit")).toEqual([true, false, true]);
+    expect(disabled(".chat-queue__remove")).toEqual([false, false, false]);
 
     rows[0]?.querySelector<HTMLButtonElement>(".chat-queue__edit")?.click();
-    rows[1]?.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
     expect(onQueueEdit).not.toHaveBeenCalled();
-    expect(onQueueRemove).not.toHaveBeenCalled();
 
     rows[2]?.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
     expect(onQueueRemove).toHaveBeenCalledWith("c");
+  });
+
+  it("routes inline draft changes, submit, cancel, and keyboard shortcuts", () => {
+    const onQueueEditChange = vi.fn();
+    const onQueueEditSubmit = vi.fn();
+    const onQueueEditCancel = vi.fn();
+    const container = renderQueue({
+      queue: [waiting("a", 1)],
+      editingId: "a",
+      editingText: "a draft",
+      onQueueEditChange,
+      onQueueEditSubmit,
+      onQueueEditCancel,
+      onQueueRemove: vi.fn(),
+    });
+    const editor = container.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")!;
+    expect(editor.value).toBe("a draft");
+    editor.value = "updated draft";
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onQueueEditChange).toHaveBeenCalledWith("updated draft");
+    editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(onQueueEditCancel).toHaveBeenCalledOnce();
+    editor.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
+    );
+    expect(onQueueEditSubmit).toHaveBeenCalledOnce();
   });
 
   it("keeps a row that already joined a run out of the reorder set", () => {
