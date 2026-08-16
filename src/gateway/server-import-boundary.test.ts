@@ -243,7 +243,7 @@ describe("gateway startup import boundaries", () => {
     const hookStart = serverImpl.indexOf("runGlobalGatewayStopSafely", closeStart);
     const closeFenceStart = serverImpl.indexOf("markClosePreludeStarted();", closeStart);
     const startupCancelStart = serverImpl.indexOf("settleStartupOnClose();", closeStart);
-    const startupJoinStart = serverImpl.indexOf("await startupSettled.catch", closeStart);
+    const startupJoinStart = serverImpl.indexOf("await startupJoin.catch", closeStart);
     const reloadStopStart = serverImpl.indexOf("await beginClosePrelude();", closeStart);
     const terminalStopStart = serverImpl.indexOf("terminalSessions.disposeAll();", closeStart);
     const markHelperStart = serverImpl.indexOf("const markClosePreludeStarted = () => {");

@@ -586,7 +586,8 @@ describe("runGatewayLoop", () => {
       captureSignal("SIGTERM")();
 
       await expect(exited).resolves.toBe(0);
-      await expect(startup.startupSettled).resolves.toBeUndefined();
+      await expect(startup.startupJoin).resolves.toBeUndefined();
+      expect(startup.startupJoin).not.toBe(unresolvedSidecarStartup);
       expect(close).toHaveBeenCalledWith({
         reason: "gateway stopping",
         restartExpectedMs: null,

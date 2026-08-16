@@ -29,6 +29,7 @@ export async function startGatewayServerCore(
   });
   const gatewayKernel = await createGatewayKernel(port, opts);
   let settleStartupOnClose: () => void = () => {};
+  let startupJoin: Promise<void>;
   let startupSettled: Promise<void>;
   const {
     beginClosePrelude,
@@ -59,9 +60,9 @@ export async function startGatewayServerCore(
       loadGatewayStartupPostAttachModule,
       waitForPostReadyWork: () => postReadyWorkBarrier,
     });
-    ({ startupSettled, settleOnClose: settleStartupOnClose } = createGatewayStartupSettlement(
-      startup.startupSettled,
-    ));
+    startupSettled = startup.startupSettled;
+    ({ startupJoin, settleOnClose: settleStartupOnClose } =
+      createGatewayStartupSettlement(startupSettled));
   } catch (err) {
     await closeOnStartupFailure();
     throw err;
@@ -81,7 +82,7 @@ export async function startGatewayServerCore(
         // Closing settles this generation's startup join while the close fence prevents
         // unresolved sidecar work from publishing into its replacement.
         settleStartupOnClose();
-        await startupSettled.catch(() => {});
+        await startupJoin.catch(() => {});
         await beginClosePrelude();
         // Kill any live operator shells before the socket layer tears down.
         terminalSessions.disposeAll();

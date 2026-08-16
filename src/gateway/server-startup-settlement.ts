@@ -1,5 +1,5 @@
 export function createGatewayStartupSettlement(startupSettled: Promise<void>): {
-  startupSettled: Promise<void>;
+  startupJoin: Promise<void>;
   settleOnClose: () => void;
 } {
   let settleOnClose: () => void = () => {};
@@ -7,7 +7,7 @@ export function createGatewayStartupSettlement(startupSettled: Promise<void>): {
     settleOnClose = resolve;
   });
   return {
-    startupSettled: Promise.race([startupSettled, closeStarted]),
+    startupJoin: Promise.race([startupSettled, closeStarted]),
     settleOnClose,
   };
 }
