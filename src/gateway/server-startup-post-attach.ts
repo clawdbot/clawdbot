@@ -574,6 +574,7 @@ export async function startGatewaySidecars(params: {
   defaultWorkspaceDir: string;
   deps: CliDeps;
   startChannels: () => Promise<void>;
+  shouldStartChannels?: () => boolean;
   refreshChatMetadata?: () => Promise<void>;
   onChannelsStarted?: () => Awaitable<void>;
   prewarmPrimaryModel?: typeof prewarmConfiguredPrimaryModel;
@@ -673,7 +674,13 @@ export async function startGatewaySidecars(params: {
     await params.refreshChatMetadata?.();
   });
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
-    if (!skipChannels) {
+    if (skipChannels) {
+      await measureStartup(params.startupTrace, "sidecars.channel-skip", () =>
+        params.logChannels.info(
+          "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
+        ),
+      );
+    } else if (params.shouldStartChannels?.() !== false) {
       try {
         await measureStartup(params.startupTrace, "sidecars.channel-start", () =>
           params.startChannels(),
@@ -681,15 +688,11 @@ export async function startGatewaySidecars(params: {
       } catch (err) {
         params.logChannels.error(`channel startup failed: ${String(err)}`);
       }
-    } else {
-      await measureStartup(params.startupTrace, "sidecars.channel-skip", () =>
-        params.logChannels.info(
-          "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
-        ),
-      );
     }
   });
-  await params.onChannelsStarted?.();
+  if (params.shouldStartChannels?.() !== false) {
+    await params.onChannelsStarted?.();
+  }
 
   let pluginServices =
     params.shouldStartPluginServices?.() === false
@@ -1320,6 +1323,7 @@ export async function startGatewayPostAttachRuntime(
                   defaultWorkspaceDir: params.defaultWorkspaceDir,
                   deps: params.deps,
                   startChannels: params.startChannels,
+                  shouldStartChannels: () => params.isClosing?.() !== true,
                   refreshChatMetadata: params.refreshChatMetadata,
                   log: params.log,
                   logHooks: params.logHooks,

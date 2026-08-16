@@ -2218,6 +2218,39 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(trace.measures).toContain("sidecars.reply-runtime");
   });
 
+  it("does not start channels when close begins during deferred sidecar preparation", async () => {
+    let closeStarted = false;
+    let releaseReplyRuntime: (() => void) | undefined;
+    hoisted.prewarmConfigDrivenReplyRuntime.mockImplementationOnce(
+      async () =>
+        await new Promise<void>((resolve) => {
+          releaseReplyRuntime = resolve;
+        }),
+    );
+    const startChannels = vi.fn(async () => {});
+    const onChannelsStarted = vi.fn();
+    const unlockStartupMethods = vi.fn();
+    const runtime = await startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      sidecarStartup: "defer",
+      isClosing: () => closeStarted,
+      startChannels,
+      onChannelsStarted,
+      unlockStartupMethods,
+    });
+
+    await waitForGatewayTestState(() => {
+      expect(releaseReplyRuntime).toBeTypeOf("function");
+    });
+    closeStarted = true;
+    releaseReplyRuntime?.();
+    await expect(runtime.startupSettled).resolves.toBeUndefined();
+
+    expect(startChannels).not.toHaveBeenCalled();
+    expect(onChannelsStarted).not.toHaveBeenCalled();
+    expect(unlockStartupMethods).not.toHaveBeenCalled();
+  });
+
   it("marks startup main-session orphans before propagating model runtime failure", async () => {
     const modelRuntimeError = new Error("model runtime unavailable");
     const startChannels = vi.fn(async () => {});
