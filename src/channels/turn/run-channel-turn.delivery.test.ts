@@ -6,6 +6,7 @@ import {
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
+import { createReplyDispatchSettledCounts } from "../../auto-reply/reply/reply-dispatch-outcome.js";
 import type {
   ReplyDispatchKind,
   ReplyDispatchReceipt,
@@ -125,11 +126,7 @@ function createReceipt(
   outcomes: Partial<Record<ReplyDispatchKind, Partial<ReplyDispatchSettledCounts>>>,
 ): ReplyDispatchReceipt {
   const counts = (kind: ReplyDispatchKind): ReplyDispatchSettledCounts => ({
-    delivered: 0,
-    deliveredNotVisible: 0,
-    cancelled: 0,
-    failedBeforeSend: 0,
-    failedAfterSend: 0,
+    ...createReplyDispatchSettledCounts(),
     ...outcomes[kind],
   });
   const receipt = { tool: counts("tool"), block: counts("block"), final: counts("final") };
