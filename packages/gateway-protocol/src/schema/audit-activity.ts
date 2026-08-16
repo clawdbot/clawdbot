@@ -5,26 +5,27 @@ import { NonEmptyString } from "./primitives.js";
 
 const AuditActivitySchemaVersionV1Schema = Type.Integer({ minimum: 1, maximum: 1 });
 
-const AuditActivityStatusV1Schema: TSchema = Type.Union([
-  Type.Literal("started"),
-  Type.Literal("succeeded"),
-  Type.Literal("failed"),
-  Type.Literal("cancelled"),
-  Type.Literal("timed_out"),
-  Type.Literal("blocked"),
-  Type.Literal("unknown"),
-]);
+export const AUDIT_ACTIVITY_STATUSES = [
+  "started",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "timed_out",
+  "blocked",
+  "unknown",
+] as const;
+export const AUDIT_ACTIVITY_KINDS = ["agent_run", "tool_action", "message"] as const;
+export const AUDIT_ACTIVITY_DIRECTIONS = ["inbound", "outbound"] as const;
 
-const AuditActivityKindV1Schema: TSchema = Type.Union([
-  Type.Literal("agent_run"),
-  Type.Literal("tool_action"),
-  Type.Literal("message"),
-]);
-
-const AuditActivityDirectionV1Schema: TSchema = Type.Union([
-  Type.Literal("inbound"),
-  Type.Literal("outbound"),
-]);
+const AuditActivityStatusV1Schema: TSchema = Type.Union(
+  AUDIT_ACTIVITY_STATUSES.map((value) => Type.Literal(value)),
+);
+const AuditActivityKindV1Schema: TSchema = Type.Union(
+  AUDIT_ACTIVITY_KINDS.map((value) => Type.Literal(value)),
+);
+const AuditActivityDirectionV1Schema: TSchema = Type.Union(
+  AUDIT_ACTIVITY_DIRECTIONS.map((value) => Type.Literal(value)),
+);
 
 const AuditActivityConversationKindV1Schema = Type.Union([
   Type.Literal("direct"),
@@ -607,9 +608,9 @@ export type AuditActivityListParams = {
   agentId?: string;
   sessionKey?: string;
   runId?: string;
-  kind?: "agent_run" | "tool_action" | "message";
-  status?: "started" | "succeeded" | "failed" | "cancelled" | "timed_out" | "blocked" | "unknown";
-  direction?: "inbound" | "outbound";
+  kind?: (typeof AUDIT_ACTIVITY_KINDS)[number];
+  status?: (typeof AUDIT_ACTIVITY_STATUSES)[number];
+  direction?: (typeof AUDIT_ACTIVITY_DIRECTIONS)[number];
   channel?: string;
   after?: number;
   before?: number;
