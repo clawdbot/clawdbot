@@ -1,6 +1,8 @@
-import { DatabaseSync } from "node:sqlite";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -18,11 +20,11 @@ import {
   recordOutboundMessageProgress,
 } from "./message-delivery-progress-store.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const PINNED_PRE_C04_READER_SHA = "65922f95070abd58684675349593a217b193fe0f";
 
 function databaseOptions() {
-  return { env: { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "message-progress-") } };
+  return { env: { OPENCLAW_STATE_DIR: tempDirs.make("message-progress-") } };
 }
 
 function progressInput(
@@ -89,10 +91,6 @@ function terminalInput(
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
-});
-
-afterAll(() => {
-  cleanupTempDirs(tempDirs);
 });
 
 describe("outbound message progress companion", () => {
@@ -206,24 +204,80 @@ describe("outbound message progress companion", () => {
       database,
     );
     recordAuditEvent(terminalInput({ occurredAt }), database);
-    const databasePath = openOpenClawStateDatabase(database).path;
+    openOpenClawStateDatabase(database);
     closeOpenClawStateDatabaseForTest();
 
-    // The exact pinned pre-C04 reader accepts only terminal outbound actions.
-    // Open the candidate database in that reader's mode and exercise the same row.
-    const pinnedReader = new DatabaseSync(databasePath, { readOnly: true });
+    const repositoryRoot = process.cwd();
+    const checkoutParent = tempDirs.make("message-progress-pinned-reader-");
+    const pinnedCheckout = path.join(checkoutParent, "checkout");
+    execFileSync(
+      "git",
+      ["worktree", "add", "--detach", pinnedCheckout, PINNED_PRE_C04_READER_SHA],
+      { cwd: repositoryRoot, stdio: "pipe" },
+    );
     try {
-      expect(pinnedReader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 9 });
-      expect(pinnedReader.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
-      expect(
-        pinnedReader
-          .prepare(
-            "SELECT action, message_outcome AS outcome FROM audit_events WHERE kind = 'message' AND direction = 'outbound' ORDER BY sequence",
-          )
-          .all(),
-      ).toEqual([{ action: "message.outbound.finished", outcome: "sent" }]);
+      fs.symlinkSync(
+        path.join(repositoryRoot, "node_modules"),
+        path.join(pinnedCheckout, "node_modules"),
+        "dir",
+      );
+      const pinnedResult = execFileSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "--input-type=module",
+          "--eval",
+          `
+            const stateDir = process.env.OPENCLAW_C04_PINNED_READER_STATE_DIR;
+            const { listAuditEvents } = await import("./src/audit/audit-event-store.ts");
+            const {
+              closeOpenClawStateDatabaseForTest,
+              openOpenClawStateDatabase,
+            } = await import("./src/state/openclaw-state-db.ts");
+            const database = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+            const opened = openOpenClawStateDatabase(database);
+            const schemaVersion = opened.db.prepare("PRAGMA user_version").get().user_version;
+            const quickCheck = opened.db.prepare("PRAGMA quick_check").get().quick_check;
+            const events = listAuditEvents({
+              filters: { runId: "run-progress", kind: "message", direction: "outbound" },
+              limit: 10,
+              database,
+            }).events;
+            closeOpenClawStateDatabaseForTest();
+            console.log("C04_PINNED_READER_RESULT=" + JSON.stringify({
+              schemaVersion,
+              quickCheck,
+              actions: events.map((event) => event.action),
+              outcomes: events.map((event) => event.outcome),
+            }));
+          `,
+        ],
+        {
+          cwd: pinnedCheckout,
+          env: {
+            ...process.env,
+            OPENCLAW_C04_PINNED_READER_STATE_DIR: database.env.OPENCLAW_STATE_DIR,
+          },
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      const resultLine = pinnedResult
+        .split("\n")
+        .find((line) => line.startsWith("C04_PINNED_READER_RESULT="));
+      expect(resultLine).toBeDefined();
+      expect(JSON.parse(resultLine?.slice("C04_PINNED_READER_RESULT=".length) ?? "null")).toEqual({
+        schemaVersion: 9,
+        quickCheck: "ok",
+        actions: ["message.outbound.finished"],
+        outcomes: ["sent"],
+      });
     } finally {
-      pinnedReader.close();
+      execFileSync("git", ["worktree", "remove", "--force", pinnedCheckout], {
+        cwd: repositoryRoot,
+        stdio: "pipe",
+      });
     }
 
     expect(openOpenClawStateDatabase(database).db.prepare("PRAGMA quick_check").get()).toEqual({

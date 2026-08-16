@@ -31,23 +31,14 @@ import type {
   MessageActionGateway,
   MessageActionResult,
 } from "../../infra/outbound/message-action-contracts.js";
-import { MessageActionDeniedError } from "../../infra/outbound/message-action-denial.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
-import {
-  actionRequiresTarget,
-  resolveActionDeliveryTargetAlias,
-} from "../../infra/outbound/message-action-spec.js";
+import { resolveActionDeliveryTargetAlias } from "../../infra/outbound/message-action-spec.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import {
-  asToolParamsRecord,
-  type AnyAgentTool,
-  jsonResult,
-  readToolStringParam,
-} from "./common.js";
+import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
 import {
   readGatewayCallOptions,
   resolveGatewayOptions,
@@ -64,6 +55,7 @@ import {
   resolveEffectiveCurrentChannelContext,
   resolveMessageToolActionSchemaActions,
 } from "./message-tool-discovery.js";
+import { createMessageToolExplicitTargetGuard } from "./message-tool-explicit-target.js";
 import { MessageToolSchema } from "./message-tool-schema.js";
 import {
   addSourceReplyFinalControl,
@@ -78,53 +70,6 @@ import {
   type VisibleTextSuppressionReason,
 } from "./message-tool-visible-content.js";
 import { isPollVoteEchoText } from "./poll-vote-echo.js";
-
-function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
-  return action === "broadcast" || actionRequiresTarget(action);
-}
-
-type ExplicitMessageTargetContext = {
-  currentChannelProvider?: string;
-  preparedMessageToolCatalog?: PreparedMessageToolCatalog;
-};
-
-function requireExplicitMessageTarget(
-  params: Record<string, unknown>,
-  context?: ExplicitMessageTargetContext,
-): void {
-  const action = readToolStringParam(params, "action", {
-    required: true,
-  }) as ChannelMessageActionName;
-  if (!actionNeedsExplicitTarget(action)) {
-    return;
-  }
-  const hasCanonicalTarget =
-    (typeof params.target === "string" && params.target.trim().length > 0) ||
-    (typeof params.to === "string" && params.to.trim().length > 0) ||
-    (typeof params.channelId === "string" && params.channelId.trim().length > 0) ||
-    (Array.isArray(params.targets) &&
-      params.targets.some((value) => typeof value === "string" && value.trim().length > 0));
-  if (hasCanonicalTarget) {
-    return;
-  }
-  const channel =
-    normalizeMessageChannel(normalizeOptionalString(params.channel)) ??
-    normalizeMessageChannel(context?.currentChannelProvider);
-  const plugin = channel ? context?.preparedMessageToolCatalog?.getChannel(channel) : undefined;
-  const aliasSpec = plugin?.actions?.messageActionTargetAliases?.[action];
-  if (
-    channel &&
-    aliasSpec &&
-    resolveActionDeliveryTargetAlias(action, params, { channel, aliasSpec })
-  ) {
-    return;
-  }
-  throw new MessageActionDeniedError(
-    "Explicit message target required for this run. Provide target/targets (and channel when needed).",
-    "message_target_missing",
-    "message-target:explicit",
-  );
-}
 
 function resolveTrustedDecisionChannel(
   raw: string | null | undefined,
@@ -311,7 +256,6 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const effectiveCurrentChannel = resolveEffectiveCurrentChannelContext(options);
   const preparedMessageToolCatalog =
     options?.preparedMessageToolCatalog ?? getPreparedMessageToolCatalog();
-  const explicitTargetToolCallIds = new WeakMap<object, string>();
   const currentThreadTs =
     options?.currentThreadTs ??
     (options?.agentThreadId != null
@@ -357,13 +301,19 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           preparedMessageToolCatalog,
         }
       : undefined;
-  const explicitMessageTargetContext: ExplicitMessageTargetContext | undefined =
-    options?.requireExplicitTarget
-      ? {
-          currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
-          preparedMessageToolCatalog,
-        }
-      : undefined;
+  // Model-supplied channel text is untrusted until routing resolves it. Early
+  // denials retain only the host-prepared source provider.
+  const decisionChannel = resolveTrustedDecisionChannel(
+    effectiveCurrentChannel.currentChannelProvider,
+    preparedMessageToolCatalog,
+  );
+  const explicitTargetGuard = options?.requireExplicitTarget
+    ? createMessageToolExplicitTargetGuard({
+        currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
+        preparedMessageToolCatalog,
+        decisionChannel,
+      })
+    : undefined;
   // Schema and prompt must use the same snapshot; repeated discovery can drift
   // across plugin hooks while needlessly loading channel action metadata twice.
   const actions = messageToolDiscoveryParams
@@ -393,39 +343,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     displaySummary: "Send and manage messages across configured channels.",
     description,
     parameters: schema,
-    prepareBeforeToolCallParams: options?.requireExplicitTarget
-      ? (params, context) => {
-          if (params && typeof params === "object" && context.toolCallId) {
-            explicitTargetToolCallIds.set(params, context.toolCallId);
-          }
-          return params;
-        }
-      : undefined,
-    finalizeBeforeToolCallParams: options?.requireExplicitTarget
-      ? (params, preparedParams) => {
-          const actionParams = asToolParamsRecord(params);
-          const actionId =
-            preparedParams && typeof preparedParams === "object"
-              ? explicitTargetToolCallIds.get(preparedParams)
-              : undefined;
-          const action = readToolStringParam(actionParams, "action");
-          if (!actionId || !action) {
-            requireExplicitMessageTarget(actionParams, explicitMessageTargetContext);
-            return params;
-          }
-          createMessageToolDecisionRecorder({
-            actionId,
-            action,
-            channel: resolveTrustedDecisionChannel(
-              effectiveCurrentChannel.currentChannelProvider,
-              preparedMessageToolCatalog,
-            ),
-          }).runBoundary(() =>
-            requireExplicitMessageTarget(actionParams, explicitMessageTargetContext),
-          );
-          return params;
-        }
-      : undefined,
+    prepareBeforeToolCallParams: explicitTargetGuard?.prepareBeforeToolCallParams,
+    finalizeBeforeToolCallParams: explicitTargetGuard?.finalizeBeforeToolCallParams,
     execute: async (toolCallId, args, signal) => {
       if (signal?.aborted) {
         throw createAbortError("Message send aborted");
@@ -435,12 +354,6 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const action = readToolStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
-      // Model-supplied channel text is untrusted until routing resolves it.
-      // Early denials therefore retain only the host-prepared source provider.
-      const decisionChannel = resolveTrustedDecisionChannel(
-        effectiveCurrentChannel.currentChannelProvider,
-        preparedMessageToolCatalog,
-      );
       const decisions = createMessageToolDecisionRecorder({
         actionId: toolCallId,
         action,
@@ -504,10 +417,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               : "Suppressed outbound message text because it matched internal runtime context.",
         });
       }
-      if (options?.requireExplicitTarget) {
-        decisions.runBoundary(() => {
-          requireExplicitMessageTarget(params, explicitMessageTargetContext);
-        });
+      if (explicitTargetGuard) {
+        decisions.runBoundary(() => explicitTargetGuard.require(params, action));
       }
 
       const gatewayOpts = readGatewayCallOptions(params);
