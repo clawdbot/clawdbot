@@ -94,6 +94,12 @@ export function createComposerKeyDownHandler({
   showAbortableUi,
 }: ComposerKeyDownDeps): (event: KeyboardEvent) => void {
   return (event) => {
+    // The handler only ever binds to the composer textarea; narrowing here
+    // keeps the draft/selection reads below assertion-free.
+    const target = event.target;
+    if (!(target instanceof HTMLTextAreaElement)) {
+      return;
+    }
     if (state.composerComposing || event.isComposing || event.keyCode === 229) {
       return;
     }
@@ -159,7 +165,6 @@ export function createComposerKeyDownHandler({
     }
 
     if ((event.key === "ArrowUp" || event.key === "ArrowDown") && props.onHistoryKeydown) {
-      const target = event.target as HTMLTextAreaElement;
       commitDraft(target.value);
       const result = props.onHistoryKeydown({
         key: event.key,
@@ -203,7 +208,6 @@ export function createComposerKeyDownHandler({
 
     const sendShortcutMatches = sendShortcut === "enter" || event.metaKey || event.ctrlKey;
     if (event.key === "Enter" && !event.shiftKey && sendShortcutMatches) {
-      const target = event.target as HTMLTextAreaElement;
       const attachments = props.getAttachments?.() ?? props.attachments ?? [];
       if (!target.value.trim() && attachments.length === 0) {
         const queued =
