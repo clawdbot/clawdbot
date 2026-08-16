@@ -1,3 +1,4 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
@@ -73,7 +74,12 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
     .filter(([, config]) => config.enabled !== false)
     .map(([channelId]) => parseBuzzTarget(channelId));
   if (channelIds.length === 0) {
-    throw new Error("Buzz requires at least one channels.buzz.groups entry");
+    if (account.accountId === DEFAULT_ACCOUNT_ID) {
+      throw new Error("Buzz requires at least one channels.buzz.groups entry");
+    }
+    throw new Error(
+      `Buzz account "${account.accountId}" requires at least one channels.buzz.accounts.${account.accountId}.groups entry`,
+    );
   }
   const configuredChannelIds = new Set(channelIds);
   const profileName = resolveBuzzProfileName({ cfg: ctx.cfg, account, channelIds });

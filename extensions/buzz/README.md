@@ -20,7 +20,14 @@ openclaw channels add --channel buzz
 
 OpenClaw installs the plugin if needed, asks for the relay URL, and generates a dedicated bot identity.
 
-Add another Buzz identity with a named account:
+For a complete named-account setup, run guided setup and select or create the
+named account when prompted:
+
+```bash
+openclaw channels add --channel buzz
+```
+
+To write only a named account's identity credentials non-interactively:
 
 ```bash
 openclaw channels add \
@@ -30,6 +37,11 @@ openclaw channels add \
   --relay-url wss://ada.example.com \
   --private-key 'nsec1...'
 ```
+
+The non-interactive command does not discover rooms. Before starting the
+Gateway, either finish guided setup for `ada` or configure
+`channels.buzz.accounts.ada.groups` and
+`channels.buzz.accounts.ada.defaultTo` manually.
 
 Existing default-account credentials are preserved when the first named
 account is added. Buzz environment variables apply only to the default account.

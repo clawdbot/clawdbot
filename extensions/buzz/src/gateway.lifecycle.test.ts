@@ -147,6 +147,37 @@ describe("Buzz gateway lifecycle", () => {
     );
   });
 
+  it("reports the account-scoped groups path for a named account", async () => {
+    const cfg = {
+      channels: {
+        buzz: {
+          accounts: {
+            ada: {
+              relayUrl: "wss://ada.example.com",
+              privateKey: PRIVATE_KEY,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const account = resolveBuzzAccount({ cfg, accountId: "ada" });
+
+    await expect(
+      startBuzzGatewayAccount({
+        cfg,
+        accountId: account.accountId,
+        account,
+        runtime: {},
+        abortSignal: new AbortController().signal,
+        getStatus: vi.fn(),
+        setStatus: vi.fn(),
+      } as unknown as ChannelGatewayContext<ResolvedBuzzAccount>),
+    ).rejects.toThrow(
+      'Buzz account "ada" requires at least one channels.buzz.accounts.ada.groups entry',
+    );
+    expect(gatewayMocks.startBuzzBus).not.toHaveBeenCalled();
+  });
+
   it("invalidates cached room targets after initial discovery and newer room metadata", async () => {
     const invalidateDirectoryCache = vi.fn();
     const { abortController, lifecycle } = startTestGateway({
