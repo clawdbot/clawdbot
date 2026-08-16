@@ -1242,8 +1242,32 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("runs trusted changed gates on a dedicated Linux worker", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-check-changed-worker-route-");
     const result = detectChangedLanes(["src/config/config.ts"]);
-    const detectedWorker = { platform: "linux" as const, result, virtualized: true };
+    const detectedWorker = {
+      cwd: dir,
+      interactive: false,
+      platform: "linux" as const,
+      result,
+      virtualized: true,
+    };
+
+    expect(
+      shouldDelegateChangedCheckToCrabbox(
+        [],
+        {},
+        {
+          interactive: false,
+          platform: "linux",
+          virtualized: true,
+        },
+      ),
+    ).toBe(true);
+    expect(shouldDelegateChangedCheckToCrabbox([], {}, detectedWorker)).toBe(true);
+
+    writeRepoFile(dir, "node_modules/.modules.yaml", "layoutVersion: 5\n");
+    writeRepoFile(dir, "node_modules/.bin/oxfmt", "#!/bin/sh\n");
+    writeRepoFile(dir, "node_modules/typescript/package.json", '{"name":"typescript"}\n');
 
     expect(shouldDelegateChangedCheckToCrabbox([], {}, detectedWorker)).toBe(false);
     expect(

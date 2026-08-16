@@ -271,17 +271,17 @@ export function shouldDelegateChangedCheckToCrabbox(
     return false;
   }
   const result = options.result;
-  if (result?.paths.length === 0) {
+  if (!result) {
+    return true;
+  }
+  if (result.paths.length === 0) {
     return false;
   }
   if (isOpenEndedTruthyValue(env.OPENCLAW_TESTBOX)) {
     return true;
   }
   if (isDedicatedLinuxWorker(env, options)) {
-    return false;
-  }
-  if (!result) {
-    return true;
+    return !changedCheckLocalDependenciesReady(options.cwd ?? process.cwd());
   }
   // Release metadata plans diff the supplied commits after classification. A missing
   // ref needs the hydrated remote checkout even when the explicit path itself is cheap.
