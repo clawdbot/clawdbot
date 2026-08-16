@@ -441,15 +441,16 @@ export function createApplicationGateway(
         setSnapshot({
           ...snapshot,
           client: nextClient,
-          phase: mismatchedBuildId !== null
-            ? "reload-required"
-            : everConnected
-              ? willRetry
-                ? "reconnecting"
-                : "offline"
-              : willRetry
-                ? "connecting"
-                : "stopped",
+          phase:
+            mismatchedBuildId !== null
+              ? "reload-required"
+              : everConnected
+                ? willRetry
+                  ? "reconnecting"
+                  : "offline"
+                : willRetry
+                  ? "connecting"
+                  : "stopped",
           hello: null,
           canvasPluginSurfaceUrl: null,
           selfUser: null,
