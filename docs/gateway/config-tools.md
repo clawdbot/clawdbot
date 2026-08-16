@@ -345,8 +345,8 @@ Configures inbound media understanding (image/audio/video):
 
 Controls which sessions can be targeted by the session tools (`sessions_list`, `sessions_history`, `sessions_send`).
 
-Default: `tree` (current session + sessions spawned by it, such as subagents, plus ambient
-watched group sessions for the same agent).
+Default: `tree` (current session + sessions spawned by it, such as subagents;
+the main session can reach every session of the same agent).
 
 ```json5
 {
@@ -362,10 +362,11 @@ watched group sessions for the same agent).
 <AccordionGroup>
   <Accordion title="Visibility scopes">
     - `self`: only the current session key.
-    - `tree`: current session + sessions spawned by the current session (subagents). For read operations, it also includes same-agent group sessions that the current session watches through ambient group awareness.
+    - `tree`: current session + sessions spawned by the current session (subagents). When the caller is the canonical main session, it includes every same-agent session for list, history, search, send, and status.
     - `agent`: any session belonging to the current agent id (can include other users if you run per-sender sessions under the same agent id).
     - `all`: any session. Cross-agent targeting still requires `tools.agentToAgent`.
-    - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"` (the default), visibility is forced to `tree` even if `tools.sessions.visibility="all"`.
+    - `self` remains strict for main. Incognito denial remains absolute, and cross-agent access still requires `all` plus `tools.agentToAgent` policy.
+    - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"` (the default), access stays limited to spawned sessions even if the caller is main or `tools.sessions.visibility="all"`.
     - When not `all`, `sessions_list` includes a compact `visibility` field
       describing the effective mode and a warning that some sessions may be
       omitted outside the current scope.
@@ -373,11 +374,11 @@ watched group sessions for the same agent).
   </Accordion>
 </AccordionGroup>
 
-With the default `session.dmScope: "main"`, human activity in a group makes that same-agent group
-session ambiently visible to the agent's main session. In a multi-user setup, `"main"` also shares
-one DM session across users, so each user routed there can read from ambiently watched groups,
-including through session-memory `memory_search`. Use a per-peer `dmScope` for DM isolation, or set
-`tools.sessions.visibility: "self"` to opt out of ambient watched-session reads.
+Ambient group watches still queue activity notices and tell the main session
+where something happened. They do not grant access: main's same-agent access is
+built into `tree`. In a multi-user setup, `session.dmScope: "main"` shares that
+main session across users; use a per-peer DM scope for isolation, or set
+`tools.sessions.visibility: "self"` for strict current-session access.
 
 ### `tools.sessions_spawn`
 
