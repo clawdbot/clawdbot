@@ -78,6 +78,23 @@ export type NpmGlobalPrefixLayout = {
   binDir: string;
 };
 
+type NpmLifecyclePolicy = "unsupported-transition" | "unflagged" | "allow-scripts";
+
+/** Selects npm's lifecycle policy from the version of the owning executable. */
+export function resolveNpmLifecyclePolicy(version: string): NpmLifecyclePolicy | null {
+  const parsed = parseSemver(version);
+  if (!parsed) {
+    return null;
+  }
+  if (parsed.major !== 11) {
+    return parsed.major >= 12 ? "allow-scripts" : "unflagged";
+  }
+  if (parsed.minor <= 12) {
+    return "unflagged";
+  }
+  return parsed.minor >= 16 ? "allow-scripts" : "unsupported-transition";
+}
+
 function normalizePackageTarget(value: string): string {
   return value.trim();
 }
@@ -1215,6 +1232,7 @@ export function globalInstallArgs(
   pkgRoot?: string | null,
   installPrefix?: string | null,
   installCwd?: string | null,
+  npmLifecyclePolicy: Exclude<NpmLifecyclePolicy, "unsupported-transition"> = "allow-scripts",
 ): string[] {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
   if (resolved.manager === "pnpm") {
@@ -1243,7 +1261,9 @@ export function globalInstallArgs(
     resolved.command,
     "i",
     "-g",
-    resolveNpmInstallScriptsAllowFlag(spec, installCwd),
+    ...(npmLifecyclePolicy === "allow-scripts"
+      ? [resolveNpmInstallScriptsAllowFlag(spec, installCwd)]
+      : []),
     ...(installPrefix ? ["--prefix", installPrefix] : []),
     spec,
     ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
@@ -1263,6 +1283,7 @@ export function globalInstallFallbackArgs(
   pkgRoot?: string | null,
   installPrefix?: string | null,
   installCwd?: string | null,
+  npmLifecyclePolicy: Exclude<NpmLifecyclePolicy, "unsupported-transition"> = "allow-scripts",
 ): string[] | null {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
   if (resolved.manager !== "npm") {
@@ -1272,7 +1293,9 @@ export function globalInstallFallbackArgs(
     resolved.command,
     "i",
     "-g",
-    resolveNpmInstallScriptsAllowFlag(spec, installCwd),
+    ...(npmLifecyclePolicy === "allow-scripts"
+      ? [resolveNpmInstallScriptsAllowFlag(spec, installCwd)]
+      : []),
     ...(installPrefix ? ["--prefix", installPrefix] : []),
     spec,
     "--omit=optional",

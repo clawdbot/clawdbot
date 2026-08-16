@@ -75,6 +75,9 @@ async function expectPathMissing(filePath: string): Promise<void> {
 
 function createRootRunner(globalRoot: string): CommandRunner {
   return async (argv) => {
+    if (argv.join(" ") === "npm --version") {
+      return { stdout: "12.0.0\n", stderr: "", code: 0 };
+    }
     if (argv.join(" ") === "npm root -g") {
       return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
     }
@@ -152,6 +155,34 @@ describe("markPackagePostInstallDoctorAdvisory", () => {
 
     expect(step.advisory).toBeUndefined();
     expect(step.stderrTail).toBe("doctor timed out");
+  });
+});
+
+describe("npm lifecycle policy preflight", () => {
+  it.each([
+    { version: "11.13.0", message: "Upgrade the owning npm to 11.16" },
+    { version: "11.15.9", message: "Upgrade the owning npm to 11.16" },
+    { version: null, message: "Unable to determine the owning npm version" },
+  ])("stops before mutation for npm $version", async ({ version, message }) => {
+    const runStep = vi.fn();
+    const runCommand = vi.fn<CommandRunner>(async () => ({
+      stdout: version ? `${version}\n` : "",
+      stderr: version ? "" : "version probe failed",
+      code: version ? 0 : 1,
+    }));
+
+    const result = await runGlobalPackageUpdateSteps({
+      installTarget: createNpmTarget("/tmp/npm-policy-test/lib/node_modules"),
+      installSpec: "openclaw@2.0.0",
+      packageName: "openclaw",
+      runCommand,
+      runStep,
+      timeoutMs: 1000,
+    });
+
+    expect(runCommand).toHaveBeenCalledWith(["npm", "--version"], expect.any(Object));
+    expect(result.failedStep?.stderrTail).toContain(message);
+    expect(runStep).not.toHaveBeenCalled();
   });
 });
 

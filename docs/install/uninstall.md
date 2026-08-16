@@ -141,7 +141,10 @@ If you used a profile, delete the matching task name and the `gateway.cmd` /
 
 ### Normal install (install.sh / npm / pnpm / bun)
 
-If you used `https://openclaw.ai/install.sh` or `install.ps1`, the CLI was installed with `npm install -g openclaw@latest`.
+If you used `https://openclaw.ai/install.sh` or `install.ps1`, the installer
+performed a global npm install and explicitly allowed OpenClaw's lifecycle
+scripts when the owning npm supported that policy. It did not grant lifecycle
+trust to dependencies.
 Remove it with `npm rm -g openclaw` (or `pnpm remove -g` / `bun remove -g` if you installed that way).
 
 ### Source checkout (git clone)

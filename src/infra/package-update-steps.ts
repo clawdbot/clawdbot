@@ -24,6 +24,7 @@ import {
   readPackageManagerProbeValue,
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   resolveNpmGlobalPrefixLayoutFromPrefix,
+  resolveNpmLifecyclePolicy,
   resolvePnpmIsolatedInstallOwner,
   resolvePnpmGlobalDirFromGlobalRoot,
   resolveExpectedInstalledVersionFromSpec,
@@ -84,6 +85,52 @@ const PACKAGE_PREINSTALL_SCRIPT_PATH = path.join(
   "scripts",
   "preinstall-package-manager-warning.mjs",
 );
+
+async function resolveNpmUpdateLifecyclePolicy(params: {
+  installTarget: ResolvedGlobalInstallTarget;
+  runCommand: CommandRunner;
+  timeoutMs: number;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{
+  policy: "unflagged" | "allow-scripts" | null;
+  failedStep: PackageUpdateStepResult | null;
+}> {
+  if (params.installTarget.manager !== "npm") {
+    return { policy: null, failedStep: null };
+  }
+  const argv = [params.installTarget.command, "--version"];
+  const startedAt = Date.now();
+  const result = await params
+    .runCommand(argv, {
+      timeoutMs: params.timeoutMs,
+      env: params.env,
+    })
+    .catch((error: unknown) => ({
+      stdout: "",
+      stderr: formatErrorMessage(error),
+      code: 1,
+    }));
+  const version = readPackageManagerProbeValue(result.stdout);
+  const policy = result.code === 0 ? resolveNpmLifecyclePolicy(version) : null;
+  if (policy === "unflagged" || policy === "allow-scripts") {
+    return { policy, failedStep: null };
+  }
+  const transition = policy === "unsupported-transition";
+  return {
+    policy: null,
+    failedStep: {
+      name: "npm lifecycle policy preflight",
+      command: argv.join(" "),
+      cwd: process.cwd(),
+      durationMs: Date.now() - startedAt,
+      exitCode: 1,
+      stdoutTail: result.stdout || null,
+      stderrTail: transition
+        ? `npm ${version} cannot safely approve OpenClaw lifecycle scripts. Upgrade the owning npm to 11.16 or newer before updating; no package changes were made.`
+        : `Unable to determine the owning npm version before updating; no package changes were made.${result.stderr ? ` ${result.stderr}` : ""}`,
+    },
+  };
+}
 
 async function resolveCanonicalPath(filePath: string): Promise<string> {
   return path.resolve(await fs.realpath(filePath).catch(() => filePath));
@@ -842,6 +889,15 @@ export async function runGlobalPackageUpdateSteps(params: {
   let packedInstallDir: string | null = null;
 
   try {
+    const npmPreflight = await resolveNpmUpdateLifecyclePolicy(params);
+    if (npmPreflight.failedStep) {
+      return {
+        steps: [npmPreflight.failedStep],
+        verifiedPackageRoot: params.packageRoot ?? params.installTarget.packageRoot,
+        afterVersion: null,
+        failedStep: npmPreflight.failedStep,
+      };
+    }
     const pnpmPreflight = await validatePnpmIsolatedUpdate({
       installTarget: params.installTarget,
       packageName: params.packageName,
@@ -933,6 +989,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         undefined,
         installLocation,
         preparedSpec.installCwd,
+        npmPreflight.policy ?? undefined,
       ),
       ...(updateCwd ? { cwd: updateCwd } : {}),
       ...installEnv,
@@ -965,6 +1022,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         undefined,
         stagedInstall?.prefix,
         preparedSpec.installCwd,
+        npmPreflight.policy ?? undefined,
       );
       if (fallbackArgv) {
         const fallbackStep = await params.runStep({

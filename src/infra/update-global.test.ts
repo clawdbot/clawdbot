@@ -32,6 +32,7 @@ import {
   resolveGlobalInstallSpec,
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   resolveNpmGlobalPrefixLayoutFromPrefix,
+  resolveNpmLifecyclePolicy,
   resolvePnpmGlobalDirFromGlobalRoot,
   type CommandRunner,
 } from "./update-global.js";
@@ -111,6 +112,28 @@ describe("update global helpers", () => {
         env: { OPENCLAW_UPDATE_PACKAGE_SPEC: "openclaw@next" },
       }),
     ).toBe("openclaw@next");
+  });
+
+  it.each([
+    ["11.12.0", "unflagged"],
+    ["11.13.0", "unsupported-transition"],
+    ["11.15.9", "unsupported-transition"],
+    ["11.16.0", "allow-scripts"],
+    ["12.0.0", "allow-scripts"],
+  ] as const)("selects npm lifecycle policy for %s", (version, expected) => {
+    expect(resolveNpmLifecyclePolicy(version)).toBe(expected);
+  });
+
+  it("applies an unflagged npm policy to primary and retry argv", () => {
+    expect(
+      globalInstallArgs("npm", "openclaw@latest", null, null, null, "unflagged"),
+    ).not.toContain("--allow-scripts=openclaw");
+    expect(
+      globalInstallFallbackArgs("npm", "openclaw@latest", null, null, null, "unflagged"),
+    ).toEqual(expect.arrayContaining(["--omit=optional"]));
+    expect(
+      globalInstallFallbackArgs("npm", "openclaw@latest", null, null, null, "unflagged"),
+    ).not.toContain("--allow-scripts=openclaw");
   });
 
   it("maps main and explicit package targets to install specs", () => {
