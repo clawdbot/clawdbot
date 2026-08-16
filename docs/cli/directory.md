@@ -55,15 +55,27 @@ openclaw message send --channel slack --target user:U012ABCDEF --message "hello"
 openclaw directory self --channel zalouser
 ```
 
-A channel may legitimately return no self identity, including channels that only expose peer or
-group directories. This is a successful empty result (exit code `0`), not a failed lookup. The text
-output names the queried channel and account and explains that the plugin returned no identity. In
-JSON mode, the result is structured so scripts can distinguish it from an error:
+A channel may legitimately return no self identity. This is a successful empty result (exit code
+`0`), not a failed lookup. Channels without a self resolver report that the channel does not expose
+a self identity, without suggesting account troubleshooting:
 
 ```json
 {
   "status": "unavailable",
   "channel": "telegram",
+  "accountId": "default",
+  "reason": "self-identity-unsupported"
+}
+```
+
+When a channel implements self lookup but returns no identity, the text output names the channel and
+account and suggests checking its configuration and authentication. JSON callers can distinguish
+that case by its reason:
+
+```json
+{
+  "status": "unavailable",
+  "channel": "msteams",
   "accountId": "default",
   "reason": "plugin-returned-no-self-identity"
 }

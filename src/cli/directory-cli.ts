@@ -12,6 +12,7 @@ import {
   renderTerminalSafeTable,
 } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { nullChannelDirectorySelf } from "../channels/plugins/directory-adapters.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
 import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
@@ -228,17 +229,22 @@ export function registerDirectoryCli(program: Command) {
         }
         const result = await fn({ cfg, accountId, runtime: defaultRuntime });
         if (!result) {
+          const unsupported = fn === nullChannelDirectorySelf;
           if (opts.json) {
             defaultRuntime.writeJson({
               status: "unavailable",
               channel: channelId,
               accountId,
-              reason: "plugin-returned-no-self-identity",
+              reason: unsupported
+                ? "self-identity-unsupported"
+                : "plugin-returned-no-self-identity",
             });
           } else {
             defaultRuntime.log(
               theme.muted(
-                `The channel plugin returned no self identity for ${formatDirectoryScope(channelId, accountId)}. It did not provide a reason; verify the account is configured and authenticated, then retry. Some channels do not expose a self identity.`,
+                unsupported
+                  ? `Channel ${JSON.stringify(sanitizeTerminalText(channelId))} does not expose a self identity.`
+                  : `No self identity was returned for ${formatDirectoryScope(channelId, accountId)}. Verify the account is configured and authenticated, then retry.`,
               ),
             );
           }

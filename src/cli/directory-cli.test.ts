@@ -1,6 +1,7 @@
 // Directory CLI tests cover directory command registration and plugin-backed lookups.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { nullChannelDirectorySelf } from "../channels/plugins/directory-adapters.js";
 import { registerDirectoryCli } from "./directory-cli.js";
 
 const runtimeState = await vi.hoisted(async () => {
@@ -192,7 +193,7 @@ describe("registerDirectoryCli", () => {
         "--json",
       ],
     },
-  ])("explains an unavailable self identity in $mode mode", async ({ mode, args }) => {
+  ])("explains an empty implemented self lookup in $mode mode", async ({ mode, args }) => {
     const self = vi.fn().mockResolvedValue(null);
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: { channels: { "demo-directory": {} } },
@@ -215,10 +216,57 @@ describe("registerDirectoryCli", () => {
       });
     } else {
       const output = runtimeState.runtimeLogs.join("\n");
-      expect(output).toContain('channel "demo-directory"');
-      expect(output).toContain('account "account-1"');
-      expect(output).toContain("returned no self identity");
-      expect(output).toContain("did not provide a reason");
+      expect(output).toBe(
+        'No self identity was returned for channel "demo-directory", account "account-1". Verify the account is configured and authenticated, then retry.',
+      );
+    }
+    expect(runtimeState.defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      mode: "human",
+      args: ["directory", "self", "--channel", "demo-directory", "--account", "account-1"],
+    },
+    {
+      mode: "JSON",
+      args: [
+        "directory",
+        "self",
+        "--channel",
+        "demo-directory",
+        "--account",
+        "account-1",
+        "--json",
+      ],
+    },
+  ])("explains an unsupported self lookup in $mode mode", async ({ mode, args }) => {
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: { "demo-directory": {} } },
+      channelId: "demo-directory",
+      plugin: {
+        id: "demo-directory",
+        directory: { self: nullChannelDirectorySelf },
+      },
+      configChanged: false,
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await program.parseAsync(args, { from: "user" });
+
+    if (mode === "JSON") {
+      expect(runtimeState.defaultRuntime.writeJson).toHaveBeenCalledWith({
+        status: "unavailable",
+        channel: "demo-directory",
+        accountId: "account-1",
+        reason: "self-identity-unsupported",
+      });
+    } else {
+      expect(runtimeState.runtimeLogs.join("\n")).toBe(
+        'Channel "demo-directory" does not expose a self identity.',
+      );
     }
     expect(runtimeState.defaultRuntime.exit).not.toHaveBeenCalled();
   });
