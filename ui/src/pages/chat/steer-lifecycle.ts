@@ -4,8 +4,13 @@ import type { SessionsListResult } from "../../api/types.ts";
 import { setLastActiveSessionKey } from "../../app/settings.ts";
 import { compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
-import { uiSessionRowMatchesSelectedChat } from "../../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  uiSessionRowMatchesSelectedChat,
+} from "../../lib/sessions/session-key.ts";
+import { showToast } from "../../lib/toast.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import {
   getChatAttachmentDataUrl,
@@ -313,6 +318,36 @@ function setChatError(host: SteerLifecycleHost, error: string | null): void {
   host.chatError = error;
 }
 
+type ChatDeliveryFailureHost = Parameters<typeof visibleSessionMatches>[0] & {
+  lastError?: string | null;
+  chatError?: string | null;
+  sessionsResult?: SessionsListResult | null;
+};
+
+/**
+ * Terminal delivery failures must always end in a visible outcome. The pane
+ * showing this session keeps the inline chat error; after reconnect or alias
+ * drift the owning pane may no longer be on screen, so anything else surfaces
+ * a global toast naming the session instead of recording the error only on
+ * the queued row where nobody sees it.
+ */
+export function surfaceChatDeliveryFailure(
+  host: ChatDeliveryFailureHost,
+  sessionKey: string,
+  agentId: string | undefined,
+  error: string,
+): void {
+  if (visibleSessionMatches(host, sessionKey, agentId)) {
+    host.lastError = error;
+    host.chatError = error;
+    return;
+  }
+  const row = host.sessionsResult?.sessions.find((session) =>
+    areUiSessionKeysEquivalent(session.key, sessionKey),
+  );
+  showToast({ message: `${resolveSessionDisplayName(sessionKey, row)}: ${error}` });
+}
+
 export async function sendQueuedChatMessageWithQueueMode(
   host: SteerSendHost,
   id: string,
@@ -446,9 +481,12 @@ export async function sendQueuedChatMessageWithQueueMode(
       sendError: result.error,
       sendState: "failed",
     }));
-    if (itemStillVisible) {
-      setChatError(host, failed ? result.error : OFFLINE_QUEUE_STORAGE_ERROR);
-    }
+    surfaceChatDeliveryFailure(
+      host,
+      itemSessionKey,
+      item.agentId,
+      failed ? result.error : OFFLINE_QUEUE_STORAGE_ERROR,
+    );
     return;
   }
   const ack = result;
@@ -462,9 +500,12 @@ export async function sendQueuedChatMessageWithQueueMode(
         setChatError(host, unconfirmedError);
       }
     } else {
-      if (itemStillVisible) {
-        setChatError(host, formatTerminalChatSendAckError(ack, isSteer ? "steer" : "chat"));
-      }
+      surfaceChatDeliveryFailure(
+        host,
+        itemSessionKey,
+        item.agentId,
+        formatTerminalChatSendAckError(ack, isSteer ? "steer" : "chat"),
+      );
       dependencies.resumeRestoredOutbox(host, id);
     }
     return;

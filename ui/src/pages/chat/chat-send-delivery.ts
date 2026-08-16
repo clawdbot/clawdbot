@@ -63,7 +63,11 @@ import { resetChatInputHistoryNavigation } from "./input-history.ts";
 import { controlUiNowMs, roundedControlUiDurationMs } from "./performance.ts";
 import { hasAbortableSessionRun, isChatBusy, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { resetChatScroll, scheduleChatScroll } from "./scroll.ts";
-import { formatTerminalChatSendAckError, OFFLINE_QUEUE_STORAGE_ERROR } from "./steer-lifecycle.ts";
+import {
+  formatTerminalChatSendAckError,
+  OFFLINE_QUEUE_STORAGE_ERROR,
+  surfaceChatDeliveryFailure,
+} from "./steer-lifecycle.ts";
 import { resetToolStream } from "./tool-stream.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
@@ -224,9 +228,7 @@ async function sendQueuedChatMessage(
     const access = readChatResetTargetAccess(host, options.target);
     if (!access.allowed) {
       setState("failed", access.reason);
-      if (visibleSessionMatches(host, sessionKey, prepared.agentId)) {
-        setChatError(host, access.reason);
-      }
+      surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, access.reason);
       return "failed";
     }
   }
@@ -245,9 +247,7 @@ async function sendQueuedChatMessage(
     }
     if (!waiting) {
       setState("failed", OFFLINE_QUEUE_STORAGE_ERROR);
-      if (visibleSessionMatches(host, sessionKey, prepared.agentId)) {
-        setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
-      }
+      surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, OFFLINE_QUEUE_STORAGE_ERROR);
     }
     return "pending";
   }
@@ -267,9 +267,7 @@ async function sendQueuedChatMessage(
     agentId: prepared.agentId,
   }));
   if (!sendingItem) {
-    if (visibleSessionMatches(host, sessionKey, prepared.agentId)) {
-      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
-    }
+    surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, OFFLINE_QUEUE_STORAGE_ERROR);
     return "pending";
   }
   registerChatSendTiming(host, sendingItem, runId, requestStartedAtMs);
@@ -349,9 +347,9 @@ async function sendQueuedChatMessage(
           publishRunStatus: false,
           armLocalTerminalReconcile: ack.runId === runId,
         });
-        setChatError(host, error);
         restoreComposer(host, options ?? {});
       }
+      surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error);
       recordChatSendTiming(host, sendingItem, "failed", sendingItem.sendSubmittedAtMs, {
         error,
         ackStatus: ack.status,
@@ -431,9 +429,7 @@ async function sendQueuedChatMessage(
     }
     discardChatAttachmentDataUrls(excludeComposerAttachments(host, attachments));
     if (retirementFailed) {
-      if (isVisible()) {
-        setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
-      }
+      surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, OFFLINE_QUEUE_STORAGE_ERROR);
       return "pending";
     }
     return retireOnAck ? "sent" : "pending";
@@ -478,9 +474,12 @@ async function sendQueuedChatMessage(
             sendState: safelyRejected ? "failed" : "unconfirmed",
           }));
         }
-        if (isVisible()) {
-          setChatError(host, restore ? error : OFFLINE_QUEUE_STORAGE_ERROR);
-        }
+        surfaceChatDeliveryFailure(
+          host,
+          sessionKey,
+          prepared.agentId,
+          restore ? error : OFFLINE_QUEUE_STORAGE_ERROR,
+        );
         recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, {
           error: restore ? error : OFFLINE_QUEUE_STORAGE_ERROR,
         });
@@ -503,9 +502,7 @@ async function sendQueuedChatMessage(
             sendState: "failed",
           }));
         }
-        if (isVisible()) {
-          setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
-        }
+        surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, OFFLINE_QUEUE_STORAGE_ERROR);
         recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, {
           error: OFFLINE_QUEUE_STORAGE_ERROR,
         });
@@ -534,12 +531,12 @@ async function sendQueuedChatMessage(
     }
     setState("failed", error);
     if (isVisible()) {
-      setChatError(host, error);
       restoreComposer(host, options ?? {});
       if (activeLeafChanged) {
         void Promise.all([loadChatHistory(host), loadChatBranches(host)]);
       }
     }
+    surfaceChatDeliveryFailure(host, sessionKey, prepared.agentId, error);
     recordChatSendTiming(host, prepared, "failed", prepared.sendSubmittedAtMs, { error });
     return "failed";
   } finally {
