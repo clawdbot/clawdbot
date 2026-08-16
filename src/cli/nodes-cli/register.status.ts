@@ -231,7 +231,7 @@ function mergePairedNodesWithEffectiveNodes(
 
 async function tryReadNodeList(opts: NodesRpcOpts): Promise<NodeListNode[] | null> {
   try {
-    return parseNodeList(await callNodesGatewayCli("node.list", opts, {}));
+    return parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}));
   } catch {
     return null;
   }
@@ -534,7 +534,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const hasFilters = connectedOnly || sinceMs !== undefined;
           const pendingRows = hasFilters ? [] : pending;
           const effectiveNodes = hasFilters
-            ? parseNodeList(await callNodesGatewayCli("node.list", opts, {}))
+            ? parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}))
             : await tryReadNodeList(opts);
           const effectivePairedRows = mergePairedNodesWithEffectiveNodes(paired, effectiveNodes);
           const filteredPaired = effectivePairedRows.filter((node) => {

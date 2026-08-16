@@ -183,7 +183,7 @@ prepare() {
     fail "$defaults_domain already has saved settings; choose a fresh proof profile"
   fi
   [[ ! -e "$scratch/rig.json" ]] || fail "$scratch already contains a rig"
-  mkdir -p "$scratch" "$scratch/agent-state"
+  mkdir -p "$scratch" "$scratch/agent-state" "$scratch/cli-state"
 
   local app_config="$app_state/openclaw.json"
   local staged_app_config="$scratch/app.json"
@@ -263,7 +263,7 @@ prepare_linux() {
     fail "runtime sources are staged but uncommitted; commit and rebuild first"
 
   [[ ! -e "$scratch/rig.json" ]] || fail "$scratch already contains a rig"
-  mkdir -p "$scratch/agent-state" "$scratch/gateway-state" "$scratch/node-state"
+  mkdir -p "$scratch/agent-state" "$scratch/cli-state" "$scratch/gateway-state" "$scratch/node-state"
   local gateway_config="$scratch/gateway.json"
   local node_config="$scratch/node.json"
   local gateway_token
@@ -399,10 +399,15 @@ run_fixture() {
 
 run_nodes() {
   [[ $# -eq 1 ]] || { usage; exit 2; }
-  load_rig "$1"
+  local scratch="$1"
+  load_rig "$scratch"
+  # A paired operator device is pinned to the scopes of its first connect, and
+  # later widening needs an approval this rig cannot reach. The CLI therefore
+  # keeps its own identity here; the proof client stays in agent-state, where it
+  # is admitted unpaired as a local backend and keeps operator.write.
   exec env \
     OPENCLAW_CONFIG_PATH="$OPENCLAW_CU_RIG_GATEWAY_CONFIG" \
-    OPENCLAW_STATE_DIR="$OPENCLAW_CU_RIG_AGENT_STATE" \
+    OPENCLAW_STATE_DIR="$scratch/cli-state" \
     node "$repo_root/scripts/run-node.mjs" nodes list --json
 }
 
