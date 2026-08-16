@@ -1,6 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { loadSettings, patchSettings, type UiSettings } from "../../app/settings.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import {
   createRealtimeTalkConversationState,
   updateRealtimeTalkConversation,
@@ -185,7 +185,8 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
             return;
           }
           state.realtimeTalkStatus = status;
-          state.realtimeTalkDetail = detail ?? null;
+          state.realtimeTalkDetail =
+            status === "error" && detail ? formatUiExternalText(detail) : (detail ?? null);
           state.realtimeTalkCameraError = false;
           state.realtimeTalkActive = status !== "idle";
           if (status === "idle" || status === "error") {

@@ -1,6 +1,6 @@
 // Control UI controller for the Logbook tab: state, gateway calls, polling.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type {
   LogbookDaysPayload,
   LogbookStatusPayload,
@@ -371,7 +371,7 @@ export async function runLogbookAnalysisNow(
       {},
     );
     if (ownsClient(state, client, clientGeneration) && !result.started && result.reason) {
-      state.error = result.reason;
+      state.error = formatUiExternalText(result.reason);
     }
   } catch (err) {
     if (ownsClient(state, client, clientGeneration)) {

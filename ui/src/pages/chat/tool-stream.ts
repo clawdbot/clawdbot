@@ -6,7 +6,7 @@ import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/direc
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { ChatQueueItem, ChatStreamSegment } from "../../lib/chat/chat-types.ts";
 import type { DiffStat } from "../../lib/chat/tool-call-diff.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
@@ -763,7 +763,7 @@ function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventP
     }
     return parseFallbackAttempts(data.attempts).map((attempt) => {
       const modelRef = resolveModelLabel(attempt.provider, attempt.model);
-      return `${modelRef ?? `${attempt.provider}/${attempt.model}`}: ${attempt.reason}`;
+      return `${modelRef ?? `${attempt.provider}/${attempt.model}`}: ${formatUiExternalText(attempt.reason)}`;
     });
   })();
 

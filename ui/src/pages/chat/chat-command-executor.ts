@@ -35,7 +35,7 @@ import {
   resolveCurrentThinkingLevel,
   resolveThinkingLevelInput,
 } from "../../lib/chat/thinking.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
@@ -220,7 +220,7 @@ async function executeCompact(
     });
     const result = await context.sessions.compact(sessionKey, options);
     if (result?.ok !== true) {
-      const reason = typeof result?.reason === "string" ? result.reason.trim() : "";
+      const reason = typeof result?.reason === "string" ? formatUiExternalText(result.reason) : "";
       return {
         content: reason
           ? t("chat.commandResults.compaction.failedWithReason", { reason })
@@ -246,7 +246,7 @@ async function executeCompact(
     if (typeof result?.reason === "string" && result.reason.trim()) {
       return {
         content: t("chat.commandResults.compaction.skippedWithReason", {
-          reason: result.reason,
+          reason: formatUiExternalText(result.reason),
         }),
         action: "refresh",
       };

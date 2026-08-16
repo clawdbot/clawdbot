@@ -4,7 +4,7 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { serializeConfigForm } from "../config-form-utils.ts";
-import { formatUiError } from "../format-error.ts";
+import { formatUiError, formatUiExternalText } from "../format-error.ts";
 import {
   adoptConfigSetAck,
   applyConfigSnapshot,
@@ -611,7 +611,7 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
       return;
     }
     if (!res.ok) {
-      let errorMessage = res.error || "Failed to open config file";
+      let errorMessage = formatUiExternalText(res.error, "Failed to open config file");
       const path = res.path || state.configSnapshot?.path;
       if (path) {
         if (await copyToClipboard(path)) {
@@ -621,7 +621,7 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
         }
       }
       if (isCurrent()) {
-        state.lastError = errorMessage;
+        state.lastError = formatUiExternalText(errorMessage);
       }
     }
   } catch (err) {

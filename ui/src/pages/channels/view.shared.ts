@@ -5,7 +5,7 @@ import type { ChannelAccountSnapshot } from "../../api/types.ts";
 import { renderSettingsSection, renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { ChannelKey, ChannelsProps } from "./view.types.ts";
 
@@ -135,7 +135,9 @@ export function renderChannelProbeRow(probe: {
   status?: number | string | null;
   error?: string | null;
 }) {
-  const detail = [probe.status ?? "", probe.error ?? ""].filter(Boolean).join(" ");
+  const detail = formatUiExternalText(
+    [probe.status ?? "", probe.error ?? ""].filter(Boolean).join(" "),
+  );
   return html`
     <div class="settings-row">
       <div class="settings-row__text">
@@ -176,7 +178,7 @@ export function renderChannelAccountRow(params: {
         <span class="settings-row__title">${params.title}</span>
         <span class="settings-row__desc">${factLine}</span>
         ${params.lastError
-          ? html`<span class="settings-row__desc">${params.lastError}</span>`
+          ? html`<span class="settings-row__desc">${formatUiExternalText(params.lastError)}</span>`
           : nothing}
       </div>
       <div class="settings-row__control">

@@ -9,7 +9,7 @@ import { hasOperatorReadAccess, hasOperatorWriteAccess } from "../../app/operato
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import {
   findUiSessionRow,
   resolveSessionPreferredFaceForKey,
@@ -282,7 +282,7 @@ class TasksPage extends OpenClawLightDomElement {
       // Refusals (already terminal, stale id, no cancellation handle) are
       // successful responses with cancelled=false; surface them like errors.
       if (!result?.cancelled) {
-        this.error = result?.reason?.trim() || t("tasksPage.cancelFailed");
+        this.error = formatUiExternalText(result?.reason, t("tasksPage.cancelFailed"));
       }
     } catch (error) {
       if (this.gateway.isCurrent(scope)) {
@@ -320,7 +320,7 @@ class TasksPage extends OpenClawLightDomElement {
       }
       const result = normalizeTasksRecoveryResult(payload)?.results[0];
       if (!result?.ok) {
-        this.error = result?.reason?.trim() || t("tasksPage.recoveryFailed");
+        this.error = formatUiExternalText(result?.reason, t("tasksPage.recoveryFailed"));
         return;
       }
       if (result.task) {

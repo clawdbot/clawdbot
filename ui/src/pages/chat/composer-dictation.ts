@@ -2,7 +2,7 @@ import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import {
   bytesToBase64,
   floatToG711Ulaw,
@@ -305,11 +305,7 @@ class ComposerDictationSession {
       return;
     }
     if (payload.type === "error") {
-      this.reportFailure(
-        typeof payload.message === "string" && payload.message.trim()
-          ? payload.message.trim()
-          : t("chat.composer.dictationFailed"),
-      );
+      this.reportFailure(formatUiExternalText(payload.message, t("chat.composer.dictationFailed")));
       return;
     }
     if (payload.type === "close" && payload.reason === "error") {

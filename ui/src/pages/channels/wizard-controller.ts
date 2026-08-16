@@ -2,7 +2,7 @@
 // as a step/answer state machine for the Control UI wizard modal.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { WizardStep } from "../../api/types.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { isWizardNotFoundError } from "../../lib/gateway-errors.ts";
 
 type WizardGatewayClient = Pick<GatewayBrowserClient, "request">;
@@ -231,7 +231,7 @@ export class ChannelWizardController {
         step: result.step,
         stepIndex: this.stepIndex,
         busy: gatewayOwned,
-        validationError: result.error ?? null,
+        validationError: result.error ? formatUiExternalText(result.error) : null,
       });
       if (gatewayOwned) {
         // Gateway-owned steps cannot consume an answer; next long-polls for
@@ -266,7 +266,7 @@ export class ChannelWizardController {
     this.setState({
       phase: "error",
       channel: this.channel,
-      message: result.error ?? "Wizard failed.",
+      message: formatUiExternalText(result.error, "Wizard failed."),
     });
   }
 

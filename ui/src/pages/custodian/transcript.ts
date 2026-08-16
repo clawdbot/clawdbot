@@ -8,7 +8,7 @@ import type { WizardStep } from "../../api/types.ts";
 import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { renderChatDivider } from "../chat/components/chat-divider.ts";
 import { renderMessageGroup } from "../chat/components/chat-message.ts";
 import { renderCustodianQuestionCard } from "./custodian-question-card.ts";
@@ -180,10 +180,12 @@ export function renderCustodianTranscriptEntry(params: {
     ${params.showWizardStep && step
       ? html`<section
           class="custodian__wizard-step"
-          aria-label=${step.title ?? step.message ?? "Setup"}
+          aria-label=${formatUiExternalText(step.title ?? step.message, "Setup")}
         >
           ${step.title
-            ? html`<strong class="custodian__wizard-title">${step.title}</strong>`
+            ? html`<strong class="custodian__wizard-title"
+                >${formatUiExternalText(step.title)}</strong
+              >`
             : nothing}
           ${renderWizardStepControls({
             step,

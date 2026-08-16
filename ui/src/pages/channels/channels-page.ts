@@ -15,7 +15,7 @@ import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import {
   GatewayPageController,
@@ -430,11 +430,12 @@ class ChannelsPage extends OpenClawLightDomElement {
         this.nostrProfileFormState = {
           ...currentForm,
           saving: false,
-          error:
-            data?.error ??
+          error: formatUiExternalText(
+            data?.error,
             t("channels.nostr.notices.updateFailedStatus", {
               status: String(response.status),
             }),
+          ),
           success: null,
           fieldErrors: parseValidationErrors(data?.details),
         };
@@ -503,11 +504,12 @@ class ChannelsPage extends OpenClawLightDomElement {
         this.nostrProfileFormState = {
           ...currentForm,
           importing: false,
-          error:
-            data?.error ??
+          error: formatUiExternalText(
+            data?.error,
             t("channels.nostr.notices.importFailedStatus", {
               status: String(response.status),
             }),
+          ),
           success: null,
         };
         return;

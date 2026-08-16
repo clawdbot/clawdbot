@@ -24,7 +24,7 @@ import {
   patchMcpServers,
   summarizeMcpServers,
 } from "../../lib/config/mcp-servers.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
@@ -467,10 +467,9 @@ export class ChatComposerCapabilityHost {
       this.addBusy = false;
     }
     if (!result.ok) {
+      const error = formatUiExternalText(result.error);
       this.addError =
-        result.stage === "session"
-          ? t("mcpServers.sessionEnableFailed", { error: result.error })
-          : result.error;
+        result.stage === "session" ? t("mcpServers.sessionEnableFailed", { error }) : error;
       this.notify();
       return;
     }

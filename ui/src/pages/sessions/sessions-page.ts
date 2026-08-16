@@ -30,7 +30,7 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
 import { openEditor } from "../../lib/editor-links.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
@@ -849,7 +849,7 @@ class SessionsPage extends OpenClawLightDomElement {
         }
       }
       if (result.errors.length > 0) {
-        this.error = result.errors.join("; ");
+        this.error = formatUiExternalText(result.errors.join("; "));
       }
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
