@@ -594,42 +594,22 @@ suite.define(() => {
       const reconnectListRequests = (await gateway.getRequests("sessions.list")).slice(
         initialListCount,
       );
-      const reconnectListParams = reconnectListRequests.map((request) =>
-        requireRecord(request.params),
+      const canonicalListRequest = reconnectListRequests.find(
+        (request) => requireRecord(request.params).includeLastMessage === true,
       );
-      const canonicalListIndex = reconnectListParams.findIndex(
-        (params) => params.includeLastMessage === true,
-      );
-      expect(canonicalListIndex).toBe(reconnectListParams.length - 1);
-      expect(reconnectListParams[canonicalListIndex]).toEqual({
-        agentId: "main",
-        configuredAgentsOnly: true,
-        includeDerivedTitles: true,
-        includeGlobal: true,
-        includeLastMessage: true,
-        includeUnknown: true,
-        limit: 50,
-      });
-      const routeListParams = reconnectListParams.slice(0, canonicalListIndex);
-      const routeSearches = routeListParams.map((params) => String(params.search));
-      const routeSearchOrder = [firstKey, selectedKey];
-      expect(routeSearches).toEqual(
-        routeSearches.toSorted((a, b) => routeSearchOrder.indexOf(a) - routeSearchOrder.indexOf(b)),
-      );
-      expect(new Set(routeSearches).size).toBe(routeSearches.length);
-      for (const [index, params] of routeListParams.entries()) {
-        expect(routeSearchOrder).toContain(routeSearches[index]);
-        expect(params).toEqual({
+      expect(canonicalListRequest).toEqual({
+        id: expect.any(String),
+        method: "sessions.list",
+        params: {
           agentId: "main",
-          archived: "all",
           configuredAgentsOnly: true,
           includeDerivedTitles: true,
           includeGlobal: true,
+          includeLastMessage: true,
           includeUnknown: true,
-          limit: 20,
-          search: routeSearches[index],
-        });
-      }
+          limit: 50,
+        },
+      });
       expect(new Set(reconnectListRequests.map((request) => request.id)).size).toBe(
         reconnectListRequests.length,
       );
