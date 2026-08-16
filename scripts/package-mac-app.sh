@@ -198,7 +198,7 @@ compiled_peekaboo_commit() {
     echo "ERROR: Resolved Peekaboo checkout not found at $checkout" >&2
     return 1
   }
-  local commit checkout_status
+  local commit
   if ! commit="$(git -C "$checkout" rev-parse HEAD)"; then
     echo "ERROR: Could not inspect compiled Peekaboo checkout revision" >&2
     return 1
@@ -207,14 +207,97 @@ compiled_peekaboo_commit() {
     echo "ERROR: Compiled Peekaboo checkout '$commit' does not match locked source '$expected'" >&2
     return 1
   }
-  if ! checkout_status="$(git -C "$checkout" status --porcelain --untracked-files=all)"; then
-    echo "ERROR: Could not inspect compiled Peekaboo checkout cleanliness" >&2
+  if ! /usr/bin/python3 - "$checkout" "$commit" <<'PY'
+import hashlib
+import os
+import stat
+import subprocess
+import sys
+
+checkout = os.fsencode(sys.argv[1])
+commit = sys.argv[2]
+
+def run_git(*arguments: str) -> bytes:
+    return subprocess.run(
+        ["git", "-C", os.fsdecode(checkout), *arguments],
+        check=True,
+        stdout=subprocess.PIPE,
+    ).stdout
+
+try:
+    object_format = run_git("rev-parse", "--show-object-format").strip().decode("ascii")
+    tree = run_git("ls-tree", "-rz", commit)
+except (OSError, subprocess.CalledProcessError, UnicodeError):
+    raise SystemExit(2)
+
+if object_format not in {"sha1", "sha256"}:
+    raise SystemExit(2)
+
+expected: dict[bytes, tuple[bytes, bytes]] = {}
+gitlinks: set[bytes] = set()
+for record in tree.split(b"\0"):
+    if not record:
+        continue
+    metadata, path = record.split(b"\t", 1)
+    mode, object_type, object_id = metadata.split(b" ", 2)
+    if object_type == b"blob":
+        expected[path] = (mode, object_id)
+    elif object_type == b"commit":
+        gitlinks.add(path)
+
+def is_gitlink_path(path: bytes) -> bool:
+    return any(path == gitlink or path.startswith(gitlink + b"/") for gitlink in gitlinks)
+
+actual: set[bytes] = set()
+for root, directories, files in os.walk(checkout, topdown=True, followlinks=False):
+    relative_root = os.path.relpath(root, checkout)
+    relative_root = b"" if relative_root == b"." else relative_root
+    kept_directories: list[bytes] = []
+    for directory in directories:
+        relative = os.path.join(relative_root, directory) if relative_root else directory
+        absolute = os.path.join(root, directory)
+        if relative == b".git" or is_gitlink_path(relative):
+            continue
+        if os.path.islink(absolute):
+            actual.add(relative)
+        else:
+            kept_directories.append(directory)
+    directories[:] = kept_directories
+    for filename in files:
+        relative = os.path.join(relative_root, filename) if relative_root else filename
+        if relative == b".git" or is_gitlink_path(relative):
+            continue
+        actual.add(relative)
+
+if actual != set(expected):
+    raise SystemExit(1)
+
+digest = hashlib.new(object_format)
+for path, (mode, expected_id) in expected.items():
+    absolute = os.path.join(checkout, path)
+    file_stat = os.lstat(absolute)
+    if mode == b"120000":
+        if not stat.S_ISLNK(file_stat.st_mode):
+            raise SystemExit(1)
+        contents = os.fsencode(os.readlink(absolute))
+    else:
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise SystemExit(1)
+        executable = bool(file_stat.st_mode & stat.S_IXUSR)
+        if executable != (mode == b"100755"):
+            raise SystemExit(1)
+        with open(absolute, "rb") as source:
+            contents = source.read()
+    digest = hashlib.new(object_format)
+    digest.update(f"blob {len(contents)}\0".encode("ascii"))
+    digest.update(contents)
+    if digest.hexdigest().encode("ascii") != expected_id:
+        raise SystemExit(1)
+PY
+  then
+    echo "ERROR: Compiled Peekaboo checkout does not exactly match its committed source" >&2
     return 1
   fi
-  [[ -z "$checkout_status" ]] || {
-    echo "ERROR: Compiled Peekaboo checkout contains uncommitted changes" >&2
-    return 1
-  }
   printf '%s' "$commit"
 }
 

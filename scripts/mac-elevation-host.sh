@@ -713,6 +713,14 @@ refresh_runtime_paths() {
   RECEIPT_PATH="${STATE_DIR}/elevation-host-install.json"
 }
 
+resolve_reusable_openclaw_cli() {
+  local cli
+  cli="$(command -v openclaw 2>/dev/null || true)"
+  case "$cli" in /*) ;; *) fail 'openclaw CLI is required for gateway node attestation' ;; esac
+  [[ -f "$cli" && -x "$cli" ]] || fail 'openclaw CLI is required for gateway node attestation'
+  OPENCLAW_CLI=("$cli")
+}
+
 resolve_migration_inputs() {
   [[ -n "$MIGRATE_LAUNCH_AGENT" ]] || return 0
   [[ -f "$MIGRATE_LAUNCH_AGENT" && ! -L "$MIGRATE_LAUNCH_AGENT" ]] ||
@@ -749,7 +757,7 @@ resolve_migration_inputs() {
     inline_state="$(plist_file_value "$MIGRATE_LAUNCH_AGENT" EnvironmentVariables.OPENCLAW_STATE_DIR)"
     case "$inline_state" in /*) ;; *) fail 'app migration LaunchAgent must expose an absolute OPENCLAW_STATE_DIR' ;; esac
     inline_config="$(plist_file_value "$MIGRATE_LAUNCH_AGENT" EnvironmentVariables.OPENCLAW_CONFIG_PATH)"
-    OPENCLAW_CLI=("$(command -v openclaw 2>/dev/null || true)")
+    resolve_reusable_openclaw_cli
   else
     MIGRATION_KIND="canonical-node"
     [[ "$MIGRATION_LABEL" == "ai.openclaw.node" ]] ||
@@ -789,7 +797,7 @@ resolve_migration_inputs() {
     case "$inline_state" in /*) ;; *) fail 'canonical node OPENCLAW_STATE_DIR must be absolute' ;; esac
     [[ "$node_env" == "${inline_state}/service-env/${MIGRATION_LABEL}.env" ]] ||
       fail 'canonical node environment file is outside its state-owned service-env directory'
-    OPENCLAW_CLI=("$(jq -r '.[3]' <<<"$args")" "$(jq -r '.[4]' <<<"$args")")
+    resolve_reusable_openclaw_cli
   fi
   if [[ "$STATE_DIR_EXPLICIT" == "1" && "$STATE_DIR" != "$inline_state" ]]; then
     fail '--state-dir does not match the migration LaunchAgent OPENCLAW_STATE_DIR'
@@ -906,7 +914,7 @@ resolve_adoption_inputs() {
   MIGRATION_KIND="running-app"
   [[ -n "$CONFIG_PATH" ]] || CONFIG_PATH="$STATE_DIR/openclaw.json"
   refresh_runtime_paths
-  OPENCLAW_CLI=("$(command -v openclaw 2>/dev/null || true)")
+  resolve_reusable_openclaw_cli
   local records=() record
   while IFS= read -r record; do
     [[ -n "$record" ]] && records+=("$record")
@@ -1447,7 +1455,8 @@ install_host() {
     installed_commit="$(plist_value "$APP_PATH" OpenClawGitCommit)"
     [[ "$installed_commit" =~ ^[0-9a-f]{40}$ ]] || fail 'installed OpenClaw app has no exact source receipt'
     ROLLBACK_APP_PATH="${APP_PATH}.rollback-elevation-host-${installed_commit}"
-    [[ ! -e "$ROLLBACK_APP_PATH" ]] || fail "elevation backup already exists: $ROLLBACK_APP_PATH"
+    [[ ! -e "$ROLLBACK_APP_PATH" && ! -L "$ROLLBACK_APP_PATH" ]] ||
+      fail "elevation backup already exists: $ROLLBACK_APP_PATH"
     ROLLBACK_APP_CDHASH_ARM64="$(codesign_value_for_arch "$APP_PATH" CDHash arm64)"
     ROLLBACK_APP_CDHASH_X86_64="$(codesign_value_for_arch "$APP_PATH" CDHash x86_64)"
     [[ -n "$ROLLBACK_APP_CDHASH_ARM64" && -n "$ROLLBACK_APP_CDHASH_X86_64" ]] ||
@@ -1643,11 +1652,8 @@ recover_install() {
   local recovery_failed=0 elevation_state failed_container failed_path restored_state
   local failed_cdhash_arm64="" failed_cdhash_x86_64=""
   if [[ "$CUTOVER_APP_MUTATED" == "1" && -n "$ROLLBACK_APP_PATH" ]]; then
-    if [[ -e "$ROLLBACK_APP_PATH" || -L "$ROLLBACK_APP_PATH" ]]; then
+    verify_recorded_rollback_app "$APP_PATH" ||
       verify_recorded_rollback_app "$ROLLBACK_APP_PATH" || return 1
-    else
-      verify_recorded_rollback_app "$APP_PATH" || return 1
-    fi
   fi
   [[ -z "$ROLLBACK_ELEVATION_PLIST" ]] ||
     backup_file_matches "$ROLLBACK_ELEVATION_PLIST" "$ROLLBACK_ELEVATION_PLIST_SHA" || return 1
@@ -1894,7 +1900,7 @@ status_host() {
   loaded_pid="$(job_pid)"
   [[ "$loaded_pid" =~ ^[0-9]+$ ]] || fail 'elevation launch agent is not running'
   verify_bridge_readiness "$loaded_pid" || fail 'elevation Bridge is not ready for the launchd-owned process'
-  OPENCLAW_CLI=("$(command -v openclaw 2>/dev/null || true)")
+  resolve_reusable_openclaw_cli
   if [[ "$INSTALL_RECEIPT_SCHEMA" == 'legacy' ]]; then
     prepare_gateway_attestation
   else
@@ -2096,7 +2102,7 @@ if [[ "$COMMAND" == "install" || "$COMMAND" == "migration-plan" ]]; then
   [[ -n "$CONFIG_PATH" ]] || CONFIG_PATH="$STATE_DIR/openclaw.json"
   refresh_runtime_paths
   if [[ "${#OPENCLAW_CLI[@]}" == "0" ]]; then
-    OPENCLAW_CLI=("$(command -v openclaw 2>/dev/null || true)")
+    resolve_reusable_openclaw_cli
   fi
   prepare_gateway_attestation
 fi
