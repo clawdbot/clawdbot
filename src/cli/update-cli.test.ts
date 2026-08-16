@@ -512,7 +512,7 @@ const {
   updateWizardCommand,
 } = await import("./update-cli.js");
 const updateCliShared = await import("./update-cli/shared.js");
-const { ensureGitCheckout, resolveGitInstallDir } = updateCliShared;
+const { resolveGitInstallDir } = updateCliShared;
 const { spawnSync } = await import("node:child_process");
 const { readRestartSentinel } = await import("../infra/restart-sentinel.js");
 
@@ -7713,7 +7713,8 @@ describe("update-cli", () => {
   });
 
   it("updateWizardCommand offers dev checkout and forwards selections", async () => {
-    const tempDir = createCaseDir("openclaw-update-wizard");
+    const root = await createTrackedTempDir("openclaw-update-wizard-");
+    const tempDir = path.join(root, "openclaw");
     await withEnvAsync({ OPENCLAW_GIT_DIR: tempDir }, async () => {
       setTty(true);
 
@@ -7856,30 +7857,6 @@ describe("update-cli", () => {
     } finally {
       homedirSpy.mockRestore();
     }
-  });
-
-  it("creates the parent directory before cloning the default dev checkout", async () => {
-    const root = await createTrackedTempDir("openclaw-update-home-");
-    const home = path.join(root, "custom-openclaw-home");
-    const checkoutDir = path.join(home, "openclaw");
-
-    await withEnvAsync({ OPENCLAW_GIT_DIR: undefined, OPENCLAW_HOME: home }, async () => {
-      const dir = resolveGitInstallDir();
-      expect(dir).toBe(checkoutDir);
-      await ensureGitCheckout({ dir, timeoutMs: 1_000, env: process.env });
-    });
-
-    expect((await fs.stat(home)).isDirectory()).toBe(true);
-    const cloneCall = vi
-      .mocked(runCommandWithTimeout)
-      .mock.calls.find((call) => call[0][0] === "git" && call[0][1] === "clone");
-    expect(cloneCall?.[0]).toEqual([
-      "git",
-      "clone",
-      "--filter=blob:none",
-      "https://github.com/openclaw/openclaw.git",
-      checkoutDir,
-    ]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

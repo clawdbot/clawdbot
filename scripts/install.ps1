@@ -1478,6 +1478,36 @@ function Assert-GitCheckoutHasCommit {
     }
 }
 
+function New-TransactionalGitCheckout {
+    param(
+        [string]$RepoUrl,
+        [string]$RepoDir
+    )
+
+    $parentDir = Split-Path -Parent $RepoDir
+    if (-not $parentDir) {
+        $parentDir = (Get-Location).Path
+    }
+    New-Item -ItemType Directory -Force -Path $parentDir | Out-Null
+    $stagingDir = Join-Path $parentDir (".openclaw-clone-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $stagingDir | Out-Null
+
+    try {
+        git clone $RepoUrl $stagingDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "git clone failed with exit code $LASTEXITCODE"
+        }
+        if (Test-Path -LiteralPath $RepoDir) {
+            throw "Git install dir appeared while cloning: $RepoDir. The existing path was left unchanged; move it or choose another -GitDir, then retry."
+        }
+        [System.IO.Directory]::Move($stagingDir, $RepoDir)
+    } finally {
+        if (Test-Path -LiteralPath $stagingDir) {
+            Remove-Item -LiteralPath $stagingDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Install-OpenClawFromGit {
     param(
         [string]$RepoDir,
@@ -1492,7 +1522,7 @@ function Install-OpenClawFromGit {
 
     Assert-GitCheckoutHasCommit -RepoDir $RepoDir
     if (-not (Test-Path $RepoDir)) {
-        git clone $repoUrl $RepoDir
+        New-TransactionalGitCheckout -RepoUrl $repoUrl -RepoDir $RepoDir
     }
 
     if (-not $SkipUpdate) {

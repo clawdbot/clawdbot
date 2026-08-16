@@ -6,6 +6,7 @@ import path from "node:path";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { hasErrnoCode } from "../../infra/errors.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
@@ -245,6 +246,46 @@ export async function runUpdateStep(params: {
   };
 }
 
+async function cloneGitCheckoutTransactionally(params: {
+  dir: string;
+  timeoutMs: number;
+  progress?: UpdateStepProgress;
+  env?: NodeJS.ProcessEnv;
+}): Promise<UpdateStepResult> {
+  const parentDir = path.dirname(params.dir);
+  await fs.mkdir(parentDir, { recursive: true });
+  const stagingDir = await fs.mkdtemp(path.join(parentDir, ".openclaw-clone-"));
+
+  try {
+    const result = await runUpdateStep({
+      name: "git clone",
+      argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, OPENCLAW_REPO_URL, stagingDir],
+      env: params.env,
+      timeoutMs: params.timeoutMs,
+      progress: params.progress,
+    });
+    if (result.exitCode !== 0) {
+      return result;
+    }
+
+    try {
+      await fs.lstat(params.dir);
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        throw error;
+      }
+      await fs.rename(stagingDir, params.dir);
+      return result;
+    }
+
+    throw new Error(
+      `OPENCLAW_GIT_DIR appeared while cloning: ${params.dir}. The existing path was left unchanged; move it or choose another OPENCLAW_GIT_DIR, then retry.`,
+    );
+  } finally {
+    await fs.rm(stagingDir, { recursive: true, force: true });
+  }
+}
+
 /** Ensure the configured source-update directory exists and points at an OpenClaw checkout. */
 export async function ensureGitCheckout(params: {
   dir: string;
@@ -255,10 +296,8 @@ export async function ensureGitCheckout(params: {
   const gitEnv = params.env ?? (await createGlobalInstallEnv());
   const dirExists = await pathExists(params.dir);
   if (!dirExists) {
-    await fs.mkdir(path.dirname(params.dir), { recursive: true });
-    return await runUpdateStep({
-      name: "git clone",
-      argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, OPENCLAW_REPO_URL, params.dir],
+    return await cloneGitCheckoutTransactionally({
+      dir: params.dir,
       env: gitEnv,
       timeoutMs: params.timeoutMs,
       progress: params.progress,

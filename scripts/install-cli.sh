@@ -1345,6 +1345,35 @@ ensure_pnpm_git_prepare_allowlist() {
   log "Updated pnpm allowlist for git-hosted build dependency: ${dep}"
 }
 
+clone_git_checkout_transactionally() {
+  local repo_url="$1"
+  local repo_dir="$2"
+
+  local parent_dir staging_dir clone_status=0
+  parent_dir="$(dirname "$repo_dir")"
+  mkdir -p "$parent_dir"
+  staging_dir="$(mktemp -d "${parent_dir}/.openclaw-clone.XXXXXX")"
+  TMPFILES+=("$staging_dir")
+
+  git clone "$repo_url" "$staging_dir" || clone_status=$?
+  if [[ "$clone_status" -ne 0 ]]; then
+    return "$clone_status"
+  fi
+
+  if [[ -e "$repo_dir" || -L "$repo_dir" ]]; then
+    fail "Git install dir appeared while cloning: ${repo_dir}. The existing path was left unchanged; move it or choose another --git-dir, then retry."
+  fi
+
+  if ! node - "$staging_dir" "$repo_dir" <<'NODE'
+const fs = require("node:fs");
+const [source, target] = process.argv.slice(2);
+fs.renameSync(source, target);
+NODE
+  then
+    fail "Could not publish the cloned checkout: ${repo_dir}. The existing path, if any, was left unchanged; move it or choose another --git-dir, then retry."
+  fi
+}
+
 install_openclaw_from_git() {
   local repo_dir="$1"
   local repo_url="https://github.com/openclaw/openclaw.git"
@@ -1387,7 +1416,7 @@ install_openclaw_from_git() {
     fi
   else
     emit_json '{"event":"step","name":"git-clone","status":"start"}'
-    git clone "$repo_url" "$repo_dir"
+    clone_git_checkout_transactionally "$repo_url" "$repo_dir"
     emit_json '{"event":"step","name":"git-clone","status":"ok"}'
     fresh_checkout=1
   fi

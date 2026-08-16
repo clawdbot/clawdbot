@@ -536,6 +536,52 @@ describe("install.ps1 failure handling", () => {
           "",
         ].join("\n"),
       },
+      {
+        name: "transactional-git-clone",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          '$sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-transactional-clone-" + [guid]::NewGuid().ToString("N"))',
+          "New-Item -ItemType Directory -Path $sandbox | Out-Null",
+          "$script:CloneMode = 'success'",
+          "$script:ConcurrentRepo = $null",
+          "function git {",
+          "  $target = $args[-1]",
+          "  New-Item -ItemType Directory -Force -Path (Join-Path $target '.git') | Out-Null",
+          "  Set-Content -LiteralPath (Join-Path $target 'checkout.marker') -Value 'complete'",
+          "  if ($script:CloneMode -eq 'failure') { $global:LASTEXITCODE = 42; return }",
+          "  if ($script:CloneMode -eq 'concurrent') {",
+          "    New-Item -ItemType Directory -Path $script:ConcurrentRepo | Out-Null",
+          "    Set-Content -LiteralPath (Join-Path $script:ConcurrentRepo 'user.marker') -Value 'keep'",
+          "  }",
+          "  $global:LASTEXITCODE = 0",
+          "}",
+          "try {",
+          "  $successRepo = Join-Path $sandbox 'success'",
+          "  New-TransactionalGitCheckout -RepoUrl 'https://example.invalid/openclaw.git' -RepoDir $successRepo",
+          "  if (-not (Test-Path -LiteralPath (Join-Path $successRepo 'checkout.marker'))) { throw 'complete checkout was not published' }",
+          "",
+          "  $script:CloneMode = 'failure'",
+          "  $failedRepo = Join-Path $sandbox 'failure'",
+          "  $cloneFailed = $false",
+          "  try { New-TransactionalGitCheckout -RepoUrl 'https://example.invalid/openclaw.git' -RepoDir $failedRepo } catch { $cloneFailed = $true }",
+          "  if (-not $cloneFailed) { throw 'failed clone was accepted' }",
+          "  if (Test-Path -LiteralPath $failedRepo) { throw 'failed clone published its destination' }",
+          "",
+          "  $script:CloneMode = 'concurrent'",
+          "  $script:ConcurrentRepo = Join-Path $sandbox 'concurrent'",
+          "  $publicationFailed = $false",
+          "  try { New-TransactionalGitCheckout -RepoUrl 'https://example.invalid/openclaw.git' -RepoDir $script:ConcurrentRepo } catch { $publicationFailed = $true }",
+          "  if (-not $publicationFailed) { throw 'concurrent destination was replaced' }",
+          "  if ((Get-Content -LiteralPath (Join-Path $script:ConcurrentRepo 'user.marker') -Raw).Trim() -ne 'keep') { throw 'concurrent destination changed' }",
+          "  if (Test-Path -LiteralPath (Join-Path $script:ConcurrentRepo 'checkout.marker')) { throw 'clone leaked into concurrent destination' }",
+          "  if (@(Get-ChildItem -LiteralPath $sandbox -Filter '.openclaw-clone-*' -Force).Count -ne 0) { throw 'staging directories remain' }",
+          "} finally {",
+          "  Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue",
+          "}",
+          "",
+        ].join("\n"),
+      },
     ];
     const tempDir = harness.createTempDir("openclaw-install-ps1-batch-");
     const fixtures = cases.map((testCase, index) => {
@@ -694,6 +740,10 @@ describe("install.ps1 failure handling", () => {
     expect(guardBody).not.toContain("Remove-Item");
     expect(guardBody).not.toContain("Move-Item");
     expect(gitInstallBody).toContain("Assert-GitCheckoutHasCommit -RepoDir $RepoDir");
+  });
+
+  runIfPowerShell("publishes fresh Git clones transactionally", () => {
+    expectBatchedPowerShellCase("transactional-git-clone");
   });
 
   it("runs Windows command shims from a Windows-local cwd", () => {
@@ -907,6 +957,7 @@ describe("install.ps1 failure handling", () => {
     const pnpmVersionBody = extractFunctionBody(source, "Get-RepoPnpmVersion");
     const pnpmVersionMatchBody = extractFunctionBody(source, "Test-PnpmCommandMatchesVersion");
     const ensurePnpmBody = extractFunctionBody(source, "Ensure-Pnpm");
+    const transactionalCloneBody = extractFunctionBody(source, "New-TransactionalGitCheckout");
     const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
     const nodeOptionsBody = extractFunctionBody(source, "Resolve-NodeOptionsWithMinOldSpace");
     const mainBody = extractFunctionBody(source, "Main");
@@ -933,7 +984,8 @@ describe("install.ps1 failure handling", () => {
     expect(ensurePnpmBody).toContain(
       'Invoke-NpmCommand -Arguments @("install", "-g", "--force", $pnpmSpec)',
     );
-    expect(gitInstallBody.indexOf("git clone $repoUrl $RepoDir")).toBeLessThan(
+    expect(transactionalCloneBody).toContain("git clone $RepoUrl $stagingDir");
+    expect(gitInstallBody.indexOf("New-TransactionalGitCheckout")).toBeLessThan(
       gitInstallBody.indexOf("Ensure-Pnpm -RepoDir $RepoDir"),
     );
     expect(gitInstallBody.indexOf("git -C $RepoDir pull --rebase")).toBeLessThan(

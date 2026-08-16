@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   readlinkSync,
   rmSync,
   symlinkSync,
@@ -219,6 +220,54 @@ describe("install-cli.sh", () => {
     `);
 
     expect(result.status).toBe(0);
+  });
+
+  it("publishes fresh Git clones only after success and cleans failed staging directories", () => {
+    const root = tempDirs.make("openclaw-install-cli-transactional-clone-");
+    const result = runInstallCliShell(
+      `
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      root="$ROOT"
+      git() {
+        local target="\${*: -1}"
+        mkdir -p "$target/.git"
+        printf 'complete\\n' > "$target/checkout.marker"
+        if [[ "$CLONE_MODE" == "failure" ]]; then
+          return 42
+        fi
+        if [[ "$CLONE_MODE" == "concurrent" ]]; then
+          mkdir -p "$CONCURRENT_REPO"
+          printf 'keep\\n' > "$CONCURRENT_REPO/user.marker"
+        fi
+      }
+
+      CLONE_MODE=success
+      success_repo="$root/success"
+      clone_git_checkout_transactionally https://example.invalid/openclaw.git "$success_repo"
+      [[ -f "$success_repo/checkout.marker" ]]
+
+      CLONE_MODE=failure
+      failed_repo="$root/failure"
+      set +e
+      clone_git_checkout_transactionally https://example.invalid/openclaw.git "$failed_repo"
+      failure_status="$?"
+      set -e
+      [[ "$failure_status" -eq 42 ]]
+      [[ ! -e "$failed_repo" ]]
+
+      CLONE_MODE=concurrent
+      CONCURRENT_REPO="$root/concurrent"
+      clone_git_checkout_transactionally https://example.invalid/openclaw.git "$CONCURRENT_REPO"
+    `,
+      { ROOT: root },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout + result.stderr).toContain("Git install dir appeared while cloning");
+    expect(readFileSync(join(root, "concurrent", "user.marker"), "utf8")).toBe("keep\n");
+    expect(existsSync(join(root, "concurrent", "checkout.marker"))).toBe(false);
+    expect(readdirSync(root).filter((entry) => entry.startsWith(".openclaw-clone."))).toEqual([]);
   });
 
   it("bounds stalled curl downloads and propagates timeout failures", () => {
