@@ -231,8 +231,11 @@ export async function handleDirectiveOnly(
     return acknowledgeIgnoredDirective(
       {
         text: directives.rawVerboseLevel
-          ? `Unrecognized verbose level "${directives.rawVerboseLevel}". Valid levels: off, on, full.`
-          : withOptions(`Current verbose level: ${currentVerboseLevel ?? "off"}.`, "on, full, off"),
+          ? `Unrecognized verbose level "${directives.rawVerboseLevel}". Valid levels: off, on, full, plain.`
+          : withOptions(
+              `Current verbose level: ${currentVerboseLevel ?? "off"}.`,
+              "on, full, off, plain",
+            ),
       },
       "hasVerboseDirective",
     );

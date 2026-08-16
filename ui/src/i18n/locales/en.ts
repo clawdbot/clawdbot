@@ -4689,7 +4689,7 @@ export const en: TranslationMap = {
       verbose: {
         current: "Current verbose level: {level}.",
         getFailed: "Failed to get verbose level: {error}",
-        unrecognized: 'Unrecognized verbose level "{level}". Valid levels: off, on, full.',
+        unrecognized: 'Unrecognized verbose level "{level}". Valid levels: off, on, full, plain.',
         set: "Verbose mode set to {level}.",
         setFailed: "Failed to set verbose mode: {error}",
       },

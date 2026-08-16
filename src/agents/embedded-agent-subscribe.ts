@@ -296,7 +296,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const shouldEmitToolResult = () =>
     typeof params.shouldEmitToolResult === "function"
       ? params.shouldEmitToolResult()
-      : params.verboseLevel === "on" || params.verboseLevel === "full";
+      : // plain is a presentation mode that still emits tool-start bubbles
+        params.verboseLevel === "on" ||
+        params.verboseLevel === "full" ||
+        params.verboseLevel === "plain";
   const shouldEmitToolOutput = () =>
     typeof params.shouldEmitToolOutput === "function"
       ? params.shouldEmitToolOutput()
@@ -361,9 +364,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     meta: string | undefined,
     commandBearing: boolean,
   ) => {
-    const visibleMeta = params.verboseLevel === "full" || !commandBearing ? meta : undefined;
+    const isPlain = params.verboseLevel === "plain";
+    // "on" hides command text for shell tools; plain keeps the sentence meta.
+    const visibleMeta =
+      isPlain || params.verboseLevel === "full" || !commandBearing ? meta : undefined;
     const agg = formatToolAggregate(toolName, visibleMeta ? [visibleMeta] : undefined, {
       markdown: useMarkdown,
+      ...(isPlain ? { detailMode: "plain" as const } : {}),
     });
     emitToolResultMessage(toolName, agg);
   };

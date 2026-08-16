@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { looksTechnicalMeta } from "../agents/tool-display-common.js";
 import { isShellToolDisplayName, resolveToolDisplay } from "../agents/tool-display.js";
 /** Formats compact tool metadata labels for auto-reply progress/status messages. */
 import { formatInlineCodeSpan } from "../shared/markdown-code.js";
@@ -9,6 +10,8 @@ type ToolAggregateOptions = {
   /** When plain, emit the sentence only — no tool emoji/label chrome. */
   detailMode?: "explain" | "raw" | "plain";
 };
+
+const PLAIN_TOOL_FALLBACK = "I'm using an internal tool to continue the work.";
 
 /**
  * Formats one grouped tool-progress label and returns the detail segment it was
@@ -23,9 +26,11 @@ export function formatToolAggregateParts(
 ): { text: string; detail?: string } {
   const filtered = (metas ?? []).filter(Boolean).map(shortenHomeInString);
   if (options?.detailMode === "plain") {
+    // Shared seam: never trust a caller-supplied technical meta in plain mode.
     const plain =
-      filtered.find((entry) => entry.trim().length > 0)?.trim() ||
-      "I'm using an internal tool to continue the work.";
+      filtered
+        .map((entry) => entry.trim())
+        .find((entry) => entry.length > 0 && !looksTechnicalMeta(entry)) || PLAIN_TOOL_FALLBACK;
     return { text: plain, detail: plain };
   }
   const display = resolveToolDisplay({ name: toolName });

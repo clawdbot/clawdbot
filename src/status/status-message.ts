@@ -925,7 +925,13 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   const queueMode = args.queue?.mode ?? "unknown";
   const queueDetails = formatQueueDetails(args.queue);
   const verboseLabel =
-    verboseLevel === "full" ? "verbose:full" : verboseLevel === "on" ? "verbose" : null;
+    verboseLevel === "full"
+      ? "verbose:full"
+      : verboseLevel === "plain"
+        ? "verbose:plain"
+        : verboseLevel === "on"
+          ? "verbose"
+          : null;
   const traceLevel =
     entry?.traceLevel === "raw" ? "raw" : entry?.traceLevel === "on" ? "on" : "off";
   const traceLabel = traceLevel === "raw" ? "trace:raw" : traceLevel === "on" ? "trace" : null;

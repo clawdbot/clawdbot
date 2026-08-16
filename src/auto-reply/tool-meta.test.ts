@@ -69,4 +69,16 @@ describe("formatToolAggregateParts plain mode", () => {
     expect(result.text).not.toContain("🛠️");
     expect(result.text).not.toContain("Bash");
   });
+
+  it("rejects technical meta and falls back to a generic sentence", () => {
+    const result = formatToolAggregateParts(
+      "exec",
+      ["check git status (repo)", "cd /workspace && npm test"],
+      { detailMode: "plain" },
+    );
+    expect(result.text).toBe("I'm using an internal tool to continue the work.");
+    expect(result.text).not.toContain("git");
+    expect(result.text).not.toContain("/workspace");
+    expect(result.text).not.toContain("(repo)");
+  });
 });

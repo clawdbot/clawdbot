@@ -329,8 +329,13 @@ export function createCliToolSummaryTracker(params: {
         return false;
       }
       const storedTool = payload.toolCallId ? toolByCallId.get(payload.toolCallId) : undefined;
+      // full shows command text; plain keeps the already-safe sentence meta.
+      // "on" still hides meta for command-bearing tools.
+      const isPlain = params.detailMode === "plain";
       const meta =
-        params.commandDetailsVisible || !storedTool?.commandBearing ? storedTool?.meta : undefined;
+        params.commandDetailsVisible || isPlain || !storedTool?.commandBearing
+          ? storedTool?.meta
+          : undefined;
       if (payload.toolCallId) {
         toolByCallId.delete(payload.toolCallId);
       }
@@ -339,6 +344,7 @@ export function createCliToolSummaryTracker(params: {
       }
       const aggregate = formatToolAggregate(payload.name, meta ? [meta] : undefined, {
         markdown: true,
+        ...(isPlain ? { detailMode: "plain" as const } : {}),
       });
       let text = aggregate;
       if (params.shouldEmitToolOutput()) {

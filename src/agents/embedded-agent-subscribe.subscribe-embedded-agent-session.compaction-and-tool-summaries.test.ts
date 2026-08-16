@@ -227,6 +227,31 @@ describe("canvas tool summaries", () => {
 
     expect(onToolResult).not.toHaveBeenCalled();
   });
+  it("emits plain-language tool summaries without paths or argv", async () => {
+    const onToolResult = vi.fn();
+
+    const toolHarness = createSubscribedSessionHarness({
+      runId: "run-tool-plain",
+      verboseLevel: "plain",
+      toolProgressDetail: "plain",
+      onToolResult,
+    });
+
+    toolHarness.emit({
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-plain-exec",
+      args: { command: "git status", workdir: "/workspace/project" },
+    });
+    await Promise.resolve();
+
+    expect(onToolResult).toHaveBeenCalledTimes(1);
+    const payload = toolResultPayloadAt(onToolResult, 0);
+    expect(payload.text).toBe("I'm checking the current state of the project.");
+    expect(payload.text).not.toContain("git");
+    expect(payload.text).not.toContain("/workspace");
+    expect(payload.text).not.toContain("🛠️");
+  });
   it("emits tool summaries when shouldEmitToolResult overrides verbose", async () => {
     const onToolResult = vi.fn();
 

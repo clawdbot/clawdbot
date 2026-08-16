@@ -163,6 +163,22 @@ describe("buildChannelProgressDraftLine", () => {
       )?.text,
     ).toContain("echo private");
   });
+
+  it("renders plain sentences for command tools without argv or tool chrome", () => {
+    const line = buildChannelProgressDraftLine(
+      {
+        event: "tool",
+        name: "exec",
+        phase: "start",
+        args: { command: "git status", workdir: "/workspace/project" },
+      },
+      { detailMode: "plain", commandText: "status" },
+    );
+    expect(line?.text).toBe("I'm checking the current state of the project.");
+    expect(line?.text).not.toContain("git");
+    expect(line?.text).not.toContain("/workspace");
+    expect(line?.text).not.toContain("🛠️");
+  });
 });
 
 // Claude CLI tool names arrive capitalized. Each tool call is described twice —

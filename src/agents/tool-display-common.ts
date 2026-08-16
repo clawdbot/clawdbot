@@ -828,9 +828,12 @@ function resolvePlainToolDetail(toolKey: string, args: unknown, meta?: string): 
   return "I'm using an internal tool to continue the work.";
 }
 
-function looksTechnicalMeta(meta: string): boolean {
-  // Paths, shell tokens, and schema-ish keys should not leak into plain mode.
-  return /[/\\]|--|`|\.ts\b|\.js\b|\.json\b|node_modules|https?:\/\//i.test(meta);
+/** True when meta looks like technical detail that must not surface in plain mode. */
+export function looksTechnicalMeta(meta: string): boolean {
+  // Paths, shell tokens, schema-ish keys, IPs, env refs, and explain markers.
+  return /[/\\]|--|`|\.ts\b|\.js\b|\.json\b|node_modules|https?:\/\/|\(repo\)|\$[A-Za-z_][A-Za-z0-9_]*|\b\d{1,3}(?:\.\d{1,3}){3}\b/i.test(
+    meta,
+  );
 }
 
 /** Normalize final detail text before attaching it to a tool display line. */

@@ -163,7 +163,9 @@ Progress lines come from real run events: tool starts, item updates, task
 plans, approvals, command output, patch summaries, and similar agent activity.
 They are enabled by default (`progress.toolProgress`, default `true`) and stay
 visible underneath the status headline. Set `progress.toolProgress: false` to
-keep the headline alone.
+keep the headline alone. With `toolProgressDetail: "plain"` (or session
+`/verbose plain`), rolling lines use non-technical sentences instead of compact
+tool labels or command text — the same shape as plain `/verbose` tool bubbles.
 
 Tools can also emit typed progress while a single call is still running. That
 is how a slow fetch or search updates the visible draft before the tool

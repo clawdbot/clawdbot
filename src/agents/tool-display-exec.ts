@@ -646,14 +646,16 @@ function plainSentenceFromExecSummary(summary: string): string {
   if (key.includes("npm ") || key.includes("pnpm ") || key.includes("yarn ")) {
     return "I'm running a package-management command.";
   }
-  if (key.includes("test") || key.includes("vitest") || key.includes("jest")) {
-    return "I'm running the project tests.";
+  // File reads before test-runner heuristics so summaries like
+  // "print lines 1-80 from test-utils.ts" stay "reading a file".
+  if (key.includes("print lines") || key.includes("read ") || key.startsWith("cat ")) {
+    return "I'm reading a file for context.";
   }
   if (key.includes("search") || key.includes("grep") || key.includes("rg ")) {
     return "I'm searching the project for relevant information.";
   }
-  if (key.includes("print lines") || key.includes("read ") || key.startsWith("cat ")) {
-    return "I'm reading a file for context.";
+  if (key.includes("test") || key.includes("vitest") || key.includes("jest")) {
+    return "I'm running the project tests.";
   }
 
   return "I'm running a command to continue the work.";

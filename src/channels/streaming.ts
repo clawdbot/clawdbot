@@ -524,13 +524,15 @@ export function buildChannelProgressDraftLine(
     case "tool": {
       const itemId = input.itemId ?? (input.toolCallId ? `tool:${input.toolCallId}` : undefined);
       const commandBearing = isCommandBearingToolCall(input.name, input.args);
+      // Status-only command lines hide argv unless commandText is raw. Plain mode
+      // still needs the deterministic sentence (no paths/argv) for mixed audiences.
+      const hideCommandMeta =
+        options?.commandText !== "raw" && commandBearing && options?.detailMode !== "plain";
       return buildNamedProgressLine(
         input.event,
         input.name,
         [
-          options?.commandText !== "raw" && commandBearing
-            ? undefined
-            : inferToolMeta(input.name, input.args, options?.detailMode),
+          hideCommandMeta ? undefined : inferToolMeta(input.name, input.args, options?.detailMode),
           input.phase && !input.name ? input.phase : undefined,
         ],
         options,
