@@ -1,4 +1,5 @@
 import type { SessionRow } from "@openclaw/gateway-protocol";
+import type { GatewaySessionMessageRequestClient } from "../session-subscriptions.js";
 import { CONTROL_MODEL_DEFAULT_BOUNDS } from "./defaults.js";
 import { createSessionEventRefreshCoordinator } from "./session-event-refresh.js";
 export { createSessionEventRefreshCoordinator } from "./session-event-refresh.js";
@@ -60,6 +61,7 @@ export type ControlModelGatewayEventFrame = Readonly<{
 }>;
 
 export type ControlModelGatewayBinding = Readonly<{
+  getSessionMessageSubscriptionClient?(): GatewaySessionMessageRequestClient | null;
   getConnectionSnapshot(): ControlModelConnectionSnapshot;
   subscribeConnection(listener: () => void): () => void;
   subscribeSessionCatalogInvalidations(listener: () => void): () => void;

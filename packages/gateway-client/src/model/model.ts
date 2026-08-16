@@ -110,6 +110,9 @@ class ControlModelImpl implements ControlModel {
   #messageSubscriptionCoordinator: ReturnType<
     typeof getGatewaySessionMessageSubscriptionCoordinator
   > | null = null;
+  #messageSubscriptionClient:
+    | Parameters<typeof getGatewaySessionMessageSubscriptionCoordinator>[0]
+    | null = null;
   #lastConnection: ControlModelConnectionSnapshot;
   #running = false;
   #disposed = false;
@@ -343,10 +346,11 @@ class ControlModelImpl implements ControlModel {
     if (connection.epoch !== previous.epoch || connection.status !== "connected") {
       if (this.#messageSubscriptionCoordinator) {
         resetGatewaySessionMessageSubscriptionCoordinator(
-          this.#gateway,
+          this.#messageSubscriptionClient ?? this.#gateway,
           this.#messageSubscriptionCoordinator,
         );
         this.#messageSubscriptionCoordinator = null;
+        this.#messageSubscriptionClient = null;
       }
       for (const conversation of this.#conversations.values()) {
         if (connection.status === "connected") {
@@ -362,9 +366,13 @@ class ControlModelImpl implements ControlModel {
   }
 
   #getMessageSubscriptionCoordinator() {
-    this.#messageSubscriptionCoordinator ??= getGatewaySessionMessageSubscriptionCoordinator(
-      this.#gateway,
-    );
+    if (!this.#messageSubscriptionCoordinator) {
+      this.#messageSubscriptionClient =
+        this.#gateway.getSessionMessageSubscriptionClient?.() ?? this.#gateway;
+      this.#messageSubscriptionCoordinator = getGatewaySessionMessageSubscriptionCoordinator(
+        this.#messageSubscriptionClient,
+      );
+    }
     return this.#messageSubscriptionCoordinator;
   }
 

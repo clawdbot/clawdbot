@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { getGatewaySessionMessageSubscriptionCoordinator } from "../session-subscriptions.js";
 import { collectMessageUiArtifacts } from "./artifact-projection.js";
 import {
   activatedConversation,
@@ -256,6 +257,23 @@ describe("Control Model conversations", () => {
     expect(secondConversation.getSnapshot().status).not.toBe("error");
     firstModel.dispose();
     secondModel.dispose();
+  });
+
+  it("shares observer refcounts with other owners of the same Gateway client", async () => {
+    const harness = createHarness({ status: "connected", epoch: 1 });
+    const coordinator = getGatewaySessionMessageSubscriptionCoordinator(harness.subscriptionClient);
+    const external = await coordinator.acquire("agent:main:one");
+    const model = createControlModel({ gateway: harness.gateway });
+    model.start();
+    model.conversation("agent:main:one");
+
+    await vi.waitFor(() => expect(harness.callsFor("sessions.messages.subscribe")).toHaveLength(2));
+    model.dispose();
+    await flush();
+    expect(harness.callsFor("sessions.messages.unsubscribe")).toHaveLength(0);
+
+    await coordinator.release(external);
+    expect(harness.callsFor("sessions.messages.unsubscribe")).toHaveLength(1);
   });
 
   it("retries a failed observer activation within the same connection epoch", async () => {

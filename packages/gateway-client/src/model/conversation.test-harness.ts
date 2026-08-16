@@ -165,7 +165,12 @@ export function createHarness(
       return await queued;
     },
   );
+  const subscriptionClient = {
+    request: async <T>(method: string, params: Record<string, unknown>) =>
+      (await request(method, params)) as T,
+  };
   const gateway: ControlModelGatewayBinding = {
+    getSessionMessageSubscriptionClient: () => subscriptionClient,
     getConnectionSnapshot: () => connection,
     subscribeConnection(listener) {
       connectionListeners.add(listener);
@@ -188,6 +193,7 @@ export function createHarness(
 
   return {
     gateway,
+    subscriptionClient,
     calls,
     request,
     materializeArtifactView,
