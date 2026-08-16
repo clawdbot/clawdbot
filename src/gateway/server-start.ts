@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import {
   createGatewayKernel,
   gatewayKernelLogs,
@@ -29,6 +30,9 @@ export async function startGatewayServerCore(
     releasePostReadyWork = resolve;
   });
   const gatewayKernel = await createGatewayKernel(port, opts);
+  // Each gateway start invalidates restored skill snapshots, covering both
+  // cold boot and in-process restart (SIGUSR1). Fixes openclaw#22517.
+  bumpSkillsSnapshotVersion({ reason: "manual" });
   const {
     beginClosePrelude,
     clearFallbackGatewayContextForServer,
