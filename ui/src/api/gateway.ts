@@ -440,7 +440,7 @@ export class GatewayBrowserClient {
     const deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null =
       await loadOrCreateDeviceIdentity().catch(() => null);
     this.client.recordTiming("device-identity-ready", generation, undefined, {
-      secureContext: typeof window !== "undefined" && window.isSecureContext === true,
+      secureContext: typeof window !== "undefined" && window.isSecureContext,
       hasDeviceIdentity: deviceIdentity !== null,
     });
     if (deviceIdentity) {
